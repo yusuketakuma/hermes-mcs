@@ -34,7 +34,7 @@ def dataset(tmp_path, now):
             member, 1, bundle["source_fingerprint"])
         assert len(source) == count
         model = "synthetic-local-model"
-        contract = cloud_inference._cloud_contract(selection={
+        contract = cloud_inference.cloud_provider_contract(selection={
             "provider": "anthropic", "model": policy.PROVIDERS["anthropic"], "effort": None})
         specs, chunks, reserves, results = [], [], [], []
         for index, text in enumerate(source):
@@ -107,14 +107,14 @@ def test_valid_chunks_share_one_financial_batch_and_match_individual_oracle(data
     data = dataset(3, legacy=legacy)
     expected = _singles(data, monkeypatch)
     assert set(expected) == {0, 1, 2}
-    batch = policy._reservation_evidence_batch
+    batch = policy.reservation_evidence_batch
     calls = []
 
     def counted(db, ids):
         calls.append(list(ids))
         return batch(db, ids)
 
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", counted)
+    monkeypatch.setattr(policy, "reservation_evidence_batch", counted)
     monkeypatch.setattr(extraction, "_cached_provider", lambda *_: pytest.fail("successful batch must not replay singles"))
     changes = data.ledger.db.total_changes
     assert _read(data) == expected
@@ -124,14 +124,14 @@ def test_valid_chunks_share_one_financial_batch_and_match_individual_oracle(data
 
 def test_large_valid_history_uses_bounded_pages(dataset, monkeypatch):
     data = dataset(67)
-    batch = policy._reservation_evidence_batch
+    batch = policy.reservation_evidence_batch
     calls = []
 
     def counted(db, ids):
         calls.append(len(ids))
         return batch(db, ids)
 
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", counted)
+    monkeypatch.setattr(policy, "reservation_evidence_batch", counted)
     monkeypatch.setattr(extraction, "_cached_provider", lambda *_: pytest.fail("valid pages must not replay singles"))
     assert set(_read(data)) == set(range(67))
     assert calls == [64, 3]
@@ -213,7 +213,7 @@ def test_batch_does_not_relax_chunk_source_provider_or_contract_checks(dataset, 
 
 def test_local_and_historical_reads_do_not_request_financial_batches(dataset, monkeypatch):
     data = dataset(provider="local")
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", lambda *_: pytest.fail("local data needs no cloud receipts"))
+    monkeypatch.setattr(policy, "reservation_evidence_batch", lambda *_: pytest.fail("local data needs no cloud receipts"))
     local = _read(data, expected_provider="local", expected_contract=None)
     assert set(local) == {0, 1, 2} and all(row["provider"] == "local" for row in local.values())
     monkeypatch.setattr(extraction, "_cached_providers", lambda *_: pytest.fail("historical read must not select a provider"))
@@ -240,7 +240,7 @@ def test_chunk_and_receipt_reads_share_the_old_wal_snapshot_and_next_read_refres
     expected = _read(data)
     db = data.ledger.db
     path = db.execute("PRAGMA database_list").fetchone()[2]
-    batch = policy._reservation_evidence_batch
+    batch = policy.reservation_evidence_batch
     changed = []
 
     def update_elsewhere(connection, ids):
@@ -250,7 +250,7 @@ def test_chunk_and_receipt_reads_share_the_old_wal_snapshot_and_next_read_refres
             changed.append(True)
         return batch(connection, ids)
 
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", update_elsewhere)
+    monkeypatch.setattr(policy, "reservation_evidence_batch", update_elsewhere)
     assert _read(data) == expected
     assert _read(data) == {}
 
@@ -275,7 +275,7 @@ def test_batch_storage_failures_propagate_without_single_fallback(dataset, monke
     def failed(*_args):
         raise error
 
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", failed)
+    monkeypatch.setattr(policy, "reservation_evidence_batch", failed)
     monkeypatch.setattr(extraction, "_cached_provider", lambda *_: pytest.fail("storage failure is not a receipt miss"))
     with pytest.raises(type(error)) as caught:
         _read(data)
@@ -294,7 +294,7 @@ def test_persistent_cancel_keeps_handler_and_borrowed_transaction(dataset, monke
         connection.set_progress_handler(lambda: 1, 1)
         return connection.execute("SELECT value FROM synthetic_marker").fetchall()
 
-    monkeypatch.setattr(policy, "_reservation_evidence_batch", interrupted)
+    monkeypatch.setattr(policy, "reservation_evidence_batch", interrupted)
     monkeypatch.setattr(extraction, "_cached_provider", lambda *_: pytest.fail("cancellation must not replay singles"))
     try:
         with pytest.raises(sqlite3.OperationalError) as caught:

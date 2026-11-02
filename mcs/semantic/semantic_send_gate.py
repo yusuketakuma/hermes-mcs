@@ -232,13 +232,13 @@ def _canonical_chain_current(db, project_id, message_id, fingerprint, policy, me
     import semantic_audit
     import semantic_facts
     import semantic_projection
-    import semantic_v4
+    import semantic_publication
     from inference_dependency_loss import source_binding
 
     facts = _latest_receipt(db, semantic_policy.KIND_FACTS_V2, project_id, message_id)
     audit = _latest_receipt(db, semantic_policy.KIND_FACT_AUDIT, project_id, message_id)
-    projection = _latest_receipt(db, semantic_v4.KIND_V4_SKIPPED if status == "SKIPPED"
-                                 else semantic_v4.KIND_V4, project_id, message_id)
+    projection = _latest_receipt(db, semantic_publication.KIND_V4_SKIPPED if status == "SKIPPED"
+                                 else semantic_publication.KIND_V4, project_id, message_id)
     if not all((facts, audit, projection)):
         return False
     for item in (facts, audit, projection):
@@ -253,7 +253,7 @@ def _canonical_chain_current(db, project_id, message_id, fingerprint, policy, me
         return False
     doc = cached["content"]
     if status == "SKIPPED":
-        return semantic_v4.current_skipped(db, project_id, message_id, fingerprint, policy, member) is not None
+        return semantic_publication.current_skipped(db, project_id, message_id, fingerprint, policy, member) is not None
     if status != "PASS":
         return False
     doc_hash = semantic_facts.doc_hash(doc)
@@ -266,7 +266,7 @@ def _canonical_chain_current(db, project_id, message_id, fingerprint, policy, me
             and doc.get("coverage", {}).get("status") == "complete"
             and not semantic_audit.published_quantity_findings(doc)
             and meta.get("schema") == 2 and type(meta.get("engine_version")) is int
-            and meta["engine_version"] == semantic_v4.ENGINE_VERSION
+            and meta["engine_version"] == semantic_publication.ENGINE_VERSION
             and type(meta.get("projection_version")) is int
             and meta["projection_version"] == semantic_projection.PROJECTION_VERSION
             and meta.get("hash") == member.get("revision") and meta.get("doc_hash") == doc_hash

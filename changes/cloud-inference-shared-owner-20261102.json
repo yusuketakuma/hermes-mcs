@@ -4,13 +4,24 @@
   "summary": "抽出・semantic・患者contextで重複していたクラウド provider と契約検証を、共通owner `mcs/llm/cloud_inference.py` へ集約しました。送信前ガード・予約・受領・結果不明・fallback・no-proxy/no-redirect・課金記録の意味は変わりません。更新ロールバック後もこの共有ownerが読み込まれたまま保たれるようになり、旧版との混在読み込みを防ぎます。",
   "upgrade": "通常の更新で適用され、追加の設定変更は不要です。",
   "details": [
-    "`_CloudProvider`・`CloudFallback`・`CloudBusy`・`_cloud_settings`・`_cloud_contract`・`_known_cloud_contract`・`_cloud_repair_answer_evidence`・`_current_cloud_settings` を extract_llm から cloud_inference へ移し、extract_llm は同名の薄いaliasで既存入口を維持します。",
+    "CloudInferenceUnit・resolve_cloud_settings・cloud_provider_contract・is_supported_cloud_contract・verify_cloud_repair_evidenceを共通ownerの入口とし、CloudFallback・CloudBusyも直接参照します。extract_llmの薄いaliasは削除し、_current_cloud_settingsは共通owner内の非公開処理として保持します。",
     "抽出固有のキャッシュ接頭辞(_PROMPT_HEAD/_BATCH_HEAD)は provider 構築時に cache_heads として渡し、品質repairの子providerへも伝播します。COMMIT_MARGIN=5 は共有ownerの定数に一本化しました。",
     "semantic_candidate の source witness(_MODULES)と extract_llm の _LOADED_SOURCE_DIGESTS に cloud_inference を登録し、mcs_update の有限preloadにも加えて、ロールバックがこの世代の契約検証を保持するようにしました。"
   ],
   "refs": [
     "mcs/llm/cloud_inference.py",
     "mcs/extract/llm/extract_llm.py",
-    "mcs/ops/mcs_update.py"
+    "mcs/ops/mcs_update.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_publication.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/core/patient_context_artifacts.py",
+    "mcs/notify/processing_route.py",
+    "tests/ops/test_update_loaded_rollback_closure.py",
+    "tests/semantic/test_semantic_cloud.py"
   ]
 }

@@ -11,7 +11,7 @@ import inference_dependency_loss
 import notify_views
 import rollup
 import semantic_projection as projection
-import semantic_v4 as v4
+import semantic_publication as v4
 from semantic_testkit import _PassJev, _canonical_cfg, _ledger, _llm_v2, _message, _patient, _seeded_two
 
 

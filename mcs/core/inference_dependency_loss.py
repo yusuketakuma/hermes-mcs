@@ -153,7 +153,7 @@ def equivalent_tx(db, pid, mid, origin):
 def bind_facts(db, facts):
     """Attest a source set once on a borrowed snapshot; retain every unbound candidate unchanged."""
     from mcs_queries import karte_source_record
-    import patient_context_state as state
+    import patient_context_projection as state
     facts = list(facts)
     mids = {fact.get('message_id') for fact in facts if type(fact.get('message_id')) is int and fact['message_id'] > 0}
     karte_ids = {_karte_id(fact['source_key']) for fact in facts
@@ -201,7 +201,7 @@ def bind_facts(db, facts):
     return bound
 
 def _facts(source, artifact):
-    import patient_context_state as state
+    import patient_context_projection as state
     meta, doc = loads_dict(artifact['meta']), loads_dict(artifact['content'])
     if (meta is None or doc is None or meta.get('error') or doc.get('_error')
             or meta.get('invalidated')
@@ -380,7 +380,7 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
             'kind': 'patient_context_candidate_unavailable', 'artifact_id': None})
     analysed = False
     valid_chunk_sigs = set()
-    import patient_context_state as state
+    import patient_context_projection as state
     for artifact in rows:
         meta = loads_dict(artifact['meta']) or {}
         if meta.get('invalidated'):

@@ -490,7 +490,7 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
     an enforced pipeline silently disabled is a missed evaluation, not
     a clean "no work" tick."""
     try:
-        from semantic_v4 import invalidate_projections
+        from semantic_publication import invalidate_projections
         scfg, errors = semantic_policy.runtime_config(cfg)
         # an invalid block also closes legacy extraction admission
         # (extract_llm.legacy_admissions) — surface it every tick

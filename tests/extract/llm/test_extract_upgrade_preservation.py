@@ -68,7 +68,7 @@ def test_dryrun_saves_selected_provider_model_after_job_preparation(
         monkeypatch.setattr(llm, "load_config", lambda: cfg)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: None)
-        monkeypatch.setattr(cloud_inference, "_CloudProvider", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
+        monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
         pending, _ = llm._select_pending(db, 1, None, None, False)
         jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
         assert len(jobs) == 1 and skipped == blocked == 0
@@ -371,8 +371,8 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("module_name", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate"])
-def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
+@pytest.mark.parametrize("source_label", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate"])
+def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, source_label):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
     try:
@@ -381,9 +381,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
         assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
         contract = llm._upgrade_contract()
         fingerprint = semantic_candidate.candidate_fingerprint({})
-        assert len(llm._LOADED_SOURCE_DIGESTS[module_name]) == 64
+        assert len(llm._LOADED_SOURCE_DIGESTS[source_label]) == 64
         monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {
-            **llm._LOADED_SOURCE_DIGESTS, module_name: "synthetic-changed-loaded-source"})
+            **llm._LOADED_SOURCE_DIGESTS, source_label: "synthetic-changed-loaded-source"})
         assert llm._upgrade_contract() != contract
         assert semantic_candidate.candidate_fingerprint({}) != fingerprint
         assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
@@ -432,9 +432,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_loops", "rejected_relation_pair"),
     ("semantic_jev", "finite_value"),
     ("semantic_transport", "LONG_MIN_CALL_S"),
-    ("semantic_v4_cohort", "hold_unbounded_job"),
-    ("semantic_v4_cohort", "cohort_document"),
-    ("semantic_v4_cohort", "_valid_cohort"),
+    ("semantic_conversion", "hold_unbounded_job"),
+    ("semantic_conversion", "cohort_document"),
+    ("semantic_conversion", "_valid_cohort"),
     ("patient_context_plan", "select_facts"),
     ("patient_context_plan", "scan_items"),
     ("patient_context_plan", "summary_selection"),

@@ -880,10 +880,10 @@ def _receipt_meta(raw):
 
 
 def _reservation_evidence(db, artifact_id):
-    return _reservation_evidence_batch(db, [artifact_id])[artifact_id]
+    return reservation_evidence_batch(db, [artifact_id])[artifact_id]
 
 
-def _reservation_evidence_batch(db, artifact_ids):
+def reservation_evidence_batch(db, artifact_ids):
     # All financial rows are checked in one borrowed snapshot. No proof is
     # cached outside this call, so later changes must be checked again.
     try:

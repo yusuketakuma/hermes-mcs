@@ -9,7 +9,7 @@ import pytest
 
 import semantic_audit as audit
 import semantic_drain as drain
-import semantic_v4 as v4
+import semantic_publication as v4
 import structured_view
 import semantic_projection as projection
 from inference_version import CURRENT_VERSION, VERSION_KEY

@@ -2,7 +2,7 @@
 from contextlib import closing
 import re
 
-from cloud_policy import _reservation_evidence_batch
+from cloud_policy import reservation_evidence_batch
 
 from inference_version import CURRENT_VERSION, current_meta_pred, is_current, read_version
 from mcs_util import loads_dict, payload_hash, strict_json, valid_hash
@@ -179,7 +179,7 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
     model = provider.get('model') if provider is not None else contract.get('model')
     if repair_provider is not None:
         import cloud_inference
-        if not cloud_inference._known_cloud_contract(repair_provider):
+        if not cloud_inference.is_supported_cloud_contract(repair_provider):
             raise _invalid()
     repair_model = repair_provider.get('model') if repair_provider is not None else model
     expected = {'repair_input_key': repair_input_key, 'source_key': source_key, 'source_sig': source_sig,
@@ -193,7 +193,7 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
     rows = _rows(db, "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND json_extract(meta,'$.repair_input_key')=? "
                  'ORDER BY artifact_id', (CANDIDATE_KIND, pid, repair_input_key))
     receipt_ids = [decode_document(row['meta'], metadata=True).get('reservation_artifact_id') for row in rows]
-    evidence_by_id = _reservation_evidence_batch(db, receipt_ids)
+    evidence_by_id = reservation_evidence_batch(db, receipt_ids)
     units, spans = {}, []
     for row in rows:
         meta, doc = decode_document(row['meta'], metadata=True), decode_document(row['content'])
@@ -240,7 +240,7 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
                 if 'effort' not in reservation and provider.get('backend') == 'openai':
                     effort = 'low'
                 try:
-                    actual = cloud_inference._cloud_contract(selection={'provider':provider.get('backend'),
+                    actual = cloud_inference.cloud_provider_contract(selection={'provider':provider.get('backend'),
                         'model':reservation['model'], 'effort':effort})
                 except (cloud_inference.CloudFallback, KeyError, TypeError):
                     raise _invalid() from None

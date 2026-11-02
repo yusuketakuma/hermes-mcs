@@ -105,7 +105,7 @@ def test_qc_purpose_uses_separate_fixed_provider_and_restores_context(cloud, mon
         def discard(self):
             pass
 
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Provider)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct) as chat:
         chat('normal')
@@ -205,7 +205,7 @@ def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatc
         def discard(self):
             self.discarded = True
 
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Provider)
     with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct) as chat:
@@ -235,9 +235,9 @@ def test_not_sent_cloud_falls_back_locally_for_the_rest_of_the_unit(cloud, monke
 
     def unavailable(provider, *args, **kwargs):
         attempts.append(True)
-        raise extract_llm.CloudFallback('synthetic_unavailable')
+        raise cloud_inference.CloudFallback('synthetic_unavailable')
 
-    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', unavailable)
     def local_chat(prompt, **kwargs):
         local.append(transport.inference_model())
         return '{"facts": []}'
@@ -256,13 +256,13 @@ def test_local_fallback_rechecks_scope_on_each_call(cloud, monkeypatch, change):
     led, cfg, job, _ = cloud
     state = {'current': True, 'calls': 0}
     def unavailable(provider, *args, **kwargs):
-        raise extract_llm.CloudFallback('synthetic_unavailable')
+        raise cloud_inference.CloudFallback('synthetic_unavailable')
     def local_chat(prompt, **kwargs):
         state['calls'] += 1
         if change == 'during':
             state['current'] = False
         return '{"facts": []}'
-    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', unavailable)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: state['current'], direct, local_fallback=local_chat,
                                      fallback_current=lambda: True) as chat:
@@ -280,9 +280,9 @@ def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monke
 
     def unavailable(provider, *args, **kwargs):
         provider.possibly_sent = state == 'paid_unknown'
-        raise extract_llm.CloudFallback('synthetic_unavailable')
+        raise cloud_inference.CloudFallback('synthetic_unavailable')
 
-    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', unavailable)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
                                      fallback_current=lambda: state != 'partial') as chat:
@@ -450,7 +450,7 @@ def test_real_process_wrapper_selects_cloud_and_resets_model(cloud, monkeypatch)
 @pytest.mark.parametrize("cloud_only", [False, True])
 def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud, monkeypatch, cloud_only):
     import semantic_store
-    import semantic_v4
+    import semantic_publication
     from candidate_testkit import approved_config
     from semantic_testkit import _canonical_cfg, _llm_v2, _PassJev
     led, cfg, _, calls = cloud
@@ -471,7 +471,7 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
     monkeypatch.setattr(transport, "llm_chat", lambda *a, **kw: pytest.fail("local GPU used"))
     if cloud_only:
         monkeypatch.setattr(semantic_drain, "reprocess_step", lambda *a, **kw: pytest.fail("worker repeated corpus seed"))
-        monkeypatch.setattr(semantic_v4, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
+        monkeypatch.setattr(semantic_publication, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
         monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda *a: 60)
     result = {"errors": []}
     out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
@@ -482,12 +482,12 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
     fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
     for kind in ("semantic_summary", "semantic_audit"):
         assert semantic_store.current_artifact(led.db, kind, 1, fp) is not None
-    published = rows(led, semantic_v4.KIND_V4)
+    published = rows(led, semantic_publication.KIND_V4)
     assert published and json.loads(published[-1]["meta"])["fingerprint"] == fp
     assert published[-1]["model"] == transport.llm_model()
     assert json.loads(published[-1]["meta"])["inference_requests"]
-    semantic_v4.invalidate_projections(led.db, semantic_drain.runtime_config(cfg)[0])
-    assert semantic_store.current_artifact(led.db, semantic_v4.KIND_V4, 1, fp) is not None
+    semantic_publication.invalidate_projections(led.db, semantic_drain.runtime_config(cfg)[0])
+    assert semantic_store.current_artifact(led.db, semantic_publication.KIND_V4, 1, fp) is not None
     from extraction_progress import message_progress
     row = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     assert message_progress(led.db, row, cfg=cfg)["state"] == "complete"
@@ -1049,7 +1049,11 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
-    monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda s: None})())
+    monkeypatch.setattr(extract_llm, "_open_current_ledger",
+                        lambda: type("DB", (), {"close": lambda s: None})())
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+    monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm.cloud_backlog.CloudBacklogPool, "sync", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
     monkeypatch.setattr(extract_llm, "_recent_arrivals", lambda *a: {99})
     monkeypatch.setattr(extract_llm, "_settle_carry", lambda *a, **kw: None)

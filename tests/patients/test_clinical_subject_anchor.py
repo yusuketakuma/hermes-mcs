@@ -1,7 +1,7 @@
 """Synthetic source ownership for previously unknown symptom names."""
 import pytest
 
-import patient_context_state as state
+import patient_context_projection as state
 
 
 def _fact(body, subject, *, evidence=None):

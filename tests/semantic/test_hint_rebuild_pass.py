@@ -17,7 +17,7 @@ import semantic_assembly as assembly
 import semantic_extraction as se
 import semantic_loops
 import semantic_send_gate
-import semantic_v4 as v4
+import semantic_publication as v4
 from semantic_testkit import _summary_from_facts, NO_FACTS, _cfg, _kind_rows, _ledger, _message, _patient, _PassJev
 
 HELD = ("semantic_summary", "semantic_audit", "semantic_coverage",

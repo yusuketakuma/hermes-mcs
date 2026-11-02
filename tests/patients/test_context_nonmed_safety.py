@@ -7,7 +7,7 @@ import pytest
 
 from patient_context import extract_context
 import patient_context_refresh as refresh
-import patient_context_state as state
+import patient_context_projection as state
 
 
 def source(mid, body, *, day=1, content_hash=None):

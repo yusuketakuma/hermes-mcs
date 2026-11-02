@@ -20,8 +20,8 @@ nearest measurement label in the body at validation time.
 Naming: comments here call this engine "the v3 pass" (the generation
 it was built as; see the clinical-plan/v3 prompt key). It lives in
 extract/llm/ as the current generation (docs/specs/semantic-evaluation.md),
-EXTRACT_VERSION is an independent schema counter, and semantic_v4 is a
-separate generation-crossing engine.
+EXTRACT_VERSION is an independent schema counter. semantic_publication owns
+publication across extraction generations.
 """
 import argparse
 import contextlib
@@ -52,14 +52,14 @@ import semantic_transport
 import semantic_loops
 import semantic_assessment
 import patient_context_plan
-import patient_context_state
+import patient_context_projection
 import semantic_jev
 import semantic_runtime
 import semantic_projection
 import semantic_audit
 import semantic_candidate
-import semantic_v4
-import semantic_v4_cohort
+import semantic_publication
+import semantic_conversion
 import semantic_store
 import semantic_notice
 import semantic_render
@@ -102,7 +102,7 @@ import patient_context_artifacts
 import mcs_util
 import semantic_assembly
 import semantic_facts
-import patient_state_context
+import extraction_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
                          current_extract_pred,
@@ -156,15 +156,15 @@ _LOADED_SOURCE_DIGESTS = {
                        ("semantic_notice", semantic_notice.__file__),
                        ("semantic_render", semantic_render.__file__),
                        ("semantic_send_gate", semantic_send_gate.__file__),
-                       ("semantic_v4", semantic_v4.__file__),
-                       ("semantic_v4_cohort", semantic_v4_cohort.__file__),
+                       ("semantic_v4", semantic_publication.__file__),
+                       ("semantic_v4_cohort", semantic_conversion.__file__),
                        ("semantic_audit", semantic_audit.__file__),
                        ("semantic_candidate", semantic_candidate.__file__),
                        ("semantic_projection", semantic_projection.__file__),
                        ("semantic_runtime", semantic_runtime.__file__),
                        ("semantic_jev", semantic_jev.__file__),
                        ("patient_context_plan", patient_context_plan.__file__),
-                       ("patient_context_state", patient_context_state.__file__),
+                       ("patient_context_state", patient_context_projection.__file__),
                        ("patient_context_refresh", patient_context_refresh.__file__),
                        ("initial_import_state", initial_import_state.__file__),
                        ("history_walk", history_walk.__file__),
@@ -186,7 +186,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("patient_context", patient_context.__file__),
                        ("semantic_assembly", semantic_assembly.__file__),
                        ("semantic_facts", semantic_facts.__file__),
-                       ("patient_state_context", patient_state_context.__file__),
+                       ("patient_state_context", extraction_context.__file__),
                        ("local_llm", local_llm.__file__),
                        ("extract_schema", extract_schema.__file__),
                        ("extract_validation", extract_validation.__file__),
@@ -623,7 +623,7 @@ def _evidence_matches_route(evidence, model, contract):
     return (name in ("anthropic", "openai") and isinstance(contract, dict)
             and set(contract) == {"backend", "model", "prompt"}
             and contract.get("backend") == name and contract.get("model") == model
-            and cloud_inference._known_cloud_contract(contract)
+            and cloud_inference.is_supported_cloud_contract(contract)
             and isinstance(contract.get("prompt"), str)
             and re.fullmatch(r"[0-9a-f]{16}", contract["prompt"]) is not None)
 
@@ -798,16 +798,7 @@ def _integrity_summary(notes: list) -> dict:
 
 # The cloud-provider contract and the guarded send lifecycle are owned by
 # cloud_inference so extract, semantic and patient-context callers share one
-# implementation; these same-identity aliases keep the established private
-# entry points without a second owner.
-CloudFallback = cloud_inference.CloudFallback
-CloudBusy = cloud_inference.CloudBusy
-_CloudProvider = cloud_inference._CloudProvider
-_current_cloud_settings = cloud_inference._current_cloud_settings
-_cloud_settings = cloud_inference._cloud_settings
-_cloud_contract = cloud_inference._cloud_contract
-_known_cloud_contract = cloud_inference._known_cloud_contract
-_cloud_repair_answer_evidence = cloud_inference._cloud_repair_answer_evidence
+# implementation. Consumers call that owner directly.
 
 
 def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason="stop"):
@@ -828,7 +819,7 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
             "message_id": reservation["message_id"], "unit_key": reservation["unit_key"],
             "owner": reservation["owner"], "prompt": prompt, "answer_text": answer_text,
             "contract": provider.contract, "purpose": provider.purpose, "finish_reason": finish_reason}
-        evidence = cloud_inference._cloud_repair_answer_evidence(provider.ledger.db, **arguments)
+        evidence = cloud_inference.verify_cloud_repair_evidence(provider.ledger.db, **arguments)
         return {"version": 1, "answer_text": answer_text, "reservation_artifact_id": rows[0][0],
                 "reservation_id": reservation["reservation_id"], "contract": provider.contract,
                 "owner": reservation["owner"], "unit_key": reservation["unit_key"],
@@ -837,7 +828,7 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
-    settings = cloud_inference._cloud_settings(cfg)
+    settings = cloud_inference.resolve_cloud_settings(cfg)
     if not cloud_policy.eligible(settings, route, project_id):
         return "off"
     mode = settings["mode"]
@@ -980,17 +971,17 @@ def _llm_call(prompt: str, deadline: float | None = None,
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
         _integrity_note(response, kind)
-        if isinstance(provider, _CloudProvider) and isinstance(response, dict) and isinstance(response.get("text"), str):
+        if isinstance(provider, cloud_inference.CloudInferenceUnit) and isinstance(response, dict) and isinstance(response.get("text"), str):
             _CALL_NOTES.cloud_response = (provider, prompt, response["text"], response.get("finish_reason"))
         acceptance = local_llm.acceptance_error(response)
         if acceptance == "length_stop":
             return None
         if acceptance is not None:
-            raise CloudFallback("cloud_incomplete_response")
+            raise cloud_inference.CloudFallback("cloud_incomplete_response")
         answer = json_object(response.get("text"))
         if answer is None:
-            raise CloudFallback("cloud_invalid_response")
-        if isinstance(provider, _CloudProvider):
+            raise cloud_inference.CloudFallback("cloud_invalid_response")
+        if isinstance(provider, cloud_inference.CloudInferenceUnit):
             selection = getattr(provider, "selection", None)
             _CALL_NOTES.provider_response = (selection.get("provider") if selection is not None else
                 "openai" if provider.model == openai_client.MODEL else
@@ -1398,7 +1389,7 @@ def llm_extract(body: str, *, context: str | None = None,
                         first_client, first_prompt, first_text, first_finish = first_response
                         origin = {**_cloud_origin_for_checkpoint(first_client, first_prompt, first_text,
                                                                   finish_reason=first_finish), "qc_src": quality_qc_src}
-                    except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                    except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
                         origin = None
                 pending = with_leaf({**v, "_quality_status": "pending"}, piece_providers,
                                     origin=origin, origin_id=origin_id)
@@ -1469,7 +1460,7 @@ def llm_extract(body: str, *, context: str | None = None,
                             response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
                             proof = {"version": 1, "started_artifact_id": started.quality_started_id,
                                      "response": response}
-                        except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                        except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
                             return _DEFERRED
                         return split_piece(key, piece, start, remaining, repair=proof)
                     return split_piece(key, piece, start, remaining)
@@ -1489,7 +1480,7 @@ def llm_extract(body: str, *, context: str | None = None,
                                 response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
                                 repair_proof = {"version": 1, "started_artifact_id": started.quality_started_id,
                                                 "response": response}
-                            except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                            except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
                                 return _DEFERRED
                         v = rv
                         piece_providers.append(repair_provider)
@@ -2117,7 +2108,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 _verify_atomic_witness(ledger.db, r, witness)
                 if outcome == "written":
                     _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
-    except CloudFallback:
+    except cloud_inference.CloudFallback:
         if isinstance(r, dict) and r.get("_cloud_discard"):
             r["_cloud_discard"]()
         return False
@@ -2183,7 +2174,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
     if isinstance(r, dict) and r.get("_cloud_guard"):
         try:
             r["_cloud_guard"]()
-        except CloudFallback:
+        except cloud_inference.CloudFallback:
             raise
     source = ledger.db.execute(
         "SELECT m.* FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
@@ -2197,9 +2188,9 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
         return "rejected"
     frame = r.get("_frame")
     if frame is not None:
-        current_frame = patient_state_context.load(ledger.db, frame.get("artifact_id"), dict(source))
+        current_frame = extraction_context.load(ledger.db, frame.get("artifact_id"), dict(source))
         if (current_frame is None or current_frame["digest"] != frame.get("digest")
-                or any(not patient_state_context.reference_current(ledger.db, dict(source),
+                or any(not extraction_context.reference_current(ledger.db, dict(source),
                     {**reference, "token": token} if isinstance(reference, dict) else None,
                     version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
             return "rejected"
@@ -2239,7 +2230,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                 retained.pop("_frame", None)
                 retained.pop("qc_src", None)
                 if "context_snapshot" in prior_meta:
-                    retained_frame = patient_state_context.load(ledger.db, prior_meta["context_snapshot"], dict(source))
+                    retained_frame = extraction_context.load(ledger.db, prior_meta["context_snapshot"], dict(source))
                     if retained_frame is None:
                         return "rejected"
                     retained["_frame"] = retained_frame
@@ -2368,7 +2359,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                 selection, errors = cloud_policy.resolve_profile(
                     r.get("_cloud_config") or load_config(), route="reextract", purpose="backlog", root=HOME)
                 if errors or selection is None:
-                    raise CloudFallback("cloud_profile_invalid")
+                    raise cloud_inference.CloudFallback("cloud_profile_invalid")
             cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                 unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
                 max_tokens=selection["max_tokens"] or MAX_TOKENS, model=selection["model"])
@@ -3075,7 +3066,7 @@ def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, 
         hint = _hint_block(hints) if hints else ""
         prompt = prefix + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
         prompt += _target_head(r["posted_at"]) + piece + _PROMPT_TAIL
-        evidence = cloud_inference._cloud_repair_answer_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
+        evidence = cloud_inference.verify_cloud_repair_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
             reservation_id=origin["reservation_id"], route="reextract", project_id=r["project_id"],
             message_id=r["message_id"], unit_key=origin["unit_key"], owner=origin["owner"], prompt=prompt,
             answer_text=origin["answer_text"], contract=origin["contract"], purpose="backlog")
@@ -3202,7 +3193,7 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                 or response["owner"] != {"lease": meta["quality_lease"]}
                 or response["unit_key"] != str(r["message_id"])):
             return False
-        evidence = cloud_inference._cloud_repair_answer_evidence(db, reservation_artifact_id=response["reservation_artifact_id"],
+        evidence = cloud_inference.verify_cloud_repair_evidence(db, reservation_artifact_id=response["reservation_artifact_id"],
             reservation_id=response["reservation_id"], route="reextract", project_id=r["project_id"],
             message_id=r["message_id"], unit_key=response["unit_key"], owner=response["owner"], prompt=prompt,
             answer_text=response["answer_text"], contract=response["contract"], finish_reason=finish_reason)
@@ -3823,7 +3814,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                     _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except _CheckpointChanged:
         return "rejected"
-    except CloudFallback:
+    except cloud_inference.CloudFallback:
         if r.get("_cloud_discard"):
             r["_cloud_discard"]()
         return "rejected"
@@ -4025,9 +4016,9 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
         snapshot = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
                               "AND model=? AND json_extract(" + json_or_null("meta") + ",'$.hash')=? "
                               "ORDER BY artifact_id DESC LIMIT 1",
-                              (patient_state_context.KIND, r["project_id"], r["message_id"], model, r["content_hash"])).fetchone()
+                              (extraction_context.KIND, r["project_id"], r["message_id"], model, r["content_hash"])).fetchone()
     if snapshot is not None:
-        frame = patient_state_context.load(db, snapshot[0], r)
+        frame = extraction_context.load(db, snapshot[0], r)
         if frame is None:
             return out
         r["_frame"] = frame
@@ -4993,7 +4984,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
             adm_params = [json.dumps(sorted(admitted_ids))]
     if cloud_only:
-        cfg = cloud_inference._cloud_settings(load_config())
+        cfg = cloud_inference.resolve_cloud_settings(load_config())
         if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
             owner = getattr(ledger, '_cloud_state_owner', None)
             if owner is not None and prioritize_patients:
@@ -5204,14 +5195,14 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow", "dry_run"):
             r["_cloud_config"] = copy.deepcopy(cfg)
-            r["_cloud_settings"] = cloud_inference._cloud_settings(cfg)
+            r["_cloud_settings"] = cloud_inference.resolve_cloud_settings(cfg)
             selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=HOME)
             if errors or selection is None:
                 blocked += 1
                 continue
             r["_cloud_selection"] = selection
         if mode == "on":
-            r["_provider_contract"] = cloud_inference._cloud_contract(selection=selection)
+            r["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -5239,7 +5230,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         attempt = {key: r.get(key) for key in ("qc_src", "human_src", "thin_src")}
         attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
         try:
-            r["_frame"] = patient_state_context.prepare(ledger, r, model=r["_target"][1],
+            r["_frame"] = extraction_context.prepare(ledger, r, model=r["_target"][1],
                 contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
                 version=EXTRACT_VERSION)
         except (ValueError, sqlite3.Error):
@@ -5529,7 +5520,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     checkpoints = queue.SimpleQueue()
     checkpoint_stopped = threading.Event()
     cfg = load_config()
-    cloud_workers = cloud_inference._cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
+    cloud_workers = cloud_inference.resolve_cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
         r.get("_cloud_mode") == "on" for r, *_ in jobs) else 1
     pool_workers = max(workers, cloud_workers)
     local_slots = threading.BoundedSemaphore(max(1, workers))
@@ -5589,7 +5580,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         checkpoints.put(("owner", fn, receipt, result))
         while not receipt["event"].wait(0.05):
             if checkpoint_stopped.is_set() or (not result and time.monotonic() >= deadline):
-                raise CloudFallback("cloud_owner_stopped")
+                raise cloud_inference.CloudFallback("cloud_owner_stopped")
         if "error" in receipt:
             raise receipt["error"]
         return receipt.get("value")
@@ -5604,7 +5595,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _, fn, receipt, result = item
                 try:
                     if checkpoint_stopped.is_set() or (not result and time.monotonic() >= deadline):
-                        raise CloudFallback("cloud_owner_stopped")
+                        raise cloud_inference.CloudFallback("cloud_owner_stopped")
                     receipt["value"] = fn()
                 except BaseException as exc:
                     receipt["error"] = exc
@@ -5636,7 +5627,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         provider = None
         if r.get("_cloud_mode") == "on":
             r["_cloud_lease"] = leases[index]
-            provider = _owner_call(lambda: cloud_inference._CloudProvider(ledger, r["_cloud_config"], route="reextract",
+            provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda: not r.get("_checkpoint_conflict")
@@ -5652,11 +5643,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_discard"] = provider.discard
                     r["_cloud_generation"] = provider.generation
                     if result is None:
-                        raise CloudFallback("cloud_validation_failed")
+                        raise cloud_inference.CloudFallback("cloud_validation_failed")
                     return result
-            except (cloud_client.CloudNotSent, CloudBusy):
+            except (cloud_client.CloudNotSent, cloud_inference.CloudBusy):
                 return _DEFERRED
-            except CloudFallback as error:
+            except cloud_inference.CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
                 # a paid attempt that failed marks the row: if local cannot finish it
@@ -5674,7 +5665,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_target"] = target
                     fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False, load_checkpoints=False)
                     if not fresh:
-                        raise CloudFallback("cloud_local_context_unavailable")
+                        raise cloud_inference.CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
                     r.update(local_r)
                     local_saved = _capture_checkpoint_state(ledger.db, r, local_ctx)
@@ -5724,7 +5715,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if r.get("_cloud_guard"):
             try:
                 r["_cloud_guard"]()
-            except CloudFallback:
+            except cloud_inference.CloudFallback:
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
@@ -6245,7 +6236,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         cloud_result = None
         provider = None
         try:
-            provider = cloud_inference._CloudProvider(ledger, r["_cloud_config"], route="reextract", project_id=r["project_id"],
+            provider = cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract", project_id=r["project_id"],
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
                 dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"],
@@ -6257,7 +6248,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             provider.commit_guard()
         except cloud_client.CloudNotSent:
             cloud_result = None
-        except CloudFallback as error:
+        except cloud_inference.CloudFallback as error:
             if provider is not None and str(error) == "cloud_unit_changed":
                 provider.discard()
             cloud_result = None
@@ -6398,7 +6389,7 @@ def legacy_admissions(ledger, cfg) -> set | None:
             return set()
         if policy.get("fact_source") != "canonical":
             return None
-        return semantic_v4_cohort.active_legacy_admissions(ledger)
+        return semantic_conversion.active_legacy_admissions(ledger)
     except Exception as e:
         _admission_closed([type(e).__name__])
         return set()
@@ -6453,7 +6444,7 @@ def _background_semantic(ledger, stop=None):
         out = semantic_drain.run_due(
             ledger, cfg, result, deadline, max_jobs=1,
             cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog",
-            prioritize_patients=cloud_inference._cloud_settings(cfg)["mode"] == "on")
+            prioritize_patients=cloud_inference.resolve_cloud_settings(cfg)["mode"] == "on")
         out["errors"] = result["errors"]
         return out
     finally:
@@ -6608,7 +6599,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
         return admit() and not circuit_open_s(ledger.db) and _context_memory_available()
 
     try:
-        cloud_cfg = cloud_inference._cloud_settings(cfg)
+        cloud_cfg = cloud_inference.resolve_cloud_settings(cfg)
         cloud_enabled = cloud_cfg["mode"] != "off"
         if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
@@ -6766,7 +6757,7 @@ def _main() -> int:
             return legacy_admissions(led, cfg), extract_validation.vital_threshold_policy(cfg)
         except Exception:
             return set(), None
-    cloud_pool = cloud_backlog.Pool(HOME) if args.all and args.lane == 2 else None
+    cloud_pool = cloud_backlog.CloudBacklogPool(HOME) if args.all and args.lane == 2 else None
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -6887,7 +6878,7 @@ def _main() -> int:
                         recent = _recent_arrivals(led)
                         adm = recent if adm is None else adm & recent
                     cloud_turn = oldest_turn or not args.semantic
-                    cloud_cfg = cloud_inference._cloud_settings(load_config())
+                    cloud_cfg = cloud_inference.resolve_cloud_settings(load_config())
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on" else 1)
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,

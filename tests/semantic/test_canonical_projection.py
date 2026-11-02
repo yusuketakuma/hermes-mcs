@@ -311,7 +311,7 @@ def test_projection_preserves_subject_and_uncertainty():
 
 def _med_bucket(med):
     from datetime import datetime
-    import patient_context_state
+    import patient_context_projection
     import rollup
     facts = {}
     posted = "2026-09-01T00:00:00+09:00"
@@ -319,7 +319,7 @@ def _med_bucket(med):
         "content_hash": "synthetic", "body_text": med.get("evidence") or "", "posted_at": posted,
         "posted_at_ts": datetime.fromisoformat(posted).timestamp()}, {},
         {"meds": [dict(med, name="アムロジピン")]}, facts)
-    projected = patient_context_state.project(list(facts.values()))
+    projected = patient_context_projection.project(list(facts.values()))
     fact = next(iter(facts.values()))
     group = next(group for group, ids in projected["groups"].items() if fact["id"] in ids)
     return rollup._med_bucket(fact, group)
@@ -458,7 +458,7 @@ def test_current_fact_pred_resolves_one_generation(tmp_path):
 @pytest.mark.parametrize("change", ["context", "policy", "off", "legacy", "prompt"])
 def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monkeypatch, change):
     import semantic_llm
-    from semantic_v4 import invalidate_projections
+    from semantic_publication import invalidate_projections
     from semantic_testkit import _cfg
     db = _seeded(tmp_path)
     try:
@@ -508,7 +508,7 @@ def test_old_projection_version_rows_are_superseded_on_rerun(tmp_path):
     a same-version rerun still reuses."""
     import time
     import semantic_drain as drain
-    import semantic_v4 as v4
+    import semantic_publication as v4
     from mcs_queries import current_projection_id, current_v4_id
     from semantic_policy import policy_fingerprint, semantic_config
     from semantic_testkit import _canonical_cfg, _llm_v2, _seeded_two
@@ -584,7 +584,7 @@ def _current_ids(db, mid):
 
 def test_reproject_supersedes_old_version_rows_bounded_and_idempotent(
         tmp_path):
-    import semantic_v4 as v4
+    import semantic_publication as v4
     from semantic_policy import KIND_FACTS_V2, semantic_config
     from semantic_testkit import _canonical_cfg
     db = _drained_old_version(tmp_path)
@@ -640,7 +640,7 @@ def test_reproject_never_resurrects_or_guesses(tmp_path):
     """Invalidated, deleted-body and non-derivable rows are left alone;
     the non-derivable ones are counted and marked so they cannot starve
     the per-tick bound."""
-    import semantic_v4 as v4
+    import semantic_publication as v4
     from semantic_policy import KIND_FACT_AUDIT, KIND_FACTS_V2, \
         semantic_config
     from semantic_testkit import _canonical_cfg
@@ -711,7 +711,7 @@ def test_reproject_never_resurrects_or_guesses(tmp_path):
 
 def test_run_due_reprojects_old_version_rows(tmp_path):
     import time
-    import semantic_v4 as v4
+    import semantic_publication as v4
     from semantic_testkit import _canonical_cfg
 
     def no_llm(prompt):
@@ -738,7 +738,7 @@ def test_run_due_reprojects_old_version_rows(tmp_path):
 ])
 def test_run_due_switch_hides_then_revives_only_current_projections(
         tmp_path, monkeypatch, fact_source, change):
-    import semantic_v4 as v4
+    import semantic_publication as v4
     from semantic_testkit import _canonical_cfg
     from semantic_testkit import _PassJev
 
@@ -858,7 +858,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
 @pytest.mark.parametrize("fact_source", ["canonical", "legacy", "shadow"])
 def test_invalidation_reads_model_config_once_per_active_scan(
         tmp_path, monkeypatch, mode, fact_source):
-    from semantic_v4 import invalidate_projections
+    from semantic_publication import invalidate_projections
     from semantic_testkit import _canonical_cfg
 
     db = _seeded(tmp_path)

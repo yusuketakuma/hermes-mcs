@@ -444,7 +444,7 @@ def _complete_context(db, config):
         db.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
                       "WHERE project_id=1")
     contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
-    contract["provider"] = cloud_inference._cloud_contract()
+    contract["provider"] = cloud_inference.cloud_provider_contract()
     policy, errors = semantic_policy.semantic_config(config, key_present=True)
     assert not errors
     assessment = context._quality_assessment(policy)

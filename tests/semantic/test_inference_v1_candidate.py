@@ -18,7 +18,7 @@ from candidate_testkit import approved_config
 from extract_testkit import _ledger, _message
 
 
-MODULES = ("inference_version", "inference_dependency_loss", "patient_context_artifacts", "clinical_events", "rollup", "patient_context_state", "patient_state_context")
+MODULES = ("inference_version", "inference_dependency_loss", "patient_context_artifacts", "clinical_events", "rollup", "patient_context_projection", "extraction_context")
 
 
 @pytest.fixture
@@ -55,8 +55,8 @@ def _reject_old_approval(approved):
     ("measurement_timeline", "project_measurements"),
     ("intervention_schedule", "project"),
     ("semantic_drain", "_reprocess_patient_state"),
-    ("patient_context_state", "project"),
-    ("patient_state_context", "reference_current"),
+    ("patient_context_projection", "project"),
+    ("extraction_context", "reference_current"),
     ("inference_dependency_loss", "read"),
     ("patient_context_artifacts", "selected_rows"),
 ])
@@ -82,8 +82,8 @@ def test_changed_definition_invalidates_new_worker_approval_without_blessing_old
     ("rollup", "PERIOD_CHECK_VERSION", -123),
     ("measurement_sources", "_MAX_RECORDS", 401),
     ("intervention_schedule", "_ROLES", {"架空職種": "synthetic"}),
-    ("patient_context_state", "_VALUE_KEYS", {"actual_dose", "synthetic_dimension"}),
-    ("patient_state_context", "STATE_MAX", 601),
+    ("patient_context_projection", "_VALUE_KEYS", {"actual_dose", "synthetic_dimension"}),
+    ("extraction_context", "STATE_MAX", 601),
     ("inference_dependency_loss", "SCHEMA", "dependency-loss/synthetic-change"),
     ("patient_context_artifacts", "CANDIDATE_KIND", "synthetic_candidate_kind"),
 ])
@@ -145,7 +145,7 @@ def test_source_drift_refuses_old_worker_lock_even_while_its_candidate_identity_
 @pytest.mark.parametrize("owner,change", [
     ("inference_version", b"\n_MAX_VERSION_LENGTH = _MAX_VERSION_LENGTH - 1\n"),
     ("clinical_events", b"\nSUBJECTS = SUBJECTS + ('synthetic_subject',)\n"),
-    ("patient_state_context", b"\nSTATE_MAX = STATE_MAX - 1\n"),
+    ("extraction_context", b"\nSTATE_MAX = STATE_MAX - 1\n"),
 ])
 def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_facts(
         tmp_path, monkeypatch, owner, change):
@@ -169,8 +169,9 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
         copied = tmp_path / (owner + ".py")
         copied.write_bytes(Path(module.__file__).read_bytes() + change)
         digest = hashlib.sha256(copied.read_bytes()).hexdigest()
-        assert digest != llm._LOADED_SOURCE_DIGESTS[owner]
-        monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {**llm._LOADED_SOURCE_DIGESTS, owner: digest})
+        source_label = "patient_state_context" if owner == "extraction_context" else owner
+        assert digest != llm._LOADED_SOURCE_DIGESTS[source_label]
+        monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {**llm._LOADED_SOURCE_DIGESTS, source_label: digest})
         assert llm._upgrade_contract() != before
         # A changed rule contract releases only the old hold's suppression, not the source protection.
         assert ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(ledger.db)).fetchone()

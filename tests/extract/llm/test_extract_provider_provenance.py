@@ -25,7 +25,7 @@ def _local(monkeypatch, outputs):
 
 @pytest.mark.parametrize("name", ["anthropic", "openai"])
 def test_cloud_result_is_identified_by_the_actual_provider(name):
-    class Provider(cloud_inference._CloudProvider):
+    class Provider(cloud_inference.CloudInferenceUnit):
         model = worker.anthropic_client.MODEL if name == "anthropic" else worker.openai_client.MODEL
 
         def __init__(self):
@@ -320,7 +320,7 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
         monkeypatch.setattr(worker, "_cloud_reextract", lambda *a, **kw: True)
         monkeypatch.setattr(worker, "_cloud_mode", lambda *a, **kw: "on")
-        monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: {"provider": "anthropic", "max_concurrency": 1})
+        monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"provider": "anthropic", "max_concurrency": 1})
         monkeypatch.setattr(worker, "_prefilter_enabled", lambda: False)
         monkeypatch.setattr(worker, "circuit_open_s", lambda db: 0)
         monkeypatch.setattr(worker, "disk_free_mb", lambda db: 100000)
@@ -331,9 +331,9 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
                 self.possibly_sent = True
 
             def __call__(self, *args, **kwargs):
-                raise worker.CloudFallback("cloud_unit_failed")
+                raise cloud_inference.CloudFallback("cloud_unit_failed")
 
-        monkeypatch.setattr(cloud_inference, "_CloudProvider", FailedCloud)
+        monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", FailedCloud)
         outcome = worker.run_pending(ledger, budget_s=300)
         assert outcome["done"] == 1
         proof = json.loads(ledger.artifacts(worker.KIND, message_id=1)[-1]["meta"])["provider_provenance"]

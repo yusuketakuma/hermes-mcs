@@ -16,7 +16,7 @@ import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_loops
 import semantic_send_gate
-import semantic_v4 as v4
+import semantic_publication as v4
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _ledger, _message, _patient
 

@@ -1,6 +1,6 @@
 """SQLite-valid unreadable JSON cannot block unrelated semantic work or replenish usage."""
 import semantic_notice
-import semantic_v4
+import semantic_publication
 import semantic_assembly as assembly
 import json
 import time
@@ -38,7 +38,7 @@ def test_unreadable_projection_is_revoked_without_blocking_other_rows(ledger):
     healthy = ledger.artifact_add(KIND_FACT_PROJ, "{}", project_id=2, meta={})
     ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (raw, poison))
     ledger.db.commit()
-    assert semantic_v4.invalidate_projections(ledger.db, {"mode": "off"}) == 2
+    assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 2
     for artifact_id in (poison, healthy):
         assert ledger.db.execute("SELECT json_extract(meta,'$.invalidated') FROM artifacts "
                                   "WHERE artifact_id=?", (artifact_id,)).fetchone()[0] == 1

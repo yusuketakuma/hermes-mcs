@@ -668,7 +668,7 @@ def test_moved_semantic_presentation_invalidates_only_new_worker_approval(monkey
 
 
 @pytest.mark.parametrize("owner,name", [("semantic_store", "current_artifact"),
-    ("semantic_v4", "invalidate_projections"), ("semantic_projection", "projection_transition"),
+    ("semantic_publication", "invalidate_projections"), ("semantic_projection", "projection_transition"),
     ("semantic_facts", "doc_hash"), ("semantic_audit", "published_quantity_findings")])
 def test_projection_lifecycle_definition_changes_only_new_worker_identity(monkeypatch, owner, name):
     import importlib
@@ -705,11 +705,11 @@ def test_source_value_definition_changes_only_new_worker_identity(monkeypatch, m
 @pytest.mark.parametrize("owner,name", [("semantic_facts", "cached_facts_plan"),
     ("semantic_audit", "cached_fact_audit"), ("semantic_audit", "canonical_audit_disposition"),
     ("semantic_audit", "fact_repair_plan"), ("semantic_audit", "fact_audit_verdict"),
-    ("semantic_v4_cohort", "hold_unbounded_job"), ("semantic_v4_cohort", "_valid_cohort"),
+    ("semantic_conversion", "hold_unbounded_job"), ("semantic_conversion", "_valid_cohort"),
     ("clinical_values", "vital_threshold_flags"), ("clinical_values", "prose_preserves_current_readings"),
     ("semantic_notice", "origin_event_id"), ("semantic_notice", "record_notice_plan_tx"),
     ("semantic_send_gate", "semantic_gate"),
-    ("semantic_v4", "publish_fact_projection"), ("semantic_v4", "publish_target_tx"), ("semantic_runtime", "guard"),
+    ("semantic_publication", "publish_fact_projection"), ("semantic_publication", "publish_target_tx"), ("semantic_runtime", "guard"),
     ("semantic_runtime", "job_matches"), ("semantic_runtime", "llm_request_was_dispatched"), ("semantic_runtime", "JobToken.from_row")])
 def test_canonical_reuse_and_publication_definition_pins_loaded_worker(monkeypatch, owner, name):
     import importlib

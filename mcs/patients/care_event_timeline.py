@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import clinical_events
 from clinical_values import written_day
 from mcs_util import valid_hash
-from patient_context_state import paired_date_conflict
+from patient_context_projection import paired_date_conflict
 from stats_math import finite_number
 
 

@@ -23,6 +23,10 @@ MODULES = {
     'semantic_quantities': 'extract/clinical/semantic_quantities.py',
     'patient_context': 'patients/patient_context.py',
     'patient_context_refresh': 'patients/patient_context_refresh.py',
+    'patient_context_projection': 'patients/patient_context_projection.py',
+    'extraction_context': 'extract/llm/extraction_context.py',
+    'semantic_publication': 'semantic/semantic_publication.py',
+    'semantic_conversion': 'semantic/semantic_conversion.py',
     'rollup': 'patients/rollup.py',
     'drug_map': 'medications/drug_map.py',
     'drug_alias': 'medications/drug_alias.py',
@@ -38,7 +42,7 @@ MODULES = {
 @pytest.mark.parametrize('first', ['extract', 'clinical_values'])
 def test_fresh_imports_and_lazy_clinical_calls_use_the_current_layout(tmp_path, first):
     code = f'''
-import sys, importlib, json
+import sys, importlib, json, hashlib
 from pathlib import Path
 sys.path.insert(0, {str(ROOT / 'mcs')!r})
 import _mcs_path
@@ -46,6 +50,19 @@ importlib.import_module({first!r})
 for name, relative in {MODULES!r}.items():
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve() == Path({str(ROOT / 'mcs')!r}) / relative, name
+import extract_llm
+for source_label, module_name in {{
+    "semantic_v4": "semantic_publication",
+    "semantic_v4_cohort": "semantic_conversion",
+    "patient_state_context": "extraction_context",
+    "patient_context_state": "patient_context_projection",
+}}.items():
+    module = importlib.import_module(module_name)
+    assert extract_llm._LOADED_SOURCE_DIGESTS[source_label] == hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
+    assert module_name not in extract_llm._LOADED_SOURCE_DIGESTS
+for name in ("CloudFallback", "CloudBusy", "_CloudProvider", "_current_cloud_settings", "_cloud_settings",
+             "_cloud_contract", "_known_cloud_contract", "_cloud_repair_answer_evidence"):
+    assert not hasattr(extract_llm, name), name
 import clinical_values
 assert clinical_values.grounded_vitals('本人P72 家族80', {{'hr':72}}) == {{'hr':72}}
 assert clinical_values.patient_current_vitals({{'hr':80}}, '本日ご家族P80') == {{}}

@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 import semantic_projection
-import semantic_v4
+import semantic_publication
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _seeded
 
@@ -42,12 +42,12 @@ def test_projection_expiry_and_rollup_eviction_rollback_together(tmp_path):
         ledger.db.execute("CREATE TEMP TRIGGER deny_rollup_delete BEFORE DELETE ON artifacts "
                           "WHEN OLD.kind='patient_rollup' BEGIN SELECT RAISE(ABORT, 'synthetic eviction failure'); END")
         with pytest.raises(sqlite3.IntegrityError, match="synthetic eviction failure"):
-            semantic_v4.invalidate_projections(ledger.db, {"mode": "off"})
+            semantic_publication.invalidate_projections(ledger.db, {"mode": "off"})
         assert not ledger.db.in_transaction
         assert ledger.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0] == original
         assert ledger.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (rollup,)).fetchone()
         ledger.db.execute("DROP TRIGGER deny_rollup_delete")
-        assert semantic_v4.invalidate_projections(ledger.db, {"mode": "off"}) == 1
+        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 1
         meta = json.loads(ledger.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
         assert meta["invalidated"] is True and meta["invalidated_reason"] == "off"
         assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (rollup,)).fetchone()

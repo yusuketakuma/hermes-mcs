@@ -7,9 +7,9 @@ import pytest
 
 import semantic
 import semantic_drain
-import semantic_v4 as v4
+import semantic_publication as v4
 from semantic_policy import semantic_config
-from semantic_v4 import invalidate_projections
+from semantic_publication import invalidate_projections
 
 MALFORMED = ["{not json", "[1,2]", '"s"', "5", None]
 

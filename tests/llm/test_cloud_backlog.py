@@ -134,7 +134,7 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(backlog.subprocess, "Popen", Child)
-    first, second = backlog.Pool(tmp_path), backlog.Pool(tmp_path)
+    first, second = backlog.CloudBacklogPool(tmp_path), backlog.CloudBacklogPool(tmp_path)
     try:
         first.sync(cfg)
         assert len(children) == 2

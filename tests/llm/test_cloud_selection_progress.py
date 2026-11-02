@@ -1,4 +1,5 @@
 """Cloud selection progresses past unreceipted replies without widening history scope."""
+import extraction_context
 from contextlib import closing, contextmanager
 from decimal import Decimal
 import json
@@ -289,14 +290,13 @@ def test_isolated_receipt_snapshot_still_requires_fresh_authority_before_prepara
     monkeypatch.setattr(cloud_policy, "history_target_ready", revoke)
     report = _cloud_pass(led)
     assert revoked == [True] and report["selected"] == report["context_blocked"] == 64
-    assert report["done"] == 0 and not led.artifacts(extract_llm.patient_state_context.KIND)
+    assert report["done"] == 0 and not led.artifacts(extraction_context.KIND)
     assert calls == reservations == results == [] and _claim_count(led) == 0
 
 
-def test_incomplete_extract_selection_preserves_carry_and_unknown_counts(cloud_candidates, monkeypatch):
+def test_retained_extract_pass_skips_selection_and_preserves_unknown_counts(cloud_candidates, monkeypatch):
     led, carry, _, calls, reservations, results = _make_paid_carry(cloud_candidates, monkeypatch)
     clock = [time.monotonic()]
-    deadline = clock[0] + 180
     observed = []
 
     def incomplete(*args, **kwargs):
@@ -309,12 +309,35 @@ def test_incomplete_extract_selection_preserves_carry_and_unknown_counts(cloud_c
     monkeypatch.setattr(extract_llm, "_prepare_jobs", lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
     report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
                                      per_write_lock=True, carry=carry)
-    assert observed == [deadline] and report["carry"] is carry
-    assert report["cloud_selection_incomplete"] is True and report["cloud_selection_reason"] == "deadline"
-    assert report["selected"] is report["fresh_selected"] is report["left"] is report["left_estimate"] is None
+    assert observed == [] and report["carry"] is carry
+    assert report["carry_waiting"] is True and "cloud_selection_incomplete" not in report
+    assert report["selected"] == report["fresh_selected"] == 0
+    assert report["left"] is report["left_estimate"] is None
     assert report["left_estimate_age_s"] is None and report["queue_ages_s"] == {"oldest": None, "newest": None}
     assert report["done"] == 0 and len(calls) == len(reservations) == len(results) == 1
     assert len(carry) == 1 and _claim_count(led) == 1
+
+
+def test_empty_carry_still_reports_incomplete_selection(cloud_candidates, monkeypatch):
+    led, _, calls, reservations, results = cloud_candidates
+    carry = []
+    observed = []
+
+    def incomplete(*args, **kwargs):
+        observed.append(kwargs["deadline"])
+        raise extract_llm._CloudSelectionIncomplete("deadline")
+
+    monkeypatch.setattr(extract_llm, "_select_pending", incomplete)
+    monkeypatch.setattr(extract_llm, "_prepare_jobs",
+                        lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
+    report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
+                                    per_write_lock=True, carry=carry)
+    assert len(observed) == 1 and report["carry"] is carry
+    assert report["cloud_selection_incomplete"] is True and report["cloud_selection_reason"] == "deadline"
+    assert report["selected"] is report["fresh_selected"] is report["left"] is report["left_estimate"] is None
+    assert report["left_estimate_age_s"] is None and report["queue_ages_s"] == {"oldest": None, "newest": None}
+    assert report["done"] == 0 and calls == reservations == results == []
+    assert _claim_count(led) == 0
 
 
 @pytest.mark.parametrize("blocked_count", [0, 3])
@@ -335,7 +358,7 @@ def test_cloud_prepares_only_through_the_successful_claim(cloud_candidates, monk
     assert report["done"] == 1 and report["selected"] == 64
     assert report["context_blocked"] == report["deferred"] == blocked_count
     assert prepared == [row["message_id"] for row in selected[:blocked_count + 1]]
-    assert [row["message_id"] for row in led.artifacts(extract_llm.patient_state_context.KIND)] == [
+    assert [row["message_id"] for row in led.artifacts(extraction_context.KIND)] == [
         selected[blocked_count]["message_id"]]
     assert len(calls) == len(reservations) == len(results) == 1 and _claim_count(led) == 0
 
@@ -406,7 +429,7 @@ def test_two_connections_refill_a_claim_lost_after_selection(cloud_candidates, m
             assert first["done"] == 1 and first["selected"] == 64
             assert [r["message_id"] for r in _current_artifacts(led)] == [selected[1]["message_id"]]
             assert _claim_count(led) == 1  # The competing owner's lease remains intact.
-            assert {r["message_id"] for r in led.artifacts(extract_llm.patient_state_context.KIND)} == {
+            assert {r["message_id"] for r in led.artifacts(extraction_context.KIND)} == {
                 row["message_id"] for row in selected[:2]}
         finally:
             if competing:
@@ -522,6 +545,7 @@ def test_after_claim_checkpoint_replays_without_another_cloud_call(cloud_candida
     def checkpoint_after_claim(ledger, row, lease_s):
         lease = claim(ledger, row, lease_s)
         if lease is not None:
+            row["_chunk_size"] = extract_llm._saved_chunk_size(ledger.db, row, row["_context"])
             assert not extract_llm._saved_chunk_state(ledger.db, row, row["_context"],
                 chunk_size=row["_chunk_size"])[1]
             value = extract_llm.extract_validation.validate(
@@ -579,7 +603,7 @@ def test_claim_limit_and_after_claim_failure_release_owned_leases(cloud_candidat
     if failure is None:
         assert _cloud_pass(led, limit=2)["done"] == 2
         assert len(calls) == len(reservations) == len(results) == len(_current_artifacts(led)) == 2
-        assert len(led.artifacts(extract_llm.patient_state_context.KIND)) == 2
+        assert len(led.artifacts(extraction_context.KIND)) == 2
     else:
         with pytest.raises(RuntimeError, match="synthetic-after-claim"):
             _cloud_pass(led, limit=2)
@@ -866,13 +890,16 @@ def test_incomplete_selection_renews_then_saves_carried_paid_result(cloud_candid
         wall[0] += 300
         result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
             cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-        assert result['cloud_selection_incomplete'] is True and result['done'] == 0
+        assert 'cloud_selection_incomplete' not in result and result['done'] == 0
+        assert result['selected'] == result['fresh_selected'] == 0
+        assert result['left'] is result['left_estimate'] is None
         assert result['carry'] is carry and len(carry) == 1 and carry[0][1] > wall[0] + 120
         assert len(calls) == len(reservations) == len(results) == 1
     lock['held'] = True
     result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
         cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-    assert result['cloud_selection_incomplete'] is True and result['done'] == result['carried'] == 1
+    assert 'cloud_selection_incomplete' not in result and result['done'] == result['carried'] == 1
+    assert result['selected'] == result['fresh_selected'] == 0
     assert carry == [] and len(_current_artifacts(led)) == 1 and _claim_count(led) == 0
     assert len(calls) == len(reservations) == len(results) == 1
 
@@ -901,12 +928,15 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
         wall[0] = now
         result = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
             cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-        assert result['cloud_selection_incomplete'] is True and result['carry'] is carry and len(carry) == 1
+        assert 'cloud_selection_incomplete' not in result and result['carry'] is carry and len(carry) == 1
+        assert result['selected'] == result['fresh_selected'] == 0
+        assert result['left'] is result['left_estimate'] is None
         assert result['done'] == 0 and len(calls) == len(reservations) == len(results) == 1
     lock['held'] = True
     result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
         cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-    assert result['cloud_selection_incomplete'] is True and result['done'] == 0
+    assert 'cloud_selection_incomplete' not in result and result['done'] == 0
+    assert result['selected'] == result['fresh_selected'] == 0
     assert result['deferred'] == 1 and carry == [] and not _current_artifacts(led)
     assert len(calls) == len(reservations) == len(results) == 1
     from anthropic_client import AnthropicError
@@ -944,7 +974,8 @@ def test_paid_carry_scope_revocation_is_discarded_and_counted(cloud_candidates, 
     lock['held'] = True
     result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
         cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-    assert result['cloud_selection_incomplete'] is True
+    assert 'cloud_selection_incomplete' not in result
+    assert result['selected'] == result['fresh_selected'] == 0
     assert result['done'] == 0 and result['carried'] == 1 and result['deferred'] == 1
     assert carry == [] and _claim_count(led) == 0
     _assert_legacy_retained(led, prior)
@@ -1039,7 +1070,7 @@ def test_carry_partial_success_then_sqlite_error_retries_only_remaining(cloud_ca
     assert len(calls) == len(reservations) == len(results) == 2
 
 
-def test_successful_selection_short_budget_never_waits_past_deadline_for_carry(
+def test_retained_short_budget_skips_lock_wait_and_preserves_paid_result(
         cloud_candidates, tmp_path, monkeypatch):
     import os
     import writer_lock
@@ -1054,7 +1085,8 @@ def test_successful_selection_short_budget_never_waits_past_deadline_for_carry(
         clock[0] += seconds
     monkeypatch.setattr(extract_llm, '_write_lock', real_write_lock)
     monkeypatch.setattr(extract_llm, 'acquire_run_lock', lambda: writer_lock.acquire_run_lock(path))
-    monkeypatch.setattr(extract_llm, '_select_pending', lambda *a, **kw: ([], 0))
+    monkeypatch.setattr(extract_llm, '_select_pending', lambda *a, **kw:
+                        pytest.fail('retained pass must not select new work'))
     monkeypatch.setattr(extract_llm, '_gc_stale_artifacts', lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=lambda: clock[0], sleep=sleep, time=time.time, perf_counter=time.perf_counter))
@@ -1062,7 +1094,9 @@ def test_successful_selection_short_budget_never_waits_past_deadline_for_carry(
     try:
         report = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
             cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
-        assert clock[0] == pytest.approx(100.5)
+        assert clock[0] == 100.0
+        assert report['selected'] == report['fresh_selected'] == 0
+        assert report['left'] is report['left_estimate'] is None
         assert report['done'] == 0 and report['carry'] == [before]
         assert _claim_count(led) == 1 and not _current_artifacts(led)
         assert len(calls) == len(reservations) == len(results) == 1
@@ -1191,19 +1225,17 @@ def test_cloud_extract_exception_preserves_claim_only_after_observed_update(
 
 
 @pytest.mark.parametrize('updater_changed', [False, True])
-def test_cloud_tail_settle_exception_preserves_claim_only_after_observed_update(
+def test_carried_settle_exception_keeps_original_claim_without_new_selection(
         cloud_candidates, monkeypatch, updater_changed):
     led, carry, _, calls, reservations, results = _make_paid_carry(cloud_candidates, monkeypatch)
     cloud_candidates[1]['cloud_llm']['max_concurrency'] = 1
-    original_settle, original_release = extract_llm._settle_carry, extract_llm._release
+    original_release = extract_llm._release
     state, passes, releases = [(False, 1)], [], []
     def settle(*args, **kwargs):
         passes.append(True)
-        if len(passes) == 2:
-            if updater_changed:
-                state[0] = (False, 2)
-            raise sqlite3.OperationalError('synthetic settle exception')
-        return original_settle(*args, **kwargs)
+        if updater_changed:
+            state[0] = (False, 2)
+        raise sqlite3.OperationalError('synthetic settle exception')
     def release(*args):
         releases.append(True)
         return original_release(*args)
@@ -1214,10 +1246,9 @@ def test_cloud_tail_settle_exception_preserves_claim_only_after_observed_update(
         extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
             background=True, cloud_only=True, prioritize_patients=True,
             per_write_lock=True, carry=carry)
-    assert len(passes) == 2 and len(carry) == 1
-    assert _claim_count(led) == (2 if updater_changed else 1)
-    assert len(releases) == int(not updater_changed)
-    assert len(calls) == len(reservations) == len(results) == 2
+    assert len(passes) == 1 and len(carry) == 1
+    assert _claim_count(led) == 1 and releases == []
+    assert len(calls) == len(reservations) == len(results) == 1
     assert not _current_artifacts(led)
 
 

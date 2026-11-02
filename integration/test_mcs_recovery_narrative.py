@@ -73,7 +73,7 @@ import notify_transport  # noqa: E402
 import read_model  # noqa: E402
 import rollup  # noqa: E402
 import semantic_facts as sf  # noqa: E402
-import semantic_v4 as v4  # noqa: E402
+import semantic_publication as v4  # noqa: E402
 
 import discord_testkit as TD  # noqa: E402
 import slack_testkit as TS  # noqa: E402

@@ -15,7 +15,7 @@ import time
 
 from mcs_util import loads_dict
 from semantic_policy import JOB_KIND
-from semantic_v4 import ENGINE_VERSION
+from semantic_publication import ENGINE_VERSION
 from stats_math import finite_number
 
 KIND_V4_COHORT = "v4_retire_cohort"

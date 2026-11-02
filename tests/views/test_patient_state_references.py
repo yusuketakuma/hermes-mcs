@@ -8,7 +8,7 @@ import extract_llm as llm
 import inference_dependency_loss as dependency_loss
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import notify_views
-import patient_state_context as state
+import extraction_context as state
 import read_model
 import patient_context
 import rollup

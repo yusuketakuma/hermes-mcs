@@ -345,7 +345,7 @@ def _canonical_measurements(db, message, projection_row, cfg, patient_name):
     import semantic_projection
     import semantic_store
     import semantic_transport
-    import semantic_v4
+    import semantic_publication
 
     # Explicit mode prevents the omitted-mode API-key probe. Canonical promotion
     # validation may still read its separately owned approval receipt.
@@ -365,7 +365,7 @@ def _canonical_measurements(db, message, projection_row, cfg, patient_name):
             or semantic_policy.policy_fingerprint(policy) != meta.get("policy_fingerprint")):
         return None, 0
     member = next((item for item in bundle["members"] if item.get("message_id") == mid), None)
-    raw, error = semantic_v4.reproject_doc(db, mid, meta)
+    raw, error = semantic_publication.reproject_doc(db, mid, meta)
     if member is None or error or raw is None:
         return None, 0
     try:

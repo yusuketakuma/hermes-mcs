@@ -2,7 +2,7 @@
 
 Thread bundling, fingerprints, current-artifact lookup, and the
 durable Jev daily-usage counter. Policy constants come from
-semantic_policy. Projection lifecycle writes belong to semantic_v4."""
+semantic_policy. Projection lifecycle writes belong to semantic_publication."""
 from __future__ import annotations
 import semantic_llm
 import semantic_transport

@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "内部モジュールと共有APIを役割に合う名前へ整理",
+  "summary": "公開処理・変換処理・抽出の固定参照情報・患者背景の投影を担う内部モジュール名を整理しました。クラウド実行と課金証跡の共有APIも、実体のあるモジュールから直接使う名前へ統一しました。",
+  "upgrade": "既存の更新手順で常駐workerと利用中の通知接続へ反映してください。保存データや設定キーの書換えは不要です。推論エンジンv1.0・内部世代11・モデル・予算・人承認の条件は変わりません。",
+  "details": [
+    "semantic_publicationが公開、semantic_conversionが変換を担当します。extraction_contextはextract/llm配下へ移し、患者背景の投影はpatient_context_projectionに統一しました。",
+    "共通クラウド実行の5つの入口とCloudBacklogPool、reservation_evidence_batchを役割が分かる名前にし、extract_llmの非公開ヘルパーの再exportを除きました。課金証跡の検証条件と、同じ時点の読取りを維持します。",
+    "patient_state_context等の設定・保存キー、v4の保存kind、コード照合に使う既存の論理ラベルは維持します。旧候補と承認記録の採用条件を緩めず、生成するsource inventoryは新しい配置に合わせます。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_publication.py",
+    "mcs/semantic/semantic_conversion.py",
+    "mcs/extract/llm/extraction_context.py",
+    "mcs/patients/patient_context_projection.py",
+    "mcs/llm/cloud_inference.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_backlog.py"
+  ]
+}

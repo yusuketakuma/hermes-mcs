@@ -12,7 +12,7 @@ import extract_llm
 import semantic_extraction as extraction
 import semantic_facts
 import semantic_relations
-import semantic_v4
+import semantic_publication
 import test_extract_upgrade_preservation as upgrade_cases
 import test_hint_rebuild_pass as hint_cases
 import test_semantic_facts_v2 as fact_cases
@@ -151,12 +151,12 @@ def test_fixed_synthetic_assembly_meaning(request, tmp_path, monkeypatch, pytest
                         db.db.execute("UPDATE artifacts SET content=json_set(content,'$.body_codepoints',-1) "
                                       "WHERE kind='semantic_source_manifest' AND message_id=2")
                         db.db.commit()
-                    result = semantic_v4.reproject_stale(db, hint_cases._scfg())
+                    result = semantic_publication.reproject_stale(db, hint_cases._scfg())
                     reason = ("manifest_changed" if name == "manifest_change_before_cache_miss"
                               else "chunk_cache_miss")
                     assert result["skip_reasons"]["hint_rebuild:" + reason] == 1
                     assert all(meta.get("invalidated") is True
-                               for meta in hint_cases._meta(db, semantic_v4.KIND_V4, 2))
+                               for meta in hint_cases._meta(db, semantic_publication.KIND_V4, 2))
                     assert hint_cases._job(db)[0] == "pending"
                     observations[name] = result
                 if name in ("old_rule_same_vs_held", "missing_preflight"):

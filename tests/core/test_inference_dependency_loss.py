@@ -12,7 +12,7 @@ import cloud_client
 import inference_dependency_loss as loss
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import patient_context_artifacts as context_artifacts
-import patient_context_state as state
+import patient_context_projection as state
 from mcs_util import payload_hash
 from semantic_testkit import _ledger, _message, _patient
 
@@ -642,7 +642,7 @@ def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key
     source_key = source.get('source_key', mid)
     binding = loss.source_binding(store.db, pid, mid,
         **({'source_key': source_key} if type(source_key) is str else {}))
-    provider = cloud_inference._cloud_contract(selection={
+    provider = cloud_inference.cloud_provider_contract(selection={
         'provider': 'anthropic', 'model': cloud_policy.MODEL, 'effort': 'low'})
     contract = {'model': 'synthetic-local', 'provider': provider}
     origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
@@ -1147,7 +1147,7 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
                   'policy':semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
-    contract = {'model':'synthetic-local', 'provider':cloud_inference._cloud_contract(selection={
+    contract = {'model':'synthetic-local', 'provider':cloud_inference.cloud_provider_contract(selection={
         'provider':'anthropic', 'model':cloud_policy.MODEL, 'effort':'low'})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],

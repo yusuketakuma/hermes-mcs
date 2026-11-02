@@ -138,9 +138,9 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker, 'load_config', lambda: {})
-    monkeypatch.setattr(cloud_inference, '_cloud_settings',
+    monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings',
                         lambda cfg: {'mode': 'off', 'max_concurrency': 1})
-    monkeypatch.setattr(worker.cloud_backlog, 'Pool', Pool)
+    monkeypatch.setattr(worker.cloud_backlog, 'CloudBacklogPool', Pool)
     monkeypatch.setattr(worker, 'legacy_admissions', lambda *args: None)
     monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(worker.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))

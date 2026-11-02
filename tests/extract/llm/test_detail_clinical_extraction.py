@@ -1,4 +1,5 @@
 """Synthetic full-detail and bounded dense-output extraction checks."""
+import extraction_context
 import extract_quality
 import extract_schema
 import extract_validation
@@ -21,13 +22,13 @@ def _framed_source(db, row):
     source = dict(row)
     source["_source_binding"] = dependency_loss.source_binding(db.db, source["project_id"], source["message_id"])
     saved = db.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1", (extract_llm.patient_state_context.KIND, source["message_id"])).fetchone()
+        "ORDER BY artifact_id DESC LIMIT 1", (extraction_context.KIND, source["message_id"])).fetchone()
     if saved is None:
         rows, _ = extract_llm._select_pending(db, 1, {source["message_id"]}, None, False)
         jobs, _, blocked = extract_llm._prepare_jobs(db, rows, extract_llm._resolved_llm(), False)
         assert not blocked and len(jobs) == 1
         return jobs[0][0]
-    frame = extract_llm.patient_state_context.load(db.db, saved[0], source)
+    frame = extraction_context.load(db.db, saved[0], source)
     assert frame is not None
     return {**source, "_frame": frame, "_context": frame["text"], "_target": extract_llm._resolved_llm()}
 

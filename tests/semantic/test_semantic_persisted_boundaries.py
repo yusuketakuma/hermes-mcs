@@ -7,8 +7,8 @@ import pytest
 
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
-import semantic_v4 as v4
-import semantic_v4_cohort as cohort
+import semantic_publication as v4
+import semantic_conversion as cohort
 import semantic_send_gate as send_gate
 import semantic_observe as observe
 import semantic_runtime as runtime

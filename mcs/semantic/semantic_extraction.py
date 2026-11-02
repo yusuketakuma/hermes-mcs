@@ -242,7 +242,7 @@ def _provider_from_reservation(row, prepared, reservation):
         elif effort is not None or profile is not None:
             return None
         selection = {"provider": provider, "model": actual, "effort": effort}
-        return provider if contract == cloud_inference._cloud_contract(selection=selection) else None
+        return provider if contract == cloud_inference.cloud_provider_contract(selection=selection) else None
     except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError):
         return None
 
@@ -280,7 +280,7 @@ def _cached_providers(db, rows, expected_model):
             if key not in references:
                 references[key] = _provider_reservation_id(db, row, candidate[3])
         ids = list(dict.fromkeys(aid for aid in references.values() if aid is not None))
-        proofs = cloud_policy._reservation_evidence_batch(db, ids) if ids else {}
+        proofs = cloud_policy.reservation_evidence_batch(db, ids) if ids else {}
     except ValueError:
         # One missing/unknown receipt must not hide another candidate's valid
         # proof. Replay the original decisions in their original order.
@@ -427,7 +427,7 @@ def _adopt_cached_chunk(cached, index, content, meta, provider, expected_provide
             actual_contract = meta.get('actual_contract')
             if actual_contract is None and provider is not None:
                 import cloud_inference
-                actual_contract = cloud_inference._cloud_contract(selection={
+                actual_contract = cloud_inference.cloud_provider_contract(selection={
                     'provider': provider, 'model': meta.get('actual_model'),
                     'effort': 'low' if provider == 'openai' else None})
             if expected_contract is not None and actual_contract != expected_contract:
@@ -445,7 +445,7 @@ def _adopt_cached_chunk(cached, index, content, meta, provider, expected_provide
                 contract = meta.get('actual_contract')
                 if contract is None:
                     import cloud_inference
-                    contract = cloud_inference._cloud_contract(selection={
+                    contract = cloud_inference.cloud_provider_contract(selection={
                         'provider': provider, 'model': meta.get('actual_model'),
                         'effort': 'low' if provider == 'openai' else None})
                 cached[index]['producer_contract'] = contract
@@ -528,7 +528,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
     """Count only current-plan checkpoints; completion requires the existing audited publication gate."""
     import semantic_llm
     from semantic_store import thread_bundle
-    from semantic_v4 import reproject_doc
+    from semantic_publication import reproject_doc
     from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
 
     source = row.get("body_text")

@@ -71,7 +71,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
     import local_llm
     import semantic_extraction
     import extract_llm
-    import patient_state_context
+    import extraction_context
     if local_llm.admission_enabled():
         raise EvaluationError('shared_admission_evaluation_forbidden')
     endpoint, model = local_llm.resolve(cfg)
@@ -153,7 +153,7 @@ def generate(snapshot: dict, cfg: dict, authorization: dict | None = None) -> di
                 arm_cfg.setdefault('extract', {})['patient_state_context'] = enabled
                 outputs = []
                 for message in selected_messages:
-                    context, references = patient_state_context.format_state(
+                    context, references = extraction_context.format_state(
                         message.get('patient_reports', [])) if enabled else ('', {})
                     result = extract_llm.llm_extract(message['body'], context=context or None,
                                                     references=references or None,

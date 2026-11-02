@@ -166,7 +166,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     def get_provider(purpose):
         if purpose not in providers:
-            providers[purpose] = cloud_inference._CloudProvider(
+            providers[purpose] = cloud_inference.CloudInferenceUnit(
                 ledger, cfg, route="semantic_backlog", purpose=purpose, project_id=job["project_id"],
                 message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
                 deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)

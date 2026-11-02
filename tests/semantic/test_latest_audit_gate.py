@@ -116,7 +116,7 @@ def test_canonical_latest_fact_audit_and_projection_gate_notice(tmp_path, monkey
     import time
     import semantic_drain
     import semantic_jev
-    import semantic_v4
+    import semantic_publication
     from semantic_testkit import _canonical_cfg, _drain, _llm_v2, _PassJev, _seeded_two
 
     db = _seeded_two(tmp_path)
@@ -138,7 +138,7 @@ def test_canonical_latest_fact_audit_and_projection_gate_notice(tmp_path, monkey
         assert event is not None
         payload = json.loads(event["payload"])
         gate.semantic_gate(db.db, event, payload, cfg)
-        kind = (semantic_v4.KIND_V4_SKIPPED if status == "SKIPPED" else semantic_v4.KIND_V4) \
+        kind = (semantic_publication.KIND_V4_SKIPPED if status == "SKIPPED" else semantic_publication.KIND_V4) \
             if tamper == "projection_invalidated" else semantic_policy.KIND_FACT_AUDIT
         row = db.artifacts(kind, message_id=1)[-1]
         meta, content = json.loads(row["meta"]), json.loads(row["content"])

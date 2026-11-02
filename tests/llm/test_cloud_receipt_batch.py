@@ -30,7 +30,7 @@ def test_batch_preserves_individual_witnesses_and_one_global_scan(tmp_path, now)
         db.db.execute('BEGIN')
         db.db.set_trace_callback(statements.append)
         try:
-            assert cloud_policy._reservation_evidence_batch(db.db, ids) == expected
+            assert cloud_policy.reservation_evidence_batch(db.db, ids) == expected
             assert db.db.in_transaction and db.db.total_changes == before
         finally:
             db.db.set_trace_callback(None)
@@ -45,7 +45,7 @@ def test_batch_rejects_bool_even_if_equal_to_a_valid_id(tmp_path, now):
         ids = _receipts(db, 1)
         assert ids[0] == 1
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
-            cloud_policy._reservation_evidence_batch(db.db, [ids[0], True])
+            cloud_policy.reservation_evidence_batch(db.db, [ids[0], True])
 
 
 @pytest.mark.parametrize('bad', ['{broken', '{"x":1,"x":2}', '{"value":1e999}', '[]'])
@@ -56,7 +56,7 @@ def test_foreign_corrupt_accounting_holds_every_batch_proof(tmp_path, now, bad):
         with db.db:
             db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_disposition'", (bad,))
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
-            cloud_policy._reservation_evidence_batch(db.db, ids)
+            cloud_policy.reservation_evidence_batch(db.db, ids)
         assert not db.db.in_transaction
 
 
@@ -65,14 +65,14 @@ def test_batch_never_reuses_proof_after_same_connection_write(tmp_path, now):
         ids = _receipts(db, 2)
         db.db.execute('BEGIN')
         try:
-            assert len(cloud_policy._reservation_evidence_batch(db.db, ids)) == 2
+            assert len(cloud_policy.reservation_evidence_batch(db.db, ids)) == 2
             db.db.execute("UPDATE artifacts SET meta='{broken' WHERE artifact_id=?", (ids[1],))
             with pytest.raises(ValueError, match='cloud_receipt_invalid'):
-                cloud_policy._reservation_evidence_batch(db.db, ids)
+                cloud_policy.reservation_evidence_batch(db.db, ids)
             assert db.db.in_transaction
         finally:
             db.db.rollback()
-        assert len(cloud_policy._reservation_evidence_batch(db.db, ids)) == 2
+        assert len(cloud_policy.reservation_evidence_batch(db.db, ids)) == 2
 
 
 def test_batch_proof_tracks_its_borrowed_snapshot_and_next_read(tmp_path, now):
@@ -82,15 +82,15 @@ def test_batch_proof_tracks_its_borrowed_snapshot_and_next_read(tmp_path, now):
         other = db.artifact_add('cloud_usage_disposition', '{}', project_id=2)
         db.db.execute('BEGIN')
         try:
-            expected = cloud_policy._reservation_evidence_batch(db.db, ids)
+            expected = cloud_policy.reservation_evidence_batch(db.db, ids)
             with sqlite3.connect(path) as writer:
                 writer.execute("UPDATE artifacts SET meta='{broken' WHERE artifact_id=?", (other,))
-            assert cloud_policy._reservation_evidence_batch(db.db, ids) == expected
+            assert cloud_policy.reservation_evidence_batch(db.db, ids) == expected
             assert db.db.in_transaction
         finally:
             db.db.rollback()
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
-            cloud_policy._reservation_evidence_batch(db.db, ids)
+            cloud_policy.reservation_evidence_batch(db.db, ids)
 
 
 def test_batch_keeps_original_sqlite_error_when_caller_rolls_back(tmp_path, monkeypatch):
@@ -100,7 +100,7 @@ def test_batch_keeps_original_sqlite_error_when_caller_rolls_back(tmp_path, monk
             raise sqlite3.OperationalError('synthetic interruption')
         monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
         with pytest.raises(sqlite3.OperationalError, match='synthetic interruption'):
-            cloud_policy._reservation_evidence_batch(db.db, [1])
+            cloud_policy.reservation_evidence_batch(db.db, [1])
 
 
 @pytest.mark.parametrize('borrowed', [False, True])
@@ -116,7 +116,7 @@ def test_batch_persistent_cancel_preserves_caller_transaction_and_handler(tmp_pa
         monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
         try:
             with pytest.raises(sqlite3.OperationalError) as caught:
-                cloud_policy._reservation_evidence_batch(db, [1])
+                cloud_policy.reservation_evidence_batch(db, [1])
             assert caught.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
             assert db.in_transaction is borrowed
             with pytest.raises(sqlite3.OperationalError):

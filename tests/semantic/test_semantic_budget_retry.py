@@ -96,7 +96,7 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
                 raise ValueError('synthetic-receipt-invalid')
             return {}
 
-        monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', verify)
+        monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', verify)
         assert semantic_drain._summary_repair_evidence(
             db.db, bundle, result, evidence, fp, policy, revision, render_phase='pre_render')
         rendered = copy.deepcopy(result)
@@ -503,7 +503,7 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         return {}
 
     monkeypatch.setattr(semantic_audit, 'audit_claims', audit)
-    monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', verify)
+    monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', verify)
     monkeypatch.setattr(semantic_transport, 'inference_requests', lambda: list(state['requests']))
     monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: state['receipt'])
     monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: (

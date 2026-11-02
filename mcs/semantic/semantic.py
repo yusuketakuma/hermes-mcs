@@ -92,7 +92,7 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
     labelled gate evidence) stays with `mcs_setup fact-source`."""
     from semantic_policy import (KIND_FACTS_V2, KIND_FACT_AUDIT,
                                  KIND_FACT_PROJ)
-    from semantic_v4 import KIND_V4
+    from semantic_publication import KIND_V4
     from mcs_queries import json_object_or_null
     out = {"scope": "history", "fact_source": None, "shadow_v2_docs": 0,
            "v2_coverage_complete": 0, "v2_needs_review": 0,

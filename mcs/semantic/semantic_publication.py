@@ -155,7 +155,7 @@ def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
                     or not answer['unit_key'].startswith('semantic:')):
                 raise semantic_runtime.RuntimeStale('repair_receipt_invalid')
             try:
-                cloud_inference._cloud_repair_answer_evidence(
+                cloud_inference.verify_cloud_repair_evidence(
                     db, reservation_artifact_id=rows[0]['artifact_id'], reservation_id=answer['reservation_id'],
                     route='semantic_backlog', project_id=pid, message_id=mid, unit_key=answer['unit_key'],
                     owner=owner, prompt=prompt, answer_text=answer['text'], contract=answer['contract'])

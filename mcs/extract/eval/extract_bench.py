@@ -464,7 +464,7 @@ def _case_context(case, mode):
     base = case.get("context")
     if mode == "off" or not case.get("patient_state"):
         return base, {}
-    import patient_state_context
+    import extraction_context
     from patient_context import pharmacy_state_items
     history = case["patient_state"]
     if not isinstance(history, list) or len(history) > 200:
@@ -486,7 +486,7 @@ def _case_context(case, mode):
             reports.append({**report, "reference_eligible": True})
     reports.sort(key=lambda item: (item["posted_at_ts"], item["message_id"]), reverse=True)
     prefix = (base or "") + ("\n" if base and not base.endswith("\n") else "")
-    text, refs = patient_state_context.format_state(reports, budget=1200 - len(prefix))
+    text, refs = extraction_context.format_state(reports, budget=1200 - len(prefix))
     return (prefix + text if text else base), refs
 
 

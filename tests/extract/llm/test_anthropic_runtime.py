@@ -121,7 +121,7 @@ def test_cloud_unit_pins_profile_through_body_and_reservation(routed, monkeypatc
                 "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
                           "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
-    provider = cloud_inference._CloudProvider(led, cfg, route=route, purpose=purpose, project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route=route, purpose=purpose, project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 120,
         current=lambda: True, dispatch=lambda fn, **_kwargs: fn())
     response = provider("synthetic prompt", deadline=time.monotonic() + 120, max_tokens=1600)
@@ -129,7 +129,7 @@ def test_cloud_unit_pins_profile_through_body_and_reservation(routed, monkeypatc
     assert received[0]["model"] == model and received[0]["reasoning"] == {"effort": effort}
     assert received[0]["max_output_tokens"] == tokens
     assert dict(reserved[0]["identity"]["selection"]) == dict(provider.selection)
-    assert provider.contract == cloud_inference._cloud_contract(selection=provider.selection)
+    assert provider.contract == cloud_inference.cloud_provider_contract(selection=provider.selection)
 
 
 @pytest.mark.parametrize("change", ["none", "answer", "prompt", "contract", "owner", "unit", "missing_hash", "missing_finish"])
@@ -160,7 +160,7 @@ def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeyp
             result.pop("answer_finish_reason_v1")
         real_record_result(ledger, reservation, result)
         row = ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()
-        contract = cloud_inference._cloud_contract(selection=selection)
+        contract = cloud_inference.cloud_provider_contract(selection=selection)
         args = {"reservation_artifact_id": row[0], "reservation_id": reservation["reservation_id"],
                 "route": "reextract", "project_id": 1, "message_id": 1,
                 "unit_key": "synthetic-unit", "owner": owner, "prompt": prompt,
@@ -176,7 +176,7 @@ def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeyp
         elif change == "unit":
             args["unit_key"] = "other-unit"
         if change == "none":
-            assert cloud_inference._cloud_repair_answer_evidence(ledger.db, **args)["reservation"] == reservation
+            assert cloud_inference.verify_cloud_repair_evidence(ledger.db, **args)["reservation"] == reservation
             from types import SimpleNamespace
             provider = SimpleNamespace(completed_reservations=[reservation], ledger=ledger,
                 contract=contract, purpose="quality_repair", dispatch=lambda fn, **_kwargs: fn())
@@ -185,7 +185,7 @@ def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeyp
             assert origin["reservation_id"] == reservation["reservation_id"] and origin["witness"]
         else:
             with pytest.raises(ValueError):
-                cloud_inference._cloud_repair_answer_evidence(ledger.db, **args)
+                cloud_inference.verify_cloud_repair_evidence(ledger.db, **args)
     finally:
         ledger.close()
 
@@ -209,7 +209,7 @@ def test_pending_repair_origin_rebuilds_prompt_from_current_source(tmp_path, mon
         selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
         assert not errors
         monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, *, model=None: True)
-        contract = cloud_inference._cloud_contract(selection=selection)
+        contract = cloud_inference.cloud_provider_contract(selection=selection)
         row.update(_target=("", selection["model"]), _provider_contract=contract)
         prefix, _ = worker._extract_prompt_context(None, None, None)
         hints = worker._rule_hints(row)
@@ -318,13 +318,13 @@ def test_paid_cloud_split_resumes_completed_children_without_resending(routed, m
             "stop_reason": "max_tokens" if length else "end_turn", "content": content,
             "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
 
-    class PausedProvider(cloud_inference._CloudProvider):
+    class PausedProvider(cloud_inference.CloudInferenceUnit):
         paused = False
 
         def __call__(self, prompt, **kwargs):
             if len(pieces) == 2 and not self.paused:
                 self.paused = True
-                raise worker.CloudBusy("synthetic-before-next-child")
+                raise cloud_inference.CloudBusy("synthetic-before-next-child")
             return super().__call__(prompt, **kwargs)
 
     monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", AnthropicClient)
@@ -334,7 +334,7 @@ def test_paid_cloud_split_resumes_completed_children_without_resending(routed, m
     provider = PausedProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic-split",
         deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
     completed, splits = {}, {}
-    with pytest.raises(worker.CloudBusy, match="synthetic-before-next-child"):
+    with pytest.raises(cloud_inference.CloudBusy, match="synthetic-before-next-child"):
         worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_out=completed,
                            on_split=lambda key, size: splits.__setitem__(key, size))
     assert len(completed) == 1 and splits and len(prompts) == 2
@@ -385,9 +385,9 @@ def test_malformed_thinking_never_creates_cloud_splits_or_extra_http(routed, mon
     monkeypatch.setattr(AnthropicClient, "request", wire)
     monkeypatch.setattr(cloud_policy, "record_result", recorded)
     deadline = time.monotonic() + 180
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic-invalid",
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic-invalid",
         deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_failed"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_failed"):
         worker.llm_extract("完全合成の本文です。", provider=provider, deadline=deadline,
                            chunks_out=completed, on_split=lambda *args: splits.append(args))
     assert not splits and not completed
@@ -537,8 +537,8 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
         assert meta["actual_model"] == cloud_policy.cloud_config(cfg)[0]["model"]
-        assert meta["prompt"] == cloud_inference._cloud_contract()["prompt"] and "code_contract" not in meta
-        assert meta["config_generation"] == cloud_policy.config_generation({"cloud_llm": cloud_inference._cloud_settings(cfg)})
+        assert meta["prompt"] == cloud_inference.cloud_provider_contract()["prompt"] and "code_contract" not in meta
+        assert meta["config_generation"] == cloud_policy.config_generation({"cloud_llm": cloud_inference.resolve_cloud_settings(cfg)})
     assert not led.artifacts("extract_llm_chunk")
 
 
@@ -658,7 +658,7 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
 
 def test_injected_call_keeps_existing_json_validation(routed):
     led, cfg, *_ = routed
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {"symptoms": []}
@@ -681,7 +681,7 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
             return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop", "model": "gpt-6-luna"}
 
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     assert provider.model == provider.contract["model"] == "gpt-6-luna"
@@ -698,7 +698,7 @@ def test_cloud_failure_restarts_whole_post_with_local_checkpoint_contract(routed
         trace.append((kwargs.get("provider") is not None, kwargs["chunks_in"].copy()))
         if kwargs.get("provider"):
             kwargs["chunks_out"][0] = {"summary": "synthetic-cloud"}
-            raise worker.CloudFallback("synthetic_failure")
+            raise cloud_inference.CloudFallback("synthetic_failure")
         assert not kwargs["chunks_in"]
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
@@ -734,10 +734,10 @@ def test_same_source_is_checked_again_after_durable_reservation(routed, monkeypa
             return result
         return changed
     monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: valid[0], dispatch=lambda fn, **kw: fn())
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_inference.CloudFallback):
         provider("synthetic", deadline=time.monotonic() + 180, max_tokens=100)
     assert len(reserved) == 1 and not calls
     assert not led.artifacts("cloud_usage_disposition") and not led.db.in_transaction
@@ -784,7 +784,7 @@ def test_commit_rechecks_cloud_permission_after_writer_transaction_starts(routed
     def revoked():
         assert led.db.in_transaction
         checked.append(True)
-        raise worker.CloudFallback("scope_changed")
+        raise cloud_inference.CloudFallback("scope_changed")
     row["_cloud_guard"] = revoked
     assert worker._replace_current(led, row, "{}") is False
     assert checked == [True]
@@ -794,16 +794,16 @@ def test_commit_rechecks_cloud_permission_after_writer_transaction_starts(routed
 
 def test_saved_provider_contract_is_the_fixed_request_shape_and_a_fresh_copy():
     # operating limits, rule versions and code releases are not part of it
-    before = cloud_inference._cloud_contract()
+    before = cloud_inference.cloud_provider_contract()
     assert before == {"backend": "anthropic", "model": worker.anthropic_client.MODEL, "prompt": before["prompt"]}
     assert len(before["prompt"]) == 16 and "code_contract" not in before and "config_generation" not in before
     before["model"] = "edited"
-    assert cloud_inference._cloud_contract()["model"] == worker.anthropic_client.MODEL
+    assert cloud_inference.cloud_provider_contract()["model"] == worker.anthropic_client.MODEL
 
 
 def test_cloud_call_resets_prior_unit_integrity_and_records_once(routed):
     led, cfg, calls, reservations, results = routed
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     notes = worker._note_list()
@@ -966,12 +966,12 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
     def dispatch(fn, *, result=False):
         dispatches.append(result)
         return fn()
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=clock() + 180, current=lambda: True, dispatch=dispatch)
     assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == '{"symptoms":[]}'
     assert outcomes == [{"http_class": "success"}]
     assert dispatches[-2:] == [True, True]
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_inference.CloudFallback):
         provider("new-send", deadline=clock() + 180, max_tokens=100)
     assert calls == ["synthetic"]
 
@@ -1035,7 +1035,7 @@ def test_failed_shadow_attempt_keeps_unit_and_unknown_quality_denominators(route
     old(led)
     def extract(body, **kwargs):
         if kwargs.get("provider"):
-            raise worker.CloudFallback("synthetic_transport")
+            raise cloud_inference.CloudFallback("synthetic_transport")
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     assert worker.run_pending(led, budget_s=180)["done"] == 1
@@ -1130,11 +1130,11 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     monkeypatch.setattr(AnthropicClient, "request", request)
     deadline = time.monotonic() + 180
     def provider():
-        return cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+        return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
 
     first = provider()
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
         first("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(posts) == len(reserves) == len(results) == 1
@@ -1144,7 +1144,7 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     assert result["usage"]["input_tokens"] == 10 and result["usage"]["output_tokens"] == 5
     assert result["disposition"] == "discarded_scope" and not led.db.in_transaction
     unavailable[0] = False
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_inference.CloudFallback):
         first("synthetic", deadline=deadline, max_tokens=100)
     with pytest.raises(cloud_client.CloudNotSent) as blocked:
         provider()("synthetic", deadline=deadline, max_tokens=100)
@@ -1168,9 +1168,9 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
     deadline = time.monotonic() + 180
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(reserves) == len(results) == (1 if fails_on_read == 4 else 0)
@@ -1194,9 +1194,9 @@ def test_transient_read_error_after_reservation_stays_unsent_and_discarded(route
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
     deadline = time.monotonic() + 180
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
@@ -1223,11 +1223,11 @@ def test_capacity_read_failure_discards_previously_settled_response(routed, monk
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", request)
     deadline = time.monotonic() + 180
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
     provider("synthetic", deadline=deadline, max_tokens=100)
     unavailable[0] = True
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
@@ -1248,7 +1248,7 @@ def test_http_deadline_reserves_existing_commit_margin_without_changing_unit_dea
         seen.append(kwargs["deadline"])
         return original(self, prompt, **kwargs)
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, "complete", complete)
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=unit_deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
     assert provider("synthetic", deadline=repair_deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
@@ -1260,10 +1260,10 @@ def test_http_deadline_reserves_existing_commit_margin_without_changing_unit_dea
 def test_commit_margin_exhaustion_never_reserves_or_sends(routed, remaining):
     led, cfg, calls, reserved, results = routed
     deadline = time.monotonic() + remaining
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.CloudFallback, match="cloud_unit_deadline"):
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_deadline"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     assert not calls and not reserved and not results
     assert not led.artifacts("cloud_usage_disposition") and not led.db.in_transaction
@@ -1348,7 +1348,7 @@ def test_each_new_reservation_reads_the_budget_in_force_now(routed, monkeypatch)
     monkeypatch.setattr(cloud_policy, "usage_reserver",
                         lambda ledger, config, **identity: lambda body, timeout: seen.append(
                             config["cloud_llm"]["daily_request_budget"]))
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="1",
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="1",
         deadline=time.monotonic() + 60, current=lambda: True, dispatch=lambda fn, **kw: fn())
     provider.reserve({"model": "x", "max_tokens": 1}, 1)
     cfg["cloud_llm"]["daily_request_budget"] = 0       # lowered while the unit is running
@@ -1458,15 +1458,15 @@ def test_unreadable_config_never_auto_enables_the_paid_route(routed):
     # load_config() answers {} when config.json cannot be read; with a key in
     # .env the absent-block default would be "on", so {} must read as off
     led, *_ = routed
-    assert cloud_inference._cloud_settings({})["mode"] == "off"
+    assert cloud_inference.resolve_cloud_settings({})["mode"] == "off"
     assert worker._cloud_mode(led, {}, "reextract", 1) == "off"
     # A readable config uses the spending defaults, without changing its scope.
-    defaults = cloud_inference._cloud_settings({"mcs_login_id": "synthetic"})
+    defaults = cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic"})
     assert defaults["mode"] == "on" and defaults["project_ids"] is None
     assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (25, 75)
-    assert cloud_inference._cloud_settings({"mcs_login_id": "synthetic", "cloud_llm": {
+    assert cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic", "cloud_llm": {
         "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}})["mode"] == "off"
-    assert cloud_inference._cloud_settings({"mcs_login_id": "synthetic",
+    assert cloud_inference.resolve_cloud_settings({"mcs_login_id": "synthetic",
                                    "cloud_llm": {"daily_cost_limit_usd": 2}})["mode"] == "on"
 
 
@@ -1478,7 +1478,7 @@ def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed
     def extract(body, **kwargs):
         if kwargs.get("provider"):
             original(body, **kwargs)      # the paid attempt is sent and settled
-            raise worker.CloudFallback("cloud_incomplete_response")
+            raise cloud_inference.CloudFallback("cloud_incomplete_response")
         pytest.fail("local must not run while its breaker is open")
     monkeypatch.setattr(worker, "llm_extract", extract)
     report = worker.run_pending(led, budget_s=180)
@@ -1491,24 +1491,24 @@ def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed
 
 def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed, monkeypatch):
     led, cfg, calls, reserved, _ = routed
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     provider.guard()                                   # inside the window: the attempt may POST
     cfg["cloud_llm"]["until"] = "2000-01-01T00:00:00+00:00"
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_inference.CloudFallback):
         provider.guard()                               # every later attempt or retry is refused
     provider.commit_guard()                            # a response that already arrived is still saved
     # A stop or expired pricing after the response stops new sends, not the paid result.
     with monkeypatch.context() as patch:
         patch.setattr(cloud_policy, "global_block_reason", lambda ledger, **kwargs: "paused")
-        with pytest.raises(worker.CloudFallback):
+        with pytest.raises(cloud_inference.CloudFallback):
             provider.guard()
         provider.commit_guard()
     cfg["cloud_llm"]["until"] = "2999-01-01T00:00:00+00:00"
     cfg["cloud_llm"]["window_start"], cfg["cloud_llm"]["window_budget_usd"] = "2999-01-01T00:00:00+00:00", 1
     cfg["cloud_llm"]["until"] = "2999-01-02T00:00:00+00:00"
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_inference.CloudFallback):
         provider.guard()                               # before the period starts nothing is sent
 
 
@@ -1558,10 +1558,10 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     monkeypatch.setattr(worker, "HOME", str(tmp_path))
     monkeypatch.setattr(worker, "Ledger", lambda *args: ledger)
     monkeypatch.setattr(ledger, "close", lambda: events.append("ledger_closed"))
-    monkeypatch.setattr(worker.cloud_backlog, "Pool", Pool)
+    monkeypatch.setattr(worker.cloud_backlog, "CloudBacklogPool", Pool)
     monkeypatch.setattr(worker, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
-    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: {"mode": "off", "max_concurrency": 1})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "off", "max_concurrency": 1})
     monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)
     monkeypatch.setattr(worker.extract_validation, "vital_threshold_policy", lambda cfg: None)
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
@@ -1646,7 +1646,7 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(worker, "Ledger", lambda *args: ledger)
     monkeypatch.setattr(ledger, "close", lambda: events.append("ledger_closed"))
-    monkeypatch.setattr(worker.cloud_backlog, "Pool", Pool)
+    monkeypatch.setattr(worker.cloud_backlog, "CloudBacklogPool", Pool)
     monkeypatch.setattr(worker, "load_config", load)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)
@@ -1720,7 +1720,7 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     assert json.loads(led.artifacts("cloud_usage_result")[0]["meta"]) == first_result
 
     deadline = time.monotonic() + 180
-    next_unit = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
+    next_unit = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         message_id=2, unit_key="synthetic-next", deadline=deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
     with pytest.raises(cloud_client.CloudNotSent) as denied:
@@ -1852,14 +1852,14 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
             break
         else:
             pytest.fail('missing requested paid repair answer')
-        original_evidence = cloud_inference._cloud_repair_answer_evidence
+        original_evidence = cloud_inference.verify_cloud_repair_evidence
         def evidence(*args, **kwargs):
             try:
                 return original_evidence(*args, **kwargs)
             except ValueError:
                 evidence_failures.append((kwargs['reservation_id'], kwargs['finish_reason']))
                 raise
-        monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', evidence)
+        monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', evidence)
     if damage in ('proof_missing', 'answer_changed', 'repair_answer_changed'):
         with led.db:
             changed_meta = json.loads(final['meta'])

@@ -15,7 +15,7 @@ import notify_sender
 import semantic_blind as blind
 import semantic_evaluation as evaluation
 import semantic_lifecycle as lifecycle
-import semantic_v4
+import semantic_publication
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_evaluation import EvaluationError
 from semantic_render import mandatory_render, render_notice
@@ -346,7 +346,7 @@ def test_verified_stage_matches_the_publication_gate(tmp_path, audit):
     try:
         _later_audit(db, facts, audit)
         doc_hash = semantic_facts.doc_hash(_doc(facts))
-        gate_doc, reason = semantic_v4.reproject_doc(
+        gate_doc, reason = semantic_publication.reproject_doc(
             db.db, 1, _meta(doc_hash=doc_hash))
         got = _read(tmp_path, final_id)
         if audit == "PASS":

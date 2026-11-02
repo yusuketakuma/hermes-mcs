@@ -1,4 +1,5 @@
 """Synthetic replay/currentness contracts; no model-quality or production acceptance."""
+import cloud_inference
 import json
 import time
 import sqlite3
@@ -532,7 +533,7 @@ def test_analysis_adoption_rechecks_without_reseed_or_new_attempt_budget(store):
 
 
 def test_publication_reuse_and_diagnostics_do_not_advance_analysis_witness(store):
-    import semantic_v4
+    import semantic_publication
     from semantic_testkit import v2_doc
     _save(store)
     _replay(store)
@@ -541,11 +542,11 @@ def test_publication_reuse_and_diagnostics_do_not_advance_analysis_witness(store
     policy = semantic_policy.policy_fingerprint(semantic_policy.runtime_config(_cfg(loop_mode='off'))[0])
     doc = v2_doc([])
     with store.db:
-        first = semantic_v4.publish(store, 1, 1, fp, policy, {'revision': revision}, doc)
+        first = semantic_publication.publish(store, 1, 1, fp, policy, {'revision': revision}, doc)
     assert first is not None
     epoch = drain._sched_state(store)['analysis_epoch']
     with store.db:
-        second = semantic_v4.publish(store, 1, 1, fp, policy, {'revision': revision}, doc)
+        second = semantic_publication.publish(store, 1, 1, fp, policy, {'revision': revision}, doc)
     assert first == second
     store.artifact_add('semantic_usage', '{"calls":1}', project_id=1)
     store.artifact_add('semantic_diagnostic', '{"status":"observed"}', project_id=1)
@@ -687,7 +688,7 @@ def test_completion_contract_tracks_profiles_but_not_operating_budgets(store, mo
         changed['cloud_llm']['profiles'][role] = profile
         assert drain._reprocess_proof_generation(store, changed, scfg) != base
         changed['cloud_llm']['profiles'][role] = 'unknown-profile'
-        with pytest.raises(extract_llm.CloudFallback):
+        with pytest.raises(cloud_inference.CloudFallback):
             drain._reprocess_proof_generation(store, changed, scfg)
 
 

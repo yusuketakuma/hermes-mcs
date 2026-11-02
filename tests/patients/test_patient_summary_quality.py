@@ -14,7 +14,7 @@ from test_patient_context_refresh import runtime as runtime, seed, finish, step,
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
 
-_REAL_CLOUD_PROVIDER = cloud_inference._CloudProvider
+_REAL_CLOUD_PROVIDER = cloud_inference.CloudInferenceUnit
 
 
 REQUEST_IDENTITY = {'input_key': '1' * 64, 'candidate_key': '2' * 64,
@@ -394,7 +394,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert refresh._contract(cfg, 1).get('provider') == cloud_inference._cloud_contract()
+    assert refresh._contract(cfg, 1).get('provider') == cloud_inference.cloud_provider_contract()
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
@@ -457,7 +457,7 @@ def repair(tmp_path, monkeypatch):
             'content': [{'type': 'text', 'text': json.dumps({'fact_ids': responses})}],
             'usage': {'input_tokens': 2, 'output_tokens': 1}}).encode()
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request', request)
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', _REAL_CLOUD_PROVIDER)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', _REAL_CLOUD_PROVIDER)
     def run():
         return refresh._quality_repair_candidate(led, 1, repair_cfg, '2026-10-27',
             {'summary': summary, 'temporal_view': {}}, identity, claim, lambda *_: current[0],
@@ -496,7 +496,7 @@ def test_distinct_summary_repair_requires_exact_response_and_receipt(monkeypatch
         assert kwargs['prompt'] == 'synthetic prompt'
         assert kwargs['owner'] == {'night_id': 'synthetic-night', 'source_sig': original['input_key']}
         return {'witness': '4' * 64}
-    monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', evidence)
+    monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', evidence)
     if damage == 'answer':
         proof['answer_text'] = json.dumps({'fact_ids': ['5' * 64]})
     elif damage == 'receipt':
@@ -579,7 +579,7 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', _REAL_CLOUD_PROVIDER)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', _REAL_CLOUD_PROVIDER)
     posts = []
     real_client = worker.openai_client.OpenAIClient
     class Client(real_client):

@@ -162,7 +162,7 @@ def test_optional_fact_validation_rejects_changed_source_and_prior_rejection():
 
 
 def test_active_v4_pass_publishes_new_context_through_existing_stage_fences(tmp_path):
-    import semantic_v4
+    import semantic_publication
     from semantic_testkit import _PassJev, _drain, _llm_v2, _seeded_two
 
     db = _seeded_two(tmp_path)
@@ -179,12 +179,12 @@ def test_active_v4_pass_publishes_new_context_through_existing_stage_fences(tmp_
         assert result["done"] == 1 and not result["failed"]
         for mid in (1, 2):
             row = db.db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
-                                "ORDER BY artifact_id DESC LIMIT 1", (semantic_v4.KIND_V4, mid)).fetchone()
+                                "ORDER BY artifact_id DESC LIMIT 1", (semantic_publication.KIND_V4, mid)).fetchone()
             content, meta = json.loads(row["content"]), json.loads(row["meta"])
             assert content["patient_context"] and meta["projection_version"] == projection.PROJECTION_VERSION
             assert any(context["subject"] == "patient" for context in content["patient_context"])
             assert all(context["subject"] in ("patient", "unspecified") for context in content["patient_context"])
-            stages = semantic_v4.stage_ledger(db, mid, meta["fingerprint"])
+            stages = semantic_publication.stage_ledger(db, mid, meta["fingerprint"])
             assert any(stage["stage"] == "s8_publish" and stage["status"] == "PASS" for stage in stages)
     finally:
         db.close()

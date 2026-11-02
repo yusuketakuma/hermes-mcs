@@ -15,7 +15,7 @@ import patient_context_refresh as refresh
 import patient_context
 from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from test_patient_context_refresh import CFG, _raw_proof, _semantic_proof, document, finish, runtime, seed, step
-import patient_context_state as state
+import patient_context_projection as state
 import inference_dependency_loss as loss
 
 __all__ = ["runtime"]

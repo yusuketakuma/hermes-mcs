@@ -24,11 +24,11 @@
 | `mcs/extract/rules/` | 投稿のルール抽出と実行統括 | 純粋な投稿判定と、run lockを伴う保存入口を区別 |
 | `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値・原文根拠・バイタル適格性、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
 | `mcs/extract/clinical/clinical_urgency.py` | 本人の根拠に基づく緊急度・QCの共通判断 | `mcs_queries`の現行原文/artifact読取を使い、通知・統計・rulesが表示moduleを経由せず利用。借用connectionを開閉・commitしない |
-| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
-| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画・原文fact構築と厳格検証 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。factの発見時刻は呼出元が明示する。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
+| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括と、`extraction_context`の抽出試行ごとの固定参照情報 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
+| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、`patient_context_projection`の原文に基づく時系列の投影、一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画・原文fact構築と厳格検証 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。factの発見時刻は呼出元が明示する。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
-| `mcs/semantic/` | claim/QC/公開、`semantic_v4`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
-| `mcs/semantic/semantic_v4_cohort.py` | 変換manifest・予約・receipt・実行前の適格性 | runtimeと操作CLIが同じ実体を利用し、評価専用領域を経由しない。読取は借用接続、予約/receipt/job更新は呼出元writerの同一transaction |
+| `mcs/semantic/` | claim/QC/公開、`semantic_publication`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
+| `mcs/semantic/semantic_conversion.py` | 変換manifest・予約・receipt・実行前の適格性 | runtimeと操作CLIが同じ実体を利用し、評価専用領域を経由しない。読取は借用接続、予約/receipt/job更新は呼出元writerの同一transaction |
 | `mcs/semantic/semantic_notice.py` | 通知適格性・起源照合・配送重複確認・公開計画 | 通常の結果/計画/intent/状態遷移は呼出元writerの同一transaction。既存degraded通知はintentごとのcommitを維持し、描画と送信直前gateは借用読取に限定 |
 | `mcs/semantic/semantic_assembly.py` | fact・根拠・依頼属性・進捗の組立て | 入力のコピーと返値を所有し、DB・推論・時刻・保存状態を持たない。`semantic_extraction`がlive/cache/repairの実行と借用connectionの読取を所有 |
 | `mcs/notify/` | 対象選定、spec/part計画、描画、送信許可、journal照合、receipt | `notify_parts`がpart計画、`notify_scope`がscope、`notify_spool`が保存先と公開、`notify_sender`がDBを持たないCLI送信を所有。`notify_actions`と`notify_transport`が同一transactionの適用/配送事実を確定し、公開はcommit後に行う |

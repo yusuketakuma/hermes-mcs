@@ -2281,14 +2281,14 @@ def test_cli_batch_flag_range(monkeypatch, capsys):
         assert json.loads(capsys.readouterr().out)["error"] == "bad_batch"
 
 
-def test_cli_batch_default_and_pass_through(monkeypatch):
+def test_cli_batch_default_and_pass_through(monkeypatch, tmp_path):
     """The flag reaches run_pending verbatim — default _BATCH_K for
     drainers, 0 when explicitly disabled."""
     seen = {}
-    monkeypatch.setattr(extract_llm, "Ledger",
-                        lambda *a: type("DB", (), {"close": lambda s: None})())
-    monkeypatch.setattr(extract_llm, "acquire_run_lock", lambda: 0)
-    monkeypatch.setattr(extract_llm.os, "close", lambda fd: None)
+    monkeypatch.setattr(extract_llm, "_open_current_ledger",
+                        lambda: type("DB", (), {"close": lambda s: None})())
+    monkeypatch.setattr(extract_llm, "acquire_run_lock", lambda:
+                        extract_llm.writer_lock.acquire_run_lock(str(tmp_path / "run.lock")))
     monkeypatch.setattr(
         extract_llm, "run_pending",
         lambda *a, **kw: seen.update(kw) or {"done": 0, "failed": 0,
@@ -2843,8 +2843,12 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--stop-after", "2"])
-    monkeypatch.setattr(extract_llm, "Ledger",
-                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    # Writer lifetime guards are exercised separately with real locks.
+    monkeypatch.setattr(extract_llm, "_open_current_ledger",
+                        lambda: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+    monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm.cloud_backlog.CloudBacklogPool, "sync", lambda *a, **kw: None)
 
     def run(*args, **kwargs):
         admitted.append(kwargs["admitted_ids"])
@@ -2882,29 +2886,29 @@ def test_request_free_text_fields_are_length_capped():
     ("not a dict", set()),
 ])
 def test_legacy_admissions_single_t18_boundary(monkeypatch, cfg, expect):
-    import semantic_v4_cohort
-    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions",
+    import semantic_conversion
+    monkeypatch.setattr(semantic_conversion, "active_legacy_admissions",
                         lambda ledger: {7})
     assert extract_llm.legacy_admissions(object(), cfg) == expect
 
 
 def test_legacy_admissions_accepts_independently_bound_evidence(monkeypatch):
-    import semantic_v4_cohort
+    import semantic_conversion
     from candidate_testkit import approved_config
     cfg = approved_config({"semantic": {"fact_source": "canonical"}})
-    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions", lambda ledger: {7})
+    monkeypatch.setattr(semantic_conversion, "active_legacy_admissions", lambda ledger: {7})
     assert extract_llm.legacy_admissions(object(), cfg) == {7}
 
 
 def test_legacy_admissions_manifest_error_fails_closed(monkeypatch):
-    import semantic_v4_cohort
+    import semantic_conversion
     from candidate_testkit import approved_config
     called = []
 
     def boom(ledger):
         called.append(True)
         raise RuntimeError("manifest")
-    monkeypatch.setattr(semantic_v4_cohort, "active_legacy_admissions", boom)
+    monkeypatch.setattr(semantic_conversion, "active_legacy_admissions", boom)
     cfg = approved_config({"semantic": {"fact_source": "canonical"}})
     assert extract_llm.legacy_admissions(object(), cfg) == set()
     assert called == [True]

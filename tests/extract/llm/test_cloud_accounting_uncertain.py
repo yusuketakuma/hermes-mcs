@@ -32,7 +32,7 @@ def test_result_does_not_finish_a_borrowed_transaction(routed):
 
 def test_unsent_receipt_is_not_an_attempt(routed):
     led, cfg, *_ = routed
-    provider = cloud_inference._CloudProvider(led, cfg, route='reextract', project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='reextract', project_id=1,
         unit_key='synthetic', deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
     provider.result({'id': 1}, {'http_class': 'not_sent'})
@@ -55,10 +55,10 @@ def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
 
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))
-    provider = cloud_inference._CloudProvider(led, cfg, route='patient_context', project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='patient_context', project_id=1,
         unit_key='synthetic-summary-repair', deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn(), max_attempts=max_attempts)
-    with pytest.raises(worker.CloudFallback, match='cloud_unit_failed'):
+    with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_failed'):
         provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
     report = cloud_policy.usage_report(led)
     assert len(sent) == expected
@@ -84,7 +84,7 @@ def test_first_attempt_reserve_refusal_is_the_only_typed_not_sent(routed, monkey
         pytest.fail('a refused reservation still sent')
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=3, **kw))
-    provider = cloud_inference._CloudProvider(led, cfg, route='patient_context', project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='patient_context', project_id=1,
         unit_key='synthetic-first-refusal', deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
     with pytest.raises(worker.cloud_client.CloudNotSent, match='budget_exceeded'):
@@ -118,10 +118,10 @@ def test_sent_attempt_failure_survives_a_later_reserve_refusal(routed, monkeypat
         return 429, {}, b'{}'
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=2, **kw))
-    provider = cloud_inference._CloudProvider(led, cfg, route='patient_context', project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='patient_context', project_id=1,
         unit_key='synthetic-retry-refusal', deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.CloudFallback, match='cloud_unit_failed'):
+    with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_failed'):
         provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
     assert sent == [True] and len(reserves) == 1
     # the sent attempt keeps its settled reservation; the refusal created none
@@ -333,7 +333,7 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
-    with pytest.raises(worker.CloudFallback, match='cloud_local_context_unavailable'):
+    with pytest.raises(cloud_inference.CloudFallback, match='cloud_local_context_unavailable'):
         worker.run_pending(led, budget_s=180)
     assert sent == [True]
     assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
@@ -374,7 +374,7 @@ def test_provider_reservation_dispatch_releases_owner_lock_before_http(routed, m
             'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))
-    provider = cloud_inference._CloudProvider(led, cfg, route='patient_context', project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='patient_context', project_id=1,
         unit_key='synthetic-repair', deadline=time.monotonic() + 180, current=lambda: True,
         dispatch=dispatch, reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved, max_attempts=1)
     assert provider('synthetic', deadline=time.monotonic() + 180, max_tokens=100)['status'] == 200

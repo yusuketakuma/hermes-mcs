@@ -529,7 +529,7 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
     import semantic_policy
     import semantic_store
     import semantic_transport
-    import semantic_v4
+    import semantic_publication
     from semantic_testkit import _cfg, facts_llm
 
     with closing(_setup(tmp_path, monkeypatch)) as ledger:
@@ -562,7 +562,7 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
         ledger.artifact_add("semantic_facts_audit", json.dumps({"status": "PASS", "evaluated": True,
             "findings": [], "fact_verdicts": {}}), project_id=1, message_id=1, meta={**meta, "doc_hash": doc_hash})
         with ledger.db:
-            assert semantic_v4.publish(ledger, 1, 1, bundle["source_fingerprint"], policy, member, doc)
+            assert semantic_publication.publish(ledger, 1, 1, bundle["source_fingerprint"], policy, member, doc)
         messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
         blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
         refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)

@@ -47,7 +47,7 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     prior = worker._prior_identity(worker._prior_extract(led.db, row))
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
     assert not errors and selection is not None
-    row["_provider_contract"] = cloud_inference._cloud_contract(selection=selection)
+    row["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
     row["_target"] = ("", selection["model"])
     row["_proof_vital_policy"] = None
     lease = worker._claim(led, row)
@@ -71,7 +71,7 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
                           "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
     deadline = time.monotonic() + 600
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, message_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, message_id=1,
         unit_key="1", deadline=deadline, current=lambda: worker._owns_current_source(led, row, lease),
         dispatch=lambda fn, **_kwargs: fn(), owner={"lease": lease}, selection=selection)
     chunks, meta, states = {}, {}, []
@@ -180,7 +180,7 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals):  # noqa: F811
     prior = worker._prior_identity(worker._prior_extract(led.db, row))
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
     assert not errors and selection is not None
-    row["_provider_contract"] = cloud_inference._cloud_contract(selection=selection)
+    row["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
     row["_target"] = ("", selection["model"])
     row["_proof_vital_policy"] = None
     lease = worker._claim(led, row)
@@ -202,7 +202,7 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals):  # noqa: F811
                           "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
     deadline = time.monotonic() + 600
-    provider = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1, message_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, message_id=1,
         unit_key="1", deadline=deadline, current=lambda: worker._owns_current_source(led, row, lease),
         dispatch=lambda fn, **_kwargs: fn(), owner={"lease": lease}, selection=selection)
     chunks, meta = {}, {}

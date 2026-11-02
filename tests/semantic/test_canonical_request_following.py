@@ -14,7 +14,7 @@ import semantic_extraction as extraction
 import semantic_facts as facts
 import semantic_loops as loops
 import semantic_projection as projection
-import semantic_v4 as v4
+import semantic_publication as v4
 from semantic_testkit import _cfg, _ledger, _message, _patient
 
 TEXT = "架空担当Aから薬剤師へ、必要な場合に架空資料Xを明日までに確認してください。"

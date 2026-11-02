@@ -106,7 +106,7 @@ def _heading_groups(body):
 def _mentions(db, project_id, senders):
     """Decorate raw source mentions with the already-read sender display fields."""
     from mcs_queries import source_patient_mentions
-    from patient_context_state import clinical_state_fact
+    from patient_context_projection import clinical_state_fact
 
     entries = []
     for item in source_patient_mentions(db, project_id):
@@ -335,7 +335,7 @@ def _allergy_correction(text, target):
 def allergy_posted_records(db, ev):
     """Keep a directly written allergy report separate from current clinical state."""
     import patient_context_plan
-    import patient_context_state
+    import patient_context_projection
     from mcs_queries import JST
 
     pid = ev.get("project_id")
@@ -362,7 +362,7 @@ def allergy_posted_records(db, ev):
             or fact.get("view_bucket") != "unknown" or temporal.get("subject") != "patient"
             or temporal.get("period") != "current" or temporal.get("unknown") is not False
             or temporal.get("negated") is True or temporal.get("corrections")
-            or fact.get("relations") or patient_context_state._unbound_target(fact) is None
+            or fact.get("relations") or patient_context_projection._unbound_target(fact) is None
             or type(fact.get("message_id")) is not int
             or type(fact.get("posted_at_ts")) not in (int, float)):
         return []
@@ -372,7 +372,7 @@ def allergy_posted_records(db, ev):
         datetime.fromtimestamp(fact["posted_at_ts"], JST)
     except (ValueError, OverflowError, OSError):
         return []
-    target = patient_context_state._unbound_target(fact)
+    target = patient_context_projection._unbound_target(fact)
     family_sources = {(f.get("message_id"), f.get("content_hash"), quote)
                       for f in facts if isinstance(f, dict) and f.get("category") == "allergies"
                       and (f.get("temporal") or {}).get("subject") in ("family", "other")

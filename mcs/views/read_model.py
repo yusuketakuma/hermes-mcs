@@ -173,10 +173,10 @@ def _context_references(db, message, items, meta):
     if not details:
         return
     import extract_llm
-    import patient_state_context
+    import extraction_context
     target = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
                         (message["project_id"], message["message_id"])).fetchone()
-    frame = (patient_state_context.load(db, meta.get("context_snapshot"), dict(target))
+    frame = (extraction_context.load(db, meta.get("context_snapshot"), dict(target))
              if target is not None and isinstance(meta, dict)
              and target["content_hash"] == message["content_hash"] else None)
     for detail in details:
@@ -185,7 +185,7 @@ def _context_references(db, message, items, meta):
                     and meta.get("patient_state_context") is True
                     and frame["digest"] == meta.get("context_digest") else None)
         current = (isinstance(supplied, dict) and ref == {**supplied, "token": ref["token"]}
-                   and patient_state_context.reference_current(db, dict(target), ref,
+                   and extraction_context.reference_current(db, dict(target), ref,
                                                                version=extract_llm.EXTRACT_VERSION))
         # An invalid antecedent's old value/date must not escape through detail JSON.
         detail["refers_to"] = {**ref, "state": "current"} if current else {"state": "updated"}

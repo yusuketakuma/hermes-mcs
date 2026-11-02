@@ -12,7 +12,7 @@ import notify_cmds
 import notify_spool
 import semantic_drain
 import semantic_store
-import semantic_v4
+import semantic_publication
 import structured_view
 from notify_testkit import CFG, NOW, _dispatch, _intent, _latest_render, led, pinned_clock
 from semantic_testkit import _canonical_cfg, _llm_v2, _message, _PassJev, _patient
@@ -92,7 +92,7 @@ def test_quiet_reprocess_avoids_semantic_notice_but_sweep_updates_thread(led, mo
     # Capture the writer's actual caller and the job identity while the
     # guarded publication transaction is running, without replacing it.
     publications = []
-    original_publish = semantic_v4.publish_target_tx
+    original_publish = semantic_publication.publish_target_tx
 
     def observe_publish(db, pid, mid, fp, policy, members, docs, status, findings, source):
         active = db.db.execute("SELECT job_id,state,payload FROM fetch_jobs WHERE job_id=?",
@@ -100,7 +100,7 @@ def test_quiet_reprocess_avoids_semantic_notice_but_sweep_updates_thread(led, mo
         original_publish(db, pid, mid, fp, policy, members, docs, status, findings, source)
         publications.append((dict(active), pid, mid, fp, policy, status))
 
-    monkeypatch.setattr(semantic_v4, "publish_target_tx", observe_publish)
+    monkeypatch.setattr(semantic_publication, "publish_target_tx", observe_publish)
     result = semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 300,
                                     jev_client=_PassJev(), llm_fn=_llm_v2)
     assert result["done"] == 1 and not result["failed"]
@@ -121,7 +121,7 @@ def test_quiet_reprocess_avoids_semantic_notice_but_sweep_updates_thread(led, mo
     meta = json.loads(v4["meta"])
     assert meta["source_binding"] == source_before
     assert meta["fingerprint"] == fp and meta["policy_fingerprint"] == policy
-    stage = [s for s in semantic_v4.stage_ledger(led, 1, fp) if s["stage"] == "s8_publish"]
+    stage = [s for s in semantic_publication.stage_ledger(led, 1, fp) if s["stage"] == "s8_publish"]
     assert stage[-1]["status"] == "PASS" and stage[-1]["artifact_id"] == v4["artifact_id"]
     assert structured_view.fact_generations(led.db, [1])[1]["semantic_facts_v4"] == v4["artifact_id"]
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0] == notices_before

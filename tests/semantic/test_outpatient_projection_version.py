@@ -6,7 +6,7 @@ import pytest
 
 import semantic_policy
 import semantic_projection as projection
-import semantic_v4 as v4
+import semantic_publication as v4
 import semantic_candidate as candidate
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import current_projection_id, current_v4_id

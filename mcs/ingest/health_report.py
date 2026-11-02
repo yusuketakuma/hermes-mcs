@@ -284,7 +284,7 @@ def cloud_stop_reason(db, cfg) -> str | None:
     """Observe a configured provider's durable stop without probing it or reading source bodies."""
     from types import SimpleNamespace
     import cloud_policy
-    # an unreadable config ({}) keeps the route off (cloud_inference._cloud_settings)
+    # an unreadable config ({}) keeps the route off (cloud_inference.resolve_cloud_settings)
     settings, errors = cloud_policy.resolve_settings(cfg) if cfg else cloud_policy.cloud_config({})
     if (errors or settings["mode"] not in ("on", "shadow")
             or not settings["routes"] or settings["project_ids"] is not None

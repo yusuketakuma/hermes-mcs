@@ -76,7 +76,7 @@ def test_provider_text_filters_only_visible_services_and_keeps_legacy_default():
 def _artifact(led, mid, route, *, hash_=None, project=1, version=CURRENT_VERSION, content=None, provider_name="anthropic"):
     if route == 'cloud':
         model = cloud_policy.PROVIDERS[provider_name]
-        provider = cloud_inference._cloud_contract({'cloud_llm': {'mode': 'off', 'provider': provider_name}})
+        provider = cloud_inference.cloud_provider_contract({'cloud_llm': {'mode': 'off', 'provider': provider_name}})
     else:
         model, provider = 'synthetic-local', {}
     meta = {VERSION_KEY: version, 'hash': hash_ or f'{mid:064x}', 'actual_model': model, **provider}
@@ -553,7 +553,7 @@ def test_route_recognizes_historical_and_current_openai_contracts():
 
     for model, effort in ((openai_client.MODEL, 'low'), (openai_client.MODEL, 'medium'),
                           (openai_client.SOL_MODEL, 'medium'), (openai_client.SOL_MODEL, 'high')):
-        contract = cloud_inference._cloud_contract(selection={'provider': 'openai', 'model': model, 'effort': effort})
+        contract = cloud_inference.cloud_provider_contract(selection={'provider': 'openai', 'model': model, 'effort': effort})
         row = {'kind': 'extract_llm', 'model': model}
         assert processing_route._route(row, {**contract, 'actual_model': model}, {'synthetic': True}) == 'cloud'
         assert processing_route._route(row, {'actual_model': model}, {'synthetic': True}) is None

@@ -9,7 +9,7 @@ from clinical_values import (
     _VITAL_CLASS, _nearest_vital_label, _vital_numbers, _bp_number,
     fold_surface, grounded_vitals, lab_analyte, lab_candidate, patient_item_scope, written_day,
 )
-from patient_context_state import paired_date_conflict
+from patient_context_projection import paired_date_conflict
 
 
 _OTHER_PERSON_CUE = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|様)?(?:の|に|は|が|も|を)")

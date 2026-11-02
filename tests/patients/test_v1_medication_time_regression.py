@@ -7,7 +7,7 @@ import pytest
 
 import extract_validation
 import inference_version as inference
-import patient_context_state
+import patient_context_projection
 import rollup
 from extract_testkit import _hash, _ledger, _message
 
@@ -49,7 +49,7 @@ def test_paired_date_with_unknown_posted_time_is_not_claimed_as_verified():
                "body_text": body, "body_state": "full", "posted_at_ts": None}
     item = {"name": "合成薬A", "subject": "patient", "status": "past",
             "action": "stop", "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "medications")
+    fact = patient_context_projection.clinical_state_fact(message, item, "medications")
     assert fact["evidence"] == body
     assert fact["temporal"]["event_day"] is None
     assert fact["temporal"]["unknown"] is True
@@ -66,7 +66,7 @@ def test_paired_date_with_unknown_posted_time_is_not_claimed_as_verified():
     ("2026年10月1日に採血した。", False),
 ])
 def test_written_weekday_must_match_its_directly_paired_date(text, expected):
-    assert patient_context_state.paired_date_conflict(text, POSTED_DAY) is expected
+    assert patient_context_projection.paired_date_conflict(text, POSTED_DAY) is expected
 
 
 POSTED_DAY = datetime.fromisoformat("2026-10-02T10:00:00+09:00").timestamp()
@@ -97,16 +97,16 @@ POSTED_DAY = datetime.fromisoformat("2026-10-02T10:00:00+09:00").timestamp()
     ("服用は1回（日）です。", False),
 ])
 def test_relative_weekday_requires_direct_consistent_pair(text, expected):
-    assert patient_context_state.paired_date_conflict(text, POSTED_DAY) is expected
+    assert patient_context_projection.paired_date_conflict(text, POSTED_DAY) is expected
 
 
 def test_relative_weekday_uses_jst_and_requires_observed_posting_time():
     utc_late = datetime.fromisoformat("2026-10-01T15:30:00+00:00").timestamp()
-    assert not patient_context_state.paired_date_conflict("本日（金）に中止。", utc_late)
-    assert patient_context_state.paired_date_conflict("本日（木）に中止。", utc_late)
-    assert patient_context_state.paired_date_conflict("本日（金）に中止。", None)
+    assert not patient_context_projection.paired_date_conflict("本日（金）に中止。", utc_late)
+    assert patient_context_projection.paired_date_conflict("本日（木）に中止。", utc_late)
+    assert patient_context_projection.paired_date_conflict("本日（金）に中止。", None)
     last_day = datetime.fromisoformat("9999-12-31T12:00:00+09:00").timestamp()
-    assert patient_context_state.paired_date_conflict("明日（土）に開始予定。", last_day)
+    assert patient_context_projection.paired_date_conflict("明日（土）に開始予定。", last_day)
 
 
 @pytest.mark.parametrize("weekday,expected_day,uncertain", [
@@ -118,7 +118,7 @@ def test_relative_weekday_is_bound_to_jst_for_medication_fact(weekday, expected_
                "body_text": body, "body_state": "full", "posted_at_ts": POSTED_DAY}
     item = {"name": "合成薬A", "subject": "patient", "status": "past",
             "action": "stop", "negated": False, "evidence": body}
-    temporal = patient_context_state.clinical_state_fact(message, item, "medications")["temporal"]
+    temporal = patient_context_projection.clinical_state_fact(message, item, "medications")["temporal"]
     assert temporal["event_day"] == expected_day and temporal["unknown"] is uncertain
 
 
@@ -128,7 +128,7 @@ def test_recurring_weekday_never_creates_a_particular_event_day():
                "body_text": body, "body_state": "full", "posted_at_ts": POSTED_DAY}
     item = {"name": "合成薬A", "subject": "patient", "status": "current",
             "action": "none", "negated": False, "evidence": body}
-    temporal = patient_context_state.clinical_state_fact(message, item, "medications")["temporal"]
+    temporal = patient_context_projection.clinical_state_fact(message, item, "medications")["temporal"]
     assert temporal["event_day"] is None
 
 
@@ -138,7 +138,7 @@ def test_conflicting_weekday_does_not_become_a_medication_event_day():
                "body_text": body, "body_state": "full", "posted_at_ts": POSTED_DAY}
     item = {"name": "合成薬A", "subject": "patient", "status": "past",
             "action": "stop", "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "medications")
+    fact = patient_context_projection.clinical_state_fact(message, item, "medications")
     assert fact["evidence"] == body
     assert fact["temporal"]["event_day"] is None
     assert fact["temporal"]["unknown"] is True
@@ -156,13 +156,13 @@ def test_uncertain_later_date_cannot_supersede_a_different_supported_current_val
                    "posted_at_ts": datetime.fromisoformat(date).timestamp()}
         item = {"name": "合成薬A", "dose": dose, "subject": "patient", "status": "current",
                 "action": "none", "negated": False, "evidence": body}
-        facts.append(patient_context_state.clinical_state_fact(message, item, "medications"))
+        facts.append(patient_context_projection.clinical_state_fact(message, item, "medications"))
     earlier, uncertain = facts
     assert earlier["temporal"]["unknown"] is False
     assert uncertain["temporal"]["unknown"] is True
     assert uncertain["temporal"]["event_day"] is None
     assert uncertain["temporal"]["state_day"] is None and uncertain["temporal"]["as_of_day"] is None
-    projected = patient_context_state.project(facts)
+    projected = patient_context_projection.project(facts)
     assert set(projected["groups"]["unknown"]) == {earlier["id"], uncertain["id"]}
     assert not projected["groups"]["history"] and not projected["groups"]["current"]
 
@@ -183,8 +183,8 @@ def test_confirmed_same_day_conflict_survives_an_unknown_and_other_subjects():
                    "posted_at_ts": datetime.fromisoformat(date).timestamp()}
         item = {"name": "合成薬A", "dose": dose, "subject": subject, "status": "current",
                 "action": "none", "negated": False, "evidence": body}
-        facts.append(patient_context_state.clinical_state_fact(message, item, "medications"))
-    groups = patient_context_state.project(facts)["groups"]
+        facts.append(patient_context_projection.clinical_state_fact(message, item, "medications"))
+    groups = patient_context_projection.project(facts)["groups"]
     assert set(groups["conflict"]) == {facts[0]["id"], facts[1]["id"]}
     assert groups["unknown"] == [facts[2]["id"]]
     assert set(groups["history"]) == {facts[3]["id"], facts[4]["id"]}
@@ -197,7 +197,7 @@ def test_start_date_and_later_ongoing_observation_are_not_compared_as_one_day():
                "body_text": body, "body_state": "full", "posted_at_ts": posted}
     item = {"name": "合成薬A", "subject": "patient", "status": "current",
             "action": "start", "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "medications")
+    fact = patient_context_projection.clinical_state_fact(message, item, "medications")
     assert fact["evidence"] == body
     assert fact["temporal"]["event_day"] == "2026-09-01"
     assert fact["temporal"]["unknown"] is False
@@ -215,7 +215,7 @@ def test_unbound_mixed_or_next_day_does_not_date_a_medication_event(body):
                "body_text": body, "body_state": "full", "posted_at_ts": POSTED_DAY}
     item = {"name": "合成薬A", "subject": "patient", "status": "past",
             "action": "stop", "negated": False, "evidence": body}
-    temporal = patient_context_state.clinical_state_fact(message, item, "medications")["temporal"]
+    temporal = patient_context_projection.clinical_state_fact(message, item, "medications")["temporal"]
     assert temporal["event_day"] is None and temporal["unknown"] is True
 
 
@@ -226,11 +226,11 @@ def test_symptom_paired_date_conflict_keeps_past_period_and_source():
                "body_text": body, "body_state": "full", "posted_at_ts": posted}
     item = {"text": "発熱", "subject": "patient", "status": "past",
             "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "symptoms")
+    fact = patient_context_projection.clinical_state_fact(message, item, "symptoms")
     assert fact["evidence"] == body and fact["temporal"]["subject"] == "patient"
     assert fact["temporal"]["period"] == "past"
     assert fact["temporal"]["event_day"] is None and fact["temporal"]["unknown"] is True
-    assert patient_context_state.project([fact])["groups"]["history"] == [fact["id"]]
+    assert patient_context_projection.project([fact])["groups"]["history"] == [fact["id"]]
 
 
 def test_relative_date_after_latest_supported_day_is_unknown_without_crashing():
@@ -240,7 +240,7 @@ def test_relative_date_after_latest_supported_day_is_unknown_without_crashing():
                "body_text": body, "body_state": "full", "posted_at_ts": posted}
     item = {"name": "合成薬A", "subject": "patient", "status": "planned",
             "action": "stop", "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "medications")
+    fact = patient_context_projection.clinical_state_fact(message, item, "medications")
     assert fact["evidence"] == body
     assert fact["temporal"]["event_day"] is None
     assert fact["temporal"]["unknown"] is True
@@ -256,7 +256,7 @@ def test_paired_future_family_and_invalid_date_remain_distinct(body, subject, ex
                "body_text": body, "body_state": "full", "posted_at_ts": posted}
     item = {"name": "合成薬A", "subject": subject, "status": "planned" if subject == "family" else "past",
             "action": "stop", "negated": False, "evidence": body}
-    fact = patient_context_state.clinical_state_fact(message, item, "medications")
+    fact = patient_context_projection.clinical_state_fact(message, item, "medications")
     assert fact["temporal"]["subject"] == subject
     assert fact["temporal"]["event_day"] == expected_day
     assert fact["temporal"]["unknown"] is uncertain

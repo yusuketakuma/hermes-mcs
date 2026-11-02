@@ -5,7 +5,7 @@ from itertools import accumulate
 
 from clinical_chunking import plan_chunks
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
-import patient_context_state as context_state
+import patient_context_projection as context_state
 from mcs_util import locate_quote_span
 
 MAX_FACTS = 256

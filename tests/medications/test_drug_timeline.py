@@ -162,11 +162,11 @@ def test_only_unknown_time_deleted_still_warns_with_period_filter(corpus):
 
 
 def test_frozen_context_frame_and_digest_are_required(corpus):
-    import patient_state_context
+    import extraction_context
     current(corpus, 1, [{"name": "キラナ", "subject": "unknown"}])
     message = dict(corpus.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     message["_source_binding"] = source_binding(corpus.db, 1, 1)
-    frame = patient_state_context.prepare(corpus, message, model=extract_llm.MODEL,
+    frame = extraction_context.prepare(corpus, message, model=extract_llm.MODEL,
         contract=extract_llm._context_contract(), attempt={}, enabled=True,
         base_context=None, version=extract_llm.EXTRACT_VERSION)
     message["_frame"] = frame
@@ -254,7 +254,7 @@ def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=Tru
                 for value in ([name, *extra_names] if grounded else [])]}}
     doc = {"facts": [fact], "evidence": [{"evidence_id": "e1", "quote": quote}]}
     monkeypatch.setattr("drug_map._source", lambda *a, **k: (row[0], "semantic_facts_v4", "{}", "synthetic", 1))
-    monkeypatch.setattr("semantic_v4.reproject_doc", lambda *a: (doc, None))
+    monkeypatch.setattr("semantic_publication.reproject_doc", lambda *a: (doc, None))
     monkeypatch.setattr("semantic_store.thread_bundle", lambda *a, **k: {"source_fingerprint": "synthetic"})
     monkeypatch.setattr("semantic_policy.semantic_config", lambda *a, **k: ({}, []))
     monkeypatch.setattr("semantic_policy.policy_fingerprint", lambda *a: "synthetic")

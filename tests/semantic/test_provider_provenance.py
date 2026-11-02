@@ -18,7 +18,7 @@ def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, mon
     try:
         rid = 'a' * 32
         selection = {'provider': 'openai', 'model': openai_client.SOL_MODEL, 'effort': 'high'}
-        contract = cloud_inference._cloud_contract(selection=selection)
+        contract = cloud_inference.cloud_provider_contract(selection=selection)
         reservation = {'reservation_id': rid, 'model': selection['model'], 'route': 'semantic_backlog',
                        'project_id': 1, 'message_id': 1, 'effort': 'high', 'profile': 'sol-high',
                        'price_version': openai_client.SOL_PRICE_VERSION}
@@ -58,9 +58,9 @@ def test_execution_contract_filters_old_chunks_without_hiding_historical_project
     import semantic_extraction as extraction
     from inference_version import CURRENT_VERSION, VERSION_KEY
 
-    old = cloud_inference._cloud_contract(selection={
+    old = cloud_inference.cloud_provider_contract(selection={
         'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'low'})
-    new = cloud_inference._cloud_contract(selection={
+    new = cloud_inference.cloud_provider_contract(selection={
         'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'medium'})
     spec = {'index': 0, 'hash': 'synthetic-hash', 'start': 0, 'end': 1, 'text': 'x'}
     meta = {VERSION_KEY: CURRENT_VERSION, 'schema': extraction.SCHEMA_VERSION,
@@ -119,7 +119,7 @@ def test_projection_provenance_requires_current_bound_evidence(tmp_path):
     import semantic_facts
     import semantic_projection
     import semantic_store
-    import semantic_v4
+    import semantic_publication
     from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_testkit import _seeded, v2_doc
 
@@ -142,16 +142,16 @@ def test_projection_provenance_requires_current_bound_evidence(tmp_path):
                        'doc_hash': doc_hash, 'result_hash': mcs_util.payload_hash(audit)}
         ledger.artifact_add('semantic_facts_audit', json.dumps(audit), project_id=1, message_id=1,
                             meta={**common, 'doc_hash': doc_hash, 'jev_provenance': audit_proof})
-        proof = semantic_v4._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, projected)
+        proof = semantic_publication._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, projected)
         # Metadata alone does not prove that any model or Jev result was adopted.
         assert proof['providers'] == [] and proof['complete'] is False and proof['jev'] == 'unknown'
         assert proof['result_hash'] == mcs_util.payload_hash(projected)
         assert proof['source_binding'] is not None and proof['target_revision'] == member['revision']
-        other_policy = semantic_v4._projection_provenance(ledger.db, 1, 1, fp, 'different-policy', member, doc, projected)
+        other_policy = semantic_publication._projection_provenance(ledger.db, 1, 1, fp, 'different-policy', member, doc, projected)
         assert other_policy['providers'] == [] and other_policy['complete'] is False
         assert other_policy['jev'] == 'unknown'
         ledger.db.execute("UPDATE artifacts SET content=? WHERE kind='semantic_facts_v2'", (json.dumps({}),))
-        stale = semantic_v4._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, projected)
+        stale = semantic_publication._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, projected)
         assert stale['providers'] == [] and stale['complete'] is False
     finally:
         ledger.close()
@@ -556,7 +556,7 @@ def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path, monkeypatc
     import inference_dependency_loss
     import mcs_util
     import semantic_store
-    import semantic_v4
+    import semantic_publication
     import semantic_extraction
     from semantic_testkit import _drain, _llm_v2, _PassJev, _seeded_two
 
@@ -581,7 +581,7 @@ def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path, monkeypatc
         fp, policy = bundle['source_fingerprint'], fact_meta['policy_fingerprint']
 
         def provenance(content=displayed, sidecar=None):
-            return semantic_v4._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, content,
+            return semantic_publication._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, content,
                                                      sequence_out=sidecar)
 
         assert provenance()['providers'] == ['local'] and provenance()['jev'] == 'done'

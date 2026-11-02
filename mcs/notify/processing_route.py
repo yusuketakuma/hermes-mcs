@@ -181,7 +181,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                 return result()
             # The projection's own metadata cannot prove its producer. Recheck
             # against the current source document and audit receipts instead.
-            import semantic_v4
+            import semantic_publication
             source = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? "
                                 "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                                 (semantic_policy.KIND_FACTS_V2, project_id, message_id)).fetchone()
@@ -189,7 +189,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                 return result()
             doc = strict_json(source["content"])
             projection_sequence = {}
-            if not isinstance(doc, dict) or proof != semantic_v4._projection_provenance(
+            if not isinstance(doc, dict) or proof != semantic_publication._projection_provenance(
                     db, project_id, message_id, bundle["source_fingerprint"], policy, member, doc, content,
                     sequence_out=projection_sequence):
                 return result()
@@ -261,4 +261,4 @@ def _route(row, meta, content):
         return None
     contract = {key: meta.get(key) for key in ("backend", "model", "prompt")}
     return "cloud" if (backend in cloud_policy.PROVIDERS and contract["model"] == row["model"]
-                       and cloud_inference._known_cloud_contract(contract)) else None
+                       and cloud_inference.is_supported_cloud_contract(contract)) else None

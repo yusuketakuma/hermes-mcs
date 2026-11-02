@@ -1,5 +1,5 @@
 """Regressions for the semantic drain (synthetic only)."""
-import semantic_v4
+import semantic_publication
 import semantic_policy
 import semantic_runtime
 import json
@@ -11,7 +11,7 @@ import semantic_drain
 import semantic_loops
 import semantic_projection
 import semantic_store
-import semantic_v4 as v4
+import semantic_publication as v4
 from semantic_policy import semantic_config
 from semantic_testkit import (_canonical_cfg, _cfg, _drained_old_version,
                               _FakeJev, _message, _pending_fact,
@@ -24,7 +24,7 @@ def test_backlog_lane_throttles_invalidation(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(semantic_drain.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
-    monkeypatch.setattr(semantic_v4, "invalidate_projections",
+    monkeypatch.setattr(semantic_publication, "invalidate_projections",
                         lambda ledger, scfg: calls.append(1) or 0)
     try:
         def run(lane):
@@ -63,7 +63,7 @@ def test_slow_invalidation_yields_next_window_with_the_same_budget(tmp_path, mon
         assert semantic_runtime.transition(ledger, semantic_runtime.JobToken.from_row(job), "done")
         return "done"
 
-    monkeypatch.setattr(semantic_v4, "invalidate_projections", invalidate)
+    monkeypatch.setattr(semantic_publication, "invalidate_projections", invalidate)
     monkeypatch.setattr(semantic_drain, '_process_job', process)
     cfg = _cfg("shadow", job_budget_seconds=450)
     try:
@@ -87,7 +87,7 @@ def test_slow_invalidation_yields_next_window_with_the_same_budget(tmp_path, mon
 def test_slow_backlog_throttle_does_not_skip_realtime_off_revocation(tmp_path, monkeypatch):
     db = _drained_old_version(tmp_path)
     clock = [100.0]
-    original = semantic_v4.invalidate_projections
+    original = semantic_publication.invalidate_projections
     scans = []
     monkeypatch.setattr(semantic_drain.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
@@ -99,7 +99,7 @@ def test_slow_backlog_throttle_does_not_skip_realtime_off_revocation(tmp_path, m
         clock[0] += 301
         return result
 
-    monkeypatch.setattr(semantic_v4, "invalidate_projections", invalidate)
+    monkeypatch.setattr(semantic_publication, "invalidate_projections", invalidate)
     try:
         semantic_drain.run_due(db, _canonical_cfg(), {"errors": []}, clock[0] + 480,
                               lane="backlog", jev_client=_FakeJev(), llm_fn=lambda *_: None)

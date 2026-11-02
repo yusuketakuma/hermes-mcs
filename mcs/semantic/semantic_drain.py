@@ -38,8 +38,8 @@ from inference_version import (CURRENT_VERSION, VERSION_KEY, is_current,
                                current_meta_pred, read_version, LEGACY_VERSION)
 import semantic_jev as jev
 import semantic_runtime as runtime
-import semantic_v4 as v4
-import semantic_v4_cohort as cohort
+import semantic_publication as v4
+import semantic_conversion as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_llm import summarize
 from semantic_loops import update_loops
@@ -366,7 +366,7 @@ def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision
                 raise runtime.RuntimeStale('summary_repair_prompt_invalid')
             called.append(True)
             try:
-                cloud_inference._cloud_repair_answer_evidence(
+                cloud_inference.verify_cloud_repair_evidence(
                     db, reservation_artifact_id=reservations[0]['artifact_id'], reservation_id=answer['reservation_id'],
                     route='semantic_backlog', project_id=pid, message_id=mid, unit_key=answer['unit_key'],
                     owner=owner, prompt=prompt, answer_text=answer['text'], contract=answer['contract'])
@@ -3110,8 +3110,8 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'context': patient_context_refresh._contract(cfg),
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
-        'cloud_contract': cloud_inference._cloud_contract(contract_cfg),
-        'cloud_repair_contract': cloud_inference._cloud_contract(
+        'cloud_contract': cloud_inference.cloud_provider_contract(contract_cfg),
+        'cloud_repair_contract': cloud_inference.cloud_provider_contract(
             contract_cfg, route='semantic_backlog', purpose='quality_repair'),
         'rollup': rollup.config_generation(cfg),
         'dictionary': rollup.generation_signature(ledger.db),
@@ -4141,7 +4141,7 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
         except OSError as error:
             raise _CloudSelectionIncomplete('reader_unavailable') from error
     cfg = load_config()
-    settings = cloud_inference._cloud_settings(cfg)
+    settings = cloud_inference.resolve_cloud_settings(cfg)
     if (lane != "backlog" or settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
             or not cloud_policy.selected_key()):
         _cloud_selection_progress = None
@@ -4541,7 +4541,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     now_m = time.monotonic()
     if not cloud_only and (lane != "backlog" or _invalidated_at is None \
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S):
-        from semantic_v4 import invalidate_projections
+        from semantic_publication import invalidate_projections
         invalidate_projections(ledger.db, scfg)
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
@@ -4777,7 +4777,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 fresh = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?',
                                           (job['job_id'],)).fetchone()
                 live_cfg = load_config(cfg_path) if cfg_path is not None else load_config()
-                live_settings = cloud_inference._cloud_settings(live_cfg)
+                live_settings = cloud_inference.resolve_cloud_settings(live_cfg)
                 live_scfg, live_errors = runtime_config(live_cfg)
                 project = job['project_id']
                 if (time.monotonic() >= deadline or fresh is None or tuple(fresh) != tuple(job) or live_errors

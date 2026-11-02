@@ -6,7 +6,7 @@ import re
 import pytest
 
 import clinical_values
-import patient_context_state
+import patient_context_projection
 import rollup
 from test_rollup_measurement_time import _save, store
 
@@ -29,7 +29,7 @@ def test_many_bp_date_candidates_keep_one_date_and_no_false_conflict():
     body = '2026-10-02（本日）に' + '、'.join(['BP 90/60'] * 2000)
     posted = datetime.fromisoformat('2026-10-02T10:00:00+09:00').timestamp()
     assert clinical_values.written_day(body) == ('ymd', date(2026, 10, 2))
-    assert not patient_context_state.paired_date_conflict(body, posted)
+    assert not patient_context_projection.paired_date_conflict(body, posted)
 
 
 @pytest.mark.parametrize(('text', 'expected'), [
@@ -59,7 +59,7 @@ def test_unambiguous_bp_does_not_hide_other_date_candidates(text, expected):
 ])
 def test_bp_does_not_hide_other_relative_or_weekday_conflicts(text, conflict):
     posted = datetime.fromisoformat('2026-10-02T10:00:00+09:00').timestamp()
-    assert patient_context_state.paired_date_conflict(text, posted) is conflict
+    assert patient_context_projection.paired_date_conflict(text, posted) is conflict
 
 
 def test_dated_labelled_bp_reaches_current_rollup(store):

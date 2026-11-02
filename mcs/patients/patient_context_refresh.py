@@ -23,7 +23,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred, r
 from writer_lock import acquire_run_lock
 import patient_context_plan as context_plan
 import mcs_queries as context_queries
-import patient_context_state as context_state
+import patient_context_projection as context_state
 
 # Historical storage/config/diagnostic names keep existing state readable.
 KIND = "patient_context_nightly_v1"
@@ -209,10 +209,10 @@ def _contract(cfg, pid=None):
             "context": extract_llm.PATIENT_CONTEXT_VERSION,
             "model": local_llm.resolve(cfg)[1]}
     if pid is not None:
-        settings = cloud_inference._cloud_settings(cfg)
+        settings = cloud_inference.resolve_cloud_settings(cfg)
         if (settings["mode"] == "on"
                 and cloud_policy.eligible(settings, "patient_context", pid)):
-            contract["provider"] = cloud_inference._cloud_contract(cfg, route="patient_context", purpose="patient_context")
+            contract["provider"] = cloud_inference.cloud_provider_contract(cfg, route="patient_context", purpose="patient_context")
     return contract
 
 
@@ -837,7 +837,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
 
 def _saved_cloud_contract(provider):
     import cloud_inference
-    return provider if cloud_inference._known_cloud_contract(provider) else None
+    return provider if cloud_inference.is_supported_cloud_contract(provider) else None
 
 
 def _publication_contract(cfg, meta):
@@ -1779,7 +1779,7 @@ def _new_summary_repair_response(db, pid, identity, provider, prompt, response, 
              "reservation_id": rid, "contract": provider.contract, "night_id": owner["night_id"],
              "original_audit_key": identity["audit_key"],
              "original_ids": [row["fact_ids"][0] for row in summary]}
-    evidence = cloud_inference._cloud_repair_answer_evidence(
+    evidence = cloud_inference.verify_cloud_repair_evidence(
         db, reservation_artifact_id=proof["reservation_artifact_id"], reservation_id=rid,
         route="patient_context", project_id=pid, message_id=None, unit_key="summary_quality_repair",
         owner=owner, prompt=prompt, answer_text=proof["answer_text"], contract=proof["contract"])
@@ -1814,7 +1814,7 @@ def _summary_repair_response(db, pid, original, repaired, content, meta, prompt)
     if answer != {"fact_ids": content.get("fact_ids")}:
         raise ValueError("patient_summary_repair_evidence_invalid")
     owner = {"night_id": proof["night_id"], "source_sig": original["input_key"]}
-    evidence = cloud_inference._cloud_repair_answer_evidence(
+    evidence = cloud_inference.verify_cloud_repair_evidence(
         db, reservation_artifact_id=proof["reservation_artifact_id"], reservation_id=proof["reservation_id"],
         route="patient_context", project_id=pid, message_id=None, unit_key="summary_quality_repair",
         owner=owner, prompt=prompt, answer_text=proof["answer_text"], contract=proof["contract"])
@@ -1956,10 +1956,10 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     if errors or selection is None:
         return "deferred", None
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
-                or cloud_inference._cloud_contract(selection=selection) != _contract(cfg, pid).get("provider"))
+                or cloud_inference.cloud_provider_contract(selection=selection) != _contract(cfg, pid).get("provider"))
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
     if cloud_policy.budget_block_reason(
-            ledger, cloud_inference._cloud_settings(cfg), max_tokens=selected_tokens,
+            ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
         return "deferred", None
     owner = {"night_id": night_id, "source_sig": identity["input_key"]}
@@ -1978,7 +1978,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             return fn()
         finally:
             os.close(fd)
-    provider = cloud_inference._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
+    provider = cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=pid,
         unit_key="summary_quality_repair", deadline=deadline,
         current=lambda: current() and _quality_owns(ledger.db, pid, identity["input_key"], claim),
         dispatch=lambda fn, **_kwargs: fn(), owner=owner,
@@ -2206,7 +2206,7 @@ def _verify_source_repair_rows(db, pid, source_key, origin, rows):
     if (not isinstance(assessment, dict) or set(assessment) != {'code', 'policy'}
             or any(not valid_hash(value) for value in assessment.values())
             or type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
-            or not cloud_inference._known_cloud_contract(origin.get('repair_provider'))):
+            or not cloud_inference.is_supported_cloud_contract(origin.get('repair_provider'))):
         raise ValueError('nightly_source_repair_invalid')
     db.execute('SAVEPOINT source_repair_replay')
     try:
@@ -2284,7 +2284,7 @@ def _verify_source_repair_rows(db, pid, source_key, origin, rows):
                                              proof['split'], PLAN_VERSION])):
                 raise ValueError('nightly_source_repair_invalid')
             def replay(payload):
-                evidence = cloud_inference._cloud_repair_answer_evidence(db,
+                evidence = cloud_inference.verify_cloud_repair_evidence(db,
                     reservation_artifact_id=meta['reservation_artifact_id'], reservation_id=meta['reservation_id'],
                     route='patient_context', project_id=pid, message_id=source['message_id'] or None,
                     unit_key=unit_key, owner={'repair_input_key':origin['repair_input_key'],'unit_key':unit_key},
@@ -2356,7 +2356,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         'original_receipts_sig':receipt_sig, 'plan':PLAN_VERSION}
     if origin['contract'].get('provider'):
         origin.update(provider=origin['contract']['provider'], model=origin['contract']['provider']['model'])
-    repair_provider = cloud_inference._cloud_contract(selection=selection)
+    repair_provider = cloud_inference.cloud_provider_contract(selection=selection)
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
                 or repair_provider != origin.get('provider'))
     if distinct:
@@ -2434,7 +2434,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
             return fn()
         finally:
             os.close(fd)
-    provider = cloud_inference._CloudProvider(ledger, cfg, route='patient_context', project_id=pid,
+    provider = cloud_inference.CloudInferenceUnit(ledger, cfg, route='patient_context', project_id=pid,
         message_id=source['message_id'] or None, unit_key=unit_key, deadline=deadline,
         current=lambda: current() and _quality_owns(ledger.db, pid, identity['input_key'], claim),
         dispatch=lambda fn, **_kwargs:fn(), reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
@@ -2466,7 +2466,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         if finish_reason not in ('stop', 'length'):
             return 'unknown', None
         try:
-            verified = cloud_inference._cloud_repair_answer_evidence(
+            verified = cloud_inference.verify_cloud_repair_evidence(
                 ledger.db, reservation_artifact_id=owned[0]['meta']['reservation_artifact_id'],
                 reservation_id=owned[0]['meta']['reservation_id'], route='patient_context', project_id=pid,
                 message_id=source['message_id'] or None, unit_key=unit_key,
@@ -3119,7 +3119,7 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
             import cloud_policy
             body = provider.client.body(prompt, max_tokens, None)
             if cloud_policy.budget_block_reason(
-                    provider.ledger, cloud_inference._cloud_settings(cfg), max_tokens=max_tokens,
+                    provider.ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=max_tokens,
                     input_bound=cloud_policy.input_bound(body), selection=selection):
                 raise Deferred("nightly_cloud_budget")
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens)
@@ -3391,7 +3391,7 @@ def _completed_cloud_receipts(ledger, provider):
         "SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' AND "
         "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END "
         "IN (SELECT value FROM json_each(?))", (json.dumps(sorted(wanted)),)).fetchall()
-    evidence = cloud_policy._reservation_evidence_batch(ledger.db, [r[0] for r in rows])
+    evidence = cloud_policy.reservation_evidence_batch(ledger.db, [r[0] for r in rows])
     if (not wanted or len(wanted) != len(reservations) or len(evidence) != len(wanted)
             or {r["reservation"]["reservation_id"] for r in evidence.values()} != set(wanted)
             or any(r["reservation"] != wanted[r["reservation"]["reservation_id"]]
@@ -3518,7 +3518,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
     quality_required = cloud_requested or _has_prior_quality_failure(ledger.db, pid)
-    cloud_settings = cloud_inference._cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
+    cloud_settings = cloud_inference.resolve_cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     cloud_selection = None
     if cloud_settings is not None:
         cloud_selection, errors = cloud_policy.resolve_profile(
@@ -3550,7 +3550,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                      and _digest(_source_occurrence(ledger.db, pid, actual)) == _digest(selected_occurrence[0])))
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
-        return cloud_inference._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
+        return cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
             current=(lambda: admit()
                 and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]

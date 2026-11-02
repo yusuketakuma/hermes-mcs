@@ -8,7 +8,7 @@ import pytest
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from inference_dependency_loss import source_binding
-import patient_state_context as state
+import extraction_context as state
 from extract_testkit import _hash, _ledger, _message
 from test_pharmacy_state import context
 

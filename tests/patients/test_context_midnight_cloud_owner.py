@@ -17,7 +17,7 @@ from test_patient_context_refresh import CFG, document, runtime, seed, stamp, st
 
 __all__ = ['runtime', 'cloud']
 
-_REAL_PROVIDER = cloud_inference._CloudProvider
+_REAL_PROVIDER = cloud_inference.CloudInferenceUnit
 _REAL_WRITER_CURRENT = worker._writer_current
 
 
@@ -36,7 +36,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: worker._WRITER_STATE)
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
-    monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda _cfg: settings)
+    monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)
     seed(led, body='見出しのない完全合成の居住記録。')
     # Prepare the exact cloud source proof via the real scan and Jev audit
     # using only synthetic provider responses; no cloud accounting is spent.
@@ -53,7 +53,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     assert not document(led)
     assert not led.artifacts('cloud_usage_reserve')
     assert context_refresh._pending(led.db, 1, cfg)[2]['A']
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', _REAL_PROVIDER)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', _REAL_PROVIDER)
     clock.wall = stamp(start)
     clock.mono = 1000
     fake_time = SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.mono,
@@ -62,7 +62,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     for module in (worker, cloud_policy, cloud_client, anthropic_client, ledger_module, semantic_runtime):
         monkeypatch.setattr(module, 'time', fake_time)
         monkeypatch.setattr(cloud_inference, 'time', module.time)
-    monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda _cfg: settings)
+    monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_args: 'on')
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *_args: 'synthetic-key')
     # Fixed calendar boundaries exercise accounting, not the live price-table date.

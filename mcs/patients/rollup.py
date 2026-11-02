@@ -41,7 +41,7 @@ import clinical_scope
 from clinical_values import (VITAL_PATTERNS, fold_surface, lab_analyte, lab_candidate,
                              patient_item_scope, patient_current_vitals, vital_match_values, written_day)
 import patient_context
-import patient_context_state as context_state
+import patient_context_projection as context_state
 import inference_version as inference
 import inference_dependency_loss as dependency_loss
 import initial_import_state

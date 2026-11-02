@@ -100,7 +100,7 @@ def memory_workers(limit):
     return max(0, min(limit, int((available - total / 10) // (256 * 1024 * 1024))))
 
 
-class Pool:
+class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
     def __init__(self, root):
         self.root = Path(root)
@@ -116,7 +116,7 @@ class Pool:
         if now - self.last_sync < 10:
             return
         self.last_sync = now
-        settings = cloud_inference._cloud_settings(cfg)
+        settings = cloud_inference.resolve_cloud_settings(cfg)
         if settings["mode"] != "on":
             self.close()
             return
@@ -252,7 +252,7 @@ def worker(parent):
                 except ProviderSettingsUnreadable:
                     wait("provider_settings_unreadable")
                     continue
-                settings = cloud_inference._cloud_settings(cfg)
+                settings = cloud_inference.resolve_cloud_settings(cfg)
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None

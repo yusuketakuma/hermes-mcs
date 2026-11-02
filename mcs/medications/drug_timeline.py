@@ -44,8 +44,8 @@ def mentions(reader, mid, *, cfg=None):
         review = db.execute(f"SELECT ({_thin_pending_sql(db)}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) FROM messages m WHERE message_id=?", (mid,)).fetchone()
         if (review and review[0]) or any(isinstance(meta.get(k), dict) and meta[k].get("applied") is False for k in ("qc_fix", "human_fix")):
             return None
-        import patient_state_context
-        frame = patient_state_context.load(db, meta.get("context_snapshot"), message)
+        import extraction_context
+        frame = extraction_context.load(db, meta.get("context_snapshot"), message)
         if meta.get("context_snapshot") is not None:
             if frame is None or frame["digest"] != meta.get("context_digest") or frame["enabled"] != meta.get("patient_state_context"):
                 return None
@@ -65,7 +65,7 @@ def mentions(reader, mid, *, cfg=None):
                 not isinstance(m.get("name"), str) for m in meds):
             return None
         return source, meds
-    from semantic_v4 import reproject_doc
+    from semantic_publication import reproject_doc
     from semantic_store import thread_bundle
     from semantic_policy import runtime_config, policy_fingerprint
     message = db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone()

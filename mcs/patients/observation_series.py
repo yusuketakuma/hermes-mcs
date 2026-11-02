@@ -5,7 +5,7 @@ import re
 
 from clinical_values import (_FLOW_AFTER, _nearest_vital_label, _vital_numbers, grounded_vitals,
                              lab_candidate, written_day)
-from patient_context_state import paired_date_conflict
+from patient_context_projection import paired_date_conflict
 
 _FIELDS = ("observation_name", "value", "unit", "condition", "measured_on", "observed_on", "last_confirmed_on")
 _RISK = re.compile(r"未確認|未確定|不明|疑い|かもしれ|未測定|未実施|未検査|ない|なし|無し|なく|"

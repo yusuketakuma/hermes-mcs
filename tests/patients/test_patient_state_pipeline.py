@@ -7,9 +7,9 @@ import pytest
 
 import extract_llm as llm
 import cloud_inference
-import patient_state_context as state
+import extraction_context as state
 import inference_dependency_loss as dependency_loss
-from test_patient_state_context import seed, target
+from test_extraction_context import seed, target
 from test_pharmacy_state import context
 from extract_testkit import _ledger, _message
 

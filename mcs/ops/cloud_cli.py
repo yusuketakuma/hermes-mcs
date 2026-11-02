@@ -194,11 +194,11 @@ def _route_counts(db, cfg, settings, deadline):
            for route in policy.ROUTES}
     if "patient_context" in settings["routes"]:
         import patient_context_refresh as context
-        import extract_llm as extract
+        import cloud_inference
         # Resolve the semantic contract without consulting installation credentials.
         contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
         if settings["mode"] == "on":
-            contract["provider"] = extract._cloud_contract({"cloud_llm": settings})
+            contract["provider"] = cloud_inference.cloud_provider_contract({"cloud_llm": settings})
         scope, params = _source_scope(settings, "p")
         rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
                           + scope + " ORDER BY p.project_id", params)

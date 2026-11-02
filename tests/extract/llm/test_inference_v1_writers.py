@@ -423,75 +423,75 @@ def test_selection_fence_rejects_stale_prefilter_input(source, monkeypatch, muta
 
 
 def test_unbound_old_frame_is_not_reused_for_current_attempt(source):
-    import patient_state_context
+    import extraction_context
 
     led, row = source
     args = dict(model="synthetic", contract="synthetic-contract", attempt={},
                 enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
-    first = patient_state_context.prepare(led, row, **args)
+    first = extraction_context.prepare(led, row, **args)
     stored = led.db.execute("SELECT content,meta FROM artifacts WHERE artifact_id=?",
                             (first["artifact_id"],)).fetchone()
     meta = json.loads(stored["meta"])
     meta.pop("source_binding")
     document = json.loads(stored["content"])
-    document["binding"] = patient_state_context._digest({
-        "target": patient_state_context._source(row), "model": args["model"],
+    document["binding"] = extraction_context._digest({
+        "target": extraction_context._source(row), "model": args["model"],
         "contract": args["contract"], "attempt": args["attempt"], "enabled": args["enabled"]})
-    document["digest"] = patient_state_context._digest({key: document[key] for key in (
+    document["digest"] = extraction_context._digest({key: document[key] for key in (
         "binding", "source", "text", "refs", "enabled")})
     with led.db:
         led.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
                        (json.dumps(document), json.dumps(meta), first["artifact_id"]))
-    assert patient_state_context.load(led.db, first["artifact_id"], row) is None
-    second = patient_state_context.prepare(led, row, **args)
+    assert extraction_context.load(led.db, first["artifact_id"], row) is None
+    second = extraction_context.prepare(led, row, **args)
     assert second["artifact_id"] != first["artifact_id"]
-    assert patient_state_context.load(led.db, second["artifact_id"], row) == second
+    assert extraction_context.load(led.db, second["artifact_id"], row) == second
 
 
 def test_context_prepare_rejects_target_occurrence_aba(source):
     from dataclasses import replace
-    import patient_state_context
+    import extraction_context
 
     led, row = source
     original = _message(body=row["body_text"])
     led.save_messages([replace(original, sender_name="別の合成投稿者")])
     led.save_messages([original])
     with pytest.raises(ValueError, match="context_source_changed"):
-        patient_state_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
+        extraction_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
             attempt={}, enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
-    assert led.artifacts(patient_state_context.KIND) == []
+    assert led.artifacts(extraction_context.KIND) == []
 
 
 def test_context_load_rejects_frame_after_target_occurrence_aba(source):
     from dataclasses import replace
-    import patient_state_context
+    import extraction_context
 
     led, row = source
-    first = patient_state_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
+    first = extraction_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
         attempt={}, enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
     original = _message(body=row["body_text"])
     led.save_messages([replace(original, sender_name="別の合成投稿者")])
     led.save_messages([original])
     current = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     assert current["content_hash"] == row["content_hash"]
-    assert patient_state_context.load(led.db, first["artifact_id"], current) is None
+    assert extraction_context.load(led.db, first["artifact_id"], current) is None
 
 
 def test_context_prepare_does_not_finish_a_borrowed_transaction(source):
-    import patient_state_context
+    import extraction_context
 
     led, row = source
     args = dict(model="synthetic", contract="synthetic-contract", attempt={},
                 enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
-    first = patient_state_context.prepare(led, row, **args)
+    first = extraction_context.prepare(led, row, **args)
     old_unread = led.db.execute("SELECT is_unread FROM messages WHERE message_id=1").fetchone()[0]
     pending_unread = 0 if old_unread else 1
     led.db.execute("BEGIN")
     try:
         led.db.execute("UPDATE messages SET is_unread=? WHERE message_id=1", (pending_unread,))
-        assert patient_state_context.load(led.db, first["artifact_id"], row) == first
+        assert extraction_context.load(led.db, first["artifact_id"], row) == first
         with pytest.raises(ValueError, match="context_transaction_owned"):
-            patient_state_context.prepare(led, row, **args)
+            extraction_context.prepare(led, row, **args)
         assert led.db.in_transaction
         assert led.db.execute("SELECT is_unread FROM messages WHERE message_id=1").fetchone()[0] == pending_unread
     finally:
@@ -676,7 +676,7 @@ def test_effective_source_change_never_revives_an_old_result_or_checkpoint(sourc
 
 @pytest.mark.parametrize('change', ['body', 'sender_aba', 'unrelated'])
 def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_changes(source, change):
-    import patient_state_context
+    import extraction_context
     from test_pharmacy_state import context
     led, target = source
     body = '本人の合成薬Aの残薬は3錠。'
@@ -688,7 +688,7 @@ def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_change
         'integrity':{'validation':{'items_dropped':0,'evidence_dropped':0},
                      'completeness_chunks':1,
                      'completeness':{'0':{'state':'hint_gaps_resolved','remaining_hint_candidates':0}}}})
-    frame = patient_state_context.prepare(led,target,model='synthetic',contract=llm._context_contract(),
+    frame = extraction_context.prepare(led,target,model='synthetic',contract=llm._context_contract(),
         attempt={'human':None,'qc':None,'thin':None},enabled=True,base_context=None,version=llm.EXTRACT_VERSION)
     assert len(frame['refs'])==1 and frame['refs']['S1']['value']=='3錠'
     # Frozen storage carries the reference token as its map key, not in its value.

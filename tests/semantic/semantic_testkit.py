@@ -271,7 +271,7 @@ def _drained_old_version(tmp_path):
     """Two canonical targets drained to PASS, then every projection/v4
     row rewritten as if minted by the previous projection version with
     older (sentinel) content."""
-    import semantic_v4 as v4
+    import semantic_publication as v4
     db = _seeded_two(tmp_path)
     semantic_drain.run_due(db, _canonical_cfg(), {"errors": []},
                      time.monotonic() + 300, jev_client=_PassJev(),

@@ -32,8 +32,8 @@ def _completed(runtime, cloud, monkeypatch, lane):
     cfg = {**CFG, "cloud_llm": settings}
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
     monkeypatch.setattr(cloud_inference, "load_config", lambda: cfg)
-    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda _cfg: settings)
-    monkeypatch.setattr(cloud_inference, "_CloudProvider", _SOURCE_REPAIR_PROVIDER)
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _cfg: settings)
+    monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", _SOURCE_REPAIR_PROVIDER)
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(cloud_policy, "api_key", lambda *_args: "synthetic-key")
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *a, **kw: True)

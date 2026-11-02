@@ -134,7 +134,7 @@ Per target message, inside the shared drain queue:
    written by an older version are brought forward without waiting for
    reprocessing: each semantic drain tick (after `invalidate_projections`,
    before the endpoint breaker check — no model or Jev call, so LLM
-   admission does not apply) runs `semantic_v4.reproject_stale`, which
+   admission does not apply) runs `semantic_publication.reproject_stale`, which
    takes at most `REPROJECT_LIMIT` (25) CURRENT rows (the reader
    predicates `current_projection_id`/`current_v4_id`, body not
    deleted) whose `projection_version` is missing or older, re-renders

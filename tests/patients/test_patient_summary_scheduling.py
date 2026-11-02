@@ -21,7 +21,7 @@ def cloud_schedule(runtime, monkeypatch):
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
             assert ledger is led
-            self.contract = cloud_inference._cloud_contract()
+            self.contract = cloud_inference.cloud_provider_contract()
             self.model = self.contract['model']
             self.possibly_sent = False
         def __call__(self, prompt, **kwargs):
@@ -38,7 +38,7 @@ def cloud_schedule(runtime, monkeypatch):
             return None
         def discard(self):
             return None
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', Cloud)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Cloud)
     return runtime, cfg
 
 

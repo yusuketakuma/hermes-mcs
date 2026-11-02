@@ -29,12 +29,12 @@ class CloudBusy(CloudFallback):
 
 def _current_cloud_settings():
     try:
-        return _cloud_settings(load_config())
+        return resolve_cloud_settings(load_config())
     except Exception:
         raise CloudFallback("cloud_unit_changed") from None
 
 
-class _CloudProvider:
+class CloudInferenceUnit:
     """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
 
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
@@ -50,9 +50,9 @@ class _CloudProvider:
         self.purpose = purpose
         self._profile_cfg = raw_cfg
         self._cache_heads = cache_heads
-        cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
+        cfg = {**cfg, "cloud_llm": resolve_cloud_settings(cfg)}
         self.model = resolved["model"]
-        self.contract = _cloud_contract(cfg, route=route, purpose=purpose, selection=resolved)
+        self.contract = cloud_provider_contract(cfg, route=route, purpose=purpose, selection=resolved)
         generation = cloud_policy.config_generation(cfg)
         scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
@@ -98,7 +98,7 @@ class _CloudProvider:
                 raise CloudFallback("cloud_unit_changed")
             try:
                 live = load_config()
-                now = _cloud_settings(live)
+                now = resolve_cloud_settings(live)
                 chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
@@ -127,7 +127,7 @@ class _CloudProvider:
         def spawn_quality_repair():
             if route != "reextract" or purpose != "backlog":
                 raise CloudFallback("cloud_repair_invalid")
-            child = _CloudProvider(ledger, raw_cfg, route=route, project_id=project_id,
+            child = CloudInferenceUnit(ledger, raw_cfg, route=route, project_id=project_id,
                 unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
                 message_id=message_id, owner=owner, discard_reason=discard_reason,
                 max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
@@ -247,7 +247,7 @@ class _CloudProvider:
             raise CloudFallback("cloud_unit_failed") from exc
 
 
-def _cloud_settings(cfg):
+def resolve_cloud_settings(cfg):
     if not cfg:
         # an unreadable config (load_config's {}) never auto-enables the paid
         # route: a real config always carries mcs_login_id, so {} means unread
@@ -263,7 +263,7 @@ _CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
                    "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
 
 
-def _cloud_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
+def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
     if selection is None:
         cfg = load_config() if cfg is None else cfg
         selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
@@ -280,16 +280,16 @@ def _cloud_contract(cfg=None, *, route="reextract", purpose="backlog", selection
     return dict(_CLOUD_CONTRACT)
 
 
-def _known_cloud_contract(contract):
+def is_supported_cloud_contract(contract):
     if contract == _CLOUD_CONTRACT:
         return True
     if not isinstance(contract, dict) or contract.get("backend") != "openai":
         return False
-    return any(contract == _cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
+    return any(contract == cloud_provider_contract(selection={"provider": "openai", "model": model, "effort": effort})
                for model, effort in openai_client.VALID_MODEL_EFFORTS)
 
 
-def _cloud_repair_answer_evidence(db, *, reservation_artifact_id, reservation_id, route,
+def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id, route,
                                   project_id, message_id, unit_key, owner, prompt, answer_text, contract,
                                   purpose="quality_repair", finish_reason="stop"):
     """Validate one repaired answer against its settled request and exact response."""
@@ -298,7 +298,7 @@ def _cloud_repair_answer_evidence(db, *, reservation_artifact_id, reservation_id
             or not isinstance(prompt, str) or not isinstance(answer_text, str)
             or purpose not in ("backlog", "patient_context", "quality_repair")
             or finish_reason not in ("stop", "length")
-            or not _known_cloud_contract(contract)):
+            or not is_supported_cloud_contract(contract)):
         raise ValueError("cloud_repair_evidence_invalid")
     try:
         encoded = answer_text.encode("utf-8")
@@ -314,7 +314,7 @@ def _cloud_repair_answer_evidence(db, *, reservation_artifact_id, reservation_id
                 or reservation["project_id"] != project_id or reservation["message_id"] != message_id
                 or reservation["unit_key"] != unit_key or reservation["owner"] != owner
                 or reservation["logical_request_fp"] != expected_request
-                or _cloud_contract(selection=selected) != contract
+                or cloud_provider_contract(selection=selected) != contract
                 or selected["provider"] == "openai" and profile is not None
                 and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
                 or selected["provider"] == "openai" and profile is not None

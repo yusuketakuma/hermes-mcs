@@ -118,7 +118,7 @@ loaded["cloud_inference"] = cloud_owner
 # processing_route reaches the shared owner only lazily through _route;
 # importing it before the cut keeps this probe on the loaded generation.
 import processing_route
-known_contract = cloud_owner._known_cloud_contract
+known_contract = cloud_owner.is_supported_cloud_contract
 gate_scope = updater._release_legacy_scope
 gate_globals = gate_scope.__wrapped__.__globals__
 assert gate_globals is sys.modules["release_apply_owner"].__dict__
@@ -138,7 +138,7 @@ def cut(args):
     def spy(contract):
         called.append(True)
         return known_contract(contract)
-    cloud_owner._known_cloud_contract = spy
+    cloud_owner.is_supported_cloud_contract = spy
     try:
         contract = dict(cloud_owner._CLOUD_CONTRACT)
         row = {"kind": "extract_llm", "model": contract["model"]}
@@ -146,7 +146,7 @@ def cut(args):
         assert processing_route._route(row, meta, {"unit": 1}) == "cloud"
         assert called
     finally:
-        cloud_owner._known_cloud_contract = known_contract
+        cloud_owner.is_supported_cloud_contract = known_contract
     if case == "postcheck":
         # Shared restore gates must also remain the captured generation.
         journal = data / "update_state.json"
