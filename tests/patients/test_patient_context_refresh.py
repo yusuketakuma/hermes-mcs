@@ -952,12 +952,16 @@ def test_source_checkpoint_reads_are_batched(runtime):
 
 @pytest.mark.parametrize("body", [" \t\n", "&nbsp;<br>", "\u3000\u00a0\n"])
 def test_whitespace_ingestion_does_not_leave_a_permanent_scan_candidate(runtime, body):
-    led, _, calls = runtime
+    led, clock, _ = runtime
     seed(led, body=body)
     seed(led, mid=2, pid=2)
-    finish(runtime, waiting=True)
+    # A fetched full post normalized to empty text has no unknown evidence or
+    # attachment. It must finish without starting an empty source scan.
+    finish(runtime)
     assert led.db.execute("SELECT body_text FROM messages WHERE message_id=1").fetchone()[0] == ""
     assert context_refresh.status(led.db, CFG)["history_pending"] == 0
+    assert context_refresh._inference_ready(led, 1, CFG, deadline=clock.mono + 60)
+    assert not any(context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2].values())
     assert context_refresh.context_view_input(led.db, 2, cfg=CFG)
 
 

@@ -180,11 +180,35 @@ def test_linux_memory(monkeypatch, text, expected):
     assert worker._context_memory_available() is expected
 
 
+@pytest.fixture
+def resident_generation(tmp_path, monkeypatch):
+    root = tmp_path / "resident"
+    data = root / "data"
+    data.mkdir(parents=True)
+    state = (False, 123)
+    monkeypatch.setattr(writer_lock, "HOME", str(root))
+    monkeypatch.setattr(writer_lock, "RUN_LOCK", str(data / "run.lock"))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: state[1])
+    monkeypatch.setattr(worker, "HOME", str(root))
+    monkeypatch.setattr(worker, "DB", str(data / "ledger.db"))
+    monkeypatch.setattr(worker, "_WRITER_STATE", state)
+    opened = []
+
+    def construct(path):
+        assert path == str(data / "ledger.db")
+        assert writer_lock.acquire_run_lock() is None
+        opened.append(path)
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(worker, "Ledger", construct)
+    assert worker._writer_current(full=True)
+    return opened
+
+
 @pytest.mark.parametrize("idle", [True, False])
 @pytest.mark.parametrize("lane,context_refresh_first", [("3", True), ("2", False)])
-def test_resident_integration(monkeypatch, idle, lane, context_refresh_first):
+def test_resident_integration(monkeypatch, resident_generation, idle, lane, context_refresh_first):
     now, events = [0.0], []
-    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setenv("MCS_LLM_SLOT", "1")
     monkeypatch.setenv(worker.local_llm.TURN_LOCK_ENV, "/synthetic/turn.lock")
     previous_slot = worker._SLOT_OVERRIDE
@@ -192,7 +216,6 @@ def test_resident_integration(monkeypatch, idle, lane, context_refresh_first):
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(worker, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
-    monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", lane, "--stop-after", "1"])
 
     def pending(*args, **kwargs):
@@ -210,6 +233,7 @@ def test_resident_integration(monkeypatch, idle, lane, context_refresh_first):
         return {"status": "deferred", "done": 0}
     monkeypatch.setattr(worker, "_background_context_refresh", context_refresh)
     assert worker.main() == 0
+    assert len(resident_generation) == 1
     assert events[0] == ("context_refresh" if context_refresh_first else "run_pending")
     assert ("context_refresh" in events) is context_refresh_first
     assert os.environ["MCS_LLM_SLOT"] == "1"
@@ -217,18 +241,17 @@ def test_resident_integration(monkeypatch, idle, lane, context_refresh_first):
     assert worker._SLOT_OVERRIDE == previous_slot
 
 
-def test_resident_exits_when_context_refresh_sees_update(monkeypatch):
-    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+def test_resident_exits_when_context_refresh_sees_update(monkeypatch, resident_generation):
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(worker.local_llm.TURN_LOCK_ENV, raising=False)
     monkeypatch.setattr(worker, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
-    monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "1"])
     monkeypatch.setattr(worker, "run_pending", lambda *a, **k: pytest.fail("extraction after update"))
     monkeypatch.setattr(worker, "_background_context_refresh", lambda *a: {
         "status": "deferred", "done": 0, "run_lock_lost": "updated"})
     assert worker.main() == 0
+    assert len(resident_generation) == 1
     assert "MCS_LLM_SLOT" not in os.environ
     assert worker.local_llm.TURN_LOCK_ENV not in os.environ
 
