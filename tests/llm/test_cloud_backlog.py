@@ -178,7 +178,9 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     import writer_lock
     parent = 991
     retries = {'once': 1, 'twice': 2}.get(semantic_busy, 0)
-    parents = iter([parent] * (4 + retries) + [1])
+    # one extra getppid: the post-acquire guard re-verifies parent/generation
+    # before run_due closes the lock-window
+    parents = iter([parent] * (5 + retries) + [1])
     monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))

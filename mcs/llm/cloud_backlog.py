@@ -284,6 +284,14 @@ def worker(parent):
                             time.sleep(1)
                             continue
                         try:
+                            # The loop guards ran before the lock wait: a
+                            # parent exit or update generation change in that
+                            # window must not enter run_due holding the run
+                            # lock.
+                            if (os.getppid() != parent
+                                    or writer_lock.updater_state() != initial
+                                    or initial[0]):
+                                return
                             scfg = semantic_drain.runtime_config(cfg)[0]
                             result = semantic_drain.run_due(ledger, cfg, {"errors": []},
                                 time.monotonic() + scfg["job_budget_seconds"] + 30,
