@@ -72,6 +72,22 @@ def build(db, cfg, body, *, deadline):
         return {**empty, "status": state}
     if time.monotonic() >= deadline:
         return {**empty, "status": "incomplete"}
+    computed = _matches(dictionary, body, deadline)
+    if computed is None:
+        return {**empty, "status": "incomplete"}
+    current, state = _active(db, cfg)
+    if time.monotonic() >= deadline:
+        return {**empty, "status": "incomplete"}
+    if (current is None or current.dict_id != dictionary.dict_id
+            or current.sha256 != dictionary.sha256):
+        return {**empty, "status": state if current is None else "inactive"}
+    return {"version": VERSION, "source_sha256": empty["source_sha256"],
+            "dictionary": {"id": dictionary.dict_id, "sha256": dictionary.sha256,
+                           "resolver_version": drug_map.RESOLVER_VERSION}, **computed}
+
+
+def _matches(dictionary, body, deadline):
+    """Derive a bounded complete or explicitly partial candidate set in memory."""
     aliases, scanned, partial = {}, 0, False
     for entry in dictionary.entries.values():
         if entry.kind == "class":
@@ -79,7 +95,7 @@ def build(db, cfg, body, *, deadline):
         for alias in entry.aliases:
             scanned += 1
             if scanned > MAX_ALIASES or time.monotonic() >= deadline:
-                return {**empty, "status": "incomplete"}
+                return None
             if (not 2 <= len(alias) <= 80 or not _safe_label(alias) or any(c in "<>" for c in alias)
                     or not (any("\u30a0" <= c <= "\u30ff" or "\uff66" <= c <= "\uff9f"
                                 or len(alias) >= 4 and "\u4e00" <= c <= "\u9fff" for c in alias)
@@ -91,10 +107,12 @@ def build(db, cfg, body, *, deadline):
             aliases.setdefault(alias, {})[entry.id] = entry
     matches = {}
     for alias, entries in aliases.items():
+        if time.monotonic() >= deadline:
+            return None
         start = body.find(alias)
         while start >= 0:
             if time.monotonic() >= deadline:
-                return {**empty, "status": "incomplete"}
+                return None
             end = _expanded_end(body, start, alias)
             surface = body[start:end]
             if ((len(alias) > 2 or _short_context(body, start, end))
@@ -136,15 +154,9 @@ def build(db, cfg, body, *, deadline):
                      "candidates": [{"id": e.id, "display": e.display, "kind": e.kind,
                                      "matched_surface": alias}
                                     for e, alias in (entries[key] for key in sorted(entries)[:MAX_CANDIDATES])]})
-    current, state = _active(db, cfg)
     if time.monotonic() >= deadline:
-        return {**empty, "status": "incomplete"}
-    if (current is None or current.dict_id != dictionary.dict_id
-            or current.sha256 != dictionary.sha256):
-        return {**empty, "status": state if current is None else "inactive"}
-    return {"version": VERSION, "status": "partial" if partial else "active", "source_sha256": empty["source_sha256"],
-            "dictionary": {"id": dictionary.dict_id,
-            "sha256": dictionary.sha256, "resolver_version": drug_map.RESOLVER_VERSION},
+        return None
+    return {"status": "partial" if partial else "active",
             "matches": rows, "overlapping_spans_omitted": len(crossing)}
 
 
@@ -202,3 +214,21 @@ def validate(snapshot, body):
             return False
         previous_end = span[1]
     return True
+
+
+def matches_snapshot(dictionary, snapshot, body, *, deadline):
+    """Re-derive and compare a snapshot using the supplied approved in-memory dictionary."""
+    try:
+        if (not isinstance(dictionary, drug_map.DrugMap) or not dictionary.approved
+                or isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                or not math.isfinite(deadline) or time.monotonic() >= deadline
+                or not validate(snapshot, body) or snapshot["status"] not in ("active", "partial")
+                or snapshot["dictionary"] != {"id": dictionary.dict_id, "sha256": dictionary.sha256,
+                                               "resolver_version": drug_map.RESOLVER_VERSION}):
+            return False
+        expected = _matches(dictionary, body, deadline)
+        return (expected is not None and time.monotonic() < deadline
+                and expected == {key: snapshot[key] for key in (
+                    "status", "matches", "overlapping_spans_omitted")})
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
+        return False
