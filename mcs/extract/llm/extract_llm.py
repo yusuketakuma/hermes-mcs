@@ -3734,14 +3734,19 @@ def _quality_record_consistent(record, expected):
     if not isinstance(record, dict) or set(record) != {"state", "remaining_hint_candidates"}:
         return False
     state = record["state"]
-    return (state in _QUALITY_TERMINAL
-            and type(record["remaining_hint_candidates"]) is int
-            and record["remaining_hint_candidates"] == expected["remaining_hint_candidates"]
-            and (state == "hint_gaps_resolved") == (expected["state"] == "hint_gaps_resolved")
-            and (state != "unresolved" or expected["state"] == "unresolved"))
+    if (state not in _QUALITY_TERMINAL
+            or type(record["remaining_hint_candidates"]) is not int
+            or record["remaining_hint_candidates"] != expected["remaining_hint_candidates"]):
+        return False
+    if state == "hint_gaps_resolved":
+        return expected["state"] == "hint_gaps_resolved"
+    if state == "unresolved":
+        return expected["state"] == "unresolved"
+    return True
 
 
-def _verify_completeness_claim(db, r, context, content, integrity, used_keys):
+def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
+                               *, chunk_size=None, saved_state=None):
     """Bind the final integrity completeness claim to the adopted leaves:
     one terminal record per adopted leaf whose count and resolved/unresolved
     claims reproduce from the persisted leaf content, plus the committed
@@ -3756,13 +3761,16 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys):
             if (not isinstance(completeness, dict) or type(chunks_n) is not int
                     or chunks_n != 1 or set(completeness) != {"0"}):
                 return False
-            document = _provider_strict_dict(content)
+            document = (content if isinstance(content, dict)
+                        else _provider_strict_dict(content))
             if document is None:
                 return False
             expected = _hint_coverage(document, _rule_hints(r), r["body_text"])
             return _quality_record_consistent(completeness["0"], expected)
-        splits, saved = _saved_chunk_state(db, r, context, chunk_size=r["_chunk_size"])
-        stack = list(reversed(list(enumerate(plan_chunks(r["body_text"], r["_chunk_size"])))))
+        size = r["_chunk_size"] if chunk_size is None else chunk_size
+        splits, saved = (saved_state if saved_state is not None
+                         else _saved_chunk_state(db, r, context, chunk_size=size))
+        stack = list(reversed(list(enumerate(plan_chunks(r["body_text"], size)))))
         pieces, seen = {}, 0
         while stack:
             key, piece = stack.pop()
@@ -4302,6 +4310,19 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
             return out
         if bound and not extract_quality.completeness_resolved(meta):
             return out
+        if (bound and isinstance(integrity, dict)
+                and ("completeness" in integrity or "completeness_chunks" in integrity)):
+            # The completeness claim is mutable metadata: binding it to the
+            # same replayed-leaf proof the commit required keeps a tampered
+            # final meta from promoting progress on its own.
+            completeness = integrity.get("completeness")
+            used = (tuple(int(k) if type(k) is str and k.isdigit() else k
+                          for k in completeness)
+                    if isinstance(completeness, dict) and (saved or splits) else ())
+            if not _verify_completeness_claim(
+                    db, r, context, document, integrity, used,
+                    chunk_size=size, saved_state=(splits, saved)):
+                return out
         if (bound and not meta.get("error") and valid is not None
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
                 and not any(isinstance(meta.get(key), dict) and meta[key].get("applied") is False

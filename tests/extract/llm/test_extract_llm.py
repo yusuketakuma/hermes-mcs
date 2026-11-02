@@ -1884,6 +1884,59 @@ def test_batch_extracts_all_rows_one_call(tmp_path, monkeypatch):
     db.close()
 
 
+def test_batch_k2_commits_the_whole_document_completeness_claim(tmp_path, monkeypatch):
+    """A batched direct commit carries no chunk checkpoints: its only leaf is
+    the artifact itself — the persisted completeness claim must reproduce
+    from the committed document (recomputed, not trusted from runtime meta)."""
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1, body="本文1"), _message(mid=2, body="本文2")])
+    monkeypatch.setattr(
+        extract_llm, "_llm_call",
+        lambda p, **kw: {"items": [{"i": 0, "symptoms": [], "summary": "s0"},
+                                   {"i": 1, "symptoms": [], "summary": "s1"}]})
+    res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=2)
+    assert res["done"] == 2
+    for mid in (1, 2):
+        arts = db.artifacts("extract_llm", message_id=mid)
+        meta = json.loads(arts[0]["meta"])
+        claim = meta["integrity"]["completeness"]
+        assert set(claim) == {"0"} and meta["integrity"]["completeness_chunks"] == 1
+        assert claim["0"] == {"state": "hint_gaps_resolved",
+                              "remaining_hint_candidates": 0}
+    db.close()
+
+
+def test_tampered_final_completeness_claim_cannot_promote_progress(tmp_path, monkeypatch):
+    """Editing only the final artifact meta — minting a resolved completeness
+    claim over an unresolved leaf — must not promote progress to complete:
+    the reader binds the claim to the replayed leaf record."""
+    body = "本人に発熱と咳があります。本人の血圧120/80です。"
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    db.save_messages([_message(mid=1, body=body)])
+    doc = {"symptoms": [
+        {"text": "発熱", "status": "ongoing", "subject": "patient", "evidence": "発熱"},
+        {"text": "咳", "status": "ongoing", "subject": "patient", "evidence": "咳"}]}
+    monkeypatch.setattr(extract_llm, "_llm_call",
+                        lambda p, **kw: json.loads(json.dumps(doc)))
+    res = extract_llm.run_pending(db, budget_s=300)
+    assert res["done"] == 1
+    art = db.artifacts("extract_llm", message_id=1)[0]
+    meta = json.loads(art["meta"])
+    # the honest claim records the vitals gap as unresolved
+    assert meta["integrity"]["completeness"]["0"]["state"] == "unresolved"
+    meta["integrity"]["completeness"]["0"] = {
+        "state": "hint_gaps_resolved", "remaining_hint_candidates": 0}
+    db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                  (json.dumps(meta, ensure_ascii=False), art["artifact_id"]))
+    source = db.db.execute(
+        "SELECT * FROM messages WHERE message_id=1").fetchone()
+    assert extract_llm.progress_for_message(
+        db.db, source, model=extract_llm.MODEL)["state"] != "complete"
+    db.close()
+
+
 def test_batch_skips_context_and_multichunk_rows(tmp_path, monkeypatch):
     """Rows with thread context keep the single-call path — batching
     is only for context-free single-chunk bodies."""

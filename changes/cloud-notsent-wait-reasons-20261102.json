@@ -9,7 +9,9 @@
     "cloud_backlog の worker は、semantic の実行ロック取得に失敗しても位相を進めず、短い待機/再獲得を繰り返して未実行の semantic を次の抽出試行より先に保ちます。2回以上の連続競合でも抽出選択へ戻りません。親終了・更新世代・メモリ・carry の条件は変わりません。",
     "worker の待機は cloud_backlog_deferred イベントに固定コード(provider_settings_unreadable, cloud_mode_off, cloud_profile_unavailable, paused, circuit_open, pricing_unverified, daily_cap 等の allowlist 内ブロック理由、それ以外は cloud_blocked)で記録し、同じ理由の継続中は繰り返し記録しません。実ID・本文・秘密・設定値は記録されません。semantic_drain の cloud_only 選択が期限内に完了しない場合も、初回・補充の両経路で cloud_selection_reason(deadline, active_transaction, reader_unavailable, reader_changed, memory, selection_busy 等)を返し、worker の記録はそのまま固定コードへ写します。観測不能(cloud_selection_incomplete)と、選択できたが0件だった通常の待ちは引き続き区別されます。",
     "extract_llm の inline proof 照合では、品質記録を証拠の正当性と分けて検証します。hint_gaps_resolved・unresolved・dispatch_unknown・skipped_budget の終端状態のみが保存対象で、pending・started は再開マーカーとして拒否します。記録はちょうど state と remaining_hint_candidates の2キーを持ち、残り件数はその断片の実本文から再計算して一致を要求します。dispatch_unknown・skipped_budget は実行履歴として保存値を保ち、内容が解決していても解決済みへ昇格させません。型の逸脱・余分なキー・件数不一致・改ざんされた終端状態はすべて拒否し、進行表示は attention のままです。",
-    "最終成果物の integrity.completeness・completeness_chunks は、採用された全断片のキー・状態・件数・断片数が、保存済み断片の本文とヒントから再計算した結果と一致する場合だけ書き込まれます。臨床文書の一致だけでなく、1項目でも一致しない記録・過不足のあるキー・断片数の不一致はコミットを拒否します。"
+    "最終成果物の integrity.completeness・completeness_chunks は、採用された全断片のキー・状態・件数・断片数が、保存済み断片の本文とヒントから再計算した結果と一致する場合だけ書き込まれます。臨床文書の一致だけでなく、1項目でも一致しない記録・過不足のあるキー・断片数の不一致はコミットを拒否します。採用キーには分割で置き換えられた保留/開始中の親断片の清掃対象キーが含まれ得るため、照合は採用済み終端断片だけを対象にし、チェックポイントを持たない非分割文書は文書自身を断片0として再計算します。",
+    "進行表示の reader 側でも、最終成果物の completeness 主張は保存済み断片の本文へ結合されます。成果物メタだけを書き換えて未解決の断片へ解決済み主張を作っても、進行状態は complete に昇格せず attention のままです。残り件数0の内容解決済み断片が dispatch_unknown・skipped_budget の実行履歴を持つ場合、件数が再計算と一致すれば正当な終端記録として受理し、履歴は解決済みへ昇格しません。",
+    "cloud_backlog の worker は、semantic 実行ロックの獲得に成功した直後・run_due 開始前に、親プロセスと更新世代がロック待機中に変わっていないことを再検証します。変化があればロックを持ったまま stale な semantic 作業を実行せず終了します。既存のソース・リース・所有者・世代境界の意味は変わりません。"
   ],
   "refs": ["mcs/llm/cloud_client.py", "mcs/extract/llm/extract_llm.py",
            "mcs/llm/cloud_backlog.py", "mcs/semantic/semantic_drain.py",

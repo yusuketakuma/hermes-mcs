@@ -252,6 +252,27 @@ def test_unresolved_or_unknown_optional_dispatch_never_reports_complete_or_retri
         db.close()
 
 
+def test_execution_history_with_resolved_content_is_a_legitimate_terminal():
+    """dispatch_unknown/skipped_budget are execution history kept as stored:
+    a leaf whose content resolves may carry one, and the completeness claim
+    must still validate — it is never promoted to resolved and a stored
+    count must still match the recomputed one."""
+    resolved = {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}
+    for history in ("dispatch_unknown", "skipped_budget"):
+        assert extract_llm._quality_record_consistent(
+            {"state": history, "remaining_hint_candidates": 0}, resolved)
+        assert not extract_llm._quality_record_consistent(
+            {"state": history, "remaining_hint_candidates": 1}, resolved)
+    # Content claims still bind both directions.
+    assert extract_llm._quality_record_consistent(
+        {"state": "unresolved", "remaining_hint_candidates": 1},
+        {"state": "unresolved", "remaining_hint_candidates": 1})
+    assert not extract_llm._quality_record_consistent(
+        {"state": "unresolved", "remaining_hint_candidates": 1}, resolved)
+    assert not extract_llm._quality_record_consistent(resolved, {
+        "state": "unresolved", "remaining_hint_candidates": 1})
+
+
 @pytest.mark.parametrize("workers", [1, 2])
 def test_lost_source_or_lease_never_authorizes_the_optional_dispatch(tmp_path, monkeypatch, workers):
     db = _ledger(tmp_path)
