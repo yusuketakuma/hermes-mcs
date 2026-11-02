@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import uuid
@@ -15,6 +16,11 @@ MAX_SOURCE = 2 * 1024 * 1024
 
 class LogInstallError(RuntimeError):
     """A fixed deployment or migration failure that leaves original logs intact."""
+
+    def __init__(self, code, *, helper_code=None):
+        self.helper_code = (helper_code if isinstance(helper_code, str)
+                            and re.fullmatch(r'run_log_[a-z_]{1,80}', helper_code) else None)
+        super().__init__(code + (': ' + self.helper_code if self.helper_code else ''))
 
 
 def _canonical_leaf(path):
@@ -167,8 +173,13 @@ def _migrate(root, receipt, raw):
     module = {'__name__': '_mcs_private_run_log', '__file__': receipt['helper']}
     exec(compile(raw, receipt['helper'], 'exec'), module)
     data_dir = os.path.join(root, 'data')
-    module['initialize'](data_dir)
-    result = module['migrate'](data_dir)
+    try:
+        module['initialize'](data_dir)
+        result = module['migrate'](data_dir)
+    except Exception as error:
+        if type(error) is module.get('RunLogError'):
+            raise LogInstallError('run_log_migration_failed', helper_code=str(error)) from None
+        raise
     return {**result, 'scope': 'verified_prefix', 'legacy_writers_closed': False}
 
 
@@ -215,8 +226,9 @@ def migrate_installed(root, recovery_dir):
             except FileNotFoundError:
                 return {'scope': 'unavailable', 'legacy_writers_closed': False}
             return _migrate(root, receipt, raw)
-    except Exception:
-        raise LogInstallError('run_log_migration_failed') from None
+    except Exception as error:
+        raise LogInstallError('run_log_migration_failed', helper_code=(
+            error.helper_code if isinstance(error, LogInstallError) else None)) from None
 
 
 def prepare(root, checkout, recovery_dir, *, source=None, promote=False):
@@ -248,8 +260,9 @@ def prepare(root, checkout, recovery_dir, *, source=None, promote=False):
                 _publish(directory, _pointer(root), json.dumps(receipt, sort_keys=True).encode())
             checked, raw = _receipt(directory, root)
             return _migrate(root, checked, raw)
-    except Exception:
-        raise LogInstallError('run_log_prepare_failed') from None
+    except Exception as error:
+        raise LogInstallError('run_log_prepare_failed', helper_code=(
+            error.helper_code if isinstance(error, LogInstallError) else None)) from None
 
 
 if __name__ == '__main__':

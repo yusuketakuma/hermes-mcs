@@ -824,11 +824,17 @@ def _provider_prior_source_verified(ref):
     return hashlib.sha256(raw).hexdigest() in _PROVIDER_PRIOR_SOURCE_WITNESSES
 
 
-def _split_target_source_matches(target: str) -> bool:
-    """Prove the target and clean checkout have identical runtime source blobs.
+_PROVIDER_ROLLBACK_SOURCE_WITNESSES = frozenset({
+    # v1.1.0 2b3ecd02: identical split-settings reader/validator and provider models.
+    "f24fcf80fb80afad4ad302fef3b76869c3238ec8143b535ee459e4276a601099",
+})
 
-    This intentionally rejects compatible but changed source until a reviewed
-    compatibility witness exists. No candidate code is imported or executed.
+
+def _split_target_source_matches(target: str, *, allow_reviewed_rollback=False) -> bool:
+    """Verify runtime source identity, or an explicitly reviewed rollback tree.
+
+    Migration requires identical source. Rollback alone may use a fixed tree
+    witness; both paths verify every current file without importing target code.
     """
     if not isinstance(target, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target) is None:
         return False
@@ -837,11 +843,19 @@ def _split_target_source_matches(target: str) -> bool:
         return False
     current = _split_source_tree(head)
     candidate = _split_source_tree(target)
-    if not current or current != candidate:
+    if not current or not candidate:
         return False
+    if current != candidate:
+        raw = json.dumps(candidate, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+        if not allow_reviewed_rollback or hashlib.sha256(raw).hexdigest() not in _PROVIDER_ROLLBACK_SOURCE_WITNESSES:
+            return False
+        readers = {"mcs/core/provider_settings.py", "mcs/core/mcs_config.py"}
+        if ([entry for entry in current if entry[3] in readers]
+                != [entry for entry in candidate if entry[3] in readers]):
+            return False
     required = {"mcs/core/mcs_util.py", "mcs/core/provider_settings.py", "mcs/core/mcs_config.py",
                 "mcs/core/safe_io.py", "mcs/llm/cloud_policy.py", "mcs/semantic/semantic_jev.py"}
-    if not required.issubset({path for _, _, _, path in current}):
+    if any(not required.issubset({path for _, _, _, path in tree}) for tree in (current, candidate)):
         return False
     # Ignore index hide flags and metadata caches: hash each actual file.
     # Untracked code in any executable tree can shadow a reader. Python does
@@ -917,7 +931,7 @@ def _provider_rollback_preflight(target: str | object) -> bool | None:
         owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
         first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if (first["mode"] != "split" or target is not _PROVIDER_SETTINGS_ONLY
-                and not _split_target_source_matches(target)):
+                and not _split_target_source_matches(target, allow_reviewed_rollback=True)):
             raise ProviderRollbackUnverified("provider_rollback_target_unverified")
         second = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if second["mode"] != "split" or second["snapshot"] != first["snapshot"]:
@@ -1810,15 +1824,17 @@ def _prepare_run_log(*, promote=False) -> None:
     try:
         run_log_install.prepare(HOME, REPO, _service_paths().recovery_dir,
                                 source=_RUN_LOG_SOURCE, promote=promote)
-    except run_log_install.LogInstallError:
-        raise UpdateError('run_log_prepare_failed') from None
+    except run_log_install.LogInstallError as error:
+        raise UpdateError('run_log_prepare_failed' + (
+            ': ' + error.helper_code if error.helper_code else '')) from None
 
 
 def _migrate_log_tail() -> None:
     try:
         run_log_install.migrate_installed(HOME, _service_paths().recovery_dir)
-    except run_log_install.LogInstallError:
-        raise UpdateError('run_log_tail_unverified') from None
+    except run_log_install.LogInstallError as error:
+        raise UpdateError('run_log_tail_unverified' + (
+            ': ' + error.helper_code if error.helper_code else '')) from None
 
 
 def _services_reconcile() -> None:
@@ -2422,7 +2438,7 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -
             # between save and exit — that IS a success (H5)
             raise UpdateError(
                 "post_merge_failed: "
-                + (cerr or cout or "").strip()[:300])
+                + (cerr or cout or "").strip()[-300:])
 
 
 def _apply_validate_args(tag: str | None, sha: str | None,
@@ -2632,6 +2648,17 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
             if merged and state.get("applying"):
+                # A recovery hold can return before the final failure bookkeeping.
+                # Preserve the apply error without consuming its command receipt.
+                try:
+                    failed_state = journal_store.load_state(STATE_PATH)
+                    if failed_state.get("_corrupt"):
+                        raise UpdateError("failure_journal_unreadable")
+                    _record_attempt(failed_state, tag, "failed", reason)
+                    journal_store.save_state(STATE_PATH, failed_state)
+                except Exception:
+                    rollback_failed = True  # A failed diagnostic write must keep the marker.
+                    raise
                 # the tree is already on the new code — a plain abort would
                 # leave the system running NEW code while claiming nothing
                 # happened; fall back to the surgical rollback path
@@ -2654,9 +2681,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                                 raise UpdateError("update_marker_changed")
                     except Exception as stop_error:
                         _report("runtime_restore_blocked", str(e) + "; stop_unverified: "
-                                + type(stop_error).__name__, writers_stopped=False)
+                                + type(stop_error).__name__, writers_stopped=False,
+                                apply_failure=reason)
                         return 1           # retain journal; stopping was not proven
-                    _report("runtime_restore_blocked", str(e), writers_stopped=True)
+                    _report("runtime_restore_blocked", str(e), writers_stopped=True,
+                            apply_failure=reason)
                     return 1               # retain the original journal and marker
                 if entry.get("schema_bump") and entry.get("backup_path"):
                     # journal rollback-shaped BEFORE the reset, like

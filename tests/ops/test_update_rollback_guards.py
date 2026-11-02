@@ -247,12 +247,12 @@ def test_provider_preflight_refuses_pending_missing_evidence_and_snapshot_change
         mcs_update._provider_rollback_preflight("a" * 40)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "requires_checked_read"})
     monkeypatch.setattr(provider_settings, "read", lambda *a, **k: {"mode": "split", "snapshot": {"v": 1}})
-    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target: False)
+    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: False)
     with pytest.raises(mcs_update.UpdateError, match="target_unverified"):
         mcs_update._provider_rollback_preflight("a" * 40)
     states = iter([{"mode": "split", "snapshot": {"v": 1}}, {"mode": "split", "snapshot": {"v": 2}}])
     monkeypatch.setattr(provider_settings, "read", lambda *a, **k: next(states))
-    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target: True)
+    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: True)
     with pytest.raises(mcs_update.UpdateError, match="settings_changed"):
         mcs_update._provider_rollback_preflight("a" * 40)
 
@@ -262,7 +262,7 @@ def test_provider_preflight_preserves_legacy_behavior(monkeypatch, tmp_path, sta
     import provider_settings
     monkeypatch.setattr(mcs_update, "HOME", str(tmp_path))
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": state})
-    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target: pytest.fail("legacy target check"))
+    monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: pytest.fail("legacy target check"))
     assert mcs_update._provider_rollback_preflight("synthetic-legacy-target") is None
 
 
@@ -358,7 +358,7 @@ def test_rollback_pending_after_quiesce_keeps_marker_and_journal(updater, tmp_pa
         marker.write_text("synthetic hold")
         private_json(pending, {"synthetic": True})
 
-    monkeypatch.setattr(updater, "_split_target_source_matches", lambda target: True)
+    monkeypatch.setattr(updater, "_split_target_source_matches", lambda target, **kwargs: True)
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: None)
     monkeypatch.setattr(updater, "_local_changes_outside", lambda *a: [])
     monkeypatch.setattr(updater, "quiesce", quiesce_then_pending)
