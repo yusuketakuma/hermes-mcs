@@ -219,13 +219,14 @@ def _measure_pipeline(world, n, monkeypatch):
 
     # Stage 1: dispatch; observe each successful atomic render publication.
     t0 = time.perf_counter()
-    for i in range(n):
-        eid = led.outbox_add("new_messages", 1 + i,
-                             {"message_ids": [10_000 + i]})
-        ev = dict(led.db.execute(
-            "SELECT * FROM notify_outbox WHERE event_id=?",
-            (eid,)).fetchone())
-        notify_cards.dispatch_intent(led, ev, CFG, now=NOW)
+    for offset in range(0, n, notify_cards.DISPATCH_GROUP_LIMIT):
+        events = []
+        for i in range(offset, min(n, offset + notify_cards.DISPATCH_GROUP_LIMIT)):
+            eid = led.outbox_add("new_messages", 1 + i,
+                                 {"message_ids": [10_000 + i]})
+            events.append(dict(led.db.execute(
+                "SELECT * FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()))
+        notify_cards.dispatch_intents(led, events, CFG, now=NOW)
     t_dispatch = time.perf_counter() - t0
     # the worker only claims once the runner publishes interactive=on
     # (as the runner does, after dispatch created the flags dir)
@@ -329,20 +330,22 @@ def test_pipeline_clock_includes_dispatch_wait_and_first_publication(tmp_path, m
     monkeypatch.setattr(sys.modules[__name__], "time", SimpleNamespace(
         perf_counter=lambda: clock[0], process_time=time.process_time,
         time=lambda: NOW - 100 * clock[0]))
-    dispatch = notify_cards.dispatch_intent
+    dispatch = notify_cards.dispatch_intents
     dispatched = 0
 
-    def dispatch_with_wait(*args, **kwargs):
+    def dispatch_with_wait(ledger, events, *args, **kwargs):
         nonlocal dispatched
-        result = dispatch(*args, **kwargs)
-        dispatched += 1
-        clock[0] = 4.0 if dispatched == 1 else 6.0
-        if dispatched == 1:
-            first = next((data / "discord_render").glob("*.json"))
-            notify_spool.publish_file(str(first.parent), first.name, first.read_bytes())
-        return result
+        results = []
+        for event in events:
+            results.extend(dispatch(ledger, [event], *args, **kwargs))
+            dispatched += 1
+            clock[0] = 4.0 if dispatched == 1 else 6.0
+            if dispatched == 1:
+                first = next((data / "discord_render").glob("*.json"))
+                notify_spool.publish_file(str(first.parent), first.name, first.read_bytes())
+        return results
 
-    monkeypatch.setattr(notify_cards, "dispatch_intent", dispatch_with_wait)
+    monkeypatch.setattr(notify_cards, "dispatch_intents", dispatch_with_wait)
     try:
         out = _measure_pipeline((led, data, worker, reg), 2, monkeypatch)
         assert out["e2e"] == [6.0, 2.0]

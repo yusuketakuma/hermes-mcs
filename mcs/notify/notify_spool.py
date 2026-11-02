@@ -1,7 +1,7 @@
 """Publish committed notification specs and restore gates to the worker filesystem.
 
 The caller owns borrowed SQLite lifetime and commits new renders before
-publish_specs. Each publication witness commits separately. Recovery repairs
+publish_specs. Publication witnesses commit in bounded groups after the files are durable. Recovery repairs
 already committed stored bytes in its existing transaction; it never sends or
 consumes worker claims. Scope/config APIs accept plain values, never providers.
 """
@@ -184,26 +184,35 @@ def _cleanup_budget_held(db, delivery_id):
                       "LIMIT 1", (delivery_id,)).fetchone() is not None
 
 
+def _mark_published(db, marks):
+    with db:
+        db.executemany(
+            "UPDATE notification_renders SET spec_published=1,"
+            "first_published_at=COALESCE(first_published_at,?),"
+            "updated_at=? WHERE delivery_id=?", marks)
+
+
 def publish_specs(db, dirs, specs, now) -> list:
-    """Atomic file publication AFTER the render commit. A crash between
-    leaves spec_published=0; recovery republishes identical bytes."""
-    published = []
-    for spec in specs:
-        if _cleanup_budget_held(db, spec["delivery_id"]):
-            continue
-        transport = spec["delivery"].get("transport", "discord")
-        path = publish_file(dirs[transport + "_render"],
-                            spec["delivery_id"] + ".json",
-                            canonical(spec))
-        # per spec: a later publish error must not leave this UPDATE in
-        # an open implicit transaction (callers' next BEGIN would fail)
-        with db:
-            db.execute(
-                "UPDATE notification_renders SET spec_published=1,"
-                "first_published_at=COALESCE(first_published_at,?),"
-                "updated_at=? WHERE delivery_id=?",
-                (now, now, spec["delivery_id"]))
-        published.append(path)
+    """Publish durable committed specs, then acknowledge each bounded successful prefix."""
+    if db.in_transaction:
+        raise ValueError("notification_publication_transaction_active")
+    published, marks = [], []
+    try:
+        for spec in specs:
+            if _cleanup_budget_held(db, spec["delivery_id"]):
+                continue
+            transport = spec["delivery"].get("transport", "discord")
+            path = publish_file(dirs[transport + "_render"],
+                                spec["delivery_id"] + ".json", canonical(spec))
+            marks.append((now, now, spec["delivery_id"]))
+            published.append(path)
+            if len(marks) == 10:
+                ready, marks = marks, []
+                _mark_published(db, ready)
+    finally:
+        # Preserve a durable prefix even when a later atomic file publish fails.
+        if marks:
+            _mark_published(db, marks)
     return published
 
 

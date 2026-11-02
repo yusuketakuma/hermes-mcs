@@ -449,6 +449,148 @@ def _scan_window(directory, names, count):
     return window
 
 
+_TRANSPORT_GROUP_LIMIT = 32
+_GROUPED_TRANSPORT_OPS = ("transport_begin", "transport_receipt")
+
+
+def _command_id(path, req):
+    cid = req.get("command_id")
+    return cid if isinstance(cid, str) else os.path.basename(path)[:-5]
+
+
+def _command_outcomes(ledger, pending, cfg, root, result, deadline, limit):
+    """Commit bounded transport groups; yield only outcomes safe to publish."""
+    attempted = index = 0
+    while index < len(pending) and attempted < limit:
+        if deadline is not None and time.monotonic() > deadline:
+            result.setdefault("errors", []).append("cmd_int_drain_deadline")
+            return
+        path, req = pending[index]
+        if req.get("op") not in _GROUPED_TRANSPORT_OPS:
+            index += 1
+            attempted += 1
+            error = validate_int(req)
+            cid = _command_id(path, req)
+            if error:
+                out = {"outcome": "rejected", "error": error, "command_id": cid}
+            else:
+                try:
+                    out = dispatch(ledger, req, cfg, root)
+                except DETERMINISTIC_DB_ERRORS as exc:
+                    with suppress(sqlite3.Error):
+                        notify_cards.connection(ledger).rollback()
+                    error = f"storage_rejected:{type(exc).__name__}"
+                    out = {"outcome": "rejected", "error": error, "command_id": cid}
+                except sqlite3.Error:
+                    raise
+                except Exception as exc:
+                    out = {"outcome": "rejected", "error": f"crash:{type(exc).__name__}",
+                           "command_id": cid}
+            yield path, req, error, out
+            continue
+        group_op = req["op"]
+        db = notify_cards.connection(ledger)
+        committed = []
+        scanned = 0
+        with notify_transport.transport_transaction(db):
+            while (index < len(pending) and attempted < limit
+                   and scanned < _TRANSPORT_GROUP_LIMIT):
+                path, req = pending[index]
+                if req.get("op") != group_op:
+                    break
+                if deadline is not None and time.monotonic() > deadline:
+                    break
+                index += 1
+                scanned += 1
+                error = validate_int(req)
+                if (error is None and req["op"] == "transport_receipt"
+                        and db.execute("SELECT 1 FROM notification_delivery_attempts WHERE attempt_id=?",
+                                       (req["attempt_id"],)).fetchone() is None):
+                    continue  # preserve a receipt whose predecessor has not been observed
+                attempted += 1
+                cid = _command_id(path, req)
+                specs, unlinks = [], []
+                now = time.time()
+                if error:
+                    out = {"outcome": "rejected", "error": error, "command_id": cid}
+                else:
+                    db.execute("SAVEPOINT transport_command")
+                    try:
+                        if req["op"] == "transport_begin":
+                            out = notify_transport.apply_transport_begin_tx(
+                                ledger, req, cfg, now, specs, unlinks)
+                        else:
+                            out = notify_transport.apply_transport_receipt_tx(
+                                ledger, req, cfg, now, specs)
+                    except DETERMINISTIC_DB_ERRORS as exc:
+                        db.execute("ROLLBACK TO transport_command")
+                        specs.clear()
+                        unlinks.clear()
+                        error = f"storage_rejected:{type(exc).__name__}"
+                        out = {"outcome": "rejected", "error": error, "command_id": cid}
+                    except sqlite3.Error:
+                        raise  # a transient/storage failure rolls back every unpublished group item
+                    except Exception as exc:
+                        db.execute("ROLLBACK TO transport_command")
+                        specs.clear()
+                        unlinks.clear()
+                        out = {"outcome": "rejected", "error": f"crash:{type(exc).__name__}",
+                               "command_id": cid}
+                    db.execute("RELEASE transport_command")
+                committed.append((path, req, error, out, specs, unlinks, now))
+        for path, req, error, out, specs, unlinks, now in committed:
+            try:
+                notify_transport.publish_transport_effects(ledger, specs, unlinks, now)
+            except OSError as exc:
+                # The DB facts committed: retain this command, never publish a false rejection.
+                result.setdefault("errors", []).append(
+                    f"transport_effect_publish_failed:{type(exc).__name__}")
+                continue
+            yield path, req, error, out
+
+
+def _publish_command_result(path, req, error, out, result, res_dir) -> bool:
+    """Publish a committed outcome before consuming its exact command file."""
+    cid = _command_id(path, req)
+    out.setdefault("command_id", cid)
+    out["processed_at"] = time.time()
+    # Separate each click's response from the durable mutation identity.
+    # Reusing token:actor filenames exposes a prior response before this
+    # command has passed current authorization/source checks.
+    result_id = cid
+    if req.get("op") == "notification" and valid_uuid(req.get("request_id")):
+        result_id = req["request_id"]
+        out["request_id"] = result_id
+    safe = "".join(c if c.isalnum() or c in "._-" else "_"
+                   for c in str(result_id))[:120] or "unknown"
+    try:
+        published = notify_spool.publish_file(res_dir, safe + ".json",
+                                              canonical(out))
+        if notify_actions.LIVE_RESULT_KEYS & out.keys():
+            # age it so gc's TOKEN_WRITE_S sweep drops it after
+            # LIVE_RESULT_S — view text never sits on disk for a week
+            aged = time.time() - notify_action_tokens.TOKEN_WRITE_S \
+                + notify_actions.LIVE_RESULT_S
+            with suppress(OSError):
+                os.utime(published, (aged, aged))
+    except OSError as e:
+        result.setdefault("errors", []).append(
+            f"result_publish_failed:{safe}:{type(e).__name__}")
+        return False                   # keep the command file
+    try:
+        if error:
+            os.replace(path, path + ".invalid")   # forensic quarantine
+        else:
+            os.unlink(path)
+    except OSError as e:
+        # the answer is published; the file stays for the next drain
+        # (receipts keep a replay idempotent) and the rest proceeds
+        result.setdefault("errors", []).append(
+            f"cmd_int_consume_failed:{safe}:{type(e).__name__}")
+        return False
+    return True
+
+
 def drain_int_commands(ledger, result, cfg, root, deadline=None,
                        limit=32) -> int:
     """Bounded three-class drain of data/cmd_int with dependency-safe receipt retention.
@@ -501,93 +643,14 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
     receipts = [p for p in pending if p[1].get("op") in _RECEIPT_OPS]
     others = [p for p in pending if p[1].get("op") not in TRANSPORT_OPS]
     done = 0
-    attempted = 0
     card_actions = False
-    for path, req in begins + receipts + others:
-        if attempted >= limit:
-            break
-        if deadline is not None and time.monotonic() > deadline:
-            result.setdefault("errors", []).append(
-                "cmd_int_drain_deadline")
-            break
-        error = validate_int(req)
-        if (error is None and req.get("op") == "transport_receipt"
-                and notify_cards.connection(ledger).execute(
-                    "SELECT 1 FROM notification_delivery_attempts WHERE attempt_id=?",
-                    (req["attempt_id"],)).fetchone() is None):
-            # A worker can publish its factual pre-wire recovery receipt
-            # before the runner reaches its queued begin. Missing rows
-            # prove neither delivery nor rejection, so retain the witness.
-            continue
-        attempted += 1
-        cid = req.get("command_id")
-        if not isinstance(cid, str):
-            cid = os.path.basename(path)[:-5]
-        if error:
-            out = {"outcome": "rejected", "error": error,
-                   "command_id": cid}
-        else:
-            try:
-                out = dispatch(ledger, req, cfg, root)
-            except DETERMINISTIC_DB_ERRORS as e:
-                # the same command fails the same way on every drain and
-                # would block every later one: quarantine it like a parse
-                # failure (type only — the text can carry user data)
-                with suppress(sqlite3.Error):
-                    notify_cards.connection(ledger).rollback()
-                error = f"storage_rejected:{type(e).__name__}"
-                out = {"outcome": "rejected", "error": error,
-                       "command_id": cid}
-            except sqlite3.Error:
-                raise      # busy/locked/corrupt storage stays retryable, like data/cmd
-            except Exception as e:
-                # Exception text can embed paths/user data — the result
-                # file is plugin-readable, so record the type only.
-                out = {"outcome": "rejected",
-                       "error": f"crash:{type(e).__name__}",
-                       "command_id": cid}
+    for path, req, error, out in _command_outcomes(
+            ledger, begins + receipts + others, cfg, root, result, deadline, limit):
         if not error and req.get("op") not in TRANSPORT_OPS:
-            # dispatched: its card changes are re-rendered in THIS drain
-            # even when the answer or the file consume below fails
             card_actions = True
-        out.setdefault("command_id", cid)
-        out["processed_at"] = time.time()
-        # Separate each click's response from the durable mutation identity.
-        # Reusing token:actor filenames exposes a prior response before this
-        # command has passed current authorization/source checks.
-        result_id = cid
-        if req.get("op") == "notification" and valid_uuid(req.get("request_id")):
-            result_id = req["request_id"]
-            out["request_id"] = result_id
-        safe = "".join(c if c.isalnum() or c in "._-" else "_"
-                       for c in str(result_id))[:120] or "unknown"
-        try:
-            published = notify_spool.publish_file(res_dir, safe + ".json",
-                                                  canonical(out))
-            if notify_actions.LIVE_RESULT_KEYS & out.keys():
-                # age it so gc's TOKEN_WRITE_S sweep drops it after
-                # LIVE_RESULT_S — view text never sits on disk for a week
-                aged = time.time() - notify_action_tokens.TOKEN_WRITE_S \
-                    + notify_actions.LIVE_RESULT_S
-                with suppress(OSError):
-                    os.utime(published, (aged, aged))
-        except OSError as e:
-            result.setdefault("errors", []).append(
-                f"result_publish_failed:{safe}:{type(e).__name__}")
-            continue                       # keep the command file
-        try:
-            if error:
-                os.replace(path, path + ".invalid")   # forensic quarantine
-            else:
-                os.unlink(path)
-        except OSError as e:
-            # the answer is published; the file stays for the next drain
-            # (receipts keep a replay idempotent) and the rest proceeds
-            result.setdefault("errors", []).append(
-                f"cmd_int_consume_failed:{safe}:{type(e).__name__}")
-            continue
-        result["commands"] = result.get("commands", 0) + 1
-        done += 1
+        if _publish_command_result(path, req, error, out, result, res_dir):
+            result["commands"] = result.get("commands", 0) + 1
+            done += 1
     if card_actions:
         # applied actions change card content (triage footer, signal
         # state via request.create / ops.signal_dismiss) — re-render

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 import notify_cards as cards
 import notify_scope
@@ -198,90 +199,103 @@ def settle_attempt_tx(db, attempt, render, result, now,
     return {"settled": result}
 
 
-def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
-    """transport_begin: the runner re-verifies send eligibility and
-    commits the attempt BEFORE any grant. A file claim alone is never
-    send authorization; a denial is itself a durable not_sent attempt."""
-    db = cards.connection(ledger)
-    now = time.time() if now is None else now
-    cid = req["command_id"]
-    if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
-        # A DB restore is unreconciled — grant nothing until the
-        # journal-vs-DB comparison finishes. No attempt row: a restore
-        # denial is not a send attempt and must not count toward the
-        # resend budget. Transient — the spec stays claimable.
-        return {"granted": False, "error": "denied_restore_pending",
-                "command_id": cid}
+@contextmanager
+def transport_transaction(db):
+    """Own one transport transaction without committing or rolling back a caller's work."""
+    if db.in_transaction:
+        raise sqlite3.ProgrammingError("transport_transaction_already_active")
     with db:
         db.execute("BEGIN IMMEDIATE")
-        old = db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE begin_command_id=?", (cid,)).fetchone()
-        if old is not None:
-            render = render_row(db, old["delivery_id"])
-            if not scope_matches(render, req):
-                return {"granted": False, "error": "denied_scope_mismatch",
-                        "command_id": cid}
-            if old["attempt_id"] != req["attempt_id"] \
-                    or old["delivery_id"] != req["delivery_id"] \
-                    or old["worker_id"] != req["worker_id"] \
-                    or any(render[k] != req.get(k) for k in
-                           ("render_rev", "payload_hash", "route_epoch")):
-                return {"granted": False, "error": "command_id_conflict",
-                        "command_id": cid}
-            return _begin_result(db, old)
-        clash = db.execute(
-            "SELECT 1 FROM notification_delivery_attempts "
-            "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-        if clash is not None:
-            return {"granted": False, "error": "attempt_id_conflict",
+        yield
+
+
+def apply_transport_begin(ledger, req, cfg, now=None) -> dict:
+    """Commit a factual send grant before publishing any transport effects."""
+    db = cards.connection(ledger)
+    now = time.time() if now is None else now
+    if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
+        return {"granted": False, "error": "denied_restore_pending",
+                "command_id": req["command_id"]}
+    specs, unlinks = [], []
+    with transport_transaction(db):
+        result = apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks)
+    publish_transport_effects(ledger, specs, unlinks, now)
+    return result
+
+
+def apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks) -> dict:
+    """Prepare a factual grant inside a borrowed transaction; defer all file effects."""
+    db = cards.connection(ledger)
+    cid = req["command_id"]
+    if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
+        return {"granted": False, "error": "denied_restore_pending",
+                "command_id": cid}
+    old = db.execute(
+        "SELECT * FROM notification_delivery_attempts "
+        "WHERE begin_command_id=?", (cid,)).fetchone()
+    if old is not None:
+        render = render_row(db, old["delivery_id"])
+        if not scope_matches(render, req):
+            return {"granted": False, "error": "denied_scope_mismatch",
                     "command_id": cid}
-        reason = _begin_check(db, req, cfg)
-        if reason == "unknown_delivery":
-            # nothing to reference — a denied attempt row needs the
-            # render FK; the result file carries the audit instead.
-            # The spec file is definitively dead — remove it so a
-            # worker stops re-claiming bytes that can never grant.
-            _unlink_spec(ledger, req["delivery_id"], req.get("transport", "discord"))
-            return {"granted": False, "error": "denied_unknown_delivery",
-                    "command_id": cid, "attempt_id": req["attempt_id"],
-                    "delivery_id": req["delivery_id"]}
-        state = "granted" if reason is None else "not_sent"
+        if old["attempt_id"] != req["attempt_id"] \
+                or old["delivery_id"] != req["delivery_id"] \
+                or old["worker_id"] != req["worker_id"] \
+                or any(render[k] != req.get(k) for k in
+                       ("render_rev", "payload_hash", "route_epoch")):
+            return {"granted": False, "error": "command_id_conflict",
+                    "command_id": cid}
+        return _begin_result(db, old)
+    clash = db.execute(
+        "SELECT 1 FROM notification_delivery_attempts "
+        "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
+    if clash is not None:
+        return {"granted": False, "error": "attempt_id_conflict",
+                "command_id": cid}
+    reason = _begin_check(db, req, cfg)
+    if reason == "unknown_delivery":
+        # nothing to reference — a denied attempt row needs the
+        # render FK; the result file carries the audit instead.
+        # The spec file is definitively dead — remove it so a
+        # worker stops re-claiming bytes that can never grant.
+        unlinks.append((req["delivery_id"], req.get("transport", "discord")))
+        return {"granted": False, "error": "denied_unknown_delivery",
+                "command_id": cid, "attempt_id": req["attempt_id"],
+                "delivery_id": req["delivery_id"]}
+    state = "granted" if reason is None else "not_sent"
+    db.execute(
+        """INSERT INTO notification_delivery_attempts(
+             attempt_id,delivery_id,begin_command_id,state,
+             error_code,worker_id,created_at,finished_at)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (req["attempt_id"], req["delivery_id"], cid, state,
+         None if reason is None else f"denied_{reason}",
+         req["worker_id"], now, None if reason is None else now))
+    if reason is None:
         db.execute(
-            """INSERT INTO notification_delivery_attempts(
-                 attempt_id,delivery_id,begin_command_id,state,
-                 error_code,worker_id,created_at,finished_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (req["attempt_id"], req["delivery_id"], cid, state,
-             None if reason is None else f"denied_{reason}",
-             req["worker_id"], now, None if reason is None else now))
-        if reason is None:
-            db.execute(
-                "UPDATE notification_renders SET state='sending',"
-                "updated_at=? WHERE delivery_id=? AND state='queued'",
-                (now, req["delivery_id"]))
-        reissued = []
-        if reason in ("source_changed", "reply_thread_changed"):
-            # Re-evaluate source/parent changes in the same commit. An
-            # unproven reply parent cancels only queued work and holds;
-            # a safely bound reply can replace a stale channel spec.
-            card_id = db.execute(
-                "SELECT card_id FROM notification_renders "
-                "WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
-            cards.issue_render(db, card_id["card_id"], cfg, now, reissued)
-        cards.mark_snapshot_dirty(db)
-        result = _begin_result(db, db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE begin_command_id=?", (cid,)).fetchone())
-    if reissued:
-        notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)),
-                             reissued, now)
+            "UPDATE notification_renders SET state='sending',"
+            "updated_at=? WHERE delivery_id=? AND state='queued'",
+            (now, req["delivery_id"]))
+    reissued = []
+    if reason in ("source_changed", "reply_thread_changed"):
+        # Re-evaluate source/parent changes in the same commit. An
+        # unproven reply parent cancels only queued work and holds;
+        # a safely bound reply can replace a stale channel spec.
+        card_id = db.execute(
+            "SELECT card_id FROM notification_renders "
+            "WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
+        cards.issue_render(db, card_id["card_id"], cfg, now, reissued)
+    cards.mark_snapshot_dirty(db)
+    result = _begin_result(db, db.execute(
+        "SELECT * FROM notification_delivery_attempts "
+        "WHERE begin_command_id=?", (cid,)).fetchone())
+    specs.extend(reissued)
     if reason is not None and (reissued or _denial_is_final(
             db, req["delivery_id"], reason)):
         render = db.execute(
             "SELECT transport FROM notification_renders WHERE delivery_id=?",
             (req["delivery_id"],)).fetchone()
-        _unlink_spec(ledger, req["delivery_id"], render["transport"])
+        unlinks.append((req["delivery_id"], render["transport"]))
     return result
 
 
@@ -425,52 +439,62 @@ def _begin_result(db, attempt) -> dict:
 
 
 def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
-    """transport_receipt: settle an attempt from the worker's factual
-    report. Echo fields must match the stored grant/render — an
-    arbitrary event_id or payload never marks anything accepted."""
+    """Commit a factual transport outcome before publishing any successor plan."""
     db = cards.connection(ledger)
     now = time.time() if now is None else now
     specs = []
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        attempt = db.execute(
-            "SELECT * FROM notification_delivery_attempts "
-            "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
-        render = None
-        if attempt is not None:
-            render = render_row(db, attempt["delivery_id"])
-        error = _receipt_check(attempt, render, req)
-        if error:
-            receipt = {"applied": False, "error": error,
-                       "attempt_id": req["attempt_id"],
-                       "delivery_id": req["delivery_id"]}
-        else:
-            prior = attempt["state"]
-            result = req["result"]
-            if prior in ("delivered", "not_sent"):
-                # terminal already: same fact is idempotent, a different
-                # fact is a conflict — never silently overwrite (§4)
-                same = prior == result and (
-                    result != "delivered"
-                    or str(attempt["message_id"]) == str(req["message_id"]))
-                receipt = {"applied": same,
-                           "error": None if same else "attempt_conflict",
-                           "conflict": not same,
-                           "attempt_id": attempt["attempt_id"],
-                           "delivery_id": attempt["delivery_id"],
-                           "attempt_state": prior}
-            else:
-                settle_attempt_tx(db, attempt, render, result, now,
-                                message_id=req.get("message_id"),
-                                error_code=req.get("error_code"))
-                receipt = {"applied": True, "attempt_id": attempt["attempt_id"],
-                           "delivery_id": attempt["delivery_id"],
-                           "attempt_state": result}
-                if render["card_id"] is not None:
-                    cards.issue_render(db, render["card_id"], cfg, now, specs)
-    notify_spool.publish_committed(ledger, db, specs, now)
+    with transport_transaction(db):
+        receipt = apply_transport_receipt_tx(ledger, req, cfg, now, specs)
+    publish_transport_effects(ledger, specs, [], now)
     return receipt
 
+
+def apply_transport_receipt_tx(ledger, req, cfg, now, specs) -> dict:
+    """Settle the exact grant/render in a borrowed transaction without file publication."""
+    db = cards.connection(ledger)
+    attempt = db.execute(
+        "SELECT * FROM notification_delivery_attempts "
+        "WHERE attempt_id=?", (req["attempt_id"],)).fetchone()
+    render = None
+    if attempt is not None:
+        render = render_row(db, attempt["delivery_id"])
+    error = _receipt_check(attempt, render, req)
+    if error:
+        receipt = {"applied": False, "error": error,
+                   "attempt_id": req["attempt_id"],
+                   "delivery_id": req["delivery_id"]}
+    else:
+        prior = attempt["state"]
+        result = req["result"]
+        if prior in ("delivered", "not_sent"):
+            # terminal already: same fact is idempotent, a different
+            # fact is a conflict — never silently overwrite (§4)
+            same = prior == result and (
+                result != "delivered"
+                or str(attempt["message_id"]) == str(req["message_id"]))
+            receipt = {"applied": same,
+                       "error": None if same else "attempt_conflict",
+                       "conflict": not same,
+                       "attempt_id": attempt["attempt_id"],
+                       "delivery_id": attempt["delivery_id"],
+                       "attempt_state": prior}
+        else:
+            settle_attempt_tx(db, attempt, render, result, now,
+                            message_id=req.get("message_id"),
+                            error_code=req.get("error_code"))
+            receipt = {"applied": True, "attempt_id": attempt["attempt_id"],
+                       "delivery_id": attempt["delivery_id"],
+                       "attempt_state": result}
+            if render["card_id"] is not None:
+                cards.issue_render(db, render["card_id"], cfg, now, specs)
+    return receipt
+
+
+def publish_transport_effects(ledger, specs, unlinks, now) -> None:
+    """Publish only effects whose owning transport transaction has committed."""
+    notify_spool.publish_committed(ledger, cards.connection(ledger), specs, now)
+    for delivery_id, transport in unlinks:
+        _unlink_spec(ledger, delivery_id, transport)
 
 
 

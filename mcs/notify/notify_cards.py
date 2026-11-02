@@ -73,6 +73,7 @@ NOTICE_KINDS = frozenset({"daily_digest"})
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
 
 RESEAT_S = 3600           # re-examine a dispatched pending intent hourly
+DISPATCH_GROUP_LIMIT = 10  # the ordinary flush window, without a new configuration knob
 MAX_RESEND = 3            # consecutive not_sent attempts before a card
                           # suspends auto-retry (update_failed)
 
@@ -1890,183 +1891,244 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
     return {"dispatched": bool(specs)}
 
 
+def _dispatch_connection(ledger):
+    db = connection(ledger)
+    if db.in_transaction:
+        raise ValueError("notification_dispatch_transaction_active")
+    return db
+
+
 def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
     """Freeze an interactive intent: sealed batch -> card fan-out ->
     immutable render -> atomic spec publication. Idempotent re-entry on
     a sealed intent repairs missing spec files and re-checks completion."""
+    db = _dispatch_connection(ledger)
     now = time.time() if now is None else now
     if ev["kind"] == "urgent_notice":
         return _dispatch_urgent_notice(ledger, ev, cfg, now)
     if ev["kind"] in NOTICE_KINDS:
         return _dispatch_notice(ledger, ev, cfg, now)
-    db = connection(ledger)
     root = notify_spool.data_root(ledger)
     dirs = notify_spool.notify_dirs(root)
     notify_spool.ensure_dirs(root)
-    scope = notify_scope.delivery_scope(cfg)
-    epoch = notify_scope.route_epoch(cfg)
     specs = []
-    outcome = {"dispatched": False, "cards": 0}
-    event_id = ev["event_id"]
     with db:
         db.execute("BEGIN IMMEDIATE")
-        row = db.execute(
-            "SELECT event_id,kind,project_id,payload,state,route "
-            "FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
-        if row is None or row["route"] != "interactive" \
-                or row["state"] not in ("pending", "failed"):
-            return {"skipped": True}
-        batch = db.execute(
-            "SELECT * FROM notification_intent_batches "
-            "WHERE event_id=?", (event_id,)).fetchone()
-        if row["kind"] == "signal" and not notify_scope.signals_notify(cfg):
-            if batch is None:
-                db.execute(
-                    "UPDATE notify_outbox SET state='suppressed',"
-                    "next_try=NULL,updated_at=? WHERE event_id=?",
-                    (now, event_id))
-                mark_snapshot_dirty(db)
-                return {"suppressed": True}
-            # sealed with signals off: re-examine hourly, never every
-            # flush — a due-forever intent would starve outbox_due slots
-            _reseat(db, event_id, now, "signals_off_sealed")
-            return {"skipped": True}
-        if batch is not None:
-            if notify_scope.interactive_enabled(cfg) and batch["transport"] != notify_scope.active_transport(cfg):
-                return {"error": "transport_mismatch"}
-            # off: notify_scope.active_transport() falls back to discord, so the
-            # stored scope can't match — fall through to reseat instead
-            if notify_scope.interactive_enabled(cfg) \
-                    and batch["transport"] in ("slack", "lineworks") \
-                    and batch["scope_json"] != canonical(scope).decode():
-                return {"error": "scope_mismatch"}
-            # A held signal resumes after its original source thread becomes
-            # deliverable; no fresh event or new patient room is necessary.
-            if row["kind"] in ("signal", "patient_history"):
-                for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
+        outcome = _dispatch_intent_tx(ledger, ev, cfg, now, specs)
+    notify_spool.publish_specs(db, dirs, specs, now)
+    return outcome
+
+
+def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
+    """Freeze one ordinary intent in the caller's write transaction."""
+    spec_start = len(specs)
+    db = connection(ledger)
+    scope = notify_scope.delivery_scope(cfg)
+    epoch = notify_scope.route_epoch(cfg)
+    outcome = {"dispatched": False, "cards": 0}
+    event_id = ev["event_id"]
+    row = db.execute(
+        "SELECT event_id,kind,project_id,payload,state,route "
+        "FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
+    if row is None or row["route"] != "interactive" \
+            or row["state"] not in ("pending", "failed"):
+        return {"skipped": True}
+    batch = db.execute(
+        "SELECT * FROM notification_intent_batches "
+        "WHERE event_id=?", (event_id,)).fetchone()
+    if row["kind"] == "signal" and not notify_scope.signals_notify(cfg):
+        if batch is None:
+            db.execute(
+                "UPDATE notify_outbox SET state='suppressed',"
+                "next_try=NULL,updated_at=? WHERE event_id=?",
+                (now, event_id))
+            mark_snapshot_dirty(db)
+            return {"suppressed": True}
+        # sealed with signals off: re-examine hourly, never every
+        # flush — a due-forever intent would starve outbox_due slots
+        _reseat(db, event_id, now, "signals_off_sealed")
+        return {"skipped": True}
+    if batch is not None:
+        if notify_scope.interactive_enabled(cfg) and batch["transport"] != notify_scope.active_transport(cfg):
+            return {"error": "transport_mismatch"}
+        # off: notify_scope.active_transport() falls back to discord, so the
+        # stored scope can't match — fall through to reseat instead
+        if notify_scope.interactive_enabled(cfg) \
+                and batch["transport"] in ("slack", "lineworks") \
+                and batch["scope_json"] != canonical(scope).decode():
+            return {"error": "scope_mismatch"}
+        # A held signal resumes after its original source thread becomes
+        # deliverable; no fresh event or new patient room is necessary.
+        if row["kind"] in ("signal", "patient_history"):
+            for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
+                issue_render(db, pending[0], cfg, now, specs)
+            outcome["dispatched"] = len(specs) > spec_start
+        elif row["kind"] == "new_messages":
+            # Initial root and replies share one intent. A root receipt
+            # can leave a reply without any render; resume only those
+            # unbound replies when the already sealed event re-enters.
+            for pending in db.execute(
+                    "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
+                    "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
+                card = notify_scope.card_row(db, pending[0])
+                if card is not None and reply_source(card):
                     issue_render(db, pending[0], cfg, now, specs)
-                outcome["dispatched"] = bool(specs)
-            elif row["kind"] == "new_messages":
-                # Initial root and replies share one intent. A root receipt
-                # can leave a reply without any render; resume only those
-                # unbound replies when the already sealed event re-enters.
-                for pending in db.execute(
-                        "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
-                        "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
-                    card = notify_scope.card_row(db, pending[0])
-                    if card is not None and reply_source(card):
-                        issue_render(db, pending[0], cfg, now, specs)
-                outcome["dispatched"] = bool(specs)
-            elif row["kind"] == "attachment_followup":
-                # Retry only unbound work after existing attempts/parts settle.
-                # A bound held/unknown plan remains owned by its receipt path.
-                if not notify_parts.late_attachment_thread(cfg):
+            outcome["dispatched"] = len(specs) > spec_start
+        elif row["kind"] == "attachment_followup":
+            # Retry only unbound work after existing attempts/parts settle.
+            # A bound held/unknown plan remains owned by its receipt path.
+            if not notify_parts.late_attachment_thread(cfg):
+                return {"error": "attachment_thread_unavailable"}
+            for pending in db.execute(
+                    "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
+                    "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
+                card = notify_scope.card_row(db, pending[0])
+                if card is None or card["delivery_state"] == "revoked" \
+                        or card["thread_state"] != "created" or not card["thread_id"]:
                     return {"error": "attachment_thread_unavailable"}
-                for pending in db.execute(
-                        "SELECT card_id FROM notification_intent_cards WHERE event_id=? "
-                        "AND state='pending' AND delivery_id IS NULL", (event_id,)).fetchall():
-                    card = notify_scope.card_row(db, pending[0])
-                    if card is None or card["delivery_state"] == "revoked" \
-                            or card["thread_state"] != "created" or not card["thread_id"]:
-                        return {"error": "attachment_thread_unavailable"}
-                    issue_render(db, pending[0], cfg, now, specs, force=True)
-                outcome["dispatched"] = bool(specs)
-            # sealed already — a flush re-entry repairs + completes
-            if complete_intent(db, event_id, now) is None:
-                _reseat(db, event_id, now, "intent_cards_unsettled")
-            specs.extend(
-                json.loads(r["spec_json"])
-                for r in db.execute(
-                    """SELECT r.spec_json, r.delivery_id
+                issue_render(db, pending[0], cfg, now, specs, force=True)
+            outcome["dispatched"] = len(specs) > spec_start
+        # sealed already — a flush re-entry repairs + completes
+        if complete_intent(db, event_id, now) is None:
+            _reseat(db, event_id, now, "intent_cards_unsettled")
+        specs.extend(
+            json.loads(r["spec_json"])
+            for r in db.execute(
+                """SELECT r.spec_json, r.delivery_id
                        FROM notification_renders r
                        JOIN notification_intent_cards ic
                          ON ic.delivery_id = r.delivery_id
                        WHERE ic.event_id=? AND r.state='queued'
                          AND (r.spec_published=0 OR r.spec_json IS NULL)""",
-                    (event_id,)).fetchall()
-                if r["spec_json"])
-            outcome["resealed"] = True
-        else:
-            if scope is None:
-                return {"error": "delivery_scope_missing"}
-            try:
-                frozen = json.loads(row["payload"])
-            except (json.JSONDecodeError, TypeError):
-                frozen = None
-            if not isinstance(frozen, dict):
-                db.execute(
-                    "UPDATE notify_outbox SET state='failed',"
-                    f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
-                    "WHERE event_id=?",
-                    ("payload_invalid", now, event_id))
-                return {"error": "payload_invalid"}
-            targets = _resolve_targets(db, row, frozen, cfg=cfg)
-            if row["kind"] == "new_messages":
-                targets = _split_reply_targets(db, targets, scope, cfg)
-            if row["kind"] == "attachment_followup":
-                if not notify_parts.late_attachment_thread(cfg):
-                    return {"error": "attachment_thread_unavailable"}
-                targets = [target for target in targets
-                           if notify_scope.scope_matches(notify_scope.card_row(db, target["card_id"]), scope)]
-                if len(targets) != 1:
-                    return {"error": "attachment_thread_unavailable"}
-                if targets[0]["text_fallback"]:
-                    return {"error": "attachment_thread_unavailable", "text_fallback": True}
-                frozen = {**frozen, "attachment_sha256": targets[0]["attachment_sha256"]}
+                (event_id,)).fetchall()
+            if r["spec_json"])
+        outcome["resealed"] = True
+    else:
+        if scope is None:
+            return {"error": "delivery_scope_missing"}
+        try:
+            frozen = json.loads(row["payload"])
+        except (json.JSONDecodeError, TypeError):
+            frozen = None
+        if not isinstance(frozen, dict):
             db.execute(
-                "INSERT INTO notification_intent_batches("
-                "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
-                "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
-                (event_id, canonical(frozen).decode(),
-                 payload_hash(frozen), epoch, now, notify_scope.active_transport(cfg),
-                 canonical(scope).decode() if notify_scope.active_transport(cfg) in ("slack", "lineworks") else None))
-            card_ids = []
-            covered = set()
-            for target in targets:
-                cid = (target["card_id"] if row["kind"] == "attachment_followup"
-                       else _card_for(db, target, scope, now))
-                db.execute(
-                    "INSERT OR IGNORE INTO notification_intent_cards("
-                    "event_id,card_id,coverage) VALUES(?,?,?)",
-                    (event_id, cid,
-                     json.dumps(target["coverage"],
-                                ensure_ascii=False)))
-                # still archived: a revoked card can never deliver this
-                # coverage — suppress it so the intent can complete
-                db.execute(
-                    "UPDATE notification_intent_cards SET state='suppressed' "
-                    "WHERE event_id=? AND card_id=? AND state='pending' "
-                    "AND EXISTS(SELECT 1 FROM notification_cards c WHERE "
-                    "c.card_id=? AND c.delivery_state='revoked')",
-                    (event_id, cid, cid))
-                card_ids.append(cid)
-                covered.update(target["coverage"])
-            if card_ids:
-                if row["kind"] == "patient_history":
-                    notify_history.coalesce_tx(db, notify_scope.card_row(db, card_ids[0]), scope, epoch, now)
-                for cid in card_ids:
-                    issue_render(db, cid, cfg, now, specs,
-                                  force=row["kind"] == "attachment_followup")
-                if row["kind"] == "new_messages":
-                    from notify_urgent import capture_initial
-                    capture_initial(ledger, cfg, {
-                        "event_id": event_id, "kind": row["kind"],
-                        "project_id": row["project_id"],
-                        "payload": json.dumps({**frozen, "message_ids": sorted(covered)}),
-                    }, now=now)
-                _reseat(db, event_id, now, "intent_cards_issued")
-                outcome.update(dispatched=True, cards=len(card_ids))
-            else:
-                # nothing deliverable — suppress like a stale text send
-                db.execute(
-                    "UPDATE notify_outbox SET state='suppressed',"
-                    "next_try=NULL,updated_at=? WHERE event_id=?",
-                    (now, event_id))
-                outcome["suppressed"] = True
-            complete_intent(db, event_id, now)
-        mark_snapshot_dirty(db)
-    notify_spool.publish_specs(db, dirs, specs, now)
+                "UPDATE notify_outbox SET state='failed',"
+                f"next_try=NULL,{HOLD_PROGRESS_SET},updated_at=? "
+                "WHERE event_id=?",
+                ("payload_invalid", now, event_id))
+            return {"error": "payload_invalid"}
+        targets = _resolve_targets(db, row, frozen, cfg=cfg)
+        if row["kind"] == "new_messages":
+            targets = _split_reply_targets(db, targets, scope, cfg)
+        if row["kind"] == "attachment_followup":
+            if not notify_parts.late_attachment_thread(cfg):
+                return {"error": "attachment_thread_unavailable"}
+            targets = [target for target in targets
+                       if notify_scope.scope_matches(notify_scope.card_row(db, target["card_id"]), scope)]
+            if len(targets) != 1:
+                return {"error": "attachment_thread_unavailable"}
+            if targets[0]["text_fallback"]:
+                return {"error": "attachment_thread_unavailable", "text_fallback": True}
+            frozen = {**frozen, "attachment_sha256": targets[0]["attachment_sha256"]}
+        db.execute(
+            "INSERT INTO notification_intent_batches("
+            "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,"
+            "transport,scope_json) VALUES(?,?,?,?,?,?,?)",
+            (event_id, canonical(frozen).decode(),
+             payload_hash(frozen), epoch, now, notify_scope.active_transport(cfg),
+             canonical(scope).decode() if notify_scope.active_transport(cfg) in ("slack", "lineworks") else None))
+        card_ids = []
+        covered = set()
+        for target in targets:
+            cid = (target["card_id"] if row["kind"] == "attachment_followup"
+                   else _card_for(db, target, scope, now))
+            db.execute(
+                "INSERT OR IGNORE INTO notification_intent_cards("
+                "event_id,card_id,coverage) VALUES(?,?,?)",
+                (event_id, cid,
+                 json.dumps(target["coverage"],
+                            ensure_ascii=False)))
+            # still archived: a revoked card can never deliver this
+            # coverage — suppress it so the intent can complete
+            db.execute(
+                "UPDATE notification_intent_cards SET state='suppressed' "
+                "WHERE event_id=? AND card_id=? AND state='pending' "
+                "AND EXISTS(SELECT 1 FROM notification_cards c WHERE "
+                "c.card_id=? AND c.delivery_state='revoked')",
+                (event_id, cid, cid))
+            card_ids.append(cid)
+            covered.update(target["coverage"])
+        if card_ids:
+            if row["kind"] == "patient_history":
+                notify_history.coalesce_tx(db, notify_scope.card_row(db, card_ids[0]), scope, epoch, now)
+            for cid in card_ids:
+                issue_render(db, cid, cfg, now, specs,
+                              force=row["kind"] == "attachment_followup")
+            if row["kind"] == "new_messages":
+                from notify_urgent import capture_initial
+                capture_initial(ledger, cfg, {
+                    "event_id": event_id, "kind": row["kind"],
+                    "project_id": row["project_id"],
+                    "payload": json.dumps({**frozen, "message_ids": sorted(covered)}),
+                }, now=now)
+            _reseat(db, event_id, now, "intent_cards_issued")
+            outcome.update(dispatched=True, cards=len(card_ids))
+        else:
+            # nothing deliverable — suppress like a stale text send
+            db.execute(
+                "UPDATE notify_outbox SET state='suppressed',"
+                "next_try=NULL,updated_at=? WHERE event_id=?",
+                (now, event_id))
+            outcome["suppressed"] = True
+        complete_intent(db, event_id, now)
+    mark_snapshot_dirty(db)
     return outcome
+
+
+def dispatch_intents(ledger, events, cfg, now=None, *, deadline=None) -> list:
+    """Commit up to one flush window of ordinary intents before publishing their specs."""
+    if len(events) > DISPATCH_GROUP_LIMIT or any(
+            ev["kind"] != "new_messages" or ev["route"] != "interactive" for ev in events):
+        raise ValueError("notification_dispatch_group_invalid")
+    if not events:
+        return []
+    db = _dispatch_connection(ledger)
+    root = notify_spool.data_root(ledger)
+    dirs = notify_spool.notify_dirs(root)
+    notify_spool.ensure_dirs(root)
+    specs, outcomes = [], []
+    now = time.time() if now is None else now
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        for ev in events:
+            if deadline is not None and time.monotonic() >= deadline:
+                outcomes.append({"deadline": True})
+                continue
+            row = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (ev["event_id"],)).fetchone()
+            if row is None or row["kind"] != "new_messages" or row["route"] != "interactive" \
+                    or row["state"] not in ("pending", "failed"):
+                outcomes.append({"skipped": True})
+                continue
+            if row["project_id"] and ledger.is_archived(row["project_id"]):
+                outcomes.append({"archived": dict(row)})
+                continue
+            if notify_spool.restore_pending(root) is not None:
+                outcomes.append({"restore_pending": True})
+                continue
+            before = len(specs)
+            db.execute("SAVEPOINT notification_dispatch_item")
+            try:
+                outcome = _dispatch_intent_tx(ledger, row, cfg, now, specs)
+            except Exception as error:
+                db.execute("ROLLBACK TO notification_dispatch_item")
+                del specs[before:]
+                outcomes.append(error)
+            else:
+                outcomes.append(outcome)
+            finally:
+                db.execute("RELEASE notification_dispatch_item")
+    notify_spool.publish_specs(db, dirs, specs, now)
+    return outcomes
 
 
 def revert_to_text(ledger, event_id, now=None, *, expected=None) -> bool:

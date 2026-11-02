@@ -746,36 +746,44 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         if outcome.get("text_fallback") and not sealed and _send_never_began(ev) \
                 and notify_cards.revert_to_text(ledger, ev["event_id"], expected=ev):
             return False
-        if outcome.get("parked"):
-            res["parked"] += 1
-        elif outcome.get("held"):
-            res["failed"] += 1
-        elif outcome.get("error") in ("payload_invalid", "resend_exhausted"):
-            # dispatch already quarantined it — a malformed frozen
-            # payload cannot heal, so never re-arm an hourly retry
-            ledger.outbox_hold(ev["event_id"], outcome["error"])
-            res["failed"] += 1
-        elif outcome.get("error"):
-            # a sealed intent whose transport/scope no longer matches the
-            # config never heals on its own — quarantine like the
-            # exception path instead of failing hourly forever
-            if ev["attempts"] >= 4:
-                ledger.outbox_hold(ev["event_id"], "dispatch_failed")
-            else:
-                ledger.outbox_mark(ev["event_id"], "failed",
-                                   retry_in=3600)
-            res["failed"] += 1
-        elif outcome.get("suppressed"):
-            res["suppressed"] += 1
-        elif not outcome.get("skipped"):
-            res["dispatched"] = res.get("dispatched", 0) + 1
+        _record_dispatch_outcome(ledger, ev, res, outcome)
     except Exception:
-        if ev["attempts"] >= 4:
-            ledger.outbox_hold(ev["event_id"], "internal_failure")
-        else:
-            ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
-        res["failed"] += 1
+        _dispatch_failed(ledger, ev, res)
     return True
+
+
+def _record_dispatch_outcome(ledger, ev, res, outcome):
+    if outcome.get("parked"):
+        res["parked"] += 1
+    elif outcome.get("held"):
+        res["failed"] += 1
+    elif outcome.get("error") in ("payload_invalid", "resend_exhausted"):
+        # dispatch already quarantined it — a malformed frozen
+        # payload cannot heal, so never re-arm an hourly retry
+        ledger.outbox_hold(ev["event_id"], outcome["error"])
+        res["failed"] += 1
+    elif outcome.get("error"):
+        # a sealed intent whose transport/scope no longer matches the
+        # config never heals on its own — quarantine like the
+        # exception path instead of failing hourly forever
+        if ev["attempts"] >= 4:
+            ledger.outbox_hold(ev["event_id"], "dispatch_failed")
+        else:
+            ledger.outbox_mark(ev["event_id"], "failed",
+                               retry_in=3600)
+        res["failed"] += 1
+    elif outcome.get("suppressed"):
+        res["suppressed"] += 1
+    elif not outcome.get("skipped"):
+        res["dispatched"] = res.get("dispatched", 0) + 1
+
+
+def _dispatch_failed(ledger, ev, res):
+    if ev["attempts"] >= 4:
+        ledger.outbox_hold(ev["event_id"], "internal_failure")
+    else:
+        ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
+    res["failed"] += 1
 
 
 RERENDER_RETRY_S = 60
@@ -1119,6 +1127,26 @@ def _fail_event(ledger, ev, cfg, res, exc):
         res["failed"] += 1
 
 
+def _archive_dispatch(ledger, ev, cfg, res):
+    # queued before the patient was archived — archived patient
+    # events must never reach the channel; drop terminally, do
+    # not count as sent OR as a retryable failure (Oracle F2).
+    # A send that began with unknown outcome is held instead,
+    # so the receipt is counted as send_outcome_unknown.
+    progress = mcs_util.loads_dict(ev["progress"] or "{}")
+    if progress is None:
+        hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
+        res["failed"] += 1
+        return
+    began = progress.get("sending")
+    if began is not None:
+        hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
+        res["uncertain"] = res.get("uncertain", 0) + 1
+        return
+    ledger.outbox_suppress(ev["event_id"])
+    res["suppressed"] += 1
+
+
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
@@ -1137,6 +1165,36 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         """Delivered as a card: needs neither the hermes exe nor a text destination."""
         return (_route(e) == "interactive" or e["kind"] in ("urgent_notice", "signal")
                 or bool(thread_attachments and e["kind"] == "attachment_followup"))
+    import notify_scope
+    group = []
+
+    def grouped(e):
+        return (e["kind"] == "new_messages" and _route(e) == "interactive"
+                and notify_scope.interactive_enabled(cfg))
+
+    def flush_group():
+        if not group:
+            return
+        pending = list(group)
+        group.clear()
+        try:
+            outcomes = notify_cards.dispatch_intents(ledger, pending, cfg, deadline=deadline)
+        except Exception as error:
+            outcomes = [error] * len(pending)
+        for event, outcome in zip(pending, outcomes, strict=True):
+            if isinstance(outcome, Exception):
+                _dispatch_failed(ledger, event, res)
+            elif outcome.get("deadline"):
+                res["skipped"] += 1
+            elif outcome.get("restore_pending"):
+                ledger.outbox_defer(event["event_id"], RERENDER_RETRY_S)
+                res["skipped"] += 1
+                res["restore_pending"] = res.get("restore_pending", 0) + 1
+            elif outcome.get("archived"):
+                _archive_dispatch(ledger, outcome["archived"], cfg, res)
+            else:
+                _record_dispatch_outcome(ledger, event, res, outcome)
+
     exe = mcs_util.hermes_exe(cfg)
     exe_ok = os.path.isfile(exe) and os.access(exe, os.X_OK)
     if not exe_ok and not any(
@@ -1146,26 +1204,20 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         return res
     for event_index, ev in enumerate(due):
         if deadline is not None and time.monotonic() >= deadline:
+            flush_group()
             res["skipped"] += len(due) - event_index
             break
+        if not grouped(ev):
+            flush_group()
+            if deadline is not None and time.monotonic() >= deadline:
+                res["skipped"] += len(due) - event_index
+                break
         if ev["project_id"] and ledger.is_archived(ev["project_id"]):
-            # queued before the patient was archived — archived patient
-            # events must never reach the channel; drop terminally, do
-            # not count as sent OR as a retryable failure (Oracle F2).
-            # A send that began with unknown outcome is held instead,
-            # so the receipt is counted as send_outcome_unknown.
-            progress = mcs_util.loads_dict(ev["progress"] or "{}")
-            if progress is None:
-                hold_event(ledger, ev, cfg, reason="payload_or_progress_invalid", rescue=False)
-                res["failed"] += 1
-                continue
-            began = progress.get("sending")
-            if began is not None:
-                hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
-                res["uncertain"] = res.get("uncertain", 0) + 1
-                continue
-            ledger.outbox_suppress(ev["event_id"])
-            res["suppressed"] += 1
+            flush_group()
+            if deadline is not None and time.monotonic() >= deadline:
+                res["skipped"] += len(due) - event_index
+                break
+            _archive_dispatch(ledger, ev, cfg, res)
             continue
         # A missing text destination is a pre-send configuration error;
         # no SQLite/restore lookup or native delivery can be attempted here.
@@ -1177,6 +1229,10 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         if ev["kind"] not in notify_sender.SYSTEM_ALERT_KINDS:
             import notify_spool
             if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
+                flush_group()
+                if deadline is not None and time.monotonic() >= deadline:
+                    res["skipped"] += len(due) - event_index
+                    break
                 # move it out of the ORDER BY event_id window so held
                 # content can never starve a later alert (no attempt used)
                 ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
@@ -1190,6 +1246,11 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 continue
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
             ledger.db.commit()
+        if grouped(ev):
+            group.append(ev)
+            if len(group) == notify_cards.DISPATCH_GROUP_LIMIT:
+                flush_group()
+            continue
         if card_route(ev):
             if _dispatch_interactive(ledger, ev, cfg, res):
                 continue
@@ -1219,4 +1280,5 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             _send_text(ledger, ev, cfg, argv, target, res, deadline)
         except Exception as exc:
             _fail_event(ledger, ev, cfg, res, exc)
+    flush_group()
     return res
