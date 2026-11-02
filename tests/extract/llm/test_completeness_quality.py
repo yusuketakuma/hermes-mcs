@@ -126,6 +126,7 @@ def test_pending_quality_checkpoint_reuses_the_first_inference_after_restart(tmp
     try:
         first = extract_llm.run_pending(db, budget_s=80)
         assert first["done"] == 0 and first["deferred"] == 1
+        assert first["defer_reasons"] == {"deadline": 1}
         assert len(calls) == 1 and not db.artifacts("extract_llm")
         assert db.artifacts("extract_llm_chunk")
         db.close()
@@ -201,7 +202,59 @@ def test_answer_returned_after_absolute_deadline_cannot_finish_the_message(monke
         return {"symptoms": [], "summary": "完全合成の遅れた回答"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", late)
+    extract_llm._CALL_NOTES.defer_reason = None
     assert extract_llm.llm_extract("完全合成の通常連絡。", deadline=11.0) is extract_llm._DEFERRED
+    assert extract_llm._CALL_NOTES.defer_reason == "deadline"
+
+
+def test_expired_before_first_piece_records_deadline_without_call(monkeypatch):
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: 12.0)
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: pytest.fail("unexpected send"))
+    extract_llm._CALL_NOTES.defer_reason = None
+    assert extract_llm.llm_extract("完全合成の通常連絡。", deadline=11.0) is extract_llm._DEFERRED
+    assert extract_llm._CALL_NOTES.defer_reason == "deadline"
+
+
+def test_late_answer_reports_deadline_at_run_boundary(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="完全合成の通常連絡。")])
+    clock = [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def late(*args, **kwargs):
+        clock[0] = 401.0
+        return {"symptoms": [], "summary": "完全合成の遅れた回答"}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", late)
+    try:
+        result = extract_llm.run_pending(db, budget_s=300)
+        assert result["deferred"] == 1 and result["defer_reasons"] == {"deadline": 1}
+        assert not db.artifacts("extract_llm")
+    finally:
+        db.close()
+
+
+def test_ignored_repair_deferral_does_not_mask_later_checkpoint_refusal(monkeypatch):
+    first = PREFIX + "本人の血圧120/80です。\n"
+    body = first + "本人には頭痛があります。"
+    calls = []
+
+    def model(prompt, **kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return copy.deepcopy(OBSERVATIONS)
+        if len(calls) == 2:
+            extract_llm._CALL_NOTES.defer_reason = "busy"
+            return extract_llm._DEFERRED
+        extract_llm._note_list().append({"finish_reason": "length"})
+        return None
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    extract_llm._CALL_NOTES.defer_reason = None
+    result = extract_llm.llm_extract(body, hints=hints(body), chunk_size=len(first),
+                                     on_split=lambda *args: False)
+    assert result is extract_llm._DEFERRED and len(calls) == 3
+    assert extract_llm._CALL_NOTES.defer_reason == "checkpoint_unverified"
 
 
 @pytest.mark.parametrize("tail,addition", [

@@ -64,12 +64,37 @@ def test_lock_lost_twice_defers_without_burning_attempts(tmp_path,
     res = extract_llm.run_pending(db, limit=10, budget_s=30,
                                   per_write_lock=True)
     assert res["lock_lost"] == 1 and res["deferred"] == 1
+    assert res["defer_reasons"] == {"write_unavailable": 1}
     assert res["done"] == 0 and res["failed"] == 0
     # no error row — the message simply stays pending
     assert db.artifacts("extract_llm", message_id=1) == []
     assert res["left"] == 1
     assert res["carried"] == 0 and res["carry"] == []
     db.close()
+
+
+def test_writer_generation_change_is_not_misreported_as_lock_contention(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(body="合成の本文です。" * 20)])
+    _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
+    original_extract = extract_llm.llm_extract
+    original_current = extract_llm._writer_current
+    updated = [False]
+
+    def extract(*args, **kwargs):
+        result = original_extract(*args, **kwargs)
+        updated[0] = True
+        return result
+
+    monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda *, full=False:
+                        not (full and updated[0]) and original_current(full=full))
+    try:
+        res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True)
+        assert res["deferred"] == 1 and res["defer_reasons"] == {"write_unavailable": 1}
+        assert res["done"] == 0 and db.artifacts("extract_llm") == []
+    finally:
+        db.close()
 
 
 def _claims(db):
@@ -287,6 +312,19 @@ def test_settle_carry_commits_or_releases(tmp_path, monkeypatch, lock_free,
     assert carry == []
     assert len(db.artifacts("extract_llm", message_id=1)) == artifacts
     assert _claims(db) == []
+    db.close()
+
+
+@pytest.mark.parametrize("reason", ["write_unavailable", "update_fence"])
+def test_discarded_carry_reports_observed_condition(tmp_path, monkeypatch, reason):
+    db = _ledger(tmp_path)
+    state, carry = _carry_one(db, monkeypatch, tmp_path)
+    if reason == "update_fence":
+        state["blocked"] = 0
+    settled, _, _ = extract_llm._settle_carry(
+        db, carry, final=True, write=reason != "update_fence", report=False)
+    assert settled["deferred"] == 1 and settled["defer_reasons"] == {reason: 1}
+    assert carry == [] and _claims(db) == []
     db.close()
 
 

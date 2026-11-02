@@ -175,6 +175,16 @@ _WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid"
                "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
                "window_cap"}
 
+# Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
+# error class, config value or id is never a valid reason in the pass record.
+_DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
+                  "not_sent", "busy", "cloud_fallback", "circuit_open",
+                  "prepare_blocked", "currentness_unverified", "cloud_guard",
+                  "commit_rejected", "prior_unavailable", "worker_error", "write_unavailable",
+                  "update_fence", "lease_renewal_failed", "checkpoint_unverified",
+                  "repair_unavailable", "unclassified",
+                  "other"}
+
 
 def worker(parent):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
@@ -280,7 +290,6 @@ def worker(parent):
                         carry = result.get("carry", carry)
                         if result.get("updated"):
                             allow_exit_settle = False
-                            return
                     else:
                         lock = writer_lock.acquire_run_lock()
                         if lock is None:
@@ -310,10 +319,23 @@ def worker(parent):
                     record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
                         "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                    if not allow_exit_settle:
+                        done = result.get("done")
+                        record["done"] = done if type(done) is int and done >= 0 else 0
+                        record["updated"] = True
                     record.update({key: result[key] for key in
                         ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred",
                          "failed", "held_prior", "carried")
                         if type(result.get(key)) is int and result[key] >= 0})
+                    reasons = result.get("defer_reasons")
+                    total = record.get("deferred")
+                    if type(total) is int and total > 0:
+                        reasons = ({key: count for key, count in reasons.items()
+                                    if key in _DEFER_REASONS and type(count) is int and count > 0}
+                                   if isinstance(reasons, dict) else {})
+                        if sum(reasons.values()) != total:
+                            reasons = {"unclassified": total}
+                        record["defer_reasons"] = reasons
                     if type(result.get("disk_low")) is bool:
                         record["disk_low"] = result["disk_low"]
                     calls = result.get("llm_calls")
@@ -334,6 +356,8 @@ def worker(parent):
                         record["reason"] = "jev_backlog_budget_reserved"
                         record["jev_effect"] = "skipped_if_eligible"
                     print(json.dumps(record), flush=True)
+                    if not allow_exit_settle:
+                        return
                     if not result.get("done"):
                         time.sleep(2)
                 except writer_lock.RunLockLost:
@@ -342,6 +366,8 @@ def worker(parent):
                     time.sleep(2)
                 except Exception as error:
                     print(json.dumps({"event": "cloud_backlog_error", "class": type(error).__name__}), flush=True)
+                    if not allow_exit_settle:
+                        return
                     time.sleep(10)
                 phase += 1
         finally:

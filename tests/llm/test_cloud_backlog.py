@@ -168,6 +168,12 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
      {}, 0, 'cloud_selection_deadline'),
     ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'synthetic-private-extra'},
      {}, 0, 'cloud_selection_incomplete'),
+    ({'deferred': 3, 'defer_reasons': {'not_sent': 2, 'deadline': 1, 'unlisted_reason': 3,
+                        'synthetic-private-extra': 9, 'busy': -1, 'other': 'x'}},
+     {'deferred': 3}, 0, None),
+    ({'deferred': 2, 'defer_reasons': {'not_sent': 1, 'synthetic-private-extra': 1}},
+     {'deferred': 2}, 0, None),
+    ({'deferred': 1, 'defer_reasons': {'deadline': 3}}, {'deferred': 1}, 0, None),
 ])
 def test_worker_alternates_cloud_only_units_without_local_calls(
         tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy, selection_reason):
@@ -236,6 +242,10 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     keys = {'selected', 'deferred', 'context_blocked', 'skipped', 'lock_lost', 'slow_deferred'}
     assert [item['done'] for item in passes] == [done, done]
     assert [{key: item[key] for key in keys if key in item} for item in passes] == [expected, expected]
+    expected_reasons = ({'not_sent': 2, 'deadline': 1}
+                        if counters.get('defer_reasons', {}).get('not_sent') == 2 else
+                        {'unclassified': expected['deferred']} if expected.get('deferred') else None)
+    assert [item.get('defer_reasons') for item in passes] == [expected_reasons, expected_reasons]
     assert not any('pids' in item or 'private_extra' in item for item in passes)
     assert 'synthetic-private-extra' not in json.dumps(passes)
 
@@ -575,7 +585,12 @@ def test_worker_keeps_paid_carry_when_extract_return_omits_carry(carry_worker, m
     assert state.carry == [] and state.closed
 
 
-def test_worker_does_not_settle_old_carry_after_update_fence(carry_worker, monkeypatch):
+@pytest.mark.parametrize('reasons,expected', [
+    ({'deadline': 1, 'busy': 1, 'synthetic-private-detail': 8}, {'deadline': 1, 'busy': 1}),
+    ({'deadline': 1, 'synthetic-private-detail': 1}, {'unclassified': 2}),
+])
+def test_worker_does_not_settle_old_carry_after_update_fence(
+        carry_worker, monkeypatch, capsys, reasons, expected):
     import extract_llm
     state, _ = carry_worker
     item = object()
@@ -584,12 +599,19 @@ def test_worker_does_not_settle_old_carry_after_update_fence(carry_worker, monke
         state.generation = (False, 2)
         state.carry = kw["carry"]
         state.carry.append(item)
-        return {"done": 0, "updated": True}
+        return {"done": 0, "deferred": 2, "defer_reasons": reasons,
+                "updated": True, "private": "synthetic-private-detail"}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
     monkeypatch.setattr(extract_llm, "_settle_carry", lambda *a, **kw: state.events.append("settle"))
     backlog.worker(991)
     assert state.events == [] and state.carry == [item] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    passes = [item for item in records if item['event'] == 'cloud_backlog_pass']
+    assert len(passes) == 1
+    assert passes[0]['updated'] is True and passes[0]['deferred'] == 2
+    assert passes[0]['defer_reasons'] == expected
+    assert 'synthetic-private-detail' not in json.dumps(records)
 
 
 def test_worker_attempts_paid_carry_before_low_memory_exit(carry_worker, monkeypatch):

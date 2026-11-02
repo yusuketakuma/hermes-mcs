@@ -357,6 +357,7 @@ def test_cloud_prepares_only_through_the_successful_claim(cloud_candidates, monk
     report = _cloud_pass(led)
     assert report["done"] == 1 and report["selected"] == 64
     assert report["context_blocked"] == report["deferred"] == blocked_count
+    assert report["defer_reasons"] == ({"prepare_blocked": blocked_count} if blocked_count else {})
     assert prepared == [row["message_id"] for row in selected[:blocked_count + 1]]
     assert [row["message_id"] for row in led.artifacts(extraction_context.KIND)] == [
         selected[blocked_count]["message_id"]]
@@ -387,8 +388,29 @@ def test_cloud_deadline_stops_preparation_and_claims(cloud_candidates, monkeypat
     monkeypatch.setattr(extract_llm, "_select_pending", selected)
     monkeypatch.setattr(extract_llm, "_prepare_jobs", preparing)
     monkeypatch.setattr(extract_llm, "_claim", lambda *a: pytest.fail("expired pass claimed a source"))
-    assert _cloud_pass(led)["done"] == 0
+    report = _cloud_pass(led)
+    assert report["done"] == 0
+    assert report["deferred"] == int(expires_after == "preparation")
+    assert report["defer_reasons"] == ({"deadline": 1} if expires_after == "preparation" else {})
     assert len(prepared) == int(expires_after == "preparation")
+    assert calls == reservations == results == [] and _claim_count(led) == 0
+
+
+def test_deadline_after_claim_before_inference_keeps_reason(cloud_candidates, monkeypatch):
+    led, _, calls, reservations, results = cloud_candidates
+    clock = [time.monotonic()]
+    plan = extract_llm._plan_units
+
+    def expire_before_workers(*args, **kwargs):
+        units = plan(*args, **kwargs)
+        clock[0] += 181
+        return units
+
+    monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, "time", extract_llm.time)
+    monkeypatch.setattr(extract_llm, "_plan_units", expire_before_workers)
+    report = _cloud_pass(led)
+    assert report["deferred"] == 1 and report["defer_reasons"] == {"deadline": 1}
     assert calls == reservations == results == [] and _claim_count(led) == 0
 
 
@@ -938,6 +960,7 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
     assert 'cloud_selection_incomplete' not in result and result['done'] == 0
     assert result['selected'] == result['fresh_selected'] == 0
     assert result['deferred'] == 1 and carry == [] and not _current_artifacts(led)
+    assert result['defer_reasons'] == {'currentness_unverified': 1}
     assert len(calls) == len(reservations) == len(results) == 1
     from anthropic_client import AnthropicError
     with pytest.raises(AnthropicError, match='budget_exceeded'):
@@ -977,6 +1000,7 @@ def test_paid_carry_scope_revocation_is_discarded_and_counted(cloud_candidates, 
     assert 'cloud_selection_incomplete' not in result
     assert result['selected'] == result['fresh_selected'] == 0
     assert result['done'] == 0 and result['carried'] == 1 and result['deferred'] == 1
+    assert result['defer_reasons'] == {'cloud_guard': 1}
     assert carry == [] and _claim_count(led) == 0
     _assert_legacy_retained(led, prior)
     assert len(led.artifacts('cloud_usage_disposition')) == 1
@@ -1148,8 +1172,9 @@ def test_paid_checkpoint_replays_after_later_candidate_database_error(cloud_cand
 
 
 @pytest.mark.parametrize('updater_changed', [False, True])
+@pytest.mark.parametrize('blocked_before_tail', [False, True])
 def test_cloud_tail_lock_contention_respects_observed_update_fence(
-        cloud_candidates, tmp_path, monkeypatch, updater_changed):
+        cloud_candidates, tmp_path, monkeypatch, updater_changed, blocked_before_tail):
     import os
     import writer_lock
     led, _, calls, reservations, results = cloud_candidates
@@ -1157,6 +1182,12 @@ def test_cloud_tail_lock_contention_respects_observed_update_fence(
     owner = writer_lock.acquire_run_lock(path)
     assert owner is not None
     state, attempts, clock = [(False, 1)], [], [100.0]
+    prepare, prepared = extract_llm._prepare_jobs, []
+    def prepare_one(*args, **kwargs):
+        prepared.append(True)
+        if blocked_before_tail and len(prepared) == 1:
+            return [], 0, 1
+        return prepare(*args, **kwargs)
     def acquire():
         attempts.append(True)
         if updater_changed and len(attempts) == 2:
@@ -1173,6 +1204,7 @@ def test_cloud_tail_lock_contention_respects_observed_update_fence(
         releases.append(True)
         return original_release(*args)
     monkeypatch.setattr(writer_lock, 'updater_state', lambda: state[0])
+    monkeypatch.setattr(extract_llm, '_prepare_jobs', prepare_one)
     monkeypatch.setattr(extract_llm, 'acquire_run_lock', acquire)
     monkeypatch.setattr(extract_llm, '_renew', renew)
     monkeypatch.setattr(extract_llm, '_release', release)
@@ -1185,6 +1217,8 @@ def test_cloud_tail_lock_contention_respects_observed_update_fence(
             per_write_lock=True, write_wait_s=1, carry=[])
         assert len(attempts) >= 2 and len(calls) == len(reservations) == len(results) == 1
         assert report['done'] == 0 and len(report['carry']) == 1
+        assert report['deferred'] == int(blocked_before_tail)
+        assert report['defer_reasons'] == ({'prepare_blocked': 1} if blocked_before_tail else {})
         row, lease, _ = report['carry'][0]
         current = led.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
                                  "AND project_id=? AND message_id=?",

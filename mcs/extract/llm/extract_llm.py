@@ -967,6 +967,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
     global _FMT_MODE
     if provider is not None:
         if deadline is not None and deadline - time.monotonic() < (need_s or 0):
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
@@ -989,11 +990,13 @@ def _llm_call(prompt: str, deadline: float | None = None,
         return answer
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
+        _CALL_NOTES.defer_reason = "deadline"
         return _DEFERRED
     probed_at = _FMT_TS
     fmt = _probe_format(deadline=deadline)
     probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
     if fmt is None:
+        _CALL_NOTES.defer_reason = "probe_unobserved"
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
     downgrades = 0
@@ -1003,6 +1006,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         # no longer finish before the deadline
         if deadline is not None \
                 and deadline - time.monotonic() < (need_s or 0):
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         rf = None
         if fmt == "schema":
@@ -1022,6 +1026,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out,
                 turn_min_s=need_s or 0)
             if response is not None and response.get("admission"):
+                _CALL_NOTES.defer_reason = "admission"
                 return _DEFERRED
         else:
             response = local_llm.chat(
@@ -1062,6 +1067,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
             # consumed nothing. Defer like a deadline expiry instead of
             # burning a retry attempt on every selected message (a llama
             # restart or reboot used to stampede attempts on whole batches).
+            _CALL_NOTES.defer_reason = ("busy" if err_out.get("kind") == "busy" else
+                "not_sent" if err_out.get("kind") == "not_sent" else
+                "endpoint_down" if err_out.get("kind") == "unreachable" or status == 503 else
+                "deadline")
             return _DEFERRED
         # 4xx rejects THE REQUEST — walk down one rung and retry; the
         # ladder ends at "plain" (no format to blame), and a plain-mode
@@ -1205,6 +1214,7 @@ def llm_extract(body: str, *, context: str | None = None,
         # A monkeypatched call or a failed dispatch cannot inherit an earlier marker.
         _CALL_NOTES.provider_response = None
         _CALL_NOTES.cloud_response = None
+        _CALL_NOTES.defer_reason = None
         active_call = call if provider_override is None else functools.partial(_llm_call, provider=provider_override)
         result = active_call(*args, **kwargs)
         return result, getattr(_CALL_NOTES, "provider_response", None)
@@ -1266,6 +1276,7 @@ def llm_extract(body: str, *, context: str | None = None,
         bump("length_resplits")
         if on_split is not None:
             if on_split(key, smaller) is False:
+                _CALL_NOTES.defer_reason = "checkpoint_unverified"
                 return _DEFERRED
         if meta_out is not None:
             meta_out.get("completeness", {}).pop(str(key), None)
@@ -1274,6 +1285,7 @@ def llm_extract(body: str, *, context: str | None = None,
 
     def infer_piece(key, piece, start, remaining):
         if deadline is not None and time.monotonic() > deadline:
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         cached = saved.get(key)
         origin = getattr(cached, "quality_origin", None)
@@ -1319,7 +1331,10 @@ def llm_extract(body: str, *, context: str | None = None,
         piece_providers = first_provider if isinstance(d, dict) else []
         if deadline is not None and time.monotonic() > deadline:
             # A dispatched failure still consumes its attempt after the deadline.
-            return None if d is None else _DEFERRED
+            if d is None:
+                return None
+            _CALL_NOTES.defer_reason = "deadline"
+            return _DEFERRED
         if d is _DEFERRED:
             return _DEFERRED
         if (d is None and len(notes) > call_start
@@ -1397,6 +1412,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     chunks_out[key] = pending
                 if on_chunk is not None:
                     if on_chunk(key, pending) is False:
+                        _CALL_NOTES.defer_reason = "checkpoint_unverified"
                         return _DEFERRED
                     origin_id = (pending.quality_origin_id or pending.quality_started_id) if origin is not None else None
                 if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
@@ -1416,9 +1432,11 @@ def llm_extract(body: str, *, context: str | None = None,
                         selected, errors = cloud_policy.resolve_profile(
                             profile_cfg, route="reextract", purpose="quality_repair", root=HOME)
                         if errors or selected is None:
+                            _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
                         distinct_profile = dict(selected) != dict(base_selection)
                         if distinct_profile and (origin is None or origin_id is None):
+                            _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
                     started = with_leaf({**v, "_quality_status": "started"}, piece_providers,
                                         origin=origin, origin_id=origin_id)
@@ -1428,6 +1446,7 @@ def llm_extract(body: str, *, context: str | None = None,
                         # saved is released, so the next run retries the repair.
                         on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers,
                                                 origin=origin, origin_id=origin_id))
+                        _CALL_NOTES.defer_reason = "checkpoint_unverified"
                         return _DEFERRED
                     if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
                         # The checkpoint wait spent the reserve, before any
@@ -1442,6 +1461,7 @@ def llm_extract(body: str, *, context: str | None = None,
                                             providers=piece_providers, origin=origin, origin_id=origin_id)
                     if distinct_profile:
                         if type(started.quality_started_id) is not int:
+                            _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
                         repair_client = provider.spawn_quality_repair()
                 repair_start = len(notes)
@@ -1451,6 +1471,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 repair_response = getattr(_CALL_NOTES, "cloud_response", None)
                 bump("repairs")
                 if repair_deadline is not None and time.monotonic() > repair_deadline:
+                    _CALL_NOTES.defer_reason = "deadline"
                     rd = _DEFERRED
                 if (rd is None and len(notes) > repair_start
                         and notes[-1].get("finish_reason") == "length"):
@@ -1461,6 +1482,7 @@ def llm_extract(body: str, *, context: str | None = None,
                             proof = {"version": 1, "started_artifact_id": started.quality_started_id,
                                      "response": response}
                         except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
+                            _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
                         return split_piece(key, piece, start, remaining, repair=proof)
                     return split_piece(key, piece, start, remaining)
@@ -1481,6 +1503,7 @@ def llm_extract(body: str, *, context: str | None = None,
                                 repair_proof = {"version": 1, "started_artifact_id": started.quality_started_id,
                                                 "response": response}
                             except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
+                                _CALL_NOTES.defer_reason = "repair_unavailable"
                                 return _DEFERRED
                         v = rv
                         piece_providers.append(repair_provider)
@@ -1512,6 +1535,7 @@ def llm_extract(body: str, *, context: str | None = None,
         if callback is not None:
             accepted = callback(key, checkpoint)
             if accepted is False and (repair is not None or replayed and on_chunk_replay is not None):
+                _CALL_NOTES.defer_reason = "checkpoint_unverified"
                 return _DEFERRED
         return [v]
 
@@ -1534,6 +1558,7 @@ def llm_extract(body: str, *, context: str | None = None,
         if not outs:
             return None
         if pending_quality:
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         out = outs[0] if len(outs) == 1 else extract_validation.merge(outs)
         if vital_policy:
@@ -5439,6 +5464,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if not _writer_current(full=True):
             return {'done': carry_settled['done'], 'failed': 0, 'left': None,
                     'deferred': carry_settled['deferred'], 'pids': sorted(carry_pids),
+                    'defer_reasons': carry_settled.get('defer_reasons', {}),
                     'carry': carry, 'updated': True}
         return {**carry_settled, 'failed': 0, 'left': None, 'carried': carry_count,
                 'carry': carry, 'carry_waiting': bool(carry), 'pids': sorted(carry_pids),
@@ -5478,6 +5504,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     endpoint_down = False
     breaker_fed = False
     slow_deferred = 0
+    # Why units deferred this pass — a fixed vocabulary only; the worker's
+    # pass record must never leak an error class, config value or id here.
+    # Carry-settle reasons ride inside carry_settled and merge in here.
+    defer_reasons: dict = dict(carry_settled.get("defer_reasons") or {})
+
+    def _defer_note(reason, settled=None, count=1):
+        if count <= 0:
+            return
+        if reason not in cloud_backlog._DEFER_REASONS:
+            reason = "other"
+        target = defer_reasons if settled is None else settled.setdefault("defer_reasons", {})
+        target[reason] = target.get(reason, 0) + count
 
     def _feed_breaker():
         """One breaker observation per contiguous outage, not per queued row."""
@@ -5525,6 +5563,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
         cloud_only=cloud_only, load_checkpoints=False)
     deferred += context_blocked
+    _defer_note("prepare_blocked", count=context_blocked)
     metas = [None] * len(jobs)
     batch_metas = []
     checkpoints = queue.SimpleQueue()
@@ -5623,7 +5662,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # thread after this future resolves (thread-local per worker)
         _CALL_NOTES.transport = r["_transport"] = None
         _CALL_NOTES.transport_at = r["_transport_at"] = None
+        _CALL_NOTES.defer_reason = r["_defer_reason"] = None
         if time.monotonic() > deadline:
+            r["_defer_reason"] = "deadline"
             return _DEFERRED, chunks_out
         try:
             result = _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out)
@@ -5632,6 +5673,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
+            r["_defer_reason"] = getattr(_CALL_NOTES, "defer_reason", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
@@ -5655,7 +5697,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if result is None:
                         raise cloud_inference.CloudFallback("cloud_validation_failed")
                     return result
-            except (cloud_client.CloudNotSent, cloud_inference.CloudBusy):
+            except cloud_client.CloudNotSent:
+                _CALL_NOTES.defer_reason = "not_sent"
+                return _DEFERRED
+            except cloud_inference.CloudBusy:
+                _CALL_NOTES.defer_reason = "busy"
                 return _DEFERRED
             except cloud_inference.CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
@@ -5664,6 +5710,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # now, _handle records the retry so the next pass does not re-send it
                 r["_cloud_failed"] = provider.possibly_sent
                 if cloud_only:
+                    _CALL_NOTES.defer_reason = "cloud_fallback"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
@@ -5689,6 +5736,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # a cloud fallback re-reads it (a pure local row must not wait on the
             # owner thread for every call).
             if provider is not None and _owner_call(lambda: bool(circuit_open_s(ledger.db))):
+                _CALL_NOTES.defer_reason = "circuit_open"
                 return _DEFERRED
             return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
 
@@ -5729,6 +5777,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
+                _defer_note("cloud_guard", settled)
                 if settled is not None:
                     settled['deferred'] += 1
                 return False
@@ -5754,6 +5803,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     settled["held_prior"] += 1
             elif outcome != "current":
                 deferred += 1
+                _defer_note("commit_rejected", settled)
                 if settled is not None:
                     settled["deferred"] += 1
             return False
@@ -5778,6 +5828,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
+                _defer_note("currentness_unverified")
                 return
             transport = r.get("_transport")
             at = r.get("_transport_at")
@@ -5790,6 +5841,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
                 deferred += 1
+                _defer_note(r.get("_defer_reason") or "other")
                 if r.get("_cloud_failed"):
                     cloud_retry()
                 # answered then deferred (no time left to repair) is still
@@ -5911,11 +5963,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 content = _thin_retry_content(ledger, r)
                 if content is None:
                     deferred += 1
+                    _defer_note("prior_unavailable")
                     return
                 prior_row = _prior_extract(ledger.db, r)
                 if (prior_row is None or prior_row["artifact_id"] != r["thin_src"]
                         or prior_row["content"] != content):
                     deferred += 1
+                    _defer_note("prior_unavailable")
                     return
                 try:
                     prior = json.loads(content)
@@ -5966,6 +6020,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 skipped += row_skipped
                 context_blocked += row_blocked
                 deferred += row_blocked
+                _defer_note("prepare_blocked", count=row_blocked)
                 if not prepared:
                     if prioritize_patients and time.monotonic() < deadline:
                         _cloud_priority_discard(ledger, candidate['message_id'])
@@ -5976,6 +6031,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 metas.append(None)
                 if time.monotonic() >= deadline:
                     deferred += 1
+                    _defer_note("deadline")
                     break
             r, ctx, saved, hints, qc = candidate
             if circuit_s and r.get("_cloud_mode") != "on":
@@ -6116,6 +6172,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                               "error": type(e).__name__}),
                                   file=sys.stderr, flush=True)
                             deferred += len(tups)
+                            _defer_note("worker_error", count=len(tups))
                             continue
                         if kind == "single":
                             index, r, ctx, saved, hints, qc, lease = \
@@ -6176,6 +6233,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
                                 r["_cloud_discard"]()
                             deferred += 1
+                            _defer_note("write_unavailable" if not held else "currentness_unverified")
         if cloud_only and not _writer_current(full=True):
             cloud_tail_updated = True
     finally:
@@ -6194,6 +6252,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     if cloud_tail_updated:
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred,
+                'defer_reasons': dict(defer_reasons),
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
@@ -6247,6 +6306,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
+            "defer_reasons": dict(defer_reasons),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
             "slow_deferred": slow_deferred,
@@ -6454,6 +6514,10 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     count, pids = 0, set()
     if not carry or writer_lock.writer_blocked():
         return settled, count, pids
+
+    def _settle_note(reason):
+        reasons = settled.setdefault("defer_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
     keep = []
     shadow = []
     context = lock_context if lock_context is not None else _write_lock(
@@ -6486,6 +6550,8 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     _release(ledger, r, lease)
                     if not report:
                         settled['deferred'] += 1
+                        _settle_note("write_unavailable" if not held else
+                                     "update_fence" if not write else "currentness_unverified")
                 else:
                     renewed = _renew(ledger, r, lease)
                     if renewed is None:
@@ -6494,6 +6560,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                         _release(ledger, r, lease)
                         if not report:
                             settled['deferred'] += 1
+                            _settle_note("lease_renewal_failed")
                     else:
                         # written back at once: a transient sqlite error on a
                         # later item leaves this list to the resident's retry,

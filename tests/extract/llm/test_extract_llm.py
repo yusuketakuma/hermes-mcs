@@ -1499,6 +1499,47 @@ def test_parallel_workers_process_all_selected(tmp_path, monkeypatch):
     db.close()
 
 
+def test_parallel_defer_reasons_are_per_worker_and_count_crashes(tmp_path, monkeypatch):
+    import threading
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
+    barrier = threading.Barrier(3, timeout=10)
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+
+    def deferred(body, **kwargs):
+        extract_llm._CALL_NOTES.defer_reason = {"本文1": "busy", "本文2": "admission"}.get(body)
+        barrier.wait()
+        if body == "本文3":
+            raise RuntimeError("synthetic")
+        return extract_llm._DEFERRED
+
+    monkeypatch.setattr(extract_llm, "llm_extract", deferred)
+    result = extract_llm.run_pending(db, limit=10, budget_s=30, workers=3)
+    assert result["deferred"] == 3
+    assert result["defer_reasons"] == {"busy": 1, "admission": 1, "worker_error": 1}
+    assert db.artifacts("extract_llm") == []
+    db.close()
+
+
+@pytest.mark.parametrize("kind,status,reason", [
+    ("busy", None, "busy"), ("not_sent", None, "not_sent"),
+    ("unreachable", None, "endpoint_down"), (None, 503, "endpoint_down"),
+])
+def test_local_defer_reason_matches_observed_transport(monkeypatch, kind, status, reason):
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
+
+    def call(*args, **kwargs):
+        if kind:
+            kwargs["error_out"]["kind"] = kind
+        return {"status": status} if status else None
+
+    monkeypatch.setattr(extract_llm.local_llm, "chat", call)
+    extract_llm._CALL_NOTES.defer_reason = None
+    assert extract_llm._llm_call("synthetic") is extract_llm._DEFERRED
+    assert extract_llm._CALL_NOTES.defer_reason == reason
+
+
 def test_parallel_workers_keep_fail_count_and_backoff(tmp_path,
                                                       monkeypatch):
     """A None result in the parallel path still writes the error row —
