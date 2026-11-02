@@ -1,12 +1,15 @@
 """Initial import owns its lock/connection until every normal or failed exit."""
 import errno
+import json
 import os
+import sqlite3
 import sys
 from types import SimpleNamespace
 
 import pytest
 
 import init_data
+import mcs_restore
 from mcs_contract import SessionExpired
 
 
@@ -97,3 +100,83 @@ def test_owned_resources_close_in_reverse_order_across_repeated_failures(
             except OSError as error:
                 if error.errno != errno.EBADF:
                     raise
+
+
+@pytest.mark.parametrize('gate', [
+    'updater_restored', 'recover_restored', 'awaiting', 'corrupt', 'symlink',
+    'update_marker', 'adopted_backup',
+])
+def test_restore_or_update_hold_blocks_before_adapter_and_ledger(
+        tmp_path, monkeypatch, gate):
+    """The import must not open the adapter or ledger — and must leave the
+    synthetic old-schema database byte-identical — while a restore writer
+    hold or an update generation race applies. A formally adopted backup
+    restore resumes writers while its delivery hold stays up."""
+    db = tmp_path / 'ledger.db'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE t(v TEXT)')
+        conn.execute('PRAGMA user_version=1')
+    before = db.read_bytes()
+    marker = tmp_path / 'restore_pending.json'
+    if gate in ('updater_restored', 'recover_restored'):
+        marker.write_text(json.dumps(
+            {"v": 1, "phase": "restored",
+             "by": "mcs_update" if gate == 'updater_restored' else "mcs_recover",
+             "at": 1, "restored_at": 1}))
+    elif gate == 'awaiting':
+        marker.write_text(json.dumps(
+            {"v": 1, "phase": "awaiting_consent", "by": "mcs_update", "at": 1}))
+    elif gate == 'corrupt':
+        marker.write_text("{not json")
+    elif gate == 'symlink':
+        marker.symlink_to(tmp_path / 'missing_target.json')
+    elif gate == 'update_marker':
+        (tmp_path / 'update_in_progress.marker').write_text('synthetic')
+    if gate == 'adopted_backup':
+        marker.write_text(json.dumps(
+            {"v": 1, "phase": "awaiting_consent",
+             "by": "mcs_backup_restore", "at": 1}))
+        monkeypatch.setattr(mcs_restore, 'writers_resumed', lambda path: True)
+
+    opened = []
+    monkeypatch.setattr(sys, 'argv', ['init_data', '--since', '1', '--delay', '0'])
+    monkeypatch.setattr(init_data, 'DB', str(db))
+
+    def acquire(_path):
+        fd = os.open(tmp_path / 'synthetic.lock', os.O_RDONLY | os.O_CREAT, 0o600)
+        opened.append(fd)
+        return fd
+
+    reached = []
+
+    class StubAdapter:
+        def set_deadline(self, _deadline):
+            pass
+
+        def list_projects(self):
+            return []
+
+    class StubLedger:
+        def __init__(self, _path):
+            reached.append('ledger')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(init_data, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(init_data, 'MCSAdapter',
+                        lambda **kw: reached.append('adapter') or StubAdapter())
+    monkeypatch.setattr(init_data, 'Ledger', StubLedger)
+    code = init_data.main()
+    if gate == 'adopted_backup':
+        # Writers may resume; the delivery hold stays owned by the restore
+        # marker itself — the import runs the normal path to completion.
+        assert code == 0 and reached == ['adapter', 'ledger']
+        import notify_spool
+        assert notify_spool.restore_pending(str(tmp_path)) is not None
+    else:
+        assert code == 3 and reached == []
+        assert db.read_bytes() == before
+        with pytest.raises(OSError) as closed:
+            os.fstat(opened[-1])
+        assert closed.value.errno == errno.EBADF

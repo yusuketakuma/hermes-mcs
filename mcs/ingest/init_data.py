@@ -32,7 +32,9 @@ from mcs_contract import MCSError, SessionExpired
 from ledger import Ledger
 from job_ops import merge_full_replies
 from mcs_util import CACHE, CHROME_BIN, CHROME_PROFILE, DB
-from writer_lock import RUN_LOCK, acquire_run_lock
+import notify_spool
+from writer_lock import (RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
+                         code_stamp)
 
 # canonical path constants live in mcs_util; the local aliases keep the
 # module attribute names (monkeypatch surface for tests) unchanged
@@ -62,6 +64,7 @@ def main() -> int:
     since = args.since or int(time.time() - args.days * 86400)
     deadline = time.monotonic() + args.deadline
 
+    expected_code = code_stamp()
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
@@ -69,6 +72,14 @@ def main() -> int:
 
     with ExitStack() as resources:
         resources.callback(os.close, lock_fd)
+        data_dir = os.path.dirname(DB)
+        if (os.path.lexists(os.path.join(data_dir, UPDATE_MARKER_NAME))
+                or code_stamp() != expected_code):
+            print(json.dumps({"ok": False, "error": "update_in_progress"}))
+            return 3
+        if notify_spool.restore_writer_hold(data_dir) is not None:
+            print(json.dumps({"ok": False, "error": "restore_in_progress"}))
+            return 3
         adapter = MCSAdapter(token_cache=CACHE)
         adapter.set_deadline(deadline)
         ledger = Ledger(DB)
