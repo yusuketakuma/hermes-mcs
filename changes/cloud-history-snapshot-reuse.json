@@ -6,5 +6,6 @@
   "refs": [
     "mcs/llm/cloud_policy.py",
     "tests/llm/test_cloud_continuous_scope.py"
-  ]
+  ],
+  "details": []
 }
