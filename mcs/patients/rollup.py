@@ -1113,7 +1113,9 @@ def _clinical_artifact_refs(db, project_id, blobs, message_ids=None):
         WHERE m.project_id=? AND a.kind IN ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
         {current_extract_pred()}
         AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
-        {scope} ORDER BY a.artifact_id""", params) if extraction_consumer_content(row["content"]) == blobs.get(row["message_id"], {}).get(row["kind"])}
+        {scope} ORDER BY a.artifact_id""", params)
+    if extraction_consumer_content(row["content"]) == extraction_consumer_content(
+            blobs.get(row["message_id"], {}).get(row["kind"]))}
 
 
 

@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "測定カバレッジが常に「未取得・不完全」扱いになる問題を修正",
+  "summary": "内部証明（leaf claims）を含む抽出artifactが、rollupのsource-bound判定で常に「未束縛」として扱われ、measurement_coverageが常にincomplete・latest_vitals/recent_labsが出ない状態になっていました。artifact参照の照合をconsumer形式同士で比較するよう修正し、正しく束縛された抽出が測定カバレッジ・最新バイタル・検査レポートへ反映されるようになります。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "_clinical_artifact_refs の照合で、内部証明キーを含むartifact contentと読出し済みblobの比較が常に不一致になり、bound_sourceが全件Falseになっていた。",
+    "比較を両側ともextraction_consumer_content（内部キー除去済み形式）に揃え、同一行のcontentであることを正しく検証する。"
+  ],
+  "refs": ["mcs/patients/rollup.py"]
+}
