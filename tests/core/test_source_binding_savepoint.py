@@ -10,6 +10,7 @@ import inference_dependency_loss as loss
 def db():
     connection = sqlite3.connect(":memory:")
     connection.execute("CREATE TABLE marker(value INTEGER)")
+    connection.execute("CREATE TABLE messages(message_id INTEGER)")
     yield connection
     connection.close()
 
@@ -33,17 +34,15 @@ def test_success_and_normal_failure_keep_caller_owned_writes(db, monkeypatch):
     assert db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
 
 
-def test_success_does_not_hide_release_failure(db, monkeypatch):
+def test_read_does_not_require_savepoint_permissions(db, monkeypatch):
     monkeypatch.setattr(loss, "_source_bindings_page", lambda *_: ["synthetic"])
-    db.set_authorizer(lambda action, arg1, arg2, *_: sqlite3.SQLITE_DENY
-                      if action == sqlite3.SQLITE_SAVEPOINT and arg1 == "RELEASE"
-                      and arg2 == "source_bindings_read" else sqlite3.SQLITE_OK)
+    db.set_authorizer(lambda action, *_: sqlite3.SQLITE_DENY
+                      if action == sqlite3.SQLITE_SAVEPOINT else sqlite3.SQLITE_OK)
     try:
-        with pytest.raises(sqlite3.DatabaseError):
-            loss.source_bindings(db, [(1, 1)])
+        assert loss.source_bindings(db, [(1, 1)]) == ["synthetic"]
+        assert not db.in_transaction
     finally:
         db.set_authorizer(None)
-        db.rollback()
 
 
 @pytest.mark.parametrize("code", [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_FULL,
@@ -67,3 +66,31 @@ def test_auto_rollback_preserves_original_error_without_replay(db, monkeypatch, 
     assert caught.value is error and getattr(caught.value, "sqlite_errorcode", None) == code
     assert not replay and not db.in_transaction
     assert db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("borrowed", [False, True])
+def test_persistent_interruption_leaves_no_read_transaction(db, monkeypatch, borrowed):
+    if borrowed:
+        db.execute("INSERT INTO marker VALUES (7)")
+    reads = []
+
+    def interrupted(connection, _pairs):
+        connection.set_progress_handler(lambda: reads.append(True) or 1, 1)
+        return connection.execute("SELECT value FROM marker").fetchall()
+
+    monkeypatch.setattr(loss, "_source_bindings_page", interrupted)
+    monkeypatch.setattr(loss, "source_binding", lambda *_: pytest.fail("cancelled read replayed"))
+    try:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            loss.source_bindings(db, [(1, 1)])
+        assert caught.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
+        assert db.in_transaction is borrowed
+        with pytest.raises(sqlite3.OperationalError):
+            db.execute("SELECT 1")
+    finally:
+        db.set_progress_handler(None, 0)
+    assert reads
+    assert db.execute("SELECT value FROM marker").fetchall() == ([(7,)] if borrowed else [])
+    if borrowed:
+        db.rollback()
+        assert db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0

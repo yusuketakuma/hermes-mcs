@@ -237,3 +237,53 @@ def test_known_sqlite_compatibility_error_replays_ordered_singles(ledger, monkey
     assert loss.source_bindings(ledger.db, pairs) == expected
     assert visited == pairs and ledger.db.in_transaction
     ledger.db.rollback()
+
+
+@pytest.mark.parametrize('borrowed', [False, True])
+def test_batch_keeps_one_snapshot_during_concurrent_revision_change(ledger, monkeypatch, borrowed):
+    expected = [loss.source_binding(ledger.db, 1, mid) for mid in (1, 2)]
+    path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+    assert ledger.db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+    page = loss._source_bindings_page
+
+    def changed(db, pairs):
+        with sqlite3.connect(path) as other:
+            other.execute("UPDATE messages SET body_text='別の合成本文' WHERE message_id=1")
+            other.execute('UPDATE message_revisions SET seq=seq+1 WHERE message_id=1')
+        return page(db, pairs)
+
+    monkeypatch.setattr(loss, '_source_bindings_page', changed)
+    if borrowed:
+        ledger.db.execute('BEGIN')
+    assert loss.source_bindings(ledger.db, [(1, 1), (1, 2)]) == expected
+    assert ledger.db.in_transaction is borrowed
+    if borrowed:
+        ledger.db.rollback()
+    assert loss.source_binding(ledger.db, 1, 1) != expected[0]
+    assert loss.source_binding(ledger.db, 1, 2) == expected[1]
+
+
+def test_batch_reads_fields_and_revision_in_one_grouped_query(ledger):
+    statements = []
+    ledger.db.set_trace_callback(statements.append)
+    try:
+        result = loss.source_bindings(ledger.db, [(1, 1), (1, 2), (2, 3)] * 20)
+    finally:
+        ledger.db.set_trace_callback(None)
+    assert len(result) == 60 and all(result)
+    assert len(statements) == 2
+    assert sum('message_revisions' in sql for sql in statements) == 1
+    assert not ledger.db.in_transaction
+
+
+@pytest.mark.parametrize('order,error', [((1, 2), TypeError), ((2, 1), ValueError)])
+def test_invalid_values_fail_in_requested_order(ledger, order, error):
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET body_text=? WHERE message_id=1', (b'synthetic',))
+        ledger.db.execute('UPDATE messages SET posted_at_ts=? WHERE message_id=2', (float('inf'),))
+    pairs = [(1, mid) for mid in order]
+    with pytest.raises(error) as single:
+        [loss.source_binding(ledger.db, *pair) for pair in pairs]
+    with pytest.raises(error) as grouped:
+        loss.source_bindings(ledger.db, pairs)
+    assert str(grouped.value) == str(single.value)
