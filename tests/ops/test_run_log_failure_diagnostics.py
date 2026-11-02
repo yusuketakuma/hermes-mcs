@@ -12,8 +12,9 @@ from test_update_log_migration import layout
     ('migrate', 'RunLogError', 'run_log_untrusted', 'run_log_untrusted'),
     ('migrate', 'RuntimeError', 'run_log_untrusted', None),
     ('migrate', 'ChildError', 'run_log_untrusted', None),
-    ('migrate', 'RunLogError', 'run_log_untrusted: SYNTHETIC_PRIVATE_PATH', None),
-    ('migrate', 'RunLogError', 'run_log_' + 'a' * 81, None),
+    ('migrate', 'RunLogError', 'run_log_untrusted: SYNTHETIC_PRIVATE_PATH',
+     'run_log_migration_failed'),
+    ('migrate', 'RunLogError', 'run_log_' + 'a' * 81, 'run_log_migration_failed'),
 ])
 def test_verified_helper_failure_codes_only(
         tmp_path, monkeypatch, operation, phase, error_type, message, expected):

@@ -18,6 +18,7 @@ class LogInstallError(RuntimeError):
     """A fixed deployment or migration failure that leaves original logs intact."""
 
     def __init__(self, code, *, helper_code=None):
+        self.code = code
         self.helper_code = (helper_code if isinstance(helper_code, str)
                             and re.fullmatch(r'run_log_[a-z_]{1,80}', helper_code) else None)
         super().__init__(code + (': ' + self.helper_code if self.helper_code else ''))
@@ -218,6 +219,8 @@ def helper_path(root, recovery_dir=None, *, checkout=None, require_installed=Fal
             raise LogInstallError('run_log_source_unavailable')
         digest = hashlib.sha256(source).hexdigest()
         return os.path.join(recovery_dir, _pointer(root)[:-5] + '-' + digest + '.py')
+    except LogInstallError:
+        raise
     except Exception:
         raise LogInstallError('run_log_helper_unverified') from None
 
@@ -246,6 +249,8 @@ def verify_installed_helper(root, recovery_dir, helper):
             if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
                 raise LogInstallError('run_log_helper_changed')
         return helper
+    except LogInstallError:
+        raise
     except Exception:
         raise LogInstallError('run_log_helper_unverified') from None
 
@@ -267,7 +272,7 @@ def migrate_installed(root, recovery_dir):
             return _migrate(root, receipt, raw)
     except Exception as error:
         raise LogInstallError('run_log_migration_failed', helper_code=(
-            error.helper_code if isinstance(error, LogInstallError) else None)) from None
+            error.helper_code or error.code if isinstance(error, LogInstallError) else None)) from None
 
 
 def prepare(root, checkout, recovery_dir, *, source=None, promote=False):
@@ -301,7 +306,7 @@ def prepare(root, checkout, recovery_dir, *, source=None, promote=False):
             return _migrate(root, checked, raw)
     except Exception as error:
         raise LogInstallError('run_log_prepare_failed', helper_code=(
-            error.helper_code if isinstance(error, LogInstallError) else None)) from None
+            error.helper_code or error.code if isinstance(error, LogInstallError) else None)) from None
 
 
 if __name__ == '__main__':
