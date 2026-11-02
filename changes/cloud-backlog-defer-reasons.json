@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "クラウドバックログの延期理由をパス記録に理由別で出すようになりました",
+  "summary": "cloud_backlog.log の cloud_backlog_pass レコードに、延期された処理の理由別件数（defer_reasons）が載るようになりました。これまで「deferred:1」だけでは原因が分からず調査できませんでした。ログの形式が増えるだけで処理の動作や送信条件は変わりません。",
+  "upgrade": "追加操作は不要です。次回のcloudバックログワーカー起動から記録が始まります。",
+  "details": [
+    "延期理由の語彙は固定集合（deadline, probe_wait, admission, endpoint_down, not_sent, busy, cloud_fallback, circuit_open, source_changed, cloud_guard, commit_conflict, lease_lost, other）に限定し、エラー内容・設定値・識別子は記録に入りません。",
+    "run_pending の返り値にも defer_reasons が含まれ、carry（持越し結果）の確定時に起きた延期も理由付きで集計されます。",
+    "語彙に無い理由はログへ出力されず、0以下・非整数の件数も除外されます。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/llm/test_cloud_backlog.py",
+    "tests/llm/test_cloud_selection_progress.py"
+  ]
+}

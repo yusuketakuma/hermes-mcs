@@ -175,6 +175,13 @@ _WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid"
                "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
                "window_cap"}
 
+# Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
+# error class, config value or id is never a valid reason in the pass record.
+_DEFER_REASONS = {"deadline", "probe_wait", "admission", "endpoint_down",
+                  "not_sent", "busy", "cloud_fallback", "circuit_open",
+                  "source_changed", "cloud_guard", "commit_conflict", "lease_lost",
+                  "other"}
+
 
 def worker(parent):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
@@ -314,6 +321,12 @@ def worker(parent):
                         ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred",
                          "failed", "held_prior", "carried")
                         if type(result.get(key)) is int and result[key] >= 0})
+                    reasons = result.get("defer_reasons")
+                    if isinstance(reasons, dict):
+                        reasons = {key: count for key, count in reasons.items()
+                            if key in _DEFER_REASONS and type(count) is int and count > 0}
+                        if reasons:
+                            record["defer_reasons"] = reasons
                     if type(result.get("disk_low")) is bool:
                         record["disk_low"] = result["disk_low"]
                     calls = result.get("llm_calls")

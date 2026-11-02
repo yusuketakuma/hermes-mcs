@@ -967,6 +967,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
     global _FMT_MODE
     if provider is not None:
         if deadline is not None and deadline - time.monotonic() < (need_s or 0):
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
@@ -989,11 +990,13 @@ def _llm_call(prompt: str, deadline: float | None = None,
         return answer
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
+        _CALL_NOTES.defer_reason = "deadline"
         return _DEFERRED
     probed_at = _FMT_TS
     fmt = _probe_format(deadline=deadline)
     probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
     if fmt is None:
+        _CALL_NOTES.defer_reason = "probe_wait"
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
     downgrades = 0
@@ -1003,6 +1006,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         # no longer finish before the deadline
         if deadline is not None \
                 and deadline - time.monotonic() < (need_s or 0):
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED
         rf = None
         if fmt == "schema":
@@ -1022,6 +1026,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 request_fn=_opener_request, error_out=err_out,
                 turn_min_s=need_s or 0)
             if response is not None and response.get("admission"):
+                _CALL_NOTES.defer_reason = "admission"
                 return _DEFERRED
         else:
             response = local_llm.chat(
@@ -1062,6 +1067,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             # consumed nothing. Defer like a deadline expiry instead of
             # burning a retry attempt on every selected message (a llama
             # restart or reboot used to stampede attempts on whole batches).
+            _CALL_NOTES.defer_reason = "endpoint_down"
             return _DEFERRED
         # 4xx rejects THE REQUEST — walk down one rung and retry; the
         # ladder ends at "plain" (no format to blame), and a plain-mode
@@ -5478,6 +5484,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     endpoint_down = False
     breaker_fed = False
     slow_deferred = 0
+    # Why units deferred this pass — a fixed vocabulary only; the worker's
+    # pass record must never leak an error class, config value or id here.
+    # Carry-settle reasons ride inside carry_settled and merge in here.
+    defer_reasons: dict = dict(carry_settled.get("defer_reasons") or {})
+
+    def _defer_note(reason, settled=None):
+        target = defer_reasons if settled is None else settled.setdefault("defer_reasons", {})
+        target[reason] = target.get(reason, 0) + 1
 
     def _feed_breaker():
         """One breaker observation per contiguous outage, not per queued row."""
@@ -5623,7 +5637,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # thread after this future resolves (thread-local per worker)
         _CALL_NOTES.transport = r["_transport"] = None
         _CALL_NOTES.transport_at = r["_transport_at"] = None
+        _CALL_NOTES.defer_reason = r["_defer_reason"] = None
         if time.monotonic() > deadline:
+            _CALL_NOTES.defer_reason = "deadline"
             return _DEFERRED, chunks_out
         try:
             result = _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out)
@@ -5632,6 +5648,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         finally:
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
+            r["_defer_reason"] = getattr(_CALL_NOTES, "defer_reason", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
@@ -5655,7 +5672,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if result is None:
                         raise cloud_inference.CloudFallback("cloud_validation_failed")
                     return result
-            except (cloud_client.CloudNotSent, cloud_inference.CloudBusy):
+            except cloud_client.CloudNotSent:
+                _CALL_NOTES.defer_reason = "not_sent"
+                return _DEFERRED
+            except cloud_inference.CloudBusy:
+                _CALL_NOTES.defer_reason = "busy"
                 return _DEFERRED
             except cloud_inference.CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
@@ -5664,6 +5685,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # now, _handle records the retry so the next pass does not re-send it
                 r["_cloud_failed"] = provider.possibly_sent
                 if cloud_only:
+                    _CALL_NOTES.defer_reason = "cloud_fallback"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
@@ -5689,6 +5711,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # a cloud fallback re-reads it (a pure local row must not wait on the
             # owner thread for every call).
             if provider is not None and _owner_call(lambda: bool(circuit_open_s(ledger.db))):
+                _CALL_NOTES.defer_reason = "circuit_open"
                 return _DEFERRED
             return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
 
@@ -5729,6 +5752,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
+                _defer_note("cloud_guard", settled)
                 if settled is not None:
                     settled['deferred'] += 1
                 return False
@@ -5754,6 +5778,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     settled["held_prior"] += 1
             elif outcome != "current":
                 deferred += 1
+                _defer_note("commit_conflict", settled)
                 if settled is not None:
                     settled["deferred"] += 1
             return False
@@ -5778,6 +5803,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
+                _defer_note("source_changed")
                 return
             transport = r.get("_transport")
             at = r.get("_transport_at")
@@ -5790,6 +5816,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
                 deferred += 1
+                _defer_note(r.get("_defer_reason") or "other")
                 if r.get("_cloud_failed"):
                     cloud_retry()
                 # answered then deferred (no time left to repair) is still
@@ -6247,6 +6274,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
+            "defer_reasons": dict(defer_reasons),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
             "slow_deferred": slow_deferred,
@@ -6454,6 +6482,10 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     count, pids = 0, set()
     if not carry or writer_lock.writer_blocked():
         return settled, count, pids
+
+    def _settle_note(reason):
+        reasons = settled.setdefault("defer_reasons", {})
+        reasons[reason] = reasons.get(reason, 0) + 1
     keep = []
     shadow = []
     context = lock_context if lock_context is not None else _write_lock(
@@ -6486,6 +6518,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     _release(ledger, r, lease)
                     if not report:
                         settled['deferred'] += 1
+                        _settle_note("source_changed")
                 else:
                     renewed = _renew(ledger, r, lease)
                     if renewed is None:
@@ -6494,6 +6527,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                         _release(ledger, r, lease)
                         if not report:
                             settled['deferred'] += 1
+                            _settle_note("lease_lost")
                     else:
                         # written back at once: a transient sqlite error on a
                         # later item leaves this list to the resident's retry,

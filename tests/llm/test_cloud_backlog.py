@@ -168,6 +168,9 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
      {}, 0, 'cloud_selection_deadline'),
     ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'synthetic-private-extra'},
      {}, 0, 'cloud_selection_incomplete'),
+    ({'defer_reasons': {'not_sent': 2, 'deadline': 1, 'unlisted_reason': 3,
+                        'synthetic-private-extra': 9, 'busy': -1, 'other': 'x'}},
+     {}, 0, None),
 ])
 def test_worker_alternates_cloud_only_units_without_local_calls(
         tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy, selection_reason):
@@ -236,6 +239,9 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     keys = {'selected', 'deferred', 'context_blocked', 'skipped', 'lock_lost', 'slow_deferred'}
     assert [item['done'] for item in passes] == [done, done]
     assert [{key: item[key] for key in keys if key in item} for item in passes] == [expected, expected]
+    expected_reasons = ({'not_sent': 2, 'deadline': 1}
+                        if 'defer_reasons' in counters else None)
+    assert [item.get('defer_reasons') for item in passes] == [expected_reasons, expected_reasons]
     assert not any('pids' in item or 'private_extra' in item for item in passes)
     assert 'synthetic-private-extra' not in json.dumps(passes)
 

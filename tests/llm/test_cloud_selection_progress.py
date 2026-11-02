@@ -938,6 +938,7 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
     assert 'cloud_selection_incomplete' not in result and result['done'] == 0
     assert result['selected'] == result['fresh_selected'] == 0
     assert result['deferred'] == 1 and carry == [] and not _current_artifacts(led)
+    assert result['defer_reasons'] == {'source_changed': 1}
     assert len(calls) == len(reservations) == len(results) == 1
     from anthropic_client import AnthropicError
     with pytest.raises(AnthropicError, match='budget_exceeded'):
