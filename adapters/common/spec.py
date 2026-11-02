@@ -120,9 +120,20 @@ def _opt_id(v):
     return v is None or _text(v, 64)
 
 
+_KEY_NAME = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
 def _known_keys(obj: dict, allowed: frozenset, where: str) -> None:
-    if not obj.keys() <= allowed:
-        _err(f"unsupported_{where}_key")
+    unknown = obj.keys() - allowed
+    if not unknown:
+        return
+    # Schema vocabulary only: a key outside [a-z0-9_] never enters the
+    # logged reason, so a crafted spec cannot smuggle payload into logs.
+    named = sorted(k for k in unknown
+                   if isinstance(k, str) and _KEY_NAME.fullmatch(k))
+    if len(named) == len(unknown):
+        _err(f"unsupported_{where}_key:{','.join(named)}")
+    _err(f"unsupported_{where}_key")
 
 
 def _validate_head(spec) -> None:

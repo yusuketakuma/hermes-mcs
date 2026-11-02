@@ -100,6 +100,44 @@ def test_provider_remnant_scan_failure_never_falls_back_to_legacy(tmp_path, monk
         mcs_util.load_config(str(config))
 
 
+def test_runtime_churn_in_data_dir_does_not_block_legacy_config(tmp_path, monkeypatch):
+    """Unrelated writes move data/'s times constantly; a stable directory must
+    still produce a consistent provider-artifact absence."""
+    tmp_path.chmod(0o700)
+    config = tmp_path / "config.json"
+    _private_json(config, {"mode": "synthetic"})
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    data_ino = os.stat(data).st_ino
+    real_fstat, real_stat = os.fstat, os.stat
+    tick = [0]
+
+    class _Drifted:
+        __slots__ = ("st_dev", "st_ino", "st_mode", "st_uid", "st_mtime_ns", "st_ctime_ns")
+
+        def __init__(self, info):
+            self.st_dev, self.st_ino = info.st_dev, info.st_ino
+            self.st_mode, self.st_uid = info.st_mode, info.st_uid
+            tick[0] += 1
+            self.st_mtime_ns = info.st_mtime_ns + tick[0]
+            self.st_ctime_ns = info.st_ctime_ns + tick[0]
+
+    def fake_fstat(fd):
+        info = real_fstat(fd)
+        return _Drifted(info) if info.st_ino == data_ino else info
+
+    def fake_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if kwargs.get("dir_fd") is None and os.fspath(path) == str(data):
+            return _Drifted(info)
+        return info
+
+    monkeypatch.setattr(os, "fstat", fake_fstat)
+    monkeypatch.setattr(os, "stat", fake_stat)
+    assert mcs_util.load_config_checked(str(config)) == {"mode": "synthetic"}
+    assert mcs_util.load_config(str(config)) == {"mode": "synthetic"}
+
+
 @pytest.mark.parametrize("raw", [
     b'{"x":1,"x":2}', b'{"nested":{"x":1,"x":2}}', b'{"x":NaN}',
     b'{"x":Infinity}', b'{"x":-Infinity}', b'\xff', b'{',

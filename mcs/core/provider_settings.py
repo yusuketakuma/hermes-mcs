@@ -329,6 +329,26 @@ def _config_presence(root_fd):
     return _identity(info)
 
 
+_PROVIDER_NAMESPACE = frozenset({
+    ".provider-settings-authority.json", ".provider-settings-pending.json",
+    "provider_settings"})
+
+
+def _provider_namespace(data_fd):
+    """data/ entries that can change the provider-settings decision — runtime
+    churn of unrelated entries never invalidates a read."""
+    names = set()
+    with os.scandir(data_fd) as entries:
+        for index, entry in enumerate(entries):
+            if index >= 100000:
+                raise ValueError("provider_artifact_scan_limit")
+            name = entry.name
+            if name in _PROVIDER_NAMESPACE or name.startswith(
+                    (".provider-settings-backup-", ".provider-settings-stage-")):
+                names.add(name)
+    return frozenset(names)
+
+
 def probe(root):
     """Observe fixed settings state without creating files or enabling a mode."""
     root = Path(root)
@@ -344,7 +364,7 @@ def probe(root):
         root_info = os.fstat(root_fd)
         if root_info.st_uid != os.getuid() or root_info.st_mode & 0o022:
             raise ValueError("provider_directory_invalid")
-        root_identity = _identity(root_info)
+        root_identity = _directory_anchor(root_info)
         config = _config_presence(root_fd)
         try:
             data_fd = _directory(root_fd, "data")
@@ -352,7 +372,8 @@ def probe(root):
             pass
         state = "legacy_unverified" if config is not None else "uninitialized_or_legacy_unverified"
         if data_fd is not None:
-            data_identity = _identity(os.fstat(data_fd))
+            data_identity = _directory_anchor(os.fstat(data_fd))
+            data_namespace = _provider_namespace(data_fd)
             try:
                 settings_fd = _directory(data_fd, "provider_settings", private=True)
             except FileNotFoundError:
@@ -366,8 +387,9 @@ def probe(root):
                 state = "requires_checked_read"
             if (_read_file(data_fd, ".provider-settings-pending.json")[1] != pending
                     or _read_file(data_fd, ".provider-settings-authority.json")[1] != authority
-                    or _identity(os.fstat(data_fd)) != data_identity
-                    or _identity(os.stat("data", dir_fd=root_fd, follow_symlinks=False)) != data_identity):
+                    or _provider_namespace(data_fd) != data_namespace
+                    or _directory_anchor(os.fstat(data_fd)) != data_identity
+                    or _directory_anchor(os.stat("data", dir_fd=root_fd, follow_symlinks=False)) != data_identity):
                 raise ValueError("provider_settings_changed")
             if settings_fd is None:
                 _must_be_absent(data_fd, "provider_settings")
@@ -377,7 +399,7 @@ def probe(root):
         else:
             _must_be_absent(root_fd, "data")
         root_handle.check()
-        if _config_presence(root_fd) != config or _identity(os.fstat(root_fd)) != root_identity:
+        if _config_presence(root_fd) != config or _directory_anchor(os.fstat(root_fd)) != root_identity:
             raise ValueError("provider_settings_changed")
         return {"state": state, "config_present": config is not None}
     finally:
@@ -424,7 +446,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
         root_info = os.fstat(root_fd)
         if root_info.st_uid != os.getuid() or root_info.st_mode & 0o022:
             raise ValueError("provider_directory_invalid")
-        root_identity = _identity(root_info)
+        root_identity = _directory_anchor(root_info)
         try:
             data_fd = _directory(root_fd, "data")
         except FileNotFoundError:
@@ -449,7 +471,8 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                 settings_fd = _directory(data_fd, "provider_settings", private=True)
             except FileNotFoundError:
                 settings_fd = None
-        data_identity = _identity(os.fstat(data_fd)) if data_fd is not None else None
+        data_identity = _directory_anchor(os.fstat(data_fd)) if data_fd is not None else None
+        data_namespace = _provider_namespace(data_fd) if data_fd is not None else None
         settings_identity = _identity(os.fstat(settings_fd)) if settings_fd is not None else None
         mode = "legacy_unverified"
         authority_snapshot = None
@@ -560,14 +583,16 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                         raise ValueError("provider_settings_changed")
         root_handle.check()
         if (_read_file(root_fd, "config.json", private=False, limit=config_limit)[1] != common_snapshot
-                or _identity(os.fstat(root_fd)) != root_identity):
+                or _directory_anchor(os.fstat(root_fd)) != root_identity):
             raise ValueError("provider_settings_changed")
         if data_fd is None:
             _must_be_absent(root_fd, "data")
         elif settings_fd is None:
             _must_be_absent(data_fd, "provider_settings")
-        if data_fd is not None and (data_identity != _identity(os.fstat(data_fd))
-                or data_identity != _identity(os.stat("data", dir_fd=root_fd, follow_symlinks=False))):
+        if data_fd is not None and (
+                data_identity != _directory_anchor(os.fstat(data_fd))
+                or data_identity != _directory_anchor(os.stat("data", dir_fd=root_fd, follow_symlinks=False))
+                or _provider_namespace(data_fd) != data_namespace):
             raise ValueError("provider_settings_changed")
         if settings_fd is not None and (settings_identity != _identity(os.fstat(settings_fd))
                 or settings_identity != _identity(os.stat("provider_settings", dir_fd=data_fd, follow_symlinks=False))):
@@ -805,7 +830,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                 raise ValueError("provider_snapshot_changed")
             _verify_lock(root, held_fd, root_fd=root_fd)
             data_fd = _directory(root_fd, "data")
-            if actual["data"] is None or _identity(os.fstat(data_fd)) != actual["data"]:
+            if actual["data"] is None or _directory_anchor(os.fstat(data_fd)) != actual["data"]:
                 raise ValueError("provider_snapshot_changed")
             root_anchor, data_anchor = _directory_anchor(os.fstat(root_fd)), _directory_anchor(os.fstat(data_fd))
             old = {}
