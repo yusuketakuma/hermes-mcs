@@ -1733,40 +1733,31 @@ def _quality_record_failure(ledger, pid, identity, claim, page_key, failure_clas
         os.close(fd)
 
 
-def _quality_reserve_repair(ledger, pid, identity, claim, current, receipt_fence):
-    """Consume the one repair before HTTP; uncertain delivery never restores it."""
-    if ledger.db.in_transaction:
+def _quality_reserve_repair_tx(ledger, pid, identity, claim, current, receipt_fence,
+                               reservation, artifact_id, owner):
+    """Consume the repair in its monetary reservation's existing transaction."""
+    if not ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
-    if not current():
+    if (not current(1) or not _quality_owns(ledger.db, pid, identity["input_key"], claim)
+            or reservation.get("route") != "patient_context" or reservation.get("project_id") != pid
+            or reservation.get("message_id") is not None
+            or reservation.get("unit_key") != "summary_quality_repair"
+            or reservation.get("owner") != owner):
         raise ValueError("patient_summary_quality_source_changed")
-    fd = acquire_run_lock()
-    if fd is None:
-        raise Deferred("patient_summary_quality_lock")
-    try:
-        ledger.db.execute("BEGIN IMMEDIATE")
-        try:
-            if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current():
-                raise ValueError("patient_summary_quality_source_changed")
-            if (ledger.db.execute("PRAGMA data_version").fetchone()[0] != receipt_fence[0]
-                    or ledger.db.total_changes != receipt_fence[1]):
-                raise ValueError("patient_summary_quality_source_changed")
-            if (_quality_repair_spent(ledger.db, pid, identity["input_key"])
-                    or _other_summary_repair_spent(ledger.db, pid, identity)):
-                ledger.db.rollback()
-                return False
-            ledger.artifact_add_tx(QUALITY_REPAIR, "{}", project_id=pid,
-                meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
-                      "candidate_key": identity["candidate_key"],
-                      **({'repair_scope': identity['repair_scope']} if valid_hash(identity.get('repair_scope')) else {})})
-            if not _quality_repair_spent(ledger.db, pid, identity["input_key"]) or not current(1):
-                raise ValueError("patient_summary_quality_source_changed")
-            ledger.db.commit()
-            return True
-        except BaseException:
-            ledger.db.rollback()
-            raise
-    finally:
-        os.close(fd)
+    if (ledger.db.execute("PRAGMA data_version").fetchone()[0] != receipt_fence[0]
+            or ledger.db.total_changes != receipt_fence[1] + 1
+            or _quality_repair_spent(ledger.db, pid, identity["input_key"])
+            or _other_summary_repair_spent(ledger.db, pid, identity)):
+        raise ValueError("patient_summary_quality_source_changed")
+    ledger.artifact_add_tx(QUALITY_REPAIR, "{}", project_id=pid,
+        meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
+              "candidate_key": identity["candidate_key"],
+              "reservation_artifact_id": artifact_id, "reservation_id": reservation["reservation_id"],
+              "request_fp": reservation["request_fp"],
+              **({'repair_scope': identity['repair_scope']} if valid_hash(identity.get('repair_scope')) else {})})
+    if not _quality_repair_spent(ledger.db, pid, identity["input_key"]) or not current(2):
+        raise ValueError("patient_summary_quality_source_changed")
+    return 1
 
 
 def _new_summary_repair_response(db, pid, identity, provider, prompt, response, summary):
@@ -1841,6 +1832,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     import extract_llm
     import cloud_inference
     import cloud_policy
+    import cloud_client
 
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
@@ -1969,14 +1961,27 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             ledger, cloud_inference._cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
         return "deferred", None
-    if not _quality_reserve_repair(ledger, pid, identity, claim, current, receipt_fence):
-        return "held", None
-    if not current() or not _quality_owns(ledger.db, pid, identity["input_key"], claim):
-        return "held", None
+    owner = {"night_id": night_id, "source_sig": identity["input_key"]}
+    def on_reserved(reserving, reservation, artifact_id):
+        if reserving is not ledger:
+            raise ValueError("patient_summary_quality_source_changed")
+        return _quality_reserve_repair_tx(reserving, pid, identity, claim, current,
+                                           receipt_fence, reservation, artifact_id, owner)
+    def reserve_dispatch(fn):
+        if ledger.db.in_transaction or not current():
+            raise Deferred("patient_summary_quality_source_changed")
+        fd = acquire_run_lock()
+        if fd is None:
+            raise Deferred("patient_summary_quality_lock")
+        try:
+            return fn()
+        finally:
+            os.close(fd)
     provider = cloud_inference._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
         unit_key="summary_quality_repair", deadline=deadline,
         current=lambda: current() and _quality_owns(ledger.db, pid, identity["input_key"], claim),
-        dispatch=lambda fn, **_kwargs: fn(), owner={"night_id": night_id, "source_sig": identity["input_key"]},
+        dispatch=lambda fn, **_kwargs: fn(), owner=owner,
+        reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
         max_attempts=1, purpose="quality_repair", selection=selection)
     try:
         response = []
@@ -1984,8 +1989,10 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
                       **({"evidence_out": response} if distinct else {}))
         repaired = context_plan.summary_selection(answer, reports)
         provider.commit_guard()
-    except (cloud_inference.CloudFallback, Deferred, ValueError):
-        return "held", None
+    except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, Deferred, ValueError):
+        # Capacity/budget/lock refusal before the reservation consumes neither
+        # allowance. A committed reservation, including an unknown send, stays spent.
+        return ("held" if _quality_repair_spent(ledger.db, pid, identity["input_key"]) else "deferred"), None
     new_ids = [row["fact_ids"][0] for row in repaired]
     if set(new_ids) == selected or not missing <= set(new_ids) or rejected & set(new_ids):
         return "held", None

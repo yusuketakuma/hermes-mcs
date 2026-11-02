@@ -2,7 +2,6 @@
 import time
 import os
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -406,6 +405,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
 
 @pytest.fixture
 def repair(tmp_path, monkeypatch):
+    from contextlib import nullcontext
     led = _ledger(tmp_path)
     led.ensure_patient(1)
     monkeypatch.setattr(refresh, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
@@ -430,6 +430,10 @@ def repair(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on' if enabled[0] else 'off')
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker, 'load_config', lambda: repair_cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: repair_cfg)
     def capture(db, pid, cfg, night_id, repaired, contract, projection):
@@ -438,21 +442,22 @@ def repair(tmp_path, monkeypatch):
         return {'identity': {**identity, 'candidate_key': key,
                  'failure_key': refresh._digest([input_key, key, assessment]), 'audit_key': 'e' * 64}}
     monkeypatch.setattr(refresh, '_quality_capture', capture)
-    class Provider:
-        def __init__(self, ledger, cfg, **kwargs):
-            assert ledger is led and kwargs['route'] == 'patient_context'
-            self.current = kwargs['current']
-            self.client = SimpleNamespace(max_attempts=kwargs.get('max_attempts', 3))
-        def __call__(self, prompt, **kwargs):
-            assert not led.db.in_transaction and self.current() and self.client.max_attempts == 1
-            sent.append(json.loads(prompt))
-            if responses[0] == 'timeout':
-                raise worker.CloudFallback('synthetic_timeout')
-            return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'fact_ids': responses})}
-        def commit_guard(self):
-            if not self.current():
-                raise worker.CloudFallback('cloud_unit_changed')
-    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
+    def request(_client, method, body, timeout, *, deadline):
+        assert method == 'POST' and timeout > 0 and not led.db.in_transaction and current[0]
+        [logical] = led.artifacts(refresh.QUALITY_REPAIR, project_id=1)
+        [financial] = led.artifacts('cloud_usage_reserve', project_id=1)
+        logical_meta, financial_meta = json.loads(logical['meta']), json.loads(financial['meta'])
+        assert logical_meta['reservation_artifact_id'] == financial['artifact_id']
+        assert logical_meta['reservation_id'] == financial_meta['reservation_id']
+        assert logical_meta['request_fp'] == financial_meta['request_fp']
+        sent.append(json.loads(body['messages'][0]['content']))
+        if responses[0] == 'timeout':
+            raise TimeoutError('synthetic transport uncertainty')
+        return 200, {}, json.dumps({'model': worker.anthropic_client.MODEL, 'stop_reason': 'end_turn',
+            'content': [{'type': 'text', 'text': json.dumps({'fact_ids': responses})}],
+            'usage': {'input_tokens': 2, 'output_tokens': 1}}).encode()
+    monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request', request)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', _REAL_CLOUD_PROVIDER)
     def run():
         return refresh._quality_repair_candidate(led, 1, repair_cfg, '2026-10-27',
             {'summary': summary, 'temporal_view': {}}, identity, claim, lambda *_: current[0],
@@ -634,7 +639,45 @@ def test_unknown_after_send_spends_repair_and_does_not_retry(repair):
     responses[:] = ['timeout']
     assert run() == ('held', None) and len(sent) == 1
     assert len(led.artifacts(refresh.QUALITY_REPAIR)) == 1
+    [reservation] = led.artifacts('cloud_usage_reserve', project_id=1)
+    [result] = led.artifacts('cloud_usage_result', project_id=1)
+    assert json.loads(result['meta'])['reservation_id'] == json.loads(reservation['meta'])['reservation_id']
+    assert json.loads(result['meta'])['http_class'] == 'transport'
+    original = [(r['artifact_id'], r['content'], r['meta']) for r in (reservation, result)]
     assert run() == ('held', None) and len(sent) == 1
+    assert [(r['artifact_id'], r['content'], r['meta']) for r in
+            (led.artifacts('cloud_usage_reserve', project_id=1)[0],
+             led.artifacts('cloud_usage_result', project_id=1)[0])] == original
+
+
+@pytest.mark.parametrize('refusal', ['capacity', 'budget_race', 'run_lock', 'hook_failure'])
+def test_summary_repair_reservation_refusal_keeps_both_allowances_unspent(repair, monkeypatch, refusal):
+    from contextlib import nullcontext
+    led, run, _, _, sent, _, _ = repair
+    with monkeypatch.context() as limited:
+        if refusal == 'capacity':
+            limited.setattr(worker.cloud_backlog, 'request_slot', lambda *_: nullcontext(False))
+        elif refusal == 'budget_race':
+            limited.setattr(worker.cloud_policy, 'budget_block_reason',
+                            lambda owner, *_args, **_kwargs: 'daily_cap' if owner.db.in_transaction else None)
+        elif refusal == 'run_lock':
+            limited.setattr(refresh, 'acquire_run_lock', lambda: None)
+        else:
+            led.db.execute("CREATE TRIGGER synthetic_repair_failure AFTER INSERT ON artifacts "
+                           "WHEN NEW.kind='patient_context_summary_quality_repair_v1' "
+                           "BEGIN SELECT RAISE(ABORT,'synthetic reservation abort'); END")
+            led.db.commit()
+        assert run() == ('deferred', None) and not sent
+        assert not led.db.in_transaction
+        assert not led.artifacts(refresh.QUALITY_REPAIR, project_id=1)
+        assert not led.artifacts('cloud_usage_reserve', project_id=1)
+        assert not led.artifacts('cloud_usage_result', project_id=1)
+    if refusal == 'hook_failure':
+        led.db.execute('DROP TRIGGER synthetic_repair_failure')
+        led.db.commit()
+    assert run()[0] == 'candidate' and len(sent) == 1
+    assert len(led.artifacts(refresh.QUALITY_REPAIR, project_id=1)) == 1
+    assert len(led.artifacts('cloud_usage_reserve', project_id=1)) == 1
 
 
 @pytest.mark.parametrize('bad', ['same', 'unknown'])
