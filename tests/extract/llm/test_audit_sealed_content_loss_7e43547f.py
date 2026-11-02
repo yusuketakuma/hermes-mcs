@@ -82,3 +82,46 @@ def test_sealed_normal_final_rejects_content_only_vital_loss(tmp_path, monkeypat
         assert (after["state"], after_ready) == ("attention", False), (after, after_ready)
     finally:
         db.close()
+
+
+def test_sealed_final_rejects_undigestable_content_with_null_meta_hash(tmp_path, monkeypatch):
+    body = PREFIX + "本人の血圧120/80です。" + "完全合成の通常経過を記録します。" * 24
+    document = {**copy.deepcopy(OBSERVATIONS), "vitals": {"sbp": 120, "dbp": 80}}
+    calls = []
+    def local_stub(*args, **kwargs):
+        calls.append(kwargs.get("kind", "first"))
+        extract_llm._CALL_NOTES.provider_response = "local"
+        return copy.deepcopy(document)
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm, "_llm_call", local_stub)
+    db = _ledger(tmp_path)
+    try:
+        db.ensure_patient(1)
+        db.save_messages([_message(mid=1, body=body)], project_id=1)
+        assert extract_llm.run_pending(db, limit=1, budget_s=300)["done"] == 1
+        final, = db.artifacts(extract_llm.KIND, message_id=1)
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        meta = json.loads(final["meta"])
+        assert meta["provider_provenance"]["result_hash"] == extract_llm._provider_result_hash(final["content"])
+        before = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
+        before_ready, _ = patient_context_refresh._raw_extraction_current(db.db, source, {})
+        assert before["state"] == "complete" and before_ready is True
+        call_count = len(calls)
+        # json.loads accepts the appended duplicate unknown keys, but the
+        # strict digest cannot form; the forged null result_hash must not
+        # promote the artifact on a None == None comparison.
+        forged = final["content"][:-1] + ',"_unknown_a":1,"_unknown_a":2}'
+        parsed = json.loads(forged)
+        assert parsed.pop("_unknown_a") == 2
+        assert parsed == json.loads(final["content"])
+        assert extract_llm._provider_result_hash(forged) is None
+        meta["provider_provenance"]["result_hash"] = None
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE artifact_id=?",
+                          (forged, json.dumps(meta), final["artifact_id"]))
+        after = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
+        after_ready, _ = patient_context_refresh._raw_extraction_current(db.db, source, {})
+        assert len(calls) == call_count
+        assert (after["state"], after_ready) == ("attention", False), (after, after_ready)
+    finally:
+        db.close()

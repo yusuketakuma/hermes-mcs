@@ -7,6 +7,7 @@ stale / corrupt — all distinguishable. Alert dedup: an unchanged
 observation never re-alerts; recovery requires a FRESH post-failure
 health write, never the watcher's own assumption.
 """
+import os
 import safe_io
 import json
 import time
@@ -38,6 +39,15 @@ def test_provider_settings_failure_stops_before_health_changes(tmp_path, monkeyp
     assert "secret-canary" not in captured.err + captured.out
     assert (config.read_bytes(), witness.read_bytes()) == before
     assert sorted(path.name for path in data.iterdir()) == [witness.name]
+
+
+def test_lock_path_must_be_a_regular_file(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    os.mkfifo(str(data / "health_watch.lock"))
+    monkeypatch.setattr(health_watch, "_load_config", lambda *a: {})
+    monkeypatch.setattr(health_watch, "_watch", lambda *a, **k: pytest.fail("non-regular lock observed"))
+    assert health_watch.main(["--home", str(tmp_path)]) == 1
 
 
 def _health_file(home, obj):

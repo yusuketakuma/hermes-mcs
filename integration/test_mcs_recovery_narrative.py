@@ -129,6 +129,8 @@ async def _td_thread_send(self, content=None, **kw):
 def isolated_narrative_state(monkeypatch, snapshot_child_clock):
     """Keep SDK fakes and updater path stubs local to each test."""
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    monkeypatch.setattr(adm, "_proc_started", lambda _pid: "proc:1")
+    monkeypatch.setattr(adm, "_pid_alive", lambda _pid: True)
     monkeypatch.setitem(sys.modules, "discord", _td_mod)
     monkeypatch.setattr(TD.FakeThread, "__init__", _td_thread_init2)
     monkeypatch.setattr(TD.FakeThread, "send", _td_thread_send)
@@ -486,8 +488,10 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         # stays closed until the RT retires
         brk = adm.Broker(N.adm_path, slots=local_llm.SLOT_COUNT)
         bg = brk.acquire("mcs.semantic", "BACKLOG")
+        assert bg["admitted"], bg
         sent = brk.sent(bg["permit_id"], "narr-bg-send")
         rt_wait = brk.acquire("hermes.interactive", "RT")
+        assert not rt_wait["admitted"] and rt_wait["reason"] == "waiting", rt_wait
         bg_blocked = brk.acquire("mcs.extract", "BACKLOG")
         brk.terminal(bg["permit_id"], "completed")
         rt_after = brk.poll(rt_wait["permit_id"])
