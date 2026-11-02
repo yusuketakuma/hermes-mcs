@@ -27,6 +27,25 @@ class CloudNotSent(CloudError):
     """A proven refusal or deadline before any attempt sent HTTP bytes."""
 
 
+def not_sent_reason(error):
+    """Classify a proven pre-send refusal without retaining arbitrary error text."""
+    detail = getattr(error, "detail", None)
+    if not isinstance(detail, str):
+        return "not_sent"
+    if detail == "cloud_unit_unresolved":
+        return "cloud_unit_unresolved"
+    if detail == "owner_transaction_active":
+        return "cloud_owner_transaction"
+    if detail == "deadline":
+        return "cloud_deadline"
+    if detail in {"daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
+                  "provider_daily_cap", "provider_monthly_cap", "window_cap"}:
+        return "cloud_budget_blocked"
+    if detail in {"pricing_unverified", "window_history_unverified"}:
+        return "cloud_pricing_unverified"
+    return "not_sent"
+
+
 class CloudClient:
     """Own the guarded provider-neutral attempt lifecycle."""
     def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=3, post_fn=None,

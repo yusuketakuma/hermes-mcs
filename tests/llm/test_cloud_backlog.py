@@ -307,6 +307,8 @@ def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch
 
 
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):
+    import extract_llm
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
     import ledger
     import writer_lock
     parents = iter([991, 1])
@@ -329,7 +331,8 @@ def test_low_memory_worker_exits_and_closes_its_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600))
     monkeypatch.setattr(ledger, "Ledger", lambda *a: SimpleNamespace(close=lambda: closed.append(True)))
-    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: False)
+    memory = iter([True, False])
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: next(memory))
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("low-memory work started"))
     backlog.worker(991)
     assert closed == [True]
@@ -699,3 +702,20 @@ def test_worker_retries_same_paid_carry_after_temporary_sqlite_lock(carry_worker
     backlog.worker(991)
     assert state.events == ["extract", "settle", "settle"]
     assert state.carry == [] and state.closed
+
+
+def test_startup_wait_exits_on_memory_loss_without_opening_ledger(monkeypatch):
+    import extract_llm
+    import ledger
+    import writer_lock
+    memory = iter([True, False])
+    locks = []
+    monkeypatch.setattr(backlog, "_parent", None)
+    monkeypatch.setattr(backlog.os, "getppid", lambda: 991)
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: next(memory))
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: locks.append(True))
+    monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
+    monkeypatch.setattr(ledger, "Ledger", lambda *a: pytest.fail("low memory opened ledger"))
+    backlog.worker(991)
+    assert locks == [True]

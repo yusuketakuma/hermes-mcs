@@ -1372,3 +1372,33 @@ def test_cloud_handle_exception_preserves_claim_only_after_observed_update(
     assert _claim_count(led) == int(updater_changed)
     assert len(releases) == (0 if updater_changed else 2)
     assert not _current_artifacts(led) and calls == reservations == results == []
+
+
+@pytest.mark.parametrize("detail,retained", [("cloud_unit_unresolved", True),
+                                            ("deadline", False),
+                                            ("synthetic-private", False)])
+def test_refused_unit_yields_selection_without_bypassing_send_guard(cloud_candidates, monkeypatch, detail, retained):
+    led, _, calls, reservations, results = cloud_candidates
+    first = _select(led, "extract")[0]["message_id"]
+    original = extract_llm._llm_call
+    def refuse(*args, **kwargs):
+        raise extract_llm.cloud_client.CloudNotSent("budget_exceeded", detail)
+    monkeypatch.setattr(extract_llm, "_llm_call", refuse)
+    report = _cloud_pass(led)
+    expected = extract_llm.cloud_client.not_sent_reason(
+        extract_llm.cloud_client.CloudNotSent("budget_exceeded", detail))
+    assert report['deferred'] == 1 and report['defer_reasons'] == {expected: 1}
+    assert not calls and not reservations and not results
+    assert _claim_count(led) == int(retained)
+    if retained:
+        assert first not in [r['message_id'] for r in _select(led, "extract")]
+        monkeypatch.setattr(extract_llm, "_llm_call", original)
+        assert _cloud_pass(led)['done'] == 1
+        assert first not in [r['message_id'] for r in _current_artifacts(led)]
+        with led.db:
+            led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
+        assert first in [r['message_id'] for r in _select(led, "extract")]
+        monkeypatch.setattr(extract_llm, "_llm_call", refuse)
+        # Expiry permits a fresh check, not a bypass of the unresolved-send guard.
+        assert _cloud_pass(led)['deferred'] == 1
+        assert len(calls) == len(reservations) == len(results) == 1

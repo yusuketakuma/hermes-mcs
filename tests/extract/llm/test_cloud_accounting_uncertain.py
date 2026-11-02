@@ -381,3 +381,19 @@ def test_provider_reservation_dispatch_releases_owner_lock_before_http(routed, m
     assert len(calls) == 1 and deltas == [2]
     assert led.db.execute('SELECT count(*) FROM synthetic_slot').fetchone()[0] == 1
     assert cloud_policy.usage_report(led)['daily_requests'] == 1
+
+
+@pytest.mark.parametrize("detail,expected", [
+    ("cloud_unit_unresolved", "cloud_unit_unresolved"),
+    ("owner_transaction_active", "cloud_owner_transaction"),
+    ("deadline", "cloud_deadline"),
+    ("daily_cap", "cloud_budget_blocked"),
+    ("provider_monthly_cap", "cloud_budget_blocked"),
+    ("pricing_unverified", "cloud_pricing_unverified"),
+    ("synthetic-private-text", "not_sent"),
+    ([], "not_sent"),
+    (None, "not_sent"),
+])
+def test_not_sent_reason_uses_only_fixed_categories(detail, expected):
+    error = worker.cloud_client.CloudNotSent("budget_exceeded", detail)
+    assert worker.cloud_client.not_sent_reason(error) == expected
