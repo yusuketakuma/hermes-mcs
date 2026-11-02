@@ -184,6 +184,10 @@ def test_urgency_uses_borrowed_uncommitted_source_without_view_or_write(store, m
     seed(store, body, {"urgency": "high", "urgency_evidence": [body]})
     monkeypatch.setitem(sys.modules, "structured_view", None)
     store.db.execute("UPDATE messages SET body_text=? WHERE message_id=1", ("本人の胸痛はありません。",))
+    # FTS5 may flush the pending UPDATE into its shadow tables when the
+    # first savepoint opens; settle that fixture work before measuring reads.
+    store.db.execute("SAVEPOINT fixture_fts_flush")
+    store.db.execute("RELEASE fixture_fts_flush")
     changes = store.db.total_changes
     assert store.db.in_transaction
     detail = clinical_urgency.message_urgency_details(store.db, 1)
