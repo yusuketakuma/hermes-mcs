@@ -59,6 +59,7 @@ def _text_chunks(lines, limit=MAX_TEXT):
 
 _CONTAINER_MAX = 10               # children of one Container
 _EMBED_MAX = 4096                 # embed description
+_ZONE_RULE = "─" * 12
 
 
 def _zones(spec: dict, esc, *, face=False) -> tuple:
@@ -189,8 +190,12 @@ def message_payload(spec, *, components_v2=False):
         zones, footer = _zones(spec, escape_md, face=with_stamps)
         posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
         zones = [_zone_text(zone) for zone in zones]
-        return posts, "\n\n".join(["\n".join(zone) for zone in zones]
-                                  + ["\n".join(footer)]).strip() or "—"
+        separator = ("\n" + _ZONE_RULE + "\n"
+                     if spec["parts"].get("section_divider_version") == 1 else "\n\n")
+        groups = ["\n".join(zone) for zone in zones]
+        if footer:
+            groups.append("\n".join(footer))
+        return posts, separator.join(groups).strip() or "—"
 
     # the legacy embed has no sections: a post action's line stays text
     # and its 💊 becomes a button in a row of its own, labelled with the
@@ -309,19 +314,26 @@ def build_view(spec: dict):
 
     # first fit wins: face stamp rows outlast the rule zones but go before
     # the post buttons (the thread still has the rows); the last level is
-    # used as is. Only face levels are text-checked: the validator already
-    # bounds the rest, and the stamp rows add text, not components.
+    # used as is. The new divider format also text-checks the merged zones.
     def one(groups):
-        return [[ln for z in groups for ln in z]]
+        merged = []
+        for zone in groups:
+            if merged and spec["parts"].get("section_divider_version") == 1:
+                merged.append(_ZONE_RULE)
+            merged.extend(zone)
+        return [merged]
     levels = [(face_zones, True), (one(face_zones), True)] if face_zones != zones else []
-    # too many rule zones: one text zone (no rule lines — the text must
-    # stay within the validator's budget); still too many parts: post
-    # buttons fall back to text lines (the 💊 menu entry reaches every post)
+    # Too many rule zones: merge them, retaining text dividers in the new
+    # format. If needed, post buttons fall back to the 💊 menu entry.
     levels += [(zones, False), (one(zones), False), ([_zone_text(one(zones)[0])], False)]
     for groups, checked in levels:
         children = layout(groups)
-        if not (too_big(children) or checked and text_len(children) > MAX_TOTAL_TEXT):
+        if not (too_big(children) or (checked or spec["parts"].get("section_divider_version") == 1)
+                and text_len(children) > MAX_TOTAL_TEXT):
             break
+    else:
+        if spec["parts"].get("section_divider_version") == 1:
+            raise ValueError("discord_section_budget")
     if not children:
         children.append(discord.ui.TextDisplay("—"))
     view = discord.ui.LayoutView(timeout=None)
