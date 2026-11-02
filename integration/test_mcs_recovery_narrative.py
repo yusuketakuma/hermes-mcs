@@ -543,13 +543,26 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         kinds = {p_["kind"] for p_ in parts.values()}
         card_ts = led.db.execute("SELECT message_id FROM notification_cards WHERE card_id=1").fetchone()[0]
         slack_cards = led.db.execute(
-            "SELECT delivery_state,layout FROM notification_cards WHERE transport='slack'").fetchall()
+            "SELECT card_id,card_key,delivery_state,layout,message_id,thread_id "
+            "FROM notification_cards WHERE transport='slack' ORDER BY card_id").fetchall()
+        reply = next((card for card in slack_cards if card["card_key"].endswith("|reply:2")), None)
+        reply_render = _latest_render(led, card_id=reply["card_id"]) if reply else None
+        reply_parts = _parts(led, reply_render["delivery_id"]) if reply_render else {}
+        root_spec = json.loads(render["spec_json"])
+        reply_spec = json.loads(reply_render["spec_json"]) if reply_render else {}
         slack_ok = (
             render["parts_state"] == "complete"
-            and len(slack_cards) == (2 if reply_cards else 1)
-            and all(card["delivery_state"] == "delivered" and card["layout"] == (
-                    notify_cards.CARD_LAYOUT if reply_cards else notify_cards.FACE_LAYOUT)
+            and len(slack_cards) == 2 and reply is not None
+            and all(card["delivery_state"] == "delivered" and card["layout"] == notify_cards.CARD_LAYOUT
                     for card in slack_cards)
+            and reply["thread_id"] == card_ts and reply["message_id"] != card_ts
+            and reply_render["parts_state"] == "complete"
+            and {"card", "thread", "body_part"} <= {p_["kind"] for p_ in reply_parts.values()}
+            and reply_spec["parts"].get("post_source_id") == 2
+            and root_spec["parts"].get("post_source_id") == 1
+            and "メド[41]番の効果を確認しました。" not in json.dumps(root_spec["parts"]["containers"], ensure_ascii=False)
+            and all(p_["state"] == "delivered" and p_["remote_id"] for p_ in reply_parts.values())
+            and not any(post.get("reply_broadcast") for post in sw.client.thread_posts)
             and kinds == {"card", "thread", "body_part",
                           "attachment_part"}
             and sum(1 for p_ in parts.values()

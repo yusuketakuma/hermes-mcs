@@ -259,21 +259,19 @@ REPLY_CARDS_DEFAULT = True
 
 
 def reply_cards_on(cfg) -> bool:
-    """Reply cards (layout 4) for Slack/Discord with card threads, unless switched off."""
-    # reply cards live in the root card's thread: without card_thread no
-    # thread is ever opened and every reply would wait, then hit the channel
-    return (notify_scope.active_transport(cfg) in REPLY_CARD_TRANSPORTS
+    """Keep Slack replies in root threads; Discord follows the configured switches."""
+    transport = notify_scope.active_transport(cfg)
+    return (transport == "slack" or (transport in REPLY_CARD_TRANSPORTS
             and notify_scope.notify_cfg(cfg).get("reply_cards", REPLY_CARDS_DEFAULT) is True
-            and notify_scope.notify_cfg(cfg).get("card_thread") is True)
+            and notify_scope.notify_cfg(cfg).get("card_thread") is True))
 
 
 def _split_reply_targets(db, targets, scope, cfg):
     """Give each later reply of a layout-4 root its own card in the root's thread.
 
-    A root whose card already exists below layout 4 keeps collecting its
-    replies (no re-post of history, no double listing); the decision is the
-    stored layout, never a date. The root target keeps the whole coverage so
-    intent completion and the root-thread attachment route stay unchanged."""
+    Slack roots use reply cards even for old layouts. Discord retains its
+    stored-layout behavior. The root target keeps the whole coverage for
+    intent completion and the root-thread attachment route."""
     if notify_scope.active_transport(cfg) not in REPLY_CARD_TRANSPORTS:
         return targets
     on = reply_cards_on(cfg)
@@ -287,7 +285,7 @@ def _split_reply_targets(db, targets, scope, cfg):
         # the stored layout decides an existing root (a layout-4 root shows no
         # replies itself, even after the switch is turned off); the switch
         # only decides whether a new root is created as layout 4
-        if (row["layout"] or 1) < 4 if row is not None else not on:
+        if scope.get("transport") != "slack" and ((row["layout"] or 1) < 4 if row is not None else not on):
             out.append(target)
             continue
         root = target["root_message_id"]
@@ -391,10 +389,8 @@ def _action_rows(db, card, content, now, context=None,
         btn("more")
     flush()
     # row 2 — secondary (a select / the LINE WORKS 1:1 menu)
-    if not in_thread_body:
-        # cards with a companion thread show the body inside it on
-        # delivery — 本文表示 only remains where no thread can carry it
-        # (card_thread off, failed/deleted thread)
+    # Thread body view also provides per-post processing details.
+    if not in_thread_body or kind == "thread":
         btn("body")
     if content["toggles"]["has_tasks"]:
         # only while the thread has open tasks — the list view is the
@@ -678,7 +674,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # answer only the clicker can see.
     present = presenter(card["transport"])
     thread_on = card["kind"] != "patient_history" and (notify_scope.notify_cfg(cfg).get("card_thread") is True
-                 or present.ALWAYS_THREAD)
+                 or present.ALWAYS_THREAD or (card["transport"] == "slack" and card["kind"] == "thread"))
     # a logical-grouping "thread" (LINE WORKS) has no failed state, so
     # a failed thread part never stops its body/overflow parts
     in_thread_body = thread_on and (
@@ -725,7 +721,11 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
             parts.pop("provider_states_version", None)
 
     set_provider_version(spec["parts"])
+    if spec["parts"].get("provider_states_version") == 4:
+        spec["parts"]["processing_display_version"] = 1
     post_source_id = own_post(card)
+    if card["transport"] == "slack" and card["kind"] == "thread":
+        spec["parts"]["slack_thread_policy"] = 1
     if positive(post_source_id):
         spec["parts"]["post_source_id"] = post_source_id
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
@@ -756,6 +756,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     spec["parts"], budget_hold = notify_parts.build_manifest(
         db, card, spec, content, in_thread_body, cfg=cfg, face_mids=face_mids, waiting=waiting)
     set_provider_version(spec["parts"])
+    if spec["parts"].get("provider_states_version") != 4:
+        spec["parts"].pop("processing_display_version", None)
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):

@@ -25,12 +25,13 @@
 <text x="298" y="243" font-size="11" fill="#66716f">APP</text>
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
 <text x="240" y="283" font-size="23" fill="#202124" font-weight="bold">山田 花子 — 履歴の保存完了・解析中</text>
-<text x="240" y="343.8" font-size="21" fill="#202124">保存済み 120件・解析済み 84件</text>
-<text x="240" y="377.40000000000003" font-size="21" fill="#202124">解析中 28件</text>
-<text x="240" y="411.00000000000006" font-size="21" fill="#202124">再試行・保留 6件</text>
-<text x="240" y="444.6000000000001" font-size="21" fill="#202124">解析状況未取得 2件</text>
-<text x="240" y="478.2000000000001" font-size="21" fill="#202124">現行抽出で緊急度が高い投稿 3件（MCSで確認）</text>
-<text x="240" y="511.8000000000001" font-size="21" fill="#202124">添付 7件（MCSで確認）</text>
-<text x="240" y="545.4000000000001" font-size="21" fill="#202124">取得時点の履歴の列挙を完了しました。</text>
-<text x="240" y="615.0000000000001" font-size="20" fill="#1264a3">MCSで開く</text>
+<path d="M240 331.8 L1000 331.8" stroke="#d5dcd7" fill="none"/>
+<text x="240" y="359.8" font-size="21" fill="#202124">保存済み 120件・解析済み 84件</text>
+<text x="240" y="393.40000000000003" font-size="21" fill="#202124">解析中 28件</text>
+<text x="240" y="427.00000000000006" font-size="21" fill="#202124">再試行・保留 6件</text>
+<text x="240" y="460.6000000000001" font-size="21" fill="#202124">解析状況未取得 2件</text>
+<text x="240" y="494.2000000000001" font-size="21" fill="#202124">現行抽出で緊急度が高い投稿 3件（MCSで確認）</text>
+<text x="240" y="527.8000000000001" font-size="21" fill="#202124">添付 7件（MCSで確認）</text>
+<text x="240" y="561.4000000000001" font-size="21" fill="#202124">取得時点の履歴の列挙を完了しました。</text>
+<text x="240" y="631.0000000000001" font-size="20" fill="#1264a3">MCSで開く</text>
 </svg>

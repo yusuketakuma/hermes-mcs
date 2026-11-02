@@ -83,7 +83,7 @@ PARTS_KEYS = frozenset({
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
-    "provider_states_version",
+    "provider_states_version", "processing_display_version", "slack_thread_policy",
     # per-transport presentation (mcs/notify/present_<t>.py); only the
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
@@ -95,7 +95,7 @@ POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id", "caption", "edit_only", "broadcast"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast"})
 MAX_CAPTION = 300
 
 # Primary operations retained on older LINE WORKS cards without ``more``.
@@ -357,6 +357,16 @@ def validate(spec) -> dict:
     containers = parts.get("containers")
     if not isinstance(containers, list):
         _err("bad_containers")
+    if "processing_display_version" in parts and (
+            type(parts["processing_display_version"]) is not int
+            or parts["processing_display_version"] != 1
+            or parts.get("provider_states_version") != 4):
+        _err("bad_processing_display")
+    if "slack_thread_policy" in parts and (
+            type(parts["slack_thread_policy"]) is not int or parts["slack_thread_policy"] != 1
+            or spec.get("kind") != "thread"
+            or spec.get("delivery", {}).get("transport", "discord") != "slack"):
+        _err("bad_slack_thread_policy")
     states = [c for c in containers if isinstance(c, dict) and "provider_states" in c]
     scoped = [c for c in containers if isinstance(c, dict) and "provider_scope" in c]
     visible = [c for c in containers if isinstance(c, dict) and "visible_providers" in c]
@@ -582,6 +592,18 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                     or not spec.get("delivery", {}).get("thread_id")
                     or (kind == "attachment_part" and not p.get("caption"))):
                 _err("bad_edit_only")
+        if "prior_owner_message_id" in p:
+            delivery = spec.get("delivery", {}) if spec else {}
+            parts = spec.get("parts", {}) if spec else {}
+            if (kind != "attachment_part" or not p.get("prior_remote_id")
+                    or p.get("unavailable") or p.get("edit_only")
+                    or spec is None or spec.get("op") not in ("create", "update")
+                    or spec.get("kind") != "thread" or not reply_card_key(spec.get("card_key"))
+                    or delivery.get("transport") != "slack" or parts.get("source_thread") is not True
+                    or not isinstance(p["prior_owner_message_id"], str)
+                    or not re.fullmatch(r"[0-9]+\.[0-9]{6}", p["prior_owner_message_id"])
+                    or p["prior_owner_message_id"] != delivery.get("thread_id")):
+                _err("bad_prior_owner_message_id")
         if "prior_remote_id" in p and (
                 (kind not in ("body_part", "attachment_part")
                  and not (kind == "card" and spec is not None
@@ -630,6 +652,10 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
                     "action_rows": parts["action_rows"]}
     if "preview_text" in parts:
         card_payload["preview_text"] = parts["preview_text"]
+    if "processing_display_version" in parts:
+        card_payload["processing_display_version"] = parts["processing_display_version"]
+    if "slack_thread_policy" in parts:
+        card_payload["slack_thread_policy"] = parts["slack_thread_policy"]
     card_sha = hashlib.sha256(canonical(card_payload)).hexdigest()
     if card.get("sha256") != card_sha:
         _err("card_part_sha256")

@@ -1,6 +1,7 @@
 """Card attachment delivery, live views, health alerts and transport gate — synthetic temp ledger only."""
 from __future__ import annotations
 
+import asyncio
 import semantic_send_gate
 import notify_parts
 import hashlib
@@ -29,6 +30,7 @@ from notify_testkit import (
     _dispatch, _intent, _latest_render, _llm_extract, _receipt,
     _seed_thread, _spec, _token_for, _uuid, led, pinned_clock,
 )
+from slack_testkit import ROOT_TS, SCOPE as SLACK_SCOPE, SLACK, _granted_card, _mkworld
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -57,18 +59,34 @@ def _followups(led):
 
 @pytest.mark.parametrize("transport", ["slack", "discord"])
 def test_earlier_native_content_fp_drifts_layout_once_and_keeps_ack_source(led, transport):
-    spec = _delivered_card(led)
-    assert _click(led, spec, "ack")["outcome"] == "applied"
+    if transport == "slack":
+        _seed_thread(led)
+        assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+        world = _mkworld(led)
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        spec = _spec(led)
+        actor = "slack:T_SYNTHETIC:U_OPERATOR"
+        token = _token_for(spec, "ack")
+        request = {"version": 2, "transport": "slack", "op": "notification",
+                   "command_id": f"{token}:{'ab' * 8}", "actor": actor,
+                   "token": token, "origin": {**SLACK_SCOPE, "message_id": ROOT_TS}}
+        assert notify_cmds.validate_int(request) is None
+        assert notify_actions.apply_notification(led, request, SLACK, now=NOW)["outcome"] == "applied"
+    else:
+        spec = _delivered_card(led)
+        actor = CLICKER
+        assert _click(led, spec, "ack")["outcome"] == "applied"
     card = _card(led)
-    card["transport"] = transport
+    assert card["transport"] == transport
     content = notify_cards.card_content(led.db, card)
+    assert content["shown"] == ([100] if transport == "slack" else [100, 101])
     old_fp = payload_hash({"c": content["containers"], "f": content["footer"],
                            "s": content["shown"], "p": content["page"],
                            "a": content.get("actor_fp")})
     card.update(content_fp=old_fp, source_fp=content["source_fp"])
     source_generation = card["source_generation"]
     acknowledged = notify_render.current_ackers(led.db, card["card_id"], source_generation, content["shown"])
-    assert acknowledged == [CLICKER]
+    assert acknowledged == [actor]
     drift = notify_cards._generation_drift(card, content)
     assert drift["presentation_generation"] == card["presentation_generation"] + 1
     assert "source_generation" not in drift and "source_fp" not in drift

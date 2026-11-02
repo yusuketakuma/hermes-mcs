@@ -277,6 +277,39 @@ def apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks) -> dict:
             "updated_at=? WHERE delivery_id=? AND state='queued'",
             (now, req["delivery_id"]))
     reissued = []
+    if reason == "slack_thread_policy_changed":
+        stale = render_row(db, req["delivery_id"])
+        card_id = stale["card_id"] if stale is not None else None
+        started = db.execute(
+            "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
+            "AND (remote_id IS NOT NULL OR attempt_id IS NOT NULL OR "
+            "(state NOT IN ('pending','held') AND NOT (state='not_sent' "
+            "AND kind='attachment_part' AND COALESCE(error_code,'')='attachment_unavailable'))) LIMIT 1",
+            (req["delivery_id"],)).fetchone()
+        if not started:
+            seeded = db.execute(
+                "SELECT part_id FROM notification_render_parts WHERE delivery_id=? AND state='not_sent'",
+                (req["delivery_id"],)).fetchall()
+            if seeded:
+                try:
+                    manifest = json.loads(stale["spec_json"])["parts"]["manifest"]
+                    unavailable = {part["part_id"] for part in manifest
+                                   if part.get("kind") == "attachment_part"
+                                   and part.get("unavailable") is True and not part.get("caption")}
+                    started = any(row["part_id"] not in unavailable for row in seeded)
+                except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+                    started = True
+        prior_in_flight = db.execute(
+            "SELECT 1 FROM notification_renders r WHERE r.card_id=? AND r.delivery_id<>? AND "
+            "(r.state IN ('sending','unknown') OR (r.state='delivered' AND EXISTS ("
+            "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+            "AND p.kind IN ('thread','body_part','attachment_part') "
+            "AND p.state IN ('pending','unknown')))) LIMIT 1",
+            (card_id, req["delivery_id"])).fetchone()
+        if (stale is not None and stale["state"] == "queued" and card_id is not None
+                and not started and not prior_in_flight and not cards.unsettled_attempt(db, card_id)):
+            cards._cancel_render(db, req["delivery_id"], now)
+            cards.issue_render(db, card_id, cfg, now, reissued, force=True)
     if reason in ("source_changed", "reply_thread_changed"):
         # Re-evaluate source/parent changes in the same commit. An
         # unproven reply parent cancels only queued work and holds;
@@ -357,6 +390,15 @@ def _begin_check(db, req, cfg) -> str | None:
     card = card_row(db, render["card_id"]) \
         if render["card_id"] is not None else None
     if card is not None:
+        if card["transport"] == "slack" and card["kind"] == "thread" and render["op"] != "revoke":
+            try:
+                parts = json.loads(render["spec_json"])["parts"]
+            except (ValueError, TypeError, KeyError, RecursionError):
+                return "slack_thread_policy_changed"
+            if (not isinstance(parts, dict) or type(parts.get("slack_thread_policy")) is not int
+                    or parts["slack_thread_policy"] != 1
+                    or parts.get("post_source_id") != cards.own_post(card)):
+                return "slack_thread_policy_changed"
         if cards.reply_source(card) and render["op"] != "revoke" \
                 and not cards.reply_thread_matches(db, card, json.loads(render["spec_json"])):
             return "reply_thread_changed"

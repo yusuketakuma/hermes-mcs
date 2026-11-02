@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "Slackの返信を元投稿のスレッドに表示",
+  "summary": "MCSの返信を元投稿のスレッド内に表示し、チャンネルには表示しません。既存の会話に後から届く返信にも適用します。",
+  "upgrade": "追加の設定操作は不要です。更新した処理を利用するには、既存の更新手順に従ってHermesまたは独立接続を反映してください。",
+  "details": [
+    "Slackでは返信カードとスレッドの設定にかかわらず、後着の返信を元投稿のスレッドに表示する。",
+    "親スレッドや添付の配送先を確認できない場合は保留する。過去の返信は一括再送しない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_parts.py",
+    "adapters/slack/delivery.py"
+  ]
+}

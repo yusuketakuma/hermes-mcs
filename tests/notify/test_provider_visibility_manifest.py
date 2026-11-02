@@ -158,3 +158,24 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
     assert "Anthropic" not in header["text"] and "OpenAI" in header["text"]
     assert "prior_remote_id" not in current["parts"]["manifest"][0]
     assert validate(current) is current
+
+
+@pytest.mark.parametrize('old_marker,new_marker,reuse', [
+    (None, None, True), (None, 1, False), (1, None, False), (1, 1, True),
+])
+def test_lineworks_reuse_respects_display_format(monkeypatch, old_marker, new_marker, reuse):
+    old_parts = _parts(4, ['jev', 'local'])
+    new_parts = _parts(4, ['jev', 'local'])
+    if old_marker is not None:
+        old_parts['processing_display_version'] = old_marker
+    if new_marker is not None:
+        new_parts['processing_display_version'] = new_marker
+    previous = {'parts': old_parts, 'source_generation': 'synthetic', 'ui_revision': 1, 'delivery': {}}
+    spec = {'op': 'update', 'parts': new_parts, 'source_generation': 'synthetic',
+            'ui_revision': 1, 'delivery': {}}
+    card = {'transport': 'lineworks', 'card_id': 1, 'message_id': 'synthetic-card'}
+    monkeypatch.setattr(notify_parts, 'scope_matches', lambda *_: True)
+    monkeypatch.setattr(notify_parts, 'stored_scope', lambda *_: {})
+    parts, hold = notify_parts.build_manifest(_DB(previous), card, spec, {'shown': [100]}, False)
+    assert hold is None
+    assert bool(parts['manifest'][0].get('prior_remote_id')) is reuse

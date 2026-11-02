@@ -14,6 +14,15 @@ def test_grounded_reason_and_separate_post_observation_times(led):
     checked = {"project_id": 1, "message_id": 100, "subject": "patient",
                "reasons": ["本人は息苦しいと話しています。"], "observed_at": NOW}
     parts = alert_view.render_parts(checked, led.db)
+    assert parts["containers"][1]["rule"] is True
+    assert notify_render.parts_text(parts).count(notify_render.SECTION_RULE) >= 1
+    from adapters.discord.cards import _zones
+    assert len(_zones({"kind": "signal", "parts": parts}, str)[0]) >= 2
+    from adapters.slack.presentation import render_parts
+    assert [block["type"] for block in render_parts(parts, card_kind="signal")][:3] == [
+        "header", "divider", "section"]
+    from present_lineworks import urgent_room_head
+    assert notify_render.parts_text(urgent_room_head(parts)).count(notify_render.SECTION_RULE) >= 1
     text = notify_render.parts_text(parts)
     assert "患者本人" in text and "引用: 本人は息苦しいと話しています。" in text
     assert "投稿 " in text and "判定 " in text and "AI" not in text

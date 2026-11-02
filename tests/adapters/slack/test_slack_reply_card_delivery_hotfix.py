@@ -185,7 +185,8 @@ def test_short_reply_face_pins_drug_actions_to_parent_thread_and_its_own_card(le
     spec = json.loads(_latest_render(led, reply["card_id"])["spec_json"])
     assert spec["parts"]["slack"]["face_posts"] and not spec["parts"]["thread_body_parts"]
     broadcasts = [p for p in world.client.thread_posts if p.get("reply_broadcast")]
-    assert len(broadcasts) == 1 and broadcasts[0]["thread_ts"] == ROOT_TS
+    assert broadcasts == []
+    assert any(p.get("thread_ts") == ROOT_TS for p in world.client.thread_posts)
     # Replaying the accepted intent and polling again never posts another card.
     _dispatch(led, intent, cfg, now=clock[0])
     asyncio.run(_granted_card(world.worker, led, world.root))
@@ -230,7 +231,7 @@ def test_only_first_verified_reply_card_send_broadcasts(world, mode):
     assert len(writes) == 1
     op, wire = writes[0]
     assert op == ("update" if mode == "update" else "create")
-    assert wire.get("reply_broadcast", False) is (mode in ("reply", "timeout"))
+    assert not wire.get("reply_broadcast", False)
     assert wire.get("thread_ts") == (ROOT_TS if mode in ("reply", "reprocess", "signal", "timeout") else None)
 
 
@@ -251,11 +252,11 @@ def test_uncertain_reply_card_broadcast_is_not_automatically_retried(led, monkey
     asyncio.run(_granted_card(world.worker, led, world.root))
     reply = led.db.execute("SELECT * FROM notification_cards WHERE card_key LIKE '%|reply:202'").fetchone()
     assert reply["delivery_state"] == "delivery_unknown"
-    writes = [kw for op, kw in world.client.calls if op == "create" and kw.get("reply_broadcast")]
+    writes = [kw for op, kw in world.client.calls if op == "create" and kw.get("thread_ts") == ROOT_TS]
     assert len(writes) == 1
     world.client.failure = None
     asyncio.run(_granted_card(world.worker, led, world.root))
-    assert [kw for op, kw in world.client.calls if op == "create" and kw.get("reply_broadcast")] == writes
+    assert [kw for op, kw in world.client.calls if op == "create" and kw.get("thread_ts") == ROOT_TS] == writes
 
 
 @pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])

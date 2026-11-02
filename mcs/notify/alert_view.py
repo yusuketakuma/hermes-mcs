@@ -28,7 +28,7 @@ def render_parts(checked, db=None):
     name = notify_render.patient_heading(db, pid) if db is not None and positive(pid) else "患者記録"
     parts = {"containers": [
         {"type": "heading", "text": "🚨 緊急度高・再確認候補"},
-        {"type": "text", "text": f"{name} · {subject}"}], "footer": []}
+        {"type": "text", "rule": True, "text": f"{name} · {subject}"}], "footer": []}
     reasons = checked.get("reasons")
     seen = set()
     if message is not None and message["body_state"] == "full" and isinstance(reasons, list):

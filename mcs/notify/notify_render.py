@@ -213,6 +213,9 @@ def render_text(parts: dict, head: str = "【{}】", lit=str,
         kind = item["type"]
         if kind == "meta":
             continue
+        if parts.get("processing_display_version") == 1 and item.get("provider_scope") == "header":
+            import processing_route
+            item = {**item, "text": processing_route.compact_header(item)}
         if item.get("rule") and lines:
             lines.append(SECTION_RULE)
         if kind == "heading":
@@ -573,10 +576,8 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
     if (include_progress and (label or progress_by_mid is not None)
             and state and state["state"] != "complete"):
-        progress = "解析更新中" if state["state"] == "processing" else "解析要確認"
-        if state["total"]:
-            progress += f"（{state['total']}区間中{state['completed']}区間完了）"
-        block["text"] += "\n" + progress
+        from extraction_progress import compact_label
+        block["text"] += "\n" + compact_label(state)
     return block
 
 
@@ -732,6 +733,8 @@ def own_post(card):
     if card["kind"] != "thread":
         return None
     layout = (card["layout"] if "layout" in card.keys() else 1) or 1
+    if "transport" in card.keys() and card["transport"] == "slack":
+        return reply_source(card) or card["root_message_id"]
     return (reply_source(card) or card["root_message_id"]) if layout >= 4 else None
 
 
@@ -953,7 +956,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         if visible_providers is None:
             visible_providers = processing_route.visible_providers()
         # layout 4: a reply card shows its one reply, the root card its root only
-        only = reply_source(card) or (card["root_message_id"] if layout >= 4 else None)
+        only = own_post(card)
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
                       posted_at,body_state,first_seen,
@@ -1008,7 +1011,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                   and (m.get("first_seen") or 0) > (_card_created(card) or float("inf")))
         if new:
             containers.append({"type": "text", "text": f"🆕 返信+{new}"})
-        if layout >= 4 and only == card["root_message_id"]:
+        if only == card["root_message_id"]:
             replies = db.execute(
                 "SELECT COUNT(*) FROM messages WHERE parent_id=? AND project_id=? "
                 "AND message_id<>? AND body_state<>'deleted'",

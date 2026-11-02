@@ -655,10 +655,30 @@ class DeliveryWorker:
                 owners = ctx.get("part_owners")
                 if owners is None:
                     owners = await asyncio.to_thread(self._part_owners, records)
-                ctx["foreign_prior_ids"] = {
-                    remote_id for remote_id in priors
-                    if any(did != spec["delivery_id"] and mid != ctx.get("card_message_id")
-                           for did, mid in owners.get(remote_id, ()))}
+                foreign_parts = set()
+                for part in manifest:
+                    remote_id = part.get("prior_remote_id")
+                    if not remote_id:
+                        continue
+                    entries = owners.get(remote_id, ())
+                    blocked = any(did != spec["delivery_id"] and mid != ctx.get("card_message_id")
+                                  for did, mid in entries)
+                    if "prior_owner_message_id" in part:
+                        prior_owner = part["prior_owner_message_id"]
+                        mids = {mid for _, mid in entries}
+                        blocked = not (part.get("kind") == "attachment_part"
+                            and part.get("unavailable") is not True and part.get("edit_only") is not True
+                            and spec.get("kind") == "thread" and spec.get("op") in ("create", "update")
+                            and spec.get("delivery", {}).get("transport") == "slack"
+                            and spec_mod.reply_card_key(spec.get("card_key"))
+                            and spec["parts"].get("source_thread") is True
+                            and isinstance(prior_owner, str) and bool(prior_owner)
+                            and prior_owner == spec["delivery"].get("thread_id")
+                            and prior_owner in mids and mids <= {prior_owner, ctx.get("card_message_id")}
+                            and None not in mids)
+                    if blocked:
+                        foreign_parts.add(part["part_id"])
+                ctx["foreign_prior_part_ids"] = foreign_parts
         for part in manifest:
             kind = part.get("kind")
             if kind == "card" or (part.get("unavailable")
@@ -731,7 +751,7 @@ class DeliveryWorker:
                       part_id=part["part_id"], kind=part["kind"],
                       receipt_envelope=envelopes.part_receipt(
                           claim, part, "unknown"))
-        if part.get("prior_remote_id") in ctx.get("foreign_prior_ids", ()):
+        if part.get("part_id") in ctx.get("foreign_prior_part_ids", ()):
             outcome = {"result": "unknown", "error_code": "part_owner_ambiguous"}
         else:
             outcome = await _outcome_of(

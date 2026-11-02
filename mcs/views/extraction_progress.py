@@ -43,6 +43,26 @@ def message_progress(db, row, *, cfg=None):
     return {key: progress[key] for key in ("state", "completed", "total")}
 
 
+
+def compact_label(progress):
+    """Describe verified progress without inferring running, waiting or terminal failure."""
+    if (not isinstance(progress, dict)
+            or progress.get("state") not in ("processing", "complete", "attention")
+            or type(progress.get("completed")) is not int
+            or type(progress.get("total")) is not int
+            or not 0 <= progress["completed"] <= progress["total"]
+            or (progress["state"] == "complete" and progress["completed"] != progress["total"])):
+        return "? 状況未取得"
+    state, done, total = progress["state"], progress["completed"], progress["total"]
+    if state == "complete":
+        return "✓ 完了"
+    if state == "attention":
+        return "! 要確認"
+    if 0 < done < total:
+        return f"◐ 一部 {done}/{total}"
+    return "◐ 未完了"
+
+
 def patient_progress(db, project_id, *, cfg=None):
     """Count only backend-validated current progress, never source text or extracted facts."""
     rows = db.execute("SELECT * FROM messages WHERE project_id=? AND body_state IS NOT 'deleted' "

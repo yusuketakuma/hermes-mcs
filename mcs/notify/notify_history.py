@@ -223,7 +223,8 @@ def content(db, card):
     if snap.get("capture_phase") == "complete":
         text.append("取得時点の履歴の列挙を完了しました。")
     title = f"{name[0] if name else '患者'} — {title}"
-    return {"containers": [{"type": "heading", "text": title}, {"type": "text", "text": "\n".join(text)}],
+    return {"containers": [{"type": "heading", "text": title},
+                           {"type": "text", "rule": True, "text": "\n".join(text)}],
             "footer": [], "shown": [anchor(card)["cohort_id"]], "shown_kind": "cohort_ids",
             "page": 0, "pages": 1, "source_fp": ui.get("history_source_fp", payload_hash([])),
             "toggles": {"acked": False, "assigned": False, "has_tasks": False},

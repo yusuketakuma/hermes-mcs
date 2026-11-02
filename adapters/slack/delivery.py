@@ -19,7 +19,6 @@ from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .cards import render, validate
 from .emoji_text import slack_emoji_pattern
-from adapters.common.announce import new_reply_announced
 from .presentation import mention_ids, thread_part_blocks
 from .paths import notify_dirs
 
@@ -322,6 +321,32 @@ class SlackCardAdapter:
                 and delivery.get("channel_id") == self._channel_id
                 and delivery.get("profile") == self._profile)
 
+    async def verify_thread_root(self, thread_ts):
+        """Verify the bound bot's root before certifying a thread."""
+        if not self._bound or not isinstance(thread_ts, str) or not _TS.fullmatch(thread_ts):
+            return "thread_scope_mismatch"
+        sender = self.single_attempt()
+        if sender is None:
+            return "retry_policy_unknown"
+        try:
+            history_call = getattr(sender, "conversations_history", None)
+            if history_call is not None:
+                history = _payload(await history_call(channel=self._channel_id,
+                    oldest=thread_ts, latest=thread_ts, inclusive=True, limit=1))
+            else:
+                history = _payload(await sender.conversations_replies(
+                    channel=self._channel_id, ts=thread_ts, limit=1))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return "thread_prefetch_failed"
+        roots = history.get("messages")
+        if (history.get("ok") is not True or not isinstance(roots, list) or not roots
+                or not isinstance(roots[0], Mapping) or roots[0].get("ts") != thread_ts
+                or not self.authored(roots[0])):
+            return "thread_root_unverified"
+        return None
+
     async def perform(self, spec):
         """One card send, with bounded retries only after definite rejection."""
         if not self._bound:
@@ -381,29 +406,11 @@ class SlackCardAdapter:
                 if ((notice and (op != "notice" or thread_ts != message_id))
                         or not isinstance(thread_ts, str) or not _TS.fullmatch(thread_ts)):
                     return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
-                try:
-                    history_call = getattr(sender, "conversations_history", None)
-                    if history_call is not None:
-                        history = _payload(await history_call(channel=self._channel_id,
-                            oldest=thread_ts, latest=thread_ts, inclusive=True, limit=1))
-                    else:
-                        history = _payload(await sender.conversations_replies(
-                            channel=self._channel_id, ts=thread_ts, limit=1))
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    return {"result": "not_sent", "error_code": "thread_prefetch_failed"}
-                roots = history.get("messages")
-                if (history.get("ok") is not True or not isinstance(roots, list) or not roots
-                        or roots[0].get("ts") != thread_ts or not self.authored(roots[0])):
-                    return {"result": "not_sent", "error_code": "thread_root_unverified"}
+                error = await self.verify_thread_root(thread_ts)
+                if error:
+                    return {"result": "not_sent", "error_code": error}
                 if op != "update":
                     kwargs["thread_ts"] = thread_ts
-                    if (op == "create" and spec["kind"] == "thread"
-                            and reply_card_key(spec.get("card_key"))
-                            and spec["parts"].get("source_thread") is True
-                            and delivery.get("intent_event_ids")):
-                        kwargs["reply_broadcast"] = True
             response = await call_native(send, **kwargs)
         except asyncio.CancelledError:
             raise
@@ -540,7 +547,10 @@ class DeliveryWorker(_BaseWorker):
             if not mid:
                 return {"result": "not_sent",
                         "error_code": "thread_root_missing"}
-            return {"result": "delivered", "remote_id": str(mid)}
+            error = await self._sender.verify_thread_root(mid)
+            if error:
+                return {"result": "not_sent", "error_code": error}
+            return {"result": "delivered", "remote_id": mid}
         if part["kind"] == "body_part":
             i = int(part["part_id"].rsplit(":", 1)[1]) - 1
             chunks = spec["parts"].get("thread_body_parts") or []
@@ -597,18 +607,12 @@ class DeliveryWorker(_BaseWorker):
         if sender is None:
             return {"result": "not_sent",
                     "error_code": "retry_policy_unknown"}
-        # a post new to an already delivered card also shows in the
-        # channel: an edit of the old card notifies nobody, so a late
-        # reply would otherwise reach only the thread's followers
-        broadcast = ({"reply_broadcast": True}
-                     if new_reply_announced(spec, part) else {})
         try:
             response = await self._blocks_call(
                 sender.chat_postMessage, blocks, _metric_method="post",
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
-                mrkdwn=False, unfurl_links=False, unfurl_media=False,
-                **broadcast)
+                mrkdwn=False, unfurl_links=False, unfurl_media=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

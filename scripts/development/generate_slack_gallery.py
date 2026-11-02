@@ -43,8 +43,6 @@ STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
          "📝 タスク 1件")
 RULE = "─" * 12
 BODY = "次回訪問時に残薬を確認してください。服薬カレンダーの写真を共有します。"
-PROCESSING_LABELS = {"processing": "解析中", "preparing": "結果を準備中", "complete": "解析完了",
-                     "attention": "解析未完了・要確認", "unknown": "状況不明"}
 
 
 class Screen:
@@ -181,29 +179,22 @@ class Screen:
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
     def provider_row(self, x, y, post, width):
-        """Illustrate one fictional adopted order and explicit unknown groups."""
+        """Show a compact synthetic processing status and relevant provider icons."""
+        labels = {"processing": "◐ 未完了", "preparing": "◐ 未完了", "complete": "✓ 完了",
+                  "attention": "! 要確認", "unknown": "? 状況未取得"}
         status = self.processing[post]
-        sequence = ["jev", "local"] if status == "complete" else []
-        marks = {provider: "✓" if provider in sequence else "?" for provider in self.providers}
-        order = "Jev → 💻" if sequence else "不明"
-        y = self.paragraph(x, y, PROCESSING_LABELS[status] + " · 採用結果の処理順: " + order,
-                           width, 15, MUTED)
-        ordered = sequence + [provider for provider in self.providers if provider not in sequence]
-        for index, provider in enumerate(ordered):
-            if sequence and index == len(sequence):
-                y = self.paragraph(x, y + 39, "その他（順序不明）", width, 15, MUTED)
-            column = index - len(sequence) if sequence and index >= len(sequence) else index
-            mark = marks[provider]
-            label = "実行済み" if mark == "✓" else "不明"
-            left = x + column * 66
+        self.text(x, y + 18, labels[status], 15, MUTED)
+        providers = [key for key in ("jev", "local") if key in self.providers] if status == "complete" else []
+        for index, provider in enumerate(providers):
+            left = x + 110 + index * 75
             if provider == "local":
                 self.text(left, y + 18, "💻", 20)
             else:
                 data = base64.b64encode((ROOT / "resources/provider-icons" / f"{provider}.png").read_bytes()).decode("ascii")
                 self.parts.append(f'<image x="{left}" y="{y}" width="22" height="22" '
-                                  f'href="data:image/png;base64,{data}"><title>{provider} {label}</title></image>')
-            self.text(left + 28, y + 18, f"{mark} {label}" if provider == "local" else mark, 18, MUTED)
-        return y + 44
+                                  f'href="data:image/png;base64,{data}"><title>{provider} 実行済み</title></image>')
+            self.text(left + 28, y + 18, "✓", 18, MUTED)
+        return y + 48
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"
@@ -375,6 +366,8 @@ def urgent_notice():
     s.text(x, y, "↳ 元の通知スレッドへの追加投稿", 17, MUTED)
     y += 43
     for part in parts["containers"]:
+        if part.get("rule"):
+            y = s.rule(x, y, 760)
         heading = part["type"] == "heading"
         text = ("引用: " if part["type"] == "quote" else "") + part["text"]
         y = s.paragraph(x, y, text, 760, 23 if heading else 20,
@@ -410,6 +403,8 @@ def initial_history():
                "保存と解析の状態を区別。同じ患者の進捗を1枚のカードで更新します。", 1100)
     x, y = s.app()
     for part in parts["containers"]:
+        if part.get("rule"):
+            y = s.rule(x, y, 760)
         heading = part["type"] == "heading"
         y = s.paragraph(x, y, part["text"], 760, 23 if heading else 21, INK, heading)
         y += 24

@@ -2218,9 +2218,8 @@ def test_thread_capability_recovers_after_expiry(world, monkeypatch):
     assert world.card(1)["thread_state"] == "failed"
 
 
-def test_thread_opens_with_body_and_card_drops_body_button(world):
-    """The companion thread opens holding the full text — the card
-    drops its 📄 button because the body already lives inside."""
+def test_thread_opens_with_body_and_card_retains_detail_button(world):
+    """The companion thread and the private detail view remain accessible."""
     world.seed()
     world.dispatch()
     worker, reg, bot = world.mkworker()
@@ -2238,7 +2237,7 @@ def test_thread_opens_with_body_and_card_drops_body_button(world):
     assert "本文" in "\n".join(thread.sent)
     _, spec = world.spec()
     ids = {b["id"] for row in spec["parts"]["action_rows"] for b in row}
-    assert "body" not in ids
+    assert "body" in ids
     assert {"ack", "assign", "summary", "link"} <= ids
     assert not {"defer", "tasks"} & ids       # retired / no open tasks
     assert spec["parts"].get("thread_body_parts")   # durable part text

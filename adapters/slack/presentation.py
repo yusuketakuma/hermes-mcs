@@ -45,21 +45,30 @@ def _ordered_providers(visible, sequence):
     return visible
 
 
-def _provider_context(states, prefix=None, visible=None, sequence=None):
+def _provider_context(states, prefix=None, visible=None, sequence=None, *, compact=False):
     visible = visible if visible is not None else [key for key, _ in _PROVIDER_NAMES]
     ordered = _ordered_providers(visible, sequence)
+    if compact:
+        from processing_route import COMPACT_MARKS, COMPACT_STATUS_LABELS
+        ordered = [key for key in ordered if states[key] in COMPACT_MARKS]
+        prefix = (prefix or "").partition(" · 採用結果の処理順: ")[0]
+        for label, compact_label in COMPACT_STATUS_LABELS.items():
+            if prefix == label or prefix.endswith(" · " + label):
+                prefix = prefix[:-len(label)] + compact_label
+                break
+    marks = COMPACT_MARKS if compact else _STATE_MARKS
     elements = ([{"type": "plain_text", "text": prefix}] if prefix else [])
     providers = {key: (name, url) for key, name, url in _PROVIDERS}
     for index, key in enumerate(ordered):
-        if sequence is not None and index == len(sequence):
+        if not compact and sequence is not None and index == len(sequence):
             elements.append({"type": "plain_text", "text": "その他（順序不明）"})
         if key == "local":
-            elements.append({"type": "plain_text", "text": f"💻 {_STATE_MARKS[states[key]]} {_STATE_LABELS[states[key]]}"})
+            elements.append({"type": "plain_text", "text": f"💻 {marks[states[key]]} {_STATE_LABELS[states[key]]}"})
         else:
             name, url = providers[key]
             elements.append({"type": "image", "image_url": url,
                              "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
-            elements.append({"type": "plain_text", "text": _STATE_MARKS[states[key]]})
+            elements.append({"type": "plain_text", "text": marks[states[key]]})
     return {"type": "context", "elements": elements}
 
 
@@ -241,7 +250,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             if len(prefix) > CONTEXT_MAX:
                 blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
                 prefix = prefix[-CONTEXT_MAX:]
-            blocks.append(_provider_context(states, prefix, visible, sequence))
+            blocks.append(_provider_context(states, prefix, visible, sequence, compact=version == 4 and parts.get("processing_display_version") == 1))
             continue
         if card_kind == "thread" and item.get("rule") and kind == "text":
             states = item.get("provider_states")

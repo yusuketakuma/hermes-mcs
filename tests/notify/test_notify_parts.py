@@ -1162,6 +1162,46 @@ def test_reply_summary_arrives_after_delivery_and_updates_its_existing_post(led,
     from adapters.common import envelopes
     cfg = {"slack": SLACK, "discord": CFG, "lineworks": LINEWORKS}[platform]
     _seed_thread(led, mids=tuple(range(100, 115)) if off_page else (100, 101))
+    if platform == "slack":
+        import asyncio
+        from slack_testkit import ROOT_TS, _granted_card, _mkworld
+
+        assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)["dispatched"]
+        world = _mkworld(led)
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        parent = _card(led)
+        assert parent["delivery_state"] == "delivered" and parent["message_id"] == ROOT_TS
+        assert _dispatch(led, _intent(led, payload={"message_ids": [101]}), cfg)["dispatched"]
+        reply = dict(led.db.execute(
+            "SELECT * FROM notification_cards WHERE card_key LIKE '%|reply:101'").fetchone())
+        initial = _spec(_latest_render(led, reply["card_id"]))
+        assert initial["op"] == "create" and initial["delivery"]["thread_id"] == ROOT_TS
+        assert initial["parts"]["post_source_id"] == 101
+        assert "要約 処理待ち" in json.dumps(initial["parts"], ensure_ascii=False)
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        reply = _card(led, reply["card_id"])
+        reply_ts = reply["message_id"]
+        assert reply["delivery_state"] == "delivered" and reply_ts != ROOT_TS
+        assert notify_render.card_content(led.db, parent, cfg=cfg)["shown"] == [100]
+        assert notify_render.card_content(led.db, reply, cfg=cfg)["shown"] == [101]
+        posts_before = list(world.client.thread_posts)
+        count = led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0]
+        _extract(led, 101, {"summary": "合成返信の独立した要約"}, kind="extract_llm")
+        notify_cards.sweep(led, cfg, now=NOW + 1)
+        fresh = _latest_render(led, reply["card_id"])
+        spec = _spec(fresh)
+        assert fresh["op"] == "update" and spec["delivery"]["message_id"] == reply_ts
+        assert "合成返信の独立した要約" in json.dumps(spec["parts"], ensure_ascii=False)
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        assert world.client.thread_posts == posts_before
+        updates = [kw for op, kw in world.client.calls if op == "update" and kw["ts"] == reply_ts]
+        assert len(updates) == 1 and "合成返信の独立した要約" in json.dumps(updates[0], ensure_ascii=False)
+        assert _card(led, reply["card_id"])["delivery_state"] == "delivered"
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        assert world.client.thread_posts == posts_before
+        assert [kw for op, kw in world.client.calls if op == "update" and kw["ts"] == reply_ts] == updates
+        assert led.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == count
+        return
     _dispatch(led, _intent(led), cfg)
     first = _latest_render(led)
     claim = _claim(first)

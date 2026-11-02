@@ -104,7 +104,7 @@ def test_real_current_checkpoint_updates_shared_summary_without_partial_facts(le
     led.db.execute("PRAGMA query_only=ON")
     cfg = {"local_llm": {"model": model}}
     block = notify_render._summary_block(led.db, 100, cfg=cfg)
-    assert f"解析更新中（{len(roots)}区間中1区間完了）" in block["text"]
+    assert f"◐ 一部 1/{len(roots)}" in block["text"]
     assert notify_render.progress_state(led.db, 100, cfg) == {
         "state": "processing", "completed": 1, "total": len(roots)}
     assert "SOURCE-CANARY" not in block["text"]

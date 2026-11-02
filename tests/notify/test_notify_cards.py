@@ -1725,9 +1725,8 @@ def test_failed_thread_keeps_body_button(led, tmp_path):
     assert "thread_body" not in spec["parts"]
 
 
-def test_created_thread_update_carries_body_not_button(led, tmp_path):
-    """A card whose thread exists renders the body as thread_body —
-    the update delivers it into the thread instead of minting 📄."""
+def test_created_thread_update_carries_body_and_detail_button(led, tmp_path):
+    """The thread carries body parts while the private body view stays available."""
     render = _deliverable(led, tmp_path)
     _begin(led, render)
     _receipt(led, render, "0" * 15 + "1", message_id="m-9")
@@ -1749,7 +1748,7 @@ def test_created_thread_update_carries_body_not_button(led, tmp_path):
             if p["kind"] == "body_part"]
     ids = {b["id"] for row in spec["parts"]["action_rows"]
            for b in row}
-    assert "body" not in ids
+    assert "body" in ids
 
 
 def test_gc_removes_old_cmd_results(led, tmp_path):

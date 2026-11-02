@@ -54,6 +54,14 @@ def test_history_has_one_card_part_only_and_link_without_source_actions(led, mon
     assert _dispatch(led, event, cfg)["cards"] == 1
     rendered = spec(led)
     assert rendered["kind"] == "patient_history"
+    parts = rendered["parts"]
+    assert parts["containers"][1]["rule"] is True
+    assert notify_render.display_text(parts).count(notify_render.SECTION_RULE) == 1
+    from adapters.discord.cards import _zones
+    assert len(_zones(rendered, str)[0]) == 2
+    from adapters.slack.presentation import render_parts
+    assert [block["type"] for block in render_parts(parts, card_kind="patient_history")][:3] == [
+        "header", "divider", "section"]
     assert [part["kind"] for part in rendered["parts"]["manifest"]] == ["card"]
     assert [[b["id"] for b in row] for row in rendered["parts"]["action_rows"]] == [["link"]]
     assert all(k not in rendered["parts"] for k in ("thread_body_parts", "thread_name", "post_source_id", "source_thread"))

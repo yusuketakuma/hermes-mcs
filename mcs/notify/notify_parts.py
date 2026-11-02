@@ -10,7 +10,7 @@ from functools import partial
 
 from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
-from notify_render import card_body_text, preview_header, notification_preview, presenter
+from notify_render import card_body_text, own_post, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
                           scope_matches, stored_scope, _body_witness_proofs,
                           _attachment_identity_witness_proofs)
@@ -253,7 +253,7 @@ def _thread_plan_ids(db, card, shown, waiting=frozenset()) -> list:
     this card. The face opens on the last page, so an intent spanning
     several pages would otherwise never post its earlier bodies (the
     in-thread card has no 📄 button to reach them)."""
-    if card["kind"] != "thread" or ((card["layout"] if "layout" in card.keys() else 1) or 1) >= 4:
+    if card["kind"] != "thread" or own_post(card) is not None:
         # layout 4: the root card carries its root post, each reply its own card
         return list(shown)
     # Previously delivered named posts must also receive late actor names
@@ -864,6 +864,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and previous["ui_revision"] == spec["ui_revision"]
                     and scope_matches(previous["delivery"], stored_scope(card))
                     and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
+                    and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
                     and same_v4_header
                     and prior_visible == visible_providers
                     and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
@@ -875,6 +876,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                "action_rows": parts["action_rows"]}
     if "preview_text" in parts:
         visible["preview_text"] = parts["preview_text"]
+    if "processing_display_version" in parts:
+        visible["processing_display_version"] = parts["processing_display_version"]
+    if "slack_thread_policy" in parts:
+        visible["slack_thread_policy"] = parts["slack_thread_policy"]
     card_payload = canonical(visible)
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(card_payload).hexdigest(),
@@ -895,15 +900,30 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     posts = prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
     cleanup = []
+    attachment_card = card
+    inherited_attachments = False
+    if card["transport"] == "slack" and spec["op"] in ("create", "update") and "|reply:" in card["card_key"]:
+        # Reuse the canonical parent's sealed receipts, never its body plan.
+        # The native thread and scope must still be the ones this reply names.
+        from notify_cards import reply_thread_target
+        parent = reply_thread_target(db, card)
+        if parent is None or parent["thread_id"] != card["thread_id"]:
+            budget_hold = "attachment_upload_identity_unverified"
+        else:
+            attachment_card = parent
+            inherited_attachments = True
     verified_body, verified_attachments, attachment_identities = (
-        _same_thread_delivered_parts(db, card) if update else ({}, {}, {}))
+        _same_thread_delivered_parts(db, attachment_card)
+        if update or inherited_attachments else ({}, {}, {}))
+    if inherited_attachments:
+        verified_body = _same_thread_delivered_parts(db, card)[0] if update else {}
     present = presenter(card["transport"])
     split_chunks = (partial(split_body_chunks,
                            wire_limit=present.THREAD_PART_WIRE_LIMIT,
                            wire_size=present.thread_part_wire_size)
                     if hasattr(present, "THREAD_PART_WIRE_LIMIT") else split_body_chunks)
     editable = present.EDITABLE
-    # Slack posts the reply with reply_broadcast; Discord adds a channel notice
+    # Discord may add a channel notice for a new reply.
     announce_thread = card["transport"] in ANNOUNCE_TRANSPORTS and card["kind"] == "thread"
     announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]),
                                body_only=True)
@@ -964,7 +984,19 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     cleanup_keys = {key for key, _text in cleanup}
     parts["thread_body_parts"] = [c for _k, c in keyed]
     prior, prior_attachment_ids, prior_remotes, prior_file_attachment_ids, uncertain_attachments, receipt_counts = (
-        _prior_remote_ids(db, card) if update else ({}, set(), {}, set(), set(), {}))
+        _prior_remote_ids(db, attachment_card)
+        if update or inherited_attachments else ({}, set(), {}, set(), set(), {}))
+    if inherited_attachments:
+        # A still-live parent plan may send later. Its pending/held parts
+        # cannot be treated as absence of a previous upload.
+        for pending in db.execute(
+                "SELECT p.part_id,p.attachment_id FROM notification_render_parts p "
+                "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+                "WHERE r.card_id=? AND p.kind='attachment_part' "
+                "AND r.state IN ('queued','held','sending','unknown')",
+                (attachment_card["card_id"],)):
+            uncertain_attachments.add(("part", pending["part_id"]))
+            uncertain_attachments.add(("attachment", pending["attachment_id"]))
     same = _prior_body_sha(db, card) if update and not editable else {}
     for i, (key, chunk) in enumerate(keyed):
         entry = {"part_id": f"body:{i + 1:04d}",
@@ -993,14 +1025,51 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                                       and not entry.get("prior_remote_id"))
         manifest.append(entry)
         idx += 1
+    parent_history = (prior, prior_attachment_ids, prior_remotes, prior_file_attachment_ids,
+                      uncertain_attachments, receipt_counts, verified_attachments, attachment_identities)
+    own_history = None
+    parent_attachment_ids = set()
+    if inherited_attachments:
+        parent_attachment_ids = prior_attachment_ids | {
+            value for kind, value in uncertain_attachments if kind == "attachment"}
+        _, own_verified, own_identities = _same_thread_delivered_parts(db, card)
+        own_history = (*_prior_remote_ids(db, card), own_verified, own_identities)
     captions = _attachment_captions(db, card, attachments)
     for a in attachments:
+        inherited_part = inherited_attachments and (
+            a["attachment_id"] in parent_attachment_ids
+            or f"attach:{a['attachment_id']:04d}" in parent_history[0]
+            or ("part", f"attach:{a['attachment_id']:04d}") in parent_history[4])
+        if inherited_attachments:
+            (prior, prior_attachment_ids, prior_remotes, prior_file_attachment_ids,
+             uncertain_attachments, receipt_counts, verified_attachments, attachment_identities) = (
+                parent_history if inherited_part else own_history)
         entry = {"part_id": f"attach:{a['attachment_id']:04d}",
                  "kind": "attachment_part", "index": idx, **a}
         if captions.get(a["attachment_id"]):
             entry["caption"] = captions[a["attachment_id"]]
         rid, sha = prior.get(entry["part_id"], (None, None))
-        if card["transport"] == "slack" and update and not a.get("unavailable"):
+        if inherited_part:
+            own_prior, own_ids, own_remotes, _, own_uncertain, own_counts, _, own_proofs = own_history
+            own_rid, own_sha = own_prior.get(entry["part_id"], (None, None))
+            child_proofs = own_proofs.get(own_rid, [])
+            expected_child = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
+            if (("part", entry["part_id"]) in own_uncertain
+                    or ("attachment", a["attachment_id"]) in own_uncertain):
+                budget_hold = budget_hold or "attachment_upload_identity_unverified"
+            elif own_rid or a["attachment_id"] in own_ids:
+                # Parent proof cannot erase a conflicting or unverified child
+                # receipt, including a second file with identical bytes.
+                if (own_rid != rid or own_sha != sha or not child_proofs
+                        or len(child_proofs) != own_counts.get(own_rid)
+                        or own_remotes.get((entry["part_id"], own_sha)) != {rid}
+                        or any(proof is None or proof[:4] != expected_child
+                               or proof[5] != "file" for proof in child_proofs)):
+                    budget_hold = budget_hold or "attachment_upload_identity_unverified"
+        if inherited_part and a.get("unavailable") and (
+                rid or ("attachment", a["attachment_id"]) in uncertain_attachments):
+            budget_hold = budget_hold or "attachment_upload_identity_unverified"
+        if card["transport"] == "slack" and (update or inherited_attachments) and not a.get("unavailable"):
             if (("part", entry["part_id"]) in uncertain_attachments
                     or ("attachment", a["attachment_id"]) in uncertain_attachments):
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
@@ -1048,8 +1117,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
             # the same bytes are already in the thread — reuse, never
             # upload a second copy on every update render
             entry["prior_remote_id"] = rid
+            if inherited_part:
+                entry["prior_owner_message_id"] = attachment_card["message_id"]
             proven = verified_attachments.get(entry["part_id"])
-            if (proven and proven[0] == rid and proven[1] == sha
+            if (update and not inherited_part and proven and proven[0] == rid and proven[1] == sha
                     and entry.get("caption") and entry["caption"] != proven[2]):
                 entry["edit_only"] = True
         manifest.append(entry)

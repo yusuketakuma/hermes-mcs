@@ -26,10 +26,11 @@
 <text x="343" y="244" font-size="14" fill="#66716f">10:02</text>
 <text x="240" y="283" font-size="17" fill="#66716f">↳ 元の通知スレッドへの追加投稿</text>
 <text x="240" y="326" font-size="23" fill="#202124" font-weight="bold">🚨 緊急度高・再確認候補</text>
-<text x="240" y="379.8" font-size="20" fill="#202124">山田 花子（あおぞら） · 患者本人</text>
-<text x="240" y="428.8" font-size="20" fill="#202124">引用: 本人は息苦しいと話しています。</text>
-<text x="240" y="477.8" font-size="20" fill="#202124">佐藤さん（あおぞら） · 投稿 10-01 09:40 · 判定 10-01 10:00</text>
-<text x="240" y="526.8" font-size="20" fill="#202124">要約処理待ち</text>
-<text x="240" y="575.8" font-size="17" fill="#66716f">原本確認: MCSで開く https://www.medical-care.net/projects/medical/1 · 投稿</text>
-<text x="240" y="603.0" font-size="17" fill="#66716f"> #701</text>
+<path d="M240 367.8 L1000 367.8" stroke="#d5dcd7" fill="none"/>
+<text x="240" y="395.8" font-size="20" fill="#202124">山田 花子（あおぞら） · 患者本人</text>
+<text x="240" y="444.8" font-size="20" fill="#202124">引用: 本人は息苦しいと話しています。</text>
+<text x="240" y="493.8" font-size="20" fill="#202124">佐藤さん（あおぞら） · 投稿 10-01 09:40 · 判定 10-01 10:00</text>
+<text x="240" y="542.8" font-size="20" fill="#202124">要約処理待ち</text>
+<text x="240" y="591.8" font-size="17" fill="#66716f">原本確認: MCSで開く https://www.medical-care.net/projects/medical/1 · 投稿</text>
+<text x="240" y="619.0" font-size="17" fill="#66716f"> #701</text>
 </svg>

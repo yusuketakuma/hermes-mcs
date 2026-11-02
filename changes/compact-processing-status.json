@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "解析状態を短く表示",
+  "summary": "投稿の解析状況と使用したサービスを短く表示し、医療情報を確認しやすくします。スレッドがある場合も本文表示から処理の詳細を確認できます。",
+  "upgrade": "追加操作は不要です。更新した表示を利用するには既存の更新手順に従って反映してください。",
+  "details": [
+    "状態を確認できない場合は未取得として表示する。",
+    "以前の配送形式と新しい表示形式を区別し、LINE WORKSの更新時に異なる表示を再利用しない。"
+  ],
+  "refs": [
+    "mcs/notify/processing_route.py",
+    "mcs/notify/notify_cards.py",
+    "adapters/slack/presentation.py"
+  ]
+}

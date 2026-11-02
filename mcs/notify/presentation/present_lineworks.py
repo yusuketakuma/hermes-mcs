@@ -86,7 +86,7 @@ def urgent_room_head(parts) -> dict:
     and the 🚨 heading drops to the next line, so nothing repeats."""
     head, patient, *rest = parts["containers"]
     return {**parts, "containers": [{"type": "heading", "text": patient["text"]},
-                                    {"type": "text", "text": head["text"]}, *rest]}
+                                    {"type": "text", "rule": True, "text": head["text"]}, *rest]}
 
 POST_ACTIONS = False          # one text bubble: no per-post controls
 ACCENT_URGENT = False

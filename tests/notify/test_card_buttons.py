@@ -215,9 +215,9 @@ def test_withdrawn_at_migration_is_additive_and_idempotent(tmp_path):
 def test_button_rows_layout_and_link(led):
     spec = _delivered_card(led)
     rows = [[b["id"] for b in row] for row in spec["parts"]["action_rows"]]
-    # primary row first; card_thread on: 本文 lives in the thread; no
-    # task yet -> no タスク一覧; no extract_llm result -> no 誤りを報告
-    assert rows == [["ack", "assign", "request", "link"], ["summary", "search"]]
+    # The private body view remains available for processing details.
+    # No open tasks or extraction report are available in this fixture.
+    assert rows == [["ack", "assign", "request", "link"], ["body", "summary", "search"]]
     link = _button(spec, "link")
     assert link == {"id": "link", "ui": "link", "label": "MCSで開く",
                     "url": "https://www.medical-care.net/projects/medical/1"}
@@ -277,7 +277,7 @@ def test_patient_actions_fit_worst_case_without_global_shortcuts(
                 "search", "report", "prev", "next"}
     if kind == "signal":
         expected.add("dismiss")
-    if not in_thread_body:
+    if not in_thread_body or kind == "thread":
         expected.add("body")
     if transport == "lineworks":
         expected.add("more")

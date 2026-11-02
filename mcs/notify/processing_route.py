@@ -9,6 +9,10 @@ from mcs_queries import FACT_KINDS_SQL, current_fact_pred
 from mcs_util import payload_hash, strict_json
 
 PROVIDERS = ("anthropic", "openai", "jev", "local")
+PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+COMPACT_MARKS = {"done": "✓", "partial": "◐", "used": "●", "pending": "…", "failed": "!"}
+COMPACT_STATUS_LABELS = {"解析未完了・要確認": "! 要確認", "状況不明": "? 状況未取得",
+                         "解析中": "◐ 未完了", "結果を準備中": "◐ 未完了", "解析完了": "✓ 完了"}
 STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
 
@@ -231,7 +235,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
 def provider_text(states, visible=None, sequence=None):
     """Readable fallback for transports without inline provider images."""
     allowed = PROVIDERS if visible is None else visible if isinstance(visible, (list, tuple)) else ()
-    names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+    names = PROVIDER_NAMES
     ordered = list(sequence) if sequence else []
     remaining = [key for key in PROVIDERS if key in allowed and key not in ordered]
     lines = [f"{names[key]} {STATE_LABELS[states[key]]}" for key in ordered]
@@ -262,3 +266,21 @@ def _route(row, meta, content):
     contract = {key: meta.get(key) for key in ("backend", "model", "prompt")}
     return "cloud" if (backend in cloud_policy.PROVIDERS and contract["model"] == row["model"]
                        and cloud_inference.is_supported_cloud_contract(contract)) else None
+
+
+def compact_header(header):
+    """Render a validated processing header without claiming live execution."""
+    states = header["provider_states"]
+    visible = header["visible_providers"]
+    sequence = header.get("provider_sequence")
+    fallback = provider_text(states, visible, sequence)
+    prefix = header["text"][:-len(fallback)].removesuffix(" · ")
+    prefix = prefix.partition(" · 採用結果の処理順: ")[0]
+    for label, short in COMPACT_STATUS_LABELS.items():
+        if prefix == label or prefix.endswith(" · " + label):
+            prefix = prefix[:-len(label)] + short
+            break
+    ordered = list(sequence or []) + [key for key in visible if key not in (sequence or [])]
+    providers = "  ".join(f"{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}"
+                          for key in ordered if states[key] in COMPACT_MARKS)
+    return prefix + (" · " + providers if providers else "")
