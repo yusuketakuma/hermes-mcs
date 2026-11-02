@@ -107,11 +107,16 @@ def _provider_config_active(path):
                 current = os.stat(data, follow_symlinks=False)
                 if identity(before) != identity(after) or identity(after) != identity(current):
                     # Runtime files also change directory times; never rebaseline ownership or replacement.
-                    if (attempt == 0 and not present
-                            and identity(before)[:4] == identity(after)[:4] == identity(current)[:4]):
+                    if identity(before)[:4] != identity(after)[:4] \
+                            or identity(after)[:4] != identity(current)[:4]:
+                        raise ValueError("provider_settings_changed")
+                    if attempt == 0:
                         retry_identity = identity(before)[:4]
                         continue
-                    raise ValueError("provider_settings_changed")
+                    # device/inode/mode/owner stayed equal through the whole
+                    # scan on one pinned fd: churn elsewhere in data/ moved
+                    # only the directory's times, so the result is consistent.
+                    return present
                 return present
             finally:
                 os.close(fd)

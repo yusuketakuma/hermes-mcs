@@ -177,6 +177,58 @@ def test_root_link_swap_during_editor_lock_does_not_create_lock_in_new_target(tm
     assert not (second / "data" / ".provider-settings-pending.json").exists()
 
 
+def _churn_during_authority_read(settings_module, data, name):
+    read_file = settings_module._read_file
+    churned = []
+
+    def churn(parent, item, **kwargs):
+        result = read_file(parent, item, **kwargs)
+        if item == ".provider-settings-authority.json" and not churned:
+            churned.append(True)
+            (data / name).write_bytes(b"synthetic")
+        return result
+
+    return churn, churned
+
+
+def test_runtime_churn_in_data_dir_does_not_invalidate_read_or_probe(tmp_path, monkeypatch):
+    """Runtime files churn data/'s directory times constantly; only the
+    provider namespace may invalidate a snapshot."""
+    tmp_path.chmod(0o700)
+    common, data, _ = tree(tmp_path, split=True)
+    churn, churned = _churn_during_authority_read(settings, data, "synthetic-runtime-journal")
+    monkeypatch.setattr(settings, "_read_file", churn)
+    state = settings.read(tmp_path, model_owners=OWNERS)
+    assert state["mode"] == "split" and state["common"] == common
+    assert churned
+    churn, churned = _churn_during_authority_read(settings, data, "synthetic-runtime-spool")
+    monkeypatch.setattr(settings, "_read_file", churn)
+    assert settings.probe(tmp_path)["state"] == "requires_checked_read"
+    assert churned
+
+
+def test_provider_namespace_change_during_read_still_fails_closed(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    tree(tmp_path, split=True)
+    data = tmp_path / "data"
+    churn, churned = _churn_during_authority_read(settings, data, ".provider-settings-backup-synthetic")
+    monkeypatch.setattr(settings, "_read_file", churn)
+    with pytest.raises(ValueError, match="provider_settings_changed"):
+        settings.read(tmp_path, model_owners=OWNERS)
+    assert churned
+
+
+def test_provider_namespace_change_during_probe_still_fails_closed(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    tree(tmp_path, split=True)
+    data = tmp_path / "data"
+    churn, churned = _churn_during_authority_read(settings, data, ".provider-settings-stage-synthetic")
+    monkeypatch.setattr(settings, "_read_file", churn)
+    with pytest.raises(ValueError, match="provider_settings_changed"):
+        settings.probe(tmp_path)
+    assert churned
+
+
 def test_root_link_rejects_dangling_and_untrusted_target(tmp_path):
     tmp_path.chmod(0o700)
     target = tmp_path / "target"
@@ -1157,7 +1209,7 @@ def test_verified_common_fails_closed_for_nonprovider_failure(tmp_path, failure)
         settings.read_with_verified_common(tmp_path, model_owners=OWNERS)
 
 
-@pytest.mark.parametrize('target', ['common', 'authority', 'pending', 'pending_transient', 'provider'])
+@pytest.mark.parametrize('target', ['common', 'authority', 'pending', 'provider'])
 def test_verified_common_rejects_concurrent_change(tmp_path, monkeypatch, target):
     common, data, directory = tree(tmp_path, split=True)
     private_json(directory / 'openai.json', {'unexpected': 'synthetic'})
@@ -1174,11 +1226,8 @@ def test_verified_common_rejects_concurrent_change(tmp_path, monkeypatch, target
                 private_json(tmp_path / 'config.json', common)
             elif target == 'authority':
                 private_json(data / '.provider-settings-authority.json', {})
-            elif target in ('pending', 'pending_transient'):
-                pending = data / '.provider-settings-pending.json'
-                private_json(pending, {})
-                if target == 'pending_transient':
-                    pending.unlink()
+            elif target == 'pending':
+                private_json(data / '.provider-settings-pending.json', {})
             else:
                 private_json(directory / 'openai.json', {'other': 'synthetic'})
         return result
@@ -1187,6 +1236,29 @@ def test_verified_common_rejects_concurrent_change(tmp_path, monkeypatch, target
     with pytest.raises((ValueError, OSError)):
         settings.read_with_verified_common(tmp_path, model_owners=OWNERS)
     assert changed
+
+
+def test_verified_common_tolerates_transient_pending_without_trace(tmp_path, monkeypatch):
+    """A pending marker that appears and disappears inside the read leaves the
+    verified file set consistent; only a trace it leaves may hold the read."""
+    common, data, directory = tree(tmp_path, split=True)
+    private_json(directory / 'openai.json', {'unexpected': 'synthetic'})
+    original = settings._read_file
+    changed = False
+
+    def read_then_change(parent, name, **kwargs):
+        nonlocal changed
+        result = original(parent, name, **kwargs)
+        if name == 'openai.json' and not changed:
+            changed = True
+            pending = data / '.provider-settings-pending.json'
+            private_json(pending, {})
+            pending.unlink()
+        return result
+
+    monkeypatch.setattr(settings, '_read_file', read_then_change)
+    state = settings.read_with_verified_common(tmp_path, model_owners=OWNERS)
+    assert state['mode'] == 'provider_unavailable' and changed
 
 
 @pytest.mark.parametrize('allow_unavailable', [False, True])
@@ -1259,8 +1331,10 @@ def test_legacy_config_retries_unrelated_atomic_data_update(
 
 
 @pytest.mark.parametrize('allow_unavailable', [False, True])
-def test_legacy_config_stops_after_repeated_data_changes(tmp_path, monkeypatch, allow_unavailable):
-    _, data, _ = tree(tmp_path)
+def test_legacy_config_tolerates_repeated_unrelated_data_changes(tmp_path, monkeypatch, allow_unavailable):
+    """Unrelated data/ entries move the directory's times without changing
+    the provider decision; sustained churn must not make config unreadable."""
+    common, data, _ = tree(tmp_path)
     scans = []
 
     def scan_then_update(fd):
@@ -1271,10 +1345,9 @@ def test_legacy_config_stops_after_repeated_data_changes(tmp_path, monkeypatch, 
         return False
 
     monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_update)
-    with pytest.raises(mcs_util.ProviderSettingsUnreadable) as error:
-        mcs_util._load_config(str(tmp_path / 'config.json'), allow_provider_unavailable=allow_unavailable)
-    assert str(error.value.__cause__) == 'provider_settings_changed'
-    assert len(scans) == 2
+    assert mcs_util._load_config(str(tmp_path / 'config.json'),
+                                allow_provider_unavailable=allow_unavailable) == common
+    assert len(scans) >= 2
 
 
 @pytest.mark.parametrize('scan_number', [1, 2])
