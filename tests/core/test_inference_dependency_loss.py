@@ -7,6 +7,8 @@ import sqlite3
 import pytest
 
 import cloud_policy
+import cloud_inference
+import cloud_client
 import inference_dependency_loss as loss
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import patient_context_artifacts as context_artifacts
@@ -623,7 +625,9 @@ def _context_receipt(store, source, repair_input_key, unit_key):
     reservation = cloud_policy.usage_reserver(store, {'cloud_llm': {'mode': 'on', 'project_ids': [pid]}},
         route='patient_context', project_id=pid, message_id=mid, unit_key=unit_key,
         owner={'repair_input_key': repair_input_key, 'unit_key': unit_key})(
-            {'model': cloud_policy.MODEL, 'max_tokens': 100}, 2)
+            {'model': cloud_policy.MODEL, 'max_tokens': 100,
+             'system': cloud_client.SYSTEM,
+             'messages': [{'role': 'user', 'content': 'synthetic unit ' + unit_key}]}, 2)
     cloud_policy.record_result(store, reservation, {'model': cloud_policy.MODEL, 'request_fp': reservation['request_fp'],
         'usage': {'input_tokens': 10, 'output_tokens': 2}, 'http_class': 'http_200',
         'request_id': 'synthetic_receipt', 'error_kind': None})
@@ -638,7 +642,8 @@ def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key
     source_key = source.get('source_key', mid)
     binding = loss.source_binding(store.db, pid, mid,
         **({'source_key': source_key} if type(source_key) is str else {}))
-    provider = {'backend': 'anthropic', 'model': cloud_policy.MODEL}
+    provider = cloud_inference._cloud_contract(selection={
+        'provider': 'anthropic', 'model': cloud_policy.MODEL, 'effort': 'low'})
     contract = {'model': 'synthetic-local', 'provider': provider}
     origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
         'source_sig': source_sig or 'a' * 64, 'source_binding': binding, 'contract': contract,
@@ -1142,7 +1147,8 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
                   'policy':semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
-    contract = {'model':'synthetic-local', 'provider':{'backend':'anthropic','model':cloud_policy.MODEL}}
+    contract = {'model':'synthetic-local', 'provider':cloud_inference._cloud_contract(selection={
+        'provider':'anthropic', 'model':cloud_policy.MODEL, 'effort':'low'})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
                               source_sig=plan.source_signature(source))

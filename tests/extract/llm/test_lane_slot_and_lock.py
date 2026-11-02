@@ -549,6 +549,7 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",

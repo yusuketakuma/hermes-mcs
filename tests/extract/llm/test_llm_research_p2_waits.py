@@ -51,6 +51,7 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "_background_semantic",

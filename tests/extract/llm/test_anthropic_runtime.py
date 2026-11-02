@@ -11,6 +11,7 @@ import pytest
 
 from anthropic_client import AnthropicClient
 import cloud_policy
+import cloud_client
 from cloud_policy import record_disposition_tx as real_record_disposition_tx
 from cloud_policy import record_result as real_record_result
 from cloud_policy import usage_reserver as real_usage_reserver
@@ -1145,8 +1146,9 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     unavailable[0] = False
     with pytest.raises(worker.CloudFallback):
         first("synthetic", deadline=deadline, max_tokens=100)
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_client.CloudNotSent) as blocked:
         provider()("synthetic", deadline=deadline, max_tokens=100)
+    assert (blocked.value.kind, blocked.value.detail) == ("budget_exceeded", "cloud_unit_unresolved")
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
 
 
@@ -1408,7 +1410,7 @@ def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkey
         return any(json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION
                    for a in led.artifacts(worker.KIND))
     @contextmanager
-    def lock(enabled, wait_s=60):
+    def lock(enabled, wait_s=60, *, deadline=None):
         # the result commit gets the lock; the later shadow audit does not
         yield not committed() or not enabled
     monkeypatch.setattr(worker, "_write_lock", lock)
@@ -1721,8 +1723,9 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     next_unit = cloud_inference._CloudProvider(led, cfg, route="reextract", project_id=1,
         message_id=2, unit_key="synthetic-next", deadline=deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.CloudFallback):
+    with pytest.raises(cloud_client.CloudNotSent) as denied:
         next_unit("different synthetic request", deadline=deadline, max_tokens=100)
+    assert (denied.value.kind, denied.value.detail) == ("budget_exceeded", "daily_cap")
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
     assert not led.db.in_transaction
 
