@@ -549,6 +549,41 @@ def _legacy(directory, name):
             os.close(child)
 
 
+def _rebind_source_device(directory, backup, state, name, source, info, record):
+    """Reverify a committed import after a device number changes across mounts."""
+    identity, offset = record.get("identity"), record.get("offset")
+    if (state["pending"] is not None or not isinstance(identity, list) or len(identity) != 2
+            or any(type(value) is not int for value in identity)
+            or identity[0] == info.st_dev or identity[1] != info.st_ino
+            or type(offset) is not int or not 0 <= offset <= info.st_size):
+        raise RunLogError("run_log_legacy_changed")
+
+    def snapshot(value):
+        return (*_identity(value), value.st_mode, value.st_uid, value.st_nlink,
+                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    with _file(backup, _stage_name(record.get("backup"))) as archived:
+        archived_info = os.fstat(archived)
+        if (archived_info.st_size != offset or _digest(archived, offset) != record.get("sha256")
+                or _digest(source, offset) != record.get("sha256")):
+            raise RunLogError("run_log_legacy_changed")
+        with _legacy(directory, name) as named, \
+                _file(backup, record["backup"]) as named_archive:
+            if (snapshot(_check(source, legacy=True)) != snapshot(info)
+                    or snapshot(_check(named, legacy=True)) != snapshot(info)
+                    or snapshot(_check(archived)) != snapshot(archived_info)
+                    or snapshot(_check(named_archive)) != snapshot(archived_info)):
+                raise RunLogError("run_log_legacy_changed")
+            state["sources"][name] = {**record, "identity": _identity(info)}
+            # Publish the committed identity canonically before old helpers can advance its mirror.
+            raw = _serialized(state)
+            if len(raw) > MAX_STATE:
+                raise RunLogError("run_log_state_limit")
+            _write_canonical(backup, raw)
+            _publish(directory, raw)
+    return state["sources"][name]
+
+
 def migrate(data_dir, names=None):
     """Import verified growing prefixes of allowlisted old logs; retain every original and backup."""
     names = LEGACY_NAMES if names is None else tuple(names)
@@ -569,6 +604,8 @@ def migrate(data_dir, names=None):
                 old = state["sources"].get(name)
                 offset = 0
                 if old is not None:
+                    if isinstance(old, dict) and old.get("identity") != _identity(info):
+                        old = _rebind_source_device(directory, backup, state, name, source, info, old)
                     if (not isinstance(old, dict) or old.get("identity") != _identity(info)
                             or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
                             or _digest(source, old["offset"]) != old.get("sha256")):
