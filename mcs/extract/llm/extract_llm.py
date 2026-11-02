@@ -3741,18 +3741,26 @@ def _quality_record_consistent(record, expected):
             and (state != "unresolved" or expected["state"] == "unresolved"))
 
 
-def _verify_completeness_claim(db, r, context, integrity, used_keys):
+def _verify_completeness_claim(db, r, context, content, integrity, used_keys):
     """Bind the final integrity completeness claim to the adopted leaves:
-    one terminal record per leaf key whose count and resolved/unresolved
+    one terminal record per adopted leaf whose count and resolved/unresolved
     claims reproduce from the persisted leaf content, plus the committed
-    leaf count. Run-time metadata alone cannot mint a resolved claim."""
+    leaf count. used_keys also carries superseded pending/started parents —
+    they are cleanup targets, not adopted leaves — and an unsplit document
+    commits no chunk checkpoints at all, so its only leaf is the artifact
+    itself. Run-time metadata alone cannot mint a resolved claim."""
     try:
         completeness = integrity.get("completeness")
         chunks_n = integrity.get("completeness_chunks")
-        if (not isinstance(completeness, dict) or type(chunks_n) is not int
-                or chunks_n != len(used_keys)
-                or set(completeness) != {str(key) for key in used_keys}):
-            return False
+        if not used_keys:
+            if (not isinstance(completeness, dict) or type(chunks_n) is not int
+                    or chunks_n != 1 or set(completeness) != {"0"}):
+                return False
+            document = _provider_strict_dict(content)
+            if document is None:
+                return False
+            expected = _hint_coverage(document, _rule_hints(r), r["body_text"])
+            return _quality_record_consistent(completeness["0"], expected)
         splits, saved = _saved_chunk_state(db, r, context, chunk_size=r["_chunk_size"])
         stack = list(reversed(list(enumerate(plan_chunks(r["body_text"], r["_chunk_size"])))))
         pieces, seen = {}, 0
@@ -3761,25 +3769,37 @@ def _verify_completeness_claim(db, r, context, integrity, used_keys):
             seen += 1
             if seen > _PROGRESS_MAX_NODES:
                 return False
-            if key in saved:
-                pieces[key] = piece
-            elif key in splits:
+            if key in splits:
                 parts = plan_chunks(piece, splits[key])
                 if len(parts) < 2 or "".join(parts) != piece:
                     return False
                 stack.extend((f"{key}:{index}", part)
                              for index, part in reversed(list(enumerate(parts))))
             else:
-                return False
+                pieces[key] = piece
+        adopted = []
         for key in used_keys:
             value = saved.get(key)
-            piece = pieces.get(key)
-            if value is None or piece is None or "_quality_status" in value:
+            if value is None or "_quality_status" in value:
+                # A pending/started checkpoint only ever reaches the commit
+                # after being superseded by a split — its leaf claim moved
+                # to the children, so the parent must be a layout parent.
+                if key not in splits:
+                    return False
+            elif key not in pieces:
                 return False
-            leaf = {k: v for k, v in value.items()
+            else:
+                adopted.append(key)
+        if (not isinstance(completeness, dict) or type(chunks_n) is not int
+                or chunks_n != len(adopted)
+                or set(completeness) != {str(key) for key in adopted}):
+            return False
+        for key in adopted:
+            leaf = {k: v for k, v in saved[key].items()
                     if k not in ("_quality_result", "_provider_leaf")}
             expected = _hint_coverage(
-                leaf, _rule_hints({"body_text": piece, "posted_at": r.get("posted_at")}), piece)
+                leaf, _rule_hints({"body_text": pieces[key], "posted_at": r.get("posted_at")}),
+                pieces[key])
             if not _quality_record_consistent(completeness.get(str(key)), expected):
                 return False
         return True
@@ -3971,7 +3991,8 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 r["_inline_extract_proof"] = inline
             if (not r.get("_kept_prior") and isinstance(integrity, dict)
                     and ("completeness" in integrity or "completeness_chunks" in integrity)
-                    and not _verify_completeness_claim(ledger.db, r, context, integrity, used_keys)):
+                    and not _verify_completeness_claim(
+                        ledger.db, r, context, content, integrity, used_keys)):
                 # The stored completeness claim must reproduce from the
                 # adopted leaves' content — run-time metadata alone cannot
                 # mint a resolved result over unresolved leaves.
