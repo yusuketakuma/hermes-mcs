@@ -215,3 +215,25 @@ def test_only_mcs_home_llama_log_is_imported_not_shared_hermes(data):
     run_log.migrate(data)
     assert (data / run_log.LOG).read_bytes() == source.read_bytes()
     assert (shared / "llamacpp.log").read_bytes() == b"shared log must stay untouched"
+
+
+def test_recorded_identity_survives_a_volume_remount(data):
+    """A remount changes st_dev only; inode+digest keep proving the same file."""
+    source = legacy(data)
+    run_log.migrate(data, ["run.log"])
+    canonical = data / run_log.BACKUPS / run_log.STATE
+    mirror = data / run_log.STATE
+    state = json.loads(canonical.read_bytes())
+    state["sources"]["run.log"]["identity"][0] += 1   # remount: new st_dev
+    raw = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    canonical.write_bytes(raw)
+    mirror.write_bytes(raw)
+    with source.open("ab") as tail:
+        tail.write(b"tail after reboot\n")
+    assert run_log.migrate(data, ["run.log"])["imported"] == ["run.log"]
+    assert (data / run_log.LOG).read_bytes() == b"synthetic old\ntail after reboot\n"
+    # a replaced file (new inode, same bytes) still fails closed
+    source.unlink()
+    legacy(data, raw=b"synthetic old\ntail after reboot\n")
+    with pytest.raises(run_log.RunLogError, match="legacy_changed"):
+        run_log.migrate(data, ["run.log"])

@@ -40,6 +40,22 @@ def _identity(info):
     return [info.st_dev, info.st_ino]
 
 
+def _same_identity(recorded, info):
+    """A recorded ``_identity`` still names the same file across a volume
+    remount: ``st_dev`` changes on remount while ``st_ino`` stays stable, so
+    a reboot must not read as tampering; the inode still catches a replaced
+    file and callers keep verifying the content digest."""
+    return (isinstance(recorded, list) and len(recorded) == 2
+            and recorded[1] == info.st_ino)
+
+
+def _same_recorded(left, right):
+    """Two recorded ``_identity`` values name the same file if their inodes
+    match: a remount between the recordings changes only ``st_dev``."""
+    return (isinstance(left, list) and isinstance(right, list)
+            and len(left) == 2 and len(right) == 2 and left[1] == right[1])
+
+
 def _check(fd, *, directory=False, legacy=False):
     info = os.fstat(fd)
     valid = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
@@ -234,7 +250,7 @@ def _record_current(directory, name, record):
     try:
         with _legacy(directory, name) as source:
             info = os.fstat(source)
-            return (record.get("identity") == _identity(info)
+            return (_same_identity(record.get("identity"), info)
                     and type(record.get("offset")) is int
                     and 0 <= record["offset"] <= info.st_size
                     and _digest(source, record["offset"]) == record.get("sha256"))
@@ -253,7 +269,7 @@ def _applied(directory, backup, pending):
             try:
                 with _file(backup, name) as archived:
                     info = os.fstat(archived)
-                    return (_identity(info) == pending["identity"]
+                    return (_same_identity(pending["identity"], info)
                             and info.st_size == pending["size"]
                             and _digest(archived, pending["size"]) == pending["sha256"])
             except FileNotFoundError:
@@ -267,7 +283,7 @@ def _applied(directory, backup, pending):
             return False
         with _file(directory, LOG) as target:
             info = os.fstat(target)
-            if (_identity(info) != pending["identity"]
+            if (not _same_identity(pending["identity"], info)
                     or info.st_size < offset + end - start):
                 return False
             try:
@@ -326,7 +342,7 @@ def _adopt(directory, backup, state):
             state["sources"][name] = record
         elif (type(record.get("offset")) is int
                 and type(current.get("offset")) is int
-                and record.get("identity") == current.get("identity")
+                and _same_recorded(record.get("identity"), current.get("identity"))
                 and record["offset"] > current["offset"]
                 and _record_current(directory, name, record)):
             # a verified foreign record proves an applied import this
@@ -384,13 +400,13 @@ def _recover(directory, backup, state):
             name = _stage_name(pending["archive"])
             try:
                 with _file(backup, name) as archived:
-                    if (_identity(os.fstat(archived)) != pending["identity"]
+                    if (not _same_identity(pending["identity"], os.fstat(archived))
                             or os.fstat(archived).st_size != pending["size"]
                             or _digest(archived, pending["size"]) != pending["sha256"]):
                         raise RunLogError("run_log_rotation_changed")
             except FileNotFoundError:
                 with _file(directory, LOG) as live:
-                    if (_identity(os.fstat(live)) != pending["identity"]
+                    if (not _same_identity(pending["identity"], os.fstat(live))
                             or os.fstat(live).st_size != pending["size"]
                             or _digest(live, pending["size"]) != pending["sha256"]):
                         raise RunLogError("run_log_rotation_changed")
@@ -425,7 +441,7 @@ def _recover(directory, backup, state):
                 raise RunLogError("run_log_pending_changed")
             with _file(directory, LOG) as target:
                 info = os.fstat(target)
-                if (_identity(info) != pending["identity"]
+                if (not _same_identity(pending["identity"], info)
                         or info.st_size < offset + end
                         or _digest(target, offset + end, offset) != pending["sha256"]):
                     raise RunLogError("run_log_pending_changed")
@@ -433,7 +449,7 @@ def _recover(directory, backup, state):
             with _file(backup, name) as source, \
                     _file(directory, LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as target:
                 if (os.fstat(source).st_size != end or _digest(source, end) != pending["sha256"]
-                        or _identity(os.fstat(target)) != pending["identity"]):
+                        or not _same_identity(pending["identity"], os.fstat(target))):
                     raise RunLogError("run_log_pending_changed")
                 size = os.fstat(target).st_size
                 if size < offset:
@@ -466,7 +482,7 @@ def _recover(directory, backup, state):
             current = state["sources"].get(pending["source"])
             next_source = pending["next_source"]
             # a folded helper may have imported further; never regress it
-            if (current is None or current.get("identity") != next_source.get("identity")
+            if (current is None or not _same_recorded(current.get("identity"), next_source.get("identity"))
                     or type(current.get("offset")) is not int
                     or type(next_source.get("offset")) is not int
                     or current["offset"] < next_source["offset"]):
@@ -569,7 +585,7 @@ def migrate(data_dir, names=None):
                 old = state["sources"].get(name)
                 offset = 0
                 if old is not None:
-                    if (not isinstance(old, dict) or old.get("identity") != _identity(info)
+                    if (not isinstance(old, dict) or not _same_identity(old.get("identity"), info)
                             or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
                             or _digest(source, old["offset"]) != old.get("sha256")):
                         raise RunLogError("run_log_legacy_changed")
