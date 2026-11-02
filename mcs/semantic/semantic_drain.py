@@ -1195,7 +1195,8 @@ def _prefiltered(ledger, mid) -> bool:
 
 def _partial_assessment(answers, scfg):
     """Validate and reduce previously answered proposition chunks to codes."""
-    if not isinstance(answers, dict) or set(answers) - set(jev.PROPOSITIONS):
+    if (not isinstance(answers, dict)
+            or set(answers) - set(jev.active_propositions(scfg))):
         raise ValueError("semantic_partial_assessment_invalid")
     out = {}
     for name, answer in answers.items():
@@ -1205,6 +1206,178 @@ def _partial_assessment(answers, scfg):
         out[name] = {"noul": value, "verdict": jev.verdict_for(
             value, scfg["match_threshold"], scfg["nomatch_threshold"])}
     return out
+
+
+
+def _verified_prefilter(ledger, pid, mid):
+    import extract_llm
+    import patient_context_refresh
+    from mcs_queries import current_extract_pred
+    try:
+        source = ledger.db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?',
+                                   (pid, mid)).fetchone()
+        raw = ledger.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm' AND message_id=? "
+                                "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
+                                (mid, pid)).fetchone()
+        meta = strict_json(raw['meta']) if raw is not None else None
+        content = strict_json(raw['content']) if raw is not None else None
+        current = (ledger.db.execute(
+            "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+            f"WHERE a.artifact_id=? AND m.project_id=? {current_extract_pred()}",
+            (raw['artifact_id'], pid)).fetchone() if raw is not None else None)
+        return bool(source is not None and isinstance(meta, dict) and isinstance(content, dict)
+                    and current is not None and is_current(meta)
+                    and not meta.get('invalidated') and meta.get('prefilter') == 'no_signal'
+                    and meta.get('hash') == source['content_hash']
+                    and patient_context_refresh._saved_cloud_contract(meta) is None
+                    and extract_llm._low_signal(source['body_text'], extract_llm._rule_hints(dict(source))))
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return False
+
+
+def _valid_primary_assessment(content, meta, model, mid, fp, policy, scfg, *, prefiltered=False):
+    try:
+        if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get('invalidated') or meta.get('stale') or meta.get('fact_id') is not None
+                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                or meta.get('schema') != SCHEMA_VERSION or model != jev.JEV_MODEL
+                or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid):
+            return False
+        verdicts = content.get('verdicts')
+        if _partial_assessment(verdicts, scfg) != verdicts:
+            return False
+        status = meta.get('technical_status')
+        if status != 'complete':
+            return (status in ('retry_wait', 'error', 'pending', 'skipped')
+                    and (not verdicts or (meta.get('registry') == jev.REGISTRY_VERSION
+                                          and meta.get('model') == jev.JEV_MODEL)))
+        if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
+            return False
+        return (set(verdicts) == set(jev.active_propositions(scfg))
+                or (verdicts == {} and prefiltered and meta.get('skipped') == 'prefilter_no_signal'
+                    and type(meta.get('jev_requests')) is int and meta['jev_requests'] == 0))
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return False
+
+
+
+def _primary_assessment_history(db, pid, mid, fp, policy):
+    assessment, previous = None, []
+    for stored in db.execute('SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+                             'AND message_id=? ORDER BY artifact_id DESC', (KIND_ASSESS, pid, mid)):
+        content, meta = strict_json(stored['content']), strict_json(stored['meta'])
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            raise ValueError('semantic_assessment_history_invalid')
+        if meta.get('fact_id') is not None:
+            if not _valid_detail_assessment(content, meta, mid):
+                raise ValueError('semantic_assessment_detail_invalid')
+            continue
+        if (type(meta.get('fingerprint')) is not str or not meta['fingerprint']
+                or type(meta.get('policy_fingerprint')) is not str or not meta['policy_fingerprint']):
+            raise ValueError('semantic_assessment_binding_invalid')
+        if meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy:
+            continue
+        if assessment is None:
+            assessment = {'content': content, 'meta': meta, 'model': stored['model']}
+        else:
+            previous.append((content, meta, stored['model']))
+    return assessment, previous
+
+
+def _valid_primary_history(content, meta, previous, mid, fp, policy, scfg):
+    verdicts = content.get('verdicts')
+    for old, old_meta, old_model in previous:
+        old_status = old_meta.get('technical_status')
+        if old_status not in ('complete', 'retry_wait', 'error', 'pending', 'skipped'):
+            return False
+        if meta.get('technical_status') != 'skipped' and old_status == 'complete':
+            continue
+        old_verdicts = old.get('verdicts')
+        if (not is_current(old_meta) or old_meta.get('invalidated') or old_meta.get('stale')
+                or old_meta.get('fingerprint') != fp or old_meta.get('policy_fingerprint') != policy
+                or old_meta.get('schema') != SCHEMA_VERSION or old_model != jev.JEV_MODEL
+                or (old_verdicts and (old_meta.get('registry') != jev.REGISTRY_VERSION
+                                      or old_meta.get('model') != jev.JEV_MODEL))
+                or type(old.get('target_message_id')) is not int or old['target_message_id'] != mid
+                or _partial_assessment(old_verdicts, scfg) != old_verdicts
+                or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
+            return False
+    return True
+
+
+def proposition_quality_report(ledger, project_id: int, scfg: dict) -> dict:
+    """Per-proposition noul/verdict distribution over current assessment rows.
+
+    For threshold/registry tuning, each message's newest row contributes
+    if it is COMPLETE and matches the ACTIVE proposition set; valid
+    no-signal rows count as prefiltered."""
+    active = jev.active_propositions(scfg)
+    latest, seen, superseded, prefiltered_count = {}, set(), 0, 0
+    policy = policy_fingerprint(scfg)
+    for stored in ledger.db.execute(
+            'SELECT message_id,content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+            'ORDER BY artifact_id DESC', (KIND_ASSESS, project_id)):
+        try:
+            content, meta = strict_json(stored['content']), strict_json(stored['meta'])
+        except (ValueError, TypeError, RecursionError, OverflowError):
+            content, meta = None, None
+        if isinstance(meta, dict) and meta.get('fact_id') is not None:
+            continue
+        mid = stored['message_id']
+        if type(mid) is not int:
+            continue
+        if mid in seen:
+            continue
+        seen.add(mid)
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            superseded += 1
+            continue
+        verdicts = content.get('verdicts')
+        row = ledger.db.execute('SELECT parent_id FROM messages WHERE project_id=? AND message_id=?',
+                                (project_id, mid)).fetchone()
+        try:
+            bundle = (semantic_store.thread_bundle(ledger.db, project_id, row['parent_id'] or mid, [mid])
+                      if row is not None else None)
+            fp = bundle['source_fingerprint'] if bundle is not None else None
+            prefiltered = (meta.get('skipped') == 'prefilter_no_signal'
+                           and _verified_prefilter(ledger, project_id, mid))
+            assessment, previous = (_primary_assessment_history(ledger.db, project_id, mid, fp, policy)
+                                    if fp is not None else (None, []))
+            valid = (assessment is not None and meta.get('technical_status') == 'complete'
+                     and assessment == {'content': content, 'meta': meta, 'model': stored['model']}
+                     and _valid_primary_assessment(content, meta, stored['model'], mid, fp, policy, scfg,
+                                                   prefiltered=prefiltered)
+                     and _valid_primary_history(content, meta, previous, mid, fp, policy, scfg))
+        except (ValueError, TypeError, KeyError, sqlite3.Error, RecursionError, OverflowError):
+            valid = False
+        if not valid:
+            superseded += 1
+            continue
+        if verdicts == {} and prefiltered:
+            prefiltered_count += 1
+            continue
+        latest[mid] = verdicts
+    props = {}
+    for pid, prop in active.items():
+        buckets, nouls = {"MATCH": 0, "NO_MATCH": 0, "UNDETERMINED": 0}, []
+        invalid = 0
+        for verdicts in latest.values():
+            entry = verdicts.get(pid)
+            verdict = entry.get('verdict') if isinstance(entry, dict) else None
+            noul = entry.get('noul') if isinstance(entry, dict) else None
+            if verdict not in buckets:
+                invalid += 1
+                continue
+            buckets[verdict] += 1
+            if type(noul) in (int, float) and math.isfinite(noul):
+                nouls.append(float(noul))
+        props[pid] = {"label_ja": prop.get("label_ja", pid),
+                      "verdicts": {**buckets, "invalid": invalid},
+                      "noul_mean": sum(nouls) / len(nouls) if nouls else None,
+                      "noul_min": min(nouls) if nouls else None,
+                      "noul_max": max(nouls) if nouls else None}
+    return {"project_id": project_id, "messages": len(latest),
+            "prefiltered": prefiltered_count, "superseded": superseded, "propositions": props}
 
 
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
@@ -1220,9 +1393,19 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                  "registry": jev.REGISTRY_VERSION,
                  "schema": SCHEMA_VERSION}
     answers = None
-    partial = {}
+    try:
+        old = prev["content"].get("verdicts", {}) if prev else {}
+        if _partial_assessment(old, scfg) != old:
+            raise ValueError("semantic_partial_assessment_invalid")
+    except (ValueError, TypeError, KeyError):
+        _why(diagnostics, "assess_partial_invalid")
+        return None, "hard"
+    partial = dict(old)
     req0 = jev_client.requests_made if jev_client else 0
-    if jev_client is not None and state is not None and _prefiltered(ledger, mid):
+    if jev_client is not None and state is not None and _verified_prefilter(ledger, pid, mid):
+        if prev and prev["content"].get("verdicts") != {}:
+            _why(diagnostics, "assess_partial_invalid")
+            return None, "hard"
         # the local prefilter already settled this body as carrying no clinical
         # signal (a lone greeting): asking twelve clinical propositions about it
         # spends a request for a known answer
@@ -1236,7 +1419,10 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
     if jev_client is not None and state is not None:
         qs = {k: jev.noul_question(p["instructions"], p["true"],
                                    p["false"])
-              for k, p in jev.PROPOSITIONS.items()}
+              for k, p in jev.active_propositions(scfg).items() if k not in old}
+        if not qs:
+            _why(diagnostics, "assess_partial_invalid")
+            return None, "hard"
         try:
             out = jev.evaluate_chunked(
                 jev_client, state, qs, deadline,
@@ -1249,12 +1435,10 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
             flag = _jev_fail_flag(e)
             try:
                 if hasattr(e, "partial_answers"):
-                    partial = _partial_assessment(e.partial_answers, scfg)
-                    old = prev["content"].get("verdicts", {}) if prev else {}
-                    if (_partial_assessment(old, scfg) != old
-                            or any(key in partial and partial[key] != value for key, value in old.items())):
+                    new = _partial_assessment(e.partial_answers, scfg)
+                    if set(new) - set(qs) or set(new) & set(old):
                         raise ValueError("semantic_partial_assessment_conflict")
-                    partial = {**old, **partial}
+                    partial = {**old, **new}
                     e.partial_verdicts = partial
             except (ValueError, TypeError):
                 e.partial_invalid = True
@@ -1288,6 +1472,16 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                                a["noul"], scfg["match_threshold"],
                                scfg["nomatch_threshold"])}
                        for k, a in answers.items()}
+    try:
+        if (set(target_verdicts) != set(qs) or set(target_verdicts) & set(old)
+                or _partial_assessment(target_verdicts, scfg) != target_verdicts):
+            raise ValueError("semantic_partial_assessment_conflict")
+        target_verdicts = {**old, **target_verdicts}
+        if set(target_verdicts) != set(jev.active_propositions(scfg)):
+            raise ValueError("semantic_partial_assessment_incomplete")
+    except (ValueError, TypeError):
+        _why(diagnostics, "assess_partial_invalid")
+        return None, "hard"
     ledger.artifact_add(
         KIND_ASSESS,
         # "detail" stays in the stored shape (medication detail
@@ -1559,7 +1753,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 KIND_ASSESS, json.dumps({"target_message_id": mid, "verdicts": partial}, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                 meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
-                      "schema": SCHEMA_VERSION, "technical_status": "skipped", "jev_skip_reason": reason})
+                      "schema": SCHEMA_VERSION, "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION,
+                      "technical_status": "skipped", "jev_skip_reason": reason})
 
     def activate_skip(reason):
         nonlocal jev_skip, jev_client
@@ -1573,7 +1768,19 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
-        prev = current_artifact(ledger.db, KIND_ASSESS, mid, fp, policy)
+        try:
+            prev, previous = _primary_assessment_history(ledger.db, pid, mid, fp, policy)
+            valid = (prev is None or (_valid_primary_assessment(
+                prev["content"], prev["meta"], prev["model"], mid, fp, policy, scfg,
+                prefiltered=(prev["meta"].get("skipped") == "prefilter_no_signal"
+                             and _verified_prefilter(ledger, pid, mid)))
+                and _valid_primary_history(prev["content"], prev["meta"], previous, mid, fp, policy, scfg)))
+        except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+            valid = False
+        if not valid:
+            _why(diagnostics, "assess_scope_invalid")
+            hard_fail = incomplete = True
+            break
         if prev and prev["meta"].get("technical_status") == "complete":
             verdicts[mid] = prev["content"].get("verdicts", {})
         elif jev_skip is not None:
@@ -2844,57 +3051,18 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
                           'backlog_reserved', 'service_unavailable', 'circuit_open')
                       or any(item['code'] != 'support_unevaluated' for item in findings)):
                     return 'held'
-        assessment = None
-        previous = []
-        for stored in db.execute('SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
-                                 'AND message_id=? ORDER BY artifact_id DESC', (KIND_ASSESS, pid, mid)):
-            meta = strict_json(stored['meta'])
-            if not isinstance(meta, dict):
-                return 'held'
-            content = strict_json(stored['content'])
-            if not isinstance(content, dict):
-                return 'held'
-            if meta.get('fact_id') is not None:
-                if not _valid_detail_assessment(content, meta, mid):
-                    return 'held'
-                continue
-            if assessment is None:
-                assessment = (content, meta, stored['model'])
-            elif meta.get('fingerprint') == fp and meta.get('policy_fingerprint') == policy:
-                previous.append((content, meta))
+        assessment, previous = _primary_assessment_history(db, pid, mid, fp, policy)
         if assessment is None:
             return 'held'
-        content, meta, model = assessment
-        verdicts = content.get('verdicts')
-        if (not is_current(meta) or meta.get('invalidated') or meta.get('fingerprint') != fp
-                or meta.get('policy_fingerprint') != policy or meta.get('schema') != SCHEMA_VERSION
-                or model != jev.JEV_MODEL or type(content.get('target_message_id')) is not int
-                or content.get('target_message_id') != mid
-                or _partial_assessment(verdicts, scfg) != verdicts):
+        content, meta, model = assessment['content'], assessment['meta'], assessment['model']
+        if (not _valid_primary_assessment(content, meta, model, mid, fp, policy, scfg,
+                                          prefiltered=_verified_prefilter(ledger, pid, mid))
+                or not _valid_primary_history(content, meta, previous, mid, fp, policy, scfg)):
             return 'held'
-        for old, old_meta in previous:
-            if (meta.get('technical_status') != 'skipped' and old_meta.get('technical_status')
-                    not in ('retry_wait', 'error', 'pending', 'skipped')):
-                continue
-            old_verdicts = old.get('verdicts')
-            if (not is_current(old_meta) or old_meta.get('invalidated')
-                    or old_meta.get('schema') != SCHEMA_VERSION
-                    or type(old.get('target_message_id')) is not int or old['target_message_id'] != mid
-                    or _partial_assessment(old_verdicts, scfg) != old_verdicts
-                    or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
-                return 'held'
         if meta.get('technical_status') == 'complete':
             if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
                 return 'held'
-            if set(verdicts) == set(jev.PROPOSITIONS):
-                return 'current'
-            if (verdicts == {} and meta.get('skipped') == 'prefilter_no_signal'
-                    and meta.get('jev_requests') == 0 and raw_meta.get('prefilter') == 'no_signal'
-                    and patient_context_refresh._saved_cloud_contract(raw_meta) is None
-                    and extract_llm._low_signal(source['body_text'], extract_llm._rule_hints(dict(source)))
-                    and _prefiltered(ledger, mid)):
-                return 'current'
-            return 'held'
+            return 'current'
         if (meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in
                 ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved', 'service_unavailable', 'circuit_open')):
             return 'held'

@@ -26,6 +26,7 @@ def _prefilter(db, mid):
 def test_a_prefiltered_post_is_not_assessed_by_jev(tmp_path):
     db = _seeded(tmp_path)
     try:
+        db.db.execute("UPDATE messages SET body_text='こんにちは' WHERE message_id IN (1, 2)")
         assert not semantic_drain._prefiltered(db, 1)
         _prefilter(db, 1)
         _prefilter(db, 2)

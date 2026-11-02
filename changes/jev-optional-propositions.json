@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "semantic.extra_propositions で任意Jev命題群を有効化可能に（皮膚・転倒・感染・摂食・睡眠・注入検知）",
+  "summary": "Jev命題の必須12件に加え、config.json の semantic.extra_propositions で皮膚・転倒・感染・摂食・睡眠・評価者への指示文に関する任意命題を追加できます。結果は未確認の参考情報として既存形式で記録されます。命題別の判定分布を集計する読取専用の診断関数も追加します。",
+  "upgrade": "既定は必須12命題のみで、既存の指紋を維持します。有効化する場合は config.json の semantic.extra_propositions に [\"E01\", ...] の形式でIDを列挙します。無効な値は semantic_extra_propositions_invalid として処理を停止します。命題の集合や内容が変わると、既存結果を保存したまま必須命題を含む再評価が必要になり、追加の照会が発生し得ます。再評価にも既存の送信条件と予算上限が適用されます。コードの変更により、canonical候補の承認指紋を確認する必要があります。",
+  "details": [
+    "semantic_jev.py に OPTIONAL_PROPOSITIONS（E01-E06）と active_propositions() を追加。必須 PROPOSITIONS は不変。",
+    "semantic_policy.py: extra_propositions を既知IDの重複なしリストとして検証。非空の命題集合と定義内容を policy_fingerprint に含め、同じ版・集合は入力順によらず同じ指紋とする。",
+    "semantic_drain.py: 評価は有効な命題集合と指紋に束縛する。proposition_quality_report は投稿ごとの最新評価の元データ・モデル・指紋を照合し、一致しない結果を集計から除く。正当なあいさつの評価省略は prefiltered として別に数え、命題の平均に含めない。",
+    "保存済み評価は最新の記録と元投稿・モデル・命題集合を再確認する。検証済みの部分回答を保ち、未回答の命題だけを追加照会する。あいさつの照会省略は、最新の抽出記録と現在の本文が条件を満たす場合に限る。",
+    "semantic_llm.py: _verdicts_brief のラベル解決が任意命題も表示。",
+    "E06（evaluator_instruction_mention）はプロンプト注入監視用: context を無視して target 本文の評価者向け指示だけを判定する。",
+    "推論エンジン v1.0・Jevモデル固定・日次上限・request_cap・fail-closed 契約は不変。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_policy.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_llm.py",
+    "tests/semantic/test_jev_extra_propositions.py"
+  ]
+}

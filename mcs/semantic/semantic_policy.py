@@ -69,7 +69,8 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
            "match_threshold": jev.MATCH_THRESHOLD,
            "nomatch_threshold": jev.NOMATCH_THRESHOLD,
            "delayed_notice_seconds": 900,
-           "project_ids": [], "until": None}
+           "project_ids": [], "until": None,
+           "extra_propositions": []}
     block = cfg.get("semantic", {})
     if not isinstance(block, dict):
         out["daily_request_budget"] = 0
@@ -163,6 +164,14 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
         except ValueError:
             errors.append("config: semantic_project_ids_invalid")
             out["project_ids"] = []
+    extra = block.get("extra_propositions", [])
+    if (not isinstance(extra, list)
+            or any(type(pid) is not str or pid not in jev.OPTIONAL_PROPOSITIONS
+                   for pid in extra)
+            or len(extra) != len(set(extra))):
+        errors.append("config: semantic_extra_propositions_invalid")
+    else:
+        out["extra_propositions"] = sorted(extra)
     if out["nomatch_threshold"] >= out["match_threshold"]:
         errors.append("config: semantic_threshold_order_invalid")
     if block.get("until") is not None:
@@ -205,6 +214,13 @@ def policy_fingerprint(scfg: dict) -> str:
     """Only interpretation settings invalidate cached analysis, not retry budgets."""
     policy = {key: scfg.get(key) for key in (
         "model", "match_threshold", "nomatch_threshold", "calibration_version")}
+    extra = scfg.get("extra_propositions", [])
+    if (not isinstance(extra, list) or any(type(pid) is not str
+            or pid not in jev.OPTIONAL_PROPOSITIONS for pid in extra)
+            or len(extra) != len(set(extra))):
+        raise ValueError("semantic_extra_propositions_invalid")
+    if extra:
+        policy["extra_propositions"] = {pid: jev.OPTIONAL_PROPOSITIONS[pid] for pid in sorted(extra)}
     # Canonical facts require their own coverage/summary audit and mandatory
     # rendering. Keep historical legacy hashes stable, but never reuse their
     # PASS receipts after changing the fact source.

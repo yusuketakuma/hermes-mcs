@@ -127,6 +127,27 @@ def test_repeated_same_contract_replay_preserves_exhausted_attempts_and_reports_
     assert report['remaining_stages']
 
 
+def test_opt_in_proposition_generation_preserves_receipts_and_fences_old_worker(store):
+    _save(store)
+    base = _cfg(loop_mode='off')
+    _replay(store, base)
+    old = dict(_job(store))
+    token = runtime.JobToken.from_row(_job(store))
+    for kind in ('semantic_usage', 'cloud_usage_reserve', 'notification_command_receipt'):
+        store.artifact_add(kind, '{"synthetic_receipt":true}', project_id=1,
+                           message_id=1, meta={'reserved': True})
+    protected = [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    cfg = _cfg(loop_mode='off', extra_propositions=['E01'])
+    assert runtime.execution_generation(semantic_policy.runtime_config(base)[0]) != \
+        runtime.execution_generation(semantic_policy.runtime_config(cfg)[0])
+    _replay(store, cfg)
+    new = _job(store)
+    assert json.loads(new['payload'])['generation'] != json.loads(old['payload'])['generation']
+    assert not runtime.job_matches(store, token)
+    assert not runtime.transition(store, token, 'done')
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == protected
+
+
 def test_enumeration_and_done_job_are_not_coverage_completion(store):
     _save(store)
     first = _replay(store)
