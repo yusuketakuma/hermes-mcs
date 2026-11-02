@@ -48,7 +48,7 @@ import initial_import_state
 import history_walk
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (decode_current_extractions, EXTRACTION_KINDS_SQL, JST, karte_summary_current, karte_summary_block,
-                         item_unverified, current_extract_pred, current_fact_pred)
+                         item_unverified, current_extract_pred, current_fact_pred, extraction_consumer_content)
 from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict, strict_json, payload_hash, load_config
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
@@ -1113,7 +1113,7 @@ def _clinical_artifact_refs(db, project_id, blobs, message_ids=None):
         WHERE m.project_id=? AND a.kind IN ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
         {current_extract_pred()}
         AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
-        {scope} ORDER BY a.artifact_id""", params) if row["content"] == blobs.get(row["message_id"], {}).get(row["kind"])}
+        {scope} ORDER BY a.artifact_id""", params) if extraction_consumer_content(row["content"]) == blobs.get(row["message_id"], {}).get(row["kind"])}
 
 
 

@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "解析済みの測定値が読み取れない問題を修正",
+  "summary": "内部の完了証跡を含む解析結果でも、患者の測定値とその根拠を読み取れるようにしました。保存した本文と表示用の本文を同じ方法で照合します。",
+  "upgrade": "既存の更新手順で収集・解析の常駐処理へ反映してください。保存データの書換えや再解析は不要です。推論エンジンv1.0・内部世代11と、根拠・現在性の検証条件は維持します。",
+  "details": [
+    "測定値と集約処理が使う本文の照合で、内部の完了証跡だけを除く共通処理を使います。測定値などの内容が異なる本文は引き続き拒否します。"
+  ],
+  "refs": [
+    "mcs/core/mcs_queries.py",
+    "mcs/patients/rollup.py",
+    "mcs/patients/measurement_sources.py",
+    "tests/patients/test_measurement_sources.py"
+  ]
+}

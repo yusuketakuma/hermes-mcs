@@ -51,6 +51,44 @@ def _lab(body, value):
             "subject": "patient", "status": "current"}
 
 
+
+def test_completion_seal_preserves_current_measurement_reference(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [_lab(body, "1.0")]}, "2026-10-01T09:00:00+09:00")
+        row = ledger.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind='extract_llm'").fetchone()
+        assert "__mcs_leaf_claims_v1" in json.loads(row["content"])
+        changes_before = ledger.db.total_changes
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        assert "__mcs_leaf_claims_v1" not in json.loads(blobs[1]["extract_llm"])
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        assert refs[(1, "extract_llm")] == row["artifact_id"]
+        messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
+        result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs, cfg={})
+        assert result["coverage"]["unprocessed"] == 0
+        [item] = measurement_timeline.project_measurements(result["records"], source_complete=False)["items"]
+        assert item["value"] == "1.0" and item["source_ref"]["artifact_id"] == row["artifact_id"]
+        assert ledger.db.total_changes == changes_before
+        assert ledger.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                                 (row["artifact_id"],)).fetchone()[0] == row["content"]
+
+
+def test_changed_clinical_blob_cannot_reuse_a_current_measurement_reference(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [_lab(body, "1.0")]}, "2026-10-01T09:00:00+09:00")
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        assert (1, "extract_llm") in refs
+        document = json.loads(blobs[1]["extract_llm"])
+        document["labs"][0]["value"] = "9.0"
+        blobs[1]["extract_llm"] = json.dumps(document, ensure_ascii=False)
+        assert rollup._clinical_artifact_refs(ledger.db, 1, blobs) == {}
+        messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
+        result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs, cfg={})
+        assert result["records"] == [] and result["coverage"]["unprocessed"] == 1
+
+
 def test_lab_source_context_rejects_negation_or_uncertainty_outside_quote():
     quote = "2026-10-01の採血 Cr 1.0 mg/dL"
     for suffix in ("ではない。", "かもしれない。", "の可能性がある。", "か？"):

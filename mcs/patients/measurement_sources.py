@@ -12,7 +12,8 @@ import inference_dependency_loss
 import initial_import_state
 from measurement_timeline import ambiguous_patient_context
 from clinical_scope import FAMILY_PERSON, OTHER_PERSON, source_assertion_span, source_axes
-from mcs_queries import current_extract_pred, current_fact_pred, decode_current_extractions, item_unverified
+from mcs_queries import (current_extract_pred, current_fact_pred, decode_current_extractions,
+                         extraction_consumer_content, item_unverified)
 from mcs_util import locate_quote_span, loads_dict
 
 _MAX_MESSAGES = 200
@@ -635,7 +636,7 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
             counts["canonical_unverified"] += 1
             continue
         row = selected.get(ref)
-        if not has_fact or row is None or row["message_id"] != mid or row["kind"] != kind or row["content"] != blobs.get(kind):
+        if not has_fact or row is None or row["message_id"] != mid or row["kind"] != kind or extraction_consumer_content(row["content"]) != blobs.get(kind):
             counts["unprocessed"] += 1
             continue
         if isinstance(doc.get("labs"), list) and len(doc["labs"]) > _MAX_PER_SOURCE:

@@ -988,6 +988,16 @@ def extraction_input_signature(content, meta, model="") -> str:
                          {key: value for key, value in metadata.items() if key not in volatile}])
 
 
+def extraction_consumer_content(content):
+    """Hide internal extraction proofs while retaining the stored clinical content."""
+    document = loads_dict(content)
+    if document is not None and (_INTERNAL_PROOF in document or _INTERNAL_LEAF_CLAIMS in document):
+        document.pop(_INTERNAL_PROOF, None)
+        document.pop(_INTERNAL_LEAF_CLAIMS, None)
+        return json.dumps(document, ensure_ascii=False)
+    return content
+
+
 def current_extraction_blobs(db, project_id: int) -> dict:
     """Read all current per-message extraction blobs for one project on borrowed db.
 
@@ -1012,12 +1022,7 @@ def current_extraction_blobs(db, project_id: int) -> dict:
             for kind, (artifact_id, content) in kinds.items():
                 if kind == 'extract_llm' and not selected_artifact_proof_valid(db, artifact_id):
                     continue
-                document = loads_dict(content)
-                if document is not None and (_INTERNAL_PROOF in document or _INTERNAL_LEAF_CLAIMS in document):
-                    document.pop(_INTERNAL_PROOF, None)
-                    document.pop(_INTERNAL_LEAF_CLAIMS, None)
-                    content = json.dumps(document, ensure_ascii=False)
-                arts.setdefault(mid, {})[kind] = content
+                arts.setdefault(mid, {})[kind] = extraction_consumer_content(content)
         return arts
     finally:
         db.execute('RELEASE current_extraction_blobs')
