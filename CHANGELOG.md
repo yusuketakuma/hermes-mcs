@@ -6,6 +6,472 @@
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-11-02
+
+**保存待ちの解析結果を保全し、通知と更新の安定性を改善**
+
+保存を待つ解析結果は再推論せずに引き継ぎ、原文と完了証跡を確かめて採用します。患者背景と測定値の根拠を保ち、クラウドの課金記録・通知・監視・更新復旧の不整合を修正しました。推論エンジンはv1.0のまま、モデル・予算・人承認の条件を維持します。新しい添付ファイル解析は含みません。
+
+| 変更 | 以前（1.1.0） | 今回（1.1.1） | 利用者への効果 |
+|---|---|---|---|
+| 保存待ちの解析 | 完了した結果の再開や追加受付に不整合がある | 保存待ちを先に処理し、原文と所有権を再確認 | 保存待ちだけを理由に同じ有料推論を繰り返すことを防ぐ |
+| 測定値の参照 | 内部証跡を持つ正常結果が読取り対象から外れる場合がある | 利用側の本文投影を統一し、値の改変は拒否 | 正常な根拠付き測定値を参照できる |
+| 保守と復旧 | 共通処理と制御ファイルの扱いが分散 | 共通推論の配置、ロック、復元中の停止条件を整理 | 読込み先や復旧の条件を追いやすくなる |
+
+![推論、根拠の確認、保存待ちの再開から患者背景と通知へつなぐ説明図](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/releases/v1.1.1/inference-flow.png)
+
+説明図は実画面や速度の測定結果ではありません。保存待ちの間も、通知には未完了・保留を区別して表示します。
+
+### 新機能
+
+- **通知部品の未完了集計に、配送計画の新旧による内訳 by_plan を追加**
+  稼働状態(health.json)の通知部品の未完了集計に by_plan を追加し、未完了部品を2つに区別します。current は同じカードにより新しい配送成功の計画記録がない計画の未完了部品、superseded はその記録がある古い計画の未完了部品です。unknown を未送達と断定せず、どちらも未完了部品として総数に含めます。未完了の合計件数・警告条件・再送・承認条件は変わりません。
+
+### 改善
+
+- **共通推論の内部ファイルを責務ごとに整理**
+  共通推論の内部ファイルをprovider固有の通信・共通通信と再試行・共有枠と回路状態の3領域に整理します。7ファイルの本文と従来のflat import名を維持し、公開CLI・設定・保存形式・モデル・予算・品質検証の条件は変更しません。
+
+- **内部モジュールと共有APIを役割に合う名前へ整理**
+  公開処理・変換処理・抽出の固定参照情報・患者背景の投影を担う内部モジュール名を整理しました。クラウド実行と課金証跡の共有APIも、実体のあるモジュールから直接使う名前へ統一しました。
+
+- **解析再開時の重複した分割と読取りを削減**
+  ローカル・クラウド解析の再開時に、同じ本文の分割計画と保存内容の検証を繰り返す処理を減らしました。処理担当を確保してから最新の保存状態を読み取り、区間ごとの分割計画と同一内容のhash計算を再利用します。
+
+- **CIを2群で並列実行し、失敗時の診断を保存**
+  LinuxとmacOSの開発テストを、対象を減らさず同じジョブ内の2群で並列実行します。失敗時も各群のログとJUnitを保存し、原因を確認しやすくします。
+
+- **クラウド利用履歴の読込みを省メモリ化**
+  クラウドの利用履歴を一度に読み込まず、順番に集計するようにしました。会計記録のJSON解析も1回に集約し、履歴が増えたときのメモリ使用量と重複処理を抑えます。
+
+- **過去チャットの処理対象確認で重複する読取りを削減**
+  過去チャットをクラウドで処理できるか確認するとき、同じスレッドの投稿情報を二重に読み取る処理を整理しました。対象確認に使った同じ時点の情報で、処理対象を記録します。
+
+- **クラウド provider・契約の共有ownerを mcs/llm へ集約**
+  抽出・semantic・患者contextで重複していたクラウド provider と契約検証を、共通owner `mcs/llm/cloud_inference.py` へ集約しました。送信前ガード・予約・受領・結果不明・fallback・no-proxy/no-redirect・課金記録の意味は変わりません。更新ロールバック後もこの共有ownerが読み込まれたまま保たれるようになり、旧版との混在読み込みを防ぎます。
+
+- **解析結果の保存時の重複処理を削減**
+  分割した解析結果を保存するとき、同じトランザクション内で途中結果を重ねて読み直す処理を減らしました。保存待ちの結果がある場合に使われなくなった旧経路も削除しました。
+
+- **ローカル推論の待機時に不要な照合を省略**
+  ローカル推論の実行枠が埋まっているとき、実行許可の判定を変えない照合処理を省きました。送信結果が不明な処理は引き続き保留し、安全に終了したと確認できるまで枠を解放しません。
+
+- **通知カード描画時の重複した文書読取りを削減**
+  同じ通知カードを描画する間は、従来の検証を通した抽出文書を同じ読取り範囲内で再利用します。描画が終わると保持した内容を破棄し、次の描画でも文書を検証して読み直します。
+
+- **通知作成時の重複した読取りを削減**
+  同じ通知を組み立てる間は薬剤ボタンと緊急度の読取り結果を再利用し、配信結果の記録で重複していた更新を省きます。
+
+- **患者まとめの品質検証で本文hashの重複計算を削減**
+  患者まとめの品質検証では同じ本文の文字コード変換とhash計算を1回にまとめ、入力照合と修復範囲の照合に再利用します。原文・改訂・患者範囲を検証する条件と、本文から得る照合値は維持します。
+
+- **保存済み解析結果の確認時に重複する課金記録の読取りを削減**
+  クラウド解析の再開時に、検証済みの保存区間をまとめて同じ読取り範囲の課金記録と照合します。不正な記録が混在する場合は、従来どおり区間ごとに判定し、有効な結果を再利用します。
+
+### 不具合修正
+
+- **患者背景の再点検で抽出できる属性を明示**
+  患者背景を再点検する推論入力に35種類の属性キーを明示します。分類と属性は既存の共通定義から生成し、原文の引用・主体・否定・時点を検証する条件は維持します。
+
+- **患者背景の修復回数を課金予約と同時に確定**
+  患者背景の要約を修復する回数の記録を、クラウドの課金予約と同じDB transactionで保存するようにしました。通信枠・予算・保存ロックなどの予約前の拒否では修復回数を消費せず、後で処理を再開できます。
+
+- **患者背景のクラウド解析結果を保存待ちから再開**
+  患者背景の解析が成功した後に保存用ロックを60秒待っても取得できなかった場合、完了結果を1件保持し、次の処理で保存を再開するようにしました。保存のためにクラウドへ再送しません。
+
+- **DBを閉じた後の課金集計キャッシュを解放**
+  DBの処理を終了した際、月次と期間指定の課金集計キャッシュも解放します。終了済みのDBオブジェクトが保持されていても、集計結果をメモリーに残し続けないようにしました。
+
+- **クラウドのバックログ処理のログに診断用の集計を追加**
+  クラウドのバックログ処理で完了件数が0件のときも、既存の返却値にある失敗件数・既存結果の保持件数・持越し件数・ディスク不足・LLM呼出し件数をログで確認できるようにしました。保留の原因を特定するものではありません。
+
+- **クラウド処理のロック取得失敗時にFDを解放**
+  クラウド処理の共有枠や子workerを管理するロックで、ファイルの検証や取得に失敗したときもFDを必ず閉じます。繰り返す失敗で未使用のFDが残ることを防ぎ、通常ファイル以外を開く際の待機も避けます。
+
+- **クラウド送信前拒否の未送信判定・semantic待機の往復・待機理由の記録を修正**
+  クラウド利用の送信前に予約層が拒否した場合、確実な未送信の型(CloudNotSent)として伝播するようになり、試行回数を消費せず・有料または部分完了の単位をローカル作業へ混ぜず・同じ要求を送り直さず次回まで待機します。semantic実行ロックの取得失敗で900秒の抽出待機へ戻されていた問題も修正し、競合が続いても未実行のsemanticを次の抽出より先に保ちます。抽出では正当な終端記録が証跡不一致で保存拒否される問題を修正し、品質記録は実本文から再計算して照合します。
+
+- **課金証跡の照合を中断した後の読取り状態を解放**
+  クラウドの課金証跡を照合する処理が時間切れで中断されても、読取り状態が残らないよう修正しました。同じ時点の課金証跡をまとめて検証し、呼出元の書込みや中断指示を維持します。
+
+- **設定の並行更新でバックグラウンド処理が終了する問題を修正**
+  クラウドのバックログworkerが設定読取りの一時的な競合で終了しないよう修正しました。実行状態ファイルの更新で設定の検出に競合が起きたときは1回やり直し、安全に読めない間は処理を保留して10秒後に設定を読み直します。
+
+- **保存待ちの推論結果が増え続ける問題を修正**
+  保存ロックが長く取れない間は、前回の推論結果の保存と所有期限の更新を先に行い、新しい推論を受け付けません。保存待ちの結果を捨てず、ロックが空いたら再推論や再送信なしで保存を再開します。
+
+- **復元中の抽出処理による書込みを防止**
+  抽出処理の起動時にも、書込みロックの取得後に更新・復元の状態を確認します。復元中はデータベースを開かず、受信済みのクラウド結果を再送せずに保持します。
+
+- **DB監査で初期取込状態の保存欄の欠落を検知**
+  schema 10のDBで初期取込状態を保存する列が欠けている場合に、監査が正常と判定していた問題を修正しました。監査と復旧用の検証で共通の必須列判定を使い、schema 9以前のDBとの互換性を維持します。
+
+- **依頼候補の判定で呼出元のモデル設定を使用**
+  患者要約の依頼候補を、要約に渡された設定と同じローカルモデルで照合できるようにしました。モデルを明示した状態判定ではホスト設定を読み直さず、別のモデルによる出典の不一致を防ぎます。
+
+- **解析済みの測定値が読み取れない問題を修正**
+  内部の完了証跡を含む解析結果でも、患者の測定値とその根拠を読み取れるようにしました。保存した本文と表示用の本文を同じ方法で照合します。
+
+- **患者背景の属性と根拠引用の返却形式を明示**
+  患者背景の再点検で、服薬管理者や支援方法などの属性を値と根拠引用付きで返す形式を明示しました。原文に明示された情報だけを採用し、引用内にない値は従来どおり拒否します。
+
+- **更新失敗後の復旧で設定検証が停止する問題を修正**
+  更新失敗から旧版へ戻す際、設定検証に必要なモジュールを見つけられず復旧が停止する問題を修正します。
+
+- **別患者の更新で患者集約が保留され続ける問題を修正**
+  集約中に別患者や共有のクラウド利用量記録が更新されても、対象患者の入力が変わっていなければ集約を保存します。対象患者のメッセージ・抽出結果・添付・薬剤参照・取得状態や共有の推論設定が変わった場合は保存を見送り、以前の集約を保持します。
+
+- **復元中の書込み停止と制御ファイルの安全な読取りを統一**
+  制御ファイルやロックがFIFOなどに置き換わると、導入・更新・復旧や監視が待ち続ける問題を修正します。復元マーカーが欠けても、更新記録に同意待ちや復元未完了が残る間は書込みを停止します。cross-list取得と独立動作の起動でも同じ停止条件を確認し、採用済みバックアップ復元のwriter再開と配送の保留を分けます。
+
+- **定期処理が実行ログの書込み競合や健康観測の遅延で打ち切られる問題を修正**
+  実行ログの状態ファイルを data 直下で置き換えるたびにディレクトリ識別情報が変わり、同時刻の設定読取りが失敗して入口処理が記録前に終了することがありました。正本を mcs-log-backups 内へ移し、data 直下は上書きのみにしたため追記中は識別情報が変わりません。また健康観測の各SQL読取りに共有の時間予算を設け、残り時間が少ない実行では新たな長い集計を始めず、遅い集計は件数不明(unknown/null)として記録します。送信待ち件数が確認できない場合は「正常」と表示せず理由コード付きで低下として扱います。
+
+- **原文照合の中断時に読取り状態が残る問題を修正**
+  原文をまとめて照合する処理が時間切れで中断されても、読取り用の状態を確実に解放します。原文と改訂番号を同じ問い合わせで取得し、最大64件の照合で重複する読取りを減らします。
+
+- **未完了DB復元のwriter holdをstandaloneが解除し得た問題と復元中writer起動を修正**
+  更新マーカーが残ったまま更新ジャーナルが空・消失した場合、standaloneが孤児と判断してマーカーを削除し、復元のwriter停止が有効な間に通常ジョブやDBマイグレーションを再開し得ました。復元目撃情報がupdater/独立復旧由来で未完了、またはawaiting_consent・破損・読取不能ならマーカーを保持してジョブを停止し続けます。`ops cloud`・`ops job`・init_dataの書込み経路でも、run.lock取得後・Adapter/Ledgerを開く前に同じ条件を確認し、復元中・更新中は書込みを拒否します。
+
+- **通知停止中の再送とLINE WORKSの配送停滞を修正**
+  Discordは、送信待ちの間に通知が停止されたり配送先が変わったりした場合、SDK内の再試行でも送信条件を確認します。LINE WORKSは一時停止中も受領済みの正しい配送許可を保持し、現在の送信条件を満たすまで待機します。
+
+### 更新時の注意
+
+- 追加操作は不要です。以前の推論入力で完了した点検・途中経過・患者背景のまとめは、既存の契約hashに従って通常処理で再評価します。公開推論エンジン1.0と内部抽出契約11は維持します。
+
+- 追加操作は不要です。予約が確定した後の送信結果が不明な場合は消費済みの記録を保持し、同じ修復を再送しません。既存の修復・課金記録は保持します。
+
+- 通常の更新手順で適用し、保存済みの証跡はコード位置を含む同一性を照合する既存の契約に従って評価します。推論や再送信の許可条件を増やさず、公開推論エンジン1.0と内部抽出契約11を維持します。
+
+- 既存の更新手順で常駐workerと利用中の通知接続へ反映してください。保存データや設定キーの書換えは不要です。推論エンジンv1.0・内部世代11・モデル・予算・人承認の条件は変わりません。
+
+- 追加操作は不要です。保持は同じworkerとLedgerの生存中、元の処理期限までに限ります。終了時や期限切れには本文を解放し、課金記録を保持します。再起動時に応答本文を復元する機能は追加していません。
+
+- 通常の更新で適用されます。推論エンジンv1.0・内部版11・分割境界・保存形式・モデルは変わりません。追加設定や過去結果の再解析は不要です。
+
+- CIを利用する開発者向けの変更です。MCSの設定変更や追加操作は不要です。
+
+- 通常の更新で適用されます。保存済みの課金記録・予算・再送を防ぐ条件は変わりません。
+
+- 通常の更新で適用されます。予算・料金・保存形式・推論エンジンv1.0は変わらず、設定変更は不要です。
+
+- 通常の更新手順でworkerを更新すると適用されます。追加の設定変更は不要です。
+
+- 通常の更新で適用されます。処理対象・承認・予算の条件と、推論エンジンv1.0は変わりません。
+
+- 通常の更新で適用され、追加の設定変更は不要です。
+
+- 追加操作は不要です。使用中のロックは従来どおり未取得として返し、それ以外の例外は維持します。所有者・リンク数・権限の検証、課金・推論・再試行の条件は変更しません。
+
+- 通常の更新で適用され、追加の設定変更は不要です。待機理由の出力コードが増えた以外、既存のイベント名・記録形式・承認・配送・受領記録の意味は変わりません。
+
+- 通常の更新で適用されます。予算・課金予約・承認・証跡の検証条件は変わらず、APIへの再送は行いません。
+
+- 追加の設定変更は不要です。稼働中のworkerへの反映は通常の更新手順で行ってください。
+
+- 追加操作は不要です。保存待ちがなくなれば従来の処理順と並列数へ戻ります。原文・処理所有権・復元保留・課金証跡の検証と失効時の扱いは維持し、公開推論エンジン1.0と内部抽出契約11は変更しません。
+
+- 既存の更新手順で抽出workerへ反映してください。推論エンジンv1.0、モデル、予算、保存前の検証条件は変わりません。
+
+- 通常の更新で適用されます。復元の承認手順・予算・推論エンジンv1.0は変わらず、追加の設定は不要です。
+
+- 追加操作は不要です。この変更によるDBの書き換えや修復は行いません。
+
+- 追加操作は不要です。実行枠の数と推論エンジンv1.0は変わりません。
+
+- 通常の更新手順で適用してください。追加の設定変更は不要です。
+
+- 既存の更新手順で収集・解析の常駐処理へ反映してください。保存データの書換えや再解析は不要です。推論エンジンv1.0・内部世代11と、根拠・現在性の検証条件は維持します。
+
+- 通常の更新で適用され、追加設定は不要です。通知の再送・承認条件は変わりません。
+
+- 変更を反映するには、利用中の通知接続を既存の更新手順に従って再起動してください。モデル・予算・人承認の条件は変わりません。
+
+- 追加操作は不要です。既存の通知・承認条件・送信結果が不明な場合の保留は維持します。
+
+- 通常の更新で適用されます。推論入力の変更は既存の契約hashで検出し、必要な再点検を通常処理で行います。推論エンジンv1.0・内部世代11・モデル・予算は維持します。
+
+- 追加操作は不要です。コードの同一性を照合する既存の契約に従って必要な再評価を行い、公開推論エンジン1.0と内部抽出契約11は維持します。
+
+- 通常のアップデートで適用されます。既に保留中の復旧の承認条件や、設定の保存先は変わりません。
+
+- 追加の設定変更は不要です。稼働中の処理への反映は通常の更新手順で行ってください。
+
+- 既存の導入・更新手順で反映します。ソース変更だけでは配備済みの独立復旧ツールへ反映されません。同意待ち・破損・読取不能による保留は削除せず、復旧手順で確認してください。既存の人承認・receipt・取得範囲・モデル・抽出世代は変わりません。
+
+- 通常の更新で適用され、追加の設定変更は不要です。稼働中の各定期処理への反映は通常の更新手順で行ってください。旧版の固定ログ補助プログラムが残っている環境でも、確定済みの取り込み記録と未処理の追記記録は両方向に引き継がれます。
+
+- 通常の更新で適用されます。推論エンジンv1.0・内部版11・モデル・努力量・予算・原文の検証条件は変わりません。追加設定や過去結果の再解析は不要です。
+
+- 通常の更新で適用されます。保存形式・照合条件・推論エンジンv1.0は変わらず、追加の設定変更は不要です。
+
+- 通常の更新で適用され、追加の設定変更は不要です。バックアップ復元の採用(writers_resumed)後は、これまでどおり writer のみ再開でき、配送の停止は別ゲートで継続します。復元目撃情報の読み方・マーカー保持の意味・承認条件は変わりません。
+
+- 変更を反映するには、利用中の通知接続（Hermes gateway、standalone、LINE WORKSアダプター）を既存の更新手順に従って再起動してください。モデル・予算・人承認の条件は変わりません。
+
+### 技術詳細
+
+<details>
+<summary>技術詳細・根拠を表示</summary>
+
+#### 患者背景の再点検で抽出できる属性を明示
+
+- 再点検の推論入力に26分類と35属性キーを共通定義から渡す。通常抽出の既存列挙も同じ集合であることを回帰テストで確認する。
+- モデル・出力上限・原文引用の検証・公開条件は変更しない。
+- 根拠: mcs/patients/patient_context_plan.py、mcs/patients/patient_context_refresh.py
+
+#### 患者背景の修復回数を課金予約と同時に確定
+
+- 既存のon_reserved_txを使い、原典と処理の所有権を同じ予約内で検証します。
+- 修復回数の記録に課金予約IDと要求のhashを結び付けます。
+- 推論エンジンの公開版1.0と内部版11、モデル、予算、品質検証の条件は維持します。
+- 根拠: mcs/patients/patient_context_refresh.py、tests/patients/test_patient_summary_quality.py、tests/patients/test_anthropic_context_refresh.py
+
+#### 共通推論の内部ファイルを責務ごとに整理
+
+- providers/にanthropic_client・openai_client、transport/にcloud_client・local_llm・llm_retry、admission/にllm_admission・llm_availabilityを置く。cloud_inference・cloud_policy・cloud_backlogはllm/直下に保持する。
+- 再帰bootstrapと更新時の世代照合を維持し、旧パスに同名のソースが残る場合の停止条件を配置テストに追加する。
+- 根拠: mcs/llm/providers/、mcs/llm/transport/、mcs/llm/admission/、tests/meta/test_module_layout.py、tests/meta/test_mcs_path_retired_extraction.py
+
+#### 内部モジュールと共有APIを役割に合う名前へ整理
+
+- semantic_publicationが公開、semantic_conversionが変換を担当します。extraction_contextはextract/llm配下へ移し、患者背景の投影はpatient_context_projectionに統一しました。
+- 共通クラウド実行の5つの入口とCloudBacklogPool、reservation_evidence_batchを役割が分かる名前にし、extract_llmの非公開ヘルパーの再exportを除きました。課金証跡の検証条件と、同じ時点の読取りを維持します。
+- patient_state_context等の設定・保存キー、v4の保存kind、コード照合に使う既存の論理ラベルは維持します。旧候補と承認記録の採用条件を緩めず、生成するsource inventoryは新しい配置に合わせます。
+- 根拠: mcs/semantic/semantic_publication.py、mcs/semantic/semantic_conversion.py、mcs/extract/llm/extraction_context.py、mcs/patients/patient_context_projection.py、mcs/llm/cloud_inference.py、mcs/llm/cloud_policy.py、mcs/llm/cloud_backlog.py
+
+#### 患者背景のクラウド解析結果を保存待ちから再開
+
+- 原典・患者範囲・設定・処理の所有者・復元待ち・課金の応答記録を保存前に再検証します。
+- 保存待ちの間はDB transaction、run lock、通信枠、開いたHTTP応答オブジェクトを保持しません。
+- 推論エンジンの公開版1.0と内部版11、モデル、予算、品質検証の条件は維持します。
+- 根拠: mcs/patients/patient_context_refresh.py、mcs/core/ledger.py、tests/patients/test_context_completed_carry.py
+
+#### 解析再開時の重複した分割と読取りを削減
+
+- 処理担当を確保できなかった候補のチェックポイント全文検証を省き、確保後の原典・所有権・競合確認を維持します。
+- 原文の文字位置・根拠・分割親の検証を保ったまま、1回の保存状態読取りで本文の先頭分割と位置計算を共有します。
+- 保存前後の確認に使う同じJSON文字列とhashを、内容が変わらない範囲だけで再利用します。
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/test_checkpoint_read_efficiency.py、tests/extract/test_chunk_dedup_growth.py、tests/extract/test_checkpoint_commit_atomicity.py
+
+#### CIを2群で並列実行し、失敗時の診断を保存
+
+- 既存の6ジョブ名、SDK統合、安全ゲートと一時HOMEの隔離を維持し、片方の失敗後も全群を実行します。
+- uvの固定版とイベントに応じた依存キャッシュを使い、仮想環境は毎回作成します。LinuxとmacOSのテスト用PythonにはSQLiteの安全性要件を満たすuv管理版を使います。
+- 合成テストの署名鍵は不変の素材だけを再利用し、ケースごとのファイル・権限・署名・台帳は独立させます。
+- 遅い30件の実行時間を出力し、診断ファイルを7日間保持します。Linuxジョブ全体の制限を45分から60分へ変更し、テスト単位の停止監視は維持します。
+- 根拠: .github/workflows/ci.yml、ci/run_pytest_groups.py、scripts/development/ci_local.sh、tests/ops/test_release_apply_owner.py
+
+#### DBを閉じた後の課金集計キャッシュを解放
+
+- 保存待ち結果の終了処理が例外になった場合も、集計キャッシュを解放してDBを閉じる。
+- 根拠: mcs/core/ledger.py、tests/llm/test_cloud_tally_cache.py
+
+#### クラウド利用履歴の読込みを省メモリ化
+
+- 重複キー・数値の不正・オブジェクト以外の記録は従来どおり拒否します。
+- 読込みの中断や不正な記録では集計キャッシュを破棄し、読取りカーソルを閉じます。
+- 根拠: mcs/llm/cloud_policy.py、tests/llm/test_cloud_tally_cache.py
+
+#### クラウドのバックログ処理のログに診断用の集計を追加
+
+- 集計には型を確認した非負整数と真偽値だけを使い、欠損値・不正な型・負数は出力しない。
+- LLM呼出し情報はcallsの件数だけを出力し、本文や余分な返却内容は含めない。
+- 根拠: mcs/llm/cloud_backlog.py
+
+#### 過去チャットの処理対象確認で重複する読取りを削減
+
+- 根拠: mcs/llm/cloud_policy.py、tests/llm/test_cloud_continuous_scope.py
+
+#### クラウド provider・契約の共有ownerを mcs/llm へ集約
+
+- CloudInferenceUnit・resolve_cloud_settings・cloud_provider_contract・is_supported_cloud_contract・verify_cloud_repair_evidenceを共通ownerの入口とし、CloudFallback・CloudBusyも直接参照します。extract_llmの薄いaliasは削除し、_current_cloud_settingsは共通owner内の非公開処理として保持します。
+- 抽出固有のキャッシュ接頭辞(_PROMPT_HEAD/_BATCH_HEAD)は provider 構築時に cache_heads として渡し、品質repairの子providerへも伝播します。COMMIT_MARGIN=5 は共有ownerの定数に一本化しました。
+- semantic_candidate の source witness(_MODULES)と extract_llm の _LOADED_SOURCE_DIGESTS に cloud_inference を登録し、mcs_update の有限preloadにも加えて、ロールバックがこの世代の契約検証を保持するようにしました。
+- 根拠: mcs/llm/cloud_inference.py、mcs/extract/llm/extract_llm.py、mcs/ops/mcs_update.py、mcs/llm/cloud_backlog.py、mcs/semantic/semantic_candidate.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_extraction.py、mcs/semantic/semantic_transport.py、mcs/semantic/semantic_publication.py、mcs/patients/patient_context_refresh.py、mcs/core/patient_context_artifacts.py、mcs/notify/processing_route.py、tests/ops/test_update_loaded_rollback_closure.py、tests/semantic/test_semantic_cloud.py
+
+#### クラウド処理のロック取得失敗時にFDを解放
+
+- ロックを取得した場合だけFDの所有権を呼出元へ渡し、失敗・中断・使用中の場合は同じ解放経路を通す。
+- O_NOFOLLOWとO_CLOEXECに加えてO_NONBLOCKを使い、対象ファイルを検証する前の待機を防ぐ。
+- 根拠: mcs/llm/cloud_backlog.py、tests/llm/test_cloud_lock_resources.py
+
+#### クラウド送信前拒否の未送信判定・semantic待機の往復・待機理由の記録を修正
+
+- cloud_client.CloudClient.complete は、同一呼出の最初の試行で予約関数(reserve_fn)が型付きの拒否を返した場合だけ CloudNotSent として伝播します。先に HTTP 試行が送られた後の予約拒否は、直前の送信失敗(例: 429/529)がそのまま結果を運び、無料の待機扱いには変換しません。HTTP 実行・結果不明・確定済み受領は従来どおり送信済みの可能性を保ちます。AnthropicClient・OpenAIClient の両方で同じ境界です。
+- 抽出の provider 呼出では、CloudNotSent はその単位を待機へ回します(再選択・再送信・ローカル代替なし)。semantic の backlog 推論では LLMNotSent(cloud_not_sent) として無料の待機へ、患者コンテキスト更新では Deferred(nightly_cloud_not_sent) へ、クラウド比較監査ではその回の監査だけをスキップします。いずれもローカル代替へ有料または部分完了のクラウド単位を混ぜません。この予算待機では、既に確定した成功断片・受領記録は破棄されません。スコープ・リース喪失など送信元の無効化は従来どおり全 provider を破棄します。
+- cloud_backlog の worker は、semantic の実行ロック取得に失敗しても位相を進めず、短い待機/再獲得を繰り返して未実行の semantic を次の抽出試行より先に保ちます。2回以上の連続競合でも抽出選択へ戻りません。親終了・更新世代・メモリ・carry の条件は変わりません。
+- worker の待機は cloud_backlog_deferred イベントに固定コード(provider_settings_unreadable, cloud_mode_off, cloud_profile_unavailable, paused, circuit_open, pricing_unverified, daily_cap 等の allowlist 内ブロック理由、それ以外は cloud_blocked)で記録し、同じ理由の継続中は繰り返し記録しません。実ID・本文・秘密・設定値は記録されません。semantic_drain の cloud_only 選択が期限内に完了しない場合も、初回・補充の両経路で cloud_selection_reason(deadline, active_transaction, reader_unavailable, reader_changed, memory, selection_busy 等)を返し、worker の記録はそのまま固定コードへ写します。観測不能(cloud_selection_incomplete)と、選択できたが0件だった通常の待ちは引き続き区別されます。
+- extract_llm の inline proof 照合では、品質記録を証拠の正当性と分けて検証します。hint_gaps_resolved・unresolved・dispatch_unknown・skipped_budget の終端状態のみが保存対象で、pending・started は再開マーカーとして拒否します。記録はちょうど state と remaining_hint_candidates の2キーを持ち、残り件数はその断片の実本文から再計算して一致を要求します。dispatch_unknown・skipped_budget は実行履歴として保存値を保ち、内容が解決していても解決済みへ昇格させません。型の逸脱・余分なキー・件数不一致・改ざんされた終端状態はすべて拒否し、進行表示は attention のままです。
+- 最終成果物の integrity.completeness・completeness_chunks は、採用された全断片のキー・状態・件数・断片数が、保存済み断片の本文とヒントから再計算した結果と一致する場合だけ書き込まれます。臨床文書の一致だけでなく、1項目でも一致しない記録・過不足のあるキー・断片数の不一致はコミットを拒否します。採用キーには分割で置き換えられた保留/開始中の親断片の清掃対象キーが含まれ得るため、照合は採用済み終端断片だけを対象にし、チェックポイントを持たない非分割文書は文書自身を断片0として再計算します。
+- 進行表示の reader 側でも、最終成果物の completeness 主張は保存済み断片の本文へ結合されます。新規コミットでは照合済みの主張を成果物本文の内部フィールド(__mcs_leaf_claims_v1)へ埋め込んで保存し、成果物メタだけを書き換えて未解決の断片や実行履歴へ解決済み主張を作っても進行状態は complete に昇格せず attention のままです。残り件数0の内容解決済み断片が dispatch_unknown・skipped_budget の実行履歴を持つ場合、件数が再計算と一致すれば正当な終端記録として受理し、履歴は解決済みへ昇格しません。埋め込みフィールドは内部専用で、公開の抽出投影からは取り除かれます。
+- seal 導入前に保存された成果物(本文に主張の写しを持たず、チェックポイント証跡も清掃済みのもの)については、合併済み文書から証明できる範囲だけを検証します。各主張が終端状態の2キー記録であること・解決済み主張が残り0を持つこと・記録された残り件数の合計が合併文書の未解決ヒント再計算を下回らないことを確認し、内容だけでは判別できない断片ごとの帰属差(例: 内容解決済みの dispatch_unknown と解決済み)は従来どおり履歴として扱います。これにより正常な旧結果は attention へ固定されず再選択もされませんが、メタ書換えで未解決の内容へ解決済みを捏造する試みは引き続き拒否します。旧成果物の保持結果を再コミットする際は内容を書き換えないため、保存済みの provider 証跡はそのまま維持されます。
+- cloud_backlog の worker は、semantic 実行ロックの獲得に成功した直後・run_due 開始前に、親プロセスと更新世代がロック待機中に変わっていないことを再検証します。変化があればロックを持ったまま stale な semantic 作業を実行せず終了します。既存のソース・リース・所有者・世代境界の意味は変わりません。
+- seal 埋め込み(__mcs_leaf_claims_v1)付きの最終成果物は、メタの completeness 主張と本文内の耐久記録が一致しても、記録された provider_provenance の result_hash・source_binding が保存時の本文へ一致しない限り完了扱いしません。seal・メタ・provider 証跡・source を変えずに本文の臨床内容だけを削除・改変した場合、既存の result_hash 検証と同じ仕組みで attention・準備未完了へ戻り、再推論や再送信は行いません。provider 不明の履歴・旧形式の未 seal 成果物・受領・課金・予約の意味は変わりません。
+- 保存済み本文の厳格なハッシュ計算が失敗した場合は、記録されたハッシュも欠落していても完了と判定しません。
+- 根拠: mcs/llm/transport/cloud_client.py、mcs/extract/llm/extract_llm.py、mcs/llm/cloud_backlog.py、mcs/semantic/semantic_drain.py、mcs/semantic/semantic_transport.py、mcs/patients/patient_context_refresh.py、tests/extract/llm/test_cloud_accounting_uncertain.py、tests/extract/llm/test_cloud_repair_final_proof.py、tests/extract/llm/test_audit_sealed_content_loss_7e43547f.py、tests/llm/test_cloud_backlog.py、tests/semantic/test_semantic_cloud.py
+
+#### 課金証跡の照合を中断した後の読取り状態を解放
+
+- 根拠: mcs/llm/cloud_policy.py、tests/llm/test_cloud_receipt_batch.py
+
+#### 設定の並行更新でバックグラウンド処理が終了する問題を修正
+
+- 設定の再検出は、ディレクトリの識別情報・所有者・権限が変わらず、提供元設定の痕跡が検出されなかった場合に限る。
+- pending・authority・提供元ディレクトリの新設、連続する変更、ディレクトリの差替え・権限・所有者の変更は引き続き拒否する。
+- 設定の読取り失敗を空設定に置き換えず、再読取り後も無効設定・停止・予算の判定を通す。
+- 根拠: mcs/core/mcs_util.py、mcs/llm/cloud_backlog.py
+
+#### 保存待ちの推論結果が増え続ける問題を修正
+
+- 保存待ちは前回の一処理分にとどめ、既に保持している結果が多い場合も削除せず順に保存する。新しい設定や任意の件数上限は追加しない。
+- 保存専用の処理では残件数・投稿の経過時間・推論呼出数を未観測として返し、残件数の重複走査を避ける。常駐処理は保存待ちの間だけ新しい患者背景・意味解析を開始しない。
+- 期限・原文・所有権が失効した結果の破棄条件や、送信結果が不明な処理を再送しない条件は維持する。
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/llm/test_carry_backpressure.py
+
+#### 解析結果の保存時の重複処理を削減
+
+- 保存直前のチェックポイント取得結果を、同じ書込みトランザクション内の整合確認と保存後の清掃判定で共有します。別トランザクションの結果は再利用せず、本文・所有権・レイアウト・祖先の検証を維持します。
+- 保存待ちの結果を先に処理して戻る現行経路へ集約し、新規処理後の到達不能な旧保存待ち経路を削除しました。
+- 根拠: mcs/extract/llm/extract_llm.py、tests/extract/test_checkpoint_commit_atomicity.py、tests/llm/test_cloud_selection_progress.py
+
+#### 復元中の抽出処理による書込みを防止
+
+- 失敗ジョブの再開入口も、データベースの初期化前に同じ条件で停止します。
+- 既存の保持結果は、保存前に復元状態を再確認します。保持中は結果の破棄や所有権の更新を行いません。
+- 根拠: mcs/extract/llm/extract_llm.py、mcs/core/writer_lock.py、tests/extract/llm/test_extractor_restore_startup.py
+
+#### DB監査で初期取込状態の保存欄の欠落を検知
+
+- 実DBのuser_versionに応じてpatients.initial_importの有無を検証します。
+- 列の有無とschema 9・10を組み合わせ、監査・復旧・バックアップ検証の一致とDB内容の不変を確認します。
+- 根拠: mcs/core/ledger_audit.py、mcs/core/ledger_schema.py
+
+#### ローカル推論の待機時に不要な照合を省略
+
+- 常に解除件数0を返す照合の自動呼出しと、使われない待機時刻の管理を削除しました。
+- 明示的な状態確認・照合の入口と、終了確認・世代による保護条件は維持します。
+- 根拠: mcs/llm/transport/local_llm.py、mcs/llm/admission/llm_admission.py
+
+#### 依頼候補の判定で呼出元のモデル設定を使用
+
+- 単件・一括の状態判定から、共通の出典検証へlocal_modelを渡す。
+- モデル省略時の既存動作と、候補の出典・ポリシー・証拠の検証は維持する。
+- 根拠: mcs/ops/commands/request_loops.py、mcs/patients/rollup.py
+
+#### 解析済みの測定値が読み取れない問題を修正
+
+- 測定値と集約処理が使う本文の照合で、内部の完了証跡だけを除く共通処理を使います。測定値などの内容が異なる本文は引き続き拒否します。
+- 根拠: mcs/core/mcs_queries.py、mcs/patients/rollup.py、mcs/patients/measurement_sources.py、tests/patients/test_measurement_sources.py
+
+#### 通知部品の未完了集計に、配送計画の新旧による内訳 by_plan を追加
+
+- superseded は「同じカードに、より新しい配送成功の計画記録がある」ことだけを示し、部品の配送完了や対応不要を意味しません。同じカード・通知先・部品・内容の送達を後続の記録で確認できない限り未完了の件数に残ります。
+- 新しい計画が送信待ち・送信中・保留・未送信・取消・送信結果不明なら分類は変わらず current に残ります。分類は計画の新旧だけを示し、通知先の異なる新しい計画でも同じカードの配送成功記録なら superseded です。
+- 観測に失敗した場合(status=unknown)は by_plan も件数不明(null)で返し、成功時と同じキー構成にします。
+- 配送状態の読取りだけを変更し、送信・受領記録の書き方は変えません。
+- 根拠: mcs/notify/notify_scope.py、mcs/ingest/health_report.py、tests/notify/test_incomplete_part_health.py、tests/ingest/test_health_observation_budget.py
+
+#### 通知カード描画時の重複した文書読取りを削減
+
+- 文書の内容は呼出しごとに独立して返し、結果がない場合と空の文書を区別します。読取り例外は再利用しません。
+- DBの書込みや読取り状態の変化を検出した場合は、その描画中の再利用を停止します。呼出し元のトランザクションを確定・取消しません。
+- 保持する文書の件数と量に内部上限を設け、上限を超えた文書も従来の読取り経路で扱います。本文や表示項目を省略しません。
+- 配送記録の保存、送信前の検証、ファイルとDBの耐久性、既存の性能基準は維持します。
+- 根拠: mcs/core/mcs_queries.py、mcs/notify/notify_render.py
+
+#### 通知作成時の重複した読取りを削減
+
+- 薬剤ボタンの表示判定は同じ通知内で共有し、ボタンの認証用トークンは毎回新しく発行します。
+- 全投稿の緊急度を確認し、最大8投稿分だけを同じ通知のプレビューに再利用します。別の通知や次回の処理には持ち越しません。
+- 配信結果の確定時に必要な更新は保持し、同じ更新の重複実行と状態が変わらない再報告での不要な更新を省きます。
+- 根拠: mcs/notify/notify_cards.py、mcs/notify/notify_render.py、mcs/notify/notify_transport.py、tests/notify/test_notification_read_reuse.py
+
+#### 患者背景の属性と根拠引用の返却形式を明示
+
+- 点検の指示文を既存の計画モジュールへ移し、属性定義と同じ契約hashで管理する。
+- 属性がない場合は空配列を返し、否定・予定・対象不明の条件を維持する。
+- 根拠: mcs/patients/patient_context_plan.py、mcs/patients/patient_context_refresh.py、tests/patients/test_context_refresh_prompt_input_equivalence.py
+
+#### 患者まとめの品質検証で本文hashの重複計算を削減
+
+- 本文が空文字の場合と削除済みの場合を区別し、原文の検証とsource signatureの計算順を維持する。
+- 品質判定・予算・再試行・モデル・出力上限は変更しない。
+- 根拠: mcs/patients/patient_context_refresh.py
+
+#### 更新失敗後の復旧で設定検証が停止する問題を修正
+
+- コードを切り替える前に提供元設定・モデルの検証モジュールを読み込み、復旧処理で同じ世代のコードを使います。
+- インストーラーと復旧の合成テストを、現在の関数依存・設定移行・保留マーカーの権限に合わせます。
+- 根拠: mcs/ops/mcs_update.py
+
+#### 別患者の更新で患者集約が保留され続ける問題を修正
+
+- 集約に使う入力と保存時の検証値を同じ読取りスナップショットから取得し、集約処理中は書込みロックを保持しない。
+- 外部の更新があった場合だけ、書込みロックを取得して対象患者の行と共有設定の内容を再確認する。同じ患者に属する未使用の行が変わった場合も保留する。
+- 対象患者の本文・連携サマリー・薬剤参照・抽出途中の記録・取得ジョブなどは、IDと件数が変わらない訂正も検出する。
+- 稼働中DBの登録データは鮮度の切替時刻も保存期限へ反映し、固定時刻のスナップショットではその時刻を使う。保存期限を確認できない場合も保存を見送る。
+- 期限切れ・文字コード異常・検証できないスキーマ・SQLiteの読取り失敗では保存せず、呼出元のトランザクションを終了しない。
+- 返信判定にも呼出元のモデル設定を渡し、判定途中で別の設定を読み直さない。
+- 根拠: mcs/patients/rollup.py、mcs/ops/commands/request_loops.py
+
+#### 復元中の書込み停止と制御ファイルの安全な読取りを統一
+
+- 共有readerは制御ファイルの末端をO_NOFOLLOW・O_NONBLOCKで開き、regular fileと読取り上限を確認します。復元マーカーと配備済みplistは1MiB、更新journalは16MiB、repo_pathは64KiBを超える場合に読取不能として扱います。祖先ディレクトリのaliasは従来どおり利用でき、末端のsymlinkは拒否します。
+- run.lock・update.lock・health_watch.lock・standalone.lockは、FIFO等を待たずに拒否します。新規lockの0600と非待機flock、失敗時のFD閉鎖を維持します。
+- 独立復旧ツールはcheckoutのmoduleをimportせず、同じ制約のreaderとlock処理を内部に保持します。切り離し起動する再起動処理にもreader本体を含め、更新後に旧treeへ戻った場合の依存を増やしません。
+- 共有restore_writer_holdは、復元目撃に加えて更新journalのrestore_consent・applying.restore_incompleteを確認します。マーカー欠落・空の同意記録・破損journalも、書込み再開の根拠にはしません。updaterの互換入口は、起動時に読み込んだ共有gateへ委譲します。
+- バックアップ復元の採用済みreceiptがwriter再開を許可する場合は、ほかに保留がなければwriterだけを再開できます。配送の停止はrestore_pendingで別に維持し、採用を送信許可へ読み替えません。
+- cross-list取得はrun.lock取得後、AdapterとLedgerを開く前に共有gateを確認します。cloud stop/resumeとjob retryも、実際のCLI入口から同じ停止条件とlock保持を回帰で確認します。
+- 独立動作は更新マーカーがなくても復元保留中にジョブを開始しません。直接sendも配送保留を確認して接続前に停止します。writer_lockの共通判定は更新・復元のどちらでも書込みを禁止し、判定不能な場合も再開しません。
+- 根拠: mcs/core/safe_io.py、mcs/core/writer_lock.py、mcs/notify/notify_spool.py、mcs/ops/update/update_journal.py、mcs/ops/mcs_update.py、mcs/ops/diagnostics/runtime_inspection.py、mcs/ops/services/service_management.py、mcs/ops/mcs_setup.py、mcs/ops/mcs_cli.py、deployment/recovery/mcs_recover.py、install.sh、mcs/ingest/health_watch.py、mcs/ingest/cross_lists.py、mcs_standalone/__main__.py、mcs_standalone/runtime.py、tests/core/test_control_lock_boundaries.py、tests/ops/test_restore_control_boundaries.py、tests/ops/test_independent_recovery_control_boundaries.py、tests/adapters/standalone/test_restore_startup_boundaries.py
+
+#### 定期処理が実行ログの書込み競合や健康観測の遅延で打ち切られる問題を修正
+
+- data/.mcs-log-state.json は正本と同じ全量(pendingを含む)を、既存ファイルへの上書きで写すミラーになりました。エントリの作成・置換・削除を伴わないため、追記のたびに data ディレクトリ自体の更新日時が変わることはありません。正本は mcs-log-backups/.mcs-log-state.json で、一時ファイルの作成・置換・削除はすべてその中で行います。未処理の pending を記録・解消する保存ではミラーが先に書かれるため、未確定の追記を隠した古いミラーが読まれることはありません。
+- 固定ハッシュで保存された旧版の実行ログ補助プログラム(run_log_install が展開するもの)は旧位置の状態ファイルを読み、記録された pending を自分で回復してから追記します。ミラーが途中で破れた場合は、ロックの内側で正本から再生成します。旧補助プログラムが回復を完了してステージを消した後の未処理記録は、対象ログの同一性と記録範囲のdigestを検証してから適用済みとみなします。
+- 新旧どちらにも互いに異なる未処理の pending がある場合は順序が確定できないため失敗として扱い、sources は同名で検証できるより新しい記録だけを採用します。外部側の進捗を取り込んだ結果は、ミラーを上書きする前に必ず正本へ確定させるため、上書きが途中で破れても取り込み記録が消えることはなく、同じ従来ログが二度取り込まれることもありません。確定済みの取り込み記録・ローテーション準備・未処理の回復が失われることはありません。
+- 健康観測で今まで時間制限がなかった読取り(保留理由の集計・ジョブ待ち件数・抽出カバレッジ・未保存epoch・失敗ジョブ集計・停滞判定・監査ガード・pending件数のフォールバック)に、観測全体で共有する時間予算を設けました。run_check は稼働監視の強制終了期限から安全余白を引いた期限を観測に渡し、共有予算はその期限を超えません。期限切れ後は新しい読取りを始めず、該当ブロックは status=unknown・件数 null で記録され、0件や成功として偽装されることはありません。health.json の書出し自体は期限内に完了します。
+- 抽出カバレッジの poison_gated・current 件数は、対象メッセージ全走査のEXISTSから、稀な artifact 側を起点にする COUNT(DISTINCT message_id) へ書き換えました。数え方の意味は変わりません。
+- 送信待ち通知件数を測れないとき(pending が null)は、通知状態を incomplete・全体を低下として記録し、理由コード notification_pending_unavailable を付けます。監視側 classify_health も同じ条件で status を degraded に落とし、理由が無い出力には同じコードを補います。観測できた0件は従来どおり正常のままです。保留キューが測れないときも通知状態を incomplete、保留ピン止め容量が測れないときは件数・バイト数を null で記録し、pending件数フォールバックが本当のSQLiteエラーで失敗した場合は従来どおり失敗として伝播します。
+- 記録・回復・ローテーション・取り込みの検証条件と、承認・配送・受領記録の意味は変えていません。
+- health_watchの二重起動防止ロックは、共通のopen_lock_fileでO_NOFOLLOW・O_NONBLOCK・O_CLOEXECを指定して開き、取得した記述子が通常ファイルかをfstatで確認します。ロックパスが通常ファイル以外の場合は、状態保存の失敗として観測・配送を行いません。
+- 根拠: mcs/core/run_log.py、mcs/ingest/health_report.py、mcs/ingest/health_watch.py、mcs/ingest/run_check.py、tests/core/test_run_log.py、tests/core/test_run_log_migration.py、tests/ingest/test_health_observation_budget.py、tests/ingest/test_run_check_stages.py、mcs/core/safe_io.py、tests/ingest/test_health_watch.py、tests/ingest/test_health_watch_file_boundary.py
+
+#### 保存済み解析結果の確認時に重複する課金記録の読取りを削減
+
+- 保存区間の件数と本文量に応じて照合を分け、区間と課金記録を同じDB読取り範囲で確認します。読取りを終えた後に証跡を保持しません。
+- 課金記録が欠けた結果や送信結果が不明な結果は再利用せず、別の有効な区間の判定を維持します。
+- DBの取消・ロック・資源不足を保存結果の欠落として扱いません。呼出し元のトランザクションや取消handlerを変更しません。
+- ローカル解析と過去結果の表示では、従来どおりクラウドの課金記録を要求しません。
+- 根拠: mcs/semantic/semantic_extraction.py、tests/semantic/test_cached_chunk_receipt_batch.py、tests/semantic/test_provider_provenance.py
+
+#### 原文照合の中断時に読取り状態が残る問題を修正
+
+- 呼出元のトランザクションと中断指示を保持します。中断・ロック競合・入出力エラーは読み直しで隠しません。
+- 取得順・重複・欠落・別患者の扱いを維持し、既知のSQL互換性エラーだけ従来の順次読取りへ戻します。
+- 根拠: mcs/core/inference_dependency_loss.py、tests/core/test_source_binding_batch.py、tests/core/test_source_binding_savepoint.py
+
+#### 未完了DB復元のwriter holdをstandaloneが解除し得た問題と復元中writer起動を修正
+
+- notify_spool.restore_writer_hold は、復元の writer 停止が有効かを返す共有ゲートです。restore_awaiting_consent が返す awaiting_consent・読取不能(unreadable)の目撃情報、および by=mcs_update|mcs_recover で phase=restored の未完了復元目撃を「保持」と判定します。by=mcs_backup_restore の採用済み復元は writers_resumed が許可すれば保持対象外で、配送の停止は従来どおり restore_pending 側が独立して管理します。
+- mcs_standalone の定期 tick は、更新マーカーの孤児判定で update.lock・run.lock が取れてジャーナルが空の場合でも、restore_writer_hold が有効ならマーカーを削除せず journal_pending として保持します。共有ゲートを import できない・想定外の形の場合も fail-closed で保持します。正当な孤児(復元目撃なし)は従来どおり削除して再開します。
+- ops cloud stop/resume・ops job の Ledger 書込み経路は、run.lock 取得・更新マーカー/コード一致の確認に加えて、同じ restore_writer_hold が有効な間は restore_in_progress で拒否します。復元中に新規 Ledger を開く・書き込む経路が塞がれます。既存の --confirm-human・reason・receipt の承認経路は変わりません。
+- init_data の初期インポートも、run.lock 取得直後に更新マーカーの存在またはコード世代の不一致を update_in_progress、restore_writer_hold が有効な場合を restore_in_progress として拒否します。復元の同意待ちだけで旧 schema の DB をネットワーク取得前にマイグレーションしたり、認証失敗・空プロジェクトでも DB を変更したりする経路が入口で止まります。正式なバックアップ復元の採用済み(writers_resumed)環境では従来どおりインポートを実行でき、配送の停止は restore 目撃情報が独立して保持します。
+- updater 側の _restore_writer_hold_marker と _awaiting_consent_marker は、起動時に読み込む共有ゲートへ委譲します。旧treeへ戻った後も起動時の実装で判定し、マーカー欠落時の同意待ち・復元未完了・読取不能を同じ条件で保持します。判定行列(updater/recover 由来は保持、manual 由来は保持しない、採用済み backup 復元は writer のみ再開)は維持します。
+- 明示的な live Jev ツール(jev_value・semantic_bench・wire_smoke・models 取得)の HTTP 予約も同じ境界を持ちます。run.lock 取得後・Ledger を開く前に restore_writer_hold を照合し、保持中は usage_restore_in_progress(budget_exceeded)で拒否して Ledger を開きません。予約の BEGIN 待ち中に復元目撃が現れた場合も、予約を保持したまま送信だけを止めます。再試行・再送信の意味は変わりません。
+- 根拠: mcs/notify/notify_spool.py、mcs_standalone/runtime.py、mcs/ops/cloud_cli.py、mcs/ops/commands/job_cli.py、mcs/ingest/init_data.py、mcs/semantic/semantic_jev.py、tests/adapters/standalone/test_stab_runtime_supervision.py、tests/ops/test_update_loaded_rollback_closure.py、tests/ingest/test_init_data_lifetime.py、tests/semantic/test_jev_live_budget.py
+
+#### 通知停止中の再送とLINE WORKSの配送停滞を修正
+
+- DiscordのHTTP 429後の再試行で、停止状態・配送先・復元待機と、公開中の送信指示を再確認します。権限を確認できない場合は送信しません。
+- スレッド本文の送信後に追加案内を停止しても、本文の配送記録を保持し、本文を再送しません。
+- LINE WORKSの配送許可の照合と現在の送信条件を分離します。送信結果が不明な場合の自動再送禁止は維持します。
+- 根拠: adapters/common/worker.py、adapters/discord/delivery.py、adapters/lineworks/delivery.py
+
+</details>
+
 ## [1.1.0] — 2026-10-30
 
 **クラウドAIの選択・予算管理、過去チャットの並列解析と返信のチャンネル通知を追加**

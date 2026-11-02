@@ -1,0 +1,71 @@
+{
+  "kind": "synthetic explanation; not a screenshot or measured result",
+  "source": "docs/releases/v1.1.1/inference-flow.svg",
+  "renderer": "macOS qlmanage -t -s 1000 on 1000x1000 wrapper, drawing translated x=305; magick crop 390x940+305+0 +repage -strip",
+  "comparison": "No before/after comparison. Current development implementation only.",
+  "source_checkout": {
+    "head": "21b96ff28bfb559f8bee5ec4fae0069b34ff7432",
+    "status": "development working tree; evidence hashes below fix the inspected bytes"
+  },
+  "evidence": [
+    {
+      "path": "mcs/core/inference_version.py",
+      "sha256": "11642404f30a83d2162a9e1f8203b4f1442aa8b09558e8e54ebe308970fc1068"
+    },
+    {
+      "path": "mcs/extract/llm/extract_llm.py",
+      "sha256": "89fad302a62b5ebce4f354d7fc7a9b9c2bd150110cf3afefbae7ca12a8dc026b"
+    },
+    {
+      "path": "mcs/llm/cloud_inference.py",
+      "sha256": "499d98c28f767e79c4e254e6f3bd0d50a3abfec8924676e23bb8c395566ed4cc"
+    },
+    {
+      "path": "mcs/llm/cloud_policy.py",
+      "sha256": "c1b5cc041dee26b0dc814dc628f13204c248a5bb44a2d323b9a7da63c841e501"
+    },
+    {
+      "path": "mcs/patients/patient_context_refresh.py",
+      "sha256": "bf70184214d46bb1eb91cdbfeaf456fce244ee10a5a02f882d8a4903f607c71b"
+    },
+    {
+      "path": "mcs/semantic/semantic_jev.py",
+      "sha256": "4af718f3ba8666337e5798f899f2a41f911cb0aa81904c57a3f58669621936dd"
+    },
+    {
+      "path": "mcs/notify/notify_render.py",
+      "sha256": "80611084a300c12136ddcf25dea40ac823a372423e5cecd43586d539254395bc"
+    },
+    {
+      "path": "mcs/notify/notify_transport.py",
+      "sha256": "ebb57313705ed0486e2930285f21a0f726e223a7e3050b6412dcf193b96c4622"
+    },
+    {
+      "path": "docs/development/LLM_RUNTIME.md",
+      "sha256": "f2c823580e915fa20ecb9ca0d89af3bcba1d07cbc0e6874170e17363155c81e4"
+    },
+    {
+      "path": "docs/guides/ANTHROPIC.md",
+      "sha256": "9205df9d82687ac58055ff99c2ec534fd0e961386069c309c6edcc7688a07821"
+    }
+  ],
+  "facts_checked": [
+    "public inference engine 1.0, internal extraction contract 11",
+    "realtime local; history and patient context prefer configured eligible cloud providers, with conditional local fallback",
+    "scope and global/per-provider budget checks before cloud dispatch",
+    "source/completeness/provenance checks before adoption",
+    "completed extraction/context results awaiting writer lock retain their save-only continuation; changed source or lost lease prevents adoption",
+    "patient context waits for required current inference and quality conditions; notifications may display incomplete or held state",
+    "unknown delivery is not automatically resent",
+    "new attachment analysis is outside 1.1.1"
+  ],
+  "checked": "PNG opened locally at native width 390px, height 940px; no clipped or overlapping labels",
+  "sha256": {
+    "svg": "664d849ec912500440ed5586ac700adb2b4cb13794a0bd1ca0fe554319353b03",
+    "png": "6063208b90152927a3f2cac2dc1669cefd6f6808687f24a4dd8a1266dd0f23a5"
+  },
+  "published_reference": {
+    "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/releases/v1.1.1/inference-flow.png",
+    "status": "unpublished candidate; authenticated GitHub display not checked"
+  }
+}

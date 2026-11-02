@@ -1,0 +1,228 @@
+{
+  "status": "unpublished preparation; performance criterion remains unmet; no main merge or deployment",
+  "baseline": {
+    "previous_release": "v1.1.0",
+    "production_sha": "2b3ecd02b1412868eb2fb92d3124345dd3d606e6"
+  },
+  "fragment_count": 36,
+  "comparison_rows": 3,
+  "technical_catalog": "CHANGELOG.md 1.1.1 details",
+  "records": [
+    {
+      "path": "changes/archive/1.1.1/12-patient-context-prompt-details.json",
+      "id": "12-patient-context-prompt-details",
+      "title": "患者背景の再点検で抽出できる属性を明示",
+      "sha256": "8c89f19eb4c329052395cde3fa6ecb4358d366ecceb4d9707c0b5aa907df5d31"
+    },
+    {
+      "path": "changes/archive/1.1.1/14-patient-summary-repair-reservation.json",
+      "id": "14-patient-summary-repair-reservation",
+      "title": "患者背景の修復回数を課金予約と同時に確定",
+      "sha256": "5373ea1fa6948c1bbfd79ce0a9fc62f3945732fd5ab49b9a79517f518863fca3"
+    },
+    {
+      "path": "changes/archive/1.1.1/18-llm-internal-layout.json",
+      "id": "18-llm-internal-layout",
+      "title": "共通推論の内部ファイルを責務ごとに整理",
+      "sha256": "8764cff7a719167efbcc281884d6a8ce0538da85fbf60ccbce9c963a1e2e23e1"
+    },
+    {
+      "path": "changes/archive/1.1.1/18-logical-owner-names.json",
+      "id": "18-logical-owner-names",
+      "title": "内部モジュールと共有APIを役割に合う名前へ整理",
+      "sha256": "0ec720cec41912f8484ab55ee45724241e7ca58283d2c4f0f265d21ac5707185"
+    },
+    {
+      "path": "changes/archive/1.1.1/20-patient-context-completed-carry.json",
+      "id": "20-patient-context-completed-carry",
+      "title": "患者背景のクラウド解析結果を保存待ちから再開",
+      "sha256": "556c5b766e70506f0e6a54ad8a466d0544dde1620b415b821d4167e9758013ef"
+    },
+    {
+      "path": "changes/archive/1.1.1/checkpoint-reader-work-reuse.json",
+      "id": "checkpoint-reader-work-reuse",
+      "title": "解析再開時の重複した分割と読取りを削減",
+      "sha256": "58a036528b7a7152c6f5bc36f048e429ae9dece9bb0a439bfb92c012641161c9"
+    },
+    {
+      "path": "changes/archive/1.1.1/ci-parallel-verification.json",
+      "id": "ci-parallel-verification",
+      "title": "CIを2群で並列実行し、失敗時の診断を保存",
+      "sha256": "f70a41f0cea53b6138a1f4d47dbff6e0605ebca914c81330f2ee50bbffcbb83c"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-accounting-cache-close.json",
+      "id": "cloud-accounting-cache-close",
+      "title": "DBを閉じた後の課金集計キャッシュを解放",
+      "sha256": "2a6a1fe8c26821faefda57a5ada99d120e10ee0306dd7cc04c9251005bd434e5"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-accounting-streaming.json",
+      "id": "cloud-accounting-streaming",
+      "title": "クラウド利用履歴の読込みを省メモリ化",
+      "sha256": "cb7d655a9d3f82502074d10f51728e3ec95847085b242bc1567c23da12c1c106"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-backlog-diagnostics.json",
+      "id": "cloud-backlog-diagnostics",
+      "title": "クラウドのバックログ処理のログに診断用の集計を追加",
+      "sha256": "bb935f6ca066a68954f97233586c8ce09d881385917a495ea3faf8ade38b393d"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-history-snapshot-reuse.json",
+      "id": "cloud-history-snapshot-reuse",
+      "title": "過去チャットの処理対象確認で重複する読取りを削減",
+      "sha256": "466187f994f7313468982b6cf6b9c00ea75bd51b5868ab10f03ab38adca142ff"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-inference-shared-owner-20261102.json",
+      "id": "cloud-inference-shared-owner-20261102",
+      "title": "クラウド provider・契約の共有ownerを mcs/llm へ集約",
+      "sha256": "27b34210345a2fb0356f6b0584433489dae8d4f9ad109f63a3b34b4535c4f236"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-lock-failure-release.json",
+      "id": "cloud-lock-failure-release",
+      "title": "クラウド処理のロック取得失敗時にFDを解放",
+      "sha256": "7b812de9a828514648b3b86d30978b0bb1bc8bb704eb1a23553fd24db9695717"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-notsent-wait-reasons-20261102.json",
+      "id": "cloud-notsent-wait-reasons-20261102",
+      "title": "クラウド送信前拒否の未送信判定・semantic待機の往復・待機理由の記録を修正",
+      "sha256": "507e1944ed7eb8dc012716c9226d88ad5bb960acfa39dc52288ba226aa543026"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-receipt-read-cancellation.json",
+      "id": "cloud-receipt-read-cancellation",
+      "title": "課金証跡の照合を中断した後の読取り状態を解放",
+      "sha256": "998e544a26dd6f4bfa3fe2e2d28f111ec6855cc277d160a601e6ec67d8b4665f"
+    },
+    {
+      "path": "changes/archive/1.1.1/config-read-retry.json",
+      "id": "config-read-retry",
+      "title": "設定の並行更新でバックグラウンド処理が終了する問題を修正",
+      "sha256": "d9bab2f87065abb14c4579202aee3f08d39a3704096898fab952bf0cb25c67df"
+    },
+    {
+      "path": "changes/archive/1.1.1/extract-carry-backpressure.json",
+      "id": "extract-carry-backpressure",
+      "title": "保存待ちの推論結果が増え続ける問題を修正",
+      "sha256": "6b0d39a02c468dd274c416e17020f8eded8eff6542cc2528fbafce0e121099a1"
+    },
+    {
+      "path": "changes/archive/1.1.1/extraction-final-save-read-reuse.json",
+      "id": "extraction-final-save-read-reuse",
+      "title": "解析結果の保存時の重複処理を削減",
+      "sha256": "c67c984b3146e4023bc14bb3b65b2d23b582a039d54716c86a9d27c02856b658"
+    },
+    {
+      "path": "changes/archive/1.1.1/extractor-restore-writer-boundary.json",
+      "id": "extractor-restore-writer-boundary",
+      "title": "復元中の抽出処理による書込みを防止",
+      "sha256": "e4a4747294f8fa0bccb53f6db601a7c1f6384cd4d0106d42ba5df13478091283"
+    },
+    {
+      "path": "changes/archive/1.1.1/ledger-audit-schema10-required-column.json",
+      "id": "ledger-audit-schema10-required-column",
+      "title": "DB監査で初期取込状態の保存欄の欠落を検知",
+      "sha256": "1d152691bc29a404b830444970f039e758d1666429b21331ed504c90f58bbcc5"
+    },
+    {
+      "path": "changes/archive/1.1.1/local-admission-unused-reconciliation.json",
+      "id": "local-admission-unused-reconciliation",
+      "title": "ローカル推論の待機時に不要な照合を省略",
+      "sha256": "fc56551b099257b1b714ffb2776403c7653f8bc848615aeae60426a3dfbe473f"
+    },
+    {
+      "path": "changes/archive/1.1.1/loop-config-binding.json",
+      "id": "loop-config-binding",
+      "title": "依頼候補の判定で呼出元のモデル設定を使用",
+      "sha256": "1505a9b62853391a9022fcecece312a308568f0cf2999a9525ebc4fc0af1147f"
+    },
+    {
+      "path": "changes/archive/1.1.1/measurement-consumer-content-proof.json",
+      "id": "measurement-consumer-content-proof",
+      "title": "解析済みの測定値が読み取れない問題を修正",
+      "sha256": "1e6252b3f9a4d28068626cb78bc910ea6fde9f8b2b221aa1144b7c9368075c20"
+    },
+    {
+      "path": "changes/archive/1.1.1/notification-part-plan-health-20261101.json",
+      "id": "notification-part-plan-health-20261101",
+      "title": "通知部品の未完了集計に、配送計画の新旧による内訳 by_plan を追加",
+      "sha256": "244f63b030b4b3722ddd9db38311d1c3acd4b7c2ec0c6a1445fab568a3f3f339"
+    },
+    {
+      "path": "changes/archive/1.1.1/notification-performance-read-scope.json",
+      "id": "notification-performance-read-scope",
+      "title": "通知カード描画時の重複した文書読取りを削減",
+      "sha256": "b12ef10f8cc98a95d6d4d19e44cbf9cc6d75de2627dd0bff5a70c031398280c5"
+    },
+    {
+      "path": "changes/archive/1.1.1/notification-performance-scoped-reads.json",
+      "id": "notification-performance-scoped-reads",
+      "title": "通知作成時の重複した読取りを削減",
+      "sha256": "f7bbb5586559ce7b81f15d46b359b800779a82d540792f196d75dff1e3162432"
+    },
+    {
+      "path": "changes/archive/1.1.1/patient-context-grounded-detail-prompt.json",
+      "id": "patient-context-grounded-detail-prompt",
+      "title": "患者背景の属性と根拠引用の返却形式を明示",
+      "sha256": "02a5d5f08d23df30044841c9ee3481ffce9b0279dae8079cae3aee58c54d8902"
+    },
+    {
+      "path": "changes/archive/1.1.1/patient-quality-body-hash.json",
+      "id": "patient-quality-body-hash",
+      "title": "患者まとめの品質検証で本文hashの重複計算を削減",
+      "sha256": "62671baeed33b1e328690c321a430f01088e4b551beaf34bbb387c820f71f8cd"
+    },
+    {
+      "path": "changes/archive/1.1.1/rollback-provider-import-closure.json",
+      "id": "rollback-provider-import-closure",
+      "title": "更新失敗後の復旧で設定検証が停止する問題を修正",
+      "sha256": "9db57f66a98224ab4b3c0b0cfb1b3e2d2b6da5a92708a1cbc0818559106b6e31"
+    },
+    {
+      "path": "changes/archive/1.1.1/rollup-patient-source-concurrency.json",
+      "id": "rollup-patient-source-concurrency",
+      "title": "別患者の更新で患者集約が保留され続ける問題を修正",
+      "sha256": "2a0fb02bc25467c39f7d94efd12ccc0a220f96e56bc4dc8c5e6b8ef931831501"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-control-readers-restore-gates-v111.json",
+      "id": "runtime-control-readers-restore-gates-v111",
+      "title": "復元中の書込み停止と制御ファイルの安全な読取りを統一",
+      "sha256": "a0321d7396cc62d73413c316ca45394193496fd46e62a5dda33debebdd0185df"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-log-health-watchdog-20261101.json",
+      "id": "runtime-log-health-watchdog-20261101",
+      "title": "定期処理が実行ログの書込み競合や健康観測の遅延で打ち切られる問題を修正",
+      "sha256": "7cc60415eca59f4c5e0fcf572e7c21bb1b33faf3e6a6b2becc5fee7f69866341"
+    },
+    {
+      "path": "changes/archive/1.1.1/semantic-cached-receipt-batch.json",
+      "id": "semantic-cached-receipt-batch",
+      "title": "保存済み解析結果の確認時に重複する課金記録の読取りを削減",
+      "sha256": "42b3c1a8c7bb8b92838918f4f56591af5178dc7435b7ef27f12fc9aeac22eafb"
+    },
+    {
+      "path": "changes/archive/1.1.1/source-bindings-read-snapshot.json",
+      "id": "source-bindings-read-snapshot",
+      "title": "原文照合の中断時に読取り状態が残る問題を修正",
+      "sha256": "56fb6b6b47887be23ae50beebf4930500461011fbbb39a40245497c49ef2ed5f"
+    },
+    {
+      "path": "changes/archive/1.1.1/standalone-restore-writer-hold-v111.json",
+      "id": "standalone-restore-writer-hold-v111",
+      "title": "未完了DB復元のwriter holdをstandaloneが解除し得た問題と復元中writer起動を修正",
+      "sha256": "9c2803c8197f8ec4789f1c67f522e4031f47e63782fca1baa4651b5f201100dd"
+    },
+    {
+      "path": "changes/archive/1.1.1/transport-live-send-authority.json",
+      "id": "transport-live-send-authority",
+      "title": "通知停止中の再送とLINE WORKSの配送停滞を修正",
+      "sha256": "3fc7fd4b800ff9f10254126d32d93f6979b3d7ee76858da94d6d8a2a1b247cd5"
+    }
+  ]
+}

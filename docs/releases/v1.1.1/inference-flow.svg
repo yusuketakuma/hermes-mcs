@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="940" viewBox="0 0 390 940" role="img" aria-labelledby="title desc">
+  <title id="title">MCS 1.1.1の推論処理の流れ</title>
+  <desc id="desc">新着と履歴を共通の推論経路で処理し、送信前の利用条件と予算、採用前の原文根拠と完了証跡を確認します。保存待ちの結果は再推論せずに保存を再試行し、患者背景と通知で利用します。実画面や測定結果ではない説明図です。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66829a"/></marker>
+  </defs>
+  <rect width="390" height="940" fill="#f4f7fb"/>
+  <g font-family="Hiragino Kaku Gothic ProN, sans-serif" fill="#18324b">
+    <text x="22" y="38" font-size="23" font-weight="700">推論から保存・表示まで</text>
+    <text x="22" y="64" font-size="15">MCS 1.1.1 · 推論エンジン 1.0</text>
+    <rect x="18" y="88" width="354" height="98" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="34" y="119" font-size="19" font-weight="700">1　新着・履歴を取り込む</text>
+    <text x="34" y="147" font-size="15">新着はローカルで即時処理</text>
+    <text x="34" y="171" font-size="15">履歴・患者背景はクラウド優先</text>
+    <path d="M195 194V211" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="222" width="354" height="150" rx="14" fill="#e8f0fd" stroke="#a4bddc"/>
+    <text x="34" y="253" font-size="19" font-weight="700">2　共通の推論経路で処理</text>
+    <text x="34" y="283" font-size="16">ローカル / 登録済みクラウド</text>
+    <text x="34" y="308" font-size="15">Anthropic・OpenAIは設定に従う</text>
+    <text x="34" y="334" font-size="14" font-weight="700">送信前に利用条件・合計/API別予算を確認</text>
+    <text x="34" y="357" font-size="14">クラウド不可時もローカルの受付条件を確認</text>
+    <path d="M195 380V397" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="408" width="354" height="121" rx="14" fill="#fff6e8" stroke="#d9ba83"/>
+    <text x="34" y="439" font-size="19" font-weight="700">3　根拠と完了を確かめる</text>
+    <text x="34" y="468" font-size="15">原文・処理範囲・完了証跡を照合</text>
+    <text x="34" y="492" font-size="15">Jevは利用可能な場合に検証へ使用</text>
+    <text x="34" y="515" font-size="14">未完了・不一致を完了扱いにしない</text>
+    <path d="M195 537V554" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="565" width="354" height="121" rx="14" fill="#e4f3ec" stroke="#9ac7b3"/>
+    <text x="34" y="596" font-size="19" font-weight="700">4　保存待ちの結果を再開</text>
+    <text x="34" y="625" font-size="15">完成結果を保持して、保存を再試行</text>
+    <text x="34" y="649" font-size="15">保存前に原文と処理権限を再確認</text>
+    <text x="34" y="672" font-size="14">保存待ちだけで同じ推論を繰り返さない</text>
+    <path d="M195 694V711" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="722" width="354" height="121" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="34" y="753" font-size="19" font-weight="700">5　患者背景・通知で使う</text>
+    <text x="34" y="782" font-size="15">患者背景は必要な処理・品質確認後</text>
+    <text x="34" y="806" font-size="15">通知は未完了・保留も区別して表示</text>
+    <text x="34" y="829" font-size="14">送信結果不明の通知は自動再送しない</text>
+    <text x="22" y="878" font-size="14" font-weight="700">添付の新規解析は1.1.1の対象外</text>
+    <text x="22" y="904" font-size="13">説明図です。実画面・速度の測定結果ではありません。</text>
+    <text x="22" y="925" font-size="13">患者データ・実投稿は使用していません。</text>
+  </g>
+</svg>
