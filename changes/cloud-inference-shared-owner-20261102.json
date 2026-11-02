@@ -7,5 +7,21 @@
     "`_CloudProvider`・`CloudFallback`・`CloudBusy`・`_cloud_settings`・`_cloud_contract`・`_known_cloud_contract`・`_cloud_repair_answer_evidence`・`_current_cloud_settings` を extract_llm から cloud_inference へ移し、extract_llm は同名の薄いaliasで既存入口を維持します。",
     "抽出固有のキャッシュ接頭辞(_PROMPT_HEAD/_BATCH_HEAD)は provider 構築時に cache_heads として渡し、品質repairの子providerへも伝播します。COMMIT_MARGIN=5 は共有ownerの定数に一本化しました。",
     "semantic_candidate の source witness(_MODULES)と extract_llm の _LOADED_SOURCE_DIGESTS に cloud_inference を登録し、mcs_update の有限preloadにも加えて、ロールバックがこの世代の契約検証を保持するようにしました。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_inference.py",
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_v4.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/core/patient_context_artifacts.py",
+    "mcs/notify/processing_route.py",
+    "mcs/ops/mcs_update.py",
+    "tests/ops/test_update_loaded_rollback_closure.py",
+    "tests/semantic/test_semantic_cloud.py"
   ]
 }
