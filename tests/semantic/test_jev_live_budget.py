@@ -225,9 +225,10 @@ def test_live_scope_has_no_writer_or_run_lock_during_http(home, monkeypatch):
     assert len(opened) == 2 and _used(home) == 2
 
 
-@pytest.mark.parametrize("blocked", ["lock", "update", "code"])
+@pytest.mark.parametrize("blocked", ["lock", "update", "code", "restore"])
 def test_blocked_live_reservation_opens_no_ledger_and_sends_nothing(home, monkeypatch, blocked):
     import os
+    import notify_spool
     import writer_lock
     stamp = [123]
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: stamp[0])
@@ -240,13 +241,35 @@ def test_blocked_live_reservation_opens_no_ledger_and_sends_nothing(home, monkey
                 (home / "data" / "update_in_progress.marker").write_text("synthetic")
             elif blocked == "code":
                 stamp[0] += 1
+            elif blocked == "restore":
+                notify_spool.mark_restored(str(home / "data"), by="mcs_update")
             with pytest.raises(jev.JevError, match="budget_exceeded") as error:
                 _evaluate(client)
-            assert error.value.detail == ("usage_lock_busy" if blocked == "lock" else "usage_code_changed")
+            expected = {"lock": "usage_lock_busy", "restore": "usage_restore_in_progress"}
+            assert error.value.detail == expected.get(blocked, "usage_code_changed")
     finally:
         if fd is not None:
             os.close(fd)
     assert _used(home) == 0
+
+
+def test_restore_hold_while_reserving_keeps_reservation_without_http(home, monkeypatch):
+    import notify_spool
+    original = runtime.manual_usage_reserver
+    def factory(*args, **kwargs):
+        reserve = original(*args, **kwargs)
+        def held(body, timeout):
+            reserved = reserve(body, timeout)
+            notify_spool.mark_restored(str(home / "data"), by="mcs_update")
+            return reserved
+        return held
+    monkeypatch.setattr(runtime, "manual_usage_reserver", factory)
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("restore hold must stop reserved HTTP")) as client:
+        with pytest.raises(jev.JevError, match="budget_exceeded") as error:
+            _evaluate(client)
+        assert error.value.detail == "usage_restore_in_progress"
+    assert _used(home) == 1
 
 
 @pytest.mark.parametrize("failure", ["constructor", "reservation"])

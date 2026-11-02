@@ -8,7 +8,8 @@
     "mcs_standalone の定期 tick は、更新マーカーの孤児判定で update.lock・run.lock が取れてジャーナルが空の場合でも、restore_writer_hold が有効ならマーカーを削除せず journal_pending として保持します。共有ゲートを import できない・想定外の形の場合も fail-closed で保持します。正当な孤児(復元目撃なし)は従来どおり削除して再開します。",
     "ops cloud stop/resume・ops job の Ledger 書込み経路は、run.lock 取得・更新マーカー/コード一致の確認に加えて、同じ restore_writer_hold が有効な間は restore_in_progress で拒否します。復元中に新規 Ledger を開く・書き込む経路が塞がれます。既存の --confirm-human・reason・receipt の承認経路は変わりません。",
     "init_data の初期インポートも、run.lock 取得直後に更新マーカーの存在またはコード世代の不一致を update_in_progress、restore_writer_hold が有効な場合を restore_in_progress として拒否します。復元の同意待ちだけで旧 schema の DB をネットワーク取得前にマイグレーションしたり、認証失敗・空プロジェクトでも DB を変更したりする経路が入口で止まります。正式なバックアップ復元の採用済み(writers_resumed)環境では従来どおりインポートを実行でき、配送の停止は restore 目撃情報が独立して保持します。",
-    "updater 側の _restore_writer_hold_marker は、ロールバックで旧ツリー上を動く可能性があるため、従来どおりローカルな読み方を保持します。共有ゲートは同じ保持条件を返し、判定行列(updater/recover 由来は保持、manual 由来は保持しない、採用済み backup 復元は writer のみ再開)をテストで一致させています。"
+    "updater 側の _restore_writer_hold_marker は、ロールバックで旧ツリー上を動く可能性があるため、従来どおりローカルな読み方を保持します。共有ゲートは同じ保持条件を返し、判定行列(updater/recover 由来は保持、manual 由来は保持しない、採用済み backup 復元は writer のみ再開)をテストで一致させています。",
+    "明示的な live Jev ツール(jev_value・semantic_bench・wire_smoke・models 取得)の HTTP 予約も同じ境界を持ちます。run.lock 取得後・Ledger を開く前に restore_writer_hold を照合し、保持中は usage_restore_in_progress(budget_exceeded)で拒否して Ledger を開きません。予約の BEGIN 待ち中に復元目撃が現れた場合も、予約を保持したまま送信だけを止めます。再試行・再送信の意味は変わりません。"
   ],
   "refs": [
     "mcs/notify/notify_spool.py",
@@ -16,8 +17,10 @@
     "mcs/ops/cloud_cli.py",
     "mcs/ops/commands/job_cli.py",
     "mcs/ingest/init_data.py",
+    "mcs/semantic/semantic_jev.py",
     "tests/adapters/standalone/test_stab_runtime_supervision.py",
     "tests/ops/test_update_loaded_rollback_closure.py",
-    "tests/ingest/test_init_data_lifetime.py"
+    "tests/ingest/test_init_data_lifetime.py",
+    "tests/semantic/test_jev_live_budget.py"
   ]
 }
