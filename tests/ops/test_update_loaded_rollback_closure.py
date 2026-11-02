@@ -147,6 +147,25 @@ def cut(args):
         assert called
     finally:
         cloud_owner._known_cloud_contract = known_contract
+    if case == "postcheck":
+        # Shared restore gates must also remain the captured generation.
+        journal = data / "update_state.json"
+        original_journal = journal.read_bytes()
+        backup_witness = data / "backup_restore_blocked.json"
+        try:
+            state = updater.journal_store.default_state()
+            state["restore_consent"] = {"report_id": "synthetic"}
+            updater.journal_store.save_state(str(journal), state)
+            assert updater._restore_writer_hold_marker() is not None
+            assert updater._restore_hold_active()
+            updater.journal_store.save_state(str(journal), updater.journal_store.default_state())
+            assert not (data / "restore_pending.json").exists()
+            backup_witness.write_text("{}")
+            assert updater._awaiting_consent_marker() == {"unreadable": True}
+            assert updater._restore_writer_hold_marker() is not None
+        finally:
+            backup_witness.unlink(missing_ok=True)
+            journal.write_bytes(original_journal)
 updater._git_out = cut
 if case == "postcheck":
     cut(["reset", "--hard", "old"])

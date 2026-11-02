@@ -28,6 +28,7 @@ import mcs_standalone  # noqa: E402,F401  (path bootstrap)
 from adapters.common.paths import read_verified_attachment  # noqa: E402
 from mcs_util import HOME  # noqa: E402
 from safe_io import fdopen_owned  # noqa: E402
+import notify_spool  # noqa: E402
 
 from . import config  # noqa: E402
 from .credential_gate import (CredentialGateUnavailable, _reader as credential_reader,  # noqa: E402
@@ -70,6 +71,9 @@ def run(root: str) -> int:
             return 0
         raise
     transport = config.interactive(cfg)
+    if notify_spool.restore_writer_hold(str(Path(root).expanduser().resolve() / "data")) is not None:
+        log("restore_in_progress")
+        return 1
     if check(root):
         return 1
     return asyncio.run(_serve(root, cfg, transport))
@@ -114,6 +118,10 @@ def send(root: str, target: str) -> int:
 
 
 def _send_with_credential_gate(root: str, target: str) -> int:
+    data = str(Path(root).expanduser().resolve() / "data")
+    if (notify_spool.restore_pending(data) is not None
+            or notify_spool.restore_writer_hold(data) is not None):
+        raise NotSent("restore_in_progress")
     cfg = config.load(root)
     transport, _ = config.channel(cfg, target)
     # The Slack connector loads both tokens even to send (load_credentials).

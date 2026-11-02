@@ -35,7 +35,6 @@ import hashlib
 import json
 import math
 import os
-import plistlib
 import re
 import sqlite3
 import stat
@@ -1976,8 +1975,8 @@ def cmd_doctor(args) -> int:
         checks["desired_recovery_runtime"] = _doctor_check([why] if why else [], [])
         if os.path.lexists(os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist")):
             try:
-                with open(os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist"), "rb") as stream:
-                    matches = runtime_inspection.recovery_executable(plistlib.load(stream)) == runtime_inspection.recovery_python(cfg)
+                matches = runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(
+                    os.path.join(AGENTS_DIR, f"{service_contract.RECOVERY_LABEL}.plist"))) == runtime_inspection.recovery_python(cfg)
             except (OSError, ValueError, TypeError):
                 matches = False
             checks["recovery_selection"] = _doctor_check(

@@ -46,6 +46,43 @@ def request(world):
             'additional_attempts': 1, 'reason': 'synthetic investigation and corrective action'}
 
 
+@pytest.mark.parametrize("witness", ["restored", "corrupt", "journal"])
+def test_retry_restore_hold_precedes_writer_under_the_lock(world, monkeypatch, witness):
+    from pathlib import Path
+    import ledger as ledger_module
+    import notify_spool
+    import update_journal
+    import writer_lock
+
+    ledger, _, _, _ = world
+    req = request(world)
+    data = Path(mcs_util.HOME) / "data"
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["applying"] = {"restore_incomplete": True}
+        (data / "update_state.json").write_text(json.dumps(state))
+    else:
+        (data / "restore_pending.json").write_text("{invalid" if witness == "corrupt" else
+            json.dumps({"by": "mcs_recover", "phase": "restored"}))
+    before = ledger.db.total_changes
+    gate = notify_spool.restore_writer_hold
+    observed = []
+
+    def locked_gate(destination):
+        assert writer_lock.acquire_run_lock(str(data / "run.lock")) is None
+        observed.append(True)
+        return gate(destination)
+
+    monkeypatch.setattr(notify_spool, "restore_writer_hold", locked_gate)
+    monkeypatch.setattr(ledger_module, "Ledger", lambda *a, **k: pytest.fail("restore-held retry opened a writer"))
+    assert job_cli.main([
+        "retry", "--job-id", str(req["job_id"]), "--diagnosis-hash", req["diagnosis_hash"],
+        "--expected-payload-hash", req["expected_payload_hash"], "--remediation", req["remediation"],
+        "--additional-attempts", "1", "--confirm-human", "--reason", req["reason"],
+    ]) == 1
+    assert observed == [True] and ledger.db.total_changes == before
+
+
 def test_retry_unknown_reason_after_human_investigation_preserves_history_and_receipt(world):
     ledger, job, payload, cfg = world
     req = request(world)

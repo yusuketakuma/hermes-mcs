@@ -46,15 +46,40 @@ DATA = os.path.join(HOME, "data")
 RECOVERY_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _fdopen_owned(fd, mode, **stream_kwargs):
+    """Adopt an owned FD, closing it if stream construction fails."""
+    try:
+        return os.fdopen(fd, mode, closefd=True, **stream_kwargs)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            if cleanup_error.errno != errno.EBADF:
+                raise
+        raise
+
+
+def _read_regular_bytes(path, maximum=16 * 1024 * 1024, private=False):
+    """Read a bounded regular leaf without project imports, links or FIFO waits."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with _fdopen_owned(fd, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(metadata.st_mode)
+                or private and metadata.st_mode & 0o077 or metadata.st_size > maximum):
+            raise ValueError("local_state_file_invalid")
+        raw = stream.read(maximum + 1)
+        if len(raw) > maximum:
+            raise ValueError("local_state_file_too_large")
+        return raw
+
+
 def _installed_repo():
     """The checkout install.sh recorded next to this tool — install and
     update support a clone anywhere, while data/ always lives in ~/.mcs.
     Falls back to ~/.mcs for installs that predate the sidecar."""
     try:
-        with open(os.path.join(RECOVERY_DIR, "repo_path"),
-                  encoding="utf-8") as f:
-            path = f.read().strip()
-    except OSError:
+        path = _read_regular_bytes(os.path.join(RECOVERY_DIR, "repo_path"), 65536).decode("utf-8").strip()
+    except (OSError, ValueError):
         return HOME
     return path if os.path.isabs(path) else HOME
 
@@ -459,33 +484,8 @@ def _load_state():
 
 def _read_local_json(path, maximum=None, private=False):
     """Read a regular, non-symlink file; preserve each caller's size policy."""
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    try:
-        metadata = os.fstat(fd)
-        if (not stat.S_ISREG(metadata.st_mode)
-                or private and metadata.st_mode & 0o077
-                or maximum is not None and metadata.st_size > maximum):
-            raise ValueError("local_state_file_invalid")
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            raw = stream.read() if maximum is None else stream.read(maximum + 1)
-        if maximum is not None and len(raw) > maximum:
-            raise ValueError("local_state_file_too_large")
-        return json.loads(raw.decode("utf-8"))
-    finally:
-        os.close(fd)
-
-
-def _fdopen_owned(fd, mode, **stream_kwargs):
-    """Adopt an owned FD, closing it if stream construction fails."""
-    try:
-        return os.fdopen(fd, mode, closefd=True, **stream_kwargs)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError as cleanup_error:
-            if cleanup_error.errno != errno.EBADF:
-                raise
-        raise
+    return json.loads(_read_regular_bytes(
+        path, 16 * 1024 * 1024 if maximum is None else maximum, private).decode("utf-8"))
 
 
 def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
@@ -700,10 +700,11 @@ def _report_alert(result, state, detail, text, **extra):
 
 def _try_lock(path):
     _check_recovery_root()
-    data_fd = None
+    data_fd = fd = None
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
         if _RECOVERY_ROOT is None:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+            fd = os.open(path, flags, 0o600)
         else:
             if os.path.dirname(os.path.abspath(path)) != os.path.abspath(DATA):
                 raise _RecoveryRootChanged()
@@ -711,8 +712,12 @@ def _try_lock(path):
                               dir_fd=_RECOVERY_ROOT.fd)
             if _root_identity(os.fstat(data_fd)) != _root_identity(os.stat(DATA, follow_symlinks=False)):
                 raise _RecoveryRootChanged()
-            fd = os.open(os.path.basename(path), os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=data_fd)
+            fd = os.open(os.path.basename(path), flags, 0o600, dir_fd=data_fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "recovery_lock_not_regular")
     except OSError:
+        if fd is not None:
+            os.close(fd)
         return None
     finally:
         if data_fd is not None:
@@ -1043,8 +1048,7 @@ def _gateway_restart_run(data, agents, uid):
 
     issued = False
     try:
-        with open(expected, "rb") as stream:
-            plist = plistlib.load(stream)
+        plist = plistlib.loads(_read_regular_bytes(expected, 1024 * 1024))
         args = plist.get("ProgramArguments")
         if plist.get("Label") != label or not isinstance(args, list) or not args \
                 or not all(isinstance(arg, str) for arg in args) \
@@ -1122,8 +1126,9 @@ def _gateway_restart_run(data, agents, uid):
 # No repo imports are needed after the parent exits or rolls the tree back.
 _GATEWAY_RESTART_PROGRAM = (
     "import errno,os,sys,json,re,stat,tempfile,time,subprocess\nfrom pathlib import Path\n"
-    "from contextlib import suppress\n" + inspect.getsource(_read_local_json)
-    + "\n" + inspect.getsource(_fdopen_owned)
+    "from contextlib import suppress\n" + inspect.getsource(_fdopen_owned)
+    + "\n" + inspect.getsource(_read_regular_bytes)
+    + "\n" + inspect.getsource(_read_local_json)
     + "\n" + inspect.getsource(_atomic_json)
     + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_restart_run)

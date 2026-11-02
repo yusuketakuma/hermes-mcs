@@ -305,9 +305,8 @@ def sync_cross_list(ledger, adapter, dataset: str, *, enabled: bool = False,
 
 def main(argv: list[str] | None = None) -> int:
     """Explicit storage-only GET under the existing writer lock; no publication."""
-    from ledger import Ledger
-    from mcs_adapter import MCSAdapter
     from writer_lock import acquire_run_lock
+    from notify_spool import restore_writer_hold
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", required=True)
@@ -329,6 +328,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     store = None
     try:
+        if restore_writer_hold(os.path.dirname(os.path.abspath(args.database))) is not None:
+            print(json.dumps({"state": "held", "reason": "restore_in_progress"}))
+            return 1
+        from ledger import Ledger
+        from mcs_adapter import MCSAdapter
         store = Ledger(args.database)
         adapter = MCSAdapter(token_cache=args.token_cache)
         adapter.load_cached_session()

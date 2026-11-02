@@ -14,8 +14,9 @@ from contextlib import suppress
 
 import mcs_runtime
 from mcs_requests import canonical
-from safe_io import atomic_write
+from safe_io import atomic_write, read_json_nofollow
 import notify_scope
+import update_journal
 
 RESTORE_MARKER = "restore_pending.json"
 
@@ -50,8 +51,7 @@ def restore_pending(root: str) -> dict | None:
         "restore.json", "backup_restore_approval.json",
         "backup_restore_resume.json", "backup_restore_blocked.json"))
     try:
-        with open(path, "rb") as handle:
-            data = json.loads(handle.read().decode("utf-8"))
+        data = read_json_nofollow(path, 1024 * 1024)
     except FileNotFoundError:
         return {"unreadable": True} if backup_restore or os.path.lexists(path) else None
     except (OSError, ValueError, RecursionError):
@@ -108,6 +108,11 @@ def restore_writer_hold(root: str) -> dict | None:
     through writers_resumed while delivery stays held, so it never answers
     here. Kept beside the other restore gates so standalone, CLI entry
     points and the updater share one reading."""
+    state = update_journal.load_state(os.path.join(root, "update_state.json"))
+    if state.get("_corrupt"):
+        return {"unreadable": True}
+    if "restore_consent" in state or (state.get("applying") or {}).get("restore_incomplete"):
+        return {"journal_hold": True}
     marker = restore_awaiting_consent(root)
     if marker is not None:
         return marker

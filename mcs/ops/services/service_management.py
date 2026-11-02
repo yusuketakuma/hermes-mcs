@@ -151,8 +151,8 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_r
     if os.path.lexists(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist')):
         why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), checkout=paths.checkout, **probe_args), recovery=True)
         try:
-            with open(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), 'rb') as stream:
-                actual = runtime_inspection.recovery_executable(plistlib.load(stream))
+            actual = runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(
+                os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist')))
         except (OSError, ValueError, TypeError):
             actual = None
         if actual is not None:
@@ -170,8 +170,7 @@ def recovery_repair_pending(cfg, *, paths: ServicePaths) -> bool:
     if 'recovery_python' not in cfg or not os.path.lexists(path):
         return False
     try:
-        with open(path, 'rb') as stream:
-            return runtime_inspection.recovery_executable(plistlib.load(stream)) != runtime_inspection.recovery_python(cfg)
+        return runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(path)) != runtime_inspection.recovery_python(cfg)
     except (OSError, ValueError, TypeError):
         return True
 
@@ -181,8 +180,7 @@ def update_parent_holds_locks(data: Path) -> bool:
     handshake token (mcs_update._UPDATE_PM_ENV)."""
     token = os.environ.get('_MCS_UPDATE_PM')
     try:
-        with open(data / 'update_state.json', encoding='utf-8') as stream:
-            applying = json.load(stream).get('applying')
+        applying = safe_io.read_json_nofollow(data / 'update_state.json', 16 * 1024 * 1024).get('applying')
     except (OSError, ValueError, AttributeError):
         return False
     return bool(token) and isinstance(applying, dict) and (applying.get('sha') == token)
@@ -193,8 +191,7 @@ def sync_recovery(cfg, note, dry, *, paths: ServicePaths) -> int:
     if 'recovery_python' not in cfg or not os.path.lexists(path):
         return 0
     desired = runtime_inspection.recovery_python(cfg)
-    with path.open('rb') as stream:
-        actual = runtime_inspection.recovery_executable(plistlib.load(stream))
+    actual = runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(path))
     if actual == desired:
         return 0
     if paths.platform != 'darwin' or not recovery_owned(paths=paths):
@@ -329,8 +326,10 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
     plist = os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist')
     fix = install_fix('手順6で復旧ツールと定期監視を導入', paths=paths)
     try:
-        deployed = Path(tool).read_bytes()
-    except OSError:
+        deployed = safe_io.read_regular_nofollow(tool, 16 * 1024 * 1024, ValueError)
+        if len(deployed) > 16 * 1024 * 1024:
+            raise ValueError('recovery_tool_too_large')
+    except (OSError, ValueError):
         deployed = None
     if deployed is None or not os.path.exists(plist):
         warnings.append(f'更新の復旧監視（{contract.RECOVERY_LABEL}）が未導入です。更新が中断しても自動復旧できません。' + fix)
@@ -342,8 +341,11 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
             if deployed != Path(paths.checkout, 'deployment', 'recovery', 'mcs_recover.py').read_bytes():
                 warnings.append(f'復旧ツール{tool}が配布版と異なります。' + fix)
         try:
-            recorded = Path(paths.recovery_dir, 'repo_path').read_text(encoding='utf-8').strip()
-        except OSError:
+            raw = safe_io.read_regular_nofollow(Path(paths.recovery_dir, 'repo_path'), 65536, ValueError)
+            if len(raw) > 65536:
+                raise ValueError('recovery_pointer_too_large')
+            recorded = raw.decode('utf-8').strip()
+        except (OSError, ValueError):
             recorded = paths.root
         if os.path.realpath(recorded) != os.path.realpath(paths.checkout):
             warnings.append(f'復旧監視の対象は{recorded}です。この導入先{paths.checkout}とは異なります。' + fix)

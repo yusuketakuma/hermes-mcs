@@ -15,6 +15,7 @@ import shutil
 from pathlib import Path
 
 import mcs_runtime
+from safe_io import read_plist_nofollow
 from lifecycle_io import run_bounded
 from mcs_config import recovery_python_problem
 
@@ -124,12 +125,16 @@ def recovery_executable(plist) -> str | None:
     return exe if isinstance(exe, str) and os.path.isabs(exe) else None
 
 
+def read_recovery_plist(path):
+    """Read a bounded deployed recovery plist, refusing links and nonregular leaves."""
+    return read_plist_nofollow(path)
+
+
 def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=None) -> mcs_runtime.RuntimeFacts | None:
     """Inspect the deployed command from the explicit plist and checkout."""
     # Inspect the deployed watchdog's command, not ambient /usr/bin/python3.
     try:
-        with open(plist_path, "rb") as f:
-            plist = plistlib.load(f)
+        plist = read_recovery_plist(plist_path)
         exe = recovery_executable(plist)
         if exe is None or recovery_python_problem(exe, checkout=checkout):
             return None

@@ -634,8 +634,8 @@ if problem:
     raise SystemExit("復旧用 Python に問題があります: " + problem)
 if "recovery_python" in cfg and os.path.lexists(
         Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist")):
-    with open(Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist"), "rb") as stream:
-        deployed = runtime_inspection.recovery_executable(plistlib.load(stream))
+    deployed = runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(
+        Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist")))
     if deployed != desired:
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape

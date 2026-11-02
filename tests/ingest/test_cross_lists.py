@@ -359,6 +359,42 @@ def test_cli_busy_lock_never_opens_writer_or_adapter(store, tmp_path, monkeypatc
     assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "run_lock_busy"}
 
 
+@pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_cli_restore_hold_precedes_writer_and_adapter(store, tmp_path, monkeypatch, capsys, witness, alias):
+    import cross_lists
+    import ledger
+    import update_journal
+
+    marker = tmp_path / "restore_pending.json"
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["applying"] = {"restore_incomplete": True}
+        (tmp_path / "update_state.json").write_text(json.dumps(state))
+    elif witness == "corrupt":
+        marker.write_text("{invalid")
+    else:
+        marker.write_text(json.dumps({"by": "mcs_update", "phase":
+                                     "restored" if witness == "restored" else "awaiting_consent"}))
+    before = (tmp_path / "synthetic.db").read_bytes()
+    directory = tmp_path
+    if alias:
+        directory = tmp_path / "alias"
+        directory.symlink_to(tmp_path, target_is_directory=True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("restore hold must precede writer and adapter construction")
+
+    monkeypatch.setattr(ledger, "Ledger", forbidden)
+    monkeypatch.setattr(mcs_adapter, "MCSAdapter", forbidden)
+    assert cross_lists.main([
+        "--database", str(directory / "synthetic.db"), "--dataset", "mentioned",
+        "--read-only-get", "--token-cache", str(tmp_path / "synthetic-cache"),
+    ]) == 1
+    assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "restore_in_progress"}
+    assert (tmp_path / "synthetic.db").read_bytes() == before
+
+
 @pytest.mark.parametrize("flags", [[], ["--read-only-get", "--unread-only"]])
 def test_cli_rejects_unapproved_or_ungrounded_get_options(tmp_path, flags):
     import cross_lists
