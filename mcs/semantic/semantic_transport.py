@@ -483,6 +483,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     if fmt is None:
         # the probe never left — an unobserved format defers the real
         # call like any other admission hold, never a silent plain send
+        _failed("probe_unsent")
         raise runtime.LLMNotSent("probe_unsent")
     rf = {"type": "json_object"} if fmt == "object" else None
     key = _long_key(model, prompt)
