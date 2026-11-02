@@ -118,3 +118,18 @@ def test_reviewed_prior_preflight_keeps_split_snapshot_guard(reviewed_source, mo
         "mode": "split", "snapshot": next(snapshots)})
     with pytest.raises(update.ProviderRollbackUnverified, match="settings_changed"):
         update._provider_rollback_preflight(previous)
+
+
+@pytest.mark.parametrize("path", ["mcs/llm/cloud_policy.py", "mcs/semantic/semantic_jev.py",
+                                  "adapters/synthetic.py", "deployment/synthetic.py"])
+def test_reviewed_witness_does_not_authorize_other_runtime_changes(reviewed_source, path):
+    update, repo, previous = reviewed_source
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# synthetic unreviewed runtime difference\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "synthetic target outside the reviewed tree")
+    unknown = _head(repo)
+    _git(repo, "checkout", "-q", "HEAD~1")
+    assert not update._split_target_source_matches(unknown, allow_reviewed_rollback=True)
+    assert update._split_target_source_matches(previous, allow_reviewed_rollback=True)

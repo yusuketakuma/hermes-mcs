@@ -825,6 +825,8 @@ def _provider_prior_source_verified(ref):
 
 
 _PROVIDER_ROLLBACK_SOURCE_WITNESSES = frozenset({
+    # ef091422: c9478a63 changes only extractor startup, not settings or storage.
+    "d1c890c28b38d2c438251529b8f4be25f0301b7e5d13d5fc10cc69cbfd0436f9",
     # v1.1.0 2b3ecd02: identical split-settings reader/validator and provider models.
     "f24fcf80fb80afad4ad302fef3b76869c3238ec8143b535ee459e4276a601099",
 })
