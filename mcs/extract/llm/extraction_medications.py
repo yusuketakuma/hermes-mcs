@@ -159,7 +159,8 @@ def block(snapshot, body, start, piece, *, private):
                 left, right = (part["start"] + n for n in match["span"])
                 if start <= left < right <= start + len(piece):
                     rows.append({"surface": match["surface"],
-                                 "candidates": [{"name": candidate["display"], "kind": candidate["kind"]}
+                                 "candidates": [{"matched_surface": candidate["matched_surface"],
+                                                 "name": candidate["display"], "kind": candidate["kind"]}
                                                 for candidate in match["candidates"]],
                                  "candidate_count": match["candidate_count"],
                                  "candidates_truncated": match["candidates_truncated"]})

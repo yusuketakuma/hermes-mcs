@@ -34,6 +34,17 @@ def test_genuine_empty_scan_still_checks_its_dictionary_generation(store, tmp_pa
     assert not references.current(store.db, {}, value, body=body)
 
 
+@pytest.mark.parametrize("surface", ["キラナ5mg", "キラナ3錠"])
+def test_prompt_keeps_the_matched_drug_name_separate_from_the_numeric_surface(store, tmp_path, surface):  # noqa: F811
+    body = surface + "を服用。"
+    _, value = snapshot(store, tmp_path, body)
+    local = references.block(value, body, 0, body, private=True)
+    cloud = references.block(value, body, 0, body, private=False)
+    assert '"matched_surface":"キラナ"' in local
+    assert "架空成分甲" in local and "架空成分甲" not in cloud
+    assert "服用量が書かれていなければdoseへ規格を転記しない" in local
+
+
 def test_owner_database_failure_is_false_before_any_transport(monkeypatch):
     def broken(*args):
         raise sqlite3.OperationalError("synthetic owner read failure")
