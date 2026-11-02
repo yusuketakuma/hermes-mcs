@@ -187,7 +187,7 @@ def test_later_chunk_failure_preserves_only_completed_detail_chunks(tmp_path,mon
         resumed = _EventJev()
         result = semantic_assessment.evaluate_medication_events(db,bundle,10,facts[:1],resumed,cfg,20.0)
         assert result['complete']
-        assert [questions for _,questions in resumed.calls] == [['status'],['polarity'],['speaker_basis']]
+        assert [questions for _,questions in resumed.calls] == [['status'],['polarity'],['speaker_basis'],['dose_direction']]
         assert len(db.artifacts(semantic_assessment.KIND_ASSESS)) == len(jev.MED_DETAIL_QUESTIONS)
     finally:
         db.close()
@@ -198,7 +198,7 @@ def test_medication_detail_real_answer_validation_retries_only_the_bad_dimension
     try:
         bundle,facts,_ = _bundle_and_facts(db)
         posts,reservations,guards = [],[],[]
-        choices = {'change_kind':'start','status':'planned','polarity':'affirmed','speaker_basis':'self_report'}
+        choices = {'change_kind':'start','status':'planned','polarity':'affirmed','speaker_basis':'self_report','dose_direction':'not_applicable'}
         def post(body,timeout):
             assert not db.db.in_transaction
             questions = body['questions']
@@ -215,7 +215,7 @@ def test_medication_detail_real_answer_validation_retries_only_the_bad_dimension
         client = jev.JevClient(api_key='synthetic',max_attempts=1,post_fn=post)
         bound = semantic_runtime.bind_jev(client,guards.append,reserve)
         result = semantic_assessment.evaluate_medication_events(db,bundle,10,facts[:1],bound,
-                    {**SCFG,'max_questions_per_request':4},time.monotonic()+60)
+                    {**SCFG,'max_questions_per_request':len(jev.MED_DETAIL_QUESTIONS)},time.monotonic()+60)
         assert result['complete'] and set(result['details']['f-start']) == set(jev.MED_DETAIL_QUESTIONS)
         assert posts == reservations == [list(jev.MED_DETAIL_QUESTIONS),['status']]
         assert client.requests_made == 2 and guards.count('jev_attempt') >= 2 and 'jev_result' in guards

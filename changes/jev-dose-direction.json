@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "薬剤イベント詳細のJev評価に用量方向（増量/減量）の次元を追加",
+  "summary": "薬剤イベント詳細をJevで評価する次元に dose_direction を追加しました。これまで用量変更（change_kind=dose）は増量か減量かの方向を持たず、通知の緊重度を分けられませんでした。新次元は increase / decrease / not_applicable / unknown の固定選択肢で、既存の status や polarity と同じ経路（一括質問・厳密検証・耐久キャッシュ）で評価されます。評価済みの次元はキャッシュから再利用されるため、既存データの再評価は発生せず、未評価イベントだけに +1 質問/イベントのコストがかかります。",
+  "upgrade": "追加操作は不要です。既存の評価キャッシュはそのまま有効で、新次元は未評価イベントの次回評価から自動で追加されます。Jev の日次・ジブ毎の上限は従来どおり適用され、上限に達した場合は新次元も他次元と同様に延期されます。",
+  "details": [
+    "MED_DETAIL_QUESTIONS の末尾に dose_direction を追加。選択肢は increase / decrease / not_applicable / unknown。",
+    "質問構築・キャッシュ・永続化・応答検証・低confidence検知は既存の次元共通経路をそのまま使用し、新しい分岐は追加していない。",
+    "抽出済み fact との自動照合は行わない（抽出 fact が用量方向を保持しないため、mismatch 検知の対象は status / polarity のまま）。",
+    "モデル・エンドポイント・推論エンジン v1.0・価格/予算の fail-closed 契約は不変。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_assessment.py",
+    "tests/semantic/test_semantic_assessment.py",
+    "tests/semantic/test_jev_cost_down.py"
+  ]
+}

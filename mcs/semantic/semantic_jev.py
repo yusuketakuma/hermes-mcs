@@ -866,6 +866,15 @@ MED_DETAIL_QUESTIONS = {
                        "family_report": "attributed to family",
                        "quoted": "quoting someone else",
                        "unknown": "cannot be determined"}),
+    "dose_direction": ("For the medication event described in "
+                       "state.target.text, which direction does the "
+                       "dose amount move, if any?",
+                       {"increase": "the dose amount is reported higher",
+                        "decrease": "the dose amount is reported lower",
+                        "not_applicable": "the event is not a dose-amount "
+                                          "change, or no direction applies",
+                        "unknown": "a dose change is reported but its "
+                                   "direction cannot be determined"}),
 }
 
 # claim-audit choice labels (spec §16.2)

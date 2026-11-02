@@ -71,9 +71,11 @@ class _EventJev:
         fact_id = state["target"]["fact_id"]
         choices = {
             "f-start": {"change_kind": "start", "status": "planned",
-                        "polarity": "affirmed", "speaker_basis": "self_report"},
+                        "polarity": "affirmed", "speaker_basis": "self_report",
+                        "dose_direction": "not_applicable"},
             "f-stop": {"change_kind": "stop", "status": "cancelled",
-                       "polarity": "negated", "speaker_basis": "clinician_report"},
+                       "polarity": "negated", "speaker_basis": "clinician_report",
+                       "dose_direction": "not_applicable"},
         }
         answers = {}
         for dimension in questions:
@@ -168,7 +170,7 @@ def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
             time.monotonic() + 30)
         assert second["complete"]
         assert [dims for _state, dims in second_client.calls] \
-            == [["status", "polarity", "speaker_basis"]]
+            == [["status", "polarity", "speaker_basis", "dose_direction"]]
         assert len(db.artifacts(assessment.KIND_ASSESS,
                                 project_id=1, message_id=10)) \
             == len(jev.MED_DETAIL_QUESTIONS)
