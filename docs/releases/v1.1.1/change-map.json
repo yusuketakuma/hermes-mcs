@@ -210,7 +210,7 @@
       "path": "changes/archive/1.1.1/runtime-log-health-watchdog-20261101.json",
       "id": "runtime-log-health-watchdog-20261101",
       "title": "定期処理が実行ログの書込み競合や健康観測の遅延で打ち切られる問題を修正",
-      "sha256": "5e8446c3b9bd9e1fcd279b36b64d99d8c949f42908982467ce2e68e618b9d668"
+      "sha256": "cfb4a173c1fdc3eab205f3eadeb4b8b7b458e3e63758bbbd1b2cfde55b653fbe"
     },
     {
       "path": "changes/archive/1.1.1/semantic-cached-receipt-batch.json",
