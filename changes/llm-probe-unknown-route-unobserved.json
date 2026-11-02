@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "未登録routeの形式probeが偽の「plain判定」としてキャッシュされる問題を修正",
+  "summary": "共有brokerに未登録のroute名で呼ばれた形式probeが、1バイトも送らずに「形式非対応（plain）」を返していました。呼出元はこの偽判定を600秒キャッシュするため、その間の全抽出・semantic呼出が非構造化のplain送信へ降格していました。未登録routeは「未観測」としてNoneを返し、既存の延期経路（次回呼出で再probe）へ委ねます。",
+  "upgrade": "追加操作は不要です。既存の形式キャッシュはそのまま有効です。",
+  "details": [
+    "admitted_probe_formatが未登録route（routesに無いclient_route）でNoneを返す。拒否・保留・送信前期限切れと同じ未観測扱いで、偽のplain判定はキャッシュされない。",
+    "送信されるprobe要求・permitの作成は従来どおり一切行われない（_validate_chat_argsより前で返る）。"
+  ],
+  "refs": [
+    "mcs/llm/transport/local_llm.py",
+    "tests/llm/test_llm_admission.py"
+  ]
+}
