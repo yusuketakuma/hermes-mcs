@@ -83,7 +83,7 @@ PARTS_KEYS = frozenset({
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
-    "provider_states_version", "processing_display_version", "slack_thread_policy",
+    "provider_states_version", "processing_display_version", "slack_thread_policy", "section_divider_version",
     # per-transport presentation (mcs/notify/present_<t>.py); only the
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
@@ -362,6 +362,9 @@ def validate(spec) -> dict:
             or parts["processing_display_version"] != 1
             or parts.get("provider_states_version") != 4):
         _err("bad_processing_display")
+    if "section_divider_version" in parts and (
+            type(parts["section_divider_version"]) is not int or parts["section_divider_version"] != 1):
+        _err("bad_section_divider_version")
     if "slack_thread_policy" in parts and (
             type(parts["slack_thread_policy"]) is not int or parts["slack_thread_policy"] != 1
             or spec.get("kind") != "thread"
@@ -487,6 +490,10 @@ def validate(spec) -> dict:
     slots, text = _containers_cost(containers)
     budget -= slots
     text_budget -= text
+    if (parts.get("section_divider_version") == 1
+            and spec["delivery"].get("transport", "discord") == "discord"):
+        # The compact Discord fallback retains each rule as text.
+        text_budget -= 14 * sum(bool(c.get("rule")) and c.get("type") != "meta" for c in containers)
     slots, text = _footer_cost(parts.get("footer") or [])
     budget -= slots
     text_budget -= text
@@ -654,6 +661,8 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
         card_payload["preview_text"] = parts["preview_text"]
     if "processing_display_version" in parts:
         card_payload["processing_display_version"] = parts["processing_display_version"]
+    if "section_divider_version" in parts:
+        card_payload["section_divider_version"] = parts["section_divider_version"]
     if "slack_thread_policy" in parts:
         card_payload["slack_thread_policy"] = parts["slack_thread_policy"]
     card_sha = hashlib.sha256(canonical(card_payload)).hexdigest()

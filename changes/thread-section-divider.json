@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "通知の要約と原文の区切りを表示",
+  "summary": "Slack・Discord・LINE WORKSの新形式通知で、要約やスタンプと原文の間に区切り線を表示します。",
+  "upgrade": "既存の更新手順に従い、対応する通知アダプターを再起動してください。未対応の旧ワーカーは新しい形式の通知を保留します。配信済みの旧形式はそのまま保持します。",
+  "refs": [
+    "mcs/notify/notify_parts.py",
+    "adapters/common/spec.py",
+    "adapters/slack/presentation.py"
+  ]
+}
