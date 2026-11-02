@@ -612,14 +612,14 @@ def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(
         db.db.executemany("INSERT INTO artifacts(kind,meta,created_at) VALUES('cloud_usage_reserve',?,?)",
             [(json.dumps({"reservation_id": f"{index:032x}"}), current - 86400) for index in range(1000)])
         db.db.commit()
-        original = c._loads
+        original = c._accounting_meta
         decoded = []
 
         def tracked(raw):
             decoded.append(1)
             return original(raw)
 
-        monkeypatch.setattr(c, "_loads", tracked)
+        monkeypatch.setattr(c, "_accounting_meta", tracked)
         statements = []
         db.db.set_trace_callback(statements.append)
         report = c.usage_report(db, now=current)
@@ -709,9 +709,9 @@ def test_reservation_gate_decodes_each_usage_row_once_but_still_catches_corrupti
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         r = _reserve(db)
         c.record_result(db, r, _result(r))
-        original = c._loads
+        original = c._accounting_meta
         decoded = []
-        monkeypatch.setattr(c, "_loads", lambda raw: decoded.append(1) or original(raw))
+        monkeypatch.setattr(c, "_accounting_meta", lambda raw: decoded.append(1) or original(raw))
         _reserve(db, unit="second")
         seen = len(decoded)
         assert seen >= 2
