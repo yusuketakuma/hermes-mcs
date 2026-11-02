@@ -103,6 +103,9 @@ import mcs_util
 import semantic_assembly
 import semantic_facts
 import extraction_context
+import extraction_medications
+import drug_map
+import drug_mentions
 from ledger import Ledger, LedgerReader
 from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_KIND,
                          current_extract_pred,
@@ -189,6 +192,8 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", __file__),
                        ("extract_schema", extract_schema.__file__),
                        ("extract_validation", extract_validation.__file__),
                        ("extract_quality", extract_quality.__file__)))
+_LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__file__,
+                             "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__})
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in _LOADED_SOURCE_PATHS.items()}
@@ -431,13 +436,19 @@ _BATCH_HINT = """対象{i}の決定的候補(ルール抽出・未確定 — 確
 """
 
 
-def _batch_prompt(jobs: list) -> str:
+def _batch_prompt(jobs: list, *, medication_hints=None) -> str:
     """One prompt for K context-free bodies. `jobs` elements are
     (body, posted_at, hints) — the bodies stay verbatim inside their
     own <<<>>> fence so per-item evidence still locates against the
     indexed body alone."""
     prompt = _BATCH_HEAD
+    if medication_hints is not None and len(medication_hints) != len(jobs):
+        raise ValueError("medication_batch_scope_invalid")
     for i, (body, posted, hints) in enumerate(jobs):
+        if medication_hints is not None:
+            block = extraction_medications.block(medication_hints[i], body, 0, body, private=True)
+            if block:
+                prompt += f"対象{i}だけの薬剤確認:\n" + block
         if hints:
             block = _hint_block(hints)
             if block:
@@ -476,7 +487,7 @@ _REPAIR_CLOSE = """
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
                    prior: dict, hints: dict | None = None,
-                   reference: str = "") -> str:
+                   reference: str = "", medication_reference: str = "") -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
@@ -492,6 +503,7 @@ def _repair_prompt(posted_at: str | None, issues: list[str],
     hint = _hint_block(hints) if hints else ""
     if hint:
         prompt += _HINT_HEAD + hint + _HINT_TAIL
+    prompt += medication_reference
     prompt += _target_head(posted_at)
     return prompt
 
@@ -573,6 +585,16 @@ _QUALITY_TERMINAL = ("hint_gaps_resolved", "unresolved", "dispatch_unknown", "sk
 def _opener_request(endpoint: str, method: str, body, timeout: float,
                     deadline: float | None = None):
     """Bounded loopback transport shared by generation and health probes."""
+    guard = getattr(_CALL_NOTES, "medication_guard", None)
+    try:
+        current = guard is None or guard()
+    except cloud_inference.CloudFallback as error:
+        if str(error) != "cloud_owner_stopped":
+            raise
+        current = False
+    if not current:
+        _CALL_NOTES.medication_source_changed = True
+        raise bounded_http.NotSentTimeout("medication_reference_changed")
     return local_llm.bounded_request(endpoint, method, body, timeout, deadline)
 
 
@@ -997,7 +1019,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
     fmt = _probe_format(deadline=deadline)
     probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
     if fmt is None:
-        _CALL_NOTES.defer_reason = "probe_unobserved"
+        _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
+            _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
         return _DEFERRED   # no idle slot to probe on — nothing sent
     endpoint, model = _resolved_llm()
     downgrades = 0
@@ -1037,6 +1060,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 extra_payload={"id_slot": _choose_slot()},
                 request_fn=_opener_request, error_out=err_out,
                 turn_min_s=need_s or 0)
+        if getattr(_CALL_NOTES, "medication_source_changed", False):
+            _CALL_NOTES.transport = None
+            _CALL_NOTES.defer_reason = "currentness_unverified"
+            return _DEFERRED
         # Endpoint health of this call for run_pending's breaker: refused /
         # not sent and 503 are outages, a pre-deadline transport failure
         # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
@@ -1169,7 +1196,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 on_chunk=None, on_chunk_replay=None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
-                references: dict | None = None, provider=None, quality_qc_src=None
+                references: dict | None = None, provider=None, quality_qc_src=None,
+                medication_hints=None, medication_guard=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -1212,12 +1240,26 @@ def llm_extract(body: str, *, context: str | None = None,
     accepted_providers = []
 
     def evidenced_call(*args, provider_override=None, **kwargs):
-        # A monkeypatched call or a failed dispatch cannot inherit an earlier marker.
+        # A rejected dispatch cannot inherit an earlier provider marker.
         _CALL_NOTES.provider_response = None
         _CALL_NOTES.cloud_response = None
         _CALL_NOTES.defer_reason = None
+        if (medication_hints is not None
+                and provider is None and provider_override is None
+                and (medication_guard is None or not medication_guard())):
+            _CALL_NOTES.defer_reason = "currentness_unverified"
+            return _DEFERRED, None
         active_call = call if provider_override is None else functools.partial(_llm_call, provider=provider_override)
-        result = active_call(*args, **kwargs)
+        previous = getattr(_CALL_NOTES, "medication_guard", None)
+        previous_changed = getattr(_CALL_NOTES, "medication_source_changed", False)
+        _CALL_NOTES.medication_source_changed = False
+        _CALL_NOTES.medication_guard = (medication_guard if provider is None and provider_override is None
+            and medication_hints is not None else None)
+        try:
+            result = active_call(*args, **kwargs)
+        finally:
+            _CALL_NOTES.medication_guard = previous
+            _CALL_NOTES.medication_source_changed = previous_changed
         return result, getattr(_CALL_NOTES, "provider_response", None)
 
     def leaf_parts(value):
@@ -1318,6 +1360,8 @@ def llm_extract(body: str, *, context: str | None = None,
         hint = _hint_block(piece_hints) if piece_hints else ""
         reference = _piece_reference(body, start, len(piece))
         scoped_prompt = prompt + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
+        scoped_prompt += extraction_medications.block(
+            medication_hints, body, start, piece, private=provider is None)
         piece_context = has_ctx or bool(reference)
         call_start = len(notes)
         if quality_status:
@@ -1466,7 +1510,10 @@ def llm_extract(body: str, *, context: str | None = None,
                             return _DEFERRED
                         repair_client = provider.spawn_quality_repair()
                 repair_start = len(notes)
-                repair_prompt = _repair_prompt(posted_at, issues, d, piece_hints, reference) + piece + _PROMPT_TAIL
+                medication_reference = extraction_medications.block(
+                    medication_hints, body, start, piece, private=provider is None and repair_client is None)
+                repair_prompt = _repair_prompt(posted_at, issues, d, piece_hints, reference,
+                    medication_reference) + piece + _PROMPT_TAIL
                 rd, repair_provider = evidenced_call(repair_prompt, deadline=repair_deadline,
                     need_s=_MIN_REPAIR_S, kind="repair", provider_override=repair_client)
                 repair_response = getattr(_CALL_NOTES, "cloud_response", None)
@@ -2219,6 +2266,8 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                 or any(not extraction_context.reference_current(ledger.db, dict(source),
                     {**reference, "token": token} if isinstance(reference, dict) else None,
                     version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
+            return "rejected"
+        if not _medication_reference_current(ledger.db, r):
             return "rejected"
     meta['source_binding'] = r['_source_binding']
     prior = _prior_extract(ledger.db, r)
@@ -2993,12 +3042,105 @@ def _frame_refs(r):
     return (r.get("_frame") or {}).get("refs") if isinstance(r, dict) else None
 
 
-def _context_contract():
+def _frame_medications(r):
+    return (r.get("_frame") or {}).get("medication_hints") if isinstance(r, dict) else None
+
+
+def _medication_reference_current(db, r, *, cfg=None, deadline=None):
+    try:
+        snapshot = _frame_medications(r)
+        if cfg is None:
+            cfg = load_config() if extraction_medications.uses_dictionary(snapshot) else {}
+        return extraction_medications.current(db, cfg, snapshot, body=r.get("body_text"), deadline=deadline)
+    except (mcs_util.ProviderSettingsUnreadable, OSError, sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
+        return False
+
+
+def _extraction_dispatch_current(ledger, r, lease, deadline):
+    try:
+        return (time.monotonic() < deadline and _owns_current_source(ledger, r, lease)
+                and _medication_reference_current(ledger.db, r, deadline=deadline))
+    except (mcs_util.ProviderSettingsUnreadable, OSError, sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
+        return False
+
+
+def _context_contract(*, source_digest=None):
     """Bind the frozen-context/schema contract independently of local-hint source revisions."""
     return hashlib.sha256(json.dumps([_INFERENCE_VERSION, EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, PLAN_VERSION,
-        _PROMPT_HEAD, extract_schema.SCHEMA, _LOADED_SOURCE_DIGESTS["patient_state_context"],
+        _PROMPT_HEAD, extract_schema.SCHEMA, source_digest or _LOADED_SOURCE_DIGESTS["patient_state_context"],
         _LOADED_SOURCE_DIGESTS["inference_version"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+_PRIOR_CONTEXT_SOURCE = "3140265acfed995e8f65528714af0365f302a33a10870621e00fdd7d2a827fbb"
+
+
+def _pending_context_frame(db, r, *, attempt, enabled):
+    """Resume the exact frozen attempt before creating any new medication reference inputs."""
+    records = []
+    for row in db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                          "AND project_id=? AND message_id=? AND model=?",
+                          (r["project_id"], r["message_id"], r["_target"][1])):
+        meta = loads_dict(row[0])
+        if (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
+                and meta.get("ver") == EXTRACT_VERSION
+                and inference.is_current(meta, target=_INFERENCE_VERSION)
+                and meta.get("invalidated") in (None, False, 0)):
+            if not mcs_util.valid_hash(meta.get("context")):
+                raise ValueError("pending_context_unverifiable")
+            records.append(meta)
+    if not records:
+        return None
+    contracts = {_context_contract(), _context_contract(source_digest=_PRIOR_CONTEXT_SOURCE)}
+    frames = []
+    for row in db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                          "AND message_id=? AND model=? ORDER BY artifact_id DESC",
+                          (extraction_context.KIND, r["project_id"], r["message_id"], r["_target"][1])):
+        doc, meta = loads_dict(row[1]), loads_dict(row[2])
+        if (not isinstance(doc, dict) or not isinstance(meta, dict)
+                or not isinstance(doc.get("source"), dict)
+                or doc["source"].get("content_hash") != r["content_hash"]
+                or not mcs_util.valid_hash(meta.get("source_binding"))
+                or not mcs_util.valid_hash(doc.get("binding"))
+                or not isinstance(doc.get("text"), (str, type(None)))
+                or not isinstance(doc.get("refs"), dict) or type(doc.get("enabled")) is not bool):
+            continue
+        payload = {key: doc[key] for key in ("binding", "source", "text", "refs", "enabled")}
+        if "medication_hints" in doc:
+            if not extraction_medications.valid(doc["medication_hints"], r["body_text"]):
+                continue
+            payload["medication_hints"] = doc["medication_hints"]
+        if mcs_util.payload_hash(payload) != doc.get("digest"):
+            continue
+        frame = {**doc, "artifact_id": row[0]}
+        old_target = {**r, **doc["source"], "_source_binding": meta["source_binding"]}
+        frames.append((frame, old_target))
+    candidates = {}
+    for record in records:
+        matched = []
+        leaf = record.get("provider_leaf")
+        contract = leaf.get("provider_contract") if isinstance(leaf, dict) else r.get("_provider_contract")
+        for frame, target in frames:
+            target = {**target, "_provider_contract": contract, "_frame": frame}
+            if _chunk_context(target, frame["text"], checkpoint=True) == record["context"]:
+                matched.append((frame, target))
+        if len(matched) != 1:
+            raise ValueError("pending_context_unverifiable")
+        frame, target = matched[0]
+        # A verified older source or a different retry keeps its own history.
+        if (target["_source_binding"] != r["_source_binding"]
+                or frame["source"] != extraction_context._source(r)):
+            continue
+        if not any(extraction_context.matches_attempt(frame, r, model=r["_target"][1],
+                contract=contract, attempt=attempt, enabled=enabled) for contract in contracts):
+            continue
+        current = extraction_context.load(db, frame["artifact_id"], r)
+        if current is None:
+            raise ValueError("pending_context_unverifiable")
+        candidates[current["artifact_id"]] = current
+    if len(candidates) > 1:
+        raise ValueError("pending_context_unverifiable")
+    return next(iter(candidates.values())) if candidates else None
 
 
 def _saved_chunk_size(db, r, context: str | None = None, *, identity=None) -> int:
@@ -3091,6 +3233,7 @@ def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, 
         reference = _piece_reference(r["body_text"], start, len(piece))
         hint = _hint_block(hints) if hints else ""
         prompt = prefix + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
+        prompt += extraction_medications.block(_frame_medications(r), r["body_text"], start, piece, private=False)
         prompt += _target_head(r["posted_at"]) + piece + _PROMPT_TAIL
         evidence = cloud_inference.verify_cloud_repair_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
             reservation_id=origin["reservation_id"], route="reextract", project_id=r["project_id"],
@@ -3212,7 +3355,10 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
         if piece == r["body_text"] and extract_quality.is_thin(before, r["body_text"]):
             issues.append("本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
                           "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を全て抽出してください")
-        prompt = _repair_prompt(r["posted_at"], issues, original, hints, reference) + piece + _PROMPT_TAIL
+        medication_reference = extraction_medications.block(
+            _frame_medications(r), r["body_text"], start, piece, private=False)
+        prompt = _repair_prompt(r["posted_at"], issues, original, hints, reference,
+                               medication_reference) + piece + _PROMPT_TAIL
         response = repair["response"]
         if (not isinstance(response, dict) or set(response) != {"version", "answer_text", "reservation_artifact_id",
                 "reservation_id", "contract", "owner", "unit_key", "witness"} or response["version"] != 1
@@ -5199,7 +5345,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False, cloud_only=False, load_checkpoints=True) -> tuple[list, int, int]:
+                  background=False, cloud_only=False, load_checkpoints=True, deadline=None) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -5208,6 +5354,9 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
     extract_cfg = cfg.get("extract") if isinstance(cfg, dict) else None
     enabled = isinstance(extract_cfg, dict) and extract_cfg.get("patient_state_context") is True
     for r in rows:
+        if deadline is not None and time.monotonic() >= deadline:
+            blocked += 1
+            continue
         r = dict(r)
         binding = inference_dependency_loss.source_binding_from_row(r)
         if (not isinstance(binding, str) or not binding
@@ -5266,9 +5415,19 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         attempt = {key: r.get(key) for key in ("qc_src", "human_src", "thin_src")}
         attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
         try:
-            r["_frame"] = extraction_context.prepare(ledger, r, model=r["_target"][1],
-                contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
-                version=EXTRACT_VERSION)
+            frame = _pending_context_frame(ledger.db, r, attempt=attempt, enabled=enabled)
+            if frame is None:
+                hint_deadline = time.monotonic() + 1.0
+                if deadline is not None:
+                    hint_deadline = min(hint_deadline, deadline)
+                medication_hints = extraction_medications.build(ledger.db, cfg, r["body_text"],
+                    private=mode != "on", deadline=hint_deadline)
+                frame = extraction_context.prepare(ledger, r, model=r["_target"][1],
+                    contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
+                    version=EXTRACT_VERSION, medication_hints=medication_hints)
+            r["_frame"] = frame
+            if not _medication_reference_current(ledger.db, r, cfg=cfg, deadline=deadline):
+                raise ValueError("medication_reference_generation_changed")
         except (ValueError, sqlite3.Error):
             blocked += 1
             continue
@@ -5351,7 +5510,8 @@ def _run_batch_call(tups, target, deadline: float,
         _CALL_NOTES.provider_response = None
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
-                           for _, r, _c, _s, hints, _q, _l in tups]),
+                           for _, r, _c, _s, hints, _q, _l in tups],
+                          medication_hints=[_frame_medications(r) for _, r, *_ in tups]),
             deadline=deadline, schema=extract_schema.SCHEMA_BATCH,
             max_tokens=_BATCH_MAX_TOKENS,
             need_s=_batch_need_s(len(tups)))
@@ -5562,7 +5722,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     prefilter = _prefilter_enabled() and admitted_ids is None
     jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
-        cloud_only=cloud_only, load_checkpoints=False)
+        cloud_only=cloud_only, load_checkpoints=False, deadline=deadline)
     deferred += context_blocked
     _defer_note("prepare_blocked", count=context_blocked)
     metas = [None] * len(jobs)
@@ -5721,7 +5881,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r.pop("_cloud_generation", None)
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
-                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False, load_checkpoints=False)
+                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False,
+                                               load_checkpoints=False, deadline=deadline)
                     if not fresh:
                         raise cloud_inference.CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
@@ -5747,6 +5908,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
                            quality_qc_src=r.get("qc_src"),
+                           medication_hints=_frame_medications(r),
+                           medication_guard=lambda: _owner_call(lambda: _extraction_dispatch_current(
+                               ledger, r, leases[index], deadline)),
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
                            **({"provider": provider} if provider is not None else {}),
@@ -6017,7 +6181,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # Lookahead replenishes lost claims without freezing unused attempt frames.
                 prepared, row_skipped, row_blocked = _prepare_jobs(
                     ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True, load_checkpoints=False)
+                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline)
                 skipped += row_skipped
                 context_blocked += row_blocked
                 deferred += row_blocked
@@ -6070,7 +6234,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
         with local_slots:   # cloud workers widen the pool, never the local backend
-            out = _run_batch_call(tups, target, deadline, vital_policy)
+            def guard():
+                return _owner_call(lambda: all(_extraction_dispatch_current(ledger, r, lease, deadline)
+                    for _, r, _c, _s, _h, _q, lease in tups))
+            if not guard():
+                return "deferred", {}, {}, None, None
+            previous = getattr(_CALL_NOTES, "medication_guard", None)
+            previous_changed = getattr(_CALL_NOTES, "medication_source_changed", False)
+            _CALL_NOTES.medication_source_changed = False
+            _CALL_NOTES.medication_guard = guard if any(_frame_medications(r) is not None for _, r, *_ in tups) else None
+            try:
+                out = _run_batch_call(tups, target, deadline, vital_policy)
+            finally:
+                _CALL_NOTES.medication_guard = previous
+                _CALL_NOTES.medication_source_changed = previous_changed
         return (*out, getattr(_CALL_NOTES, "transport", None),
                 getattr(_CALL_NOTES, "transport_at", None))
 
@@ -6270,6 +6447,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
+                medication_hints=_frame_medications(r),
                 **({"references": _frame_refs(r)} if _frame_refs(r) else {}))
             provider.commit_guard()
         except cloud_client.CloudNotSent:

@@ -9,13 +9,34 @@ import pytest
 import cloud_policy
 import extract_llm as worker
 import cloud_inference
+import extraction_context
 import mcs_util
 from extract_testkit import _extract_artifact, _hash, _message, _qc_artifact
 from test_anthropic_runtime import _current_artifacts, _use_real_cloud_accounting, routed  # noqa: F401
 
 
-@pytest.mark.parametrize("damage", ["none", "qc_feedback", "occurrence", "null_marker", "bool_version"])
-def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path, damage):  # noqa: F811
+def _use_legacy_frame(led, row):
+    # Freeze the actual pre-medication contract, not a new frame with its
+    # additional field removed after sealing. The old prompt must replay.
+    attempt = {key: row.get(key) for key in ("qc_src", "human_src", "thin_src")}
+    attempt["auto_retry"] = 0
+    frame = extraction_context.prepare(led, row, model=row["_target"][1],
+        contract=worker._context_contract(source_digest=worker._PRIOR_CONTEXT_SOURCE),
+        attempt=attempt, enabled=row["_frame"]["enabled"], base_context=row["_input_context"],
+        version=worker.EXTRACT_VERSION)
+    assert "medication_hints" not in frame
+    assert extraction_context.matches_attempt(frame, row, model=row["_target"][1],
+        contract=worker._context_contract(source_digest=worker._PRIOR_CONTEXT_SOURCE),
+        attempt=attempt, enabled=frame["enabled"])
+    row["_frame"] = frame
+    row["_context"] = frame["text"]
+    return frame["text"]
+
+
+@pytest.mark.parametrize("contract_kind,damage", [
+    ("legacy", damage) for damage in ("none", "qc_feedback", "occurrence", "null_marker", "bool_version")
+] + [("medication", damage) for damage in ("none", "qc_feedback", "null_marker")])
+def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path, damage, contract_kind):  # noqa: F811
     """Exercise the internal checkpoint/commit contract, not cloud admission."""
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
@@ -43,6 +64,10 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     jobs, _, blocked = worker._prepare_jobs(led, rows, ("", "gpt-6-luna"), False, allow_cloud=False)
     assert not blocked and len(jobs) == 1
     row, context, _, hints, qc = jobs[0]
+    if contract_kind == "legacy":
+        context = _use_legacy_frame(led, row)
+    else:
+        assert worker._frame_medications(row) is not None
     assert qc and qc["src"] == source_id and qc["qc"] == qc_id
     prior = worker._prior_identity(worker._prior_extract(led.db, row))
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
@@ -88,12 +113,15 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
 
     result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
         posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider)
+        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
+        medication_hints=worker._frame_medications(row))
     assert isinstance(result, dict)
     assert states == ["pending", "started", "completed"]
     assert [(model, effort) for model, effort, _ in sends] == [
         ("gpt-6-luna", "medium"), ("gpt-6.1-sol", "high")]
     assert "頭痛" in sends[0][2] and "裏付けがありません" in sends[0][2]
+    for _, _, prompt in sends:
+        assert ("薬剤抽出の確認:" in prompt) == (contract_kind == "medication")
     row["_provider_evidence"] = meta.pop("_provider_evidence")
     result["_model"] = selection["model"]
     outcome = worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
@@ -152,7 +180,7 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     assert len(sends) == 2
 
 
-def _repair_run(routed, monkeypatch, tmp_path, repair_vitals):  # noqa: F811
+def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False):  # noqa: F811
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops."""
     led, cfg, _, _, _ = routed
@@ -177,6 +205,10 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals):  # noqa: F811
     jobs, _, blocked = worker._prepare_jobs(led, rows, ("", "gpt-6-luna"), False, allow_cloud=False)
     assert not blocked and len(jobs) == 1
     row, context, _, hints, qc = jobs[0]
+    if not new_contract:
+        context = _use_legacy_frame(led, row)
+    else:
+        assert worker._frame_medications(row) is not None
     prior = worker._prior_identity(worker._prior_extract(led.db, row))
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
     assert not errors and selection is not None
@@ -217,7 +249,8 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals):  # noqa: F811
 
     result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
         posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider)
+        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
+        medication_hints=worker._frame_medications(row))
     assert isinstance(result, dict) and len(sends) == 2
     row["_provider_evidence"] = meta.pop("_provider_evidence")
     result["_model"] = selection["model"]
@@ -344,3 +377,31 @@ def test_inline_proof_rejects_tampered_terminal_records(routed, monkeypatch, tmp
                                       "injected": True}
         leaf["content"] = json.dumps(content, ensure_ascii=False)
     assert not worker._verify_inline_extract_proof(led.db, row, context, document, proof)
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+def test_medication_frame_partial_repair_preserves_terminal_proof(routed, monkeypatch, tmp_path, tamper):  # noqa: F811
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120}, new_contract=True)
+    with led.db:
+        led.db.execute("BEGIN IMMEDIATE")
+        proof = worker._extract_inline_proof(led.db, row, context, tuple(chunks))
+    assert worker._verify_inline_extract_proof(led.db, row, context, result, proof)
+    if tamper:
+        leaf = next(item for item in proof["rows"]
+                    if '\"quality_status\": \"unresolved\"' in item["meta"])
+        damaged = json.loads(leaf["meta"])
+        damaged["quality_status"] = "hint_gaps_resolved"
+        damaged["quality_remaining"] = 0
+        leaf["meta"] = json.dumps(damaged)
+        assert not worker._verify_inline_extract_proof(led.db, row, context, result, proof)
+    outcome = worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {"qc": qc_id, "applied": True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior)
+    assert outcome == "written"
+    [final] = _current_artifacts(led)
+    assert "__mcs_internal_proof_v1" in json.loads(final["content"])
+    message = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    assert worker.progress_for_message(led.db, message, model=result["_model"])["state"] == "attention"
+    assert worker._select_pending(led, 1, None, None, False)[0] == []
+    assert len(sends) == 2
