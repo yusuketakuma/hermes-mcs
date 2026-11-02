@@ -1001,12 +1001,12 @@ def test_live_segment_rotates_and_closed_segment_is_compacted(
 
 @pytest.mark.parametrize("mutate,reason", [
     (lambda s: s["parts"].__setitem__("future_poll", {"q": "?"}),
-     "unsupported_parts_key"),
+     "unsupported_parts_key:future_poll"),
     (lambda s: s["parts"]["manifest"][1].__setitem__("future_flag", 1),
-     "unsupported_part_key"),
+     "unsupported_part_key:future_flag"),
     (lambda s: s["delivery"].__setitem__("future_route", "x"),
-     "unsupported_delivery_key"),
-    (lambda s: s.__setitem__("future_top", 1), "unsupported_spec_key"),
+     "unsupported_delivery_key:future_route"),
+    (lambda s: s.__setitem__("future_top", 1), "unsupported_spec_key:future_top"),
 ])
 def test_outdated_worker_holds_spec_with_unknown_feature(tmp_path, mutate,
                                                          reason):
