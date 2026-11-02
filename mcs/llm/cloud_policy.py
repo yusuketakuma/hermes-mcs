@@ -9,7 +9,6 @@ from itertools import chain
 import json
 import math
 import re
-import sqlite3
 import time
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -901,18 +900,10 @@ def _reservation_evidence_batch(db, artifact_ids):
         ids = list(dict.fromkeys(ids))
         if not ids:
             return {}
-        db.execute('SAVEPOINT cloud_receipt_batch')
-        try:
-            result = _reservation_evidence_batch_snapshot(db, ids)
-        except BaseException:
-            try:
-                db.execute('ROLLBACK TO cloud_receipt_batch')
-                db.execute('RELEASE cloud_receipt_batch')
-            except sqlite3.Error:
-                pass  # SQLite may already have unwound the savepoint.
-            raise
-        db.execute('RELEASE cloud_receipt_batch')
-        return result
+        with closing(db.execute('SELECT artifact_id FROM (SELECT artifact_id FROM artifacts LIMIT 1) '
+                                'UNION ALL SELECT NULL UNION ALL SELECT NULL')) as anchor:
+            anchor.fetchone()
+            return _reservation_evidence_batch_snapshot(db, ids)
     except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
         raise ValueError("cloud_receipt_invalid") from None
 
