@@ -4108,12 +4108,13 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
                 # _prior_provider_evidence without the provider identity —
                 # an honestly unknown provider stays readable.
                 proof = meta.get("provider_provenance")
-                if (not isinstance(proof, dict)
+                digest = _provider_result_hash(final["content"])
+                if (not isinstance(proof, dict) or digest is None
                         or meta.get("source_binding") != r["_source_binding"]
                         or type(proof.get("version")) is not int or proof["version"] != 1
                         or proof.get("stage") != "extract"
                         or proof.get("source_binding") != r["_source_binding"]
-                        or proof.get("result_hash") != _provider_result_hash(final["content"])
+                        or proof.get("result_hash") != digest
                         or type(proof.get("complete")) is not bool
                         or not isinstance(proof.get("providers"), list)
                         or any(name not in ("local", "anthropic", "openai")
