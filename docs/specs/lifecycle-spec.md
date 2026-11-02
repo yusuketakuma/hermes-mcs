@@ -221,7 +221,7 @@ LLM・サービスの追加probeは明示した範囲だけに限る。`init` �
 | snapshot | `publish_snapshot`: backup→tmp→DELETE journal→verify→atomic rename。plugin/CCO の読取専用コピー | 単一 latest | ✅ |
 | 添付ファイル | `prune_attachments` が古い実体を削除（行は state='pruned' で name/bytes/sha256/url 残留→再DL可） | 週ポリシー | ✅ |
 | config/.env | git 外・暗号化なし。**バックアップ対象外** — 再生成は `init` | — | ✅（仕様） |
-| ログ | `rotate_log`: >5MB → `.1`（1世代） | 1世代 | ✅ |
+| ログ | `run_log.rotate`: 既定5MiB超で退避。旧writerの停止を確認するまでは延期し、稼働ログのcopytruncateは行わない | `data/mcs-log-backups/` に別名で保持（1世代への上書きなし） | ✅ |
 
 原則: バックアップは**検証しないと publish しない**（broken file は
 fresh backup を塞がない・Oracle B24）。原本への復元上書きは人手のみ
@@ -299,7 +299,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 |---|---|
 | `notify_target`（カード/テキスト） | 患者コンテンツ・シグナル・依頼 |
 | `notify_system_target`（無ければ notify_target） | セッション失効・run 失敗・更新📋・復旧 |
-| `run.log`/`extract_drain*.log`/`semantic_drain.log` | 全実行ログ（rotate で bounded） |
+| `data/mcs.log` | 共通ログhelperが実行ログの記録とローテーションを管理。`run.log`・`extract_drain*.log`・`semantic_drain.log`等の旧名は移行元として扱う |
 | `health.json` | 機械可読な健全状態（外部監視・警報判定の正本） |
 | `update_state.json`📋 | 更新機構の状態・試行履歴・rollback 情報 |
 

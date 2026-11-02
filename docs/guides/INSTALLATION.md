@@ -235,7 +235,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | # | 内容 | 再実行・失敗時 |
 |---|---|---|
 | 1 | brew パッケージ: `git` `python@3.14` `uv` `llama.cpp` `google-chrome`(cask)。導入済みは skip | `brew` が無い・`brew install` 失敗で停止 |
-| 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築（`pip install -e hermes-agent[messaging]`）・`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | 中断した clone/checkout・Python の無い venv・失敗した pip install は再実行時にやり直す。clone・venv・pip の失敗で停止 |
+| 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・Python の無い venv・失敗した依存導入は再実行時にやり直す。clone・venv・依存導入の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
@@ -674,7 +674,7 @@ cronに追加され7件になる。別に LLM サーバ常駐の
 | 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください | 直前の `エラー:` 行のステージで停止した | その `エラー:` の指示に従って直し、`./install.sh` を再実行（完了分は skip） |
 | `モデル取得に失敗しました` | モデル DL が途中で失敗 | そのまま `./install.sh` を再実行（`.part` から再開） |
 | `モデルの整合性が確認できません（SHA256: <検証値>）` | DL 結果が `install.sh` 記録の sha256（`MCS_ALLOW_MODEL_SHA_OVERRIDE=1` 指定時は `MCS_MODEL_SHA256`）と不一致 | 通信経路を確認し、上書きしている場合は値を確認して再実行（`.part` は削除済みで最初から DL） |
-| Hermes 導入に失敗しました | pip install の失敗（通信・コンパイラ） | 上に出たエラーを直して再実行（pip install をやり直す） |
+| Hermes 導入に失敗しました | Hermesのcheckout内での `uv pip install` の失敗（通信・コンパイラ等） | 上に出たエラーを直して同じフラグで `install.sh` を再実行する（依存導入をやり直す）。Hermes経路では `pip` への自動切替えは行わない |
 | llama-server が見つかりません | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
 | プラグインの有効化に失敗しました | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
 | `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`$PY mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
