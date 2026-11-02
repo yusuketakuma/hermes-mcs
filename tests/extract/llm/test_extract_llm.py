@@ -2886,7 +2886,7 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--stop-after", "2"])
     # Writer lifetime guards are exercised separately with real locks.
     monkeypatch.setattr(extract_llm, "_open_current_ledger",
-                        lambda: type("DB", (), {"close": lambda self: None})())
+                        lambda **_: type("DB", (), {"close": lambda self: None})())
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm.cloud_backlog.CloudBacklogPool, "sync", lambda *a, **kw: None)

@@ -134,7 +134,7 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
         def close(self):
             pass
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
-    monkeypatch.setattr(worker, '_open_current_ledger', Ledger)
+    monkeypatch.setattr(worker, '_open_current_ledger', lambda **_: Ledger())
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker, 'load_config', lambda: {})

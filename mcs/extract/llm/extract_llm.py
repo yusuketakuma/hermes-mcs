@@ -6665,16 +6665,43 @@ def main() -> int:
             os.environ[local_llm.TURN_LOCK_ENV] = turn
 
 
-def _open_current_ledger():
+def _open_current_ledger(*, deadline=None):
     fd = writer_lock.acquire_run_lock()
     if fd is None:
         return None
     try:
-        if not _writer_current(full=True):
+        if not _writer_current(full=True) or (deadline is not None and time.monotonic() >= deadline):
             return None
         return Ledger(DB)
     finally:
         os.close(fd)
+
+
+_RESIDENT_STARTUP_WAIT_S = 600.0
+_RESIDENT_STARTUP_POLL_S = 0.5
+
+
+def _open_resident_ledger(deadline):
+    waiting = False
+    while _writer_current(full=True):
+        if time.monotonic() >= deadline:
+            return None
+        led = _open_current_ledger(deadline=deadline)
+        if led is not None:
+            print(json.dumps({"event": "extractor_ledger_opened", "pid": os.getpid()}),
+                  file=sys.stderr, flush=True)
+            return led
+        if not _writer_current(full=True):
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        if not waiting:
+            print(json.dumps({"event": "extractor_waiting_for_writer", "pid": os.getpid()}),
+                  file=sys.stderr, flush=True)
+            waiting = True
+        time.sleep(min(_RESIDENT_STARTUP_POLL_S, remaining))
+    return None
 
 
 def _main() -> int:
@@ -6770,7 +6797,15 @@ def _main() -> int:
                       "extract_version": EXTRACT_VERSION, inference.VERSION_KEY: _INFERENCE_VERSION,
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
           file=sys.stderr, flush=True)
-    led = _open_current_ledger()
+    stop = (time.monotonic() + args.stop_after
+            if args.all and args.stop_after > 0 else None)
+    if args.all:
+        startup_deadline = time.monotonic() + _RESIDENT_STARTUP_WAIT_S
+        if stop is not None:
+            startup_deadline = min(startup_deadline, stop)
+        led = _open_resident_ledger(startup_deadline)
+    else:
+        led = _open_current_ledger()
     if led is None:
         print(json.dumps({"ok": False, "error": "writer_unavailable"}))
         return 1
@@ -6795,9 +6830,6 @@ def _main() -> int:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
             # lock across the whole backlog would starve the 10-min tick
-            stop = (time.monotonic() + args.stop_after
-                    if args.stop_after > 0 else None)
-
             def pause(seconds):
                 remaining = seconds if stop is None else min(seconds, stop - time.monotonic())
                 if remaining > 0:
