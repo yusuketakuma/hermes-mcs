@@ -249,9 +249,19 @@ def with_relogin(adapter, ledger, result, where: str, fn, *args,
                 result["messages"] = msgs
         try:
             replay = fn(*args, **kwargs)
-        except SessionExpired as e2:
-            raise SessionExpired(
-                "auto_login=ok_then_expired") from e2
+        except BaseException as exc:
+            # A failed replay cannot supersede observations from committed work.
+            for key, entries in aborted.items():
+                for entry in entries:
+                    if entry not in result.get(key, ()):
+                        result.setdefault(key, []).append(entry)
+            if where == "unread" and msgs is not None:
+                replay_counts = result.get("_unread_counted", {})
+                result["messages"] += sum(max(0, n - replay_counts.get(pid, 0))
+                                          for pid, n in counted.items())
+            if isinstance(exc, SessionExpired):
+                raise SessionExpired("auto_login=ok_then_expired") from exc
+            raise
         _restore_unobserved(where, result, aborted, counted, replay)
         return replay
     finally:

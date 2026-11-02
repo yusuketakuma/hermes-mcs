@@ -3,9 +3,53 @@ import collection_stages
 import health_report
 import mcs_contract
 import time
+from types import SimpleNamespace
+
+import pytest
 
 import mcs_adapter
 from ingest_testkit import _iso, _ledger, _message, _msg_at, _unread_patient
+
+
+@pytest.mark.parametrize("where", ["unread", "backfill", "self_probe"])
+@pytest.mark.parametrize("failure", [mcs_contract.SessionExpired, RuntimeError, KeyboardInterrupt])
+def test_failed_replay_retains_first_attempt_observations(tmp_path, where, failure):
+    db = _ledger(tmp_path)
+    adapter = SimpleNamespace(auto_login=lambda **kwargs: "ok")
+    result = {"errors": ["prior stage error"], "incomplete": [], "messages": 4, "run_id": 1}
+    calls = []
+
+    def stage():
+        calls.append(1)
+        if len(calls) == 1:
+            result["errors"].append("mark 1: network_error")
+            result["incomplete"].append(1)
+            result["coverage_stalled"] = [{"pid": 1, "reason": "failed"}]
+            result["messages"] += 5
+            result["_unread_counted"] = {1: 3, 2: 2}
+            raise mcs_contract.SessionExpired()
+        result["errors"].append("project 2: replay_failed")
+        result["incomplete"].append(1)
+        if where == "unread":
+            # One patient overlaps, but replay fetched fewer of its messages.
+            result["messages"] += 3
+            result["_unread_counted"] = {2: 1, 3: 2}
+        raise failure()
+
+    try:
+        with pytest.raises(failure) as error:
+            collection_stages.with_relogin(adapter, db, result, where, stage)
+        assert len(calls) == 2
+        assert result["errors"] == ["prior stage error", "project 2: replay_failed",
+                                    "mark 1: network_error"]
+        assert result["incomplete"] == [1]
+        assert result["coverage_stalled"] == [{"pid": 1, "reason": "failed"}]
+        assert result["messages"] == (11 if where == "unread" else 4)
+        assert "_unread_counted" not in result
+        if failure is mcs_contract.SessionExpired:
+            assert error.value.detail == "auto_login=ok_then_expired"
+    finally:
+        db.close()
 
 
 def test_backfill_replay_records_each_coverage_gap_once(tmp_path):
