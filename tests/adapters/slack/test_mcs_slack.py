@@ -527,7 +527,7 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
             assert not result["errors"]
             await worker.tick()
             assert [kind for kind, _ in client.calls] == [
-                "auth_test"] + ["create"] * (1 + n_body)
+                "auth_test", "create", "replies"] + ["create"] * n_body
             # card settle + every part receipt drains in one pass — no
             # legacy thread_receipt twin (it could only scope_mismatch)
             result = {"errors": []}
@@ -539,8 +539,11 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
             worker.release_scope_lock()
 
     asyncio.run(deliver())
-    public = json.dumps(client.calls[1][1], ensure_ascii=False)
-    assert private_body not in public
+    card = client.calls[1][1]
+    # The fallback preview may contain the root post; the full body is not
+    # inserted into the legacy thread-body card's visible blocks.
+    assert private_body not in json.dumps(card.get("blocks"), ensure_ascii=False)
+    assert card["text"] == spec["parts"]["preview_text"]
     # every body chunk landed as a reply on the card's own ts — never a
     # top-level channel message, never an ephemeral one
     card_ts = "1790000000.000001"
@@ -685,18 +688,18 @@ def test_private_drug_thread_pin_requires_delivered_reply_and_live_token(
         assert w.reg.token(token).get("verified_thread_id") == expected
 
 
-def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
+def test_slack_private_medication_pages_stay_within_selected_post(led):
     _seed_thread(led)
     names = [f"合成薬{index:02d}" for index in range(16)]
-    old_quote = "本人は本日、合成旧薬を5mg服用しています。"
+    old_quote = "本人は本日、合成別投稿薬を5mg服用しています。"
     quotes = {name: f"本人は本日、{name}を5mg服用しています。" for name in names}
     with led.db:
-        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=100', (old_quote,))
-        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=101', (''.join(quotes.values()),))
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=100', (''.join(quotes.values()),))
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=101', (old_quote,))
     med = {"dose": "5mg", "action": "start", "subject": "patient",
            "status": "current", "negated": False, "unverified": False}
-    _llm_extract(led, 100, {"meds": [{**med, "name": "合成旧薬", "evidence": old_quote}]})
-    _llm_extract(led, 101, {"meds": [{**med, "name": name, "evidence": quotes[name]} for name in names]})
+    _llm_extract(led, 101, {"meds": [{**med, "name": "合成別投稿薬", "evidence": old_quote}]})
+    _llm_extract(led, 100, {"meds": [{**med, "name": name, "evidence": quotes[name]} for name in names]})
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
     spec = json.loads(_latest_render(led)["spec_json"])
     token = next(token for token, ctx in token_map(spec).items()
@@ -754,7 +757,8 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
             all_text.append(text)
             expected = names[page * 5:(page + 1) * 5]
             assert [name for name in names if name in text] == expected
-            assert "古い投稿" in buttons
+            assert "古い投稿" not in buttons and "新しい投稿" not in buttons
+            assert "合成別投稿薬" not in text
             if page < 3:
                 text, buttons = await click_answer(buttons["次の5件"])
             else:
@@ -762,11 +766,7 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
         assert all("・" + name in "\n".join(all_text) for name in names)
         text, buttons = await click_answer(buttons["前の5件"])
         assert [name for name in names if name in text] == names[10:15]
-        text, buttons = await click_answer(buttons["古い投稿"])
-        assert "合成旧薬" in text and all(name not in text for name in names)
-        assert "新しい投稿" in buttons
-        text, buttons = await click_answer(buttons["新しい投稿"])
-        assert names[0] in text and names[5] not in text
+        assert "古い投稿" not in buttons and "新しい投稿" not in buttons
         # The original is on the card; the clicker's private answers never touch the thread.
         assert w.client.thread_posts == []
         assert len(w.client.calls) == shared_calls
@@ -949,7 +949,8 @@ def _rewrite(w, spec, text, prior, part_id="body:0001", ctx=None):
     ctx = ctx or {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     part = {"part_id": part_id, "kind": "body_part",
             "prior_remote_id": prior}
-    return asyncio.run(w.worker._body_part(spec, text, ctx, part))
+    bound = {**spec, "delivery": {**spec["delivery"], "thread_id": ROOT_TS, "message_id": ROOT_TS}}
+    return asyncio.run(w.worker._body_part(bound, text, ctx, part))
 
 
 @pytest.mark.parametrize("kind", ["body_part", "attachment_part"])
@@ -1042,19 +1043,22 @@ def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
 
 
 @pytest.mark.thread_bodies
-def test_slack_body_special_characters_are_literal_and_dedupe_after_restart(led):
+def test_slack_body_special_characters_are_literal_and_rebind_exact_prior(led):
     from html import unescape
     w, spec, _ = _rewrite_world(led)
     body = "BP<90 & >60 <!channel> <@U0OP>"
     ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
-    first = asyncio.run(w.worker._body_part(spec, body, ctx))
+    part = {"part_id": "body:0001", "kind": "body_part"}
+    first = asyncio.run(w.worker._body_part(spec, body, ctx, part))
     posted = len(w.client.thread_posts)
     wire = w.client.thread_posts[-1]["text"]
     assert "<!channel>" not in wire and "<@U0OP>" not in wire
     assert unescape(wire) == body
     assert w.client.thread_posts[-1]["link_names"] is False
+    bound = {**spec, "delivery": {**spec["delivery"], "thread_id": ROOT_TS, "message_id": ROOT_TS}}
     again = asyncio.run(w.worker._body_part(
-        spec, body, {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
+        bound, body, {"thread_id": ROOT_TS, "history": None, "consumed": set()},
+        {**part, "prior_remote_id": first["remote_id"]}))
     assert again == first and len(w.client.thread_posts) == posted
 
 
@@ -1075,8 +1079,11 @@ def test_slack_rewrite_keeps_special_characters_literal_and_reuses_same_id(led):
 
 
 @pytest.mark.thread_bodies
-def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led, legacy):
     w, spec, replies = _rewrite_world(led)
+    if legacy:
+        spec = {**spec, "parts": {k: v for k, v in spec["parts"].items() if k != "post_source_id"}}
     posted = len(w.client.thread_posts)
     replies.append({"ts": "1790000000.000099", "text": "他人",
                     "user": "U_FOREIGN"})
@@ -1086,22 +1093,33 @@ def test_slack_rewrite_never_touches_a_foreign_or_missing_reply(led):
               "not-a-ts"]
     for i, prior in enumerate(priors):
         out = _rewrite(w, spec, f"変更後 {i}", prior)
-        assert out["result"] == "delivered" and out["remote_id"] != prior
+        if legacy:
+            assert out["result"] == "delivered" and out["remote_id"] != prior
+        else:
+            assert out == {"result": "unknown", "error_code": "edit_target_unverified"}
     assert not _updates(w)
-    assert len(w.client.thread_posts) == posted + len(priors)
+    assert len(w.client.thread_posts) == posted + (len(priors) if legacy else 0)
 
 
 @pytest.mark.parametrize("error", ["message_not_found",
                                    "cant_update_message"])
+@pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.thread_bodies
-def test_slack_rejected_update_falls_back_to_a_new_reply(led, error):
+def test_slack_rejected_update_respects_post_ownership(led, error, legacy):
     w, spec, replies = _rewrite_world(led)
+    if legacy:
+        spec = {**spec, "parts": {k: v for k, v in spec["parts"].items() if k != "post_source_id"}}
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
     w.client.update_failure = FakeSlackError(200, error)
     out = _rewrite(w, spec, "変更後の本文", our_ts)
-    assert out["result"] == "delivered" and out["remote_id"] != our_ts
-    assert len(w.client.thread_posts) == posted + 1
-    assert w.client.thread_posts[-1]["text"] == "変更後の本文"
+    if legacy:
+        assert out["result"] == "delivered" and out["remote_id"] != our_ts
+        assert len(w.client.thread_posts) == posted + 1
+        assert w.client.thread_posts[-1]["text"] == "変更後の本文"
+    else:
+        assert out == ({"result": "unknown", "error_code": "edit_target_unverified"}
+                       if error == "message_not_found" else {"result": "not_sent", "error_code": error})
+        assert len(w.client.thread_posts) == posted
 
 
 @pytest.mark.parametrize("status,error", [(429, "ratelimited"),
@@ -1129,15 +1147,21 @@ def test_slack_unknown_update_outcome_never_posts_a_second_reply(led):
 
 
 @pytest.mark.thread_bodies
-def test_slack_one_reply_is_rewritten_for_only_one_chunk(led):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_slack_one_reply_is_rewritten_for_only_one_chunk(led, legacy):
     w, spec, replies = _rewrite_world(led)
+    if legacy:
+        spec = {**spec, "parts": {k: v for k, v in spec["parts"].items() if k != "post_source_id"}}
     posted, our_ts = len(w.client.thread_posts), replies[0]["ts"]
     ctx = {"thread_id": ROOT_TS, "history": None, "consumed": set()}
     first = _rewrite(w, spec, "新1", our_ts, ctx=ctx)
     second = _rewrite(w, spec, "新2", our_ts, "body:0002", ctx=ctx)
     assert first["remote_id"] == our_ts
-    assert second["result"] == "delivered" and second["remote_id"] != our_ts
-    assert len(w.client.thread_posts) == posted + 1
+    if legacy:
+        assert second["result"] == "delivered" and second["remote_id"] != our_ts
+    else:
+        assert second == {"result": "unknown", "error_code": "edit_target_unverified"}
+    assert len(w.client.thread_posts) == posted + int(legacy)
 
 
 @pytest.mark.thread_bodies
@@ -1256,8 +1280,12 @@ def test_slack_attachment_update_binds_remote_file(led, tmp_path):
                 if p["kind"] == "attachment_part")
     fid = w.client.upload_calls and \
         w.client.replies["1790000000.000001"][-1]["files"][0]["id"]
+    receipt = led.db.execute(
+        "SELECT state, remote_id FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (spec["delivery_id"], part["part_id"])).fetchone()
+    assert receipt["state"] == "delivered" and receipt["remote_id"] == fid
     out = asyncio.run(w.worker._attachment_part(
-        {**spec, "op": "update"}, part,
+        {**spec, "op": "update"}, {**part, "prior_remote_id": fid},
         {"thread_id": "1790000000.000001",
          "history": None, "consumed": set()}))
     # the same file already remote binds its real id — no re-upload
@@ -1404,8 +1432,14 @@ def test_slack_thread_part_needs_the_proven_card_root(led):
     out = asyncio.run(w.worker._perform_part(
         {"spec": json.loads(_latest_render(led)["spec_json"])},
         part, {"card_message_id": "1790000000.000001"}))
+    assert out == {"result": "not_sent", "error_code": "thread_scope_mismatch"}
+    assert asyncio.run(w.sender.bind())
+    out = asyncio.run(w.worker._perform_part(
+        {"spec": json.loads(_latest_render(led)["spec_json"])},
+        part, {"card_message_id": "1790000000.000001"}))
     assert out == {"result": "delivered",
                    "remote_id": "1790000000.000001"}
+    assert any(op == "replies" and req["ts"] == "1790000000.000001" for op, req in w.client.calls)
 
 
 @pytest.mark.parametrize("launcher", ["default", "cco"])
