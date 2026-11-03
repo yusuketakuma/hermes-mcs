@@ -595,7 +595,8 @@ def _opener_request(endpoint: str, method: str, body, timeout: float,
     if not current:
         _CALL_NOTES.medication_source_changed = True
         raise bounded_http.NotSentTimeout("medication_reference_changed")
-    return local_llm.bounded_request(endpoint, method, body, timeout, deadline)
+    with getattr(_CALL_NOTES, "transport_context", contextlib.nullcontext)():
+        return local_llm.bounded_request(endpoint, method, body, timeout, deadline)
 
 
 _CALL_NOTES = threading.local()
@@ -1994,8 +1995,8 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
     """Hold the run lock only across a DB write when `enabled`, waiting
     up to ``wait_s`` seconds for it.
 
-    The tick caller already holds the lock for the whole run, so it
-    passes False. The standalone --all backlog drainer passes True so it
+    The tick holds the lock outside local transport, so it passes False.
+    The standalone --all backlog drainer passes True so it
     never holds the lock longer than a single write — holding it across
     the whole backlog would starve the 10-min tick for days.
 
@@ -5601,7 +5602,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 archived_first: bool = False,
                 fair_oldest: bool = False, allow_cloud: bool = True,
                 background: bool = False, cloud_only: bool = False,
-                prioritize_patients: bool = False) -> dict:
+                prioritize_patients: bool = False, run_lock_fd: int | None = None) -> dict:
     """Extract up to `limit` pending/stale messages with bounded inference.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -5632,6 +5633,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     _BATCH_K, itself 0 since batching measured net negative; --batch K
     remains for explicit use."""
     _validate_run_args(limit, budget_s)
+    if run_lock_fd is not None and (per_write_lock or workers != 1 or allow_cloud or cloud_only):
+        raise ValueError("borrowed_run_lock_requires_serial_local")
     if ledger.db.in_transaction:
         return {"done": 0, "failed": 0, "left": None, "deferred": 0,
                 "pids": [], "transaction_active": True, "carry": carry or []}
@@ -5743,7 +5746,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     carry_out: list = []
     carried = carry_count
     keep_claims: set = set()
-    cloud_tail_updated = False
+    writer_stopped = False
     # thread contexts + any durable chunk checkpoints are loaded on the
     # calling thread — worker threads never touch the sqlite handle
     target = _resolved_llm()
@@ -6339,7 +6342,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 residue.append(tup)
         return residue
 
+    previous_transport = getattr(_CALL_NOTES, "transport_context", contextlib.nullcontext)
     try:
+        if run_lock_fd is not None:
+            _CALL_NOTES.transport_context = functools.partial(
+                writer_lock.unlocked_transport, ledger.db, run_lock_fd, deadline=deadline)
         # Work units preserve selection order: context-bearing, multi-
         # chunk, or checkpointed rows run single; context-free single-
         # chunk bodies batch batch_k-to-a-call so queue wait, spec
@@ -6430,7 +6437,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                          if cloud_only else lock(per_write_lock))
             with tail_lock as held:
                 if cloud_only and not _writer_current(full=True):
-                    cloud_tail_updated = True
+                    writer_stopped = True
                     for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
                         carry_out.append((r, lease, functools.partial(
                             _commit, r, d, ctx, integrity, qc, used_keys)))
@@ -6457,21 +6464,26 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             deferred += 1
                             _defer_note("write_unavailable" if not held else "currentness_unverified")
         if cloud_only and not _writer_current(full=True):
-            cloud_tail_updated = True
+            writer_stopped = True
+    except writer_lock.RunLockLost:
+        # A lost writer fence also forbids checkpoint and claim cleanup writes.
+        writer_stopped = True
+        raise
     finally:
+        _CALL_NOTES.transport_context = previous_transport
         if cloud_only and not _writer_current(full=True):
-            cloud_tail_updated = True
-        if not cloud_tail_updated:
+            writer_stopped = True
+        if not writer_stopped:
             try:
                 _flush_checkpoints()
             finally:
                 if cloud_only and not _writer_current(full=True):
-                    cloud_tail_updated = True
-                if not cloud_tail_updated:
+                    writer_stopped = True
+                if not writer_stopped:
                     for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                         if id(r) not in keep_claims:
                             _release(ledger, r, lease)
-    if cloud_tail_updated:
+    if writer_stopped:
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred,
                 'defer_reasons': dict(defer_reasons),

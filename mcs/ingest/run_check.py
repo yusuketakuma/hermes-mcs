@@ -194,7 +194,7 @@ def _report_open_transaction(ledger, result):
 
 
 def stage_derive(ledger, result, deadline, cfg=None,
-                 llm_budget_cap: float = 90):
+                 llm_budget_cap: float = 90, run_lock_fd=None):
     """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
 
     The rule pass supplies pattern-based hints before LLM extraction.
@@ -261,7 +261,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 # Only realtime arrivals use this slot, newest first.
                 # Existing claim leases exclude in-flight work.
                 oldest_first=False, batch_k=extract_llm._BATCH_K, allow_cloud=False,
-                vital_policy=extract_validation.vital_threshold_policy(cfg))
+                vital_policy=extract_validation.vital_threshold_policy(cfg), run_lock_fd=run_lock_fd)
             if result["extract_llm"].get("gc_error") == "extract_stale_gc_failed":
                 result["errors"].append("extract_llm: extract_stale_gc_failed")
     except Exception as e:
@@ -1151,7 +1151,7 @@ def _main() -> int:
         if not _code_changed(result):
             _run_stage(result, "derive", deadline, stage_derive,
                        ledger, result, deadline, cfg,
-                       llm_budget_cap=0 if args.jobs_only else 90)
+                       llm_budget_cap=0 if args.jobs_only else 90, run_lock_fd=lock_fd)
         _require_closed_transaction(ledger, result)
 
         _run_stage(result, "deliver", deadline, _deliver,
@@ -1193,7 +1193,7 @@ def _main() -> int:
     except RunLockLost as e:
         if _report_open_transaction(ledger, result):
             return 1
-        # An updater won the lock during semantic transport. Held: record
+        # An updater won the lock during LLM transport. Held: record
         # the run as partial and stop — no further stage runs old code.
         # Not held: no DB write at all; the 'running' row is closed as
         # 'crashed' by the next begin_run (the crashed-run path).
