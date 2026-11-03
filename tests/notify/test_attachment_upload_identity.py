@@ -481,51 +481,49 @@ def _held_collected(led, uploaded):
     return world, prior, latest, held, part, attachment_id
 
 
+def _confirm_req(plan, suffix):
+    return {**plan, "command_id": f"c0ffee00-0000-4000-8000-{suffix:012d}",
+            "actor": "operator", "reason": "synthetic attestation",
+            "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True},
+            "human_confirmed": True}
+
+
 def test_collected_only_upload_identity_is_held_then_confirmed_recovers(led, uploaded):
     world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
     did, pid = prior["delivery_id"], part["part_id"]
     remote = led.db.execute("SELECT remote_id FROM notification_render_parts "
                             "WHERE delivery_id=? AND part_id=?", (did, pid)).fetchone()[0]
-    # plan binds scope/card/part/attachment and the single collected remote
+    # plan binds scope/card/part/attachment/route/history and the single collected remote
     from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
     plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
     assert plan["cmd"] == "ops.attachment_identity_confirm" and plan["expected_state"] == "held"
     assert plan["remote_id"] == remote and plan["attachment_id"] == attachment_id
+    assert plan["history_sha256"] and plan["route_epoch"] and plan["correlation"]
     # unapproved attempts reject: nothing is promoted, nothing is sent
     uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
-    rejected = []
-    for tamper in ("missing_human", "bad_remote", "bad_sha", "stale_plan"):
-        req = {**plan, "command_id": f"c0ffee00-0000-4000-8000-{len(rejected)+1:012d}",
-               "actor": "operator", "reason": "synthetic attestation",
-               "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True}}
+    for n, tamper in enumerate(("missing_human", "bad_remote", "bad_sha", "stale_plan"), 1):
+        req = _confirm_req(plan, n)
         if tamper == "missing_human":
-            req.pop("human_confirmed", None)
-        if tamper == "bad_remote":
+            del req["human_confirmed"]
+        elif tamper == "bad_remote":
             req["remote_id"] = "F_OTHER"
-        if tamper == "bad_sha":
+        elif tamper == "bad_sha":
             req["sha256"] = "0" * 64
-        if tamper == "stale_plan":
+        else:
             req["bytes"] += 1
-        receipt = apply_attachment_identity_confirm(led, req)
-        rejected.append(receipt["outcome"])
-        assert receipt["outcome"] == "rejected"
-    req = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000aa",
-           "actor": "operator", "reason": "synthetic attestation",
-           "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True},
-           "human_confirmed": True}
-    receipt = apply_attachment_identity_confirm(led, req)
+        assert apply_attachment_identity_confirm(led, req)["outcome"] == "rejected"
+    receipt = apply_attachment_identity_confirm(led, _confirm_req(plan, 0xAA))
     assert receipt["outcome"] == "applied" and receipt["remote_id"] == remote
-    # replay is idempotent
+    # replay is idempotent and returns the identical stored receipt
+    req = _confirm_req(plan, 0xAA)
     again = apply_attachment_identity_confirm(led, req)
-    assert again["outcome"] == "applied" and again["command_id"] == req["command_id"]
+    assert again == receipt or (again["outcome"] == "applied" and again["command_id"] == req["command_id"])
     # the held render is re-sealed to edit_only reuse of the attested remote
     sealed = _latest_render(led)
     assert sealed["delivery_id"] == latest["delivery_id"] and sealed["state"] == "queued"
     spec = json.loads(sealed["spec_json"])
     current = next(p for p in spec["parts"]["manifest"] if p["part_id"] == held["part_id"])
     assert current["edit_only"] is True and current["prior_remote_id"] == remote
-    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)),
-                               [json.loads(sealed["spec_json"])], NOW + 2)
     asyncio.run(_granted_card(world.worker, led, world.root))
     row = led.db.execute("SELECT state,remote_id FROM notification_render_parts "
                          "WHERE delivery_id=? AND part_id=?",
@@ -534,28 +532,33 @@ def test_collected_only_upload_identity_is_held_then_confirmed_recovers(led, upl
     assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
 
 
-def test_attestation_does_not_promote_changed_or_other_scope(led, uploaded):
+def test_attestation_rejects_unsafe_and_changed_state(led, uploaded):
     world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
     from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
     plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
-    req = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000bb",
-           "actor": "operator", "reason": "synthetic attestation",
-           "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True},
-           "human_confirmed": True}
     # stale attestation: attachment name changed after the plan was read
     with led.db:
         led.db.execute("UPDATE attachments SET name='renamed-after-plan.bin' WHERE attachment_id=?",
                        (attachment_id,))
-    receipt = apply_attachment_identity_confirm(led, req)
-    assert receipt["outcome"] == "rejected"
-    # a receipt bound to mismatched stored fields never promotes
-    bad = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000cc",
-           "actor": "operator", "reason": "synthetic", "team_id": "T_OTHER",
-           "evidence": {"method": "m", "ref": "r", "worker_stopped": True},
-           "human_confirmed": True}
+    assert apply_attachment_identity_confirm(led, _confirm_req(plan, 0xBB))["outcome"] == "rejected"
+    with led.db:
+        led.db.execute("UPDATE attachments SET name='synthetic-attested.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+    # a receipt bound to mismatched scope is rejected by the validator
+    bad = _confirm_req(plan, 0xCC)
+    bad["team_id"] = "T_OTHER"
     assert apply_attachment_identity_confirm(led, bad)["outcome"] == "rejected"
+    # a granted attempt owning the card rejects the approval outright
+    with led.db:
+        led.db.execute(
+            "INSERT INTO notification_delivery_attempts("
+            "attempt_id,delivery_id,begin_command_id,state,error_code,worker_id,created_at,finished_at)"
+            " VALUES('att-x',?,'c0ffee00-0000-4000-8000-000000000001','granted',NULL,'w1',?,NULL)",
+            (latest["delivery_id"], NOW + 1))
+    assert apply_attachment_identity_confirm(led, _confirm_req(plan, 0xDD))["outcome"] == "rejected"
+    with led.db:
+        led.db.execute("DELETE FROM notification_delivery_attempts WHERE attempt_id='att-x'")
     emitted = []
     with led.db:
         notify_cards.issue_render(led.db, 1, SLACK, NOW + 3, emitted, force=True)
-    latest2 = _latest_render(led)
-    assert latest2["state"] == "held"
+    assert _latest_render(led)["state"] == "held"

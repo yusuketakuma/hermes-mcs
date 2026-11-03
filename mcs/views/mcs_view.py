@@ -1031,7 +1031,7 @@ def main(argv=None):
                 version = TRANSPORT_VERSIONS[transport]
             req = {**req, "cmd": command, "version": version,
                    "human_confirmed": confirmed}
-            if action not in ("card_resolve", "card_part_resolve"):
+            if action not in ("card_resolve", "card_part_resolve", "attachment_identity_confirm"):
                 req["project_id"] = args["project"]
             result = requests.enqueue(req, cmd_dir)
         elif args["kind"] == "notification_receipt":
