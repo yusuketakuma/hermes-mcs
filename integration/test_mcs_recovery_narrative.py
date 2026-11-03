@@ -550,6 +550,8 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         reply_parts = _parts(led, reply_render["delivery_id"]) if reply_render else {}
         root_spec = json.loads(render["spec_json"])
         reply_spec = json.loads(reply_render["spec_json"]) if reply_render else {}
+        shared_files = [payload for operation, payload in sw.client.calls
+                        if operation == "update" and "file_ids" in payload]
         slack_ok = (
             render["parts_state"] == "complete"
             and len(slack_cards) == 2 and reply is not None
@@ -564,15 +566,20 @@ def _run_narrative(tmp_path, *, reply_cards=True):
             and all(p_["state"] == "delivered" and p_["remote_id"] for p_ in reply_parts.values())
             and not any(post.get("reply_broadcast") for post in sw.client.thread_posts)
             and kinds == {"card", "thread", "body_part",
-                          "attachment_part"}
+                          "attachment_part", "file_group"}
             and sum(1 for p_ in parts.values()
                     if p_["kind"] == "body_part") > 4
             and all(p_["state"] == "delivered" and p_["remote_id"]
                     for p_ in parts.values())
             and all(pp["thread_ts"] == card_ts
                     for pp in sw.client.thread_posts)
-            and all(c["thread_ts"] == card_ts
-                    for c in sw.client.upload_calls))
+            and all(c.get("channel") is None and c.get("thread_ts") is None
+                    for c in sw.client.upload_calls)
+            and len(shared_files) == 1
+            and shared_files[0]["channel"] == TS.SCOPE["channel_id"]
+            and shared_files[0]["ts"] == card_ts
+            and shared_files[0]["file_ids"] == [
+                p_["remote_id"] for p_ in parts.values() if p_["kind"] == "attachment_part"])
         N.check("slack_card_full_thread_file_parts", slack_ok, {
             "kinds": sorted(kinds),
             "body_parts": sum(1 for p_ in parts.values()

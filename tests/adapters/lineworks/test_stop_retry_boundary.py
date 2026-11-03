@@ -1,5 +1,6 @@
 """Synthetic: stopping during a proven-unsent wait must not start another wire call."""
 import asyncio
+import json
 import time
 from types import SimpleNamespace
 
@@ -58,6 +59,7 @@ def test_stop_during_unsent_wait_never_starts_the_next_wire_call(
         part = {"kind": "attachment_part", "part_id": "attach:0001", "name": "synthetic.bin"}
         if kind == "unavailable":
             part.update(unavailable=True, caption="synthetic unavailable")
+    spec_path.write_text(json.dumps(spec))
     out = asyncio.run(worker._perform_part({"spec": spec}, part, {}))
     assert worker._stopping is (boundary == "stop")
     assert len(calls) == (2 if boundary == "authorized" else 1)

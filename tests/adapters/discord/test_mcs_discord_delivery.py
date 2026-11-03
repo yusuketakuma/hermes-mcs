@@ -1203,7 +1203,7 @@ def _clock(monkeypatch, start=1_000_000.0):
     from adapters.common import worker as worker_mod
     now = [start]
     monkeypatch.setattr(worker_mod, "time",
-                        types.SimpleNamespace(time=lambda: now[0]))
+                        types.SimpleNamespace(time=lambda: now[0], monotonic=lambda: now[0]))
     return now
 
 
