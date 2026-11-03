@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS notification_render_parts(
   delivery_id TEXT NOT NULL,
   part_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('card','thread','body_part',
-                                    'attachment_part')),
+                                    'attachment_part','file_group')),
   idx INTEGER NOT NULL,
   payload_sha256 TEXT, bytes INTEGER, name TEXT, attachment_id INTEGER,
   state TEXT NOT NULL DEFAULT 'pending'
@@ -695,6 +695,27 @@ def _migrate(db, *, schema_version: int, fts: bool, fts_created: bool = False):
 
 
 def _migrate_body(db, cols, old_version: int):
+    if old_version < 11 and db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='notification_render_parts'").fetchone():
+        # CHECK constraints cannot be altered: rebuild the parts table so
+        # 'file_group' becomes a legal part kind on existing ledgers.
+        db.execute("ALTER TABLE notification_render_parts RENAME TO notification_render_parts_v10")
+        db.execute("""CREATE TABLE notification_render_parts(
+            delivery_id TEXT NOT NULL,
+            part_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('card','thread','body_part',
+                                              'attachment_part','file_group')),
+            idx INTEGER NOT NULL,
+            payload_sha256 TEXT, bytes INTEGER, name TEXT, attachment_id INTEGER,
+            state TEXT NOT NULL DEFAULT 'pending'
+              CHECK(state IN ('pending','delivered','not_sent','unknown','held')),
+            remote_id TEXT, error_code TEXT, attempt_id TEXT,
+            updated_at REAL,
+            PRIMARY KEY(delivery_id, part_id))""")
+        db.execute("""INSERT INTO notification_render_parts
+            SELECT * FROM notification_render_parts_v10""")
+        db.execute("DROP TABLE notification_render_parts_v10")
     if "initial_import" not in cols("patients"):
         db.execute("ALTER TABLE patients ADD COLUMN initial_import TEXT")
     db.execute("""

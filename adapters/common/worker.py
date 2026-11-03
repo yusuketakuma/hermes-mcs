@@ -716,6 +716,12 @@ class DeliveryWorker:
             if "receipt" not in phases and "result" in phases:
                 await self._republish_part_receipt(claim, part, rows)
             if phases & {"result", "receipt", "denied"}:
+                if kind == "attachment_part":
+                    res = next((r for r in reversed(rows)
+                                if r.get("phase") == "result"), None)
+                    if (res and res.get("result") == "delivered"
+                            and isinstance(res.get("remote_id"), str) and res["remote_id"]):
+                        ctx.setdefault("part_remotes", {})[part["part_id"]] = str(res["remote_id"])
                 if kind == "thread":
                     res = next((r for r in reversed(rows)
                                 if r.get("phase") == "result"), None)

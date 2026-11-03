@@ -940,18 +940,13 @@ class DeliveryWorker(_BaseWorker):
                   and p.get("unavailable") is not True]
         if not stages or stages[-1].get("part_id") == "file_group":
             return {"result": "not_sent", "error_code": "file_group_missing"}
-        records = await asyncio.to_thread(self._jview.refresh)
-        import notify_envelopes as envelopes
+        remotes = ctx.get("part_remotes") or {}
         fids = []
         for stage in stages:
-            aid = envelopes.part_attempt_id(spec["delivery_id"], stage["part_id"])
-            res = next((r for r in reversed(records.get(aid, []))
-                        if r.get("phase") == "result"), None)
-            if (res is None or res.get("result") != "delivered"
-                    or not isinstance(res.get("remote_id"), str)
-                    or not res["remote_id"]):
+            fid = remotes.get(stage["part_id"])
+            if not isinstance(fid, str) or not fid:
                 return {"result": "not_sent", "error_code": "stage_receipt_missing"}
-            fids.append(str(res["remote_id"]))
+            fids.append(fid)
         if len(set(fids)) != len(fids):
             return {"result": "not_sent", "error_code": "file_group_duplicate"}
         try:
