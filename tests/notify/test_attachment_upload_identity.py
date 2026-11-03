@@ -745,3 +745,4 @@ def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, m
                for pid, (state, remote) in rows.items())
     assert len(world.client.upload_calls) == uploads
 
+

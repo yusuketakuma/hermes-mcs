@@ -321,7 +321,8 @@ def _transport_parts_cost(spec, parts) -> int:
             _validate_face_posts(spec, parts, own["face_posts"], name)
         if 'file_group' in own:
             if (name != 'slack' or spec.get('kind') != 'thread'
-                    or not post_scoped(spec) or own['file_group'] is not True):
+                    or spec.get('op') not in ('create', 'update')
+                    or own['file_group'] is not True):
                 _err('bad_slack_file_group')
             manifest = parts.get('manifest')
             if not isinstance(manifest, list):
