@@ -22,10 +22,13 @@ def test_realtime_limit_includes_batch_fallback(tmp_path, monkeypatch, batch_k, 
         seen.append(kw) or {"done": 0, "failed": 0, "pids": []}))
     with closing(_ledger(tmp_path)) as ledger:
         result = {"errors": [], "realtime_ids": [1]}
-        run_check.stage_derive(ledger, result, time.monotonic() + 1000, {}, llm_budget_cap=budget)
+        # The tick reserves half its remaining time for downstream clinical work.
+        run_check.stage_derive(ledger, result, time.monotonic() + 2 * budget + 120, {},
+                               llm_budget_cap=budget, run_lock_fd=71)
     assert len(seen) == 1
     assert seen[0]["limit"] == expected
     assert seen[0]["budget_s"] == budget
     assert seen[0]["batch_k"] == batch_k
     assert seen[0]["admitted_ids"] == {1}
     assert seen[0]["oldest_first"] is False
+    assert seen[0]["run_lock_fd"] == 71

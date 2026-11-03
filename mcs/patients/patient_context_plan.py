@@ -163,13 +163,6 @@ def scan_items(answer, chunk):
     return checked
 
 
-def candidate_key(snapshot, progress, pid, lane):
-    """Prioritize initial publication, then the least recently attempted patient."""
-    return (bool(snapshot.get("scope", {}).get("is_archived")),
-            not snapshot["initial"] if lane == "A" else False,
-            progress.get("last_attempt_unit", 0), progress.get("last_attempt", 0), pid)
-
-
 def lane_rotation(best, rotation):
     """Choose the next available lane with the unchanged six/three/one schedule."""
     sequence = "AAAAAABBBC"
