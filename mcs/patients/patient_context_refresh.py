@@ -1969,8 +1969,8 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             or not admit() or not current()
             or extract_llm._cloud_mode(ledger, cfg, "patient_context", pid) != "on"):
         return "deferred", None
-    # The shared route precheck uses a margin-only estimate. Check this exact
-    # repair prompt's reservation bound before consuming the logical repair.
+    # Check an unspent repair's exact bound before consuming its one-use
+    # allowance. Spent attempts must still reach shared response recovery.
     request_texts = {"system": extract_llm.anthropic_client.SYSTEM,
                      "messages": [{"content": prompt}]}
     selection, errors = cloud_policy.resolve_profile(
@@ -3140,14 +3140,6 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
         selection = getattr(provider, "selection", None)
         selected_tokens = selection.get("max_tokens") if selection is not None else None
         max_tokens = 1600 if selected_tokens is None else selected_tokens
-        if selection is not None:
-            import cloud_inference
-            import cloud_policy
-            body = provider.client.body(prompt, max_tokens, None)
-            if cloud_policy.budget_block_reason(
-                    provider.ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=max_tokens,
-                    input_bound=cloud_policy.input_bound(body), selection=selection):
-                raise Deferred("nightly_cloud_budget")
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens)
     else:
         endpoint, model = local_llm.resolve(cfg)
@@ -3640,6 +3632,9 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     if paid:
                         raise ValueError('nightly_cloud_failed') from error
                     raise Deferred("nightly_cloud_source_changed") from error
+                if (str(error) == "cloud_send_blocked" and saved and saved.get("_provider_contract")):
+                    # A fresh unsent remainder does not release a persisted cloud cursor.
+                    raise Deferred("nightly_cloud_budget") from error
                 if paid:
                     meta["provider"] = provider.contract
                     meta["model"] = provider.model

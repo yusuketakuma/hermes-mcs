@@ -319,7 +319,14 @@ def test_local_boundaries_do_not_send(cloud, denial):
         cfg["cloud_llm"]["routes"] = ["reextract"]
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct) as chat:
-        assert chat is None
+        if denial == "cap":
+            # The configured route must remain recoverable. A new request is
+            # still refused before any reservation or HTTP attempt.
+            assert callable(chat)
+            with pytest.raises(semantic_drain.runtime.LLMNotSent):
+                chat("synthetic historical input")
+        else:
+            assert chat is None
     assert not calls and not rows(led, "cloud_usage_reserve")
 
 
