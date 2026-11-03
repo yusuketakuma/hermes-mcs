@@ -4,13 +4,15 @@ import fcntl
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
-from time import monotonic
+from time import monotonic, perf_counter
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 from safe_io import fdopen_owned, fsync_dir
 
@@ -34,33 +36,37 @@ def snapshot_verify_timeout_s(path: str) -> float:
         size = 0
     return SNAPSHOT_VERIFY_TIMEOUT_S + min(
         SNAPSHOT_VERIFY_EXTRA_MAX_S, size / SNAPSHOT_VERIFY_RATE_BPS)
-# Why the latest publish returned None: a fixed code plus elapsed seconds,
-# never paths or database content. Reset at the start of every publish.
-_failure: dict = {}
+class _PublicationStatus(threading.local):
+    def __init__(self):
+        self.failure = {}
+        self.timing = {}
+        self.locks = {}
+
+
+_status = _PublicationStatus()
 
 
 def last_failure() -> dict:
-    """Bounded reason and timings of the most recent unpublished snapshot."""
-    return dict(_failure)
-
-
-# Copy/verify seconds and the verify budget of the latest publish that
-# succeeded, so the remaining margin stays visible without a failure.
-_timing: dict = {}
+    """Return this thread's latest bounded failure, never paths or source data."""
+    return dict(_status.failure)
 
 
 def last_timing() -> dict:
-    """Bounded timings of the most recent published snapshot."""
-    return dict(_timing)
+    """Return this thread's latest published snapshot timings and marker state."""
+    return dict(_status.timing)
 
 
 def _reset_status() -> None:
-    _failure.clear()
-    _timing.clear()
+    _status.failure.clear()
+    _status.timing.clear()
 
 
 def _fail(reason: str, **extra) -> None:
-    _failure.update(reason=reason, **extra)
+    _status.failure.update(reason=reason, **extra)
+
+
+def _record_timing(**values) -> None:
+    _status.timing.update(values)
 
 
 # Exit 1 is only an explicit validation refusal; a failed bootstrap/import
@@ -121,7 +127,7 @@ def _valid_snapshot_candidate(path: str, *, deadline: float,
                 except BaseException:
                     if state is not None:
                         state["unreaped"] = True
-                    _failure["child_unreaped"] = True
+                    _status.failure["child_unreaped"] = True
                     # The inherited lock fences new validators until even an
                     # uninterruptible disk wait exits and the OS closes it.
                     pass
@@ -136,7 +142,7 @@ def _valid_snapshot_candidate(path: str, *, deadline: float,
                 except BaseException:
                     if state is not None:
                         state["unreaped"] = True
-                    _failure["child_unreaped"] = True
+                    _status.failure["child_unreaped"] = True
                 raise
     except OSError as error:
         _fail("validator_oserror", errno=error.errno)
@@ -237,12 +243,88 @@ def _cleanup_candidate(tmp: str, fd: int) -> None:
                                  stderr=subprocess.DEVNULL, pass_fds=(fd,))
         try:
             if child.wait(timeout=1) != 0:
-                _failure["cleanup_failed"] = True
+                _status.failure["cleanup_failed"] = True
         except subprocess.TimeoutExpired:
             # Its inherited fence remains held until the unlink finishes.
-            _failure["cleanup_pending"] = True
+            _status.failure["cleanup_pending"] = True
     except OSError:
-        _failure["cleanup_failed"] = True
+        _status.failure["cleanup_failed"] = True
+
+
+def _lock_identity(info):
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+        raise ValueError("snapshot_lock_unverified")
+    return info.st_dev, info.st_ino
+
+
+def _verified_publication_lock(dest_dir, fd):
+    """Accept only this thread's live, matching, OS-locked publication fence."""
+    try:
+        if type(fd) is not int or fd < 0:
+            raise ValueError("snapshot_lock_unverified")
+        identity = _lock_identity(os.fstat(fd))
+        if _status.locks.get(fd) != identity:
+            raise ValueError("snapshot_lock_unverified")
+        path = os.path.join(dest_dir, '.snapshot.lock')
+        if _lock_identity(os.stat(path, follow_symlinks=False)) != identity:
+            raise ValueError("snapshot_lock_unverified")
+        probe = os.open(path, os.O_WRONLY | os.O_NOFOLLOW)
+        try:
+            if _lock_identity(os.fstat(probe)) != identity:
+                raise ValueError("snapshot_lock_unverified")
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # A foreign owner's lock must not masquerade as this fd's fence.
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                raise ValueError("snapshot_lock_unverified")
+        finally:
+            os.close(probe)
+        return True
+    except (OSError, ValueError):
+        _fail("snapshot_lock_unverified")
+        return False
+
+
+@contextmanager
+def _publication_lock(dest_dir: str):
+    """Own the existing publication fence across freshness checks and marker updates."""
+    try:
+        os.makedirs(dest_dir, mode=0o700, exist_ok=True)
+        os.chmod(dest_dir, 0o700)
+        fd = os.open(os.path.join(dest_dir, '.snapshot.lock'),
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        _fail("snapshot_setup_oserror", errno=error.errno)
+        yield None
+        return
+    with fdopen_owned(fd, 'w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _fail("snapshot_lock_busy")
+            yield None
+            return
+        except OSError as error:
+            _fail("snapshot_lock_error", errno=error.errno)
+            yield None
+            return
+        try:
+            identity = _lock_identity(os.fstat(fd))
+            if _lock_identity(os.stat(os.path.join(dest_dir, '.snapshot.lock'),
+                                      follow_symlinks=False)) != identity:
+                raise ValueError("snapshot_lock_unverified")
+        except (OSError, ValueError):
+            _fail("snapshot_lock_unverified")
+            yield None
+            return
+        _status.locks[fd] = identity
+        try:
+            yield fd
+        finally:
+            _status.locks.pop(fd, None)
 
 
 def publish_snapshot(db_path: str, dest_dir: str, *,
@@ -257,76 +339,77 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
         _fail("deadline_before_copy")
         return None
     started = monotonic()
-    try:
-        os.makedirs(dest_dir, mode=0o700, exist_ok=True)
-        os.chmod(dest_dir, 0o700)
-        fd = os.open(os.path.join(dest_dir, '.snapshot.lock'),
-                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as error:
-        _fail("snapshot_setup_oserror", errno=error.errno)
+    total_started = perf_counter()
+    with _publication_lock(dest_dir) as fd:
+        if fd is None:
+            return None
+        return _publish_snapshot_locked(db_path, dest_dir, fd, deadline=deadline, started=started,
+                                        total_started=total_started)
+
+
+def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
+                             deadline: float | None = None, started=None, total_started=None) -> str | None:
+    """Copy and validate while the caller retains the publication fence."""
+    if not _verified_publication_lock(dest_dir, fd):
         return None
-    with fdopen_owned(fd, 'w') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            _fail("snapshot_lock_busy")
+    started = monotonic() if started is None else started
+    total_started = perf_counter() if total_started is None else total_started
+    state = {}
+    tmp = None
+    published = False
+    try:
+        if deadline is not None and monotonic() >= deadline:
+            _fail("deadline_before_copy")
             return None
+        try:
+            temp_fd, tmp = tempfile.mkstemp(dir=dest_dir, prefix=".snapshot.", suffix=".tmp")
+            os.close(temp_fd)
         except OSError as error:
-            _fail("snapshot_lock_error", errno=error.errno)
+            _fail("snapshot_setup_oserror", errno=error.errno)
             return None
-        state = {}
-        tmp = None
-        published = False
+        if not _prepare_in_child(db_path, tmp, deadline, fd, state):
+            _status.failure.setdefault("copy_s", round(monotonic() - started, 3))
+            return None
+        copied = monotonic()
+        verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
+            SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
+        if deadline is not None:
+            verify_by = min(verify_by, deadline)
+        if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
+            _status.failure.setdefault("reason", "validator_false")
+            _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
+                  capped_by_deadline=deadline is not None and verify_by == deadline)
+            return None
+        verified = monotonic()
+        if verified >= verify_by:
+            _fail("verify_deadline", copy_s=round(copied - started, 3),
+                  verify_s=round(verified - copied, 3))
+            return None
+        publication_started = perf_counter()
+        dest = os.path.join(dest_dir, "ledger-snapshot.db")
         try:
+            candidate_fd = os.open(tmp, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(candidate_fd)
+            finally:
+                os.close(candidate_fd)
             if deadline is not None and monotonic() >= deadline:
-                _fail("deadline_before_copy")
-                return None
-            try:
-                temp_fd, tmp = tempfile.mkstemp(dir=dest_dir, prefix=".snapshot.", suffix=".tmp")
-                os.close(temp_fd)
-            except OSError as error:
-                _fail("snapshot_setup_oserror", errno=error.errno)
-                return None
-            if not _prepare_in_child(db_path, tmp, deadline, fd, state):
-                _failure.setdefault("copy_s", round(monotonic() - started, 3))
-                return None
-            copied = monotonic()
-            verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
-                SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
-            if deadline is not None:
-                verify_by = min(verify_by, deadline)
-            if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
-                _failure.setdefault("reason", "validator_false")
-                _fail(_failure["reason"], copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None and verify_by == deadline)
-                return None
-            verified = monotonic()
-            if verified >= verify_by:
-                _fail("verify_deadline", copy_s=round(copied - started, 3),
+                _fail("publish_deadline", copy_s=round(copied - started, 3),
                       verify_s=round(verified - copied, 3))
                 return None
-            dest = os.path.join(dest_dir, "ledger-snapshot.db")
-            try:
-                candidate_fd = os.open(tmp, os.O_RDONLY | os.O_NOFOLLOW)
-                try:
-                    os.fsync(candidate_fd)
-                finally:
-                    os.close(candidate_fd)
-                if deadline is not None and monotonic() >= deadline:
-                    _fail("publish_deadline", copy_s=round(copied - started, 3),
-                          verify_s=round(verified - copied, 3))
-                    return None
-                os.replace(tmp, dest)
-                published = True
-                fsync_dir(dest_dir)
-            except OSError:
-                _fail("publication_uncertain" if published else "publication_failed",
-                      copy_s=round(copied - started, 3),
-                      verify_s=round(verified - copied, 3))
-                return None
-            _timing.update(copy_s=round(copied - started, 3),
-                           verify_s=round(verified - copied, 3), budget_s=round(verify_by - copied, 3))
-            return dest
-        finally:
-            if tmp is not None and not published and not state.get("unreaped"):
-                _cleanup_candidate(tmp, fd)
+            os.replace(tmp, dest)
+            published = True
+            fsync_dir(dest_dir)
+        except OSError:
+            _fail("publication_uncertain" if published else "publication_failed",
+                  copy_s=round(copied - started, 3),
+                  verify_s=round(verified - copied, 3))
+            return None
+        _record_timing(copy_s=round(copied - started, 3),
+                       verify_s=round(verified - copied, 3), budget_s=round(verify_by - copied, 3),
+                       publication_s=round(perf_counter() - publication_started, 3),
+                       total_s=round(perf_counter() - total_started, 3))
+        return dest
+    finally:
+        if tmp is not None and not published and not state.get("unreaped"):
+            _cleanup_candidate(tmp, fd)

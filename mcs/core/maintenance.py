@@ -700,9 +700,12 @@ def _prune_spool_temporaries(data: str, cutoff: float) -> int:
     return removed
 
 
-def publish_snapshot(db_path: str, *, deadline: float | None = None) -> bool:
+def publish_snapshot(db_path: str, *, deadline: float | None = None, _lock_fd=None) -> bool:
     """Regenerate the read-only snapshot consumed by the sandboxed CCO
     (backup -> tmp -> DELETE journal -> verify -> atomic rename)."""
+    if _lock_fd is not None:
+        snapshots._reset_status()
+        return bool(snapshots._publish_snapshot_locked(db_path, SNAPSHOT_DIR, _lock_fd, deadline=deadline))
     return bool(_publish_snapshot(db_path, SNAPSHOT_DIR, deadline=deadline))
 
 
@@ -810,12 +813,27 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
     taken BEFORE the copy: a write landing in between only makes the
     next tick publish again."""
     snapshots._reset_status()
+    total_started = time.perf_counter()
+    if deadline is not None and monotonic() >= deadline:
+        snapshots._fail("signature_deadline")
+        return None
+    with snapshots._publication_lock(SNAPSHOT_DIR) as lock_fd:
+        if lock_fd is None:
+            return None
+        return _refresh_snapshot_locked(db_path, force=force, now=now, deadline=deadline,
+                                        lock_fd=lock_fd, total_started=total_started)
+
+
+def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_fd, total_started):
+    """Check freshness and save its marker under the same publication fence."""
     now = time.time() if now is None else now
+    signature_started = time.perf_counter()
     try:
         sig = _content_signature(db_path, deadline=deadline)
     except _SnapshotSignatureDeadline:
         snapshots._fail("signature_deadline")
         return None
+    signature_s = time.perf_counter() - signature_started
     prev = _load_json(_snapshot_sig_path())
     dest = os.path.join(SNAPSHOT_DIR, "ledger-snapshot.db")
     if deadline is not None and monotonic() >= deadline:
@@ -828,17 +846,26 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
             snapshots._fail("signature_deadline")
             return None
         return "unchanged"
-    if not publish_snapshot(db_path, deadline=deadline):
+    if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd):
         return None
+    marker_started = time.perf_counter()
+    marker_state = "unavailable"
     if sig is None:
         with suppress(OSError):
             os.unlink(_snapshot_sig_path())
     else:
         text = json.dumps({"sig": sig, "published_at": now})
-        with suppress(OSError):   # the marker is only a fast path
+        try:
             os.makedirs(SNAPSHOT_DIR, mode=0o700, exist_ok=True)
-            atomic_write(_snapshot_sig_path(), lambda f: f.write(text),
-                         mode=0o600)
+            atomic_write(_snapshot_sig_path(), lambda f: f.write(text), mode=0o600)
+        except OSError:
+            pass  # Publication succeeded; its optional reuse marker did not.
+        else:
+            marker_state = "saved"
+    snapshots._record_timing(signature_s=round(signature_s, 3),
+                             marker_s=round(time.perf_counter() - marker_started, 3),
+                             marker_state=marker_state,
+                             total_s=round(time.perf_counter() - total_started, 3))
     return "published"
 
 

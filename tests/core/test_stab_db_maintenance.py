@@ -207,7 +207,13 @@ def test_signature_sql_progress_expiry_does_not_publish(tmp_path, monkeypatch):
 
 def test_unreadable_signature_still_requests_fresh_copy(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **kw: calls.append(kw) or False)
+
+    def publish(path, *, deadline, _lock_fd):
+        assert snapshots._verified_publication_lock(maintenance.SNAPSHOT_DIR, _lock_fd)
+        calls.append({"deadline": deadline})
+        return False
+
+    monkeypatch.setattr(maintenance, "publish_snapshot", publish)
     deadline = time.monotonic() + 10
     assert maintenance.refresh_snapshot(str(tmp_path / "missing.db"), deadline=deadline) is None
     assert calls == [{"deadline": deadline}]
@@ -244,7 +250,7 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     out = snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10)
     assert out is not None
     timing = snapshots.last_timing()        # the margin is visible on success too
-    assert set(timing) == {"copy_s", "verify_s", "budget_s"}
+    assert set(timing) == {"copy_s", "verify_s", "budget_s", "publication_s", "total_s"}
     assert 0 <= timing["verify_s"] <= timing["budget_s"]
     # a later refused publish leaves no stale success timing behind
     monkeypatch.setattr(snapshots, "monotonic", real)
