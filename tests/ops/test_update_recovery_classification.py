@@ -113,7 +113,9 @@ def _trace_world(updater, monkeypatch, *, applying=None, markers=(None,),
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: trace.append("cleanup") or [])
     monkeypatch.setattr(updater, "_journal_consent_from_marker", lambda *a: trace.append("adopt_marker"))
     monkeypatch.setattr(updater, "_last_report", lambda: {})
-    monkeypatch.setattr(updater, "_awaiting_consent_marker", marker)
+    # Recovery now reads the shared writer gate, which includes unfinished
+    # restore journals as well as narrow awaiting-consent marker phases.
+    monkeypatch.setattr(updater, "_restore_writer_hold_marker", marker)
     monkeypatch.setattr(updater, "_head_sha", head)
     monkeypatch.setattr(updater, "_tree_clean", tree_clean)
     monkeypatch.setattr(updater, "_local_changes_outside", changes)

@@ -2738,15 +2738,20 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     # journal is rollback-shaped: target is prev, restore still owed
     assert st["applying"]["rollback"] is True
     assert st["applying"]["sha"] == before
+    failed_receipt = dict(st["executed"]["cid"])
 
     mcs_update.recover_interrupted()
     assert notices == []
     st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] != "interrupted_pre_merge"
-    assert report["result"] == "escalate"
+    assert report["result"] == "restore_consent_blocked"
     assert "rollback db restore" in report["detail"]
     assert st["applying"] is not None          # still visible to humans
+    assert st["applying"]["restore_incomplete"] is True
+    assert Path(mcs_update.MARKER_PATH).exists()
+    assert "restore_consent" not in st  # A failed backup is not a pending human loss report.
+    assert st["executed"]["cid"] == failed_receipt
     assert (st.get("executed") or {}).get("cid", {}).get("result") \
         != "interrupted_recovered"
     assert restore_evidence.database_version(live) == 8
@@ -2874,7 +2879,15 @@ def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypa
 
     assert updater.apply("v1.1.0", target, "synthetic-command") == 1
     assert updater._head_sha() == target
-    assert updater.journal_store.load_state(updater.STATE_PATH) == saved["journal"]
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    # The failed apply is durable even when rollback preflight holds before
+    # command-receipt settlement. Every other journal field remains intact.
+    attempt = state["attempts"].pop("v1.1.0")
+    assert set(attempt) == {"at", "detail", "result"}
+    assert attempt["result"] == "failed"
+    assert attempt["detail"] == "post_merge_failed: postcheck_failed: synthetic"
+    assert type(attempt["at"]) is float and attempt["at"] > 0
+    assert state == saved["journal"]
     report = json.loads(Path(updater.REPORT_PATH).read_text())
     assert report["result"] == "runtime_restore_blocked"
     assert report["writers_stopped"] is (failure == "none")
