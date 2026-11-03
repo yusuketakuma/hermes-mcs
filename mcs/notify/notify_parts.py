@@ -955,7 +955,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 suffix = "\n" + SECTION_RULE
                 combined = header_chunks[-1] + suffix
                 if (len(combined) <= THREAD_PART_LIMIT
-                        and (not hasattr(present, "THREAD_PART_WIRE_LIMIT")
+                        and (getattr(present, "THREAD_PART_WIRE_LIMIT", None) is None
                              or present.thread_part_wire_size(combined) <= present.THREAD_PART_WIRE_LIMIT)):
                     header_chunks[-1] = combined
                 else:

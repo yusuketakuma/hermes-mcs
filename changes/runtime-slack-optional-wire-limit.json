@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "Slackの旧本文を再計画する際の上限なし分岐を修正",
+  "summary": "バイト上限が設定されていない本文計画でも、区切り線の結合時に例外を起こさず既存の文字数制限を適用します。",
+  "upgrade": "更新後は利用中の通知サービスへのコード反映が必要です。現在のSlackバイト上限や不明な送信を再送しない条件は変更しません。",
+  "details": [
+    "文字数制限と任意のバイト制限を別々に判定する。",
+    "送信されなかったと確定したサイズ拒否だけの再計画と、unknownの保護を維持する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_parts.py",
+    "tests/adapters/slack/test_slack_body_limits_hotfix.py"
+  ]
+}
