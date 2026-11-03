@@ -3,6 +3,6 @@
   "upgrade": {
     "operations": "保留中の添付部品について、Slack側のファイルと記録を目視照合のうえ mcs_view attachment_identity_plan で計画を確認し、control attachment_identity_confirm --confirm-human でJSON承認を投入する（worker停止証拠が必須）。複数添付は部品ごとに承認する。",
     "applies_when": "attachment_upload_identity_unverified の held 通知が残る場合に有効。既存の ops.card_part_resolve 契約は変更なし。",
-    "notes": "receipt追加のみで既存renderやDB行を改変しない。昇格は読取時に完全一致した記録のみに適用される。"
+    "notes": "承認は監査receiptの追加と、まだ送信されていない未公開の held render（specと部品行）の再封印だけを行います。送信済みの履歴・証跡・その他のDB行は一切変更しません。再封印は全ての保留添付が承認済みの場合だけ行われ、証跡のない部分変更は残りません。"
   }
 }
