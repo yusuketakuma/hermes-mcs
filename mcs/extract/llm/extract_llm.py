@@ -2988,11 +2988,32 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
 
 
 def _release(ledger, r, lease: float | None):
-    """Drop OUR lease — the next_try equality guard keeps a replacement
-    claim (taken after our lease lapsed) alive."""
+    """Release our lease or briefly retain a rejected save under its exact owner fence.
+    The next_try equality guard keeps a replacement claim alive."""
     if lease is None or ledger.db.in_transaction:
         return
     token = r.get("_claim_token") if isinstance(r, dict) else None
+    if isinstance(r, dict) and r.pop("_commit_hold", False):
+        # Preserve this owner's claim briefly after a rejected save; checking
+        # the occurrence and updating its lease share one writer transaction.
+        ledger.db.execute("BEGIN IMMEDIATE")
+        try:
+            if (mcs_util.valid_hash(r.get("_source_binding")) and type(token) is str and token
+                    and _source_writable(ledger.db, r) and _owns_current_source(ledger, r, lease)):
+                now = time.time()
+                held = ledger.db.execute(
+                    "UPDATE fetch_jobs SET next_try=?,updated_at=? WHERE kind='extract_claim' "
+                    "AND project_id=? AND message_id=? AND next_try=? AND next_try>? "
+                    "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ?",
+                    (now + _PREPARE_HOLD_S, now, r["project_id"], r["message_id"], lease, now, token))
+                if held.rowcount:
+                    ledger.db.commit()
+                    return
+        except BaseException:
+            ledger.db.rollback()
+            raise
+        # A changed source or expired claim follows the existing exact-owner
+        # cleanup, without holding the replacement occurrence or another owner.
     ledger.db.execute(
         "DELETE FROM fetch_jobs WHERE kind='extract_claim' "
         "AND project_id=? AND message_id=? AND next_try=? "
@@ -6077,6 +6098,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
         nonlocal done, deferred, held_prior
+        r.pop("_commit_hold", None)
         if r.get("_cloud_guard"):
             try:
                 r["_cloud_guard"]()
@@ -6104,6 +6126,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             check_current=qc is None and not r["thin_src"] and not r["human_src"],
             expected_prior=r.get("_expected_prior"))
         if outcome != "written":
+            if outcome == "rejected":
+                r["_commit_hold"] = True
             if outcome == "held":
                 held_prior += 1
                 if settled is not None:
