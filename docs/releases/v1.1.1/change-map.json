@@ -1,10 +1,10 @@
 {
-  "status": "unpublished integration candidate; final Slack feature, production application and release acceptance pending",
+  "status": "release notes prepared; production application and publication are tracked in ACCEPTANCE_1.1.1.md",
   "baseline": {
     "previous_release": "v1.1.0",
     "production_sha": "2673b767b9cba56a0ca169eeebe1d0c6c63143e6"
   },
-  "fragment_count": 79,
+  "fragment_count": 91,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -481,6 +481,78 @@
       "id": "update-failure-diagnostics-v111",
       "title": "更新失敗後の復元保留でも元の失敗理由を保持",
       "sha256": "ab24041f20767b0f8d90451965feb37e339b40d2130239af3e481f87378b640d"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-backlog-observation.json",
+      "id": "cloud-backlog-observation",
+      "title": "クラウド解析ログで呼出し時間とロック待ちを確認できるよう修正",
+      "sha256": "c887c329e71637b825ea348568bc182fddb4ff5d931d6b21091efc3efc050f53"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-entry-recovery.json",
+      "id": "cloud-entry-recovery",
+      "title": "予算上限に達した後も保存済みのLLM応答を再利用",
+      "sha256": "4c487b3f96ca4292b9573be3c78457535e86623dac2b0a8d63c07ec1d16e0a70"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-paid-answer-recovery.json",
+      "id": "cloud-paid-answer-recovery",
+      "title": "保存済みのクラウド回答から中断した処理を再開",
+      "sha256": "4efa206e40a81b13bce1a69a0eba6b603154919edbb86fca19989d31f51fa8fb"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-selection-patient-order.json",
+      "id": "cloud-selection-patient-order",
+      "title": "クラウド処理の候補選択で全投稿の並べ替えデータを保持しないよう修正",
+      "sha256": "59603f88cf49f009675328354b0647d0856ed34727eca08dc38cc048638bb43f"
+    },
+    {
+      "path": "changes/archive/1.1.1/extraction-batch-measurement.json",
+      "id": "extraction-batch-measurement",
+      "title": "一括抽出の実行回数とトークン数の重複集計を防止",
+      "sha256": "5289dddecfd87b0a0efd37f61535395b1cbf1428ddd7fa59ac25e1aa0a6da738"
+    },
+    {
+      "path": "changes/archive/1.1.1/patient-context-fair-order.json",
+      "id": "patient-context-fair-order",
+      "title": "患者コンテキストの処理が一部の患者に偏る問題を修正",
+      "sha256": "d78d4d80a12936aa5c60c77d4c3d3b3da27d853ae13408a9ca21ff4a03d580f7"
+    },
+    {
+      "path": "changes/archive/1.1.1/realtime-extract-transport-lock.json",
+      "id": "realtime-extract-transport-lock",
+      "title": "新着のローカル推論中にほかの解析結果を保存できるよう修正",
+      "sha256": "89d8b09fe21434f9a5c1bad4bed58a4b80c4028a2dc00d819b6ab3776fad9b23"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-file-group-hardening.json",
+      "id": "slack-file-group-hardening",
+      "title": "Slackの添付表示と配送証跡を保護",
+      "sha256": "28ee0f6ffeaae2527b3272dfe8e97fc03f5dd6cf498b59ce60ceff18e2ad694d"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-preflight-file-group-recovery.json",
+      "id": "slack-preflight-file-group-recovery",
+      "title": "Slackの複数添付を含む配送確認後の復旧を修正",
+      "sha256": "23b5aeb57377ea3993f4cf0cebfc5f92d566126ac4c22327ef7c399e3b3aaeef"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-private-manual-proof-chain.json",
+      "id": "slack-private-manual-proof-chain",
+      "title": "人が確認した添付更新の保存証拠を引き継ぐ",
+      "sha256": "ec341f26fcccca83da84b7a4de5d3a4d87fba2f5e91a68206970413a28635c59"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-unknown-group-retention.json",
+      "id": "slack-unknown-group-retention",
+      "title": "複数添付の共有結果が不明なときに復旧用の記録を保持",
+      "sha256": "83cb849c74e2681b5621f26266203cd1ee07747c5eb9ed494bf6b90e7016336d"
+    },
+    {
+      "path": "changes/archive/1.1.1/unacked-pending-slack-replies.json",
+      "id": "unacked-pending-slack-replies",
+      "title": "カード準備中の返信を未確認一覧に表示",
+      "sha256": "25106cb326c9c6222d27fe484d4bbf8f60cccb50489090937a483c3f7d3dca2e"
     }
   ]
 }
