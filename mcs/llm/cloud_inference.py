@@ -253,6 +253,23 @@ class CloudInferenceUnit:
                 if evidence['reservation'] not in self.completed_reservations:
                     self.completed_reservations.append(evidence['reservation'])
             else:
+                def send_block_reason():
+                    # An exact recovery miss is not proof of no prior send: old
+                    # envelopes and incomplete receipts use the reservation guard.
+                    self.commit_guard()
+                    try:
+                        return cloud_policy.request_send_block_reason(self.ledger,
+                            {"cloud_llm": _current_cloud_settings()}, self.client.body(prompt, tokens, prefix),
+                            route=self.route, project_id=self.project_id, message_id=self.message_id,
+                            unit_key=self.unit_key, owner=self.owner, selection=self.selection,
+                            input_binding=self._input_binding())
+                    except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError):
+                        self.possibly_sent = True
+                        raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
+                if self.dispatch(send_block_reason, result=True):
+                    # Only a history-checked fresh request may use caller local fallback.
+                    self.commit_guard()
+                    raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
                 with cloud_backlog.request_slot(HOME, capacity) as held:
                     if not held:

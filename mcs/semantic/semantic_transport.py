@@ -254,6 +254,10 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             if (local_fallback is not None and str(error) != 'cloud_unit_changed'
                     and not any(p.possibly_sent for p in providers.values())):
                 return local(prompt, timeout)
+            if str(error) == 'cloud_send_blocked':
+                # A history-checked fresh request denied before reservation is
+                # a wait in the cloud-only lane, never a failed paid generation.
+                raise runtime.LLMNotSent('cloud_not_sent') from error
             current()
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)

@@ -868,11 +868,10 @@ def _cloud_mode(ledger, cfg, route, project_id):
     selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
     if errors or selection is None:
         return "off"
-    limit = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
-    if mode in ("on", "shadow") and (not cloud_policy.selected_key(HOME, cfg)
-            or cloud_policy.block_reason(ledger, settings, route, project_id, model=selection["model"])
-            or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
-        return "off"   # a reached cap keeps the rows in the local batches
+    # Quota/circuit denial is decided after recovering/checking this input's
+    # prior attempt. Turning the route off here could send an unknown unit locally.
+    if mode in ("on", "shadow") and not cloud_policy.selected_key(HOME, cfg):
+        return "off"
     return mode
 
 
@@ -5937,7 +5936,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # An unknown send keeps its source/backend claim; only a known outcome can fall back.
                 r["_cloud_failed"] = provider.possibly_sent
                 unresolved = getattr(provider, 'unresolved', provider.possibly_sent)
-                if cloud_only or unresolved:
+                if cloud_only or unresolved or (str(error) == "cloud_send_blocked" and (saved or chunks_out)):
                     _CALL_NOTES.defer_reason = "cloud_unit_unresolved" if unresolved else "cloud_fallback"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
