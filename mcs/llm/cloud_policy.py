@@ -1304,6 +1304,9 @@ class _Tally:
         return digest.digest()
 
     def update(self, ledger, now):
+        last_id = self.last_id
+        new_orphans = {}
+        changed_orphans = set()
         with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
@@ -1340,20 +1343,27 @@ class _Tally:
                 else:
                     entry = self.orphans.get(rid)
                     if entry is None:
-                        prior = [(_accounting_meta(r["meta"]), r) for r in _matching_rows_many(
-                            ledger, KINDS[0], [rid], now=now, _timestamps_checked=True)]
-                        entry = self.orphans[rid] = (prior, [])
-                        for _, reserved in prior:
-                            self.history_valid_until = min(self.history_valid_until, reserved['created_at'] + 62 * 86400)
+                        entry = self.orphans[rid] = ([], [])
+                        new_orphans[rid] = entry
                     entry[1].append((m, row))
-                    try:
-                        if len(entry[0]) != 1:
-                            raise ValueError
-                        _settled(entry[0][0][0], _reserve_valid(*entry[0][0]), entry[1])
-                    except (AnthropicError, ValueError, InvalidOperation, TypeError):
-                        self.invalid = True
+                    changed_orphans.add(rid)
                 self.last_id = row["artifact_id"]
-        self.prefix = self.fingerprint(ledger, now)
+        # Bind all late results together; each lookup validates retained history.
+        for row in _matching_rows_many(ledger, KINDS[0], new_orphans, now=now, _timestamps_checked=True):
+            meta = _accounting_meta(row["meta"])
+            new_orphans[meta["reservation_id"]][0].append((meta, row))
+            self.history_valid_until = min(self.history_valid_until, row['created_at'] + 62 * 86400)
+        for rid in changed_orphans:
+            prior, results = self.orphans[rid]
+            try:
+                if len(prior) != 1:
+                    raise ValueError
+                _settled(prior[0][0], _reserve_valid(*prior[0]), results)
+            except (AnthropicError, ValueError, InvalidOperation, TypeError):
+                self.invalid = True
+        # The caller already verified this prefix in the same read snapshot.
+        if self.prefix is None or self.last_id != last_id:
+            self.prefix = self.fingerprint(ledger, now)
         self.checked_at = now
 
 
