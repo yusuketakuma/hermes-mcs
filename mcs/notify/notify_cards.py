@@ -2514,8 +2514,9 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_render_parts p
                        WHERE p.delivery_id=r.delivery_id AND r.transport='slack'
-                         AND p.kind='attachment_part' AND p.state='unknown'
-                         AND p.error_code IN ('edit_target_unverified','edit_history_unverified'))
+                         AND p.state='unknown' AND (p.kind='file_group'
+                           OR (p.kind='attachment_part'
+                             AND p.error_code IN ('edit_target_unverified','edit_history_unverified'))))
                      AND ((r.card_id IS NULL AND r.op='notice'
                            AND r.state IN ('cancelled','not_sent'))
                           OR (r.state IN ('cancelled','not_sent')
@@ -2566,8 +2567,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 "WHERE p.delivery_id=r.delivery_id AND p.state='pending') "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
                 "WHERE p.delivery_id=r.delivery_id AND r.transport='slack' "
-                "AND p.kind='attachment_part' AND p.state='unknown' "
-                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')) "
+                "AND p.state='unknown' AND (p.kind='file_group' OR (p.kind='attachment_part' "
+                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')))) "
                 "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")

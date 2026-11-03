@@ -486,7 +486,7 @@ UNACKED_WINDOW_S = 7 * 86400
 def unacked_view(db, transport, now=None, projects=None,
                  member_names=None) -> dict:
     """🗂 delivered thread/signal cards created or content-rendered within the window whose
-    current content carries no live acknowledgement, grouped by patient
+    current content carries no live acknowledgement or has a Slack reply awaiting its card, grouped by patient
     (oldest card's patient first, archived patients last), oldest first; assigned-but-unconfirmed
     cards are marked. Digest cards span projects and are left out.
     On LINE WORKS the owner mention becomes the ``member_names`` name or

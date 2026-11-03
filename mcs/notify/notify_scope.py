@@ -261,7 +261,7 @@ def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
         "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
         "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
         "      FROM notification_renders WHERE card_id=ic.card_id) "
-        "    AND ((p.kind IN ('body_part','attachment_part') "
+        "    AND ((p.kind IN ('body_part','attachment_part','file_group') "
         "          AND p.state IN ('pending','unknown')) "
         "      OR (p.kind='thread' AND p.state='unknown'))), "
         " (SELECT json_extract(c.ui_state,'$.history_latest.phase') FROM notification_intent_cards i "
