@@ -674,3 +674,58 @@ def test_approval_never_promotes_later_unapproved_collected_row(led, uploaded):
     later = next(proof for proof in next(iter(identities.values()))
                  if proof[0] == pid and proof[6] == prior["render_rev"] + 50)
     assert later[5] == "collected"
+
+
+def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, monkeypatch):
+    """Sequential per-part approvals; the last one unholds; GC of the sealed
+    spec keeps receipts so recovery continues."""
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    _seed_thread(led, mids=(100,))
+    aid1, _p1, _b1 = _attach(led, tmp_path, name="syn-one.bin")
+    aid2, _p2, blob2 = _attach(led, tmp_path, name="syn-two.bin", blob=b"other-bytes")
+    assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    prior = _latest_render(led)
+    parts = {p["part_id"]: p for p in json.loads(prior["spec_json"])["parts"]["manifest"]
+             if p["kind"] == "attachment_part"}
+    assert len(parts) == 2
+    # lose all sealed manifests → both attachment parts hold collected-only
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?",
+                       (prior["delivery_id"],))
+        led.db.execute("UPDATE attachments SET name='renamed-one.bin' WHERE attachment_id=?", (aid1,))
+        led.db.execute("UPDATE attachments SET name='renamed-two.bin' WHERE attachment_id=?", (aid2,))
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, [], force=True)
+    held_render = _latest_render(led)
+    assert held_render["state"] == "held"
+    held_parts = [r[0] for r in led.db.execute(
+        "SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+        "AND kind='attachment_part' AND state='held'", (held_render["delivery_id"],))]
+    assert len(held_parts) == 2
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    # first approval: second part still unattested → render stays held
+    plan1 = attachment_identity_confirm_plan(led.db, held_render["delivery_id"], held_parts[0])
+    receipt1 = apply_attachment_identity_confirm(led, _confirm_req(plan1, 0xA1))
+    assert receipt1["outcome"] == "applied" and receipt1["replan"] == "withheld"
+    assert _latest_render(led)["state"] == "held"
+    # second approval: every held attachment attested → re-sealed and queued
+    plan2 = attachment_identity_confirm_plan(led.db, held_render["delivery_id"], held_parts[1])
+    receipt2 = apply_attachment_identity_confirm(led, _confirm_req(plan2, 0xA2))
+    assert receipt2["outcome"] == "applied" and receipt2["replan"] == "sealed"
+    sealed = _latest_render(led)
+    assert sealed["state"] == "queued"
+    uploads = len(world.client.upload_calls)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    states = {r[0]: r[1] for r in led.db.execute(
+        "SELECT part_id,state FROM notification_render_parts WHERE delivery_id=? "
+        "AND kind='attachment_part'", (held_render["delivery_id"],))}
+    assert set(states.values()) == {"delivered"}
+    assert len(world.client.upload_calls) == uploads
+    # GC clears sealed manifests; receipts still drive later recovery
+    assert notify_cards.gc(led, SLACK, now=NOW + 100, limit=10)["spec_json_cleared"] >= 1
+    with led.db:
+        led.db.execute("UPDATE attachments SET name='post-gc.bin' WHERE attachment_id=?", (aid2,))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 101, emitted, force=True)
+    assert _latest_render(led)["state"] != "held" or emitted
