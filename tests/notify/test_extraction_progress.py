@@ -29,7 +29,7 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
     assert progress == {"processing": 1, "complete": 1, "attention": 1, "unknown": 0,
                         "completed": 4, "total": 7, "posts": 3, "limited": False}
     text = notify_views.patient_summary_text(led.db, 1, cfg={})[1]
-    assert "処理中1・完了1・要確認1（7区間中4区間完了）" in text
+    assert "未完了1・完了1・要確認1（7区間中4区間完了）" in text
     assert "完了は抽出処理のみ" not in text
     assert "CANARY" not in text and "CANARY" not in str(progress)
 
@@ -221,5 +221,5 @@ def test_signal_and_digest_body_preserve_legacy_progress(led, monkeypatch, kind,
     body = notify_render.card_body_text(
         led.db, card, {"shown": json.dumps(["synthetic-signal"])}, stamps=False, cfg={})[1]
     assert "合成症状" in body and "合成原文" in body
-    assert ("◐ 一部 1/3" if state == "processing" else "! 要確認") in body
+    assert (("◐ 一部 1/3" if state == "processing" else "! 要確認") in body) == (layout == 1)
     assert label not in body

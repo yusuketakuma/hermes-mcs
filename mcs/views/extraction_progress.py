@@ -89,7 +89,7 @@ def summary_lines(db, project_id, *, cfg=None):
     if not progress["posts"]:
         return ["抽出の処理状況: 取得済みの投稿はありません"]
     scope = f"最新{progress['posts']}投稿"
-    line = (f"抽出の処理状況（{scope}）: 処理中{progress['processing']}・"
+    line = (f"抽出の処理状況（{scope}）: 未完了{progress['processing']}・"
             f"完了{progress['complete']}・要確認{progress['attention']}")
     if progress["unknown"]:
         line += f"・状況未取得{progress['unknown']}"
