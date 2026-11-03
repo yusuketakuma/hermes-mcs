@@ -116,6 +116,51 @@ def test_group_unknown_is_human_resolvable_and_receipt_replay_has_no_new_publica
     assert notify_recovery._human_delivered_part(led.db, req["delivery_id"], "file_group")
 
 
+@pytest.mark.parametrize("result", ["mark_delivered", "mark_not_sent"])
+def test_gc_keeps_unknown_group_spec_for_human_resolution(led, monkeypatch, result):
+    from pathlib import Path
+    import notify_cards
+    import notify_recovery
+    import notify_spool
+    from notify_testkit import NOW
+    from slack_testkit import SLACK
+
+    req, render, _ = group_unknown(led)
+    path = Path(notify_spool.notify_dirs(notify_spool.data_root(led))["slack_render"]) / (req["delivery_id"] + ".json")
+    original = path.read_bytes()
+    notify_cards.gc(led, now=NOW + 1)
+    saved = led.db.execute("SELECT spec_json,spec_published FROM notification_renders WHERE delivery_id=?",
+                           (req["delivery_id"],)).fetchone()
+    assert saved["spec_json"] == render["spec_json"] and saved["spec_published"] == 1
+    assert path.read_bytes() == original
+    if result == "mark_not_sent":
+        req.update(result=result, evidence={**req["evidence"], "proof": "no_journal_started"})
+        req.pop("remote_id")
+    published = []
+    monkeypatch.setattr(notify_spool, "publish_specs", lambda *args: published.extend(args[2]))
+    receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)
+    assert receipt["outcome"] == "applied", receipt.get("error")
+    assert receipt["part_state"] == ("delivered" if result == "mark_delivered" else "not_sent")
+    assert len(published) == (1 if result == "mark_not_sent" else 0)
+
+
+@pytest.mark.parametrize("state", ["pending", "unknown"])
+def test_group_only_wait_is_classified_in_pending_diagnostics(led, state):
+    import notify_scope
+    from notify_testkit import NOW, _intent
+
+    req, render, _ = group_unknown(led)
+    event = _intent(led, payload={"message_ids": [100]})
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state=? WHERE delivery_id=? AND kind='file_group'",
+                       (state, req["delivery_id"]))
+        led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage,state) VALUES (?,?,'[]','pending')",
+                       (event["event_id"], render["card_id"]))
+    observed = notify_scope.pending_breakdown(led.db, NOW + 1)
+    assert {key: row["count"] for key, row in observed["by_reason"].items()} == {"card_parts_" + state: 1}
+    assert observed["attention"] == int(state == "unknown")
+
+
 @pytest.mark.parametrize("fault", ["wrong_card_remote", "stage_missing", "stage_unknown", "stage_duplicate_fid",
                                    "stage_hash", "stage_order", "stage_set"])
 def test_group_resolution_requires_exact_sealed_order_complete_stages_and_card_remote(led, monkeypatch, fault):
