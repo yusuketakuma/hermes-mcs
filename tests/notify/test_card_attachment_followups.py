@@ -145,6 +145,9 @@ def _late_slack_file(led, tmp_path, monkeypatch, name="synthetic.png", mid=100):
     from slack_testkit import _mkworld, _granted_card
 
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
+    cfg = {**SLACK, "notify_target": "slack:C_SYNTHETIC"}
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *_: "/bin/sh")
     mids = (100,) if mid == 100 else (100, mid)
     _seed_thread(led, mids=mids)
     with led.db:
@@ -154,7 +157,15 @@ def _late_slack_file(led, tmp_path, monkeypatch, name="synthetic.png", mid=100):
     event = _intent(led, payload={"message_ids": list(mids)})
     assert _dispatch(led, event, SLACK)["dispatched"]
     world = _mkworld(led)
-    asyncio.run(_granted_card(world.worker, led, world.root))
+    # Each source post owns a card; finish every card before adding the late file.
+    for _ in range(len(mids) + 1):
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        if led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
+                          (event["event_id"],)).fetchone()[0] == "accepted":
+            break
+        notify_flush.flush(led)  # The parent's receipts wake and dispatch its held reply cards.
+    assert led.db.execute("SELECT COUNT(*) FROM notification_intent_cards "
+                          "WHERE event_id=? AND state='delivered'", (event["event_id"],)).fetchone()[0] == len(mids)
     assert led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?",
                           (event["event_id"],)).fetchone()[0] == "accepted"
     assert not world.client.upload_calls
@@ -168,9 +179,6 @@ def _late_slack_file(led, tmp_path, monkeypatch, name="synthetic.png", mid=100):
         "SELECT * FROM notify_outbox WHERE kind='attachment_followup'").fetchone()
     assert followup is not None
     assert json.loads(followup["payload"])["attachment_id"] == aid
-    cfg = {**SLACK, "notify_target": "slack:C_SYNTHETIC"}
-    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
-    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *_: "/bin/sh")
     legacy = []
 
     def no_legacy(*args, **kwargs):
@@ -213,7 +221,7 @@ def test_late_slack_file_uses_original_thread_and_exact_attachment_receipt(
     import os
     import notify_cmds
     import notify_flush
-    from slack_testkit import ROOT_TS, SCOPE
+    from slack_testkit import ROOT_TS
 
     world, aid, event_id, blob, legacy = _late_slack_file(
         led, tmp_path, monkeypatch, name, mid)
@@ -270,6 +278,14 @@ def test_late_slack_file_uses_original_thread_and_exact_attachment_receipt(
         "WHERE attachment_id=? AND state='delivered'", (aid,)).fetchone()
     assert row is not None and row[1].startswith("F_SYNTHETIC")
     assert row[2] == hashlib.sha256(blob).hexdigest()
+    owner = led.db.execute(
+        "SELECT c.message_id,c.thread_id FROM notification_render_parts p "
+        "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+        "JOIN notification_cards c ON c.card_id=r.card_id "
+        "WHERE p.attachment_id=? AND p.state='delivered' ORDER BY r.render_rev DESC LIMIT 1", (aid,)).fetchone()
+    assert owner[1] == ROOT_TS
+    assert (owner[0] == ROOT_TS) is (mid == 100)
+    assert groups[-1]["ts"] == owner[0] and groups[-1]["file_ids"] == [row[1]]
     notify_flush.flush(led)
     asyncio.run(_late_slack_cycle(world, led))
     assert len(world.client.upload_calls) == 1 and not legacy
@@ -379,7 +395,7 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     import asyncio
     from pathlib import Path
     import notify_flush
-    from slack_testkit import ROOT_TS, SCOPE
+    from slack_testkit import ROOT_TS
 
     world, aid, event_id, blob, legacy = _late_slack_file(led, tmp_path, monkeypatch)
     second_blob = b"completely synthetic second PDF"
@@ -428,8 +444,10 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     expected = {"synthetic.png": blob, "synthetic-second.pdf": second_blob}
     assert len(world.client.upload_calls) == 2
     assert {call["filename"]: call["file"] for call in world.client.upload_calls} == expected
-    assert all(call["channel"] == SCOPE["channel_id"] and call["thread_ts"] == ROOT_TS
+    assert all("channel" not in call and "thread_ts" not in call
                for call in world.client.upload_calls)
+    groups = [call[1] for call in world.client.calls if call[0] == "update" and call[1].get("file_ids")]
+    assert groups and groups[-1]["ts"] == ROOT_TS and len(set(groups[-1]["file_ids"])) == 2
     for attachment_id, content in ((aid, blob), (second_aid, second_blob)):
         assert led.db.execute(
             "SELECT 1 FROM notification_render_parts WHERE attachment_id=? "

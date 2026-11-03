@@ -258,7 +258,7 @@ def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", miss
         target = next(p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part")
         for part in spec["parts"]["manifest"][1:]:
             unknown = rejection is not None and part == target
-            remote = ("1790000000.000001" if part["kind"] == "thread" else
+            remote = ("1790000000.000001" if part["kind"] in ("thread", "file_group") else
                       "F_SYNTHETIC_" + str(part["attachment_id"]) if part["kind"] == "attachment_part" else
                       f"1790000001.{part['index']:06d}")
             assert transport.apply_part_receipt(
@@ -304,7 +304,12 @@ def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", miss
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     if missing_spec:
         with led.db:
-            led.db.execute("UPDATE notification_renders SET spec_json=NULL,spec_published=0")
+            # GC removes full specs while retaining the existing hash-bound identity witnesses.
+            for saved in led.db.execute("SELECT delivery_id FROM notification_renders").fetchall():
+                witness = notify_parts.attachment_identity_witness(led.db, saved["delivery_id"])
+                raw = json.dumps({"attachment_identity": witness}) if witness is not None else None
+                led.db.execute("UPDATE notification_renders SET spec_json=?,spec_published=0 WHERE delivery_id=?",
+                               (raw, saved["delivery_id"]))
         for spec_path in Path(dirs["slack_render"]).glob("*.json"):
             spec_path.unlink()
     caption["text"] = "synthetic current description"
@@ -526,7 +531,7 @@ def test_manual_then_native_edit_remain_reusable_after_both_specs_are_collected(
     assert transport.apply_transport_receipt(led, envelopes.transport_receipt(
         claim, "delivered", message_id="1790000000.000001"), SLACK, now=NOW + 4)["applied"]
     for part in spec["parts"]["manifest"][1:]:
-        remote = ("1790000000.000001" if part["kind"] == "thread" else
+        remote = ("1790000000.000001" if part["kind"] in ("thread", "file_group") else
                   target["prior_remote_id"] if part["kind"] == "attachment_part" else f"synthetic-{part['index']}")
         assert transport.apply_part_receipt(led, envelopes.part_receipt(
             claim, part, "delivered", remote_id=remote), SLACK, now=NOW + 4)["applied"]
@@ -623,6 +628,8 @@ def test_local_preflight_recovery_uses_current_caption_and_only_exact_edits(led,
     from slack_testkit import SLACK
     req, original, target, path, _ = preflight_recovery(led, monkeypatch, error=error, missing_spec=missing_spec, sibling=True)
     journal_bytes = path.read_bytes()
+    old_spec_bytes = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                                    (req["delivery_id"],)).fetchone()[0]
     original_rows = [tuple(row) for row in led.db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=?",
                                                        (original["delivery_id"],))]
     assert mcs_requests.validate(req) is None
@@ -652,8 +659,11 @@ def test_local_preflight_recovery_uses_current_caption_and_only_exact_edits(led,
     assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 3) == receipt
     old = led.db.execute("SELECT spec_json,payload_hash FROM notification_renders WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
     assert old["payload_hash"] == req["manifest_sha256"]
+    assert old["spec_json"] == old_spec_bytes
     if missing_spec:
-        assert old["spec_json"] is None
+        from notify_scope import _attachment_identity_witness_proofs
+        assert "parts" not in json.loads(old["spec_json"])
+        assert _attachment_identity_witness_proofs(old["spec_json"], old) is not None
 
 
 @pytest.mark.parametrize("change,expected", [
@@ -758,7 +768,8 @@ def test_preflight_does_not_resolve_under_independent_holds(led, monkeypatch, ho
 
 
 @pytest.mark.parametrize("change", ["missing_prior", "sibling_upload", "changed_file", "missing_target", "scope", "thread",
-                                     "create", "published", "part_started", "attempt", "blocked"])
+                                     "create", "published", "part_started", "attempt", "blocked",
+                                     "group_flag", "group_nonbool", "group_prior", "group_not_last", "group_missing"])
 def test_unsafe_candidate_rolls_back_settlement_plan_and_publication(led, monkeypatch, change):
     import notify_cards
     req, _, target, _, _ = preflight_recovery(led, monkeypatch, sibling=True)
@@ -785,6 +796,20 @@ def test_unsafe_candidate_rolls_back_settlement_plan_and_publication(led, monkey
             else:
                 spec["parts"]["manifest"] = [p for p in spec["parts"]["manifest"] if p["part_id"] != target["part_id"]]
                 db.execute("DELETE FROM notification_render_parts WHERE delivery_id=? AND part_id=?", (delivery_id, target["part_id"]))
+        elif change.startswith("group_"):
+            group = next(p for p in spec["parts"]["manifest"] if p["kind"] == "file_group")
+            if change == "group_flag":
+                spec["parts"]["slack"].pop("file_group")
+            elif change == "group_nonbool":
+                spec["parts"]["slack"]["file_group"] = "true"
+            elif change == "group_prior":
+                group["prior_remote_id"] = "unverified-post"
+            elif change == "group_not_last":
+                spec["parts"]["manifest"].remove(group)
+                spec["parts"]["manifest"].insert(1, group)
+            else:
+                spec["parts"]["manifest"].remove(group)
+                db.execute("DELETE FROM notification_render_parts WHERE delivery_id=? AND part_id='file_group'", (delivery_id,))
         elif change == "scope":
             spec["delivery"]["channel_id"] = "C_OTHER"
         elif change == "thread":

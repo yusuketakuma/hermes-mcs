@@ -417,7 +417,8 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
              "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch")
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
-    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part")
+    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
+                 and (kind != "file_group" or transport == "slack")
                  and isinstance(attempt_id, str) and bool(attempt_id.strip()))
     not_sent = {"worker_stopped": True,
                 "proof_any_of": ["no_journal_started", "api_rejected", "remote_absent"],
@@ -436,7 +437,8 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
             "requirements": {"human_confirmation": True, "actor": True, "reason": True,
                              "evidence_fields": ["method", "ref"],
                              "worker_stopped_for_all_results": not card,
-                             "mark_delivered": {"remote_identity": "message_id" if card else "remote_id"},
+                             "mark_delivered": {"remote_identity": "message_id" if card else
+                                                "card_message_id_and_exact_file_set" if kind == "file_group" else "remote_id"},
                              "mark_not_sent": not_sent},
             "final_scope_and_journal_validation_required": True,
             "automatic_resend": False}
@@ -775,7 +777,9 @@ def _preflight_recovery_targets(db, render, card, plans):
         remote = _delivered_edit_target(db, card, part, render["render_rev"])
         if not remote or remote in used_remotes:
             return None
-        if render["spec_json"] is not None:
+        from notify_scope import _attachment_identity_witness_proofs
+        if (render["spec_json"] is not None
+                and _attachment_identity_witness_proofs(render["spec_json"], render) is None):
             try:
                 old = json.loads(render["spec_json"])
                 matches = [p for p in old["parts"]["manifest"] if p["part_id"] == part["part_id"]]
@@ -789,6 +793,41 @@ def _preflight_recovery_targets(db, render, card, plans):
         targets[part["part_id"]] = {**part, "prior_remote_id": remote}
         used_remotes.add(remote)
     return targets
+
+
+def _human_delivered_part(db, delivery_id, part_id):
+    # Reuse the common digest-checked human receipt verifier, including duplicate rejection.
+    import notify_parts
+    rows = db.execute("SELECT r.*,p.part_id,p.payload_sha256,p.attempt_id AS part_attempt,"
+                      "p.error_code AS part_error,p.remote_id FROM notification_render_parts p "
+                      "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+                      "WHERE p.delivery_id=? AND p.part_id=? AND p.state='delivered'",
+                      (delivery_id, part_id)).fetchall()
+    return bool(notify_parts._manual_edit_receipts(db, rows).get((delivery_id, part_id)))
+
+
+def _preflight_shared_file(db, card, part, remote, identities):
+    # A private upload receipt proves preparation, not visibility on this card.
+    expected = (part["part_id"], part["attachment_id"], part.get("sha256"),
+                part.get("bytes"), part.get("name"))
+    for proof in identities.get(remote, ()):
+        if proof is None or proof[:5] != expected:
+            continue
+        if proof[5] not in ("private_stage", "file", "collected", "operator_edit", "operator_verified"):
+            continue
+        shared = db.execute("SELECT p.delivery_id,p.error_code,p.state,p.remote_id FROM notification_renders r "
+                            "JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+                            "WHERE r.card_id=? AND r.render_rev=? AND r.state='delivered' "
+                            "AND p.kind='file_group' AND p.part_id='file_group'",
+                            (card["card_id"], proof[6])).fetchone()
+        if shared is None:
+            if proof[5] != "private_stage":
+                return True  # Legacy public uploads have no private-stage group.
+        elif (shared[2] == "delivered" and shared[3] == card["message_id"]
+              and (shared[1] is None or shared[1] == "operator_part_resolve"
+                   and _human_delivered_part(db, shared[0], "file_group"))):
+            return True
+    return False
 
 
 def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
@@ -813,10 +852,26 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
     saved = {row["part_id"]: row for row in db.execute(
         "SELECT * FROM notification_render_parts WHERE delivery_id=?", (delivery_id,))}
     if (len(manifest) != len(saved) or {p.get("part_id") for p in manifest} != set(saved)
-            or {p.get("kind") for p in manifest} - {"card", "thread", "body_part", "attachment_part"}
+            or {p.get("kind") for p in manifest} - {"card", "thread", "body_part", "attachment_part", "file_group"}
             or sum(p.get("kind") == "card" for p in manifest) != 1
             or sum(p.get("kind") == "thread" for p in manifest) != 1):
         return "preflight_replan_unsafe"
+    groups = [part for part in manifest if part.get("kind") == "file_group"]
+    grouped = (spec.get("parts", {}).get("slack") or {}).get("file_group") is True
+    if groups or grouped:
+        if (card["transport"] != "slack" or spec.get("kind") != "thread" or not grouped
+                or len(groups) != 1 or groups[0] is not manifest[-1]
+                or set(groups[0]) != {"part_id", "kind", "index", "sha256"}
+                or groups[0]["part_id"] != "file_group"
+                or not any(part["kind"] == "attachment_part" and not part.get("unavailable")
+                           for part in manifest)):
+            return "preflight_replan_unsafe"
+    if grouped:
+        from adapters.common.spec import file_group_sha256
+        if groups[0].get("sha256") != file_group_sha256(spec):
+            return "preflight_replan_unsafe"
+    import notify_parts
+    identities = notify_parts._same_thread_delivered_parts(db, card)[2] if grouped else {}
     found_targets = set()
     used_remotes = set()
     held = current["state"] == "held"
@@ -828,12 +883,15 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
                     ("kind", "kind"), ("idx", "index"), ("payload_sha256", "sha256"),
                     ("bytes", "bytes"), ("name", "name"), ("attachment_id", "attachment_id")))):
             return "preflight_replan_unsafe"
-        if part["kind"] in ("card", "thread"):
+        if part["kind"] in ("card", "thread", "file_group"):
             continue
         remote = _delivered_edit_target(db, card, part, render["render_rev"])
         if (not remote or remote in used_remotes or part.get("prior_remote_id") != remote or part.get("broadcast") is True
                 or part.get("unavailable") is True
                 or (part["kind"] == "attachment_part" and not part.get("caption"))):
+            return "preflight_replan_unsafe"
+        if (grouped and part["kind"] == "attachment_part"
+                and not _preflight_shared_file(db, card, part, remote, identities)):
             return "preflight_replan_unsafe"
         if part["part_id"] in targets:
             target = targets[part["part_id"]]
@@ -852,6 +910,92 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
         db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL WHERE delivery_id=?",
                    (delivery_id,))
         db.execute("UPDATE notification_cards SET delivery_state='delivered' WHERE card_id=?", (card["card_id"],))
+    return None
+
+
+def _file_group_resolution_error(db, render, card, plan, req):
+    group_row = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                           (plan["delivery_id"], plan["part_id"])).fetchone()
+    if group_row["kind"] != "file_group":
+        return None
+    from adapters.slack.cards import validate
+    from mcs_util import strict_json
+    try:
+        spec = validate(strict_json(render["spec_json"]))
+        manifest = spec["parts"]["manifest"]
+        groups = [part for part in manifest if part["kind"] == "file_group"]
+        if (card is None or render["transport"] != "slack" or spec["kind"] != "thread"
+                or render["card_id"] != card["card_id"] or not scope_matches(render, stored_scope(card))
+                or payload_hash(spec) != render["payload_hash"]
+                or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
+                or not scope_matches(render, spec["delivery"])
+                or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))
+                or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
+                or len(groups) != 1 or groups[0]["part_id"] != plan["part_id"]
+                or groups[0]["sha256"] != group_row["payload_sha256"]
+                or not isinstance(card["message_id"], str) or not card["message_id"]
+                or card["delivery_state"] != "delivered" or card["thread_state"] != "created"
+                or not isinstance(card["thread_id"], str) or not card["thread_id"]
+                or spec["delivery"].get("thread_id") not in (None, card["thread_id"])
+                or spec["op"] == "update" and spec["delivery"].get("message_id") != card["message_id"]
+                or req["result"] == "mark_delivered" and req["remote_id"] != card["message_id"]):
+            return "file_group_identity_unverified"
+        for kind, remote in (("card", card["message_id"]), ("thread", card["thread_id"])):
+            if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND kind=? "
+                              "AND state='delivered' AND remote_id=?",
+                              (render["delivery_id"], kind, remote)).fetchone():
+                return "file_group_identity_unverified"
+        stages = [part for part in manifest if part["kind"] == "attachment_part" and not part.get("unavailable")]
+        remotes = set()
+        if not stages:
+            return "file_group_dependencies_unverified"
+        for stage in stages:
+            row = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                             (render["delivery_id"], stage["part_id"])).fetchone()
+            if (row is None or row["state"] != "delivered"
+                    or row["error_code"] is not None and not (
+                        row["error_code"] == "operator_part_resolve"
+                        and _human_delivered_part(db, render["delivery_id"], stage["part_id"]))
+                    or not isinstance(row["remote_id"], str) or not row["remote_id"]
+                    or row["remote_id"] in remotes
+                    or stage.get("prior_remote_id") not in (None, row["remote_id"])
+                    or any(row[column] != stage.get(key) for column, key in (
+                        ("kind", "kind"), ("idx", "index"), ("attachment_id", "attachment_id"),
+                        ("payload_sha256", "sha256"), ("bytes", "bytes"), ("name", "name")))):
+                return "file_group_dependencies_unverified"
+            remotes.add(row["remote_id"])
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return "file_group_identity_unverified"
+    return None
+
+
+def _file_group_retry_error(db, render, card, candidates):
+    # Approval covers the exact existing private FID set, never a newly arrived upload.
+    from adapters.slack.cards import validate
+    from mcs_util import strict_json
+    original = strict_json(render["spec_json"])
+    fields = ("part_id", "attachment_id", "sha256", "bytes", "name")
+    stages = [part for part in original["parts"]["manifest"]
+              if part["kind"] == "attachment_part" and not part.get("unavailable")]
+    expected = [tuple(part.get(key) for key in fields) + (db.execute(
+        "SELECT remote_id FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (render["delivery_id"], part["part_id"])).fetchone()[0],) for part in stages]
+    if len(candidates) > 1:
+        return "file_group_retry_scope_changed"
+    for spec in candidates:
+        try:
+            validate(spec)
+            actual = [tuple(part.get(key) for key in fields) + (part.get("prior_remote_id"),)
+                      for part in spec["parts"]["manifest"]
+                      if part["kind"] == "attachment_part" and not part.get("unavailable")]
+            if (actual != expected or spec["op"] != "update" or spec["card_key"] != card["card_key"]
+                    or not scope_matches(card, spec["delivery"])
+                    or spec["delivery"].get("message_id") != card["message_id"]
+                    or spec["delivery"].get("thread_id") != card["thread_id"]
+                    or (spec["parts"].get("slack") or {}).get("file_group") is not True):
+                return "file_group_retry_scope_changed"
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            return "file_group_retry_scope_changed"
     return None
 
 
@@ -902,8 +1046,15 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
             render = render_row(db, req["delivery_id"])
             card = card_row(db, render["card_id"])
             preflight = req["evidence"].get("proof") == _PREFLIGHT_PROOF
+            group_retry = (req["result"] == "mark_not_sent" and db.execute(
+                "SELECT kind FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                (req["delivery_id"], req["part_id"])).fetchone()[0] == "file_group")
+            for plan in plans:
+                error = _file_group_resolution_error(db, render, card, plan, req)
+                if error:
+                    break
             targets = _preflight_recovery_targets(db, render, card, plans) if preflight else None
-            if preflight and targets is None:
+            if not error and preflight and targets is None:
                 error = "preflight_target_unverified"
         if error is None:
             db.execute("SAVEPOINT part_resolution")
@@ -928,6 +1079,11 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                     replacement = cards.issue_render(db, card["card_id"], cfg, now, candidates, force=True,
                                                      _preflight_candidate=True)
                     error = _seal_preflight_update(db, candidates, replacement, render, card, targets)
+            elif (error is None and group_retry and card["delivery_state"] != "update_failed"
+                  and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
+                  and not cards.resend_exhausted(db, card["card_id"])):
+                cards.issue_render(db, card["card_id"], cfg, now, candidates, force=True)
+                error = _file_group_retry_error(db, render, card, candidates)
             if error is not None:
                 db.execute("ROLLBACK TO part_resolution")
             db.execute("RELEASE part_resolution")
@@ -946,13 +1102,15 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                             {**plan, "part_state": item["part_state"],
                              "prior_remote_id": targets[plan["part_id"]]["prior_remote_id"]}
                             for plan, item in zip(plans, settlements)]
+                if group_retry:
+                    specs.extend(candidates)
                 if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
                     receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
         if error is not None:
             receipt.update(outcome="rejected", error=error)
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
-        if (error is None and not preflight and card is not None and card["delivery_state"] != "update_failed"
+        if (error is None and not preflight and not group_retry and card is not None and card["delivery_state"] != "update_failed"
                 and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
                 and not cards.resend_exhausted(db, card["card_id"])):
             cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
