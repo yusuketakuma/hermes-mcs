@@ -516,7 +516,8 @@ def _sealed_attachment_identity(row, card, *, manual_edit=False):
                 or manual_edit and (row["op"] != "update" or unavailable or part.get("edit_only") is not True)):
             return None
         return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
-                row["part_bytes"], row["name"], "operator_edit" if manual_edit else "unavailable" if unavailable else "file",
+                row["part_bytes"], row["name"], "private_stage" if not unavailable and (spec["parts"].get("slack") or {}).get("file_group") is True else
+                "operator_edit" if manual_edit else "unavailable" if unavailable else "file",
                 row["render_rev"], part.get("edit_only") is True,
                 not unavailable and part.get("prior_remote_id") is None)
     except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
@@ -685,7 +686,9 @@ def attachment_identity_witness(db, delivery_id):
         return None
     rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
         p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
-        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*
+        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*,
+        EXISTS(SELECT 1 FROM notification_render_parts g WHERE g.delivery_id=r.delivery_id
+               AND g.kind='file_group') AS private_stage_render
         FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
         WHERE r.delivery_id=? AND r.state='delivered' AND p.kind='attachment_part'
           AND p.state='delivered' AND p.remote_id IS NOT NULL
@@ -710,7 +713,9 @@ def _same_thread_delivered_parts(db, card):
         return body, attachments, identities
     rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
         p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
-        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*
+        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*,
+        EXISTS(SELECT 1 FROM notification_render_parts g WHERE g.delivery_id=r.delivery_id
+               AND g.kind='file_group') AS private_stage_render
         FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
         WHERE r.card_id=? AND r.state='delivered' AND p.kind IN ('body_part','attachment_part')
           AND p.state='delivered' AND p.remote_id IS NOT NULL
@@ -740,15 +745,18 @@ def _same_thread_delivered_parts(db, card):
                             and valid_hash(row["payload_hash"])):
                         collected = (row["part_id"], row["part_attachment_id"], None, None,
                                      row["name"], "collected", row["render_rev"], False, False)
-                    candidates = (("operator_edit", True, False),) if operator else (
+                    private = (("private_stage", True, False),) if operator else (
+                        ("private_stage", False, True), ("private_stage", False, False),
+                        ("private_stage", True, False))
+                    candidates = private + ((("operator_edit", True, False),) if operator else (
                         ("file", False, True), ("file", False, False), ("file", True, False),
-                        ("unavailable", False, False), ("unavailable", True, False))
+                        ("unavailable", False, False), ("unavailable", True, False)))
                     if proofs is not None and collected is not None:
                         for kind, edit_only, uploaded in candidates:
                             if _attachment_identity_proof(row, card, kind, edit_only, uploaded) in proofs:
                                 identity = (*collected[:5], kind, collected[6], edit_only, uploaded)
                                 break
-                if identity is None and not operator and proofs is None:
+                if identity is None and not operator and proofs is None and not row["private_stage_render"]:
                     identity = _collected_attachment_identity(row)
                 if (identity is not None and identity[5] == "collected"
                         and (row["delivery_id"], row["part_id"], row["render_rev"],
@@ -759,8 +767,10 @@ def _same_thread_delivered_parts(db, card):
                     # this collected upload — distinguishable from a sealed file
                     # proof and never auto-promoted.
                     identity = (*identity[:5], "operator_verified", *identity[6:])
-                identities.setdefault(str(row["remote_id"]), []).append(
-                    identity)
+                if (identity is not None and row["private_stage_render"]
+                        and identity[5] in ("file", "collected")):
+                    identity = None  # Private preparation never proves public delivery.
+                identities.setdefault(str(row["remote_id"]), []).append(identity)
             try:
                 old = json.loads(row["spec_json"])
                 caption = next((part.get("caption") for part in old["parts"]["manifest"]
@@ -1055,13 +1065,15 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     if any(not chunk.strip() for _key, chunk in keyed):
         budget_hold = "blank_part_unrepresentable"
     attachments = _plan_attachments(db, planned)
-    if len(keyed) + len(attachments) > MAX_PARTS - 2:
+    group_cost = int(card["transport"] == "slack" and card["kind"] == "thread"
+                     and any(not a.get("unavailable") for a in attachments))
+    if len(keyed) + len(attachments) + group_cost > MAX_PARTS - 2:
         # Hold the render as a whole: retaining the earliest chunks silently
         # loses new replies and can overwrite already delivered content.
         budget_hold = "part_budget_exceeded"
         keyed = [("truncated#1", _TRUNCATED_PART)]
         attachments = []
-    if len(keyed) + len(attachments) + len(cleanup) > MAX_PARTS - 2:
+    if len(keyed) + len(attachments) + len(cleanup) + group_cost > MAX_PARTS - 2:
         # Keep the resource bound and withhold this whole render: never
         # report success while a proven old summary chunk remains untouched.
         budget_hold = budget_hold or "thread_cleanup_budget_exceeded"
@@ -1165,7 +1177,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 # honoured like a sealed file proof for reuse but never created
                 # by the writer — only by an applied human approval.
                 sealed = [proof for proof in proofs if proof is not None
-                          and proof[5] in ("file", "operator_verified")]
+                          and proof[5] in ("file", "private_stage", "operator_verified")]
                 collected = [proof for proof in proofs if proof is not None and proof[5] == "collected"]
                 manual_edits = [proof for proof in proofs if proof is not None and proof[5] == "operator_edit"]
                 expected = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
@@ -1183,7 +1195,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                         or a["bytes"] < 0 or not (sealed or collected and manual_edits)
                         or len(proofs) != receipt_counts.get(rid)
                         or len(prior_remotes.get((entry["part_id"], sha), ())) != 1
-                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected", "operator_edit", "operator_verified")
+                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "private_stage", "collected", "operator_edit", "operator_verified")
                                for proof in proofs)
                         or len({proof[4] for proof in proofs}) != 1 or sha != a.get("sha256")):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
@@ -1198,6 +1210,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
                 else:
                     entry["name"] = (sealed or collected)[0][4]
+                    if any(proof[5] == "operator_verified" for proof in sealed):
+                        entry["operator_verified"] = True
             elif a["attachment_id"] in prior_attachment_ids:
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
         if rid and a.get("unavailable") and entry.get("caption"):
@@ -1218,7 +1232,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     if (card["transport"] == "slack" and card["kind"] == "thread"
             and any(e["kind"] == "attachment_part" and not e.get("unavailable")
                     for e in manifest)):
-        manifest.append({"part_id": "file_group", "kind": "file_group", "index": idx})
+        from adapters.common.spec import file_group_sha256
+        parts["manifest"] = manifest
+        manifest.append({"part_id": "file_group", "kind": "file_group", "index": idx,
+                         "sha256": file_group_sha256({**spec, "parts": parts})})
         parts.setdefault("slack", {})["file_group"] = True
     parts["manifest"] = manifest
     return parts, budget_hold

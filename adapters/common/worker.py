@@ -731,6 +731,10 @@ class DeliveryWorker:
                 continue
             if "started" in phases:
                 continue              # unknown — reconcile reports it
+            if kind == "file_group" and any(
+                    p.get("kind") == "attachment_part" and not p.get("unavailable")
+                    and p["part_id"] not in ctx.get("part_remotes", {}) for p in manifest):
+                return  # A private stage is not a visible file receipt.
             if kind != "thread" and not ctx.get("thread_id"):
                 continue              # held — dependents need a thread
             # revocation withdraws the spec file (the worker never reads
@@ -932,8 +936,15 @@ class DeliveryWorker:
         async def allowed(*, retry=True):
             if not await self._send_allowed(spec):
                 return False
-            return not retry or await asyncio.to_thread(os.path.isfile, os.path.join(
-                self._dirs["render"], spec["delivery_id"] + ".json"))
+            def current():
+                try:
+                    with open(os.path.join(self._dirs["render"], spec["delivery_id"] + ".json"),
+                              encoding="utf-8") as stream:
+                        live = json.load(stream)
+                    return live == spec
+                except (OSError, ValueError, TypeError, RecursionError):
+                    return False
+            return await asyncio.to_thread(current)
         return allowed
 
     async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
