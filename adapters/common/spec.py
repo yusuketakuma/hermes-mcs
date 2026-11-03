@@ -95,7 +95,7 @@ POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast", "operator_verified"})
 MAX_CAPTION = 300
 
 # Primary operations retained on older LINE WORKS cards without ``more``.
@@ -586,6 +586,19 @@ def _validate_chunks(parts: dict):
     return chunks
 
 
+def file_group_sha256(spec):
+    """Bind the ordered private stages to this sealed card, source and route."""
+    parts = spec.get("parts", {})
+    stages = [{key: p.get(key) for key in (
+        "part_id", "index", "attachment_id", "sha256", "bytes", "name",
+        "prior_remote_id", "operator_verified")}
+        for p in parts.get("manifest", []) if p.get("kind") == "attachment_part"
+        and p.get("unavailable") is not True]
+    identity = {"card_key": spec.get("card_key"), "delivery": spec.get("delivery"),
+                "post_source_id": parts.get("post_source_id"), "stages": stages}
+    return hashlib.sha256(canonical(identity)).hexdigest()
+
+
 def _validate_manifest(manifest, *, spec=None) -> None:
     """Per-part shape: ordered unique ids, kind-specific requirements."""
     if not isinstance(manifest, list) or not manifest \
@@ -609,6 +622,15 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                 and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
+        if kind == "file_group":
+            if (spec is None or spec.get("delivery", {}).get("transport") != "slack"
+                    or spec.get("kind") != "thread"
+                    or spec.get("op") not in ("create", "update")
+                    or (spec.get("parts", {}).get("slack") or {}).get("file_group") is not True
+                    or p["part_id"] != "file_group" or i != len(manifest) - 1
+                    or set(p) != {"part_id", "kind", "index", "sha256"}
+                    or p.get("sha256") != file_group_sha256(spec)):
+                _err("bad_slack_file_group")
         if "broadcast" in p:
             if (type(p["broadcast"]) is not bool or kind != "body_part"
                     or spec is None or spec.get("kind") != "thread"
@@ -617,6 +639,12 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                         or not spec["delivery"].get("intent_event_ids")
                         or p.get("prior_remote_id") or p.get("edit_only")))):
                 _err("bad_broadcast")
+        if "operator_verified" in p:
+            if (p["operator_verified"] is not True or kind != "attachment_part"
+                    or not p.get("prior_remote_id") or p.get("unavailable")
+                    or spec is None or spec.get("delivery", {}).get("transport") != "slack"
+                    or (spec.get("parts", {}).get("slack") or {}).get("file_group") is not True):
+                _err("bad_operator_verified")
         if "edit_only" in p:
             if (type(p["edit_only"]) is not bool or kind not in ("body_part", "attachment_part")
                     or not p.get("prior_remote_id") or spec is None or spec.get("op") != "update"

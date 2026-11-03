@@ -27,15 +27,24 @@ def _rows(world):
             if row.get("phase") == "result" and row.get("kind") == "attachment_part"]
 
 
-def _world(store, tmp_path):
+def _world(store, tmp_path, legacy=None):
+    if legacy is not None:
+        import notify_parts
+        build = notify_parts.build_manifest
+        def legacy_manifest(*args, **kwargs):
+            parts, hold = build(*args, **kwargs)
+            parts["manifest"] = [p for p in parts["manifest"] if p["kind"] != "file_group"]
+            parts.get("slack", {}).pop("file_group", None)
+            return parts, hold
+        legacy.setattr(notify_parts, "build_manifest", legacy_manifest)
     _seed_thread(store)
     aid, _, blob = _attach(store, tmp_path)
     assert _dispatch(store, _intent(store), SLACK)["dispatched"]
     return _mkworld(store), aid, blob
 
 
-def test_upload_origin_is_bound_to_sealed_part_and_remote_identity(led, tmp_path):
-    world, aid, blob = _world(led, tmp_path)
+def test_upload_origin_is_bound_to_sealed_part_and_remote_identity(led, tmp_path, monkeypatch):
+    world, aid, blob = _world(led, tmp_path, legacy=monkeypatch)
     asyncio.run(_granted_card(world.worker, led, world.root))
     row, = _rows(world)
     assert row["attachment_origin"] == {
@@ -106,9 +115,9 @@ def test_ambiguous_upload_has_no_claim_of_upload_provenance(led, tmp_path):
 
 @pytest.mark.parametrize("missing", [404, 410, "message_not_found"])
 @pytest.mark.parametrize("scoped", [False, True])
-def test_missing_file_caption_target_is_not_recorded_as_a_successful_edit(led, tmp_path, missing, scoped):
+def test_missing_file_caption_target_is_not_recorded_as_a_successful_edit(led, tmp_path, missing, scoped, monkeypatch):
     from types import SimpleNamespace
-    world, _, _ = _world(led, tmp_path)
+    world, _, _ = _world(led, tmp_path, legacy=monkeypatch)
     asyncio.run(_granted_card(world.worker, led, world.root))
     spec = json.loads(_latest_render(led)["spec_json"])
     if not scoped:
