@@ -3446,10 +3446,17 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     scanned = 0
     waiting = 0
     best = {}
+    # Keep patient order across clock changes and new source revisions.
     patients = ledger.db.execute(
-        "SELECT p.project_id FROM patients p LEFT JOIN messages m ON m.project_id=p.project_id "
-        "GROUP BY p.project_id ORDER BY COALESCE(p.is_archived,0)!=0, "
-        "MAX(m.posted_at_ts) IS NULL, MAX(m.posted_at_ts) DESC, p.project_id").fetchall()
+        "SELECT p.project_id FROM patients p LEFT JOIN artifacts a ON a.artifact_id=("
+        "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=p.project_id "
+        "AND message_id IS NULL AND " + current_meta_pred("meta", target=CURRENT_VERSION)
+        + " ORDER BY artifact_id DESC LIMIT 1) "
+        "ORDER BY COALESCE(p.is_archived,0)!=0, CASE WHEN json_valid(a.content) THEN "
+        "CASE WHEN json_type(a.content,'$.last_attempt_unit')='integer' "
+        "AND json_extract(a.content,'$.last_attempt_unit')>=0 "
+        "THEN json_extract(a.content,'$.last_attempt_unit') ELSE 0 END ELSE 0 END, "
+        "p.project_id", (PROGRESS,)).fetchall()
     for row in patients:
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}

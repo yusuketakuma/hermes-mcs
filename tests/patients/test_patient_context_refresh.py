@@ -184,6 +184,43 @@ def document(led, kind=context_refresh.KIND, pid=1):
     return json.loads(row[0]) if row else None
 
 
+@pytest.mark.parametrize('offsets', [(0, 0, 0), (0, -1, -2)])
+@pytest.mark.parametrize('new_arrivals', [False, True])
+def test_worker_rotates_ready_patients_despite_clock_and_new_arrivals(runtime, offsets, new_arrivals):
+    led, clock, _ = runtime
+    for pid in (1, 2, 3):
+        seed(led, mid=pid, pid=pid)
+    started = clock.wall
+    selected = []
+    for index, offset in enumerate(offsets):
+        clock.wall = started + offset
+        if new_arrivals and index:
+            seed(led, mid=10 + index, pid=1)
+        outcome = step(runtime)
+        assert outcome['status'] == 'progressed', outcome
+        selected.append(led.db.execute(
+            "SELECT project_id FROM artifacts WHERE kind=? AND project_id>0 "
+            "ORDER BY artifact_id DESC LIMIT 1", (context_refresh.PROGRESS,)).fetchone()[0])
+    assert selected == [1, 2, 3]
+
+
+@pytest.mark.parametrize('content', ['{', '{"last_attempt_unit":true}',
+                                      '{"last_attempt_unit":"99"}', '{"last_attempt_unit":-1}'])
+def test_worker_ignores_invalid_attempt_order_and_skips_unready_patient(runtime, content):
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1, proof=False)
+    seed(led, mid=2, pid=2)
+    seed(led, mid=3, pid=3)
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    led.artifact_add(context_refresh.PROGRESS, content, project_id=2, meta=meta)
+    led.artifact_add(context_refresh.PROGRESS, '{"last_attempt_unit":1}', project_id=3, meta=meta)
+    result = step(runtime)
+    assert result['status'] == 'progressed', result
+    assert document(led, context_refresh.PROGRESS, pid=2)['last_attempt_unit'] == 1
+    assert document(led, context_refresh.PROGRESS, pid=1) is None
+
+
 @pytest.mark.parametrize('at,day', [
     ('2026-10-17T12:00:00', '2026-10-17'), ('2026-10-17T22:59:59', '2026-10-17'),
     ('2026-10-17T23:59:59', '2026-10-17'), ('2026-10-18T00:00:00', '2026-10-18'),
