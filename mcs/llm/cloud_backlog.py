@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -20,6 +21,50 @@ if __name__ == "__main__":
 from run_log_install import helper_path, LogInstallError
 
 _parent = None
+
+
+_RUNTIME_ERROR_CODES = frozenset({
+    "transport_inside_db_transaction", "extract_insert_unverified",
+    "extract_revive_unverified", "extract_source_changed_during_write",
+    "extract_hold_unverified", "extract_proof_readback_failed",
+    "extract_stale_gc_unverified", "extract_gc_cursor_unverified",
+    "cloud_disposition_owner_transaction_active", "cloud_circuit_transaction_active",
+    "cloud_circuit_transaction_required", "cloud_history_transaction_required",
+    "cloud_reservation_hook_invalid", "cloud_result_owner_transaction_active",
+    "cloud_disposition_transaction_required", "cloud_dryrun_transaction_required",
+    "patient_source_transaction_required", "patient_summary_transaction_required",
+    "patient_summary_transaction_active", "patient_context_source_transaction_required",
+    "patient_context_read_changed", "patient_summary_snapshot_required",
+})
+_SQLITE_ERROR_PRIMARY = frozenset({
+    "SQLITE_ERROR", "SQLITE_INTERNAL", "SQLITE_PERM", "SQLITE_ABORT", "SQLITE_BUSY",
+    "SQLITE_LOCKED", "SQLITE_NOMEM", "SQLITE_READONLY", "SQLITE_INTERRUPT", "SQLITE_IOERR",
+    "SQLITE_CORRUPT", "SQLITE_NOTFOUND", "SQLITE_FULL", "SQLITE_CANTOPEN", "SQLITE_PROTOCOL",
+    "SQLITE_EMPTY", "SQLITE_SCHEMA", "SQLITE_TOOBIG", "SQLITE_CONSTRAINT", "SQLITE_MISMATCH",
+    "SQLITE_MISUSE", "SQLITE_NOLFS", "SQLITE_AUTH", "SQLITE_FORMAT", "SQLITE_RANGE",
+    "SQLITE_NOTADB", "SQLITE_NOTICE", "SQLITE_WARNING",
+})
+_SQLITE_ERROR_CODES = {name: code for name, code in vars(sqlite3).items()
+                       if type(code) is int and (name in _SQLITE_ERROR_PRIMARY or any(
+                           name.startswith(primary + "_") for primary in _SQLITE_ERROR_PRIMARY))}
+
+
+def _exception_observation(error):
+    """Expose only a fixed runtime reason or a matching standard SQLite error identity."""
+    record = {"class": type(error).__name__}
+    if (type(error) is RuntimeError and len(error.args) == 1
+            and type(error.args[0]) is str and error.args[0] in _RUNTIME_ERROR_CODES):
+        record["error_code"] = error.args[0]
+    elif isinstance(error, sqlite3.Error):
+        try:
+            code = getattr(error, "sqlite_errorcode", None)
+            name = getattr(error, "sqlite_errorname", None)
+            if (type(code) is int and type(name) is str
+                    and _SQLITE_ERROR_CODES.get(name) == code):
+                record.update(sqlite_errorcode=code, sqlite_errorname=name)
+        except Exception:
+            pass  # Diagnostic metadata must never replace the original failure handling.
+    return record
 
 
 _TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s")
@@ -315,7 +360,7 @@ def worker(parent, *, index=None):
                     except Exception as error:
                         carry_failures += 1
                         delay = min(60, 2 ** min(carry_failures, 6))
-                        _event("cloud_carry_settle_error", **{"class": type(error).__name__},
+                        _event("cloud_carry_settle_error", **_exception_observation(error),
                                retry_s=delay, failures=carry_failures)
                         time.sleep(delay)
                         continue
@@ -457,7 +502,7 @@ def worker(parent, *, index=None):
                 except semantic_runtime.RuntimeGuardError:
                     time.sleep(2)
                 except Exception as error:
-                    _event("cloud_backlog_error", **{"class": type(error).__name__},
+                    _event("cloud_backlog_error", **_exception_observation(error),
                            phase="extract" if phase % 2 == 0 else "semantic")
                     if not allow_exit_settle:
                         return
@@ -470,7 +515,7 @@ def worker(parent, *, index=None):
                 try:
                     settle_carry()
                 except Exception as error:
-                    _event("cloud_carry_settle_error", **{"class": type(error).__name__})
+                    _event("cloud_carry_settle_error", **_exception_observation(error))
 
 
 def main():
