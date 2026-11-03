@@ -40,7 +40,7 @@ MAX_PART_ID = 64
 MAX_PART_NAME = 200
 MAX_ATTACH_PATH = 512
 MAX_BODY_PART_CHARS = 2000
-PART_KINDS = ("card", "thread", "body_part", "attachment_part")
+PART_KINDS = ("card", "thread", "body_part", "attachment_part", "file_group")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _UUID = re.compile(
@@ -88,7 +88,7 @@ PARTS_KEYS = frozenset({
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
 # what each transport namespace may hold
-TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts"}),
+TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
                        "lineworks": frozenset()}
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
@@ -319,6 +319,20 @@ def _transport_parts_cost(spec, parts) -> int:
             _err("bad_accent")
         if "face_posts" in own:
             _validate_face_posts(spec, parts, own["face_posts"], name)
+        if 'file_group' in own:
+            if (name != 'slack' or spec.get('kind') != 'thread'
+                    or spec.get('op') not in ('create', 'update')
+                    or own['file_group'] is not True):
+                _err('bad_slack_file_group')
+            manifest = parts.get('manifest')
+            if not isinstance(manifest, list):
+                _err('bad_slack_file_group')
+            groups = [p for p in manifest if isinstance(p, dict) and p.get('kind') == 'file_group']
+            attach = [p for p in manifest if isinstance(p, dict) and p.get('kind') == 'attachment_part'
+                      and p.get('unavailable') is not True]
+            if (len(groups) != 1 or groups[0].get('part_id') != 'file_group'
+                    or manifest.index(groups[0]) != len(manifest) - 1 or not attach):
+                _err('bad_slack_file_group')
         actions = own.get("post_actions")
         if actions is None:
             continue

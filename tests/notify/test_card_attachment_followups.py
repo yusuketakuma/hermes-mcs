@@ -248,9 +248,13 @@ def test_late_slack_file_uses_original_thread_and_exact_attachment_receipt(
         assert _late_followup_state(led, event_id) != "accepted"
         assert len(world.client.upload_calls) == 1
         upload = world.client.upload_calls[0]
-        assert upload["channel"] == SCOPE["channel_id"]
-        assert upload["thread_ts"] == ROOT_TS
+        # private stage: no channel/thread on the upload — the group
+        # chat.update(file_ids) attaches the FID to the card itself.
+        assert "channel" not in upload and "thread_ts" not in upload
         assert upload["filename"] == name and upload["file"] == blob
+        groups = [c[1] for c in world.client.calls if c[0] == "update"
+                  and c[1].get("file_ids")]
+        assert groups and groups[-1]["file_ids"]
         assert not any("新しい返信をカードに追加しました" in post["text"]
                        for post in world.client.thread_posts[previous_posts:])
         assert not legacy
@@ -577,3 +581,4 @@ def test_slack_attachment_kill_switch_preserves_send_ownership(
         if prior == "unsealed_unknown":
             assert json.loads(row["progress"])["sending"] == 1
     assert not world.client.upload_calls
+

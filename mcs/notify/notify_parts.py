@@ -1215,6 +1215,11 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 entry["edit_only"] = True
         manifest.append(entry)
         idx += 1
+    if (card["transport"] == "slack" and card["kind"] == "thread"
+            and any(e["kind"] == "attachment_part" and not e.get("unavailable")
+                    for e in manifest)):
+        manifest.append({"part_id": "file_group", "kind": "file_group", "index": idx})
+        parts.setdefault("slack", {})["file_group"] = True
     parts["manifest"] = manifest
     return parts, budget_hold
 

@@ -730,6 +730,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         spec["parts"]["slack_thread_policy"] = 1
     if positive(post_source_id):
         spec["parts"]["post_source_id"] = post_source_id
+
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
         target = signal_thread_target(db, card, cfg)
         if target is not None and card["thread_id"] == target["thread_id"] and notify_scope.scope_matches(card, target):
@@ -771,6 +772,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         own["face_posts"] = face_posts
     if present.ACCENT_URGENT and content.get("urgent"):
         own["accent"] = "urgent"
+    if (spec["parts"].get("slack") or {}).get("file_group"):
+        own["file_group"] = True
     if own:
         # an older worker holds a spec carrying this key until restarted
         spec["parts"][card["transport"]] = own

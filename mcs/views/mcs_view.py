@@ -75,8 +75,10 @@ class View:
             # v8 adds capture/shadow message metadata (read-compatible)
             # v9 adds bounded acquisition job reasons (read-compatible)
             # v10 adds initial-import state and a card kind (read-compatible)
+            # v11 widens the render-part kind CHECK for file_group
+            # (read-compatible)
             if self.db.execute("PRAGMA user_version").fetchone()[0] \
-                    not in (5, 6, 7, 8, 9, 10):
+                    not in (5, 6, 7, 8, 9, 10, 11):
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")
