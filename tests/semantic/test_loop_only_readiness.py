@@ -13,7 +13,7 @@ import semantic_policy
 import semantic_runtime
 import semantic_store
 from semantic_testkit import BODY, _FakeJev, _PassJev, _cfg, _llm_v2, _message
-from test_patient_context_refresh import _raw_proof, seed
+from test_patient_context_refresh import _raw_proof as _summary_raw_proof, seed
 from test_patient_context_refresh import runtime as runtime
 
 
@@ -30,6 +30,40 @@ def _request_llm(_prompt):
     return json.dumps({"facts": [{"statement": "確認依頼の記載がある",
         "kind": "explicit_request", "status": "not_stated", "polarity": "affirmed",
         "time_text": None, "quantity": None, "evidence_quote": "確認お願いします"}]})
+
+
+def _raw_proof(led, pid, mid):
+    # The generic patient-context fixture only stores a summary. These loop
+    # sources contain clinical/request hints, so a resolved raw proof must
+    # actually retain them rather than merely claim zero missing items in meta.
+    import extract_llm
+    import extract_validation
+
+    _summary_raw_proof(led, pid, mid)
+    row = dict(led.db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                              (pid, mid)).fetchone())
+    body = row["body_text"]
+    if body == BODY:
+        document = {"summary": "合成の処方変更と確認依頼", "meds": [{
+            "name": "カロナール", "dose": None, "freq": "1日3回", "action": "change",
+            "status": "planned", "subject": "patient", "negated": False,
+            "evidence": body.split("。", 1)[0]}], "requests": [{
+                "to": None, "from": None, "kind": "request", "action": "確認お願いします",
+                "evidence": "確認お願いします"}]}
+    else:
+        assert body == "アムロジピン5mgを継続します。"
+        document = {"summary": "合成の継続処方", "meds": [{
+            "name": "アムロジピン", "dose": None, "action": "none", "status": "current",
+            "subject": "patient", "negated": False, "evidence": body}]}
+    valid = extract_validation.validate(document, body)
+    assert valid is not None and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
+    assert extract_llm._hint_coverage(valid, extract_llm._rule_hints(row), body) == {
+        "state": "hint_gaps_resolved", "remaining_hint_candidates": 0}
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=("
+                       "SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
+                       "AND project_id=? AND message_id=?)", (json.dumps(document), pid, mid))
+    assert patient_context_refresh._raw_extraction_current(led.db, row, _config())[0]
 
 
 def _seed(runtime, *, reply=False, targets=None):
@@ -68,6 +102,24 @@ def _ready(runtime, cfg):
 
 def _receipts(led):
     return led.artifacts(drain.KIND_LOOP_COMPLETION, project_id=1)
+
+
+@pytest.mark.parametrize("field", ["meds", "requests"])
+def test_resolved_metadata_cannot_hide_missing_raw_source_hints(runtime, field):
+    led = _seed(runtime)
+    cfg = _config()
+    assert _run(led, cfg, client=_FakeJev())["done"] == 1
+    assert _state(led, cfg) == "current"
+    raw = led.artifacts("extract_llm", project_id=1, message_id=1)[-1]
+    document = json.loads(raw["content"])
+    document[field] = []
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                       (json.dumps(document), raw["artifact_id"]))
+    row = led.db.execute("SELECT * FROM messages WHERE project_id=1 AND message_id=1").fetchone()
+    assert not patient_context_refresh._raw_extraction_current(led.db, row, cfg)[0]
+    assert _state(led, cfg) == "held"
+    assert not _ready(runtime, cfg)
 
 
 @pytest.mark.parametrize("fact_source", ["legacy", "shadow"])
