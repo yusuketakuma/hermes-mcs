@@ -7,5 +7,6 @@
     "mcs/notify/notify_parts.py",
     "adapters/common/spec.py",
     "adapters/slack/presentation.py"
-  ]
+  ],
+  "details": []
 }

@@ -6,5 +6,6 @@
   "refs": [
     "mcs/notify/notify_render.py",
     "mcs/notify/notify_cards.py"
-  ]
+  ],
+  "details": []
 }

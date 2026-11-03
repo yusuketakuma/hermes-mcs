@@ -1,8 +1,15 @@
 {
+  "category": "fixed",
+  "title": "証明が欠けたSlack添付を人の確認で復旧",
   "summary": "Slackスレッドカードで添付のアップロード証明が欠けて送信保留（attachment_upload_identity_unverified）になると、これまで人による解除経路がなく全更新が止まっていました。新しい人承認操作 ops.attachment_identity_confirm を追加し、配送先で添付の同一性を確認した操作者だけが、監査receiptつきで「このファイルはこの添付」と証明できるようにしました。証明された添付は重複アップロードせず既存ファイルの編集だけを再利用します。証明しない限り昇格されず、状態が変わった承認は拒否されます。",
-  "upgrade": {
-    "operations": "保留中の添付部品について、Slack側のファイルと記録を目視照合のうえ mcs_view attachment_identity_plan で計画を確認し、control attachment_identity_confirm --confirm-human でJSON承認を投入する（worker停止証拠が必須）。複数添付は部品ごとに承認する。",
-    "applies_when": "attachment_upload_identity_unverified の held 通知が残る場合に有効。既存の ops.card_part_resolve 契約は変更なし。",
-    "notes": "承認は監査receiptの追加と、まだ送信されていない未公開の held render（specと部品行）の再封印、およびその配信に必要なカード状態・スナップショット公開の更新だけを行います。送信済みの履歴と証跡は変更しません。再封印は全ての保留添付が承認済みの場合だけ行われ、証跡のない部分変更は残りません。"
-  }
+  "upgrade": "保留中の添付部品について、Slack側のファイルと記録を目視照合のうえ mcs_view attachment_identity_plan で計画を確認し、control attachment_identity_confirm --confirm-human でJSON承認を投入する（worker停止証拠が必須）。複数添付は部品ごとに承認する。",
+  "details": [
+    "attachment_upload_identity_unverified の held 通知が残る場合に有効。既存の ops.card_part_resolve 契約は変更なし。",
+    "承認は監査receiptの追加と、まだ送信されていない未公開の held render（specと部品行）の再封印、およびその配信に必要なカード状態・スナップショット公開の更新だけを行います。送信済みの履歴と証跡は変更しません。再封印は全ての保留添付が承認済みの場合だけ行われ、証跡のない部分変更は残りません。"
+  ],
+  "refs": [
+    "mcs/notify/notify_recovery.py",
+    "mcs/notify/notify_parts.py",
+    "tests/notify/test_attachment_upload_identity.py"
+  ]
 }

@@ -5,5 +5,6 @@
   "upgrade": "追加操作は不要です。公開情報の照会には、既存の共通ゲートウェイの設定が必要です。",
   "refs": [
     "mcs/medications/drug_info.py"
-  ]
+  ],
+  "details": []
 }

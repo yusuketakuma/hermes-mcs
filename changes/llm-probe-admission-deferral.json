@@ -1,9 +1,10 @@
 {
   "category": "fixed",
   "title": "LLM枠の一時拒否で形式probeが「plain判定」として600秒固定される問題を修正",
-  "summary": "共有brokerの一時的な占有・送信前期限切れで1バイトも送られなかった形式probeが「形式非対応（plain）」として600秒キャッシュされ、枠が復帰してもjson_schema/json_objectが再確認されず、semantic側は未観測のままplain送信へ進んでいました。送信前の期限切れ（NotSentTimeout）は明確な未送信（not_sent）として伝搬し、未送信のprobeは「未観測」として既存の無料保留経路（失敗回数を消費しない延期）へ返します。実際にHTTPで拒否された形式の降格と600秒の再probe・未知routeの認可拒否・送信後のタイムアウト判定は従来どおりです。",
+  "summary": "推論枠の一時的な占有や送信前の期限切れで、形式確認が未送信でもplain形式として600秒固定される問題を修正しました。未送信は未観測として延期し、失敗回数を消費しません。送信後の形式降格とタイムアウト判定は維持します。",
   "upgrade": "追加操作は不要です。既存の形式キャッシュはそのまま有効です。",
   "details": [
+    "共有brokerの一時的な占有・送信前期限切れで1バイトも送られなかった形式probeが「形式非対応（plain）」として600秒キャッシュされ、枠が復帰してもjson_schema/json_objectが再確認されず、semantic側は未観測のままplain送信へ進んでいました。送信前の期限切れ（NotSentTimeout）は明確な未送信（not_sent）として伝搬し、未送信のprobeは「未観測」として既存の無料保留経路（失敗回数を消費しない延期）へ返します。実際にHTTPで拒否された形式の降格と600秒の再probe・未知routeの認可拒否・送信後のタイムアウト判定は従来どおりです。",
     "admitted_probe_formatがadmission拒否・未送信・送信前期限切れでNone（未観測）を返し、呼出元の既存保留経路に委ねる。未知routeの拒否は従来どおり。",
     "probe_formatが最初の送信前に期限切れした場合もNoneを返す（一度でも送信した後の降格判定は維持）。",
     "bounded_httpの送信前期限切れ（NotSentTimeout）をkind=not_sentとして伝搬。probeはnot_sentを未送信として延期し、extract/semanticの本送信も既存の無料保留（_DEFERRED/LLMNotSent）へ返る。permitはnot_sentとしてterminal退避。",
