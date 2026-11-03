@@ -237,12 +237,12 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
         cfg['cloud_llm']['exclude_project_ids'] = [1]
         return 200, {}, json.dumps({'model': MODEL, 'usage': {'input_tokens': 10, 'output_tokens': 2},
             'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
-    def finish(ledger, reservation, metadata):
+    def finish(ledger, reservation, metadata, **kwargs):
         assert metadata['disposition'] == 'discarded_scope'
         cfg['cloud_llm'].pop('exclude_project_ids')
         if accounting_fails:
             raise RuntimeError('synthetic accounting failure')
-        return _REAL_RESULT(ledger, reservation, metadata)
+        return _REAL_RESULT(ledger, reservation, metadata, **kwargs)
     monkeypatch.setattr(cloud_policy, 'record_result', finish)
     monkeypatch.setattr(cloud_policy, 'record_disposition_tx', _REAL_DISPOSITION)
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
@@ -333,8 +333,8 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
-    with pytest.raises(cloud_inference.CloudFallback, match='cloud_local_context_unavailable'):
-        worker.run_pending(led, budget_s=180)
+    report = worker.run_pending(led, budget_s=180)
+    assert report['deferred'] == 1
     assert sent == [True]
     assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
     assert cloud_policy.usage_report(led)['unresolved_requests'] == 1

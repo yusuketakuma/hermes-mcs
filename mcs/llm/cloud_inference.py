@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 import sqlite3
 import time
 
@@ -40,7 +41,7 @@ class CloudInferenceUnit:
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
-                 purpose=None, selection=None, cache_heads=()):
+                 purpose=None, selection=None, cache_heads=(), input_binding=None):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
         resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
@@ -63,7 +64,12 @@ class CloudInferenceUnit:
         self._children = []
         self.message_id = message_id
         self.owner = owner
+        self.input_binding = input_binding
+        self._input_binding = lambda: (mcs_util.payload_hash([self.input_binding, scope])
+                                      if self.input_binding is not None else None)
+        self.route, self.project_id, self.unit_key = route, project_id, unit_key
         self._possibly_sent = False
+        self._unresolved = False
         self.discard_reason = discard_reason
         self.ledger = ledger
         self.deadline = deadline
@@ -131,7 +137,7 @@ class CloudInferenceUnit:
                 unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
                 message_id=message_id, owner=owner, discard_reason=discard_reason,
                 max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
-                purpose="quality_repair", cache_heads=self._cache_heads)
+                purpose="quality_repair", cache_heads=self._cache_heads, input_binding=self.input_binding)
             self._children.append(child)
             return child
         self.spawn_quality_repair = spawn_quality_repair
@@ -148,9 +154,9 @@ class CloudInferenceUnit:
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
                 unit_key=unit_key, message_id=self.message_id, owner=self.owner,
-                selection=self.selection, **hook)(body, timeout)
+                selection=self.selection, input_binding=self._input_binding(), **hook)(body, timeout)
         self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
-        def record(reservation, metadata):
+        def record(reservation, metadata, *, answer=None):
             # The callback also settles a reservation rejected before sending.
             # Capture the other cases before owner-thread dispatch: acquiring the
             # owner or saving accounting can fail after the HTTP attempt.
@@ -166,7 +172,10 @@ class CloudInferenceUnit:
                     outcome = {**metadata, "disposition": self.final_disposition}
                 else:
                     outcome = dict(metadata)
-                value = cloud_policy.record_result(ledger, reservation, outcome)
+                value = cloud_policy.record_result(ledger, reservation, outcome,
+                    **({"answer": answer} if answer is not None else {}))
+                if isinstance(metadata.get('http_class'), str) and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class']):
+                    self._unresolved = False
                 self.completed_reservations.append(reservation)
                 return value
             return dispatch(write, result=True)
@@ -208,19 +217,14 @@ class CloudInferenceUnit:
     @possibly_sent.setter
     def possibly_sent(self, value):
         self._possibly_sent = value
+        self._unresolved = bool(value)
+
+    @property
+    def unresolved(self):
+        """Keep ambiguous sends closed across local fallback and child repair calls."""
+        return self._unresolved or any(child.unresolved for child in self._children)
 
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
-        try:
-            capacity = _current_cloud_settings()["max_concurrency"]
-        except Exception:
-            self.discard()
-            raise CloudFallback("cloud_unit_changed") from None
-        with cloud_backlog.request_slot(HOME, capacity) as held:
-            if not held:
-                raise CloudBusy("cloud_capacity")
-            return self._complete(prompt, deadline=deadline, max_tokens=max_tokens)
-
-    def _complete(self, prompt, *, deadline, max_tokens):
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
@@ -228,10 +232,34 @@ class CloudInferenceUnit:
             # the fixed extraction heads are long enough to cache; the small repair head is not
             prefix = next((head for head in self._cache_heads if prompt.startswith(head)), None)
             selected_tokens = self.selection["max_tokens"]
-            answer = self.client.complete(prompt, deadline=http_deadline,
-                max_tokens=max_tokens if selected_tokens is None else selected_tokens,
-                before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,
-                cache_prefix=prefix)
+            tokens = max_tokens if selected_tokens is None else selected_tokens
+            def recover():
+                if self.input_binding is None:
+                    return None
+                self.commit_guard()
+                try:
+                    return cloud_policy.recover_response(self.ledger, route=self.route,
+                        project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
+                        input_binding=self._input_binding(),
+                        request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)))
+                except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError):
+                    raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
+            saved = self.dispatch(recover, result=True)
+            if saved is not None:
+                evidence, answer = saved
+                answer["reused_response"] = True
+                self.possibly_sent = True
+                self._unresolved = False
+                if evidence['reservation'] not in self.completed_reservations:
+                    self.completed_reservations.append(evidence['reservation'])
+            else:
+                capacity = _current_cloud_settings()["max_concurrency"]
+                with cloud_backlog.request_slot(HOME, capacity) as held:
+                    if not held:
+                        raise CloudBusy("cloud_capacity")
+                    answer = self.client.complete(prompt, deadline=http_deadline, max_tokens=tokens,
+                        before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,
+                        cache_prefix=prefix)
             self.commit_guard()
             return answer
         except CloudFallback as error:

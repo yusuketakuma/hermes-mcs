@@ -14,7 +14,7 @@ from ledger import Ledger
 def _reserve(ledger, unit_key='synthetic'):
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
     return cloud_policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key=unit_key)(
-        {'model': MODEL, 'max_tokens': 100}, 2)
+        {'model': MODEL, 'max_tokens': 100, 'messages': [{'role': 'user', 'content': unit_key}]}, 2)
 
 
 def _open(ledger, now):

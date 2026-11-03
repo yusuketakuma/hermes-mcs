@@ -239,6 +239,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                 raise runtime.LLMNotSent('cloud_target_unverified')
             provider.owner.update(semantic_source=payload_hash(source_occurrences),
                                   semantic_generation=_inference_generation.get(), semantic_phase=target[1])
+        provider.input_binding = payload_hash(provider.owner) if provider.owner.get('semantic_source') else None
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)

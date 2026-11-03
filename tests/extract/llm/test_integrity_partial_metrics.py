@@ -7,6 +7,20 @@ import pytest
 import extract_llm
 
 
+def test_recovered_answer_does_not_count_the_original_http_or_tokens_again():
+    extract_llm._note_list().clear()
+    extract_llm._integrity_note({"status": "ok", "finish_reason": "stop",
+        "usage": {"total_tokens": 12}, "reused_response": True}, "repair")
+    summary = extract_llm._integrity_summary(extract_llm._note_list())
+    assert summary["calls"] == summary["first_calls"] == summary["repair_calls"] == 0
+    assert summary["reused_responses"] == 1 and summary["usage"] is None
+    extract_llm._integrity_note({"status": "ok", "usage": {"total_tokens": 3}})
+    mixed = extract_llm._integrity_summary(extract_llm._note_list())
+    assert mixed["calls"] == mixed["first_calls"] == 1
+    assert mixed["reused_responses"] == 1 and mixed["usage"] == {"total_tokens": 3}
+    extract_llm._note_list().clear()
+
+
 def test_partial_backend_metrics_do_not_invent_missing_zeros():
     summary = extract_llm._integrity_summary([{
         "finish_reason": "stop", "usage": {"prompt_tokens": 11},

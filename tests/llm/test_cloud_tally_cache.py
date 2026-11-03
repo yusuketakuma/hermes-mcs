@@ -223,9 +223,9 @@ def test_paid_result_survives_unrelated_corrupt_timestamp_but_new_sends_stop(tmp
                      'usage': {'input_tokens': 10, 'output_tokens': 2}}
             return 200, {}, json.dumps(reply).encode()
 
-        def save(reservation, metadata):
+        def save(reservation, metadata, **answer):
             received.append((reservation, metadata))
-            c.record_result(ledger, reservation, metadata)
+            c.record_result(ledger, reservation, metadata, **answer)
 
         client = AnthropicClient('synthetic', post_fn=post, max_attempts=1)
         reserve = c.usage_reserver(ledger, _cfg(), route='reextract', project_id=1, unit_key='paid')

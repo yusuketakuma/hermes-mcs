@@ -16,6 +16,7 @@ import uuid
 from functools import lru_cache
 
 import anthropic_client
+import bounded_http
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
@@ -76,7 +77,7 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
 
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp",
-                 "effort", "profile")
+                 "effort", "profile", "input_binding")
 
 
 def capture_history_tx(db, command_id, now, *, continuous=False):
@@ -741,7 +742,7 @@ def _binding(meta):
 
 def _receipt_binding(reservation):
     return {key: reservation.get(key) for key in _BINDING_KEYS
-            if key not in ("effort", "profile") or key in reservation}
+            if key not in ("effort", "profile", "input_binding") or key in reservation}
 
 
 def _reserve_valid(meta, row):
@@ -765,6 +766,8 @@ def _reserve_valid(meta, row):
             raise AnthropicError("pricing_unverified", "reservation_invalid")
     if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
             or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
+            or 'input_binding' in meta and (not isinstance(meta['input_binding'], str)
+                or re.fullmatch(r'[0-9a-f]{64}', meta['input_binding']) is None)
             or meta.get('logical_request_fp') is not None and (not isinstance(meta['logical_request_fp'], str)
                 or re.fullmatch(r'[0-9a-f]{64}', meta['logical_request_fp']) is None)
             or meta.get('logical_unit_fp') is not None and (not isinstance(meta['logical_unit_fp'], str)
@@ -1133,19 +1136,12 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
             result = matches[0][0]
             if result.get('disposition'):
                 raise ValueError('discarded')
-            if settled and result.get('http_class') == 'not_sent':
+            if _confirmed_rejection(result, settled, previous['model']):
                 continue
             # A confirmed successful result may be deliberately reprocessed
             # with another model. An ambiguous send never grants that retry.
             if (prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
-                continue
-            # A validated rate-limit response rejected this attempt. Its
-            # reserved cost still remains counted under the existing policy.
-            if (result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
-                    and result.get('usage') is None):
-                continue
-            if _confirmed_openai_quota(result, previous['model']):
                 continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
@@ -1526,7 +1522,8 @@ def resume(ledger):
     ledger.artifact_add("cloud_control", "running")
 
 
-def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None, on_reserved_tx=None, selection=None):
+def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None,
+                   on_reserved_tx=None, selection=None, input_binding=None):
     """Bind one unit's accounting; callers supply the same guard before and after this hook."""
     from semantic_runtime import reserve_artifact
     c = _cfg(cfg)
@@ -1570,6 +1567,10 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
                 "owner": owner or {}}
         if selection is not None:
             meta.update(effort=selection["effort"], profile=selection["profile"])
+        if input_binding is not None:
+            if not isinstance(input_binding, str) or re.fullmatch(r'[0-9a-f]{64}', input_binding) is None:
+                raise AnthropicError('contract_error', 'input_binding_invalid')
+            meta['input_binding'] = input_binding
         if (route == 'semantic_backlog' and isinstance(owner, dict)
                 and owner.get('semantic_target_id') == message_id
                 and all(isinstance(owner.get(k), str) and owner[k]
@@ -1614,7 +1615,59 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
     return reserve
 
 
-def record_result(ledger, reservation, metadata):
+def _confirmed_rejection(result, settled, model):
+    # A known rejection permits another attempt while retaining its reserved cost.
+    return (settled and result.get('http_class') == 'not_sent'
+            or result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
+            and result.get('usage') is None or _confirmed_openai_quota(result, model))
+
+
+def _saved_answer(answer, metadata):
+    if (not isinstance(answer, dict) or not isinstance(answer.get('text'), str)
+            or answer.get('finish_reason') not in ('stop', 'length')):
+        raise ValueError('cloud_answer_invalid')
+    encoded = answer['text'].encode('utf-8')
+    if (len(encoded) > bounded_http.MAX_RESPONSE_BYTES
+            or metadata.get('answer_text_sha256_v1') != hashlib.sha256(encoded).hexdigest()
+            or metadata.get('answer_finish_reason_v1') != answer['finish_reason']):
+        raise ValueError('cloud_answer_invalid')
+    return {key: answer[key] for key in ('text', 'finish_reason')}
+
+
+def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp):
+    """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
+    with _accounting_snapshot(ledger.db):
+        rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+            "FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
+            "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
+            "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding')=? AND "
+            "json_extract(meta,'$.request_fp')=? END ORDER BY artifact_id",
+            (KINDS[0], project_id, message_id, route, unit_key, input_binding, request_fp)).fetchall()
+        saved = None
+        for row in rows:
+            reservation = _receipt_meta(row['meta'])
+            maximum = _reserve_valid(reservation, row)
+            results = _matching_bound_rows(ledger, KINDS[1], reservation['reservation_id'])
+            matches = [(_receipt_meta(r['meta']), r) for r in results]
+            _, settled = _settled(reservation, maximum, matches)
+            if (len(matches) == 1 and not matches[0][0].get('disposition')
+                    and _confirmed_rejection(matches[0][0], settled, reservation['model'])
+                    and not _matching_bound_rows(ledger, 'cloud_usage_disposition', reservation['reservation_id'])):
+                continue
+            evidence = reservation_evidence(ledger.db, row['artifact_id'])
+            raw = ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=? "
+                                   "THEN content END FROM artifacts WHERE artifact_id=?",
+                                   (6 * bounded_http.MAX_RESPONSE_BYTES + 128, results[0]['artifact_id'])).fetchone()[0]
+            answer = strict_json(raw)
+            if not isinstance(answer, dict) or set(answer) != {'text', 'finish_reason'} or saved is not None:
+                raise ValueError('cloud_answer_unresolved')
+            answer = _saved_answer(answer, evidence['result'])
+            saved = (evidence, {'status': 200, **answer, 'model': reservation['model'],
+                                'usage': evidence['result']['usage']})
+        return saved
+
+
+def record_result(ledger, reservation, metadata, *, answer=None):
     """Settle only a matching, validated result; repeat delivery is idempotent."""
     # Accounting owns its transaction.  In particular, a result callback can
     # run while a caller's transaction is open; do not commit or roll it back.
@@ -1679,6 +1732,8 @@ def record_result(ledger, reservation, metadata):
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")
             result["disposition"] = metadata["disposition"]
+        content = (json.dumps(_saved_answer(answer, result), ensure_ascii=False)
+                   if answer is not None and reservation.get('input_binding') is not None else '{}')
     except (AnthropicError, ValueError, KeyError, TypeError, InvalidOperation):
         _circuit_result(ledger, AnthropicError("pricing_unverified"))
         raise AnthropicError("pricing_unverified", "result_invalid") from None
@@ -1707,7 +1762,9 @@ def record_result(ledger, reservation, metadata):
             if len(rows) != 1:
                 _record_cloud_circuit_result_tx(ledger, AnthropicError("pricing_unverified"))
                 return "conflict"
-            if stored == result:
+            saved_content = ledger.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                                               (rows[0]['artifact_id'],)).fetchone()[0]
+            if stored == result and (answer is None or saved_content == content):
                 return "ok"
             # Preserve the conflict durably; accounting must never pick the cheaper result.
             ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
@@ -1716,7 +1773,7 @@ def record_result(ledger, reservation, metadata):
                                          "error_kind": "pricing_unverified"})
             _record_cloud_circuit_result_tx(ledger, AnthropicError("pricing_unverified"))
             return "conflict"
-        ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
+        ledger.artifact_add_tx(KINDS[1], content, project_id=reservation["project_id"],
                                message_id=reservation.get("message_id"), model=model, meta=result)
         _record_cloud_circuit_result_tx(ledger, error)
         return "ok"

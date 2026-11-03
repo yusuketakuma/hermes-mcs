@@ -743,8 +743,7 @@ def _integrity_note(response, kind: str = "first", probe: int = 0,
                      downgrades: int = 0, err_out: dict | None = None) -> None:
     """Bounded per-call integrity record for shared extraction paths: counts and
     token usage only — never payload text."""
-    # probe/downgrade counts ride on the answered call's note so
-    # `calls == len(notes)` stays untouched
+    # Probe/downgrade counts ride on the answered call's note.
     note = {
         "status": None if response is None else response.get("status"),
         "finish_reason": None if response is None
@@ -756,17 +755,24 @@ def _integrity_note(response, kind: str = "first", probe: int = 0,
     if type((err_out or {}).get("slot_wait_ms")) is int:
         note["slot_wait_ms"] = err_out["slot_wait_ms"]
         note["slot_wait_confirmed"] = err_out.get("slot_wait_confirmed")
+    if response is not None and response.get("reused_response") is True:
+        note["reused_response"] = True
     _note_list().append(note)
 
 
 def _integrity_summary(notes: list) -> dict:
-    calls = len(notes)
+    calls = 0
+    reused = 0
     usage, timings, repair_timings = {}, {}, {}
     finishes = {}
     repair_calls = probe_runs = downgrades = 0
     slot_wait_ms = slot_wait_unconfirmed = 0
     slot_waits = False
     for note in notes:
+        if note.get("reused_response") is True:
+            reused += 1
+            continue
+        calls += 1
         finish = note.get("finish_reason")
         if finish is not None:
             finishes[finish] = finishes.get(finish, 0) + 1
@@ -817,6 +823,8 @@ def _integrity_summary(notes: list) -> dict:
     if slot_waits:
         summary["slot_wait_ms"] = slot_wait_ms
         summary["slot_wait_unconfirmed"] = slot_wait_unconfirmed
+    if reused:
+        summary["reused_responses"] = reused
     return summary
 
 
@@ -5905,7 +5913,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 current=lambda: not r.get("_checkpoint_conflict")
                     and _owns_current_source(ledger, r, r["_cloud_lease"]),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD)))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True)))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -5926,11 +5934,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             except cloud_inference.CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
-                # a paid attempt that failed marks the row: if local cannot finish it
-                # now, _handle records the retry so the next pass does not re-send it
+                # An unknown send keeps its source/backend claim; only a known outcome can fall back.
                 r["_cloud_failed"] = provider.possibly_sent
-                if cloud_only:
-                    _CALL_NOTES.defer_reason = "cloud_fallback"
+                unresolved = getattr(provider, 'unresolved', provider.possibly_sent)
+                if cloud_only or unresolved:
+                    _CALL_NOTES.defer_reason = "cloud_unit_unresolved" if unresolved else "cloud_fallback"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
@@ -6521,7 +6529,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
                 dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True))
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
