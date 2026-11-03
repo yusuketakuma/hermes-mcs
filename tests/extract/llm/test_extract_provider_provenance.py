@@ -308,7 +308,8 @@ def test_prefilter_does_not_claim_a_provider(tmp_path, monkeypatch):
         ledger.close()
 
 
-def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize('unresolved', [False, True])
+def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monkeypatch, unresolved):
     ledger = _ledger(tmp_path)
     try:
         ledger.save_messages([_message(body="完全合成の記録です。")])
@@ -316,11 +317,11 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(worker, "_rerender_cards", lambda *a, **kw: None)
-        monkeypatch.setattr(worker, "load_config", lambda: {})
-        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
+        cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
+        monkeypatch.setattr(worker, "load_config", lambda: cfg)
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(worker, "_cloud_reextract", lambda *a, **kw: True)
         monkeypatch.setattr(worker, "_cloud_mode", lambda *a, **kw: "on")
-        monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"provider": "anthropic", "max_concurrency": 1})
         monkeypatch.setattr(worker, "_prefilter_enabled", lambda: False)
         monkeypatch.setattr(worker, "circuit_open_s", lambda db: 0)
         monkeypatch.setattr(worker, "disk_free_mb", lambda db: 100000)
@@ -329,12 +330,23 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         class FailedCloud:
             def __init__(self, *args, **kwargs):
                 self.possibly_sent = True
+                self.unresolved = unresolved
 
             def __call__(self, *args, **kwargs):
                 raise cloud_inference.CloudFallback("cloud_unit_failed")
 
         monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", FailedCloud)
+        if unresolved:
+            monkeypatch.setattr(worker.local_llm, 'chat', lambda *a, **k: pytest.fail('unknown cloud send cannot fall back'))
         outcome = worker.run_pending(ledger, budget_s=300)
+        if unresolved:
+            assert outcome['done'] == 0 and outcome['deferred'] == 1
+            [retry] = ledger.artifacts(worker.KIND, message_id=1)
+            retry_meta = json.loads(retry['meta'])
+            assert retry_meta['error'] == 1 and retry_meta['attempts'] == 1
+            assert retry_meta['next_try'] > worker.time.time()
+            assert retry_meta.get('provider_provenance', {}).get('providers') != ['local']
+            return
         assert outcome["done"] == 1
         proof = json.loads(ledger.artifacts(worker.KIND, message_id=1)[-1]["meta"])["provider_provenance"]
         assert proof["providers"] == ["local"] and proof["complete"] is True

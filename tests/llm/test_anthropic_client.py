@@ -519,9 +519,19 @@ def test_semantic_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_pa
     from test_openai_client import response
     from test_semantic_cloud import rows
 
+    import cloud_inference
+    original_call = cloud_inference.CloudInferenceUnit.__call__
+    def checked_call(self, *args, **kwargs):
+        try:
+            return original_call(self, *args, **kwargs)
+        except cloud_inference.CloudFallback as error:
+            raise AssertionError("synthetic retry unit unexpectedly failed") from error
+    monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', checked_call)
+
     led, cfg, job, _ = cloud
     cfg["cloud_llm"]["provider"] = provider
     monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+    monkeypatch.setattr(cloud_inference, "HOME", str(tmp_path))
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *args: "synthetic-key")
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
     lock_path = tmp_path / "synthetic-run.lock"

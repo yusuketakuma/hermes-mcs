@@ -79,7 +79,17 @@ def test_receipted_work_behind_large_invalid_prefix_eventually_selected(blocked_
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
 def test_isolated_selection_reaches_receipted_tail(blocked_prefix, lane):
     led, _ = blocked_prefix
-    selected = _select(led, lane, deadline=time.monotonic() + 60)
+    module = semantic_drain if lane == "semantic" else extract_llm
+    for _ in range(4):
+        try:
+            selected = _select(led, lane, deadline=time.monotonic() + 60)
+            break
+        except module._CloudSelectionIncomplete as error:
+            # A bounded SQL window may end on a slower host. Resume the same
+            # proof-bound selection next pass; never turn it into empty success.
+            assert str(error) == "deadline"
+    else:
+        pytest.fail("bounded selection did not advance to the receipted tail")
     assert [row["project_id"] for row in selected] == [513]
     assert cloud_policy.history_thread_allowed(led.db, 513, 513)
 
