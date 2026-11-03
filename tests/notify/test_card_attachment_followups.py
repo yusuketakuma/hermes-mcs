@@ -317,7 +317,8 @@ def test_late_slack_file_failure_never_becomes_accepted_or_auto_duplicates(
     assert len(attempts) == 1 and not world.client.upload_calls
     row = led.db.execute(
         "SELECT state FROM notification_render_parts WHERE attachment_id=?", (aid,)).fetchone()
-    assert row is not None and row[0] == ("unknown" if fault == "unknown" else "not_sent")
+    # A composite upload may have allocated a private FID before its later 403.
+    assert row is not None and row[0] == "unknown"
     for _ in range(2):
         notify_flush.flush(led)
         asyncio.run(_late_slack_cycle(world, led))
