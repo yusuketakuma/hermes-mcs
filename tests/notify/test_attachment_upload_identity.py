@@ -746,3 +746,13 @@ def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, m
     assert len(world.client.upload_calls) == uploads
 
 
+
+
+def test_dbg5(led, uploaded):
+    r = _latest_render(led)
+    print("\nRENDER", r["state"], r["parts_state"], "pub", r["spec_published"])
+    for p in led.db.execute("SELECT part_id,kind,state,remote_id,error_code,attempt_id FROM notification_render_parts WHERE delivery_id=? ORDER BY idx", (r["delivery_id"],)):
+        print("PART", tuple(p))
+    print("spec slack:", json.loads(r["spec_json"])["parts"].get("slack"))
+    print("manifest kinds:", [p["kind"] for p in json.loads(r["spec_json"])["parts"]["manifest"]])
+
