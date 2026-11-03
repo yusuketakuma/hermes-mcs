@@ -17,8 +17,7 @@ __all__ = ["led"]
 pytestmark = pytest.mark.thread_bodies
 
 
-@pytest.fixture
-def uploaded(led, tmp_path, monkeypatch):
+def _uploaded(led, tmp_path, monkeypatch):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     _seed_thread(led, mids=(100,))
     attachment_id, path, blob = _attach(led, tmp_path, name="synthetic-original.bin")
@@ -41,8 +40,18 @@ def uploaded(led, tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def collected_with_edit_witness(led, uploaded):
-    world, original, _spec, part, attachment_id = uploaded
+def uploaded(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    with monkeypatch.context() as legacy:
+        legacy_attachment_parts(legacy)
+        return _uploaded(led, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def collected_with_edit_witness(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
+    world, original, _spec, part, attachment_id = _uploaded(led, tmp_path, monkeypatch)
     emitted = []
     with led.db:
         notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, emitted, force=True)
@@ -524,12 +533,53 @@ def test_collected_only_upload_identity_is_held_then_confirmed_recovers(led, upl
     spec = json.loads(sealed["spec_json"])
     current = next(p for p in spec["parts"]["manifest"] if p["part_id"] == held["part_id"])
     assert current["edit_only"] is True and current["prior_remote_id"] == remote
+    from adapters.slack.cards import validate
+    validate(spec)
+    group = spec["parts"]["manifest"][-1]
+    assert group["kind"] == "file_group"
+    assert led.db.execute("SELECT payload_sha256 FROM notification_render_parts "
+                          "WHERE delivery_id=? AND part_id='file_group'",
+                          (sealed["delivery_id"],)).fetchone()[0] == group["sha256"]
     asyncio.run(_granted_card(world.worker, led, world.root))
     row = led.db.execute("SELECT state,remote_id FROM notification_render_parts "
                          "WHERE delivery_id=? AND part_id=?",
                          (sealed["delivery_id"], held["part_id"])).fetchone()
     assert row["state"] == "delivered" and row["remote_id"] == remote
     assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
+
+
+@pytest.mark.parametrize("fault", ["hash", "shape"])
+def test_confirmation_never_reseals_a_tampered_group_or_partially_changes_parts(led, uploaded, fault):
+    world, _prior, latest, _held, _part, _attachment_id = _held_collected(led, uploaded)
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+
+    spec = json.loads(latest["spec_json"])
+    group = spec["parts"]["manifest"][-1]
+    assert group["kind"] == "file_group"
+    if fault == "hash":
+        group["sha256"] = "0" * 64
+    else:
+        group["unexpected"] = True
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
+                       (canonical(spec).decode(), payload_hash(spec), latest["delivery_id"]))
+        led.db.execute("UPDATE notification_render_parts SET payload_sha256=? "
+                       "WHERE delivery_id=? AND part_id='file_group'",
+                       (group["sha256"], latest["delivery_id"]))
+    before = dict(_latest_render(led))
+    parts = [dict(row) for row in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx",
+        (latest["delivery_id"],))]
+    attachment = next(part for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], attachment["part_id"])
+    uploads = len(world.client.upload_calls)
+    receipt = apply_attachment_identity_confirm(led, _confirm_req(plan, 0xAB))
+    assert receipt["outcome"] == "applied" and receipt["replan"] == "withheld"
+    assert dict(_latest_render(led)) == before
+    assert [dict(row) for row in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx",
+        (latest["delivery_id"],))] == parts
+    assert len(world.client.upload_calls) == uploads
 
 
 def test_attestation_rejects_unsafe_and_changed_state(led, uploaded):
@@ -672,7 +722,7 @@ def test_approval_never_promotes_later_unapproved_collected_row(led, uploaded):
     card = led.db.execute("SELECT * FROM notification_cards WHERE card_id=?", (latest["card_id"],)).fetchone()
     _body, _att, identities = notify_parts._same_thread_delivered_parts(led.db, card)
     later = next(proof for proof in next(iter(identities.values()))
-                 if proof[0] == pid and proof[6] == prior["render_rev"] + 50)
+                 if proof is not None and proof[0] == pid and proof[6] == prior["render_rev"] + 50)
     assert later[5] == "collected"
 
 
@@ -683,9 +733,12 @@ def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, m
     _seed_thread(led, mids=(100,))
     aid1, _p1, _b1 = _attach(led, tmp_path, name="syn-one.bin")
     aid2, _p2, blob2 = _attach(led, tmp_path, name="syn-two.bin", blob=b"other-bytes")
-    assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
-    world = _mkworld(led)
-    asyncio.run(_granted_card(world.worker, led, world.root))
+    from slack_testkit import legacy_attachment_parts
+    with monkeypatch.context() as legacy:
+        legacy_attachment_parts(legacy)
+        assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+        world = _mkworld(led)
+        asyncio.run(_granted_card(world.worker, led, world.root))
     prior = _latest_render(led)
     parts = {p["part_id"]: p for p in json.loads(prior["spec_json"])["parts"]["manifest"]
              if p["kind"] == "attachment_part"}

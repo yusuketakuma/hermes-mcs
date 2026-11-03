@@ -1294,6 +1294,14 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
             or len(manifest) != len(saved) or {p.get("part_id") for p in manifest} != set(saved)
             or spec.get("delivery_id") != delivery_id or spec.get("render_rev") != current["render_rev"]):
         return None
+    groups = [part for part in manifest if part.get("kind") == "file_group"]
+    grouped = (spec.get("parts", {}).get("slack") or {}).get("file_group") is True
+    if bool(groups) != grouped or len(groups) > 1:
+        return None
+    if grouped:
+        from adapters.common.spec import file_group_sha256
+        if groups[0].get("sha256") != file_group_sha256(spec):
+            return None
     confirmed = {(att_id, sha, size): (remote, name)
                  for _did, _pid, _rev, att_id, sha, size, name, remote in
                  notify_parts._confirmed_upload_identities(db, card)}
@@ -1314,9 +1322,19 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
         part["prior_remote_id"], part["edit_only"], part["name"] = remote, True, name
         used.add(remote)
         renamed.append((name, row["part_id"]))
+    if grouped:
+        from adapters.slack.cards import validate
+        groups[0]["sha256"] = file_group_sha256(spec)
+        try:
+            validate(spec)
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            return None
     for name, part_id in renamed:
         db.execute("UPDATE notification_render_parts SET name=? WHERE delivery_id=? AND part_id=?",
                    (name, delivery_id, part_id))
+    if grouped:
+        db.execute("UPDATE notification_render_parts SET payload_sha256=? WHERE delivery_id=? AND part_id=?",
+                   (groups[0]["sha256"], delivery_id, groups[0]["part_id"]))
     db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
                (canonical(spec).decode(), payload_hash(spec), delivery_id))
     db.execute("UPDATE notification_renders SET state='queued',parts_state='pending' WHERE delivery_id=?",
