@@ -1,10 +1,10 @@
 {
-  "status": "release notes prepared; production application and publication are tracked in ACCEPTANCE_1.1.1.md",
+  "status": "additional fixes prepared after production 710b1356; follow-up application, operational acceptance and publication are recorded separately",
   "baseline": {
     "previous_release": "v1.1.0",
     "production_sha": "2673b767b9cba56a0ca169eeebe1d0c6c63143e6"
   },
-  "fragment_count": 91,
+  "fragment_count": 97,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -553,6 +553,42 @@
       "id": "unacked-pending-slack-replies",
       "title": "カード準備中の返信を未確認一覧に表示",
       "sha256": "25106cb326c9c6222d27fe484d4bbf8f60cccb50489090937a483c3f7d3dca2e"
+    },
+    {
+      "path": "changes/archive/1.1.1/attachment-confirm-group-reseal.json",
+      "id": "attachment-confirm-group-reseal",
+      "title": "添付の人確認後にまとめ表示の配送計画も再封印",
+      "sha256": "728371b477123a43c5fbe773df5fb8215a25b706675764e25b42128e7f2413d8"
+    },
+    {
+      "path": "changes/archive/1.1.1/card-sweep-core-import.json",
+      "id": "card-sweep-core-import",
+      "title": "Slackの添付付き通知カード更新が止まる問題を修正",
+      "sha256": "1edb6f789160a52584481900d41e35e025070183c27c86419702e853c7444dc1"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-backlog-fixed-error-observation.json",
+      "id": "cloud-backlog-fixed-error-observation",
+      "title": "クラウド処理の停止原因を固定コードで確認できるように修正",
+      "sha256": "b2b2a7e897b997627be748aed5680cf508e348ac42996d3dbd33697a93c7ecbe"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-pricing-refusal.json",
+      "id": "cloud-pricing-refusal",
+      "title": "会計記録の破損をクラウドの停止理由として保持",
+      "sha256": "4a482755304049c05ff3e8bc9b9d799a411037d0cb2e805f218c4e55d3b1683b"
+    },
+    {
+      "path": "changes/archive/1.1.1/context-prepare-fairness.json",
+      "id": "context-prepare-fairness",
+      "title": "抽出を保留する投稿が後続の解析を止める問題を修正",
+      "sha256": "e52a2bfc63dc3d9a8c4f1871349c048d33ef7964aadbb6abfd0df29680caa93d"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-child-private-stage-reuse.json",
+      "id": "slack-child-private-stage-reuse",
+      "title": "返信カードの同じ添付を次の更新でも再利用",
+      "sha256": "c5bafe85b8a55adb963dad3bb43373790c1e5828c0ca37caf51e5bfcffbedb3b"
     }
   ]
 }
