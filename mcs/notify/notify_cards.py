@@ -772,6 +772,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         own["face_posts"] = face_posts
     if present.ACCENT_URGENT and content.get("urgent"):
         own["accent"] = "urgent"
+    if (spec["parts"].get("slack") or {}).get("file_group"):
+        own["file_group"] = True
     if own:
         # an older worker holds a spec carrying this key until restarted
         spec["parts"][card["transport"]] = own
