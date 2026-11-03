@@ -60,18 +60,19 @@ DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "patient_rollup"
 STALE_DAYS = 21          # message unseen this long while siblings refresh
 # Bump when persisted rollup content changes shape, or when a scope/guard
-# change alters what build_rollup keeps: current-version caches are trusted
-# without per-read rebuilds, and dirty_projects() rebuilds every row stamped
-# with another version (10: source-bound pharmacy reports; 11: vital owners
+# change alters what build_rollup keeps: dirty_projects() and completion
+# caches invalidate rows stamped with another version
+# (10: source-bound pharmacy reports; 11: vital owners
 # written without a particle and oxygen flows are not patient readings;
 # 12: per-request, current Loop evidence replaces thread-wide reply inference;
 # 13: retain every accepted reply relation and its source in posting-time order;
 # 14: measurement order requires source-bound measurement time and coverage;
 # 15: re-evaluate clinical assertions under the updated scope rules;
 # 16: attachment coverage and missing message bodies are checked;
-# 17: adjacent source retractions cannot confirm a vital value).
+# 17: adjacent source retractions cannot confirm a vital value;
+# 18: recheck stored medication dose uncertainty and self/other owners).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 17
+PERIOD_CHECK_VERSION = 18
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}

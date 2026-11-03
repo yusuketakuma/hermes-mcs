@@ -8,7 +8,7 @@ from mcs_util import locate_quote_span
 
 from clinical_scope import (CURRENT_MARK, FAMILY_PERSON, OTHER_PERSON, current_medication_continuation, source_axes,
                             source_polarity, source_resolution, source_assertion_span)
-from clinical_values import _is_unambiguous_bp_date_marker, written_day
+from clinical_values import _is_unambiguous_bp_date_marker, written_day, medication_source_dose_unrecorded
 
 _JST = timezone(timedelta(hours=9))
 _DATES = ("measured_on", "observed_on", "onset", "last_confirmed_on")
@@ -603,9 +603,14 @@ def clinical_state_fact(message, item, category, source="extract_llm"):
                 "evidence": body[span[0]:span[1]] if span else ""}]
     keys = (("dose", "actual_dose"), ("freq", "actual_frequency"), ("onset", "onset"),
             ("measured_on", "measured_on"), ("condition", "condition"))
+    dose_unrecorded = (category == "medications" and item.get("dose") is not None
+                       and medication_source_dose_unrecorded(body, name,
+                           evidence=body[span[0]:span[1]] if span else None, evidence_span=span))
     if span:
         quote = body[span[0]:span[1]]
         for raw_key, key in keys:
+            if raw_key == "dose" and dose_unrecorded:
+                continue
             value = item.get(raw_key)
             inner = locate_quote_span(quote, value) if isinstance(value, str) and value else None
             if inner is not None:
@@ -622,7 +627,7 @@ def clinical_state_fact(message, item, category, source="extract_llm"):
             "posted_at": message.get("posted_at"), "source": source, "reported": dict(item)}
     temporal = (annotate(fact, body) if span else
                 {"subject": item.get("subject", "unknown"), "period": "unknown", "unknown": True})
-    if (source == "extract_v1" and category == "medications" or item_unverified(item) or not span
+    if (source == "extract_v1" and category == "medications" or item_unverified(item) or not span or dose_unrecorded
             or message.get("body_state") not in (None, "full")
             or span and name_span is None):
         temporal["unknown"] = True

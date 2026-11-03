@@ -39,6 +39,7 @@ from mcs_util import loads_dict, search_fold
 from clinical_display import item_scope, scoped_vitals, vital_line
 from semantic_render import FACT_ATTRIBUTE_LABELS
 import clinical_urgency
+import clinical_values
 import mcs_queries
 
 
@@ -388,10 +389,16 @@ def _symptom_line(llm: dict, v1: dict, *, context=(None, None, "patient")):
     return line
 
 
-def _med_display_name(item):
+def _med_display_name(item, *, body=None):
     name, dose = str(item["name"]), item.get("dose")
     if not isinstance(dose, str) or not dose.strip():
         return name + (f" {dose}" if dose else "")
+    span = item.get("evidence_span")
+    if isinstance(item.get("span"), dict):
+        span = [item["span"].get("start"), item["span"].get("end")]
+    if clinical_values.medication_source_dose_unrecorded(
+            body, name, evidence=item.get("evidence"), evidence_span=span):
+        return f"{name}（用量要確認: {dose}）"
     folded_name, folded_dose = search_fold(name), search_fold(dose)
     if not re.search(r"(?<![0-9.])" + re.escape(folded_dose) + r"(?![0-9.a-z])", folded_name):
         return f"{name} {dose}"
@@ -423,7 +430,7 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
         scope = item_scope(m, context, str(m["name"]))
         if scope != "patient" and not (scope == "planned" and m.get("status") == "planned"):
             continue
-        d = _med_display_name(m)
+        d = _med_display_name(m, body=context[0])
         if (action := _label(RX_LABEL, m.get("action"))):
             d += f"[{action}]"
         if m.get("status") == "planned":
@@ -444,7 +451,7 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
         unverified.extend(
-            (_med_display_name(m),
+            (_med_display_name(m, body=context[0]),
              ref_of(True, i, m))
             for i, m in enumerate(_items(v1, "medications"))
             if isinstance(m, dict) and m.get("name")

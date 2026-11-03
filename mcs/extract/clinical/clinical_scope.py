@@ -35,7 +35,7 @@ SYMPTOMS = ("発熱", "お熱", "高熱", "血尿", "疼痛", "痛み", "嘔気"
 
 URGENT_REQUEST = re.compile(r"ください|下さい|お願い|ほしい|欲しい|願います")
 
-_SELF_PERSON = r"ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?"
+_SELF_PERSON = r"(?:ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:自身)?"
 
 
 _CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|拡張期|容態|病歴|入院|退院|搬送|死亡|脈拍|酸素|薬|服薬|Cr|eGFR|AST|ALT|BUN|HbA1c|Hb|Na|K|血糖|採血|検査|BP|SpO2|熱|体重|身長|weight|height|BS|Glu|glucose|BNP|INR|CRP|Alb|[胸腹頭背腰]痛|"
@@ -43,7 +43,7 @@ _CLINICAL_OWNER = (r"症状|状態|体調|意識|呼吸|体温|血圧|収縮期|
 
 NAMED_PERSON = r"[ぁ-んァ-ヶ一-龥A-Za-z0-9]{1,16}(?:さん|様)"
 
-_COMPOUND_PERSON = rf"(?:{FAMILY_PERSON}|{OTHER_PERSON}|{NAMED_PERSON})(?:ご本人|本人)"
+_COMPOUND_PERSON = rf"(?:{FAMILY_PERSON}|{OTHER_PERSON}|{NAMED_PERSON})(?:(?:ご本人|本人)(?:自身)?|自身)"
 
 _OWNER_MODIFIER = r"(?:(?:現在|以前|過去|本日)の|強い|弱い|激しい|軽い)*"
 
@@ -123,11 +123,11 @@ _REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼�
 
 def person_scope(person, patient_name):
     # 「同居の娘さん」: _NAMED_PERSON also takes の, so read its relation tail, not the whole as a name.
-    if re.fullmatch(rf"(?:.+の)?(?:{FAMILY_PERSON})(?:ご本人|本人)?", person):
+    if re.fullmatch(rf"(?:.+の)?(?:{FAMILY_PERSON})(?:ご本人|本人)?(?:自身)?", person):
         return "family"
-    if re.fullmatch(rf"(?:{OTHER_PERSON})(?:ご本人|本人)?", person):
+    if re.fullmatch(rf"(?:{OTHER_PERSON})(?:ご本人|本人)?(?:自身)?", person):
         return "other"
-    alias = person.removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
+    alias = person.removesuffix("自身").removesuffix("ご本人").removesuffix("本人").removesuffix("さん").removesuffix("様")
     alias = re.sub(r"\s+", "", alias)
     name = re.sub(r"\s+", "", patient_name) if isinstance(patient_name, str) else ""
     # Strip an explicit time modifier, never a の inside another person's name.
@@ -296,9 +296,19 @@ def source_axes(body, start, end, *, default="patient"):
     return subject, period
 
 
-def source_assertion_span(body, surface):
-    """Locate one unique target and its existing source-clause boundaries."""
-    span = locate_quote_span(body, surface) if isinstance(body, str) and isinstance(surface, str) else None
+def source_assertion_span(body, surface, *, anchor=None):
+    """Locate a unique or explicitly bound target and its existing source-clause boundaries."""
+    if not isinstance(body, str) or not isinstance(surface, str):
+        return None
+    if anchor is None:
+        span = locate_quote_span(body, surface)
+    else:
+        if (not isinstance(anchor, (list, tuple)) or len(anchor) != 2
+                or any(type(n) is not int for n in anchor)
+                or not 0 <= anchor[0] < anchor[1] <= len(body)):
+            return None
+        text = body[anchor[0]:anchor[1]]
+        span = anchor if locate_quote_span(text, surface) == (0, len(text)) else None
     if span is None:
         return None
     start, end = span

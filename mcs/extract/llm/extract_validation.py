@@ -536,6 +536,10 @@ class Validator:
         end = span[0] + left + (inner[1] if inner else len(text))
         return text, start, end, span[0] + right
 
+    def drop_reason(self, reason):
+        if self.drops is not None and len(self.drops.setdefault("reasons", [])) < 5:
+            self.drops["reasons"].append(reason)
+
     def medication_continuation(self, item, assertion):
         """Prove one positive current medication continuation inside a complete quoted sentence."""
         quote = item.get("evidence")
@@ -553,7 +557,7 @@ class Validator:
         if subject == "unknown":
             return None
         tail = flat_text(self.body[end:right]).casefold()
-        match = re.fullmatch(r"を(?P<dose>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|錠|包|カプセル))"
+        match = re.fullmatch(r"を(?:1回|一回)?(?P<dose>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|錠|包|カプセル))"
                              r"(?P<prn>頓(?:服|用)で)?[、,]"
                              r"(?P<freq>1日[1-6]回(?:まで)?|就寝前)(?:に)?"
                              r"(?:内服|服用)(?:しています|している)", tail)
@@ -756,6 +760,8 @@ class Validator:
                 item["unverified"] = True
             self.ev(item, m)
             quote = item.get("evidence")
+            if sj is None and quote is not None:
+                self.drop_reason(f"meds[{index}].subjectが未記載です。本文の服用者をpatient/family/other/unknownで確認してください。")
             if quote is not None:
                 flat_quote = flat_text(quote)
                 mentions = list(re.finditer(re.escape(flat_text(item["name"])), flat_quote))
@@ -801,14 +807,21 @@ class Validator:
                             value = m.get(key) if key == "prn" else item.get(key)
                             matches = type(value) is type(supported) and (
                                 flat_text(value).casefold() == supported if isinstance(value, str) else value == supported)
-                            if value is not None and not matches:
+                            if value is None and key in ("dose", "freq"):
+                                self.uncertain(item, key, nullable=key == "dose")
+                                self.drop_reason(f"meds[{index}].{key}が本文の明示値を拾えていません。薬剤を含む同じ文の用量・頻度を確認してください。")
+                            elif value is not None and not matches:
                                 self.uncertain(item, key, nullable=key == "dose")
                         meds.append({**item, "normalized": clinical_values.medication_surface(item["name"])})
                         continue
+                    attribute_source = clinical_values.medication_attribute_source(
+                        assertion[0], self.body[assertion[3]:])
                     for key in ("dose", "freq", "route", "prn"):
                         if item.get(key) is not None and not clinical_values.medication_attribute_supported(
-                                key, item[key], assertion[0]):
+                                key, item[key], attribute_source if key == "dose" else assertion[0], surface=item["name"]):
                             self.uncertain(item, key, nullable=key == "dose")
+                            if key == "dose" and clinical_values.medication_dose_unrecorded(attribute_source, surface=item["name"]):
+                                self.drop_reason(f"meds[{index}].doseは本文の用量未記載と矛盾します。製品規格を服用量へ転記しないでください。")
                     if m.get("prn") is False and not clinical_values.medication_attribute_supported(
                             "prn", False, assertion[0]):
                         item["unverified"] = True

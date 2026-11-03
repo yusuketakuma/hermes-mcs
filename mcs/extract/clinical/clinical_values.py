@@ -125,10 +125,71 @@ _ROUTE_WORDS = {"oral": r"経口|内服|服用|飲(?:む|み|ん|め)",
 _PRN_WORDS = r"頓用|頓服|必要時|必要(?:な|のある)(?:とき|時|場合)"
 
 
-def medication_attribute_supported(key, value, assertion):
+_DOSE_UNRECORDED = (
+    r"(?:服用量|内服量|投与量|1回量|用量)(?:は|が|については)?"
+    r"(?:未記載|不明|未確認|(?:記載|記録)(?:が|は)?(?:ない|なし|ありません|されてい(?:ない|ません)))"
+    r"(?:です|でした)?(?=$|[。．！？!?;；、,])"
+)
+
+
+def medication_dose_unrecorded(assertion, *, surface=None):
+    """Recognize dose uncertainty only in a generic clause or this drug's own owner phrase."""
+    source = re.sub(r"\s+", "", unicodedata.normalize("NFKC", assertion).casefold())
+    name = re.sub(r"\s+", "", unicodedata.normalize("NFKC", surface).casefold()) if isinstance(surface, str) else None
+    for match in re.finditer(_DOSE_UNRECORDED, source):
+        prefix = source[:match.start()]
+        if not prefix or prefix[-1] in "。．！？!?;；、,":
+            return True
+        if name and re.search(r"(?<![A-Za-z0-9一-龥々ァ-ヶー])" + re.escape(name)
+                              + r"(?:[0-9.]+(?:mg|μg|mcg|g|ml))?(?:錠|カプセル)?の$", prefix):
+            return True
+    return False
+
+
+def medication_attribute_source(assertion, tail):
+    """Include only an adjacent owner-free dose-unknown clause in this drug's evidence."""
+    follow = re.match(r"^[。．、,]\s*([^。．！？!?;；、,\n]+)", tail)
+    if (follow and not re.search(r"と|及び|および|併用", assertion)
+            and re.match(r"^(?:服用量|内服量|投与量|1回量|用量)", re.sub(r"\s+", "", follow[1]))
+            and medication_dose_unrecorded(follow[1])):
+        return assertion + "。" + follow[1]
+    return assertion
+
+
+def medication_source_dose_unrecorded(body, surface, *, evidence=None, evidence_span=None):
+    """Recheck stored dose uncertainty in the source clause bound by its literal evidence."""
+    if not isinstance(body, str) or not isinstance(surface, str):
+        return False
+    anchor = None
+    if evidence_span is not None:
+        if (not isinstance(evidence_span, (list, tuple)) or len(evidence_span) != 2
+                or any(type(n) is not int for n in evidence_span)
+                or not 0 <= evidence_span[0] < evidence_span[1] <= len(body)
+                or body[evidence_span[0]:evidence_span[1]] != evidence):
+            return False
+        bound = evidence_span
+    elif evidence is not None:
+        bound = locate_quote_span(body, evidence) if isinstance(evidence, str) else None
+        if bound is None:
+            return False
+    else:
+        bound = None
+    if bound is not None:
+        inner = locate_quote_span(body[bound[0]:bound[1]], surface)
+        if inner is None:
+            return False
+        anchor = (bound[0] + inner[0], bound[0] + inner[1])
+    span = clinical_scope.source_assertion_span(body, surface, anchor=anchor)
+    return bool(span and medication_dose_unrecorded(
+        medication_attribute_source(body[span[0]:span[1]], body[span[1]:]), surface=surface))
+
+
+def medication_attribute_supported(key, value, assertion, *, surface=None):
     """Check a supplied attribute against this drug's own assertion without dose conversions."""
     source = re.sub(r"\s+", "", unicodedata.normalize("NFKC", assertion).casefold())
     denied = r"(?:は|が|も|を)?(?:(?:では|じゃ)(?:なく|ない|ありません)|せず|しない|しません|して(?:いない|いません))"
+    if key == "dose" and medication_dose_unrecorded(assertion, surface=surface):
+        return False
     if key == "route":
         return value in _ROUTE_WORDS and any(not re.match(denied, source[match.end():])
             for match in re.finditer(_ROUTE_WORDS[value], source))

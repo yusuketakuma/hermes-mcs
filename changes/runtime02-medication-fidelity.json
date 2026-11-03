@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "薬剤の規格と服用量、本人と家族の服用を区別",
+  "summary": "用量未記載の本文から製品規格を服用量として残す出力を拒否し、1回量と頻度、家族自身の服用を正しく検証します。",
+  "upgrade": "更新後の抽出・読取り・表示に適用します。旧保存値は原本を保持して再検証し、rollupキャッシュは既存の版管理で更新します。一括のLLM再抽出や追加の照会は行いません。",
+  "details": [
+    "薬剤に対応する用量未記載だけを扱い、別の薬剤の用量不明を混ぜません。",
+    "明示された用量・頻度・服用者が出力から欠落した場合は、既存の上限付き修正依頼へ理由を渡します。",
+    "共通の対象者判定で本人自身、家族自身、他者自身を区別し、予定を実施済みとして確定しません。",
+    "保存済みの矛盾する用量を確定用量へ採用せず、表示は元の値を用量要確認として残します。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/clinical_scope.py",
+    "mcs/extract/llm/extract_validation.py",
+    "mcs/patients/patient_context_projection.py",
+    "mcs/patients/rollup.py",
+    "mcs/views/structured_view.py"
+  ]
+}
