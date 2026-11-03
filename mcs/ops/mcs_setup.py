@@ -690,18 +690,13 @@ def _init_split_snapshot():
     snapshot = state['snapshot']
     data_fd = os.open(root / 'data', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        before = provider_settings._identity(os.fstat(data_fd))
-        if before != snapshot['data']:
+        namespace_before = provider_settings._provider_namespace(data_fd)
+        if provider_settings._directory_anchor(os.fstat(data_fd)) != snapshot['data']:
             raise ValueError('provider_settings_changed')
-        names = []
-        with os.scandir(data_fd) as entries:
-            for index, entry in enumerate(entries):
-                if index >= 100000:
-                    raise ValueError('provider_artifact_scan_limit')
-                if entry.name.startswith(('.provider-settings-backup-', '.provider-settings-stage-')):
-                    names.append(entry.name)
-        names.sort()
-        if provider_settings._identity(os.fstat(data_fd)) != before:
+        names = sorted(name for name in namespace_before if name.startswith(
+            ('.provider-settings-backup-', '.provider-settings-stage-')))
+        if (provider_settings._provider_namespace(data_fd) != namespace_before
+                or provider_settings._directory_anchor(os.fstat(data_fd)) != snapshot['data']):
             raise ValueError('provider_settings_changed')
     finally:
         os.close(data_fd)

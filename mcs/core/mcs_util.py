@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 import sys
+import time
 import unicodedata
 import urllib.request
 from contextlib import suppress
@@ -128,6 +129,13 @@ class ProviderSettingsUnreadable(RuntimeError):
     """Provider settings cannot be read consistently and must not default open."""
 
 
+# Read failures that can occur inside a commit's write window: bounded retry
+# absorbs the blip; anything else (or a persistent failure) stays fail-closed.
+_TRANSIENT_PROVIDER_READ = frozenset({
+    "provider_settings_changed", "provider_settings_pending",
+    "provider_file_changed", "provider_file_missing", "provider_snapshot_changed"})
+
+
 def _load_config(path, *, allow_provider_unavailable=False):
     active = _provider_config_active(path)
     if active:
@@ -140,13 +148,16 @@ def _load_config(path, *, allow_provider_unavailable=False):
             root = os.path.dirname(os.path.abspath(path))
             reader = (provider_settings.read_with_verified_common if allow_provider_unavailable
                       else provider_settings.read)
-            try:
-                state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
-            except ValueError as error:
-                if str(error) != "provider_settings_changed":
-                    raise
-                # Discard the conflicted snapshot and verify a fresh one once.
-                state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+            for attempt in range(3):
+                try:
+                    state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+                    break
+                except ValueError as error:
+                    if str(error) not in _TRANSIENT_PROVIDER_READ or attempt == 2:
+                        raise
+                    # A commit keeps readers closed for its whole write window:
+                    # wait briefly and re-verify rather than fail on the blip.
+                    time.sleep(0.15)
             if state["mode"] == "provider_unavailable":
                 cfg = dict(state["common"])
                 cloud = cfg.get("cloud_llm", {})

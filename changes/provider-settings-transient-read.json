@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "設定保存中の一瞬にプロバイダ設定が読めないと報告される問題を修正",
+  "summary": "プロバイダ設定の保存（コミット）が行われている間の一時的な読取不可が、リトライなしの「設定未検証」エラーになり、診断やバックログ処理を不必要に停止させることがありました。コミット窓内で起こり得る一時的な失敗には有界の再読を行い、継続する失敗は従来どおり停止します。あわせて、設定初期化のスナップショット照合がディレクトリの時刻差分を誤検出し、常に失敗していた不具合を修正しました。",
+  "upgrade": "追加操作は不要です。設定保存と診断・処理のタイミングが重なっても、一時的な読取不可で停止しなくなります。",
+  "details": [
+    "provider_settings_pending・provider_file_changed・provider_file_missing・provider_snapshot_changed・provider_settings_changed を有界リトライ（最大3回・0.15秒間隔）の対象に追加した。",
+    "_init_split_snapshot の data/ 照合を名前空間・アンカー基準へ更新し、実行時のファイル出入りを許容しつつプロバイダ関連エントリの変化は検出する。"
+  ],
+  "refs": ["mcs/core/mcs_util.py", "mcs/ops/mcs_setup.py"]
+}
