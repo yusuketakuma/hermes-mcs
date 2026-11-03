@@ -142,14 +142,20 @@ def test_cloud_pool_exec_preserves_parent_and_worker_arguments(tmp_path, monkeyp
     helper = str(tmp_path / "helper.py")
     monkeypatch.setattr(cloud_backlog, "helper_path", lambda *a, **k: helper)
     seen = []
-    child = SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda **kw: 0)
+    class Child:
+        def poll(self): return None
+        def terminate(self): return None
+        def wait(self, **kwargs): return 0
+
+    child = Child()
     monkeypatch.setattr(cloud_backlog.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw)) or child)
     pool = cloud_backlog.CloudBacklogPool(tmp_path)
     try:
         pool.sync(cfg)
         argv, kw = seen[0]
         assert argv[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
-        assert argv[7:] == [sys.executable, str(Path(cloud_backlog.__file__).resolve()), "--parent", str(os.getpid())]
+        assert argv[7:] == [sys.executable, str(Path(cloud_backlog.__file__).resolve()),
+                            "--parent", str(os.getpid()), "--index", "0"]
         assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
     finally:
         pool.close()

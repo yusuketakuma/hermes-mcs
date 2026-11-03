@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -14,6 +15,17 @@ import run_log_install
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "deployment/scripts/mcs_offsite.sh"
+
+
+def _logged_output(data):
+    # exec preserves the producer PID; its separate drainer finishes after EOF.
+    path, deadline = data / "mcs.log", time.monotonic() + 5
+    while time.monotonic() < deadline:
+        raw = path.read_bytes() if path.exists() else b""
+        if raw.endswith(b"\n"):
+            return raw
+        time.sleep(0.01)
+    return path.read_bytes()
 
 
 def _wrapper(tmp_path, exit_code=0, *, enabled=False):
@@ -81,7 +93,7 @@ def test_wrapper_forwards_explicit_policy_snapshot_and_redacts_output(tmp_path, 
     assert result.stdout == (f"mcs offsite: backup failed (exit {code})\n".encode()
                              if code else b"")
     assert result.stderr == b""
-    assert (data / "mcs.log").read_bytes() == b"synthetic output must not leak\n"
+    assert _logged_output(data) == b"synthetic output must not leak\n"
 
 
 def test_rendered_owner_opt_in_works_without_cron_arguments(tmp_path):
@@ -89,7 +101,7 @@ def test_rendered_owner_opt_in_works_without_cron_arguments(tmp_path):
     result = subprocess.run(["/bin/bash", str(runner)], capture_output=True,
                             env={"HOME": str(tmp_path)}, timeout=10)
     assert result.returncode == 0 and result.stdout == b""
-    assert (data / "mcs.log").read_bytes() == b"synthetic output must not leak\n"
+    assert _logged_output(data) == b"synthetic output must not leak\n"
     assert json.loads(calls.read_text())["argv"] == [
         str(tmp_path / "repo with spaces/mcs/ops/mcs_backup.py"), "offsite",
         "--scheduled", "--keychain", "--state-dir", str(data),

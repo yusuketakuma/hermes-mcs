@@ -189,6 +189,18 @@ def _tree(tmp_path, *, shebang="#!/bin/sh\n", body='echo "argv=$*" "pp=${PYTHONP
     return shim, real
 
 
+@pytest.fixture
+def trusted_host_ancestors(tmp_path, monkeypatch):
+    # Model trusted install ancestry outside the synthetic tree. Linux /tmp
+    # is shared; fixture files/directories retain every real permission check.
+    ancestors = {(info.st_dev, info.st_ino) for parent in tmp_path.parents
+                 for info in (parent.stat(),)}
+    original = setup._safe_owner
+    monkeypatch.setattr(setup, "_safe_owner", lambda info: original(info) or (
+        (info.st_dev, info.st_ino) in ancestors and info.st_uid in (os.getuid(), 0)))
+
+
+@pytest.mark.usefixtures("trusted_host_ancestors")
 def test_the_mcs_shim_runs_its_venv_command_directly_with_a_minimal_environment(tmp_path, monkeypatch):
     shim, real = _tree(tmp_path)
     for key, value in (("PYTHONPATH", "/synthetic/inject"), ("DYLD_INSERT_LIBRARIES", "/synthetic/lib"),
@@ -206,6 +218,7 @@ def test_the_mcs_shim_runs_its_venv_command_directly_with_a_minimal_environment(
     assert not unchanged()
 
 
+@pytest.mark.usefixtures("trusted_host_ancestors")
 @pytest.mark.parametrize("change, code", [
     ("group_writable_dir", "hermes_writable_by_others"),
     ("env_shebang", "hermes_interpreter_from_path"),
@@ -223,6 +236,7 @@ def test_an_unprovable_hermes_command_is_refused_before_any_input(tmp_path, chan
     assert str(raised.value) == code
 
 
+@pytest.mark.usefixtures("trusted_host_ancestors")
 def test_run_stops_before_asking_when_the_command_is_untrusted(term, tmp_path, capsys):
     shim, real = _tree(tmp_path, shebang="#!/usr/bin/env python3\n")
     term([], [])                                       # any prompt would raise StopIteration
@@ -231,6 +245,7 @@ def test_run_stops_before_asking_when_the_command_is_untrusted(term, tmp_path, c
     assert "hermes_bin" in out and "hermes_interpreter_from_path" in out
 
 
+@pytest.mark.usefixtures("trusted_host_ancestors")
 def test_a_small_native_binary_is_checked_without_being_decoded(tmp_path):
     native = tmp_path / "bin" / "hermes"
     native.parent.mkdir()
@@ -240,6 +255,7 @@ def test_a_small_native_binary_is_checked_without_being_decoded(tmp_path):
     assert argv0 == os.path.realpath(native) and len(identity) == 1
 
 
+@pytest.mark.usefixtures("trusted_host_ancestors")
 def test_an_interpreter_reached_through_a_replaceable_directory_is_refused(tmp_path):
     # the kernel follows the shebang path as written: a safe target behind a directory
     # others can write is not safe
