@@ -79,7 +79,7 @@ MAX_RESEND = 3            # consecutive not_sent attempts before a card
 
 LINEWORKS_SUMMARY_WAIT_S = 120
 
-# mirrored from adapters/common/spec (core never imports adapters);
+# display limits mirrored from adapters/common/spec for this renderer;
 # tests/notify/test_card_extras.py pins them equal
 MAX_COMPONENTS = 40           # the worker's per-card component ceiling
 MAX_BUTTONS = 5              # spec.MAX_BUTTONS

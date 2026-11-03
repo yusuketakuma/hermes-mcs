@@ -6,7 +6,10 @@ at any depth (e.g. extract/rules/, extract/llm/), except retired v2/v3 engines.
 Entry-point modules put
 the mcs/ root on sys.path and import this module; importing it
 prepends every module dir so local modules resolve ahead of any
-same-named installed package. See AGENTS.md "構成".
+same-named installed package. The checkout root follows those module
+dirs so shared adapter contracts also resolve from standalone core
+entrypoints, independently of their working directory. Registering a
+path does not import adapters or their optional SDKs. See AGENTS.md "構成".
 """
 import os
 import sys
@@ -33,4 +36,4 @@ def _import_roots() -> list[str]:
     return roots
 
 
-sys.path[:0] = [p for p in _import_roots() if p not in sys.path]
+sys.path[:0] = [p for p in [*_import_roots(), os.path.dirname(_PKG)] if p not in sys.path]

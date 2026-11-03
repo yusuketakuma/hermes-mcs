@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import re
 
-# Twin of adapters.common.text.escape_md (mcs/ never imports adapters;
-# tests pin the two equal): same-length look-alikes for Discord markup.
+# Twin of adapters.common.text.escape_md for this renderer (tests pin the
+# two equal): same-length look-alikes for Discord markup.
 _MD_KEEP = re.compile(r"(<@[!&]?\w+>|https?://\S+)")
 _MD_INLINE = str.maketrans("*_~|`[]<\\", "＊＿～｜｀［］＜＼")
 _MD_LINE = re.compile(r"^([ \t]*)(?:(\d+)\.|([#>+-]))", re.M)

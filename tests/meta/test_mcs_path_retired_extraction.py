@@ -7,6 +7,30 @@ import sys
 import pytest
 
 
+def test_checkout_root_registration_preserves_flat_priority_without_importing_packages(tmp_path, monkeypatch):
+    checkout = tmp_path / "checkout"
+    core = checkout / "mcs/core"
+    core.mkdir(parents=True)
+    (core / "synthetic_core.py").write_text("CURRENT = True")
+    (checkout / "synthetic_core.py").write_text("SHADOW = True")
+    (checkout / "adapters").mkdir()
+    (checkout / "adapters/__init__.py").write_text("raise AssertionError('must remain lazy')")
+    bootstrap = checkout / "mcs/_mcs_path.py"
+    bootstrap.write_bytes((Path(__file__).resolve().parents[2] / "mcs/_mcs_path.py").read_bytes())
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(checkout)])
+    for _ in range(2):
+        runpy.run_path(str(bootstrap))
+    assert sys.path.count(str(checkout)) == 1
+    assert sys.path.index(str(core)) < sys.path.index(str(checkout))
+    spec = importlib.machinery.PathFinder.find_spec("synthetic_core", sys.path)
+    assert Path(spec.origin) == core / "synthetic_core.py"
+    package = importlib.machinery.PathFinder.find_spec("adapters", [str(checkout)])
+    assert Path(package.origin) == checkout / "adapters/__init__.py"
+
+
 @pytest.mark.parametrize("generation", ["v2", "v3"])
 def test_retired_extraction_leftovers_are_not_import_roots(tmp_path, monkeypatch, generation):
     root = tmp_path / "mcs"
