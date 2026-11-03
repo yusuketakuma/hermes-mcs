@@ -707,6 +707,21 @@ def test_cloud_priority_walk_matches_fixed_snapshot_order(cloud_candidates, olde
     assert len(actual) == 68
 
 
+def test_cloud_priority_retains_patient_order_without_retaining_all_message_metadata(cloud_candidates):
+    led, *_ = cloud_candidates
+    for mid in range(65, 513):
+        old(led, mid)
+    with led.db:
+        led.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
+        led.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
+        cloud_policy.capture_history_tx(led.db, 'synthetic-bounded-order', time.time())
+    rows, _ = extract_llm._select_pending(led, 4, None, None, False, cloud_only=True,
+        prioritize_patients=True, deadline=time.monotonic() + 120)
+    assert len(rows) == len({r['message_id'] for r in rows}) == 4
+    retained_bytes = len(json.dumps(led._cloud_priority_progress).encode())
+    assert retained_bytes < 2048, retained_bytes
+
+
 def test_cloud_priority_walk_resumes_across_deadlines_and_unrelated_writes(cloud_candidates, monkeypatch):
     led, _, *_ = cloud_candidates
     expected = [row['message_id'] for row in _select(led, 'extract')]

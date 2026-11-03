@@ -5249,7 +5249,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         if not isinstance(state, dict) or state.get('identity') != identity:
             upper = ledger.db.execute('SELECT message_id FROM messages ORDER BY message_id DESC LIMIT 1').fetchone()
             state = {'identity': identity, 'upper': upper[0] if upper else None, 'after': None,
-                     'rows': [], 'maxima': {}, 'ordered': None, 'phase': 0, 'position': 0, 'ready': []}
+                     'maxima': {}, 'ordered': None, 'phase': 0, 'position': 0, 'message_after': None, 'ready': []}
             owner._cloud_priority_progress = state
         while state['ordered'] is None:
             if time.monotonic() >= deadline:
@@ -5273,20 +5273,13 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 state['after'] = mid
                 if pid is None:
                     continue  # history_target_ready cannot authorize NULL project IDs
-                state['rows'].append((mid, pid, posted))
-                previous = state['maxima'].get(pid)
+                previous = state['maxima'].setdefault(pid, None)
                 if posted is not None and (previous is None or posted > previous):
                     state['maxima'][pid] = posted
             if len(page) < _CLOUD_PRIORITY_PAGE:
-                def priority(item):
-                    mid, pid, posted = item
-                    latest = state['maxima'].get(pid)
-                    return (latest is None, -latest if latest is not None else 0, pid,
-                            posted is not None if oldest_first else posted is None,
-                            (-posted if not oldest_first else posted) if posted is not None else 0,
-                            -mid if not oldest_first else mid)
-                state['ordered'] = sorted(state.pop('rows'), key=priority)
-                state.pop('maxima')
+                maxima = state.pop('maxima')
+                state['ordered'] = sorted(maxima, key=lambda pid: (
+                    maxima[pid] is None, -maxima[pid] if maxima[pid] is not None else 0, pid))
                 if time.monotonic() >= deadline:
                     raise _CloudSelectionIncomplete('deadline')
 
@@ -5314,14 +5307,43 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             if state['position'] >= len(state['ordered']):
                 state['phase'] += 1
                 state['position'] = 0
+                state['message_after'] = None
                 continue
-            mid, _, _ = state['ordered'][state['position']]
+            pid = state['ordered'][state['position']]
+            scope, params = '', [pid, state['upper']]
+            if state['message_after'] is not None:
+                posted, mid = state['message_after']
+                comparison = '>' if oldest_first else '<'
+                if posted is None:
+                    scope = f' AND ((posted_at_ts IS NULL AND message_id{comparison}?)' + (
+                        ' OR posted_at_ts IS NOT NULL)' if oldest_first else ')')
+                    params.append(mid)
+                else:
+                    scope = f' AND ((posted_at_ts,message_id){comparison}(?,?)' + (
+                        ')' if oldest_first else ' OR posted_at_ts IS NULL)')
+                    params.extend((posted, mid))
+            # Rank patients once; walk each patient's existing time index in bounded pages.
+            page = ledger.db.execute('SELECT message_id,posted_at_ts FROM messages '
+                'WHERE project_id=? AND message_id<=?' + scope +
+                f' ORDER BY posted_at_ts {order},message_id {order} LIMIT ?',
+                (*params, _CLOUD_PRIORITY_PAGE)).fetchall()
             archived, rehold = phases[state['phase']]
-            found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
-            state['position'] += 1
-            if found:
-                state['ready'].append((mid, archived, rehold))
-                selected.extend(found)
+            for mid, posted in page:
+                if selected and deadline - time.monotonic() <= 1.0:
+                    break
+                if posted is not None and (type(posted) not in (int, float) or not math.isfinite(posted)):
+                    raise _CloudSelectionIncomplete('ordering_unverified')
+                found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
+                state['message_after'] = (posted, mid)
+                if found:
+                    state['ready'].append((mid, archived, rehold))
+                    selected.extend(found)
+                if len(selected) >= limit:
+                    break
+            else:
+                if len(page) < _CLOUD_PRIORITY_PAGE:
+                    state['position'] += 1
+                    state['message_after'] = None
         if time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
         return selected, None if oldest_first else 0
