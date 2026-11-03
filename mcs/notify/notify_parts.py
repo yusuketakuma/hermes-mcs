@@ -516,7 +516,8 @@ def _sealed_attachment_identity(row, card, *, manual_edit=False):
                 or manual_edit and (row["op"] != "update" or unavailable or part.get("edit_only") is not True)):
             return None
         return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
-                row["part_bytes"], row["name"], "private_stage" if not unavailable and (spec["parts"].get("slack") or {}).get("file_group") is True else
+                row["part_bytes"], row["name"], ("private_operator_edit" if manual_edit else "private_stage")
+                if not unavailable and (spec["parts"].get("slack") or {}).get("file_group") is True else
                 "operator_edit" if manual_edit else "unavailable" if unavailable else "file",
                 row["render_rev"], part.get("edit_only") is True,
                 not unavailable and part.get("prior_remote_id") is None)
@@ -745,7 +746,7 @@ def _same_thread_delivered_parts(db, card):
                             and valid_hash(row["payload_hash"])):
                         collected = (row["part_id"], row["part_attachment_id"], None, None,
                                      row["name"], "collected", row["render_rev"], False, False)
-                    private = (("private_stage", True, False),) if operator else (
+                    private = (("private_operator_edit", True, False), ("private_stage", True, False)) if operator else (
                         ("private_stage", False, True), ("private_stage", False, False),
                         ("private_stage", True, False))
                     candidates = private + ((("operator_edit", True, False),) if operator else (
@@ -756,6 +757,8 @@ def _same_thread_delivered_parts(db, card):
                             if _attachment_identity_proof(row, card, kind, edit_only, uploaded) in proofs:
                                 identity = (*collected[:5], kind, collected[6], edit_only, uploaded)
                                 break
+                if identity is not None and operator and identity[5] == "private_stage":
+                    identity = (*identity[:5], "private_operator_edit", *identity[6:])
                 if identity is None and not operator and proofs is None and not row["private_stage_render"]:
                     identity = _collected_attachment_identity(row)
                 if (identity is not None and identity[5] == "collected"
@@ -1179,7 +1182,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 sealed = [proof for proof in proofs if proof is not None
                           and proof[5] in ("file", "private_stage", "operator_verified")]
                 collected = [proof for proof in proofs if proof is not None and proof[5] == "collected"]
-                manual_edits = [proof for proof in proofs if proof is not None and proof[5] == "operator_edit"]
+                manual_edits = [proof for proof in proofs if proof is not None
+                                and proof[5] in ("operator_edit", "private_operator_edit")]
                 expected = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
                 unavailable_only = (sha is None and proofs
                     and len(proofs) == receipt_counts.get(rid)
@@ -1195,7 +1199,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                         or a["bytes"] < 0 or not (sealed or collected and manual_edits)
                         or len(proofs) != receipt_counts.get(rid)
                         or len(prior_remotes.get((entry["part_id"], sha), ())) != 1
-                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "private_stage", "collected", "operator_edit", "operator_verified")
+                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "private_stage", "collected", "operator_edit", "private_operator_edit", "operator_verified")
                                for proof in proofs)
                         or len({proof[4] for proof in proofs}) != 1 or sha != a.get("sha256")):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"

@@ -226,7 +226,8 @@ def test_settlement_storage_failure_still_propagates_and_rolls_back(led, monkeyp
     assert led.db.execute("SELECT 1 FROM command_receipts WHERE command_id=?", (req["command_id"],)).fetchone() is None
 
 
-def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", missing_spec=True, sibling=False, repeated=False, cancelled=False):
+def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", missing_spec=True, sibling=False,
+                       repeated=False, cancelled=False, legacy_original=False):
     from adapters.common import envelopes
     import notify_cards
     import notify_parts
@@ -245,7 +246,20 @@ def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", miss
     caption = {"text": "synthetic original description"}
     monkeypatch.setattr(notify_parts, "_attachment_captions",
                         lambda db, card, attachments: {a["attachment_id"]: caption["text"] for a in attachments})
-    assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    if legacy_original:
+        build = notify_parts.build_manifest
+        def legacy_manifest(*args, **kwargs):
+            parts, hold = build(*args, **kwargs)
+            parts["manifest"] = [part for part in parts["manifest"] if part["kind"] != "file_group"]
+            parts.get("slack", {}).pop("file_group", None)
+            if parts.get("slack") == {}:
+                parts.pop("slack")
+            return parts, hold
+        with monkeypatch.context() as patch:
+            patch.setattr(notify_parts, "build_manifest", legacy_manifest)
+            assert _dispatch(led, _intent(led), SLACK)["dispatched"]
+    else:
+        assert _dispatch(led, _intent(led), SLACK)["dispatched"]
 
     def settle(render, rejection=None):
         spec = json.loads(render["spec_json"])
@@ -332,7 +346,11 @@ def test_manually_confirmed_caption_edit_keeps_sealed_upload_for_next_render(led
     req["evidence"].pop("proof")
     with led.db:
         if original_collected:
-            led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?", (original["delivery_id"],))
+            import notify_parts
+            witness = notify_parts.attachment_identity_witness(led.db, original["delivery_id"])
+            assert witness is not None
+            led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                           (json.dumps({"attachment_identity": witness}), original["delivery_id"]))
         led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
                        ("synthetic changed body", "c" * 64))
     receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)
@@ -414,7 +432,7 @@ def test_prior_native_edit_alone_does_not_prove_the_original_upload(led, monkeyp
 def test_legacy_collected_update_upload_with_later_native_edit_remains_usable(led, monkeypatch):
     from slack_testkit import SLACK
 
-    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False, repeated=True)
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False, repeated=True, legacy_original=True)
     req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
     req["evidence"].pop("proof")
     with led.db:
@@ -478,7 +496,8 @@ def test_held_manual_caption_replans_only_after_proof_is_valid(led, monkeypatch,
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
-def test_manual_caption_witness_survives_gc_without_text(led, monkeypatch, corrupt):
+@pytest.mark.parametrize("legacy_private_witness", [False, True])
+def test_manual_caption_witness_survives_gc_without_text(led, monkeypatch, corrupt, legacy_private_witness):
     import notify_cards
     from slack_testkit import SLACK
 
@@ -486,7 +505,17 @@ def test_manual_caption_witness_survives_gc_without_text(led, monkeypatch, corru
     req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
     req["evidence"].pop("proof")
     assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
-    notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
+    import notify_parts
+    identity = notify_parts._sealed_attachment_identity
+    def old_identity(*args, **kwargs):
+        proof = identity(*args, **kwargs)
+        if proof is not None and proof[5] == "private_operator_edit":
+            return (*proof[:5], "private_stage", *proof[6:])
+        return proof
+    with monkeypatch.context() as patch:
+        if legacy_private_witness:
+            patch.setattr(notify_parts, "_sealed_attachment_identity", old_identity)
+        notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
     raw = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
                          (req["delivery_id"],)).fetchone()[0]
     witness = json.loads(raw)

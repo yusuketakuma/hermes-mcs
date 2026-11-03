@@ -869,7 +869,7 @@ def _manual_attachment_hold_ready(db, card, latest, content, gens, cfg, now, wai
         return False
     held_attachments = {p["part_id"] for p in parts if p["kind"] == "attachment_part"}
     _, _, identities = notify_parts._same_thread_delivered_parts(db, card)
-    if not any(proof is not None and proof[0] in held_attachments and proof[5] == "operator_edit"
+    if not any(proof is not None and proof[0] in held_attachments and proof[5] in ("operator_edit", "private_operator_edit")
                for proofs in identities.values() for proof in proofs):
         return False
     db.execute("SAVEPOINT manual_attachment_replan")
