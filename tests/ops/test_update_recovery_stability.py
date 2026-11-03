@@ -333,20 +333,20 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, *a, **k: notices.append(text) or True)
+    prior_execution = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"]
     assert updater.recover_interrupted() == 1
     assert restarts == [] and Path(updater.MARKER_PATH).exists()
     assert notices == []                 # frozen: report only, no ledger write
     report = json.loads(Path(updater.REPORT_PATH).read_text())
-    assert report["result"] == "escalate" and report.get("writers_stopped") is not True
+    assert report["result"] == "restore_consent_blocked" and report.get("writers_stopped") is not True
     assert "drainers_key" not in report
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
     assert Path(live).read_bytes() == damaged
     assert not Path(updater.DATA, "restore_pending.json").exists()
 
-    # Recovery records the unusable backup as escalated before approval.
-    # Approval of DB restoration must preserve that recorded result exactly.
-    prior_execution = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"]
-    assert prior_execution["result"] == "escalated"
+    # The shared journal hold preserves the original failed receipt exactly.
+    assert updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"] == prior_execution
+    assert prior_execution["result"] == "failed"
     # Once usable and approved, the copy succeeds but old-schema reconcile stays held.
     backup_broken.clear()
     _seed_consent(live, back)
@@ -387,11 +387,16 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         assert updater.recover_interrupted() == 1
         after = updater.journal_store.load_state(updater.STATE_PATH)
         assert after["applying"] == applying and after["stages"] == state["stages"]
-        assert after["executed"]["synthetic-held"]["result"] == "escalated"
+        assert after["executed"] == state["executed"]
+        assert "synthetic-held" not in after["executed"]
         assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
         report = json.loads(Path(updater.REPORT_PATH).read_text())
         assert report.get("writers_stopped") is not True
-        assert "restore_incomplete" in report["detail"]
+        assert report["result"] == "restore_consent_blocked"
+        if shape == "missing_backup":
+            assert "without a rollback" in report["detail"]
+        else:
+            assert "restore_incomplete" in report["detail"]
 
 
 @pytest.mark.parametrize("failure_stage", ["layout_floor", "standalone_target", "runtime"])
