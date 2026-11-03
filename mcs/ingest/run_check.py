@@ -195,14 +195,12 @@ def _report_open_transaction(ledger, result):
 
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
-    """extract_v1 (instant rules) -> extract_llm (v4) -> rollups.
+    """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
 
-    Two lanes, one lineage: the rule pass is pure-pattern and instant —
-    it keeps real-time analysis at ingest speed so notifications and
-    signals never wait on the LLM queue. The extract_llm pass
-    (mcs/extract/llm, extract_llm.EXTRACT_VERSION) then folds the same rule output
-    in as prompt hints and mints the extract_v1 artifact itself when
-    the rule pass has not."""
+    The rule pass supplies pattern-based hints before LLM extraction.
+    Each phase leaves time for downstream clinical work. Medication
+    mapping uses this tick's latest extraction before rollups and signals.
+    The LLM pass also mints extract_v1 when the rule pass has not."""
     def transaction_pending():
         _require_closed_transaction(ledger, result)
 
