@@ -125,9 +125,15 @@ def inference_requests() -> list:
 
 # LLMNotSent stages that prove nothing was dispatched — every CloudNotSent
 # subclass lands here through not_sent_reason; settled chunks keep receipts.
+# The local path only runs after every provider is proven not possibly_sent,
+# so its refusals cannot taint cloud receipts either.  Admission verdicts are
+# dynamic (llm_admission:<state>) and checked by prefix at the discard site.
 _PRESEND_REFUSAL_STAGES = frozenset({
     "cloud_not_sent", "cloud_unit_unresolved", "cloud_owner_transaction",
-    "cloud_deadline", "cloud_budget_blocked", "cloud_pricing_unverified"})
+    "cloud_deadline", "cloud_budget_blocked", "cloud_pricing_unverified",
+    "cloud_capacity", "cloud_profile_unavailable", "realtime_target",
+    "probe_unsent", "long_output_needs_budget", "llm_turn_busy",
+    "llm_unreachable", "llm_unavailable"})
 
 
 @contextmanager
@@ -263,7 +269,9 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         # A definite pre-send refusal is a harmless budget wait: already
         # settled chunks/receipts stay. Scope or lease loss and every other
         # guard failure still discards the unit's dispositions.
-        if lock_lost is None and getattr(error, "stage", None) not in _PRESEND_REFUSAL_STAGES:
+        stage = getattr(error, "stage", None)
+        if (lock_lost is None and stage not in _PRESEND_REFUSAL_STAGES
+                and not (isinstance(stage, str) and stage.startswith("llm_admission:"))):
             for selected in providers.values():
                 selected.discard()
         raise
