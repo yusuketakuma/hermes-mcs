@@ -639,3 +639,38 @@ def test_confirmed_then_second_rename_recovers_without_new_upload(led, uploaded)
                          (spec["delivery_id"], held["part_id"])).fetchone()
     assert row["state"] == "delivered" and row["remote_id"] == remote
     assert len(world.client.upload_calls) == uploads
+
+
+def test_approval_never_promotes_later_unapproved_collected_row(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    did, pid = prior["delivery_id"], part["part_id"]
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    assert apply_attachment_identity_confirm(led, _confirm_req(plan, 0xF5))["outcome"] == "applied"
+    # A later unapproved collected row carrying the same identity tuple must not
+    # be promoted by the earlier approval.
+    new_did = "d0ffee00-0000-4000-8000-0000000000f6"
+    old_part = led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (did, pid)).fetchone()
+    old_render = dict(led.db.execute(
+        "SELECT * FROM notification_renders WHERE delivery_id=?", (did,)).fetchone())
+    with led.db:
+        render = {**old_render, "delivery_id": new_did, "render_rev": prior["render_rev"] + 50,
+                  "spec_json": None, "correlation": "ffffffff-0000-4000-8000-0000000000f6"}
+        cols = ",".join(render)
+        led.db.execute(f"INSERT INTO notification_renders({cols}) "
+                       f"VALUES({','.join('?' * len(render))})", tuple(render.values()))
+        for src in (old_part, dict(led.db.execute(
+                "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='thread'",
+                (did,)).fetchone())):
+            row = {**src, "delivery_id": new_did}
+            cols = ",".join(row)
+            led.db.execute(f"INSERT INTO notification_render_parts({cols}) "
+                           f"VALUES({','.join('?' * len(row))})", tuple(row.values()))
+    import notify_parts
+    card = led.db.execute("SELECT * FROM notification_cards WHERE card_id=?", (latest["card_id"],)).fetchone()
+    _body, _att, identities = notify_parts._same_thread_delivered_parts(led.db, card)
+    later = next(proof for proof in next(iter(identities.values()))
+                 if proof[0] == pid and proof[6] == prior["render_rev"] + 50)
+    assert later[5] == "collected"

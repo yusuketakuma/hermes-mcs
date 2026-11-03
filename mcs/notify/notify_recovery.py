@@ -1137,9 +1137,9 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
             or spec.get("delivery_id") != delivery_id or spec.get("render_rev") != current["render_rev"]):
         return None
     confirmed = {(att_id, sha, size): (remote, name)
-                 for att_id, sha, size, name, remote in
+                 for _did, _pid, _rev, att_id, sha, size, name, remote in
                  notify_parts._confirmed_upload_identities(db, card)}
-    used = set()
+    used, renamed = set(), []
     for part in manifest:
         row = saved.get(part.get("part_id"))
         if (row is None or any(row[key] != part.get(field) for key, field in (
@@ -1155,8 +1155,10 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
             return None
         part["prior_remote_id"], part["edit_only"], part["name"] = remote, True, name
         used.add(remote)
+        renamed.append((name, row["part_id"]))
+    for name, part_id in renamed:
         db.execute("UPDATE notification_render_parts SET name=? WHERE delivery_id=? AND part_id=?",
-                   (name, delivery_id, row["part_id"]))
+                   (name, delivery_id, part_id))
     db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
                (canonical(spec).decode(), payload_hash(spec), delivery_id))
     db.execute("UPDATE notification_renders SET state='queued',parts_state='pending' WHERE delivery_id=?",

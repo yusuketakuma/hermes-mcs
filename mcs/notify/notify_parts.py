@@ -654,8 +654,12 @@ def _confirmed_upload_identities(db, card):
         if (not history or notify_recovery._confirmed_history_digest(history)
                 != receipt["history_sha256"]):
             continue
-        confirmed.add((receipt["attachment_id"], receipt["sha256"], receipt["bytes"],
-                       receipt["name"], receipt["remote_id"]))
+        # Promotion is bound to the exact rows the approval attested — a later
+        # delivered row carrying the same tuple is never promoted by it.
+        confirmed.update(
+            (row["delivery_id"], row["part_id"], row["render_rev"],
+             row["attachment_id"], row["payload_sha256"], row["bytes"],
+             row["name"], row["remote_id"]) for row in history)
     return confirmed
 
 
@@ -747,7 +751,8 @@ def _same_thread_delivered_parts(db, card):
                 if identity is None and not operator and proofs is None:
                     identity = _collected_attachment_identity(row)
                 if (identity is not None and identity[5] == "collected"
-                        and (row["part_attachment_id"], row["payload_sha256"],
+                        and (row["delivery_id"], row["part_id"], row["render_rev"],
+                             row["part_attachment_id"], row["payload_sha256"],
                              row["part_bytes"], row["name"],
                              str(row["remote_id"])) in confirmed):
                     # An applied ops.attachment_identity_confirm receipt attests
