@@ -40,7 +40,7 @@ MAX_PART_ID = 64
 MAX_PART_NAME = 200
 MAX_ATTACH_PATH = 512
 MAX_BODY_PART_CHARS = 2000
-PART_KINDS = ("card", "thread", "body_part", "attachment_part")
+PART_KINDS = ("card", "thread", "body_part", "attachment_part", "file_group")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _UUID = re.compile(
@@ -88,7 +88,7 @@ PARTS_KEYS = frozenset({
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
 # what each transport namespace may hold
-TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_ids"}),
+TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
                        "lineworks": frozenset()}
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
@@ -319,21 +319,19 @@ def _transport_parts_cost(spec, parts) -> int:
             _err("bad_accent")
         if "face_posts" in own:
             _validate_face_posts(spec, parts, own["face_posts"], name)
-        if 'file_ids' in own:
-            files = own['file_ids']
-            if (name != 'slack' or spec.get('op') != 'update' or spec.get('kind') != 'thread'
-                    or not post_scoped(spec) or not isinstance(files, list) or not 0 < len(files) <= MAX_PARTS - 2
-                    or any(not isinstance(fid, str) or re.fullmatch(r'F[A-Z0-9]{1,63}', fid) is None for fid in files)
-                    or len(set(files)) != len(files)):
-                _err('bad_slack_file_ids')
+        if 'file_group' in own:
+            if (name != 'slack' or spec.get('kind') != 'thread'
+                    or not post_scoped(spec) or own['file_group'] is not True):
+                _err('bad_slack_file_group')
             manifest = parts.get('manifest')
             if not isinstance(manifest, list):
-                _err('bad_slack_file_ids')
-            for fid in files:
-                matches = [p for p in manifest if isinstance(p, dict) and p.get('kind') == 'attachment_part'
-                           and p.get('prior_remote_id') == fid and p.get('unavailable') is not True]
-                if len(matches) != 1:
-                    _err('unbound_slack_file_id')
+                _err('bad_slack_file_group')
+            groups = [p for p in manifest if isinstance(p, dict) and p.get('kind') == 'file_group']
+            attach = [p for p in manifest if isinstance(p, dict) and p.get('kind') == 'attachment_part'
+                      and p.get('unavailable') is not True]
+            if (len(groups) != 1 or groups[0].get('part_id') != 'file_group'
+                    or manifest.index(groups[0]) != len(manifest) - 1 or not attach):
+                _err('bad_slack_file_group')
         actions = own.get("post_actions")
         if actions is None:
             continue
@@ -691,8 +689,8 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
         card_payload["section_divider_version"] = parts["section_divider_version"]
     if "slack_thread_policy" in parts:
         card_payload["slack_thread_policy"] = parts["slack_thread_policy"]
-    if (parts.get('slack') or {}).get('file_ids'):
-        card_payload['slack_file_ids'] = parts['slack']['file_ids']
+    if (parts.get('slack') or {}).get('file_group'):
+        card_payload['slack_file_group'] = True
     card_sha = hashlib.sha256(canonical(card_payload)).hexdigest()
     if card.get("sha256") != card_sha:
         _err("card_part_sha256")
