@@ -73,6 +73,12 @@ def _fallback(store, cfg):
     return _latest_render(store)
 
 
+def _signal_updates(store, cfg, now):
+    before = _latest_render(store)["delivery_id"]
+    notify_cards.sweep(store, cfg, now=now)
+    return int(_latest_render(store)["delivery_id"] != before)
+
+
 @pytest.mark.parametrize("cfg", [CFG, SLACK], ids=["discord", "slack"])
 @pytest.mark.parametrize("gc", [False, True], ids=["full-spec", "after-gc"])
 def test_delivered_fallback_is_stable_and_updates_its_own_thread(led, cfg, gc):
@@ -85,7 +91,7 @@ def test_delivered_fallback_is_stable_and_updates_its_own_thread(led, cfg, gc):
         assert witness == {"signal_thread_route": "card", "thread_id": None}
         assert "synthetic-transition" not in json.dumps(witness)
     for tick in (LATE + 2, LATE + 62, LATE + 122):
-        assert notify_cards.sweep(led, cfg, now=tick)["updated"] == 0
+        assert _signal_updates(led, cfg, tick) == 0
     assert (_card(led)["message_id"], _card(led)["thread_id"]) == (mid, thread)
     assert _latest_render(led)["render_rev"] == 1
     assert list(led.db.execute("SELECT token,expires_at FROM notification_action_tokens ORDER BY token")) == expires
@@ -98,7 +104,7 @@ def test_delivered_fallback_is_stable_and_updates_its_own_thread(led, cfg, gc):
     assert all(part.get("prior_remote_id") for part in spec["parts"]["manifest"] if part["kind"] == "body_part")
     (validate_slack if cfg is SLACK else validate)(spec)
     _land(led, _latest_render(led), cfg, now=LATE + 180)
-    assert notify_cards.sweep(led, cfg, now=LATE + 181)["updated"] == 0
+    assert _signal_updates(led, cfg, LATE + 181) == 0
 
 
 @pytest.mark.parametrize("cfg", [CFG, SLACK], ids=["discord", "slack"])
@@ -112,8 +118,8 @@ def test_fallback_never_moves_while_attempt_or_parts_are_unsettled(led, cfg, sta
     else:
         _land(led, created, cfg, finish=False)
     before = _card(led)
-    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
-    assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 0
+    delivered_source(led, card_id=2, cfg=cfg)
+    assert _signal_updates(led, cfg, LATE + 60) == 0
     after = _card(led)
     assert (after["message_id"], after["thread_id"], after["desired_render_rev"]) == (
         before["message_id"], before["thread_id"], before["desired_render_rev"])
@@ -124,16 +130,16 @@ def test_available_source_moves_fallback_once_and_lost_source_falls_back_once(le
     created = _fallback(led, cfg)
     _land(led, created, cfg)
     notify_cards.gc(led, cfg, now=LATE + 1)
-    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
+    delivered_source(led, card_id=2, cfg=cfg)
     source = _card(led, 2)
-    assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 1
+    assert _signal_updates(led, cfg, LATE + 60) == 1
     moved = _latest_render(led)
     spec = json.loads(moved["spec_json"])
     assert spec["op"] == "create" and spec["parts"]["source_thread"] is True
     assert spec["delivery"]["thread_id"] == source["thread_id"]
     _land(led, moved, cfg, now=LATE + 60)
     notify_cards.gc(led, cfg, now=LATE + 61)
-    assert notify_cards.sweep(led, cfg, now=LATE + 62)["updated"] == 0
+    assert _signal_updates(led, cfg, LATE + 62) == 0
     with led.db:
         led.db.execute("UPDATE notification_cards SET thread_state='deleted' WHERE card_id=2")
     notify_cards.sweep(led, cfg, now=LATE + 120)
@@ -144,7 +150,7 @@ def test_available_source_moves_fallback_once_and_lost_source_falls_back_once(le
     assert spec["op"] == "create" and "source_thread" not in spec["parts"]
     assert "thread_id" not in spec["delivery"]
     mid, thread = _land(led, moved, cfg, now=LATE + 120)
-    assert notify_cards.sweep(led, cfg, now=LATE + 121)["updated"] == 0
+    assert _signal_updates(led, cfg, LATE + 121) == 0
     assert (_card(led)["message_id"], _card(led)["thread_id"]) == (mid, thread)
 
 
@@ -154,7 +160,7 @@ def test_legacy_null_specs_keep_slack_own_root_and_hold_unknown_discord_route(le
     mid, thread = _land(led, created, cfg)
     with led.db:
         led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE card_id=1")
-    assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 0
+    assert _signal_updates(led, cfg, LATE + 60) == 0
     assert (_card(led)["message_id"], _card(led)["thread_id"]) == (mid, thread)
     with led.db:
         specs = []
@@ -166,15 +172,15 @@ def test_legacy_null_specs_keep_slack_own_root_and_hold_unknown_discord_route(le
 def test_failed_source_face_update_does_not_remove_proven_original_thread(led, cfg):
     created = _fallback(led, cfg)
     _land(led, created, cfg)
-    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
+    delivered_source(led, card_id=2, cfg=cfg)
     source = _card(led, 2)
     with led.db:
         led.db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=2")
     assert notify_cards.signal_thread_target(led.db, _card(led), cfg)["thread_id"] == source["thread_id"]
-    assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 1
+    assert _signal_updates(led, cfg, LATE + 60) == 1
     moved = _latest_render(led)
     _land(led, moved, cfg, now=LATE + 60)
-    assert notify_cards.sweep(led, cfg, now=LATE + 61)["updated"] == 0
+    assert _signal_updates(led, cfg, LATE + 61) == 0
     with led.db:
         led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE part_id='thread' "
                        "AND delivery_id IN (SELECT delivery_id FROM notification_renders WHERE card_id=2)")

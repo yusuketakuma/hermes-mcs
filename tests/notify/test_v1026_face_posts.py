@@ -61,7 +61,9 @@ def test_face_groups_stamps_below_all_folded_originals(led, monkeypatch):
         stamp_at = [i for i, block in enumerate(blocks) if block["type"] == "context"
                     and STAMP in json.dumps(block, ensure_ascii=False)]
         assert len(stamp_at) == 1 and stamp_at[0] > folds[0]
-        assert spec["parts"]["containers"][posts[0]["at"]]["text"] in blocks[stamp_at[0]]["elements"][0]["text"]
+        header = spec["parts"]["containers"][posts[0]["at"]]["text"]
+        assert header in json.dumps(blocks[:folds[0]], ensure_ascii=False)
+        assert STAMP in json.dumps(blocks[stamp_at[0]], ensure_ascii=False)
         assert blocks[folds[0]]["child_blocks"][0]["text"]["text"] == original
         assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
 

@@ -197,7 +197,7 @@ def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
     # single-post writer would only emit the five direct choices.
     if "stamp" not in _ids(spec):
         spec["parts"]["action_rows"].append([{
-            "id": "stamp", "label": "別の投稿", "token": "f" * 32}])
+            "id": "stamp", "ui": "button", "label": "別の投稿", "token": "f" * 32}])
     for i, row in enumerate(spec["parts"]["action_rows"]):
         if row and row[0]["id"] == "stamp_press":
             spec["parts"]["action_rows"][i] = row[:stamp_count]
