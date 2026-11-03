@@ -598,6 +598,31 @@ def _manual_edit_receipts(db, rows):
     return verified
 
 
+def _confirmed_upload_identities(db, card):
+    """Human-attested collected upload identities for this card, from applied receipts only."""
+    confirmed = set()
+    for (raw,) in db.execute(
+            "SELECT receipt_json FROM command_receipts WHERE outcome='applied' "
+            "AND CASE WHEN json_valid(receipt_json) THEN "
+            "json_extract(receipt_json,'$.kind')='ops.attachment_identity_confirm' AND "
+            "json_extract(receipt_json,'$.card_id')=? ELSE 0 END", (card["card_id"],)):
+        try:
+            receipt = strict_json(raw)
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if (not isinstance(receipt, dict) or receipt.get("card_id") != card["card_id"]
+                or type(receipt.get("attachment_id")) is not int
+                or not valid_hash(receipt.get("sha256"))
+                or type(receipt.get("bytes")) is not int or receipt["bytes"] < 0
+                or not isinstance(receipt.get("name"), str) or not 0 < len(receipt["name"]) <= 200
+                or not isinstance(receipt.get("remote_id"), str) or not receipt["remote_id"]
+                or not scope_matches(card, receipt.get("scope"))):
+            continue
+        confirmed.add((receipt["attachment_id"], receipt["sha256"], receipt["bytes"],
+                       receipt["name"], receipt["remote_id"]))
+    return confirmed
+
+
 def _attachment_identity_proof(row, card, kind, edit_only, uploaded):
     return payload_hash({"delivery_id": row["delivery_id"], "render_rev": row["render_rev"],
                          "payload_hash": row["payload_hash"], "scope": stored_scope(row),
@@ -653,6 +678,7 @@ def _same_thread_delivered_parts(db, card):
                      AND t.kind='thread' AND t.state='delivered' AND t.remote_id=?)
         ORDER BY r.render_rev,p.idx""", (card["card_id"], card["thread_id"])).fetchall()
     manual = _manual_edit_receipts(db, rows) if card["transport"] == "slack" else {}
+    confirmed = _confirmed_upload_identities(db, card) if card["transport"] == "slack" else ()
     for row in rows:
         if not scope_matches(row, stored_scope(card)):
             continue
@@ -684,6 +710,13 @@ def _same_thread_delivered_parts(db, card):
                                 break
                 if identity is None and not operator and proofs is None:
                     identity = _collected_attachment_identity(row)
+                if (identity is not None and identity[5] == "collected"
+                        and (row["part_attachment_id"], row["payload_sha256"],
+                             row["part_bytes"], row["name"],
+                             str(row["remote_id"])) in confirmed):
+                    # An applied ops.attachment_identity_confirm receipt attests
+                    # this collected upload as our own — never auto-promoted.
+                    identity = (*identity[:5], "file", *identity[6:])
                 identities.setdefault(str(row["remote_id"]), []).append(
                     identity)
             try:
