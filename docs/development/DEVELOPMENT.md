@@ -451,11 +451,12 @@ $PY mcs/views/mcs_view.py requests show --project 123 --request-id 1
 
 <!-- BEGIN GENERATED:cli -->
 
-26 subcommands — auto-generated from `mcs_view` argparse.
+27 subcommands — auto-generated from `mcs_view` argparse.
 
 | コマンド | アクション |
 |---|---|
 | `card_part_plan` | — |
+| `attachment_identity_plan` | — |
 | `status` | — |
 | `search` | — |
 | `timeline` | — |
@@ -472,7 +473,7 @@ $PY mcs/views/mcs_view.py requests show --project 123 --request-id 1
 | `comparison` | — |
 | `loops` | — |
 | `operations` | — |
-| `control` | `scan` `retry` `pause` `resume` `adopt_summary` `signal_dismiss` `signal_policy` `refstat_approve` `card_resolve` `card_part_resolve` |
+| `control` | `scan` `retry` `pause` `resume` `adopt_summary` `signal_dismiss` `signal_policy` `refstat_approve` `card_resolve` `card_part_resolve` `attachment_identity_confirm` |
 | `stats` | — |
 | `signals` | — |
 | `read_model` | — |
