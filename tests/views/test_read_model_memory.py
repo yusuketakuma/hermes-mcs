@@ -22,9 +22,9 @@ def _page_peak(messages):
     content = json.dumps({'summary': 'SYNTHETIC ' * 450})
     meta = json.dumps({'hash': 'h', VERSION_KEY: CURRENT_VERSION})
     db.executemany("INSERT INTO messages VALUES(?,1,NULL,1,'full','h','synthetic')",
-                   ((mid,) for mid in range(messages)))
+                   ((mid,) for mid in range(1, messages + 1)))
     db.executemany("INSERT INTO artifacts VALUES(?,?,1,'extract_llm',?,?)",
-                   ((mid, mid, content, meta) for mid in range(messages)))
+                   ((mid, mid, content, meta) for mid in range(1, messages + 1)))
     gc.collect()
     tracemalloc.start()
     try:
@@ -33,7 +33,7 @@ def _page_peak(messages):
         assert page['total'] == messages
         assert page['truncated'] is True
         assert len(page['records']) == 1
-        assert page['records'][0]['message_id'] == 0
+        assert page['records'][0]['message_id'] == 1
         assert page['coverage']['collection']['messages'] == messages
         assert page['coverage']['extraction']['extract_llm']['current'] == messages
         assert 'SYNTHETIC' not in json.dumps(page)

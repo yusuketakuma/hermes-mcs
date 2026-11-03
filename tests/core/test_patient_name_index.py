@@ -43,9 +43,9 @@ def test_patient_headings_preserve_rows_and_bounded_lookup_work(tmp_path, monkey
             # Emulate an existing compatible DB predating this optional index.
             with closing(sqlite3.connect(tmp_path / "ledger.db")) as db, db:
                 db.execute("DROP INDEX IF EXISTS idx_patients_name")
-                assert db.execute("PRAGMA user_version").fetchone()[0] == 10
+                assert db.execute("PRAGMA user_version").fetchone()[0] == 11
             store = make_ledger(tmp_path)
-        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert store.db.execute("PRAGMA user_version").fetchone()[0] == 11
         assert _rows(store.db) == saved
         expected = {pid: f"合成患者{pid}（合成施設）" for pid in range(1, 1001)}
         expected.update({2001: "合成同名（施設甲） #2001", 2002: "合成同名（施設乙） #2002",

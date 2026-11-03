@@ -233,7 +233,7 @@ def test_recorded_identity_survives_a_volume_remount(data):
     assert run_log.migrate(data, ["run.log"])["imported"] == ["run.log"]
     assert (data / run_log.LOG).read_bytes() == b"synthetic old\ntail after reboot\n"
     # a replaced file (new inode, same bytes) still fails closed
-    source.unlink()
+    source.rename(data / "replaced-run.log")
     legacy(data, raw=b"synthetic old\ntail after reboot\n")
     with pytest.raises(run_log.RunLogError, match="legacy_changed"):
         run_log.migrate(data, ["run.log"])

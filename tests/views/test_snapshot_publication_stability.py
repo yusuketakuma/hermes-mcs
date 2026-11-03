@@ -7,7 +7,7 @@ import pytest
 import mcs_view
 
 
-@pytest.mark.parametrize("version,accepted", [(9, True), (10, True), (11, False)])
+@pytest.mark.parametrize("version,accepted", [(9, True), (10, True), (11, True), (12, False)])
 def test_snapshot_schema_generation_is_explicit_and_readonly(tmp_path, version, accepted):
     path = tmp_path / "synthetic-snapshot.db"
     db = sqlite3.connect(path)

@@ -1286,8 +1286,8 @@ def test_runtime_config_retries_after_unrelated_atomic_data_update(tmp_path, mon
 
 
 @pytest.mark.parametrize(('failure', 'expected_calls'), [
-    ('provider_settings_changed', 2),
-    ('provider_settings_pending', 1),
+    ('provider_settings_changed', 3),
+    ('provider_settings_pending', 3),
     ('provider_authority_invalid', 1),
 ])
 @pytest.mark.parametrize('allow_unavailable', [False, True])

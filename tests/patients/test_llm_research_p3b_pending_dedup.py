@@ -46,7 +46,9 @@ def test_lane_a_reads_selection_snapshot_once(runtime, monkeypatch):
 def test_lane_b_reuses_selection_snapshot(runtime, monkeypatch):
     led, _, _ = runtime
     seed_three(led)
-    assert step(runtime)['lane'] == 'A'
+    # Every patient receives one fair unit before the first patient resumes.
+    for _ in range(3):
+        assert step(runtime)['lane'] == 'A'
     counts = counted(monkeypatch, led)
     result = step(runtime)
     led.db.set_trace_callback(None)
@@ -60,7 +62,8 @@ def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
     led, _, calls = runtime
     seed_three(led)
     if lane == 'B':
-        assert step(runtime)['lane'] == 'A'
+        for _ in range(3):
+            assert step(runtime)['lane'] == 'A'
         del calls[:]
     original = context_refresh._latest
     edited = []
@@ -89,7 +92,8 @@ def test_result_reports_scan_size(runtime):
     seed_three(led)
     result = step(runtime)
     assert result['scanned'] == 1 and type(result['scan_ms']) is int and result['scan_ms'] >= 0
-    assert step(runtime, complete=lambda pid: pid == 3)['scanned'] == 3
+    # Patient 1 has just run; the next walk starts with patients 2, then 3.
+    assert step(runtime, complete=lambda pid: pid == 3)['scanned'] == 2
     finish(runtime)
     result = step(runtime)
     assert result['status'] == 'complete' and result['scanned'] == 3

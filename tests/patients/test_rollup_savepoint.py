@@ -82,6 +82,7 @@ def test_auto_rollback_preserves_original_error(db, monkeypatch, reader, inner, 
     (lambda db: rollup.current_cached_refs(db, 1, {}, None), "_current_cached_refs"),
 ])
 def test_nested_source_binding_auto_rollback_propagates_to_caller(db, monkeypatch, reader, inner):
+    db.execute("CREATE TABLE messages(message_id INTEGER)")
     db.execute("INSERT INTO marker VALUES (7)")
     error = sqlite3.DatabaseError("synthetic disk failure")
     error.sqlite_errorcode = sqlite3.SQLITE_IOERR | (3 << 8)

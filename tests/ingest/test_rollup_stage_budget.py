@@ -49,8 +49,8 @@ def test_derive_reserves_verification_and_existing_tail_for_every_stage(tmp_path
         monkeypatch.setattr(mcs_signals, "evaluate", signals)
         result = {"errors": []}
         run_check.stage_derive(ledger, result, 480, {}, llm_budget_cap=0)
-        assert seen == {"rules": 296, "drugs": 296, "scan": 148,
-                        "scan_commit": 296, "rebuild": 296, "signals": 296}
+        assert seen == pytest.approx({"rules": 148, "drugs": 296 / 3, "scan": 296 / 3,
+                                     "scan_commit": 592 / 3, "rebuild": 592 / 3, "signals": 296})
         assert result["rollup_scan"]["state"] == "unknown"
         assert result["rollup_scan"]["unknown_reasons"] == {"deadline": 1}
         assert result["errors"] == ["deadline_deferred:rollup_scan"]
@@ -90,8 +90,8 @@ def test_derive_reserves_rebuild_time_and_excludes_unknown_touched(tmp_path, mon
         run_check.stage_derive(ledger, result, 200, {}, llm_budget_cap=0)
 
         # 20 seconds for snapshot verification and 30 for the existing tail.
-        assert seen["commit_deadline"] == seen["rebuild_deadline"] == 150
-        assert seen["scan_deadline"] == seen["rebuild_start"] == 85
+        assert seen["commit_deadline"] == seen["rebuild_deadline"] == pytest.approx(320 / 3)
+        assert seen["scan_deadline"] == seen["rebuild_start"] == pytest.approx(190 / 3)
         assert seen["rebuild_start"] < seen["rebuild_deadline"]
         assert seen["rebuilt"] == {1, 3}
         assert result["rollups"] == 2
@@ -133,7 +133,7 @@ def test_real_scan_timeout_preserves_time_to_rebuild_confirmed_dirty(tmp_path, m
         run_check.stage_derive(ledger, result, 200, {}, llm_budget_cap=0)
 
         assert scans == [1, 2]
-        assert rebuilt == [(1, 85, 150)]
+        assert len(rebuilt) == 1 and rebuilt[0] == pytest.approx((1, 190 / 3, 320 / 3))
         assert [row["project_id"] for row in ledger.artifacts(rollup.KIND)] == [1]
         assert result["rollups"] == 1
         assert result["rollup_scan"]["state"] == "unknown"
