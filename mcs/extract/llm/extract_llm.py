@@ -5363,24 +5363,32 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False, cloud_only=False, load_checkpoints=True, deadline=None) -> tuple[list, int, int]:
+                  background=False, cloud_only=False, load_checkpoints=True, deadline=None,
+                  blocked_reasons=None) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
     blocked = 0
+
+    def block(reason):
+        nonlocal blocked
+        blocked += 1
+        if blocked_reasons is not None:
+            blocked_reasons[reason] = blocked_reasons.get(reason, 0) + 1
+
     cfg = load_config()
     extract_cfg = cfg.get("extract") if isinstance(cfg, dict) else None
     enabled = isinstance(extract_cfg, dict) and extract_cfg.get("patient_state_context") is True
     for r in rows:
         if deadline is not None and time.monotonic() >= deadline:
-            blocked += 1
+            block("prepare_deadline")
             continue
         r = dict(r)
         binding = inference_dependency_loss.source_binding_from_row(r)
         if (not isinstance(binding, str) or not binding
                 or r.get('_source_binding', binding) != binding
                 or inference_dependency_loss.source_binding(ledger.db, r['project_id'], r['message_id']) != binding):
-            blocked += 1
+            block("prepare_source_changed")
             continue
         r['_source_binding'] = binding
         r["_target"] = target
@@ -5393,7 +5401,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                 mode = 'off'
         r["_cloud_background"] = background and mode in ("on", "shadow")
         if cloud_only and mode != "on":
-            blocked += 1
+            block("prepare_cloud_disabled")
             continue
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow", "dry_run"):
@@ -5401,7 +5409,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             r["_cloud_settings"] = cloud_inference.resolve_cloud_settings(cfg)
             selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=HOME)
             if errors or selection is None:
-                blocked += 1
+                block("prepare_profile_unavailable")
                 continue
             r["_cloud_selection"] = selection
         if mode == "on":
@@ -5445,9 +5453,13 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                     version=EXTRACT_VERSION, medication_hints=medication_hints)
             r["_frame"] = frame
             if not _medication_reference_current(ledger.db, r, cfg=cfg, deadline=deadline):
-                raise ValueError("medication_reference_generation_changed")
-        except (ValueError, sqlite3.Error):
-            blocked += 1
+                block("prepare_medication_changed")
+                continue
+        except sqlite3.Error:
+            block("prepare_database_unavailable")
+            continue
+        except ValueError:
+            block("prepare_context_invalid")
             continue
         context = r["_context"] = r["_frame"]["text"]
         saved = {}
@@ -5738,11 +5750,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # Manifest-declared conversions (admitted_ids) were explicitly
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
+    prepare_reasons = {}
     jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
-        cloud_only=cloud_only, load_checkpoints=False, deadline=deadline)
+        cloud_only=cloud_only, load_checkpoints=False, deadline=deadline,
+        blocked_reasons=prepare_reasons)
     deferred += context_blocked
-    _defer_note("prepare_blocked", count=context_blocked)
+    for reason, count in prepare_reasons.items():
+        _defer_note(reason, count=count)
+    _defer_note("prepare_blocked", count=context_blocked - sum(prepare_reasons.values()))
     metas = [None] * len(jobs)
     batch_metas = []
     checkpoints = queue.SimpleQueue()
@@ -6202,13 +6218,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if time.monotonic() >= deadline:
                     break
                 # Lookahead replenishes lost claims without freezing unused attempt frames.
+                row_reasons = {}
                 prepared, row_skipped, row_blocked = _prepare_jobs(
                     ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline)
+                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
+                    blocked_reasons=row_reasons)
                 skipped += row_skipped
                 context_blocked += row_blocked
                 deferred += row_blocked
-                _defer_note("prepare_blocked", count=row_blocked)
+                for reason, count in row_reasons.items():
+                    _defer_note(reason, count=count)
+                _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
                 if not prepared:
                     if prioritize_patients and time.monotonic() < deadline:
                         _cloud_priority_discard(ledger, candidate['message_id'])

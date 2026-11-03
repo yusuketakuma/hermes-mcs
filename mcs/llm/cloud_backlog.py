@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 if __name__ == "__main__":
@@ -18,6 +19,33 @@ if __name__ == "__main__":
 from run_log_install import helper_path, LogInstallError
 
 _parent = None
+
+
+def _event(event, **values):
+    print(json.dumps({"event": event, "pid": os.getpid(), "ts": time.time(), **values}), flush=True)
+
+
+@contextmanager
+def _phase_progress(phase):
+    started = time.monotonic()
+    stopped = threading.Event()
+
+    def report():
+        while not stopped.wait(60):
+            try:
+                _event("cloud_backlog_progress", phase=phase,
+                       elapsed_s=round(time.monotonic() - started, 3))
+            except OSError:
+                return
+
+    _event("cloud_backlog_phase", phase=phase)
+    reporter = threading.Thread(target=report, daemon=True)
+    reporter.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        reporter.join(timeout=0.1)
 
 
 def owner_alive():
@@ -76,7 +104,7 @@ def request_slot(root, capacity):
 
 
 def memory_workers(limit):
-    """Keep ten percent of physical memory plus 256 MiB per additional worker."""
+    """Bound the pool by free memory after a ten-percent reserve and 256 MiB per worker."""
     if sys.platform != "darwin":
         try:
             values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
@@ -105,6 +133,7 @@ class CloudBacklogPool:
     def __init__(self, root):
         self.root = Path(root)
         self.children = []
+        self.indices = {}
         self.lock = None
         self.last_sync = 0.0
 
@@ -117,12 +146,13 @@ class CloudBacklogPool:
             return
         self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
+        self.children = [p for p in self.children if p.poll() is None]
+        self.indices = {p: index for p, index in self.indices.items() if p in self.children}
         if settings["mode"] != "on":
-            self.close()
+            # Workers retire at the idle boundary after paid carry is settled.
             return
         if not cloud_policy.selected_key(self.root):
             return
-        self.children = [p for p in self.children if p.poll() is None]
         selection, errors = cloud_policy.resolve_profile(
             cfg, route="reextract", purpose="backlog", root=self.root)
         if errors or selection is None:
@@ -137,19 +167,26 @@ class CloudBacklogPool:
             if self.lock is None:
                 return
         self.children = [p for p in self.children if p.poll() is None]
-        target = min(settings["max_concurrency"], len(self.children) + memory_workers(settings["max_concurrency"]))
+        target = memory_workers(settings["max_concurrency"])
+        self.indices = {p: index for p, index in self.indices.items() if p in self.children}
+        # Keep one worker of hysteresis: its resident memory changes the sample.
+        if self.children and target > 0 and abs(target - len(self.children)) <= 1:
+            target = min(settings["max_concurrency"], len(self.children))
         inherited = os.environ.get("MCS_RUN_LOG_HELPER")
         recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
         helper = helper_path(self.root, recovery, require_installed=True)
         if inherited and inherited != helper:
             raise LogInstallError("run_log_helper_unverified")
         for _ in range(max(0, target - len(self.children))):
+            index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(
                 [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
-                 sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid())],
+                 sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid()),
+                 "--index", str(index)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 close_fds=True)
             self.children.append(child)
+            self.indices[child] = index
 
     def close(self):
         for child in self.children:
@@ -163,6 +200,7 @@ class CloudBacklogPool:
                 child.kill()
                 child.wait(timeout=1)
         self.children = []
+        self.indices = {}
         if self.lock is not None:
             os.close(self.lock)
             self.lock = None
@@ -187,10 +225,12 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "cloud_budget_blocked", "cloud_pricing_unverified",
                   "cloud_not_sent", "cloud_scope_or_budget", "llm_turn_busy", "budget_short",
                   "paused", "mode_off", "out_of_scope", "jev_skip_unverified",
-                  "other"}
+                  "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
+                  "prepare_profile_unavailable", "prepare_medication_changed",
+                  "prepare_context_invalid", "prepare_database_unavailable", "other"}
 
 
-def worker(parent):
+def worker(parent, *, index=None):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
     _parent = parent
@@ -205,8 +245,7 @@ def worker(parent):
     from mcs_util import DB, CONF_PATH, ProviderSettingsUnreadable, load_config
     initial = writer_lock.updater_state()
     phase = 0
-    print(json.dumps({"event": "cloud_worker_started", "pid": os.getpid(), "parent": parent,
-                      "source_digests": extract_llm._LOADED_SOURCE_DIGESTS}), flush=True)
+    _event("cloud_worker_started", parent=parent, source_digests=extract_llm._LOADED_SOURCE_DIGESTS)
     while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
         if not extract_llm._context_memory_available():
             return
@@ -225,14 +264,15 @@ def worker(parent):
     with closing(ledger):
         carry = []
         allow_exit_settle = True
-        waiting = {"code": None}
+        waiting = {"code": None, "at": 0.0}
+        carry_failures = 0
+        capacity_checked = float("-inf")
 
         def wait(code):
-            # a persistent wait logs once on entry and again only when the
-            # reason changes — not on every loop
-            if code != waiting["code"]:
-                waiting["code"] = code
-                print(json.dumps({"event": "cloud_backlog_deferred", "reason": code}), flush=True)
+            # A persistent hold emits a heartbeat, not one event per retry.
+            if code != waiting["code"] or time.monotonic() - waiting["at"] >= 60:
+                waiting.update(code=code, at=time.monotonic())
+                _event("cloud_backlog_deferred", reason=code)
             time.sleep(10)
 
         def settle_carry():
@@ -250,10 +290,13 @@ def worker(parent):
                     except writer_lock.RunLockLost:
                         return
                     except Exception as error:
-                        print(json.dumps({"event": "cloud_carry_settle_error",
-                                          "class": type(error).__name__}), flush=True)
-                        time.sleep(2)
+                        carry_failures += 1
+                        delay = min(60, 2 ** min(carry_failures, 6))
+                        _event("cloud_carry_settle_error", **{"class": type(error).__name__},
+                               retry_s=delay, failures=carry_failures)
+                        time.sleep(delay)
                         continue
+                    carry_failures = 0
                     if writer_lock.updater_state() != initial or not extract_llm._writer_current(full=True):
                         return
                     if carry:
@@ -269,6 +312,16 @@ def worker(parent):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                if index is not None:
+                    retire = settings["mode"] != "on" or index >= settings["max_concurrency"]
+                    if time.monotonic() - capacity_checked >= 60:
+                        capacity_checked = time.monotonic()
+                        capacity = memory_workers(settings["max_concurrency"])
+                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                    if retire:
+                        _event("cloud_worker_retired", reason=("cloud_mode_off"
+                            if settings["mode"] != "on" else "capacity_reduced"))
+                        return
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
@@ -285,14 +338,15 @@ def worker(parent):
                 if blocked:
                     wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
                     continue
-                waiting["code"] = None
                 started = time.monotonic()
                 try:
                     if phase % 2 == 0:
-                        result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
-                            per_write_lock=True, workers=1, background=True,
-                            cloud_only=True, prioritize_patients=True,
-                            admitted_ids=extract_llm.legacy_admissions(ledger, cfg), carry=carry)
+                        waiting["code"] = None
+                        with _phase_progress("extract"):
+                            result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
+                                per_write_lock=True, workers=1, background=True,
+                                cloud_only=True, prioritize_patients=True,
+                                admitted_ids=extract_llm.legacy_admissions(ledger, cfg), carry=carry)
                         carry = result.get("carry", carry)
                         if result.get("updated"):
                             allow_exit_settle = False
@@ -304,8 +358,13 @@ def worker(parent):
                             # the usual parent/fence/memory guards, so an
                             # unexecuted semantic job stays ahead of the next
                             # extract attempt.
+                            if (waiting["code"] != "writer_lock_busy"
+                                    or time.monotonic() - waiting["at"] >= 60):
+                                waiting.update(code="writer_lock_busy", at=time.monotonic())
+                                _event("cloud_backlog_deferred", reason="writer_lock_busy", phase="semantic")
                             time.sleep(1)
                             continue
+                        waiting["code"] = None
                         try:
                             # The loop guards ran before the lock wait: a
                             # parent exit or update generation change in that
@@ -316,10 +375,11 @@ def worker(parent):
                                     or initial[0]):
                                 return
                             scfg = semantic_drain.runtime_config(cfg)[0]
-                            result = semantic_drain.run_due(ledger, cfg, {"errors": []},
-                                time.monotonic() + scfg["job_budget_seconds"] + 30,
-                                max_jobs=1, cfg_path=CONF_PATH, run_lock_fd=lock,
-                                lane="backlog", cloud_only=True)
+                            with _phase_progress("semantic"):
+                                result = semantic_drain.run_due(ledger, cfg, {"errors": []},
+                                    time.monotonic() + scfg["job_budget_seconds"] + 30,
+                                    max_jobs=1, cfg_path=CONF_PATH, run_lock_fd=lock,
+                                    lane="backlog", cloud_only=True)
                         finally:
                             os.close(lock)
                     record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
@@ -371,7 +431,8 @@ def worker(parent):
                 except semantic_runtime.RuntimeGuardError:
                     time.sleep(2)
                 except Exception as error:
-                    print(json.dumps({"event": "cloud_backlog_error", "class": type(error).__name__}), flush=True)
+                    _event("cloud_backlog_error", **{"class": type(error).__name__},
+                           phase="extract" if phase % 2 == 0 else "semantic")
                     if not allow_exit_settle:
                         return
                     time.sleep(10)
@@ -383,18 +444,18 @@ def worker(parent):
                 try:
                     settle_carry()
                 except Exception as error:
-                    print(json.dumps({"event": "cloud_carry_settle_error",
-                                      "class": type(error).__name__}), flush=True)
+                    _event("cloud_carry_settle_error", **{"class": type(error).__name__})
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parent", type=int, required=True)
+    parser.add_argument("--index", type=int, choices=range(32))
     args = parser.parse_args()
     if args.parent != os.getppid():
         return 2
-    worker(args.parent)
+    worker(args.parent, index=args.index)
     return 0
 
 

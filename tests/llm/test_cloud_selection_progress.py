@@ -672,7 +672,7 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
     monkeypatch.setattr(cloud_policy, "usage_reserver", reserve_factory)
     monkeypatch.setattr(extract_llm, "_ensure_v1", change_after_claim)
     assert _cloud_pass(led)["done"] == 0 and len(changed) == 1
-    assert sent == [] and _claim_count(led) == 0 and not _current_artifacts(led)
+    assert sent == [] and _claim_count(led) == int(change == "unknown_paid") and not _current_artifacts(led)
     _assert_legacy_retained(led, prior)
     usage = cloud_policy.usage_report(led)
     assert not usage["pricing_unverified"]
@@ -1402,3 +1402,65 @@ def test_refused_unit_yields_selection_without_bypassing_send_guard(cloud_candid
         # Expiry permits a fresh check, not a bypass of the unresolved-send guard.
         assert _cloud_pass(led)['deferred'] == 1
         assert len(calls) == len(reservations) == len(results) == 1
+
+
+@pytest.mark.parametrize("cause,expected", [
+    ("deadline", "prepare_deadline"),
+    ("source", "prepare_source_changed"),
+    ("cloud_disabled", "prepare_cloud_disabled"),
+    ("profile", "prepare_profile_unavailable"),
+    ("medication", "prepare_medication_changed"),
+    ("context", "prepare_context_invalid"),
+    ("database", "prepare_database_unavailable"),
+])
+def test_prepare_refusal_reports_fixed_reason_without_private_error(cloud_candidates, monkeypatch, cause, expected):
+    led, *_ = cloud_candidates
+    rows, _ = extract_llm._select_pending(led, 1, None, None, False, cloud_only=True)
+    assert len(rows) == 1
+    rows = [dict(rows[0])]
+    deadline = time.monotonic() + 60
+    if cause == "deadline":
+        deadline = time.monotonic() - 1
+    elif cause == "source":
+        rows[0]["_source_binding"] = "synthetic-stale-binding"
+    elif cause == "cloud_disabled":
+        monkeypatch.setattr(extract_llm, "_cloud_mode", lambda *a: "off")
+    elif cause == "profile":
+        original_profile = cloud_policy.resolve_profile
+        calls = []
+        def changed_profile(*a, **kw):
+            calls.append(True)
+            # Admit first, then fail while freezing the prepared job's profile.
+            return original_profile(*a, **kw) if len(calls) == 1 else (None, ["private-detail"])
+        monkeypatch.setattr(cloud_policy, "resolve_profile", changed_profile)
+    elif cause == "medication":
+        monkeypatch.setattr(extract_llm, "_medication_reference_current", lambda *a, **kw: False)
+    elif cause in ("context", "database"):
+        def unavailable(*args, **kwargs):
+            import sqlite3
+            error = sqlite3.OperationalError if cause == "database" else ValueError
+            raise error("private-detail")
+        monkeypatch.setattr(extract_llm, "_pending_context_frame", unavailable)
+    reasons = {}
+    jobs, skipped, blocked = extract_llm._prepare_jobs(
+        led, rows, extract_llm._resolved_llm(), False, cloud_only=True,
+        load_checkpoints=False, deadline=deadline, blocked_reasons=reasons)
+    assert jobs == [] and skipped == 0 and blocked == 1
+    assert reasons == {expected: 1}
+    assert expected in extract_llm.cloud_backlog._DEFER_REASONS
+    assert _claim_count(led) == 0
+
+
+def test_prepare_reasons_reach_cloud_pass_accounting(cloud_candidates, monkeypatch):
+    led, *_ = cloud_candidates
+    original = extract_llm._prepare_jobs
+    rejected = []
+    def changed_once(ledger, rows, *args, **kwargs):
+        if not rejected:
+            rejected.append(rows[0]["message_id"])
+            rows = [{**rows[0], "_source_binding": "synthetic-stale-binding"}]
+        return original(ledger, rows, *args, **kwargs)
+    monkeypatch.setattr(extract_llm, "_prepare_jobs", changed_once)
+    report = _cloud_pass(led)
+    assert report["done"] == 1 and report["context_blocked"] == 1
+    assert report["defer_reasons"] == {"prepare_source_changed": 1}

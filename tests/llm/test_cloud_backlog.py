@@ -117,7 +117,8 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
         def __init__(self, command, **kw):
             helper = backlog.helper_path(tmp_path, require_installed=True)
             assert command[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
-            assert command[7:] == [sys.executable, str(Path(backlog.__file__).resolve()), "--parent", str(os.getpid())]
+            assert command[7:11] == [sys.executable, str(Path(backlog.__file__).resolve()), "--parent", str(os.getpid())]
+            assert command[11:] == ["--index", str(len(children) % 2)]
             assert kw["stdin"] == subprocess.DEVNULL and kw["close_fds"]
             assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
             self.stopped = False
@@ -142,7 +143,10 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
         assert not second.children
         first.last_sync -= 11
         first.sync(cfg)
-        assert len(children) == 4
+        assert len(children) == 2
+        first.last_sync -= 11
+        first.sync({"cloud_llm": {"mode": "off"}})
+        assert not any(p.stopped for p in children)
         first.close()
         assert all(p.stopped for p in children)
         second.last_sync -= 11
@@ -445,7 +449,9 @@ def test_worker_waits_and_reloads_unreadable_config(carry_worker, monkeypatch, c
     assert state.events == (['extract'] if block is None else [])
     assert state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert {'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'} in records
+    assert any(item['event'] == 'cloud_backlog_deferred'
+               and item['reason'] == 'provider_settings_unreadable' for item in records)
+    assert all(type(item['ts']) is float and type(item['pid']) is int for item in records)
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 
@@ -472,7 +478,8 @@ def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkey
     assert state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     holds = [item for item in records if item['event'] == 'cloud_backlog_deferred']
-    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'}]
+    assert len(holds) == 1 and holds[0]['reason'] == 'provider_settings_unreadable'
+    assert type(holds[0]['ts']) is float and type(holds[0]['pid']) is int
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 
@@ -518,7 +525,8 @@ def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypat
     assert waits == [10, 10] and state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     holds = [item for item in records if item['event'] == 'cloud_backlog_deferred']
-    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': code}]
+    assert len(holds) == 1 and holds[0]['reason'] == code
+    assert type(holds[0]['ts']) is float and type(holds[0]['pid']) is int
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 
@@ -719,3 +727,138 @@ def test_startup_wait_exits_on_memory_loss_without_opening_ledger(monkeypatch):
     monkeypatch.setattr(ledger, "Ledger", lambda *a: pytest.fail("low memory opened ledger"))
     backlog.worker(991)
     assert locks == [True]
+
+
+def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    item = object()
+
+    def extract(ledger, **kwargs):
+        state.events.append("extract")
+        cfg["cloud_llm"]["max_concurrency"] = 1
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kwargs):
+        assert carry == [item]
+        state.events.append("settle")
+        carry.clear()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    backlog.worker(991, index=2)
+    assert state.events == ["extract", "settle"] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1]['event'] == 'cloud_worker_retired'
+    assert records[-1]['reason'] == 'capacity_reduced'
+
+
+@pytest.mark.parametrize("capacity,index", [(0, 0), (1, 2)])
+def test_low_memory_target_retires_idle_worker_without_work(carry_worker, monkeypatch, capacity, index):
+    import extract_llm
+    state, _ = carry_worker
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: capacity)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("retired worker started work"))
+    backlog.worker(991, index=index)
+    assert state.closed and state.events == []
+
+
+def test_memory_target_tolerates_one_resident_worker(carry_worker, monkeypatch):
+    import extract_llm
+    state, _ = carry_worker
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 1)
+
+    def extract(*a, **kw):
+        state.events.append("extract")
+        state.alive = False
+        return {"done": 1}
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    backlog.worker(991, index=1)
+    assert state.closed and state.events == ["extract"]
+
+
+def test_repeated_carry_failure_backs_off_without_sending_again(carry_worker, monkeypatch):
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+    delays = []
+
+    def extract(*a, **kw):
+        state.events.append("extract")
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert carry == [item]
+        state.events.append("settle")
+        raise sqlite3.OperationalError("synthetic locked database")
+
+    def sleep(seconds):
+        delays.append(seconds)
+        if len(delays) == 7:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    backlog.worker(991)
+    assert delays == [2, 4, 8, 16, 32, 60, 60]
+    assert state.events.count("extract") == 1
+    assert state.carry == [item] and state.closed
+
+
+def test_phase_progress_reports_fixed_stage_without_payload(monkeypatch, capsys):
+    class Stopped:
+        def __init__(self):
+            self.waits = 0
+
+        def wait(self, seconds):
+            assert seconds == 60
+            self.waits += 1
+            return self.waits > 1
+
+        def set(self):
+            pass
+
+    class Reporter:
+        def __init__(self, *, target, daemon):
+            assert daemon is True
+            self.target = target
+
+        def start(self):
+            self.target()
+
+        def join(self, timeout=None):
+            assert timeout == 0.1
+            pass
+
+    monkeypatch.setattr(backlog.threading, "Event", Stopped)
+    monkeypatch.setattr(backlog.threading, "Thread", Reporter)
+    with backlog._phase_progress("semantic"):
+        pass
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [r['event'] for r in records] == ['cloud_backlog_phase', 'cloud_backlog_progress']
+    assert all(r['phase'] == 'semantic' and type(r['ts']) is float and type(r['pid']) is int for r in records)
+    assert records[1]['elapsed_s'] >= 0
+
+
+def test_phase_progress_never_waits_indefinitely_for_blocked_log_output(monkeypatch):
+    joins = []
+    class BlockedReporter:
+        def __init__(self, *, target, daemon):
+            assert daemon is True
+        def start(self):
+            pass
+        def join(self, timeout=None):
+            assert timeout is not None and 0 < timeout <= 0.1
+            joins.append(timeout)
+    monkeypatch.setattr(backlog.threading, "Thread", BlockedReporter)
+    with backlog._phase_progress("semantic"):
+        pass
+    assert joins == [0.1]
