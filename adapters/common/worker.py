@@ -716,6 +716,12 @@ class DeliveryWorker:
             if "receipt" not in phases and "result" in phases:
                 await self._republish_part_receipt(claim, part, rows)
             if phases & {"result", "receipt", "denied"}:
+                if kind == "attachment_part":
+                    res = next((r for r in reversed(rows)
+                                if r.get("phase") == "result"), None)
+                    if (res and res.get("result") == "delivered"
+                            and isinstance(res.get("remote_id"), str) and res["remote_id"]):
+                        ctx.setdefault("part_remotes", {})[part["part_id"]] = str(res["remote_id"])
                 if kind == "thread":
                     res = next((r for r in reversed(rows)
                                 if r.get("phase") == "result"), None)
@@ -807,6 +813,8 @@ class DeliveryWorker:
                       delivery_id=spec["delivery_id"],
                       part_id=part["part_id"], kind=part["kind"],
                       result=outcome["result"])
+        if part["kind"] == "attachment_part" and outcome["result"] == "delivered"                 and outcome.get("remote_id"):
+            ctx.setdefault("part_remotes", {})[part["part_id"]] = str(outcome["remote_id"])
         if part["kind"] == "thread":
             # Discord: the card's thread binding also rides the legacy
             # thread_receipt envelope — best-effort, because the

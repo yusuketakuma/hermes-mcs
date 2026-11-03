@@ -563,6 +563,8 @@ class DeliveryWorker(_BaseWorker):
             return await self._body_part(spec, text, ctx, part)
         if part["kind"] == "attachment_part":
             return await self._attachment_part(spec, part, ctx)
+        if part["kind"] == "file_group":
+            return await self._file_group(spec, part, ctx)
         return {"result": "not_sent", "error_code": "unsupported_part"}
 
     async def _body_part(self, spec: dict, text: str, ctx: dict,
@@ -841,6 +843,12 @@ class DeliveryWorker(_BaseWorker):
         not_sent(sdk_capability_missing): visible incompleteness,
         never a faked completion."""
         if part.get("edit_only") is True:
+            group_fid = (spec["parts"].get("slack") or {}).get("file_group") \
+                and isinstance(part.get("prior_remote_id"), str)
+            if group_fid:
+                # receipt-bound private FID — verify it still exists and
+                # matches the sealed identity before the group attaches it.
+                return await self._verify_private_fid(part, ctx)
             return await self._edit_only_prior(spec, part, escape(part["caption"], quote=False), ctx,
                                                attachment=not part.get("unavailable"))
         scoped = post_scoped(spec)
@@ -858,7 +866,8 @@ class DeliveryWorker(_BaseWorker):
                         "remote_id": str(part["prior_remote_id"])}
             return await self._body_part(spec, part["caption"], ctx, part)
         thread_ts = ctx.get("thread_id")
-        if not thread_ts:
+        group_mode = bool((spec["parts"].get("slack") or {}).get("file_group"))
+        if not thread_ts and not group_mode:
             return {"result": "not_sent",
                     "error_code": "thread_root_missing"}
         sender = self._sender.single_attempt()
@@ -874,8 +883,13 @@ class DeliveryWorker(_BaseWorker):
                 and ctx.get("history") is None):
             # File identity alone cannot bind a different source post.
             ctx["history"] = await self._replies(thread_ts)
-        if (not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
-                or (scoped and part.get("prior_remote_id")):
+        if group_mode and part.get("prior_remote_id"):
+            # receipt-bound private FID — the group update attaches it to the
+            # card; no thread post exists to remote-match against.
+            return {"result": "delivered", "remote_id": str(part["prior_remote_id"]),
+                    "attachment_origin": "edit"}
+        if thread_ts and ((not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
+                or (scoped and part.get("prior_remote_id"))):
             # an identical file already remote in this thread binds the
             # part to its real file id (remote-verified) — post-seal
             # corruption locally cannot fake a match either way
@@ -897,11 +911,17 @@ class DeliveryWorker(_BaseWorker):
             # the file's visible line: 📎 name — patient/post
             extra["initial_comment"] = escape(part["caption"], quote=False)
         try:
-            response = await call_native(
-                upload,
-                channel=self._settings["channel_id"],
-                thread_ts=thread_ts, file=blob,
-                filename=name, title=name, **extra)
+            if (spec["parts"].get("slack") or {}).get("file_group"):
+                # private stage: upload binds no channel/thread — the group
+                # update below attaches the FID to the card itself.
+                response = await call_native(
+                    upload, file=blob, filename=name, title=name)
+            else:
+                response = await call_native(
+                    upload,
+                    channel=self._settings["channel_id"],
+                    thread_ts=thread_ts, file=blob,
+                    filename=name, title=name, **extra)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -913,6 +933,67 @@ class DeliveryWorker(_BaseWorker):
                     "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": fid,
                 "attachment_origin": "upload"}
+
+    async def _verify_private_fid(self, part: dict, ctx: dict) -> dict:
+        """files.info-proof that a privately uploaded FID is still ours and
+        still the sealed file. Anything unverifiable stays unknown — a
+        reused part is never re-uploaded or blindly trusted."""
+        prior = str(part["prior_remote_id"])
+        sender = self._sender.single_attempt()
+        info = getattr(sender, "files_info", None) if sender is not None else None
+        if info is None:
+            return {"result": "unknown", "error_code": "sdk_capability_missing"}
+        try:
+            data = _payload(await call_native(info, file=prior, limit=1))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._log("edit_preflight_held", reason="file_info_unverified")
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        file_obj = data.get("file") if isinstance(data, dict) else None
+        if data.get("ok") is not True or not isinstance(file_obj, dict):
+            return {"result": "unknown", "error_code": "edit_target_unverified"}
+        if _file_problem(file_obj, part):
+            return {"result": "unknown", "error_code": "edit_file_unverified"}
+        return {"result": "delivered", "remote_id": prior,
+                "attachment_origin": "edit"}
+
+    async def _file_group(self, spec: dict, part: dict, ctx: dict) -> dict:
+        """One chat.update(file_ids) attaching every staged FID to the card.
+
+        The group receipt means the card now lists those files; a stage's own
+        receipt only means the private upload succeeded — the two are never
+        conflated. A missing response leaves this part unknown, never resent."""
+        update = getattr(self._sender.single_attempt(), "chat_update", None)
+        if update is None:
+            return {"result": "not_sent", "error_code": "sdk_capability_missing"}
+        ts = ctx.get("card_message_id") or spec["delivery"].get("message_id")
+        if not isinstance(ts, str) or not ts:
+            return {"result": "not_sent", "error_code": "card_target_missing"}
+        manifest = spec["parts"]["manifest"]
+        stages = [p for p in manifest if p.get("kind") == "attachment_part"
+                  and p.get("unavailable") is not True]
+        if not stages or stages[-1].get("part_id") == "file_group":
+            return {"result": "not_sent", "error_code": "file_group_missing"}
+        remotes = ctx.get("part_remotes") or {}
+        fids = []
+        for stage in stages:
+            fid = remotes.get(stage["part_id"])
+            if not isinstance(fid, str) or not fid:
+                return {"result": "not_sent", "error_code": "stage_receipt_missing"}
+            fids.append(fid)
+        if len(set(fids)) != len(fids):
+            return {"result": "not_sent", "error_code": "file_group_duplicate"}
+        try:
+            response = await call_native(update, ts=ts, file_ids=fids)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return _failed(exc, "file_group", ts)
+        data = _payload(response)
+        if data.get("ok") is not True:
+            return {"result": "unknown", "error_code": "bad_slack_response"}
+        return {"result": "delivered", "remote_id": ts}
 
     async def _file_remote_match(self, thread_ts: str, part: dict,
                                  ctx: dict, *, prior_only=False):

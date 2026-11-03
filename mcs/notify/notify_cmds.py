@@ -118,7 +118,7 @@ def _part_identity(req) -> str | None:
         return "bad_part_id"
     if req.get("kind") is not None \
             and req["kind"] not in (
-                "card", "thread", "body_part", "attachment_part"):
+                "card", "thread", "body_part", "attachment_part", "file_group"):
         return "bad_kind"
     return None
 

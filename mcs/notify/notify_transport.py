@@ -88,7 +88,7 @@ def settle_attempt_tx(db, attempt, render, result, now,
         db.execute(
             "UPDATE notification_render_parts SET state='held',"
             "updated_at=? WHERE delivery_id=? AND state='pending' "
-            "AND kind IN ('thread','body_part','attachment_part')",
+            "AND kind IN ('thread','body_part','attachment_part','file_group')",
             (now, render["delivery_id"]))
     notify_parts.update_state(db, render["delivery_id"], now)
     if render["state"] != "cancelled":
@@ -303,7 +303,7 @@ def apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks) -> dict:
             "SELECT 1 FROM notification_renders r WHERE r.card_id=? AND r.delivery_id<>? AND "
             "(r.state IN ('sending','unknown') OR (r.state='delivered' AND EXISTS ("
             "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
-            "AND p.kind IN ('thread','body_part','attachment_part') "
+            "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
             "AND p.state IN ('pending','unknown')))) LIMIT 1",
             (card_id, req["delivery_id"])).fetchone()
         if (stale is not None and stale["state"] == "queued" and card_id is not None
@@ -673,7 +673,7 @@ def settle_part_receipt(db, req, now) -> dict:
                    "parts_state": notify_parts.update_state(
                        db, render["delivery_id"], now)}
     if receipt.get("applied") and render is not None and part is not None \
-            and part["kind"] in ("attachment_part", "thread"):
+            and part["kind"] in ("attachment_part", "thread", "file_group"):
         for owner in db.execute(
                 "SELECT ic.event_id FROM notification_intent_cards ic "
                 "JOIN notify_outbox o ON o.event_id=ic.event_id "

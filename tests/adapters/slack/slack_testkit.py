@@ -49,6 +49,7 @@ class FakeClient:
         self.upload_fail_at: set[int] = set()
         self.upload_failure: Exception | None = None
         self._fid_n = 0
+        self._files: dict = {}
         if uploads:
             self.files_upload_v2 = self._files_upload_v2
         self.bot_id = "B_SYNTHETIC"
@@ -95,11 +96,19 @@ class FakeClient:
         entry = {"id": f"F_SYNTHETIC_{self._fid_n:04d}",
                  "name": kwargs.get("filename"),
                  "size": len(blob),
-                 "sha256": hashlib.sha256(blob).hexdigest()}
+                 "sha256": hashlib.sha256(blob).hexdigest(),
+                 "mode": "hosted", "is_external": False, "editable": False}
+        self._files[entry["id"]] = entry
         ts = self._next_ts()
-        self.replies.setdefault(kwargs["thread_ts"], []).append(
-            {"ts": ts, "bot_id": self.bot_id, "files": [entry]})
+        if kwargs.get("thread_ts"):
+            self.replies.setdefault(kwargs["thread_ts"], []).append(
+                {"ts": ts, "bot_id": self.bot_id, "files": [entry]})
         return {"ok": True, "files": [entry]}
+
+    async def files_info(self, **kwargs):
+        self.calls.append(("files_info", kwargs))
+        f = self._files.get(kwargs.get("file"))
+        return {"ok": f is not None, "file": f or {}}
 
     async def conversations_replies(self, **kwargs):
         self.calls.append(("replies", kwargs))
@@ -116,7 +125,7 @@ class FakeClient:
             for m in msgs:
                 if m["ts"] == kwargs["ts"] and "text" in kwargs:
                     m["text"] = kwargs["text"]
-        return {"ok": True, "channel": kwargs["channel"], "ts": kwargs["ts"]}
+        return {"ok": True, "channel": kwargs.get("channel"), "ts": kwargs["ts"]}
 
     async def chat_delete(self, **kwargs):
         self.calls.append(("delete", kwargs))
