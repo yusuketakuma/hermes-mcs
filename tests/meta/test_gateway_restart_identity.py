@@ -34,7 +34,8 @@ def gateway(tmp_path, monkeypatch):
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
-            assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+            assert kwargs['stdin'] == subprocess.DEVNULL
+            assert kwargs['stdout'] is kwargs['stderr'] and kwargs['stdout'].fileno() >= 0
             assert kwargs['env']['HOME'] == str(home)
             assert kwargs['env']['HERMES_HOME'] == str(plistlib.loads(plist.read_bytes()).get(
                 'EnvironmentVariables', {}).get('HERMES_HOME', home / '.hermes'))
@@ -480,3 +481,103 @@ def test_native_restart_keeps_inherited_lifecycle_environment(gateway, monkeypat
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
     assert seen == ['synthetic']
     assert not any('kickstart' in call for call in calls)
+
+
+def _busy_text(count=2):
+    return (f'✗ Refusing to restart the gateway: {count} live session(s) would be interrupted.\n'
+            '  • synthetic periodic job\n'
+            '  Let them finish, or interrupt them deliberately:\n'
+            f'    hermes gateway restart --yes   # interrupts {count} live session(s)\n').encode()
+
+
+@pytest.mark.parametrize('outcome', ['idle', 'expired', 'external', 'hold', 'foreign'])
+def test_live_session_refusal_waits_without_interrupting_owned_work(gateway, monkeypatch, outcome):
+    rec, data, agents, plist, calls, running = gateway
+    real = rec.subprocess.run
+    clock = [0.0]
+    attempts = []
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if outcome == 'external':
+            running['pid'] = 303
+        elif outcome == 'hold':
+            (data / 'restore_pending.json').write_text('{"phase":"awaiting_consent"}')
+        elif outcome == 'foreign':
+            plist.write_bytes(plistlib.dumps({'Label': 'foreign'}))
+
+    def run(argv, **kwargs):
+        if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
+            attempts.append(argv)
+            assert kwargs['timeout'] <= 300
+            if outcome != 'idle' or len(attempts) == 1:
+                kwargs['stdout'].write(_busy_text())
+                return subprocess.CompletedProcess(argv, 1)
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(rec.subprocess, 'run', run)
+    monkeypatch.setattr(rec, 'time', SimpleNamespace(time=lambda: 0,
+        monotonic=lambda: clock[0], sleep=sleep))
+    result = rec._gateway_restart_run(str(data), str(agents), 501)
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert 'synthetic periodic job' not in json.dumps(report)
+    assert all(argv[-4:] == ['-p', 'default', 'gateway', 'restart'] for argv in attempts)
+    if outcome == 'idle':
+        assert result == 0 and len(attempts) == 2
+        assert report['pid'] == 202
+        # The busy call made no change; only the ordinary idle call restarted.
+        assert len([call for call in calls if call[-1] == 'restart']) == 1
+    elif outcome == 'external':
+        assert result == 0 and len(attempts) == 1 and report['pid'] == 303
+    else:
+        assert result == 1 and report['status'] == 'unknown'
+        assert report['error'] == {'expired': 'gateway_restart_busy_timeout',
+                                  'hold': 'gateway_restart_restore_hold',
+                                  'foreign': 'gateway_service_not_owned'}[outcome]
+        assert len(attempts) == (132 if outcome == 'expired' else 1)
+    assert clock[0] <= 660
+    assert not any('kickstart' in call or '--yes' in call or '--force' in call for call in calls)
+
+
+@pytest.mark.parametrize('output,code', [
+    (b'', 1), (_busy_text(), 2), (_busy_text() + b'additional error\n', 1),
+    (_busy_text().replace(b'interrupts 2', b'interrupts 3'), 1),
+    (b'x' * 65537 + _busy_text(), 1),
+])
+def test_only_exact_guard_refusal_is_retried(gateway, monkeypatch, output, code):
+    rec, data, agents, _, calls, _ = gateway
+    real = rec.subprocess.run
+    attempts = []
+
+    def run(argv, **kwargs):
+        if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
+            attempts.append(argv)
+            kwargs['stdout'].write(output)
+            return subprocess.CompletedProcess(argv, code)
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(rec.subprocess, 'run', run)
+    monkeypatch.setattr(rec.time, 'sleep', lambda _: pytest.fail('nonbusy failure must not wait'))
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert len(attempts) == 1
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert report['status'] == 'unknown' and report['error'] == 'gateway_restart_nonzero'
+
+
+def test_pid_changed_before_first_restart_is_verified_without_restart(gateway, monkeypatch):
+    rec, data, agents, _, calls, running = gateway
+    real = rec.subprocess.run
+    observed = [0]
+
+    def run(argv, **kwargs):
+        if argv[:2] == ['launchctl', 'print'] and argv[-1].startswith('user/'):
+            observed[0] += 1
+            if observed[0] == 2:
+                running['pid'] = 303
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(rec.subprocess, 'run', run)
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
+    assert not any(call[-1] == 'restart' for call in calls)
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert report['previous_pid'] == 101 and report['pid'] == 303
