@@ -241,6 +241,7 @@ def test_resident_stop_after_bounds_startup_wait(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
     monkeypatch.setattr(extract_llm, "_open_current_ledger", lambda **_: None)
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(
+        time=lambda: 1000.0,
         monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds)))
     assert extract_llm.main() == 1 and now[0] == 2.0
     assert json.loads(capsys.readouterr().out)["error"] == "writer_unavailable"

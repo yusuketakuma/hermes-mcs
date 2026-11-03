@@ -6390,7 +6390,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             # rows stay pending, claims are released
                             # below and no attempt is burned
                             print(json.dumps({"event": "extract_worker_error",
-                                              "error": type(e).__name__}),
+                                              "error": type(e).__name__,
+                                              "pid": os.getpid(), "ts": time.time()}),
                                   file=sys.stderr, flush=True)
                             deferred += len(tups)
                             _defer_note("worker_error", count=len(tups))
@@ -7061,7 +7062,7 @@ def _main() -> int:
         os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
         os.environ[local_llm.TURN_LOCK_ENV] = os.path.join(
             HOME, "data", "llm_turn.lock")
-    print(json.dumps({"event": "extractor_started", "pid": os.getpid(),
+    print(json.dumps({"event": "extractor_started", "pid": os.getpid(), "ts": time.time(),
                       "extract_version": EXTRACT_VERSION, inference.VERSION_KEY: _INFERENCE_VERSION,
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
           file=sys.stderr, flush=True)
@@ -7268,7 +7269,7 @@ def _main() -> int:
                     # a transient failure ('database is locked') must not
                     # kill the resident worker — log, back off, retry
                     print(json.dumps({"event": "extract_loop_error",
-                                      "error": type(e).__name__,
+                                      "error": type(e).__name__, "pid": os.getpid(),
                                       "ts": time.time()}),
                           file=sys.stderr, flush=True)
                     pause(30)

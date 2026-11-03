@@ -242,7 +242,7 @@ def test_run_lock_excludes_second_writer(tmp_path):
     os.close(third)
 
 
-def test_cli_writer_holds_run_lock(tmp_path, monkeypatch):
+def test_cli_writer_holds_run_lock(tmp_path, monkeypatch, capsys):
     """A manual write CLI must refuse to run while a tick holds the lock —
     the shared queue is drained by exactly one writer at a time."""
     lock = tmp_path / "run.lock"
@@ -251,8 +251,11 @@ def test_cli_writer_holds_run_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(writer_lock, "RUN_LOCK", str(lock))
     monkeypatch.setattr(extract_llm, "DB", str(tmp_path / "ledger.db"))
     monkeypatch.setattr(sys, "argv", ["extract_llm", "--limit", "1"])
-    assert extract_llm.main() == 3
-    os.close(held)
+    try:
+        assert extract_llm.main() == 1
+        assert json.loads(capsys.readouterr().out)["error"] == "writer_unavailable"
+    finally:
+        os.close(held)
     # free lock -> the CLI proceeds against the throwaway DB
     assert extract_llm.main() == 0
 

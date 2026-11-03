@@ -1499,7 +1499,7 @@ def test_parallel_workers_process_all_selected(tmp_path, monkeypatch):
     db.close()
 
 
-def test_parallel_defer_reasons_are_per_worker_and_count_crashes(tmp_path, monkeypatch):
+def test_parallel_defer_reasons_are_per_worker_and_count_crashes(tmp_path, monkeypatch, capsys):
     import threading
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
@@ -1517,6 +1517,10 @@ def test_parallel_defer_reasons_are_per_worker_and_count_crashes(tmp_path, monke
     result = extract_llm.run_pending(db, limit=10, budget_s=30, workers=3)
     assert result["deferred"] == 3
     assert result["defer_reasons"] == {"busy": 1, "admission": 1, "worker_error": 1}
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    failure = next(event for event in events if event.get("event") == "extract_worker_error")
+    assert type(failure["ts"]) is float and type(failure["pid"]) is int
+    assert failure["error"] == "RuntimeError" and "synthetic" not in json.dumps(failure)
     assert db.artifacts("extract_llm") == []
     db.close()
 

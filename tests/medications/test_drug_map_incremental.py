@@ -175,3 +175,23 @@ def test_invalid_progress_types_never_publish_stale_refs_or_skip_unprocessed_row
     assert drug_map.current_refs(store.db, 1) == []
     assert store.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?",
                             (drug_map.KIND,)).fetchone()[0] == 0
+
+
+def test_partial_walk_distinguishes_checked_unmatched_from_pending_in_ui(store, tmp_path, monkeypatch):
+    import notify_views
+
+    for mid in range(1, 9):
+        _seed(store, mid=mid, names=("未登録架空薬",))
+    result = _tick(store, _dictionary(tmp_path), monkeypatch)
+    assert result["status"] == "partial"
+    progress = drug_map.read_annotation_progress(store.db)
+    assert 0 < progress["cursor"] < 8
+    checked = drug_map.current_refs_with_progress(store.db, 1, progress)
+    pending = drug_map.current_refs_with_progress(store.db, 8, progress)
+    assert len(checked) == 1 and checked[0]["status"] == "unresolved"
+    assert pending == []
+    checked_text = notify_views._candidate_line(checked[0], True)
+    pending_text = notify_views._candidate_line(None, True)
+    assert "完全一致する候補はありません" in checked_text
+    assert "まだありません" in pending_text
+    assert "候補はありません" not in pending_text

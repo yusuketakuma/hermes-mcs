@@ -20,6 +20,14 @@ import health_watch
 import health_policy
 
 
+@pytest.fixture(autouse=True)
+def no_live_disk_probe(monkeypatch):
+    # These file-evidence cases cover an unavailable probe; live recovery is
+    # exercised separately in test_runtime_budget_fairness.py.
+    import health_report
+    monkeypatch.setattr(health_report, "attachment_free_mb", lambda path=None: None)
+
+
 @pytest.mark.parametrize("marker", ["pending", "authority"])
 def test_provider_settings_failure_stops_before_health_changes(tmp_path, monkeypatch, capsys, marker):
     tmp_path.chmod(0o700)

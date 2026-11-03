@@ -454,8 +454,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     that predate evidence_at are read via health_at.
 
     Healthy observations and recovery are internal observations only.
-    disk_low has its own dedup: disk_alert fires only when a fresh
-    file turns low; stale/missing/corrupt evidence keeps
+    disk_low has its own dedup and a fresh disk-space observation even
+    when the health producer is stale; an unavailable disk read preserves
     the last known value."""
     now = time.time() if now is None else now
     if not finite_number(now):
@@ -467,6 +467,13 @@ def evaluate(home: str = HOME, now: float | None = None,
     status_path = os.path.join(home, STATUS_REL)
 
     obs = classify_health(health_path, now, deadline)
+    # Disk pressure changes while the producer is busy or stale.
+    from health_report import attachment_free_mb, attachment_disk_low
+    live_free_mb = attachment_free_mb(os.path.join(home, "data"))
+    if finite_number(live_free_mb):
+        obs["disk_free_mb"] = round(live_free_mb)
+        obs["disk_observed_at"] = now
+        obs["disk_low"] = attachment_disk_low(live_free_mb)
     notify = cfg.get("notify") if isinstance(cfg, dict) else None
     if isinstance(notify, dict) and notify.get("interactive") == "lineworks":
         obs["notify_transport"] = "lineworks"
@@ -546,7 +553,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     else:
         state.pop("streak", None)
     disk_prev = state.get("disk_low") is True
-    disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
+    disk_low = (obs["disk_low"] if "disk_observed_at" in obs or obs["status"] in OVERALL_STATUS
                 else disk_prev)
     disk_alert = disk_low and not disk_prev
     state["disk_low"] = disk_low

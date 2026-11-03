@@ -644,6 +644,22 @@ def build_health(db, result: dict, status: str,
     # a signal digest scheduled interval_h ahead and never attempted is
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
+    try:
+        cards_health = bounded_health_read(
+            db, lambda _check: notify_scope.health_cards(db, cfg),
+            seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
+    except Exception as exc:
+        cards_health = dict.fromkeys((
+            "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
+            "revoked", "oldest_pending_age_s", "layout_inventory", "unknown_parts",
+            "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
+            "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
+            "last_delivered_at"))
+        cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc))
+    cards_unknown = cards_health.get("status") == "unknown"
+    incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
+    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
+    part_holds = part_holds_health(db, now, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     outbox = pending_health(db, now, seconds=remaining())
     # an unmeasurable pending count can never read as delivered work
     pending_unknown = outbox["pending"] is None
@@ -772,21 +788,6 @@ def build_health(db, result: dict, status: str,
     if unstored_state != 'none_observed':
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
-    try:
-        cards_health = bounded_health_read(
-            db, lambda _check: notify_scope.health_cards(db, cfg),
-            seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
-    except Exception as exc:
-        cards_health = dict.fromkeys((
-            "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
-            "revoked", "oldest_pending_age_s", "layout_inventory", "unknown_parts",
-            "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
-            "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
-            "last_delivered_at"))
-        cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc))
-    cards_unknown = cards_health.get("status") == "unknown"
-    incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=remaining())
-    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
     if parts_incomplete or cards_unknown:
         notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
@@ -952,7 +953,7 @@ def build_health(db, result: dict, status: str,
                    "retired_held": retired_held,
                    "held_pinned_attachments": held_pins,
                    "incomplete_parts": incomplete_parts,
-                   "part_holds": part_holds_health(db, now, seconds=remaining())},
+                   "part_holds": part_holds},
         "semantic_jobs": ({"pending": _pending_rows[0]["c"],
                            "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
                                             if _pending_rows[0]["o"] else 0)}

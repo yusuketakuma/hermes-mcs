@@ -214,7 +214,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
     work_deadline = deadline - snapshots.snapshot_verify_timeout_s(source_db) - 30
     try:
         import extract
-        ex = extract.run_pending(ledger, deadline=work_deadline)
+        # Leave a fair share for medication mapping, rollups and signals.
+        rule_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 2
+        ex = _run_stage(result, "derive_rules", work_deadline,
+                        lambda: extract.run_pending(ledger, deadline=rule_deadline), required=True)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
         if ex.get("reconcile_error") is not None:
@@ -226,7 +229,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
     try:
         import extract_llm
         remain = work_deadline - time.monotonic()
-        budget = min(llm_budget_cap, max(0, remain))
+        budget = min(llm_budget_cap, max(0, remain) / 2)
+        if budget < extract_llm._MIN_CALL_S:
+            # Keep a complete call viable while reserving clinical follow-up time.
+            budget = min(llm_budget_cap, extract_llm._MIN_CALL_S, max(0, remain) * 0.9)
         idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
         # This tick's arrivals plus earlier notified arrivals a busy or
         # one-call tick left behind — the realtime slot reaches them
@@ -237,7 +243,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 (time.time() - REALTIME_CARRY_S,))}
         if budget < extract_llm._MIN_CALL_S or not realtime:
             result["extract_llm"] = idle
-        elif extract_llm.pinned_slot_busy(work_deadline):
+        elif extract_llm.pinned_slot_busy(time.monotonic() + budget):
             # Hermes is using realtime; the arrival stays durable for
             # another pass while ingestion and background keep moving.
             result["extract_llm"] = {**idle, "skipped_busy": True}
@@ -270,8 +276,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
         invalid = error is not None
         if invalid:
             result["errors"].append(f"drug_map: {error}")
-        result["drug_map"] = drug_map.derive(
-            ledger, dictionary, deadline=work_deadline)
+        map_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 3
+        result["drug_map"] = _run_stage(
+            result, "derive_medications", work_deadline,
+            lambda: drug_map.derive(ledger, dictionary, deadline=map_deadline), required=True)
         if invalid:
             result["drug_map"]["status"] = "invalid"
         elif result["drug_map"]["status"] == "partial":
@@ -290,9 +298,11 @@ def stage_derive(ledger, result, deadline, cfg=None,
         for k in ("cmd_imports", "trickle_imports"):
             touched |= {c["pid"] for c in result.get(k, [])}
         scan_start = time.monotonic()
-        scan_deadline = min(work_deadline, scan_start + max(0, work_deadline - scan_start) / 2)
+        # Rollups yield before the remaining signal evaluation slice.
+        rollup_deadline = scan_start + max(0, work_deadline - scan_start) * 2 / 3
+        scan_deadline = scan_start + max(0, rollup_deadline - scan_start) / 2
         scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
-                                               commit_deadline=work_deadline)
+                                               commit_deadline=rollup_deadline)
         touched.difference_update(scan.unknown)
         rebuild_ids = list(dict.fromkeys([*scan.dirty, *sorted(touched)]))
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
@@ -308,7 +318,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
         source_unknown = []
         source_unknown_reasons = {}
         result["rollups"] = rollup.rebuild_many(
-            ledger, rebuild_ids, deadline=work_deadline, source_changed=source_changed,
+            ledger, rebuild_ids, deadline=rollup_deadline, source_changed=source_changed,
             source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons, cfg=cfg)
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
@@ -884,9 +894,10 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
     import notify_cmds
     try:
         # last-chance drain: interactions queued while this tick ran
-        notify_cmds.drain_int_commands(
-            ledger, result, cfg, os.path.join(HOME, "data"),
-            deadline=deadline, limit=16)
+        _run_stage(result, "finish_commands", deadline,
+                   lambda: notify_cmds.drain_int_commands(
+                       ledger, result, cfg, os.path.join(HOME, "data"),
+                       deadline=deadline, limit=16), required=True)
         _require_closed_transaction(ledger, result)
         notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
     except TickTransactionOpen:
@@ -904,8 +915,9 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         # H4: a full copy + quick_check only when the ledger changed, the
         # notification flag asks for it, or the copy is an hour old
         dirty = notify_cards.snapshot_dirty(ledger)
-        state = maintenance.refresh_snapshot(DB, force=dirty,
-                                             deadline=_hard_deadline())
+        state = _run_stage(result, "finish_snapshot", deadline,
+                           lambda: maintenance.refresh_snapshot(
+                               DB, force=dirty, deadline=_hard_deadline()), required=True)
         result["snapshot"] = state is not None
         result["snapshot_state"] = state
         if state is None:
