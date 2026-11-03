@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "意味解析の延期理由の一部が処理記録に現れない問題を修正",
+  "summary": "意味解析で一時停止・機能停止・対象範囲外・期限不足・世代競合・Jev検証不能で延期した場合、延期件数には数えられる一方で理由の集計から漏れ、分類合計と延期件数が一致しませんでした。これらの延期にも固定の理由を記録するようにしました。",
+  "upgrade": "追加操作は不要です。処理記録の延期理由に paused・mode_off・out_of_scope・jev_skip_unverified・deadline・commit_rejected が現れることがあります。",
+  "details": [
+    "ジョブ準備段階で延期された6経路に固定理由を計上し、分類合計と延期件数の一致を回復した。"
+  ],
+  "refs": ["mcs/semantic/semantic_drain.py", "mcs/llm/cloud_backlog.py"]
+}

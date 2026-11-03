@@ -186,6 +186,7 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "cloud_unit_unresolved", "cloud_owner_transaction", "cloud_deadline",
                   "cloud_budget_blocked", "cloud_pricing_unverified",
                   "cloud_not_sent", "cloud_scope_or_budget", "llm_turn_busy", "budget_short",
+                  "paused", "mode_off", "out_of_scope", "jev_skip_unverified",
                   "other"}
 
 

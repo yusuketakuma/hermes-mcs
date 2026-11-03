@@ -4547,6 +4547,13 @@ def _job_metric(job, token, cohort: str, status, job_age: float,
     }
 
 
+def _defer_note(out: dict, reason: str) -> None:
+    """Count a prepare-phase defer so its reason reaches defer_reasons."""
+    out["deferred"] += 1
+    counts = out.setdefault("defer_reasons", {})
+    counts[reason] = counts.get(reason, 0) + 1
+
+
 def _apply_job_status(ledger, token, limit: int, status: str,
                       budget_short: bool, out: dict) -> bool:
     """Map one finished job's status onto its queue transition and the
@@ -5006,7 +5013,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             from mcs_queries import paused
             if paused(ledger.db, job["project_id"]):
                 runtime.transition(ledger, token, "defer", retry_in=300)
-                out["deferred"] += 1
+                _defer_note(out, "paused")
                 continue
             if cfg_path is not None:
                 current_cfg = load_config(cfg_path)
@@ -5020,7 +5027,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         result["errors"].append(e)
                 if scfg["mode"] == "off":
                     runtime.transition(ledger, token, "defer", retry_in=300)
-                    out["deferred"] += 1
+                    _defer_note(out, "mode_off")
                     out["mode"] = "off"
                     break
             # A semantic job's first call is exempt from the in-call reserve
@@ -5039,7 +5046,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["floor_skipped"][job["kind"]] = \
                     out["floor_skipped"].get(job["kind"], 0) + 1
                 if job["kind"] == QC_JOB_KIND:
-                    out["deferred"] += 1
+                    _defer_note(out, "deadline")
                     break
                 continue
             if scfg["project_ids"] is not None \
@@ -5049,7 +5056,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # the whole max_jobs window and starve in-scope work. The
                 # row stays pending: a later project_ids change resumes it.
                 runtime.transition(ledger, token, "defer", retry_in=300)
-                out["deferred"] += 1
+                _defer_note(out, "out_of_scope")
                 continue
             if token.attempts < 0 or token.attempts >= limit:
                 # A row can be re-seeded or manually edited while it is waiting
@@ -5060,7 +5067,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 if runtime.transition(ledger, token, "failed"):
                     out["failed"] += 1
                 else:
-                    out["deferred"] += 1
+                    _defer_note(out, "commit_rejected")
                 continue
             lane_cap = scfg["daily_request_budget"]
             if lane == "backlog":
@@ -5096,7 +5103,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     if "semantic: jev_skip_unverified" not in result["errors"]:
                         result["errors"].append("semantic: jev_skip_unverified")
                     runtime.transition(ledger, token, "defer", retry_in=300)
-                    out["deferred"] += 1
+                    _defer_note(out, "jev_skip_unverified")
                     continue
             job_jev = None if job_skip is not None else jev_client
             reserve_fn = None
