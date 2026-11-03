@@ -12,8 +12,9 @@ import semantic_observe
 from semantic_testkit import _cfg, _message, _audit_pair as _pair
 
 
-@pytest.mark.parametrize("batch", [1, 2])
-def test_extract_metrics_do_not_count_shared_batch_measurements_per_artifact(batch):
+@pytest.mark.parametrize("batch,counted", [(1, True), (2, False), (True, False),
+                                           (1.0, False), (None, False), (0, False), ("1", False)])
+def test_extract_metrics_do_not_count_shared_batch_measurements_per_artifact(batch, counted):
     with sqlite3.connect(":memory:") as db:
         db.execute("CREATE TABLE artifacts (artifact_id INTEGER, kind TEXT, meta TEXT)")
         integrity = {"calls": 1, "batch": batch, "timings": {
@@ -24,7 +25,7 @@ def test_extract_metrics_do_not_count_shared_batch_measurements_per_artifact(bat
         assert observed["artifacts"] == 2
         expected = {"calls": 2, "prompt_ms": 4.0, "predicted_ms": 6.0, "tokens": 20}
         assert {key: observed[key] for key in expected} == (
-            expected if batch == 1 else dict.fromkeys(expected))
+            expected if counted else dict.fromkeys(expected))
 
 
 def test_observation_and_status_share_current_denominator_not_history(tmp_path):
