@@ -11,13 +11,15 @@ import sys
 import tempfile
 import zlib
 
-from generate_slack_gallery import (BODY, FONT, GREEN, HEADING, INK, META, MUTED, POSTS, RULE,
+from generate_slack_gallery import (BODY, FONT, GREEN, HEADING, INK, MUTED, POSTS, RULE,
                                     SENDER, Screen, asset_hashes, verify_png)
 
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "docs/screenshots/lineworks-gallery"
 BLUE = "#176cc2"
+# This one-file example is independent of Slack's multi-file example.
+META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
 
 
 class TalkScreen(Screen):
