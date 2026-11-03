@@ -143,6 +143,18 @@ def single_attempt(client):
         return None
     sender = copy.copy(client)
     sender.retry_handlers = []
+    # The SDK upload helper makes several requests. Check current sealed
+    # authority before each request, including the binary upload step.
+    for edge in ("api_call", "_upload_file"):
+        native = getattr(sender, edge, None)
+        if native is None:
+            continue
+        async def checked(*args, _native=native, **kwargs):
+            allowed = RETRY_ALLOWED.get()
+            if allowed is not None and not await allowed():
+                raise RuntimeError("send_authority_revoked")
+            return await _native(*args, **kwargs)
+        setattr(sender, edge, checked)
     return sender
 
 
@@ -176,7 +188,7 @@ def _rate_wait(exc) -> float | None:
 RETRY_ALLOWED = contextvars.ContextVar("slack_retry_allowed", default=None)
 
 
-async def call_native(fn, *, retry_allowed=None, **kwargs):
+async def call_native(fn, *, retry_allowed=None, retry=True, **kwargs):
     """One Slack write; a 429 waits out Retry-After and resends once,
     only if RETRY_ALLOWED still allows it — otherwise the 429 stands as
     the not_sent outcome. A second failure propagates for _failed() to
@@ -187,7 +199,7 @@ async def call_native(fn, *, retry_allowed=None, **kwargs):
         raise
     except Exception as exc:
         wait = _rate_wait(exc)
-        if wait is None:
+        if wait is None or not retry:
             raise
         rejected = exc
     await asyncio.sleep(wait)
@@ -448,8 +460,9 @@ class DeliveryWorker(_BaseWorker):
     def _retry_gate(self, spec):
         """RETRY_ALLOWED for one send: the current authority, logged
         when it withholds a retry (the receipt preserves the rejection)."""
+        current = super()._retry_gate(spec)
         async def allowed():
-            if await self._send_allowed(spec):
+            if await current():
                 return True
             self._log("retry_skipped", delivery_id=spec["delivery_id"])
             return False
@@ -848,7 +861,7 @@ class DeliveryWorker(_BaseWorker):
             if group_fid:
                 # receipt-bound private FID — verify it still exists and
                 # matches the sealed identity before the group attaches it.
-                return await self._verify_private_fid(part, ctx)
+                return await self._verify_private_fid(spec, part, ctx)
             return await self._edit_only_prior(spec, part, escape(part["caption"], quote=False), ctx,
                                                attachment=not part.get("unavailable"))
         scoped = post_scoped(spec)
@@ -878,16 +891,13 @@ class DeliveryWorker(_BaseWorker):
         if upload is None:
             return {"result": "not_sent",
                     "error_code": "sdk_capability_missing"}
-        if (scoped and not part.get("prior_remote_id")
+        if (not group_mode and scoped and not part.get("prior_remote_id")
                 and (spec["op"] == "update" or spec["delivery"].get("thread_id"))
                 and ctx.get("history") is None):
             # File identity alone cannot bind a different source post.
             ctx["history"] = await self._replies(thread_ts)
         if group_mode and part.get("prior_remote_id"):
-            # receipt-bound private FID — the group update attaches it to the
-            # card; no thread post exists to remote-match against.
-            return {"result": "delivered", "remote_id": str(part["prior_remote_id"]),
-                    "attachment_origin": "edit"}
+            return await self._verify_private_fid(spec, part, ctx)
         if thread_ts and ((not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
                 or (scoped and part.get("prior_remote_id"))):
             # an identical file already remote in this thread binds the
@@ -915,17 +925,21 @@ class DeliveryWorker(_BaseWorker):
                 # private stage: upload binds no channel/thread — the group
                 # update below attaches the FID to the card itself.
                 response = await call_native(
-                    upload, file=blob, filename=name, title=name)
+                    upload, retry=False, file=blob, filename=name, title=name)
             else:
                 response = await call_native(
-                    upload,
+                    upload, retry=False,
                     channel=self._settings["channel_id"],
                     thread_ts=thread_ts, file=blob,
                     filename=name, title=name, **extra)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return _failed(exc, "attachment_part", thread_ts)
+            # files_upload_v2 is composite: its completion may reject after
+            # creating a private FID. Never authorize a second upload.
+            failed = _failed(exc, "attachment_part", thread_ts)
+            failed["result"] = "unknown"
+            return failed
         data = _payload(response)
         fid = _upload_file_id(data)
         if data.get("ok") is not True or not fid:
@@ -934,11 +948,14 @@ class DeliveryWorker(_BaseWorker):
         return {"result": "delivered", "remote_id": fid,
                 "attachment_origin": "upload"}
 
-    async def _verify_private_fid(self, part: dict, ctx: dict) -> dict:
+    async def _verify_private_fid(self, spec: dict, part: dict, ctx: dict) -> dict:
         """files.info-proof that a privately uploaded FID is still ours and
         still the sealed file. Anything unverifiable stays unknown — a
         reused part is never re-uploaded or blindly trusted."""
         prior = str(part["prior_remote_id"])
+        if (not self._sender._owns(spec.get("delivery", {}))
+                or part not in spec.get("parts", {}).get("manifest", [])):
+            return {"result": "unknown", "error_code": "file_target_unverified"}
         sender = self._sender.single_attempt()
         info = getattr(sender, "files_info", None) if sender is not None else None
         if info is None:
@@ -953,7 +970,11 @@ class DeliveryWorker(_BaseWorker):
         file_obj = data.get("file") if isinstance(data, dict) else None
         if data.get("ok") is not True or not isinstance(file_obj, dict):
             return {"result": "unknown", "error_code": "edit_target_unverified"}
-        if _file_problem(file_obj, part):
+        if (file_obj.get("id") != prior
+                or (part.get("operator_verified") is not True and (
+                    not self._sender._bot_user_id
+                    or file_obj.get("user") != self._sender._bot_user_id))
+                or _file_problem(file_obj, part)):
             return {"result": "unknown", "error_code": "edit_file_unverified"}
         return {"result": "delivered", "remote_id": prior,
                 "attachment_origin": "edit"}
@@ -985,13 +1006,15 @@ class DeliveryWorker(_BaseWorker):
         if len(set(fids)) != len(fids):
             return {"result": "not_sent", "error_code": "file_group_duplicate"}
         try:
-            response = await call_native(update, ts=ts, file_ids=fids)
+            response = await call_native(update, channel=self._settings["channel_id"],
+                                         ts=ts, file_ids=fids)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             return _failed(exc, "file_group", ts)
         data = _payload(response)
-        if data.get("ok") is not True:
+        if (data.get("ok") is not True or data.get("ts") != ts
+                or data.get("channel") != self._settings["channel_id"]):
             return {"result": "unknown", "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": ts}
 

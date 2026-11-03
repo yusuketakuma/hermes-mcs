@@ -500,7 +500,7 @@ def _parts_in_flight(db, latest) -> bool:
         return False
     return db.execute(
         "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
-        "AND ((kind IN ('body_part','attachment_part') "
+        "AND ((kind IN ('body_part','attachment_part','file_group') "
         "AND state IN ('pending','unknown')) OR (kind='thread' AND state='unknown')) "
         "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
@@ -1134,6 +1134,11 @@ def complete_intent(db, event_id, now) -> str | None:
                      AND a.sha256=? AND p.attachment_id=?
                      AND p.kind='attachment_part' AND p.state='delivered'
                      AND p.remote_id IS NOT NULL AND p.remote_id!='' AND p.payload_sha256=?
+                     AND (NOT EXISTS(SELECT 1 FROM notification_render_parts g
+                            WHERE g.delivery_id=r.delivery_id AND g.kind='file_group')
+                          OR EXISTS(SELECT 1 FROM notification_render_parts g
+                            WHERE g.delivery_id=r.delivery_id AND g.kind='file_group'
+                              AND g.state='delivered' AND g.remote_id=c.message_id))
                      AND EXISTS(SELECT 1 FROM notification_render_parts t
                          WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
                            AND t.state='delivered' AND t.remote_id=c.thread_id)

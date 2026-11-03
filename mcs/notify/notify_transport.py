@@ -645,7 +645,7 @@ def settle_part_receipt(db, req, now) -> dict:
                     "UPDATE notification_render_parts SET state='held',"
                     "updated_at=? WHERE delivery_id=? AND idx>? "
                     "AND state='pending' AND kind IN "
-                    "('body_part','attachment_part')",
+                    "('body_part','attachment_part','file_group')",
                     (now, render["delivery_id"], part["idx"]))
             if req["result"] == "not_sent":
                 # a failed thread never carries these files and the

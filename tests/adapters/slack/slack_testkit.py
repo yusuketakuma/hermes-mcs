@@ -93,7 +93,7 @@ class FakeClient:
         self.upload_calls.append(kwargs)
         self._fid_n += 1
         blob = kwargs.get("file") or b""
-        entry = {"id": f"F_SYNTHETIC_{self._fid_n:04d}",
+        entry = {"id": f"F_SYNTHETIC_{self._fid_n:04d}", "user": "U_BOT",
                  "name": kwargs.get("filename"),
                  "size": len(blob),
                  "sha256": hashlib.sha256(blob).hexdigest(),
