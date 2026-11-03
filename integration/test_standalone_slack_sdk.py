@@ -121,7 +121,8 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", lambda *_a: pytest.fail("no real sockets"))
 
 
-def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypatch):
+@pytest.mark.parametrize("grouped", [False, True], ids=["legacy-thread", "private-file-group"])
+def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypatch, grouped):
     async def scenario():
         client, session = standalone._client({"bot_token": "xox" + "b-fictional"})
         wire = Wire()
@@ -131,13 +132,19 @@ def test_real_sdk_upload_no_retries_and_closed_session_never_falls_back(monkeypa
             # None means verified; a failure is a slack_identity_* code
             assert await standalone._identity(client, {"team_id": "T_SYNTHETIC",
                                                        "application_id": "A_SYNTHETIC"}) is None
-            result = await client.files_upload_v2(channel="C_SYNTHETIC", thread_ts="1790000000.000001",
-                                                file=b"sample", filename="sample.txt", title="sample.txt")
+            target = {} if grouped else {"channel": "C_SYNTHETIC", "thread_ts": "1790000000.000001"}
+            result = await client.files_upload_v2(**target, file=b"sample", filename="sample.txt", title="sample.txt")
             assert result["ok"]
             assert [op for op, _ in wire.calls] == [
                 "auth.test", "bots.info", "files.getUploadURLExternal",
                 "fictional", "files.completeUploadExternal"]
-            assert wire.calls[-1][1]["thread_ts"] == "1790000000.000001"
+            if grouped:
+                assert "channel_id" not in wire.calls[-1][1] and "thread_ts" not in wire.calls[-1][1]
+                await client.chat_update(channel="C_SYNTHETIC", ts="1790000000.000001", file_ids=["F_SYNTHETIC"])
+                assert wire.calls[-1] == ("chat.update", {"channel": "C_SYNTHETIC", "ts": "1790000000.000001",
+                                                         "file_ids": "F_SYNTHETIC"})
+            else:
+                assert wire.calls[-1][1]["thread_ts"] == "1790000000.000001"
             wire.fail = "chat.postMessage"
             with pytest.raises(TimeoutError):
                 await client.chat_postMessage(channel="C_SYNTHETIC", text="架空通知")
