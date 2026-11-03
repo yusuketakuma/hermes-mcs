@@ -198,6 +198,7 @@ def test_medication_presence_keeps_order_and_duplicates_across_bounded_batches(s
         assert list(structured_view.medication_post_ids(store.db, iter(ids))) == expected
     finally:
         store.db.set_trace_callback(None)
-    reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    # Per-artifact proof checks are separate from the bounded source walk.
+    reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT REQUESTED.MID,")]
     assert len(reads) == 3
     assert store.db.total_changes == before

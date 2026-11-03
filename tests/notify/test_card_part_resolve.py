@@ -238,7 +238,10 @@ def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", miss
     _seed_thread(led)
     _attach(led, 100, name="synthetic.pdf")
     if sibling:
-        _attach(led, 101, name="synthetic-second.pdf")
+        sibling_id = _attach(led, 101, name="synthetic-second.pdf")
+        # Slack's parent render contains only the root post's attachments.
+        with led.db:
+            led.db.execute("UPDATE attachments SET message_id=100 WHERE attachment_id=?", (sibling_id,))
     caption = {"text": "synthetic original description"}
     monkeypatch.setattr(notify_parts, "_attachment_captions",
                         lambda db, card, attachments: {a["attachment_id"]: caption["text"] for a in attachments})
