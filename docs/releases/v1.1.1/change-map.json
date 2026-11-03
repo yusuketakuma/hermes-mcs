@@ -1,10 +1,10 @@
 {
-  "status": "unpublished locally accepted candidate; main integration and production application pending",
+  "status": "unpublished integration candidate; final Slack feature, production application and release acceptance pending",
   "baseline": {
     "previous_release": "v1.1.0",
-    "production_sha": "2b3ecd02b1412868eb2fb92d3124345dd3d606e6"
+    "production_sha": "2673b767b9cba56a0ca169eeebe1d0c6c63143e6"
   },
-  "fragment_count": 38,
+  "fragment_count": 79,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -39,6 +39,12 @@
       "sha256": "556c5b766e70506f0e6a54ad8a466d0544dde1620b415b821d4167e9758013ef"
     },
     {
+      "path": "changes/archive/1.1.1/absent-responsiveness-urgency.json",
+      "id": "absent-responsiveness-urgency",
+      "title": "呼びかけへの反応がない記述で緊急度判定が保持されない問題を修正",
+      "sha256": "c920b7197e1c30d1608c11599c5c178256d5d8f1435d833e32cd9da47b1cf98b"
+    },
+    {
       "path": "changes/archive/1.1.1/checkpoint-reader-work-reuse.json",
       "id": "checkpoint-reader-work-reuse",
       "title": "解析再開時の重複した分割と読取りを削減",
@@ -61,6 +67,12 @@
       "id": "cloud-accounting-streaming",
       "title": "クラウド利用履歴の読込みを省メモリ化",
       "sha256": "cb7d655a9d3f82502074d10f51728e3ec95847085b242bc1567c23da12c1c106"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-backlog-defer-reasons.json",
+      "id": "cloud-backlog-defer-reasons",
+      "title": "クラウドバックログの延期理由を記録",
+      "sha256": "c86b01fae852f410137c6f80ff5a436dc7447865dfe422ff85a9766680884353"
     },
     {
       "path": "changes/archive/1.1.1/cloud-backlog-diagnostics.json",
@@ -93,10 +105,34 @@
       "sha256": "507e1944ed7eb8dc012716c9226d88ad5bb960acfa39dc52288ba226aa543026"
     },
     {
+      "path": "changes/archive/1.1.1/cloud-presend-receipt-keeping.json",
+      "id": "cloud-presend-receipt-keeping",
+      "title": "送信前に拒否された呼出しで確定済みの支払証跡が破棄される問題を修正",
+      "sha256": "c2ea326d07521c6c647dc25ab78e65aa24a0e7332e59e8ac6310abe5e1d47639"
+    },
+    {
       "path": "changes/archive/1.1.1/cloud-receipt-read-cancellation.json",
       "id": "cloud-receipt-read-cancellation",
       "title": "課金証跡の照合を中断した後の読取り状態を解放",
       "sha256": "998e544a26dd6f4bfa3fe2e2d28f111ec6855cc277d160a601e6ec67d8b4665f"
+    },
+    {
+      "path": "changes/archive/1.1.1/cloud-stall-fairness.json",
+      "id": "cloud-stall-fairness",
+      "title": "クラウドの延期理由と未解決投稿による処理停滞を改善",
+      "sha256": "684a18e168a7cdf1d023e0ac747cf460a255bca19e6471bbb271e8e0991e9b32"
+    },
+    {
+      "path": "changes/archive/1.1.1/compact-local-llm-indicator.json",
+      "id": "compact-local-llm-indicator",
+      "title": "ローカルLLMの状態表示を短くする",
+      "sha256": "81019cc63614e75e8021a00fb1dbd9f070567c564eadb439c9c9c72adff6e8f9"
+    },
+    {
+      "path": "changes/archive/1.1.1/compact-processing-status.json",
+      "id": "compact-processing-status",
+      "title": "解析状態を短く表示",
+      "sha256": "e21dc281001a8695c35ad4d5d71d463c010d9d5dddeaccfb0bfe085e769c92b5"
     },
     {
       "path": "changes/archive/1.1.1/config-read-retry.json",
@@ -105,10 +141,40 @@
       "sha256": "d9bab2f87065abb14c4579202aee3f08d39a3704096898fab952bf0cb25c67df"
     },
     {
+      "path": "changes/archive/1.1.1/discord-section-dividers.json",
+      "id": "discord-section-dividers",
+      "title": "Discordカードの区切り線を維持",
+      "sha256": "a1f8f5024b55a31054d2b9145e772e5c983a7418f48b92b8871824c651e31e7e"
+    },
+    {
+      "path": "changes/archive/1.1.1/drug-info-gateway-only.json",
+      "id": "drug-info-gateway-only",
+      "title": "公開薬剤情報の通信先を共通ゲートウェイに限定",
+      "sha256": "518974338c843ff14a003b3adc3b93156c2d44084ab53f2f4b1ecb2629868143"
+    },
+    {
+      "path": "changes/archive/1.1.1/drug-master-extraction-hints.json",
+      "id": "drug-master-extraction-hints",
+      "title": "医薬品マスターを薬剤抽出の参考入力に利用",
+      "sha256": "f623a2d8aea9a97e8e437ef06448e3dbc4c0bd86aeade418b71e8ca083bb7ad4"
+    },
+    {
+      "path": "changes/archive/1.1.1/drug-reference-chat.json",
+      "id": "drug-reference-chat",
+      "title": "投稿中の薬剤名から辞書の参考候補を表示",
+      "sha256": "6dcd72ec424300b388640a8df1b8fafa50336c11a33ab46e3da840611c259a81"
+    },
+    {
       "path": "changes/archive/1.1.1/extract-carry-backpressure.json",
       "id": "extract-carry-backpressure",
       "title": "保存待ちの推論結果が増え続ける問題を修正",
       "sha256": "6b0d39a02c468dd274c416e17020f8eded8eff6542cc2528fbafce0e121099a1"
+    },
+    {
+      "path": "changes/archive/1.1.1/extract-startup-lock-wait.json",
+      "id": "extract-startup-lock-wait",
+      "title": "抽出ワーカーの更新後の起動待ちを修正",
+      "sha256": "cd6ecf9bd9d41b63edc036ceece4ac1bd3d1a32778d2b49d102c813864ab17d7"
     },
     {
       "path": "changes/archive/1.1.1/extraction-final-save-read-reuse.json",
@@ -123,10 +189,46 @@
       "sha256": "e4a4747294f8fa0bccb53f6db601a7c1f6384cd4d0106d42ba5df13478091283"
     },
     {
+      "path": "changes/archive/1.1.1/failed-relogin-replay-observations.json",
+      "id": "failed-relogin-replay-observations",
+      "title": "再ログイン後の収集失敗でも先行する診断記録を保持",
+      "sha256": "5efb8903e9a32df059fc7d0b8ab57c7bd9552b1e3e4dfec57ebd7275f0fa34f8"
+    },
+    {
+      "path": "changes/archive/1.1.1/jev-optional-propositions.json",
+      "id": "jev-optional-propositions",
+      "title": "semantic.extra_propositions で任意Jev命題群を有効化可能に（皮膚・転倒・感染・摂食・睡眠・注入検知）",
+      "sha256": "86f4cf126276b2bfcbc5b333a0518cce2d1854285f614e58383d27a33975ceba"
+    },
+    {
       "path": "changes/archive/1.1.1/ledger-audit-schema10-required-column.json",
       "id": "ledger-audit-schema10-required-column",
       "title": "DB監査で初期取込状態の保存欄の欠落を検知",
       "sha256": "1d152691bc29a404b830444970f039e758d1666429b21331ed504c90f58bbcc5"
+    },
+    {
+      "path": "changes/archive/1.1.1/legacy-processing-display.json",
+      "id": "legacy-processing-display",
+      "title": "従来の解析表示の更新判定を維持",
+      "sha256": "4ee2794e1d0db39b184bc4026301c9fc08ddd349ce3482c06d7b495f78089b00"
+    },
+    {
+      "path": "changes/archive/1.1.1/llm-completion-deadline.json",
+      "id": "llm-completion-deadline",
+      "title": "LLMの未完了応答と未送信を正しく扱う",
+      "sha256": "8654bf27cad6e981a854a4f852cd929b29ab42837351a382ca4fb28a41de5ea7"
+    },
+    {
+      "path": "changes/archive/1.1.1/llm-probe-admission-deferral.json",
+      "id": "llm-probe-admission-deferral",
+      "title": "LLM枠の一時拒否で形式probeが「plain判定」として600秒固定される問題を修正",
+      "sha256": "45801fd13e337bb88be2b185d1b19897310bb4c98c28dbe6523d0594e0426350"
+    },
+    {
+      "path": "changes/archive/1.1.1/llm-probe-unknown-route-unobserved.json",
+      "id": "llm-probe-unknown-route-unobserved",
+      "title": "未登録routeの形式probeが偽の「plain判定」としてキャッシュされる問題を修正",
+      "sha256": "5050887049ce3ed7c1c79ed9320b0ffa406966432966f268714bc968d474159f"
     },
     {
       "path": "changes/archive/1.1.1/local-admission-unused-reconciliation.json",
@@ -189,16 +291,82 @@
       "sha256": "62671baeed33b1e328690c321a430f01088e4b551beaf34bbb387c820f71f8cd"
     },
     {
+      "path": "changes/archive/1.1.1/provider-rollback-ef091-witness.json",
+      "id": "provider-rollback-ef091-witness",
+      "title": "更新失敗時に検証済みの候補へ戻せるよう修正",
+      "sha256": "caa85a7625bc0605aa9b5cf20d9087ff2aa6d80ea35b1d4076501e8c86e6a5b0"
+    },
+    {
+      "path": "changes/archive/1.1.1/provider-rollback-v110-witness.json",
+      "id": "provider-rollback-v110-witness",
+      "title": "更新失敗時に検証済みの1.1.0へ戻せるよう修正",
+      "sha256": "47ae958f7e69a3e49cb6c433904663004865b6763e2b7208e45999ff6493841d"
+    },
+    {
+      "path": "changes/archive/1.1.1/provider-settings-runtime-churn.json",
+      "id": "provider-settings-runtime-churn",
+      "title": "プロバイダ設定の読取検証を無関係な実行時ファイルに耐性化",
+      "sha256": "3076e5b410e7d0268dce1ca280d446c81917bd3575ad4523dd336e440df5a172"
+    },
+    {
+      "path": "changes/archive/1.1.1/provider-settings-transient-read.json",
+      "id": "provider-settings-transient-read",
+      "title": "設定保存中の一瞬にプロバイダ設定が読めないと報告される問題を修正",
+      "sha256": "0985544ddb7bcf1ecc22c4ef41ed7eb882ab80d7265dc24d55cf1ab14cc0a4b3"
+    },
+    {
+      "path": "changes/archive/1.1.1/recovery-helper-generation.json",
+      "id": "recovery-helper-generation",
+      "title": "旧世代の復旧用ログ処理が残る更新時の停止を修正",
+      "sha256": "fbcd9d1632a5187129a4771ab0c3555711441ae3e6a898f163a62bdffa043a28"
+    },
+    {
       "path": "changes/archive/1.1.1/rollback-provider-import-closure.json",
       "id": "rollback-provider-import-closure",
       "title": "更新失敗後の復旧で設定検証が停止する問題を修正",
       "sha256": "9db57f66a98224ab4b3c0b0cfb1b3e2d2b6da5a92708a1cbc0818559106b6e31"
     },
     {
+      "path": "changes/archive/1.1.1/rollup-bound-source-internal-claims.json",
+      "id": "rollup-bound-source-internal-claims",
+      "title": "測定カバレッジが常に「未取得・不完全」扱いになる問題を修正",
+      "sha256": "81399be65c79ba2615776f79e43cdd59a6ab2947a2a1ba86a890647d34ee5733"
+    },
+    {
       "path": "changes/archive/1.1.1/rollup-patient-source-concurrency.json",
       "id": "rollup-patient-source-concurrency",
       "title": "別患者の更新で患者集約が保留され続ける問題を修正",
       "sha256": "2a0fb02bc25467c39f7d94efd12ccc0a220f96e56bc4dc8c5e6b8ef931831501"
+    },
+    {
+      "path": "changes/archive/1.1.1/run-log-device-identity.json",
+      "id": "run-log-device-identity",
+      "title": "再マウント後の旧ログ確認による更新停止を修正",
+      "sha256": "e71b467f41a5eca926eeebe6ce7fc4f41b47da4b2b346c5c58402e1874e6f8d2"
+    },
+    {
+      "path": "changes/archive/1.1.1/run-log-helper-codes.json",
+      "id": "run-log-helper-codes",
+      "title": "実行ログ処理の導入・移行失敗で固有の原因が失われる問題を修正",
+      "sha256": "e4bda636a74753be056cc6f4a0ddf16c08dd5bbaca0538a7329a56c499db4e54"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-attachment-identity-confirm.json",
+      "id": "runtime-attachment-identity-confirm",
+      "title": "証明が欠けたSlack添付を人の確認で復旧",
+      "sha256": "713250902d7f6585047d5f549949e9ba1af4c9f7273dc694add33897fb5c5219"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-clinical-health-budget.json",
+      "id": "runtime-clinical-health-budget",
+      "title": "薬剤照合・集計・シグナルと通知診断の時間を確保",
+      "sha256": "c93f9716c4743ff47f0119fa3826789772c7e633c35d183ec5ef8b1c97da66fc"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-cloud-worker-stability.json",
+      "id": "runtime-cloud-worker-stability",
+      "title": "クラウド解析の停滞理由と常駐数を管理",
+      "sha256": "067986af16b605438e4b0834f9d170edd4468b9cfe2b76cfdf26590ebcf4afbb"
     },
     {
       "path": "changes/archive/1.1.1/runtime-control-readers-restore-gates-v111.json",
@@ -213,10 +381,64 @@
       "sha256": "cfb4a173c1fdc3eab205f3eadeb4b8b7b458e3e63758bbbd1b2cfde55b653fbe"
     },
     {
+      "path": "changes/archive/1.1.1/runtime-notification-reconcile.json",
+      "id": "runtime-notification-reconcile",
+      "title": "通知の送信証跡を稼働中も定期照合",
+      "sha256": "61dadeec71da2072c8962607b456332ac4011469a9d13c138546207cbedb886b"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime-slack-optional-wire-limit.json",
+      "id": "runtime-slack-optional-wire-limit",
+      "title": "Slackの旧本文を再計画する際の上限なし分岐を修正",
+      "sha256": "a02b063fd0c7a6e9b5e19b3d81deb8ede5f925146d347eeead6fb10223f5e6b5"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime02-accounting-scans.json",
+      "id": "runtime02-accounting-scans",
+      "title": "クラウド費用集計の重複走査を削減",
+      "sha256": "dc7fc2eef49d5e3bebf037c643cd83cd6962de6d2482908dccc959b4056ea148"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime02-completion-observation.json",
+      "id": "runtime02-completion-observation",
+      "title": "保存結果と通知全体の完了、保留の解決手順を表示",
+      "sha256": "63c575f75b8f218f5be4ca9da79c29e328eca0a2c1640906b788be605b3d480e"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime02-medication-fidelity.json",
+      "id": "runtime02-medication-fidelity",
+      "title": "薬剤の規格と服用量、本人と家族の服用を区別",
+      "sha256": "c4d51086e9df25af3895b9fbbfb30cded484c9320372840dc6a148b60fcd9031"
+    },
+    {
+      "path": "changes/archive/1.1.1/runtime02-snapshot-fence.json",
+      "id": "runtime02-snapshot-fence",
+      "title": "snapshotの並行公開を抑止して計測を分離",
+      "sha256": "58fe20c0ba0661646b2b84e7e60b31655e3a7ef8cf0d40f46262c9c62c1de958"
+    },
+    {
       "path": "changes/archive/1.1.1/semantic-cached-receipt-batch.json",
       "id": "semantic-cached-receipt-batch",
       "title": "保存済み解析結果の確認時に重複する課金記録の読取りを削減",
       "sha256": "42b3c1a8c7bb8b92838918f4f56591af5178dc7435b7ef27f12fc9aeac22eafb"
+    },
+    {
+      "path": "changes/archive/1.1.1/semantic-defer-coverage.json",
+      "id": "semantic-defer-coverage",
+      "title": "意味解析の延期理由の一部が処理記録に現れない問題を修正",
+      "sha256": "e8c1dd1ffe955749352e68e552600c01493f90a48fd509a7a26d8935bd69d685"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-replies-in-thread.json",
+      "id": "slack-replies-in-thread",
+      "title": "Slackの返信を元投稿のスレッドに表示",
+      "sha256": "5a2a49ccd0813de626039d7e296873217782ed9ce260e71de11d3af75bc16331"
+    },
+    {
+      "path": "changes/archive/1.1.1/slack-thread-history-verification.json",
+      "id": "slack-thread-history-verification",
+      "title": "Slackスレッドの履歴を確認してから投稿",
+      "sha256": "f63c1257f10cb4a7a9e2a4e183b344f6530e9815ba6bb6a6f9dd7926636ff548"
     },
     {
       "path": "changes/archive/1.1.1/source-bindings-read-snapshot.json",
@@ -225,16 +447,40 @@
       "sha256": "56fb6b6b47887be23ae50beebf4930500461011fbbb39a40245497c49ef2ed5f"
     },
     {
+      "path": "changes/archive/1.1.1/spec-key-list-delimiter.json",
+      "id": "spec-key-list-delimiter",
+      "title": "複数の未対応キーがある通知仕様の拒否理由が記録から消える問題を修正",
+      "sha256": "3a98bd342fa8e94ef9be505e140e54bb8f35edbd0e225765ffb6a921f56532ef"
+    },
+    {
+      "path": "changes/archive/1.1.1/spec-unsupported-key-names.json",
+      "id": "spec-unsupported-key-names",
+      "title": "spec拒否の記録に安全な不明キー名を付与",
+      "sha256": "504f069243f556ae0b9bfb23e2d98dfcce0c434f559171c6cbec5430fda3588b"
+    },
+    {
       "path": "changes/archive/1.1.1/standalone-restore-writer-hold-v111.json",
       "id": "standalone-restore-writer-hold-v111",
       "title": "未完了DB復元のwriter holdをstandaloneが解除し得た問題と復元中writer起動を修正",
       "sha256": "9c2803c8197f8ec4789f1c67f522e4031f47e63782fca1baa4651b5f201100dd"
     },
     {
+      "path": "changes/archive/1.1.1/thread-section-divider.json",
+      "id": "thread-section-divider",
+      "title": "通知の要約と原文の区切りを表示",
+      "sha256": "0171ba91b6673645c6a1d432740f89ed212e738637c9dc7eb862798a9e9666b5"
+    },
+    {
       "path": "changes/archive/1.1.1/transport-live-send-authority.json",
       "id": "transport-live-send-authority",
       "title": "通知停止中の再送とLINE WORKSの配送停滞を修正",
       "sha256": "3fc7fd4b800ff9f10254126d32d93f6979b3d7ee76858da94d6d8a2a1b247cd5"
+    },
+    {
+      "path": "changes/archive/1.1.1/update-failure-diagnostics-v111.json",
+      "id": "update-failure-diagnostics-v111",
+      "title": "更新失敗後の復元保留でも元の失敗理由を保持",
+      "sha256": "ab24041f20767b0f8d90451965feb37e339b40d2130239af3e481f87378b640d"
     }
   ]
 }

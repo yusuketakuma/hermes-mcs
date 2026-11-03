@@ -2,7 +2,7 @@
   "version": "1.1.1",
   "sections": {
     "features": {
-      "notes": "2026-11-02、1.1.1候補: 新着はローカル、履歴と患者背景は設定されたクラウドを優先する説明を、共通クラウド処理・保存待ち結果の再開・患者背景の生成条件と照合した。モデル・予算・人承認の条件は維持する。患者背景の属性と引用根拠の返却形式、内部証跡付き結果の測定値読取り、未完了通知の配送計画別内訳を変更記録と照合した。新しい添付ファイル解析を追加したとは書かず、実績のない処理量や速度の向上率も記載しない。",
+      "notes": "2026-11-02、1.1.1候補: 新着はローカル、履歴と患者背景は設定されたクラウドを優先する説明を、共通クラウド処理・保存待ち結果の再開・患者背景の生成条件と照合した。モデル・予算・人承認の条件は維持する。患者背景の属性と引用根拠の返却形式、内部証跡付き結果の測定値読取り、未完了通知の配送計画別内訳を変更記録と照合した。新しい添付ファイル解析を追加したとは書かず、実績のない処理量や速度の向上率も記載しない。 2026-11-03追補: 医薬品辞書の未確定参考候補、薬名・規格・服用量の区別、コンパクトな解析状況表示、通知保留の人承認付き復旧を現行コードと照合した。新しい添付表示は実装中であり、受入後に追加照合する。",
       "sources": [
         "README.md",
         "mcs/llm/cloud_inference.py",
@@ -15,11 +15,13 @@
         "changes/archive/1.1.1/extract-carry-backpressure.json",
         "changes/archive/1.1.1/patient-context-grounded-detail-prompt.json",
         "changes/archive/1.1.1/measurement-consumer-content-proof.json",
-        "changes/archive/1.1.1/notification-part-plan-health-20261101.json"
+        "changes/archive/1.1.1/notification-part-plan-health-20261101.json",
+        "mcs/extract/llm/extraction_medications.py",
+        "mcs/notify/notify_recovery.py"
       ]
     },
     "demos": {
-      "notes": "2026-11-02、1.1.1候補: Slackを先頭とする説明図9画面、本人向け回答と人承認、DiscordとLINE WORKSの表示を既存README・画面資料に照合した。処理サービス欄はAPIキーの登録状態と採用結果の証跡で表示を決める。今回の通知読取りの再利用は表示内容を変えないため、既存画面の差替えは不要と判断した。版別の説明図とその同梱・リンクはリリース生成時に別に確認し、既存図を実画面や性能実測の証拠とはしない。",
+      "notes": "2026-11-02、1.1.1候補: Slackを先頭とする説明図9画面、本人向け回答と人承認、DiscordとLINE WORKSの表示を既存README・画面資料に照合した。処理サービス欄はAPIキーの登録状態と採用結果の証跡で表示を決める。今回の通知読取りの再利用は表示内容を変えないため、既存画面の差替えは不要と判断した。版別の説明図とその同梱・リンクはリリース生成時に別に確認し、既存図を実画面や性能実測の証拠とはしない。 2026-11-03追補: 既存の推論フロー図は合成の説明図として保持し、実画面や性能値と区別する。新しいSlack添付表示に伴うgalleryは実装担当が生成元・SVG・PNGをそろえ、最終候補で検査する。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -28,11 +30,12 @@
         "mcs/notify/processing_route.py",
         "mcs/notify/notify_render.py",
         "changes/archive/1.1.1/notification-performance-scoped-reads.json",
-        "docs/releases/VISUAL_PREPARATION.md"
+        "docs/releases/VISUAL_PREPARATION.md",
+        "docs/releases/v1.1.1/inference-flow.svg"
       ]
     },
     "quickstart": {
-      "notes": "2026-11-02、1.1.1候補: 既存の導入・診断・固定候補更新の入口を維持し、更新ガイドの候補版と対応表を、v1.1.0を含む31更新元・52経路の合成manifestへ合わせた。installとCIのHermes固定commitが同じであることを照合した。復元保留中のwriter起動拒否、更新・rollback後のmodule読込みとサービス反映の条件を確認した。更新の承認をDB復元や結果不明通知の個別承認へ広げない。本番適用・再起動・稼働確認は未実施であり、この見直しを実機受入とはしない。",
+      "notes": "2026-11-02、1.1.1候補: 既存の導入・診断・固定候補更新の入口を維持し、更新ガイドの候補版と対応表を、v1.1.0を含む31更新元・52経路の合成manifestへ合わせた。installとCIのHermes固定commitが同じであることを照合した。復元保留中のwriter起動拒否、更新・rollback後のmodule読込みとサービス反映の条件を確認した。更新の承認をDB復元や結果不明通知の個別承認へ広げない。本番適用・再起動・稼働確認は未実施であり、この見直しを実機受入とはしない。 2026-11-03追補: 固定候補の公式更新planはHermes経路でblockerなし、再導入・設定移行なし、gateway再起動ありだった。最終候補のschemaとサービス反映は新しいplanと適用receiptで確認する。",
       "sources": [
         "README.md",
         "install.sh",
@@ -46,11 +49,12 @@
         "mcs/ingest/init_data.py",
         "tests/fixtures/schema_upgrade/update-paths.json",
         "changes/archive/1.1.1/runtime-control-readers-restore-gates-v111.json",
-        "changes/archive/1.1.1/rollback-provider-import-closure.json"
+        "changes/archive/1.1.1/rollback-provider-import-closure.json",
+        "scripts/mcs_upgrade.py"
       ]
     },
     "safety": {
-      "notes": "2026-11-02、1.1.1候補: READMEの外部送信先、明示OFF、API別・合計の予算、人承認、未取得と観測済み0件の区別を維持する。保存待ちの有料結果と課金receiptの保全、原文と完了証跡の結合、通知の送信直前の権限照合、復元中の書込み保留を変更記録と実装に照合した。結果不明の配送を自動再送したり、クラウドの失敗を未使用と断定したりしない。実API・実SDK・実配送は未確認として、合成回帰の成功と区別する。",
+      "notes": "2026-11-02、1.1.1候補: READMEの外部送信先、明示OFF、API別・合計の予算、人承認、未取得と観測済み0件の区別を維持する。保存待ちの有料結果と課金receiptの保全、原文と完了証跡の結合、通知の送信直前の権限照合、復元中の書込み保留を変更記録と実装に照合した。結果不明の配送を自動再送したり、クラウドの失敗を未使用と断定したりしない。実API・実SDK・実配送は未確認として、合成回帰の成功と区別する。 2026-11-03追補: 添付の人承認は完全一致した履歴行だけへ束縛し、未公開heldの再封印とカード状態・公開処理以外へ広げない。送信済み証跡・unknown・復元保留・予算を保持し、本番辞書を自動有効化しない。",
       "sources": [
         "README.md",
         "SECURITY.md",
@@ -63,11 +67,14 @@
         "mcs/notify/processing_route.py",
         "changes/archive/1.1.1/cloud-notsent-wait-reasons-20261102.json",
         "changes/archive/1.1.1/transport-live-send-authority.json",
-        "changes/archive/1.1.1/standalone-restore-writer-hold-v111.json"
+        "changes/archive/1.1.1/standalone-restore-writer-hold-v111.json",
+        "mcs/notify/notify_parts.py",
+        "mcs/notify/notify_recovery.py",
+        "resources/drug-master/20261013/manifest.json"
       ]
     },
     "docs": {
-      "notes": "2026-11-02、1.1.1候補: 内部moduleを責務別に整理した配置説明と、生成するmodule表・配布source inventoryの対象を照合した。現行ガイドと採番予定を1.1.1へ合わせ、1.1.0以前の注意・受入票・変更履歴は保持した。この見直し記録は1.1.1の生成準備であり、CHANGELOG・README要約・版別説明図の生成と最終一致検査は親担当が行う。消失した過去ログの成功件数は現候補の実測成功にせず、新しい固定候補の検証・本番適用・GitHub公開を受入票で分けて記録する。",
+      "notes": "2026-11-02、1.1.1候補: 内部moduleを責務別に整理した配置説明と、生成するmodule表・配布source inventoryの対象を照合した。現行ガイドと採番予定を1.1.1へ合わせ、1.1.0以前の注意・受入票・変更履歴は保持した。この見直し記録は1.1.1の生成準備であり、CHANGELOG・README要約・版別説明図の生成と最終一致検査は親担当が行う。消失した過去ログの成功件数は現候補の実測成功にせず、新しい固定候補の検証・本番適用・GitHub公開を受入票で分けて記録する。 2026-11-03追補: 未公開1.1.1の既存節へ現在の41変更記録を追補し、合計79件を版別archiveと対応表へ保存した。公開・本番適用・GitHub CIの実行結果は準備記録と分ける。",
       "sources": [
         "README.md",
         "docs/development/RELEASE_NOTES.md",
@@ -78,7 +85,8 @@
         "docs/guides/UPGRADE_AGENT.md",
         "changes/archive/1.1.1/18-logical-owner-names.json",
         "changes/archive/1.1.1/18-llm-internal-layout.json",
-        "deployment/sdc-release-owner.json"
+        "deployment/sdc-release-owner.json",
+        "docs/releases/v1.1.1/change-map.json"
       ]
     }
   }
