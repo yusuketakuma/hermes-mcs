@@ -296,6 +296,13 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
                   "prepare_profile_unavailable", "prepare_medication_changed",
                   "prepare_context_invalid", "prepare_database_unavailable", "other"}
+_COMMIT_REJECTION_REASONS = frozenset({
+    "transaction", "source_or_owner", "checkpoint", "prior_changed", "quality_proof",
+    "completeness", "context", "reference", "medication", "retained_proof", "result_seal",
+    "insert_fence", "cloud_guard",
+})
+_COMMIT_REJECTION_CODES = frozenset("commit_" + reason for reason in _COMMIT_REJECTION_REASONS)
+_DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
 
 
 def worker(parent, *, index=None):

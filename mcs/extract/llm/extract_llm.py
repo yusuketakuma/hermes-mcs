@@ -8,7 +8,7 @@ extract_v1 (provenance kept — rules and model never overwrite each other).
 
 Local endpoint: http://127.0.0.1:8080/v1/chat/completions (OpenAI-compatible,
 enable_thinking=false for clean JSON). Eligible units can use the configured
-Anthropic cloud route; scope, keys and budgets gate each HTTP attempt.
+cloud route; scope, keys and budgets gate each HTTP attempt.
 
 Incremental: run_pending() extracts only messages lacking a current
 extract_llm artifact (content_hash tracked in meta). run_check calls it
@@ -2213,12 +2213,23 @@ def _verify_created_artifact_tx(db, artifact_id, *, kind, project_id, message_id
         raise RuntimeError("extract_insert_unverified")
 
 
+def _commit_rejected(r, reason):
+    """Return the unchanged rejection outcome while retaining only a fixed diagnostic."""
+    if isinstance(r, dict):
+        r["_commit_reject_reason"] = ("commit_" + reason
+            if type(reason) is str and reason in cloud_backlog._COMMIT_REJECTION_REASONS else "commit_rejected")
+    return "rejected"
+
+
 def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
                      qc_fix: dict | None = None,
                      extra_meta: dict | None = None, *, scoped_cleanup=False, result_witness=None):
+    diagnostic_row = r
+    if isinstance(r, dict):
+        r.pop("_commit_reject_reason", None)
     if not isinstance(r, dict) or not isinstance(r.get("_source_binding"), str):
-        return "rejected"
+        return _commit_rejected(diagnostic_row, "source_or_owner")
     meta = {inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
             "extract_version": EXTRACT_VERSION,
             "patient_context_version": PATIENT_CONTEXT_VERSION}
@@ -2227,7 +2238,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             "SELECT * FROM messages m WHERE message_id=? AND content_hash=? "
             f"AND {current_v4_id()} IS NULL", (r["message_id"], r["content_hash"])).fetchone()
         if source is None:
-            return "rejected"                # fence before any missing-row context read
+            return _commit_rejected(diagnostic_row, "source_or_owner")                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
     actual_model = _actual_model(r)
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger.db, r)
@@ -2251,7 +2262,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
         meta['source_binding'] = r['_source_binding']
     held_prior = False
     if not _source_writable(ledger.db, r):
-        return "rejected"
+        return _commit_rejected(diagnostic_row, "source_or_owner")
     if isinstance(r, dict) and r.get("_cloud_guard"):
         try:
             r["_cloud_guard"]()
@@ -2263,18 +2274,19 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
         f"AND {current_v4_id()} IS NULL",
         (r["message_id"], r["content_hash"], r["project_id"])).fetchone()
     if source is None:
-        return "rejected"
+        return _commit_rejected(diagnostic_row, "source_or_owner")
     if "_input_context" in r and _thread_context(ledger.db, r,
             budget=r.get("_input_context_budget", _CTX_TOTAL_MAX)) != r["_input_context"]:
-        return "rejected"
+        return _commit_rejected(diagnostic_row, "context")
     frame = r.get("_frame")
     if frame is not None:
         current_frame = extraction_context.load(ledger.db, frame.get("artifact_id"), dict(source))
-        if (current_frame is None or current_frame["digest"] != frame.get("digest")
-                or not _frame_references_current(ledger.db, dict(source), current_frame)):
-            return "rejected"
+        if current_frame is None or current_frame["digest"] != frame.get("digest"):
+            return _commit_rejected(diagnostic_row, "context")
+        if not _frame_references_current(ledger.db, dict(source), current_frame):
+            return _commit_rejected(diagnostic_row, "reference")
         if not _medication_reference_current(ledger.db, r):
-            return "rejected"
+            return _commit_rejected(diagnostic_row, "medication")
     meta['source_binding'] = r['_source_binding']
     prior = _prior_extract(ledger.db, r)
     human = extra_meta.get("human_fix") if isinstance(extra_meta, dict) else None
@@ -2313,7 +2325,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                 if "context_snapshot" in prior_meta:
                     retained_frame = extraction_context.load(ledger.db, prior_meta["context_snapshot"], dict(source))
                     if retained_frame is None:
-                        return "rejected"
+                        return _commit_rejected(diagnostic_row, "retained_proof")
                     retained["_frame"] = retained_frame
                     retained_context = retained_frame["text"]
                 else:
@@ -2327,7 +2339,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                             {key: value for key, value in retained_document.items()
                              if key not in (_INTERNAL_REPAIR_PROOF, _INTERNAL_LEAF_CLAIMS)},
                             retained_proof)):
-                    return "rejected"
+                    return _commit_rejected(diagnostic_row, "retained_proof")
                 meta["internal_proof_version"] = 1
                 meta["internal_proof_hash"] = prior_meta["internal_proof_hash"]
         inline_proof = r.get("_inline_extract_proof") if not retaining_prior else None
@@ -2335,13 +2347,13 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             clinical = _provider_strict_dict(content)
             if (clinical is None or _INTERNAL_REPAIR_PROOF in clinical
                     or not _verify_inline_extract_proof(ledger.db, r, bound_context, clinical, inline_proof)):
-                return "rejected"
+                return _commit_rejected(diagnostic_row, "result_seal")
             clinical[_INTERNAL_REPAIR_PROOF] = inline_proof
             content = json.dumps(clinical, ensure_ascii=False)
             meta["internal_proof_version"] = 1
             meta["internal_proof_hash"] = _internal_proof_hash(inline_proof)
             if meta["internal_proof_hash"] is None:
-                return "rejected"
+                return _commit_rejected(diagnostic_row, "result_seal")
         claims = meta["integrity"].get("completeness") if isinstance(meta.get("integrity"), dict) else None
         if isinstance(claims, dict):
             # Persist the verified leaf claim inside freshly written content:
@@ -2351,11 +2363,11 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             # content would void the stored provider evidence.
             clinical = _provider_strict_dict(content)
             if clinical is None:
-                return "rejected"
+                return _commit_rejected(diagnostic_row, "result_seal")
             existing = clinical.get(_INTERNAL_LEAF_CLAIMS)
             if existing is not None:
                 if existing != claims:
-                    return "rejected"
+                    return _commit_rejected(diagnostic_row, "result_seal")
             elif not retaining_prior:
                 clinical[_INTERNAL_LEAF_CLAIMS] = claims
                 content = json.dumps(clinical, ensure_ascii=False)
@@ -2409,7 +2421,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             (KIND, content, actual_model, meta_json, created_at,
              r["message_id"], r["content_hash"], r["project_id"]))
         if not cur.rowcount:
-            return "rejected"
+            return _commit_rejected(diagnostic_row, "insert_fence")
         # A trigger can change the occurrence even under our writer reservation.
         # Returning normally here would commit the newly inserted stale result.
         if not _source_writable(ledger.db, r):
@@ -3961,27 +3973,31 @@ def _verify_atomic_witness(db, r, witnesses):
 
 def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
                               used_keys, *, check_current, mark_context=None, expected_prior=None):
+    if isinstance(r, dict):
+        r.pop("_commit_reject_reason", None)
     if ledger.db.in_transaction:
-        return "rejected"
+        return _commit_rejected(r, "transaction")
     r.pop("_inline_extract_proof", None)
     try:
         with ledger.db:
             ledger.db.execute("BEGIN IMMEDIATE")
-            if (r.get("_checkpoint_conflict") or not _source_writable(ledger.db, r)
+            if r.get("_checkpoint_conflict"):
+                return _commit_rejected(r, "checkpoint")
+            if (not _source_writable(ledger.db, r)
                     or not _owns_current_source(ledger, r, r.get("_current_lease"))):
-                return "rejected"
+                return _commit_rejected(r, "source_or_owner")
             expected = r.get("_checkpoint_identity")
             if expected is None:
-                return "rejected"
+                return _commit_rejected(r, "checkpoint")
             state = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
             if not _checkpoint_state_matches(r, expected, used_keys, state):
-                return "rejected"
+                return _commit_rejected(r, "checkpoint")
             if check_current and _current(ledger, r["message_id"], r["content_hash"]):
                 return "current"
             if expected_prior is not None:
                 prior = _prior_extract(ledger.db, r)
                 if prior is None or _prior_identity(prior) != expected_prior:
-                    return "rejected"
+                    return _commit_rejected(r, "prior_changed")
             _, _, current = state
             # The existing checkpoint cleanup is safe only after every adopted
             # repaired leaf has been copied into the protected final artifact.
@@ -3995,10 +4011,10 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 try:
                     inline = _extract_inline_proof(ledger.db, r, context, used_keys)
                 except (ValueError, TypeError, KeyError, sqlite3.Error):
-                    return "rejected"
+                    return _commit_rejected(r, "quality_proof")
                 clinical = _provider_strict_dict(content)
                 if clinical is None or not _verify_inline_extract_proof(ledger.db, r, context, clinical, inline):
-                    return "rejected"
+                    return _commit_rejected(r, "quality_proof")
                 r["_inline_extract_proof"] = inline
             if (not r.get("_kept_prior") and isinstance(integrity, dict)
                     and ("completeness" in integrity or "completeness_chunks" in integrity)
@@ -4007,7 +4023,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 # The stored completeness claim must reproduce from the
                 # adopted leaves' content — run-time metadata alone cannot
                 # mint a resolved result over unresolved leaves.
-                return "rejected"
+                return _commit_rejected(r, "completeness")
             witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,
@@ -4037,11 +4053,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 if outcome == "written":
                     _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except _CheckpointChanged:
-        return "rejected"
+        return _commit_rejected(r, "checkpoint")
     except cloud_inference.CloudFallback:
         if r.get("_cloud_discard"):
             r["_cloud_discard"]()
-        return "rejected"
+        return _commit_rejected(r, "cloud_guard")
     if outcome != "rejected":
         _rerender_cards(ledger, r["project_id"], r["message_id"])
     return outcome
@@ -6094,7 +6110,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     settled["held_prior"] += 1
             elif outcome != "current":
                 deferred += 1
-                _defer_note("commit_rejected", settled)
+                reason = r.get("_commit_reject_reason")
+                _defer_note(reason if type(reason) is str and reason in cloud_backlog._COMMIT_REJECTION_CODES
+                            else "commit_rejected", settled)
                 if settled is not None:
                     settled["deferred"] += 1
             return False

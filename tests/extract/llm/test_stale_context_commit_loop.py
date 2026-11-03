@@ -10,8 +10,8 @@ from extract_testkit import _ledger
 from test_extraction_context import seed, target
 
 
-@pytest.mark.parametrize("stale", [False, True])
-def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(tmp_path, monkeypatch, stale):
+@pytest.fixture
+def checkpointed(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, "_writer_current", lambda **kwargs: True)
     monkeypatch.setattr(worker, "_rerender_cards", lambda *args: None)
@@ -31,25 +31,90 @@ def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(tmp_pat
         value = {"summary": "合成の対象結果"}
         assert worker._persist_chunks(ledger, row, {0: value}, context,
             chunk_size=row["_chunk_size"], lease=lease, guard=row["_checkpoint_guard"])
-        if not stale:
-            assert worker._pending_context_frame(ledger.db, row, attempt=attempt, enabled=True) == frame
-            assert worker._commit_extraction_atomic(
-                ledger, row, json.dumps(value), context, None, None, None, (0,), check_current=True) == "written"
-            assert ledger.artifacts(worker.KIND, message_id=row["message_id"])
-            return
-        with ledger.db:
-            # An earlier result can cease to support the old S-reference while
-            # this target's own occurrence, frame and paid candidate stay put.
-            ledger.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (antecedent,))
-        reference = {**frame["refs"]["S1"], "token": "S1"}
-        assert not frames.reference_current(ledger.db, row, reference, version=worker.EXTRACT_VERSION)
-        before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
-        for _ in range(2):
-            assert worker._owns_current_source(ledger, row, lease)
-            assert source_binding(ledger.db, row["project_id"], row["message_id"]) == row["_source_binding"]
-            with pytest.raises(ValueError, match="^pending_context_reference_changed$"):
-                worker._pending_context_frame(ledger.db, row, attempt=attempt, enabled=True)
-        assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
-        assert not ledger.artifacts(worker.KIND, message_id=row["message_id"])
+        yield ledger, row, frame, attempt, lease, value, antecedent
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(checkpointed, stale):
+    ledger, row, frame, attempt, lease, value, antecedent = checkpointed
+    context = frame["text"]
+    row["_commit_reject_reason"] = "commit_reference"
+    if not stale:
+        assert worker._pending_context_frame(ledger.db, row, attempt=attempt, enabled=True) == frame
+        assert worker._commit_extraction_atomic(
+            ledger, row, json.dumps(value), context, None, None, None, (0,), check_current=True) == "written"
+        assert ledger.artifacts(worker.KIND, message_id=row["message_id"])
+        assert "_commit_reject_reason" not in row
+        return
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (antecedent,))
+    reference = {**frame["refs"]["S1"], "token": "S1"}
+    assert not frames.reference_current(ledger.db, row, reference, version=worker.EXTRACT_VERSION)
+    before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    for _ in range(2):
+        assert worker._owns_current_source(ledger, row, lease)
+        assert source_binding(ledger.db, row["project_id"], row["message_id"]) == row["_source_binding"]
+        with pytest.raises(ValueError, match="^pending_context_reference_changed$"):
+            worker._pending_context_frame(ledger.db, row, attempt=attempt, enabled=True)
+    assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    assert not ledger.artifacts(worker.KIND, message_id=row["message_id"])
+
+
+@pytest.mark.parametrize("boundary,reason", [
+    ("transaction", "transaction"), ("owner", "source_or_owner"),
+    ("conflict", "checkpoint"), ("missing_checkpoint", "checkpoint"),
+    ("layout", "checkpoint"), ("prior", "prior_changed"),
+    ("completeness", "completeness"), ("context", "context"),
+    ("reference", "reference"), ("medication", "medication"),
+])
+def test_commit_rejection_retains_only_fixed_diagnostic_and_preserves_rows(checkpointed, monkeypatch, boundary, reason):
+    ledger, row, frame, _attempt, _lease, value, antecedent = checkpointed
+    integrity, prior = None, None
+    if boundary == "transaction":
+        ledger.db.execute("BEGIN IMMEDIATE")
+    elif boundary == "owner":
+        row["_claim_token"] = "synthetic-other-owner"
+    elif boundary == "conflict":
+        row["_checkpoint_conflict"] = True
+    elif boundary == "missing_checkpoint":
+        row.pop("_checkpoint_identity")
+    elif boundary == "layout":
+        row["_checkpoint_layout"] = ("synthetic-different-layout",)
+    elif boundary == "prior":
+        prior = ()
+    elif boundary == "completeness":
+        integrity = {"completeness_chunks": 1, "completeness": {
+            "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 999}}}
+    elif boundary == "context":
+        row["_input_context"] = "synthetic-different-context"
+    elif boundary == "reference":
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (antecedent,))
+    elif boundary == "medication":
+        monkeypatch.setattr(worker, "_medication_reference_current", lambda *a, **k: False)
+    before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    assert worker._commit_extraction_atomic(ledger, row, json.dumps(value), frame["text"],
+        integrity, None, None, (0,), check_current=True, expected_prior=prior) == "rejected"
+    assert row["_commit_reject_reason"] == "commit_" + reason
+    assert ledger.db.in_transaction is (boundary == "transaction")
+    assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    ledger.db.rollback()
+
+
+def test_minimal_row_rejection_diagnostic_reaches_original_caller(checkpointed):
+    ledger, row, frame, _attempt, _lease, value, antecedent = checkpointed
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (antecedent,))
+    minimal = {key: row[key] for key in ("message_id", "content_hash", "_source_binding", "_target", "_frame")}
+    with ledger.db:
+        ledger.db.execute("BEGIN IMMEDIATE")
+        assert worker._replace_current_tx(ledger, minimal, json.dumps(value)) == "rejected"
+    assert minimal["_commit_reject_reason"] == "commit_reference"
+
+
+def test_unknown_commit_diagnostic_never_retains_arbitrary_data():
+    row = {}
+    assert worker._commit_rejected(row, "synthetic-private-detail /synthetic/path") == "rejected"
+    assert row == {"_commit_reject_reason": "commit_rejected"}
