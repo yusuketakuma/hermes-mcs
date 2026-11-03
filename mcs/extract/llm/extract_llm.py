@@ -2889,6 +2889,7 @@ def pinned_slot_busy(deadline: float | None = None) -> bool:
     return bool(busy) and busy.get(_choose_slot()) is True
 
 
+_PREPARE_HOLD_S = 60  # a refused context waits without consuming an inference attempt
 _EXTRACT_LEASE_S = 900   # crash → the claim self-expires; a stolen
                          # lease only costs bounded duplicate inference
 _CARRY_MARGIN_S = 120    # a carried result is dropped this close to its
@@ -3081,6 +3082,14 @@ def _context_contract(*, source_digest=None):
 
 
 _PRIOR_CONTEXT_SOURCE = "3140265acfed995e8f65528714af0365f302a33a10870621e00fdd7d2a827fbb"
+# Source witness from the deployed 710b1356 extraction_context.py, before
+# this input-validation/scheduling fix; clinical prompt and plan are unchanged.
+_PREPARE_CONTEXT_SOURCE = "08a818e1843d577cca760be8db70ccb385803c3624bc6d92b70dc56672595088"
+
+
+def _context_contracts():
+    return {_context_contract(), *(_context_contract(source_digest=source) for source in
+            (_PRIOR_CONTEXT_SOURCE, _PREPARE_CONTEXT_SOURCE))}
 
 
 def _pending_context_frame(db, r, *, attempt, enabled):
@@ -3117,7 +3126,7 @@ def _pending_context_frame(db, r, *, attempt, enabled):
             records.append(meta)
     if not records:
         return None
-    contracts = {_context_contract(), _context_contract(source_digest=_PRIOR_CONTEXT_SOURCE)}
+    contracts = _context_contracts()
     frames = []
     for row in db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
                           "AND message_id=? AND model=? ORDER BY artifact_id DESC",
@@ -5092,7 +5101,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
-                    cloud_only: bool = False, deadline: float | None = None) -> tuple[list, int | None]:
+                    cloud_only: bool = False, deadline: float | None = None,
+                    exclude_ids=None) -> tuple[list, int | None]:
     deadline = deadline if cloud_only else None
     reader = None
     owner = ledger
@@ -5126,7 +5136,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             result = _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
                 archived_first=archived_first, fair_oldest=fair_oldest,
                 prioritize_patients=prioritize_patients, cloud_only=cloud_only,
-                receipt_check=receipt_check, deadline=deadline)
+                receipt_check=receipt_check, deadline=deadline,
+                **({"exclude_ids": exclude_ids} if exclude_ids else {}))
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
     except MemoryError as error:
@@ -5163,7 +5174,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          oldest_first: bool, *, archived_first: bool = False,
                          fair_oldest: bool = False, prioritize_patients: bool = False,
                          cloud_only: bool = False, receipt_check=None,
-                         deadline: float | None = None) -> tuple[list, int | None]:
+                         deadline: float | None = None, exclude_ids=None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -5191,6 +5202,13 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             # even when the manifest exceeds SQLite's variable limit.
             adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
             adm_params = [json.dumps(sorted(admitted_ids))]
+    if exclude_ids:
+        if cloud_only:
+            raise ValueError("cloud_selection_exclusion_invalid")
+        # Only pass-local refusals are excluded; admission, source, shard and
+        # quality gates remain in this same query before its SQL limit.
+        adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
+        adm_params.append(json.dumps(sorted(exclude_ids)))
     if cloud_only:
         cfg = cloud_inference.resolve_cloud_settings(load_config())
         if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
@@ -5394,7 +5412,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                   background=False, cloud_only=False, load_checkpoints=True, deadline=None,
-                  blocked_reasons=None) -> tuple[list, int, int]:
+                  blocked_reasons=None, blocked_rows=None) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -5405,6 +5423,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         blocked += 1
         if blocked_reasons is not None:
             blocked_reasons[reason] = blocked_reasons.get(reason, 0) + 1
+        if blocked_rows is not None:
+            blocked_rows.append((dict(r), reason))
 
     cfg = load_config()
     extract_cfg = cfg.get("extract") if isinstance(cfg, dict) else None
@@ -5480,7 +5500,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                     private=mode != "on", deadline=hint_deadline)
                 frame = extraction_context.prepare(ledger, r, model=r["_target"][1],
                     contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
-                    version=EXTRACT_VERSION, medication_hints=medication_hints)
+                    version=EXTRACT_VERSION, medication_hints=medication_hints,
+                    compatible_contracts=tuple(_context_contracts() - {_context_contract()}))
             r["_frame"] = frame
             if not _medication_reference_current(ledger.db, r, cfg=cfg, deadline=deadline):
                 block("prepare_medication_changed")
@@ -5783,10 +5804,42 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
     prepare_reasons = {}
-    jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
-        ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
-        cloud_only=cloud_only, load_checkpoints=False, deadline=deadline,
-        blocked_reasons=prepare_reasons)
+    jobs, skipped, context_blocked = [], 0, 0
+    candidates = rows
+    selected_count = len(rows)
+    seen = {row["message_id"] for row in rows}
+    if not cloud_only:
+        rows = []  # local refill retains one candidate page, never all refused bodies
+    while candidates and not cloud_only:
+        refused = []
+        prepared, row_skipped, row_blocked = _prepare_jobs(
+            ledger, candidates, target, prefilter, allow_cloud=allow_cloud, background=background,
+            cloud_only=False, load_checkpoints=False, deadline=deadline,
+            blocked_reasons=prepare_reasons, blocked_rows=refused)
+        jobs.extend(prepared)
+        skipped += row_skipped
+        context_blocked += row_blocked
+        for refused_row, reason in refused:
+            if reason == "prepare_context_invalid" and time.monotonic() < deadline and _writer_current(full=True):
+                # This CAS is a finite preparation wait, not a sent/failed unit.
+                # Never replace another owner's active claim or discard proof.
+                _claim(ledger, refused_row, _PREPARE_HOLD_S)
+        if jobs or not any(reason == "prepare_context_invalid" for _, reason in refused) or time.monotonic() >= deadline:
+            break
+        # A rejected head must not spend the healthy-job limit. Seeing a source
+        # once per pass and the existing deadline bound an all-held backlog.
+        candidates, extra_fresh = _select_pending(
+            ledger, limit, admitted_ids, shard, oldest_first,
+            archived_first=archived_first, fair_oldest=fair_oldest,
+            prioritize_patients=prioritize_patients, exclude_ids=seen)
+        if not candidates:
+            break
+        if any(row["message_id"] in seen for row in candidates):
+            break
+        seen.update(row["message_id"] for row in candidates)
+        selected_count += len(candidates)
+        fresh_selected = (None if fresh_selected is None or extra_fresh is None
+                          else fresh_selected + extra_fresh)
     deferred += context_blocked
     for reason, count in prepare_reasons.items():
         _defer_note(reason, count=count)
@@ -6555,7 +6608,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 repairs=comparison_meta.get("repairs", 0 if valid else None))
     # Cloud selection is scope-limited; an empty result cannot bound the global backlog.
     left, age_min, age_max, estimate = (None, None, None, None) if cloud_only else _backlog_report(
-        ledger, len(rows), limit, done + skipped + held_prior)
+        ledger, selected_count, limit, done + skipped + held_prior)
     now_ts = time.time()
     llm_calls = _llm_call_stats([*metas, *batch_metas])
     if pre_probes:
@@ -6569,7 +6622,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate": max(0, estimate["left"] - estimate["done"]) if estimate is not None else None,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
-            "selected": len(rows), "deferred": deferred,
+            "selected": selected_count, "deferred": deferred,
             "defer_reasons": dict(defer_reasons),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,

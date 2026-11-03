@@ -295,7 +295,36 @@ def _source(target):
         "project_id", "message_id", "content_hash", "posted_at", "posted_at_ts", "parent_id")}
 
 
-def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None):
+def _prior_source_attempt(doc, meta, target, *, model, contract, attempt, compatible_contracts=()):
+    # A different metadata hash alone is not proof of history. Link the stored
+    # source fence back to the immutable attempt binding before ignoring it.
+    if (not isinstance(doc, dict) or not isinstance(meta, dict)
+            or not isinstance(model, str) or not model
+            or not patient_context.valid_reference_hash(meta.get("source_binding"))
+            or meta["source_binding"] == target.get("_source_binding")
+            or meta.get("hash") != target.get("content_hash")
+            or not isinstance(doc.get("source"), dict)
+            or set(doc["source"]) != set(_source(target))
+            or any(type(doc["source"].get(key)) is not int for key in ("project_id", "message_id"))
+            or not isinstance(doc["source"].get("posted_at"), (str, type(None)))
+            or doc["source"].get("posted_at_ts") is not None and _finite(doc["source"]["posted_at_ts"]) is None
+            or any(doc["source"].get(key) != target.get(key)
+                   for key in ("project_id", "message_id", "content_hash"))
+            or not isinstance(doc.get("text"), (str, type(None)))
+            or isinstance(doc.get("text"), str) and len(doc["text"]) > TOTAL_MAX
+            or not isinstance(doc.get("refs"), dict) or type(doc.get("enabled")) is not bool):
+        return False
+    for token, value in doc["refs"].items():
+        if not isinstance(value, dict) or reference_item({**value, "token": token}) is None:
+            return False
+    old_target = {**target, **doc["source"], "_source_binding": meta["source_binding"]}
+    return any(matches_attempt(doc, old_target, model=model, contract=known,
+                              attempt=attempt, enabled=doc["enabled"])
+               for known in (contract, *compatible_contracts))
+
+
+def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None,
+            compatible_contracts=()):
     """Persist the full attempt frame before inference; retries reuse it byte for byte."""
     if ledger.db.in_transaction:
         raise ValueError("context_transaction_owned")
@@ -313,7 +342,12 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
         if not _medication_hints_valid(medication_hints, target.get("body_text")):
             raise ValueError("context_medication_hints_invalid")
         medication_hints = json.loads(json.dumps(medication_hints, allow_nan=False))
+    if (not isinstance(compatible_contracts, tuple)
+            or any(not isinstance(known, str) or not known for known in compatible_contracts)):
+        raise ValueError("invalid_context_options")
     binding = _binding(target, model, contract, attempt, enabled, medication_hints)
+    bindings = {binding, *(_binding(target, model, known, attempt, enabled, medication_hints)
+                          for known in compatible_contracts)}
     # Do not include mutable history or summary text in the lookup binding.
     with ledger.db:
         if not ledger.db.in_transaction:
@@ -327,11 +361,11 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
                 "content_hash", "posted_at", "posted_at_ts", "parent_id")) or source["body_state"] not in (None, "full")
                 or not source["body_text"]):
             raise ValueError("context_source_changed")
-        for row in ledger.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+        for row in ledger.db.execute("SELECT artifact_id,content,meta,model FROM artifacts WHERE kind=? AND project_id=? "
                                      "AND message_id=? ORDER BY artifact_id DESC",
                                      (KIND, target["project_id"], target["message_id"])):
             old = load(ledger.db, row[0], target)
-            if old is not None and old["binding"] == binding:
+            if old is not None and old["binding"] in bindings:
                 references = []
                 for token, value in old['refs'].items():
                     reference = reference_item({**value, 'token': token}) if isinstance(value, dict) else None
@@ -346,7 +380,11 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
             doc, meta = loads_dict(row["content"]), loads_dict(row["meta"])
             if isinstance(meta, dict) and patient_context.valid_reference_hash(meta.get("hash")) and meta["hash"] != target["content_hash"]:
                 continue
-            if (not isinstance(doc, dict) or not isinstance(meta, dict) or doc.get("binding") == binding
+            if (old is None and isinstance(doc, dict) and "medication_hints" in doc
+                    and _prior_source_attempt(doc, meta, target, model=row[3], contract=contract,
+                        attempt=attempt, compatible_contracts=compatible_contracts)):
+                continue
+            if (not isinstance(doc, dict) or not isinstance(meta, dict) or doc.get("binding") in bindings
                     or "medication_hints" in doc and old is None):
                 raise ValueError("context_snapshot_invalid")
         prefix = (base_context or "") + ("\n" if base_context and not base_context.endswith("\n") else "")
