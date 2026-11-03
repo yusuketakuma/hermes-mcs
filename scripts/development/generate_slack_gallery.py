@@ -25,7 +25,7 @@ FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
 HEADING = "💬 山田 花子（あおぞら）"
 # layout 2: the line under the title — start date, then counts
-META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
+META = "10-01〜 · {n}投稿 · 📎 2 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
 POSTS = (
     (f"10-01 09:40 {SENDER}",
@@ -178,6 +178,22 @@ class Screen:
         self.rect(x - 8, y - size - 2, width + 16, size + 22, "#f3f6f4", 8, "#dce2dd")
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
+    def file_group(self, x, y, width, files):
+        """One fictional native file group on its own post, not separate uploads."""
+        self.rect(x - 8, y - 8, width + 16, 182, "#f8faf9", 9, "#dce2dd")
+        tile_width = (width - 12) / len(files)
+        for index, name in enumerate(files):
+            left = x + index * (tile_width + 12)
+            self.rect(left, y, tile_width, 94, "#edf1ee", 6, "#dce2dd")
+            if name.endswith(".jpg"):
+                self.rect(left + 15, y + 15, tile_width - 30, 64, "#dbe9e1", 5)
+                self.text(left + 24, y + 55, "画像", 18, GREEN)
+            else:
+                self.rect(left + 20, y + 15, 47, 64, "#fff", 4, "#d6dfd9")
+                self.text(left + 25, y + 54, "PDF", 16, GREEN, True)
+            self.paragraph(left + 5, y + 120, name, tile_width - 10, 14, INK)
+        return y + 194
+
     def provider_row(self, x, y, post, width):
         """Show a compact synthetic processing status and relevant provider icons."""
         labels = {"processing": "◐ 未完了", "preparing": "◐ 未完了", "complete": "✓ 完了",
@@ -201,18 +217,18 @@ class Screen:
 
 
 def overview():
-    s = Screen(1, "元の投稿と返信を、1件ずつのカードで。", "元の投稿はチャンネルに、返信は1件ずつのカードとしてスレッドに。添付もスレッドへ。", 1350)
-    s.line(662, 194, 662, 1269)
+    s = Screen(1, "原文も添付も、その投稿のカードに。", "元投稿はチャンネル、返信はスレッド内へ。各カードに画像・PDFをまとめて表示。", 1280)
+    s.line(662, 194, 662, 1199)
     x, y = s.app(188, 227)
-    s.actions(x, s.card(x, y, 397, replies=1))
+    y = s.actions(x, s.card(x, y, 397, replies=1))
+    s.file_group(x, y, 397, ("服薬カレンダー.jpg", "訪問メモ.pdf"))
     s.text(689, 227, "スレッド", 23, INK, True)
     s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
     tx, ty = s.app(689, 297)
-    y = s.card(tx, ty, 322, post=1)
-    y = s.paragraph(tx, y + 4, "📎 服薬カレンダー.jpg — 山田 花子 10-01 09:40 佐藤さん", 322, 16)
-    s.rect(tx, y - 8, 200, 100, "#f3f6f4", 8, "#dce2dd")
-    s.text(tx + 100, y + 48, "画像", 16, MUTED)
+    y = s.actions(tx, s.card(tx, ty, 322, post=1))
+    s.file_group(tx, y, 322, ("連絡図.jpg", "共有メモ.pdf"))
+    s.text(192, 1157, "添付は各投稿の原文より下にまとめます。プレビュー・操作欄との並びはSlackに従います。", 16, MUTED)
     return s.finish()
 
 

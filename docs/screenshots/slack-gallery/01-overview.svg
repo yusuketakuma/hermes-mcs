@@ -1,13 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1350" viewBox="0 0 1100 1350" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
-<title>元の投稿と返信を、1件ずつのカードで。 — 架空のSlack表示例</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1280" viewBox="0 0 1100 1280" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title>原文も添付も、その投稿のカードに。 — 架空のSlack表示例</title>
 <desc>架空の名前・投稿・数値を使った説明図。実データ・実投稿の匿名化例は使用していません。実画面のキャプチャではありません。</desc>
-<rect x="0" y="0" width="1100" height="1350" rx="0" fill="#f6f4ef"/>
+<rect x="0" y="0" width="1100" height="1280" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  01</text>
-<text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">元の投稿と返信を、1件ずつのカードで。</text>
-<text x="28" y="107" font-size="18" fill="#66716f">元の投稿はチャンネルに、返信は1件ずつのカードとしてスレッドに。添付もスレッドへ。</text>
-<rect x="24" y="134" width="1052" height="1135" rx="12" fill="#fff" stroke="#dce2dd"/>
-<rect x="24" y="134" width="142" height="1135" rx="12" fill="#351638"/>
-<rect x="148" y="134" width="18" height="1135" rx="0" fill="#351638"/>
+<text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">原文も添付も、その投稿のカードに。</text>
+<text x="28" y="107" font-size="18" fill="#66716f">元投稿はチャンネル、返信はスレッド内へ。各カードに画像・PDFをまとめて表示。</text>
+<rect x="24" y="134" width="1052" height="1065" rx="12" fill="#fff" stroke="#dce2dd"/>
+<rect x="24" y="134" width="142" height="1065" rx="12" fill="#351638"/>
+<rect x="148" y="134" width="18" height="1065" rx="0" fill="#351638"/>
 <text x="44" y="176" font-size="22" fill="#fff" font-weight="bold">MCSデモ</text>
 <text x="44" y="218" font-size="14" fill="#cbbfcf">チャンネル</text>
 <rect x="34" y="232" width="122" height="36" rx="6" fill="#64406a"/>
@@ -16,9 +16,9 @@
 <path d="M166 194 L1076 194" stroke="#e1e5e2" fill="none"/>
 <text x="192" y="172" font-size="22" fill="#202124" font-weight="bold"># mcs-demo</text>
 <text x="1050" y="172" font-size="15" fill="#66716f" text-anchor="end">架空の表示例</text>
-<text x="28" y="1305" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
-<text x="28" y="1330" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
-<path d="M662 194 L662 1269" stroke="#e3e7e4" fill="none"/>
+<text x="28" y="1235" font-size="16" fill="#66716f">説明用の画面イメージ。実際の配置はSlackのバージョン・設定で異なります。</text>
+<text x="28" y="1260" font-size="15" fill="#087f5b">実データ不使用 / 画像内の操作はできません</text>
+<path d="M662 194 L662 1199" stroke="#e3e7e4" fill="none"/>
 <rect x="188" y="227" width="36" height="36" rx="8" fill="#087f5b"/>
 <text x="197" y="253" font-size="22" fill="#fff" font-weight="bold">M</text>
 <text x="236" y="243" font-size="19" fill="#202124" font-weight="bold">MCS</text>
@@ -26,7 +26,7 @@
 <text x="294" y="242" font-size="11" fill="#66716f">APP</text>
 <text x="339" y="243" font-size="14" fill="#66716f">10:02</text>
 <text x="236" y="282" font-size="21" fill="#202124" font-weight="bold">💬 山田 花子（あおぞら）</text>
-<text x="236" y="311.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 1 · @自分宛て</text>
+<text x="236" y="311.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 2 · @自分宛て</text>
 <text x="236" y="351.8" font-size="15" fill="#66716f">✓ 完了</text>
 <image x="346" y="333.8" width="22" height="22" href="data:image/png;base64,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"><title>jev 実行済み</title></image>
 <text x="374" y="351.8" font-size="18" fill="#66716f">✓</text>
@@ -50,6 +50,15 @@
 <rect x="236" y="721.8" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
 <text x="250" y="748.8" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
 <text x="236" y="797.8" font-size="18" fill="#1264a3">MCSで開く</text>
+<rect x="228" y="813.8" width="413" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
+<rect x="236.0" y="821.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="251.0" y="836.8" width="162.5" height="64" rx="5" fill="#dbe9e1"/>
+<text x="260.0" y="876.8" font-size="18" fill="#087f5b">画像</text>
+<text x="241.0" y="941.8" font-size="14" fill="#202124">服薬カレンダー.jpg</text>
+<rect x="440.5" y="821.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="460.5" y="836.8" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
+<text x="465.5" y="875.8" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
+<text x="445.5" y="941.8" font-size="14" fill="#202124">訪問メモ.pdf</text>
 <text x="689" y="227" font-size="23" fill="#202124" font-weight="bold">スレッド</text>
 <text x="689" y="257" font-size="16" fill="#66716f"># mcs-demo</text>
 <path d="M682 275 L1059 275" stroke="#e3e7e4" fill="none"/>
@@ -60,7 +69,7 @@
 <text x="795" y="312" font-size="11" fill="#66716f">APP</text>
 <text x="840" y="313" font-size="14" fill="#66716f">10:02</text>
 <text x="737" y="352" font-size="21" fill="#202124" font-weight="bold">↳ 💬 山田 花子（あおぞら）</text>
-<text x="737" y="381.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 1 · @自分</text>
+<text x="737" y="381.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 2 · @自分</text>
 <text x="737" y="408.8" font-size="17" fill="#66716f">宛て</text>
 <text x="737" y="449.0" font-size="15" fill="#66716f">◐ 未完了</text>
 <path d="M737 467.0 L1059 467.0" stroke="#d5dcd7" fill="none"/>
@@ -73,8 +82,17 @@
 <text x="737" y="622.6" font-size="15" fill="#087f5b">スタンプ 👀3 田中・佐藤・鈴木 / 🙆1 高橋</text>
 <text x="737" y="646.6" font-size="15" fill="#087f5b"> · 10-01 10:30時点</text>
 <path d="M737 658.6 L1059 658.6" stroke="#d5dcd7" fill="none"/>
-<text x="737" y="690.6" font-size="16" fill="#202124">📎 服薬カレンダー.jpg — 山田 花子 </text>
-<text x="737" y="716.2" font-size="16" fill="#202124">10-01 09:40 佐藤さん</text>
-<rect x="737" y="733.8000000000001" width="200" height="100" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
-<text x="837" y="789.8000000000001" font-size="16" fill="#66716f">画像</text>
+<rect x="737" y="686.6" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="751" y="713.6" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="737" y="762.6" font-size="18" fill="#1264a3">MCSで開く</text>
+<rect x="729" y="778.6" width="338" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
+<rect x="737.0" y="786.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="752.0" y="801.6" width="125.0" height="64" rx="5" fill="#dbe9e1"/>
+<text x="761.0" y="841.6" font-size="18" fill="#087f5b">画像</text>
+<text x="742.0" y="906.6" font-size="14" fill="#202124">連絡図.jpg</text>
+<rect x="904.0" y="786.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="924.0" y="801.6" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
+<text x="929.0" y="840.6" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
+<text x="909.0" y="906.6" font-size="14" fill="#202124">共有メモ.pdf</text>
+<text x="192" y="1157" font-size="16" fill="#66716f">添付は各投稿の原文より下にまとめます。プレビュー・操作欄との並びはSlackに従います。</text>
 </svg>
