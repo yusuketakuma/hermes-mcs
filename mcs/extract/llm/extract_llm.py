@@ -2271,9 +2271,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
     if frame is not None:
         current_frame = extraction_context.load(ledger.db, frame.get("artifact_id"), dict(source))
         if (current_frame is None or current_frame["digest"] != frame.get("digest")
-                or any(not extraction_context.reference_current(ledger.db, dict(source),
-                    {**reference, "token": token} if isinstance(reference, dict) else None,
-                    version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
+                or not _frame_references_current(ledger.db, dict(source), current_frame)):
             return "rejected"
         if not _medication_reference_current(ledger.db, r):
             return "rejected"
@@ -3051,6 +3049,13 @@ def _frame_refs(r):
     return (r.get("_frame") or {}).get("refs") if isinstance(r, dict) else None
 
 
+def _frame_references_current(db, row, frame):
+    """Check every frozen antecedent with the same predicate at prepare and commit."""
+    return all(extraction_context.reference_current(db, row,
+        {**reference, "token": token} if isinstance(reference, dict) else None,
+        version=EXTRACT_VERSION) for token, reference in frame["refs"].items())
+
+
 def _frame_medications(r):
     return (r.get("_frame") or {}).get("medication_hints") if isinstance(r, dict) else None
 
@@ -3172,6 +3177,8 @@ def _pending_context_frame(db, r, *, attempt, enabled):
         current = extraction_context.load(db, frame["artifact_id"], r)
         if current is None:
             raise ValueError("pending_context_unverifiable")
+        if not _frame_references_current(db, r, current):
+            raise ValueError("pending_context_reference_changed")
         candidates[current["artifact_id"]] = current
     if len(candidates) > 1:
         raise ValueError("pending_context_unverifiable")
