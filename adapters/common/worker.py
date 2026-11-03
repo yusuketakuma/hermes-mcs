@@ -45,6 +45,7 @@ JOURNAL_SEGMENT_BYTES = 8 << 20  # rotate the live journal segment past this
 EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # >= 10 min; modal/confirm/followup reads
                                # check expiry on access anyway)
+RECONCILE_EVERY_S = 300.0      # retry receipt recovery without restarting the sender
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
@@ -194,6 +195,7 @@ class DeliveryWorker:
         # in-memory: a restart costs one extra denied begin, bounded
         self._retry_after: dict[str, float] = {}
         self._next_expire = 0.0               # first tick sweeps at once
+        self._next_reconcile = time.monotonic() + RECONCILE_EVERY_S
 
     # -- scope lock --------------------------------------------------
 
@@ -347,7 +349,7 @@ class DeliveryWorker:
             self._log("reconciled", **stats)
         return stats
 
-    async def reconcile(self) -> dict:
+    async def reconcile(self, *, periodic: bool = False) -> dict:
         """Settle orphaned attempts before any new claim runs.
 
         - unreported results  -> republish the recorded receipt
@@ -355,10 +357,16 @@ class DeliveryWorker:
           scope lock + dead worker prove the send never began)
         - post-HTTP attempts  -> unknown receipt; never resend
         """
-        # a full scan, not the cache: this runs once per start and the
-        # maintain_journal() below invalidates the cache anyway
+        # A full scan rechecks damaged files; cached absence cannot prove
+        # a send never started.
         records, clean = await asyncio.to_thread(journal.scan_checked,
                                                  self._dirs["state"])
+        if periodic:
+            # Startup owns only dead predecessors. Between ticks this
+            # worker still owns live grants, including missing witnesses.
+            records = {aid: rows for aid, rows in records.items()
+                       if not any(r.get("worker_id") == self._worker_id
+                                  and r.get("phase") != "receipt" for r in rows)}
         if not clean:
             # An unreadable row may be the sole started witness of a
             # dependent part. No new wire call can infer it was unsent.
@@ -406,6 +414,8 @@ class DeliveryWorker:
         # A persisted claim can outlive its whole journal file. Absence
         # of its started witness cannot establish that HTTP never ran.
         for delivery_id, claim in list(self._reg.claims().items()):
+            if periodic and claim.get("worker_id") == self._worker_id:
+                continue
             aid = claim.get("attempt_id")
             if aid in records:
                 continue
@@ -430,7 +440,19 @@ class DeliveryWorker:
                 await self._retire_reconciled(aid, env, claim, rows)
         # predecessors' files are closed now — bound their growth
         await self.maintain_journal(rotate=True)
+        self._next_reconcile = time.monotonic() + RECONCILE_EVERY_S
         return stats
+
+    async def _periodic_reconcile(self) -> None:
+        if self._lock_fd is None or time.monotonic() < self._next_reconcile:
+            return
+        # A failed publication retries at the cadence, not every poll.
+        self._next_reconcile = time.monotonic() + RECONCILE_EVERY_S
+        started = time.monotonic()
+        with self._reg.batch():
+            stats = await self.reconcile(periodic=True)
+        self._log("reconcile_pass", **stats, ts=time.time(),
+                  elapsed_s=round(time.monotonic() - started, 3))
 
     async def _retire_reconciled(self, aid, env, claim, rows) -> None:
         # An attempt that never read a grant never sent, and its not_sent
@@ -1127,6 +1149,7 @@ class DeliveryWorker:
     async def tick(self) -> None:
         if self._stopping:
             return
+        await self._periodic_reconcile()
         now = time.time()
         scanned = await asyncio.to_thread(self._scan_specs)
         # the runner-published flag is the cheap local kill switch —
