@@ -1296,7 +1296,8 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
 
 
-def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtime, cloud, monkeypatch):
+@pytest.mark.parametrize('local_ready', [False, True])
+def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtime, cloud, monkeypatch, local_ready):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     calls = []
@@ -1308,7 +1309,7 @@ def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtim
             raise cloud_inference.CloudFallback("cloud_unit_failed")
     monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", Unknown)
     for _ in range(3):
-        result = step(runtime, local_admit=lambda: False)
+        result = step(runtime, local_admit=lambda: local_ready)
         if result["status"] == "failed":
             break
     assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
@@ -2078,6 +2079,28 @@ def test_source_repair_sealing_checkpoint_resumes_without_repeating_a_completed_
     assert len(source_repair['sent']) == before == 2
 
 
+def test_paid_source_repair_resumes_after_candidate_save_failure_without_a_second_post(runtime, source_repair, monkeypatch):
+    led, clock, _ = runtime
+    update = context_refresh._source_repair_update_tx
+    monkeypatch.setattr(context_refresh, '_source_repair_update_tx',
+                        lambda *_args: (_ for _ in ()).throw(ValueError('synthetic save failure')))
+    for _ in range(25):
+        step(runtime)
+        if led.artifacts('cloud_usage_result', project_id=1):
+            break
+    else:
+        pytest.fail('paid repair did not reach its durable receipt')
+    assert len(source_repair['sent']) == 1
+    reserved = led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)
+    assert len(reserved) == 1 and json.loads(reserved[0]['content'])['phase'] == 'reserved'
+    assert not context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    monkeypatch.setattr(context_refresh, '_source_repair_update_tx', update)
+    clock.wall += 3600  # Keep the existing failed-save backoff; do not erase its state.
+    drain(runtime)
+    assert len(source_repair['sent']) == len(led.artifacts('cloud_usage_reserve', project_id=1)) == 2
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+
+
 @pytest.mark.parametrize('tamper', ['duplicate_slot','duplicate_header','receipt','new_revision','scope','key','budget'])
 def test_source_repair_rejects_changed_evidence_before_adoption(runtime, source_repair, monkeypatch, tamper):
     led, clock, _ = runtime
@@ -2469,7 +2492,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
 
     def length_only(prompt, *, deadline, max_tokens):
         return client.complete(prompt, deadline=deadline, max_tokens=max_tokens,
-            after_result=lambda reservation, meta:results.append(meta))
+            after_result=lambda reservation, meta, **_answer:results.append(meta))
 
     deadline = clock.mono + 600
     if stage == 'summary':
@@ -2751,7 +2774,8 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
         assert after[0][1] == legacy_content
 
 
-def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path):
+@pytest.mark.parametrize('save_interrupted', [False, True])
+def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path, save_interrupted):
     """A paid repair remains bound to its response through publication and later reads."""
     from contextlib import nullcontext
 
@@ -2833,6 +2857,19 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
 
     monkeypatch.setattr(_source_repair_jev, 'JevClient', lambda **kwargs: _SOURCE_REPAIR_JEV(post_fn=judge, **kwargs))
     seed(led, body=_REPAIR_HOME + _REPAIR_BED)
+    if save_interrupted:
+        prove = context_refresh._new_summary_repair_response
+        monkeypatch.setattr(context_refresh, '_new_summary_repair_response',
+                            lambda *_args: (_ for _ in ()).throw(ValueError('synthetic save failure')))
+        for _ in range(25):
+            step(runtime)
+            if led.artifacts('cloud_usage_result', project_id=1):
+                break
+        else:
+            pytest.fail('paid summary repair did not reach its durable receipt')
+        assert len(sends) == 1 and not led.artifacts(context_refresh.QUALITY_REPAIR_CANDIDATE, project_id=1)
+        monkeypatch.setattr(context_refresh, '_new_summary_repair_response', prove)
+        runtime[1].wall += 3600
     drain(runtime)
     assert len(sends) == 1
     assert sends[0]['model'] == 'gpt-6.1-sol' and sends[0]['reasoning'] == {'effort': 'high'}

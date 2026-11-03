@@ -181,7 +181,7 @@ def test_discard_receipt_preserves_billing_and_result_idempotence(tmp_path, now,
             c.record_disposition_tx(db, reservation, "discarded_scope")
         # Pre-existing legacy receipt has no profile fields; replay must not rewrite it.
         assert "effort" not in reservation and "profile" not in reservation
-        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile")}
+        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile", "input_binding")}
         old["disposition"] = "discarded_scope"
         receipt = db.artifact_add("cloud_usage_disposition", "{}", project_id=1, model=MODEL, meta=old)
         old_rows = [dict(row) for row in db.artifacts("cloud_usage_disposition")]
@@ -533,7 +533,7 @@ def test_legacy_result_replay_preserves_existing_row_without_profile_backfill(tm
         assert "effort" not in reservation and "profile" not in reservation
         metadata = _result(reservation)
         usage = c._price_definition(MODEL, reservation["price_version"])["validate_usage"](metadata["usage"])
-        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile")}
+        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile", "input_binding")}
         old.update(usage=usage, cost_usd=str(c.usage_cost(usage, model=MODEL,
                     price_version=reservation["price_version"])), http_class="http_200",
                    request_id="req_synthetic", error_kind=None)

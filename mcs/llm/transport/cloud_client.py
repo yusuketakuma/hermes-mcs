@@ -30,6 +30,8 @@ class CloudNotSent(CloudError):
 def not_sent_reason(error):
     """Classify a proven pre-send refusal without retaining arbitrary error text."""
     detail = getattr(error, "detail", None)
+    if not isinstance(detail, str):
+        detail = None
     if detail == "cloud_unit_unresolved":
         return "cloud_unit_unresolved"
     if detail == "owner_transaction_active":
@@ -67,7 +69,7 @@ class CloudClient:
 
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn=None, after_result=None, cache_prefix=None):
-        """Return the shared chat envelope; every attempted HTTP reports safe metadata.
+        """Return the shared chat envelope; settle metadata and the answer together.
         ``cache_prefix`` (a fixed leading part of ``prompt``) is sent as its own
         cached text block so repeated prompts share it."""
         if not isinstance(prompt, str) or not prompt:
@@ -164,7 +166,7 @@ class CloudClient:
             if result is None:
                 meta["error_kind"] = last.kind
             if after_result:
-                after_result(reservation, meta)
+                after_result(reservation, meta, answer=result)
             if result is not None:
                 return result
             if not last.retryable:

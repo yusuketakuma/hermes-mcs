@@ -7,14 +7,14 @@ import pytest
 import cloud_policy
 import openai_client
 import semantic_runtime as runtime
-from anthropic_client import AnthropicError, MODEL
+from anthropic_client import AnthropicClient, AnthropicError, MODEL
 from ledger import Ledger
 
 
 def _reserve(ledger, unit_key='synthetic'):
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
     return cloud_policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key=unit_key)(
-        {'model': MODEL, 'max_tokens': 100}, 2)
+        AnthropicClient('synthetic').body(unit_key, 100, None), 2)
 
 
 def _open(ledger, now):

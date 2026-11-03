@@ -257,6 +257,21 @@ def _sources_intact(sources):
                for source in sources)
 
 
+def _cloud_input_binding(db, pid, snapshot):
+    """Bind paid-response adoption to original occurrences as well as the input contract."""
+    pairs = [(pid, source['message_id']) for source in snapshot['sources'] if source['source'] == 'chat']
+    bindings = []
+    for offset in range(0, len(pairs), 64):
+        bindings.extend(dependency_loss.source_bindings(db, pairs[offset:offset + 64]))
+    for source in snapshot['sources']:
+        if source['source'] == 'karte_summary':
+            bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
+    if any(not valid_hash(binding) for binding in bindings):
+        raise ValueError('nightly_cloud_source_changed')
+    return _digest([snapshot['source_sig'], snapshot['contract'], bindings,
+                    [(context_plan.source_key(s), s.get('first_seen')) for s in snapshot['sources']]])
+
+
 
 
 
@@ -837,7 +852,10 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
 
 def _saved_cloud_contract(provider):
     import cloud_inference
-    return provider if cloud_inference.is_supported_cloud_contract(provider) else None
+    if not isinstance(provider, dict):
+        return None
+    contract = {key: provider.get(key) for key in ('backend', 'model', 'prompt')}
+    return contract if cloud_inference.is_supported_cloud_contract(contract) else None
 
 
 def _publication_contract(cfg, meta):
@@ -1899,14 +1917,18 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         return "held", None
     if _other_summary_repair_spent(ledger.db, pid, identity):
         return "held", None
-    if _quality_repair_spent(ledger.db, pid, identity["input_key"]):
+    spent = _quality_repair_spent(ledger.db, pid, identity["input_key"])
+    if spent:
         rows = ledger.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
             + current_meta_pred("meta", target=CURRENT_VERSION)
             + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.input_key') END=? "
               "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.original_failure_key') END=?",
             (QUALITY_REPAIR_CANDIDATE, pid, identity["input_key"], identity["failure_key"])).fetchall()
-        if len(rows) != 1:
+        if len(rows) > 1:
             return "held", None
+        # No derived candidate may mean the paid response committed before a crash.
+        # The existing reservation hook still forbids spending this repair again.
+    if spent and rows:
         artifact_id, raw_content, raw_meta = rows[0]
         saved, meta = loads_dict(raw_content), loads_dict(raw_meta)
         ids = saved.get("fact_ids") if isinstance(saved, dict) and set(saved) in (
@@ -1958,7 +1980,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != _contract(cfg, pid).get("provider"))
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
-    if cloud_policy.budget_block_reason(
+    if not spent and cloud_policy.budget_block_reason(
             ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
         return "deferred", None
@@ -1983,7 +2005,8 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         current=lambda: current() and _quality_owns(ledger.db, pid, identity["input_key"], claim),
         dispatch=lambda fn, **_kwargs: fn(), owner=owner,
         reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
-        max_attempts=1, purpose="quality_repair", selection=selection)
+        max_attempts=1, purpose="quality_repair", selection=selection,
+        input_binding=_digest([identity, _cloud_input_binding(ledger.db, pid, _snapshot(ledger.db, pid, cfg, hydrate=False))]))
     try:
         response = []
         answer = _ask(cfg, payload, deadline, admit, provider=provider,
@@ -2316,6 +2339,7 @@ def _verify_source_repair_rows(db, pid, source_key, origin, rows):
 def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, current, deadline, admit, threshold):
     """Advance one reserved source repair unit; no saved slot may dispatch again."""
     import extract_llm
+    import cloud_client
     import cloud_inference
     import cloud_policy
     identity, source = captured['identity'], captured['sources'][0]
@@ -2340,9 +2364,10 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         protected, codes, receipt_sig = _source_repair_inputs(ledger.db, pid, captured, threshold)
         header = _source_repair_header(ledger.db, pid, repair_key)
         existing_units = _source_repair_units(ledger.db, pid, repair_key)
-        if header and any(row['phase'] == 'reserved' for row in existing_units):
+        reserved_units = [row for row in existing_units if row['phase'] == 'reserved']
+        if len(reserved_units) > 1:
             return 'unknown', None
-        if existing_units:
+        if existing_units and not reserved_units:
             _source_repair_parts(ledger.db, pid, source, _contract(cfg, pid), repair_key, require_complete=False)
     finally:
         ledger.db.rollback()
@@ -2381,12 +2406,13 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
     chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
     unit_key = _digest(['source-repair-unit/1', repair_key, span, saved.get('split', 0), PLAN_VERSION])
-    if any(row['meta']['unit_key'] == unit_key for row in _source_repair_units(ledger.db, pid, repair_key)):
+    if reserved_units and (not header or reserved_units[0]['meta']['unit_key'] != unit_key
+                           or reserved_units[0]['chunk_span'] != span):
         return 'unknown', None
     if (time.monotonic() + CALL_SECONDS + COMMIT_MARGIN > deadline or not admit()
             or extract_llm._cloud_mode(ledger, cfg, 'patient_context', pid) != 'on'):
         return 'deferred', None
-    slot = [None]
+    slot = [reserved_units[0]['artifact_id'] if reserved_units else None]
     def on_reserved(owner, reservation, artifact_id):
         nonlocal header
         if (owner is not ledger or not owner.db.in_transaction or not current(1)
@@ -2439,7 +2465,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         current=lambda: current() and _quality_owns(ledger.db, pid, identity['input_key'], claim),
         dispatch=lambda fn, **_kwargs:fn(), reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
         owner={'repair_input_key':repair_key,'unit_key':unit_key}, max_attempts=1,
-        purpose='quality_repair', selection=selection)
+        purpose='quality_repair', selection=selection, input_binding=_digest(origin))
     try:
         response = []
         result = _scan(cfg, source, saved, night_id, deadline, admit, provider=provider,
@@ -2448,7 +2474,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
                                                for fact in captured['facts']}})
         provider.commit_guard()
-    except (cloud_inference.CloudFallback, Deferred, ValueError):
+    except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, Deferred, ValueError):
         return ('unknown' if slot[0] is not None else 'deferred'), None
     if slot[0] is None or not current():
         return 'unknown', None
@@ -3543,29 +3569,27 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     source_quality_skipped = False
     selected_source = [None]
     selected_occurrence = [None]
+    cloud_input = _cloud_input_binding(ledger.db, pid, snapshot) if cloud_settings is not None else None
 
-    def current():
+    def current(*, after_commit=False):
         latest = _snapshot(ledger.db, pid, cfg, hydrate=False)
         actual = next((row for row in latest["sources"] if selected_source[0] is not None
                        and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
         return (admit() and latest["source_sig"] == snapshot["source_sig"]
+                and (cloud_input is None or _cloud_input_binding(ledger.db, pid, latest) == cloud_input)
                 and _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
                                      allow_dependency_repair=lane != "A")
-                and _scan_sig(ledger.db, pid) == frozen_scan_sig
-                and _published_version(ledger.db, pid) == frozen_ver
+                and (after_commit or _scan_sig(ledger.db, pid) == frozen_scan_sig
+                     and _published_version(ledger.db, pid) == frozen_ver)
                 and (selected_source[0] is None or actual is not None
                      and _digest(_source_occurrence(ledger.db, pid, actual)) == _digest(selected_occurrence[0])))
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
         return cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
-            current=(lambda: admit()
-                and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
-                and _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                     allow_dependency_repair=lane != "A"))
-                if after_commit else current,
+            current=lambda: current(after_commit=after_commit),
             dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]},
-            selection=cloud_selection)
+            selection=cloud_selection, input_binding=cloud_input)
 
     def discard_if_changed():
         if provider is not None:
@@ -3606,6 +3630,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             except (cloud_inference.CloudFallback, ValueError) as error:
                 changed = isinstance(error, cloud_inference.CloudFallback) and str(error) == "cloud_unit_changed"
                 paid = provider.possibly_sent
+                unresolved = getattr(provider, 'unresolved', paid)
                 if changed:
                     provider.discard()
                     if paid:
@@ -3619,7 +3644,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     meta["provider"] = provider.contract
                     meta["model"] = provider.model
                 provider = None
-                if paid and not local_admit():
+                if paid and (unresolved or not local_admit()):
                     # a paid attempt failed and local cannot take over now: record
                     # the retry instead of re-sending the same unit every tick.
                     # Partial cloud progress keeps its cloud pin (a local record

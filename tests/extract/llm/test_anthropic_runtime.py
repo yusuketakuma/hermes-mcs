@@ -53,7 +53,7 @@ def routed(tmp_path, monkeypatch):
             return item
         return reserve
     monkeypatch.setattr(cloud_policy, "usage_reserver", reserve_factory)
-    def record(ledger, reservation, metadata):
+    def record(ledger, reservation, metadata, **_answer):
         assert threading.get_ident() == owner
         ledger.db.execute("SELECT 1").fetchone()
         results.append(reservation)
@@ -63,7 +63,7 @@ def routed(tmp_path, monkeypatch):
         return ledger.artifact_add_tx("cloud_usage_disposition", "{}",
                                       meta={"attempt": reservation["n"], "disposition": reason})
     monkeypatch.setattr(cloud_policy, "record_disposition_tx", disposition)
-    class Client:
+    class Client(AnthropicClient):
         def __init__(self, key):
             assert key == "synthetic-key"
         def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result,
@@ -72,7 +72,7 @@ def routed(tmp_path, monkeypatch):
             reservation = reserve_fn({"prompt": prompt, "max_tokens": max_tokens}, 1)
             before_attempt()
             calls.append(prompt)
-            after_result(reservation, {"http_class": "success"})
+            after_result(reservation, {"http_class": "http_200"})
             return {"status": 200, "finish_reason": "stop", "text": '{"symptoms":[]}'}
     monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", Client)
     yield led, cfg, calls, reserved, results
@@ -300,9 +300,9 @@ def test_paid_cloud_split_resumes_completed_children_without_resending(routed, m
     prompts, pieces, metadata = [], [], []
     record = cloud_policy.record_result
 
-    def recorded(ledger, reservation, outcome):
+    def recorded(ledger, reservation, outcome, **answer):
         metadata.append(dict(outcome))
-        return record(ledger, reservation, outcome)
+        return record(ledger, reservation, outcome, **answer)
 
     def wire(self, method, request, timeout, **kwargs):
         content = request["messages"][0]["content"]
@@ -371,9 +371,9 @@ def test_malformed_thinking_never_creates_cloud_splits_or_extra_http(routed, mon
     calls, metadata, splits, completed = [], [], [], {}
     record = cloud_policy.record_result
 
-    def recorded(ledger, reservation, outcome):
+    def recorded(ledger, reservation, outcome, **answer):
         metadata.append(dict(outcome))
-        return record(ledger, reservation, outcome)
+        return record(ledger, reservation, outcome, **answer)
 
     def wire(self, method, body, timeout, **kwargs):
         calls.append(body)
@@ -708,6 +708,30 @@ def test_cloud_failure_restarts_whole_post_with_local_checkpoint_contract(routed
     assert not calls
 
 
+@pytest.mark.parametrize('known', [False, True])
+def test_cloud_fallback_requires_a_known_attempt_outcome(routed, monkeypatch, known):
+    led, _, calls, *_ = routed
+    old(led)
+    local = []
+    def infer(_body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is not None:
+            if known:
+                provider('synthetic complete request', deadline=kwargs['deadline'], max_tokens=100)
+            else:
+                provider.possibly_sent = True
+            raise cloud_inference.CloudFallback('synthetic_failed_unit')
+        local.append(True)
+        return {}
+    monkeypatch.setattr(worker, 'llm_extract', infer)
+    report = worker.run_pending(led, budget_s=180)
+    assert report['done'] == int(known) and len(local) == int(known)
+    assert len(calls) == int(known)
+    if not known:
+        assert report['defer_reasons']['cloud_unit_unresolved'] == 1
+        assert not _current_artifacts(led)
+
+
 def test_active_hold_stays_local_until_exact_upgrade_contract_changes(routed, monkeypatch):
     led, *_ = routed
     old(led)
@@ -959,7 +983,7 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
         assert clock() < deadline
         # The HTTP response completed on time, then its owner callback waited.
         monkeypatch.setattr(worker.time, "monotonic", lambda: clock() + 200)
-        after_result(reservation, {"http_class": "success"})
+        after_result(reservation, {"http_class": "http_200"})
         return {"status": 200, "finish_reason": "stop", "text": '{"symptoms":[]}'}
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, "complete", complete)
     monkeypatch.setattr(cloud_policy, "record_result", lambda ledger, reservation, metadata: outcomes.append(metadata))
@@ -969,7 +993,7 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=clock() + 180, current=lambda: True, dispatch=dispatch)
     assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == '{"symptoms":[]}'
-    assert outcomes == [{"http_class": "success"}]
+    assert outcomes == [{"http_class": "http_200"}]
     assert dispatches[-2:] == [True, True]
     with pytest.raises(cloud_inference.CloudFallback):
         provider("new-send", deadline=clock() + 180, max_tokens=100)
@@ -1066,9 +1090,9 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
     old(led)
     local, outcomes = [], []
     record = cloud_policy.record_result
-    def recorded(ledger, reservation, metadata):
+    def recorded(ledger, reservation, metadata, **answer):
         outcomes.append(dict(metadata))
-        return record(ledger, reservation, metadata)
+        return record(ledger, reservation, metadata, **answer)
     monkeypatch.setattr(cloud_policy, "record_result", recorded)
     original_complete = worker.anthropic_client.AnthropicClient.complete
     def complete(self, *args, **kwargs):
@@ -1090,7 +1114,7 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
     report = worker.run_pending(led, budget_s=180)
     assert report["done"] == 1 and len(local) == 1
     assert len(calls) == len(reserved) == len(results) == 1
-    assert outcomes == [{"http_class": "success"}]
+    assert outcomes == [{"http_class": "http_200"}]
     annotations = led.artifacts("cloud_usage_disposition")
     assert len(annotations) == 1
     assert json.loads(annotations[0]["meta"])["disposition"] == "discarded_scope"
