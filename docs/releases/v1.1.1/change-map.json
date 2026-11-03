@@ -1,10 +1,10 @@
 {
-  "status": "additional fixes prepared after production 710b1356; follow-up application, operational acceptance and publication are recorded separately",
+  "status": "102 changes prepared at a01c463f; production d07b5160 follow-up application, operational acceptance and publication are recorded separately",
   "baseline": {
     "previous_release": "v1.1.0",
     "production_sha": "2673b767b9cba56a0ca169eeebe1d0c6c63143e6"
   },
-  "fragment_count": 97,
+  "fragment_count": 102,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -589,6 +589,36 @@
       "id": "slack-child-private-stage-reuse",
       "title": "返信カードの同じ添付を次の更新でも再利用",
       "sha256": "c5bafe85b8a55adb963dad3bb43373790c1e5828c0ca37caf51e5bfcffbedb3b"
+    },
+    {
+      "path": "changes/archive/1.1.1/extraction-commit-fixed-reasons.json",
+      "id": "extraction-commit-fixed-reasons",
+      "title": "抽出結果を保存できなかった理由を固定分類で確認可能に修正",
+      "sha256": "eff87c37afbdb79369d40c5898a83707f822be4b71e02adc9aaca0dd7ef9396f"
+    },
+    {
+      "path": "changes/archive/1.1.1/extraction-commit-hold-fairness.json",
+      "id": "extraction-commit-hold-fairness",
+      "title": "保存を保留した投稿が後続の抽出を妨げる問題を修正",
+      "sha256": "81d55dec07293d77dec5758bb693f2ea2406121d298a3e43a098744966c7b1f5"
+    },
+    {
+      "path": "changes/archive/1.1.1/gateway-restart-live-session-wait.json",
+      "id": "gateway-restart-live-session-wait",
+      "title": "処理中の会話が終了してからゲートウェイを通常再起動",
+      "sha256": "44710526cd7dd1e8fa281a4445e2cc8e5275d6df56aa5e8a4e81a0884707fbc4"
+    },
+    {
+      "path": "changes/archive/1.1.1/stale-pending-context-reference.json",
+      "id": "stale-pending-context-reference",
+      "title": "参照元が失効した抽出結果の保存拒否が繰り返される問題を修正",
+      "sha256": "74ad1a0c28df4c8e4104526010b6ca54c5c8ff2f552b39a89e7d54ecc28ba45b"
+    },
+    {
+      "path": "changes/archive/1.1.1/terminal-quality-checkpoint-hold.json",
+      "id": "terminal-quality-checkpoint-hold",
+      "title": "現在の確認項目と矛盾する保存候補を保留して後続の抽出へ進行",
+      "sha256": "4db390ad045859070777920cfacffc081a54dfa0383dedf9bed8aba33691a50a"
     }
   ]
 }
