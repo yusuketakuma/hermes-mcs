@@ -12,6 +12,7 @@ import semantic_drain
 import semantic_store
 from semantic_testkit import _cfg, _FakeJev, _llm
 from test_patient_context_refresh import runtime as runtime
+from test_patient_context_refresh import CFG as CONTEXT_CFG
 from test_patient_context_refresh import _raw_proof, _semantic_proof, seed, step
 
 
@@ -149,14 +150,20 @@ def test_qc_must_match_current_extraction(runtime):
 def test_latest_ready_active_before_archive(runtime, monkeypatch):
     led, _, _ = runtime
     for pid in (1, 2, 3, 4):
-        seed(led, pid, pid, proof=pid != 3)
+        seed(led, pid, pid, proof=False)
         led.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (pid, pid))
+        led.db.commit()
+        if pid != 3:
+            _proof(led, pid, pid, CONTEXT_CFG)
     led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=4")
     led.db.commit()
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
     result = step(runtime)
     assert result["status"] == "progressed"
-    assert refresh._latest(led.db, refresh.PROGRESS, 2)[0]
+    # Untested active patients start at ordinal zero, with project ID as the tie-break.
+    assert refresh._latest(led.db, refresh.PROGRESS, 1)[0]
+    assert not refresh._latest(led.db, refresh.PROGRESS, 2)[0]
+    assert not refresh._latest(led.db, refresh.PROGRESS, 3)[0]
     assert not refresh._latest(led.db, refresh.PROGRESS, 4)[0]
 
 
@@ -339,7 +346,8 @@ def test_classification_skip_preserves_previous_partial_verdict(runtime):
         project_id=1, message_id=1, model=semantic_drain.jev.JEV_MODEL,
         meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': bundle['source_fingerprint'],
               'policy_fingerprint': semantic_policy.policy_fingerprint(policy),
-              'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait'})
+              'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait',
+              'model': semantic_drain.jev.JEV_MODEL, 'registry': semantic_drain.jev.REGISTRY_VERSION})
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
     out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=None, llm_fn=_llm)
@@ -360,10 +368,19 @@ def test_classification_rejects_forged_no_signal_marker(runtime):
     with led.db:
         led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.prefilter','no_signal') WHERE kind='extract_llm'")
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
+    client = _FakeJev()
     out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
-                                 jev_client=_FakeJev(), llm_fn=_llm)
-    assert out['done'] == 1
-    assert json.loads(led.artifacts('semantic_assess', message_id=1)[-1]['meta'])['skipped'] == 'prefilter_no_signal'
+                                 jev_client=client, llm_fn=_llm)
+    assert out['done'] == 1 and client.requests_made > 0
+    latest = led.artifacts('semantic_assess', message_id=1)[-1]
+    assert 'skipped' not in json.loads(latest['meta'])
+    assert json.loads(latest['content'])['verdicts']
+    assert _ready(runtime, cfg)
+    # A forged completed no-signal assessment cannot bypass the source check either.
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=json_set(content,'$.verdicts',json('{}')), "
+                       "meta=json_set(meta,'$.skipped','prefilter_no_signal','$.jev_requests',0) "
+                       "WHERE artifact_id=?", (latest['artifact_id'],))
     assert not _ready(runtime, cfg)
 
 
@@ -383,11 +400,22 @@ def test_complete_assessment_cannot_discard_prior_partial(runtime, old_value, ex
         project_id=1, message_id=1, model=semantic_drain.jev.JEV_MODEL,
         meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': bundle['source_fingerprint'],
               'policy_fingerprint': semantic_policy.policy_fingerprint(policy),
-              'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait'})
+              'schema': semantic_drain.SCHEMA_VERSION, 'technical_status': 'retry_wait',
+              'model': semantic_drain.jev.JEV_MODEL, 'registry': semantic_drain.jev.REGISTRY_VERSION})
     led.semantic_seed(1, [1], {'source': 'synthetic-history'})
     out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 300,
                                  jev_client=_FakeJev(), llm_fn=_llm)
     assert out['done'] == 1
+    latest = led.artifacts('semantic_assess', message_id=1)[-1]
+    content = json.loads(latest['content'])
+    assert content['verdicts'][name] == verdict
+    assert _ready(runtime, cfg)
+    # Simulate a later complete record that discards the durable partial answer.
+    content['verdicts'][name] = {'noul': 0.9, 'verdict': semantic_drain.jev.verdict_for(
+        0.9, policy['match_threshold'], policy['nomatch_threshold'])}
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                       (json.dumps(content), latest['artifact_id']))
     assert _ready(runtime, cfg) is expected
 
 
