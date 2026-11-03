@@ -210,8 +210,8 @@ def test_slack_flag_off_keeps_ephemeral_body_gate(led, kind):
 
 
 def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatch):
-    _seed_thread(led)
-    ev = _intent(led)
+    _seed_thread(led, mids=(100,))
+    ev = _intent(led, payload={"message_ids": [100]})
     monkeypatch.setattr(notify_flush, "_config", lambda: SLACK)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "/nonexistent/synthetic")
     assert notify_flush.flush(led)["dispatched"] == 1
@@ -338,8 +338,10 @@ def test_slack_scope_switch_seals_new_cards_without_retargeting(led):
     assert not transport.apply_transport_begin(led, _command(render), other)["granted"]
     ev2 = _intent(led, payload={"message_ids": [101]})
     assert _dispatch(led, ev2, other)["dispatched"]
-    assert _card(led, 2)["team_id"] == "T_OTHER"
-    assert _card(led, 2)["card_key"] != _card(led)["card_key"]
+    created = led.db.execute("SELECT * FROM notification_cards WHERE team_id=? AND root_message_id=100",
+                             ("T_OTHER",)).fetchall()
+    assert created and all(row["team_id"] == "T_OTHER" for row in created)
+    assert all(row["card_key"] != _card(led)["card_key"] for row in created)
 
 
 def test_signal_membership_is_transport_and_slack_scope_local(led):
@@ -365,6 +367,8 @@ def test_legacy_database_migration_preserves_inflight_discord(led, tmp_path):
     grant = _begin(led, render)
     old_card = _card(led)
     # Recreate the pre-Slack schema with an actual in-flight Discord grant.
+    for row in led.db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='notification_renders' AND sql LIKE '%transport%'").fetchall():
+        led.db.execute(f'DROP INDEX "{row[0]}"')
     for table in ("notification_cards", "notification_renders", "notification_intent_batches"):
         led.db.execute(f"ALTER TABLE {table} DROP COLUMN transport")
         col = "scope_json" if table == "notification_intent_batches" else "team_id"

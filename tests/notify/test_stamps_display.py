@@ -499,8 +499,18 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
             {"actor_id": OTHER, "reaction_type": "viewed", "name": f"合成他者{mid}<@UFAKE>"},
         ], True, now=NOW - 10)
     cfg = {"slack": SLACK, "discord": CFG, "lineworks": LINEWORKS}[platform]
-    assert _dispatch(led, _intent(led), cfg)["dispatched"]
+    event = _intent(led)
+    assert _dispatch(led, event, cfg)["dispatched"]
+    if platform == "slack":
+        from notify_testkit import delivered_source, _latest_render
+        delivered_source(led, mids=(100,), cfg=cfg)
+        assert _dispatch(led, event, cfg, now=NOW + 1)["dispatched"]
+        specs = [json.loads(_latest_render(led, row[0])["spec_json"]) for row in
+                 led.db.execute("SELECT card_id FROM notification_cards ORDER BY card_id")]
+        assert {item["parts"]["post_source_id"] for item in specs} == {100, 101}
     spec = json.loads(_latest_render(led)["spec_json"])
+    if platform != "slack":
+        specs = [spec]
     footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
     assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform == "lineworks")
     assert "MCS 👀" not in footer
@@ -520,9 +530,9 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                 (card, None)]:
             fallback_footer = "\n".join(item["text"] for item in
                 notify_render.card_content(led.db, fallback, cfg=fallback_cfg)["footer"])
-            assert "スタンプ 👀3 · 自分 2投稿" in fallback_footer
-            assert "再取得失敗" in fallback_footer
-        blocks = slack_cards.render(spec)[1]
+            assert "スタンプ 👀1 · 自分 1投稿" in fallback_footer
+            assert "再取得失敗" not in fallback_footer
+        blocks = [block for item in specs for block in slack_cards.render(item)[1]]
         assert not any("スタンプ 👀3" in element.get("text", "") for block in blocks
                    for element in block.get("elements", []))
         stamp_context = [element for block in blocks if block["type"] == "context"
@@ -575,9 +585,11 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     if platform == "slack":
         # the Slack card face carries each post: its line and summary
         # containers, then the stamp row and the folded original
-        containers = spec["parts"]["containers"]
-        rules = [i for i, c in enumerate(containers) if c.get("rule")] + [len(containers)]
-        for mid, post in zip((100, 101), spec["parts"]["slack"]["face_posts"]):
+        for item in specs:
+            containers = item["parts"]["containers"]
+            rules = [i for i, c in enumerate(containers) if c.get("rule")] + [len(containers)]
+            mid = item["parts"]["post_source_id"]
+            post, = item["parts"]["slack"]["face_posts"]
             end = next(i for i in rules if i > post["at"])
             front = "\n".join(c.get("text", "") for c in containers[post["at"]:end]
                               if c["type"] == "text") + "\n" + "\n".join(post["stamps"])
@@ -593,7 +605,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     for mid in (100, 101):
         post = "".join(posts[mid])
         assert "<@" not in post and "@everyone" not in post
-        assert post.count(notify_render.SECTION_RULE) == 0
+        assert post.count(notify_render.SECTION_RULE) == (0 if platform == "slack" else 1)
         front = posts[mid][0]
         tail = "".join(posts[mid][1:])
         assert "📋 要約" not in post and "📄 本文" not in post

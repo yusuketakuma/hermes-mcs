@@ -112,7 +112,7 @@ def test_fallback_never_moves_while_attempt_or_parts_are_unsettled(led, cfg, sta
     else:
         _land(led, created, cfg, finish=False)
     before = _card(led)
-    delivered_source(led, card_id=2, cfg=cfg)
+    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
     assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 0
     after = _card(led)
     assert (after["message_id"], after["thread_id"], after["desired_render_rev"]) == (
@@ -124,7 +124,7 @@ def test_available_source_moves_fallback_once_and_lost_source_falls_back_once(le
     created = _fallback(led, cfg)
     _land(led, created, cfg)
     notify_cards.gc(led, cfg, now=LATE + 1)
-    delivered_source(led, card_id=2, cfg=cfg)
+    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
     source = _card(led, 2)
     assert notify_cards.sweep(led, cfg, now=LATE + 60)["updated"] == 1
     moved = _latest_render(led)
@@ -166,7 +166,7 @@ def test_legacy_null_specs_keep_slack_own_root_and_hold_unknown_discord_route(le
 def test_failed_source_face_update_does_not_remove_proven_original_thread(led, cfg):
     created = _fallback(led, cfg)
     _land(led, created, cfg)
-    delivered_source(led, card_id=2, cfg=cfg)
+    delivered_source(led, card_id=2, mids=(100,), cfg=cfg)
     source = _card(led, 2)
     with led.db:
         led.db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=2")

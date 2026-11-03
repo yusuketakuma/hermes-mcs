@@ -5,7 +5,7 @@ import pytest
 
 from adapters.slack import cards
 import present_slack
-from notify_testkit import _dispatch, _intent, _latest_render, _seed_thread, led, pinned_clock
+from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread, delivered_source, led, pinned_clock
 from slack_card_testkit import _spec
 from slack_testkit import SLACK
 
@@ -24,19 +24,30 @@ def test_eight_posts_overflow_to_thread_without_losing_originals(led, pinned_clo
     with led.db:
         led.db.executemany("UPDATE messages SET body_text=? WHERE message_id=?",
                            [(text, mid) for mid, text in originals.items()])
-    assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}), SLACK)["dispatched"]
-    spec = json.loads(_latest_render(led)["spec_json"])
-    _text, blocks = cards.render(spec)
-    face = spec["parts"].get("slack", {}).get("face_posts", [])
-    assert 0 < len(face) < len(mids)
-    assert _block_count(blocks) <= present_slack.face_block_count(spec["parts"], face) <= 50
-    on_face = {p["original"] for p in face}
-    body_parts = [(p["name"], text) for p, text in zip(
-        [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"],
-        spec["parts"]["thread_body_parts"], strict=True)]
-    for mid, original in originals.items():
+    event = _intent(led, payload={"message_ids": list(mids)})
+    assert _dispatch(led, event, SLACK)["dispatched"]
+    delivered_source(led, mids=(100,), cfg=SLACK)
+    assert _dispatch(led, event, SLACK, now=NOW + 1)["dispatched"]
+    rows = led.db.execute("SELECT card_id FROM notification_cards WHERE kind='thread' ORDER BY card_id").fetchall()
+    assert len(rows) == len(mids)
+    seen = set()
+    for row in rows:
+        spec = json.loads(_latest_render(led, row[0])["spec_json"])
+        mid = spec["parts"]["post_source_id"]
+        seen.add(mid)
+        _text, blocks = cards.render(spec)
+        face = spec["parts"].get("slack", {}).get("face_posts", [])
+        assert len(face) <= 1
+        assert _block_count(blocks) <= present_slack.face_block_count(spec["parts"], face) <= 50
+        on_face = {post["original"] for post in face}
+        body_parts = [(part["name"], text) for part, text in zip(
+            [part for part in spec["parts"]["manifest"] if part["kind"] == "body_part"],
+            spec["parts"]["thread_body_parts"], strict=True)]
+        original = originals[mid]
         in_thread = "".join(text for name, text in body_parts if name.startswith(f"m:{mid}#"))
-        assert (original in on_face and not in_thread) or (original not in on_face and in_thread == original)
+        assert (on_face == {original} and not in_thread) or (not on_face and in_thread == original)
+        assert not any(text in on_face or text in in_thread for other, text in originals.items() if other != mid)
+    assert seen == set(mids)
 
 
 def test_recursive_budget_counts_boundary_and_separate_stamp_zone():

@@ -164,11 +164,28 @@ def test_unacked_leaves_out_old_cards(led):
 
 @pytest.mark.parametrize("transport", ["discord", "slack", "lineworks"])
 def test_unacked_observes_new_content_before_a_card_refresh(led, transport):
-    spec = _delivered_card(led)
-    _click(led, spec, "ack")
-    _deliver(led)
-    led.db.execute("UPDATE notification_cards SET transport=?", (transport,))
-    led.db.commit()
+    if transport == "slack":
+        from notify_testkit import _dispatch, _intent, _seed_thread, _latest_render
+        from slack_testkit import SLACK, SCOPE
+        from test_notify_slack import _command, _drain, _settle_parts
+        _seed_thread(led, mids=(100,))
+        _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
+        render = _latest_render(led)
+        spec = json.loads(render["spec_json"])
+        assert _drain(led, _command(render))["granted"]
+        receipt = _command(render, "transport_receipt")
+        assert _drain(led, receipt)["applied"]
+        _settle_parts(led, render)
+        token = next(b["token"] for row in spec["parts"]["action_rows"] for b in row if b["id"] == "ack")
+        assert _drain(led, {"version": 2, "transport": "slack", "op": "notification",
+            "command_id": token + ":" + "f" * 16, "actor": "slack:T_SYNTHETIC:U_SYNTHETIC",
+            "token": token, "origin": {**SCOPE, "message_id": receipt["message_id"]}})["outcome"] == "applied"
+    else:
+        spec = _delivered_card(led)
+        _click(led, spec, "ack")
+        _deliver(led)
+        led.db.execute("UPDATE notification_cards SET transport=?", (transport,))
+        led.db.commit()
     assert notify_views.unacked_view(led.db, transport, NOW, [1])["items"] == []
     _msg(led, 102, parent=100, body="合成の未確認返信")
     # No sweep or click on this card has persisted a new source generation.
