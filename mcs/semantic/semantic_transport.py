@@ -185,7 +185,10 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                 deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
         return providers[purpose]
 
-    provider = get_provider("backlog")
+    try:
+        provider = get_provider("backlog")
+    except cloud_inference.CloudFallback:
+        raise runtime.LLMNotSent('cloud_profile_unavailable') from None
 
     switched = False
 
