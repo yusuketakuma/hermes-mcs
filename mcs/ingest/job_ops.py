@@ -192,6 +192,9 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False
                 if req["cmd"] == "ops.card_part_resolve":
                     import notify_recovery
                     receipt = notify_recovery.apply_card_part_resolve(ledger, req)
+                elif req["cmd"] == "ops.attachment_identity_confirm":
+                    import notify_recovery
+                    receipt = notify_recovery.apply_attachment_identity_confirm(ledger, req)
                 elif req["cmd"] == "ops.card_resolve":
                     import notify_recovery
                     receipt = notify_recovery.apply_card_resolve(ledger, req)

@@ -461,3 +461,101 @@ def test_delivered_edit_with_conflicting_sealed_identity_is_held(led, uploaded, 
         "SELECT error_code FROM notification_render_parts WHERE delivery_id=?", (latest["delivery_id"],))} \
         == {"attachment_upload_identity_unverified"}
     assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
+
+
+def _held_collected(led, uploaded):
+    """The delivered upload loses its sealed manifest; only collected rows remain."""
+    world, prior, _spec, part, attachment_id = uploaded
+    did = prior["delivery_id"]
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?", (did,))
+        led.db.execute("UPDATE attachments SET name='synthetic-attested.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, [], force=True)
+    latest = _latest_render(led)
+    assert latest["delivery_id"] != did and latest["state"] == "held"
+    held = led.db.execute(
+        "SELECT part_id,state,error_code,attempt_id FROM notification_render_parts "
+        "WHERE delivery_id=? AND kind='attachment_part'", (latest["delivery_id"],)).fetchone()
+    assert held["state"] == "held" and held["error_code"] == "attachment_upload_identity_unverified"
+    return world, prior, latest, held, part, attachment_id
+
+
+def test_collected_only_upload_identity_is_held_then_confirmed_recovers(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    did, pid = prior["delivery_id"], part["part_id"]
+    remote = led.db.execute("SELECT remote_id FROM notification_render_parts "
+                            "WHERE delivery_id=? AND part_id=?", (did, pid)).fetchone()[0]
+    # plan binds scope/card/part/attachment and the single collected remote
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    assert plan["cmd"] == "ops.attachment_identity_confirm" and plan["expected_state"] == "held"
+    assert plan["remote_id"] == remote and plan["attachment_id"] == attachment_id
+    # unapproved attempts reject: nothing is promoted, nothing is sent
+    uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
+    rejected = []
+    for tamper in ("missing_human", "bad_remote", "bad_sha", "stale_plan"):
+        req = {**plan, "command_id": f"c0ffee00-0000-4000-8000-{len(rejected)+1:012d}",
+               "actor": "operator", "reason": "synthetic attestation",
+               "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True}}
+        if tamper == "missing_human":
+            req.pop("human_confirmed", None)
+        if tamper == "bad_remote":
+            req["remote_id"] = "F_OTHER"
+        if tamper == "bad_sha":
+            req["sha256"] = "0" * 64
+        if tamper == "stale_plan":
+            req["bytes"] += 1
+        receipt = apply_attachment_identity_confirm(led, req)
+        rejected.append(receipt["outcome"])
+        assert receipt["outcome"] == "rejected"
+    req = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000aa",
+           "actor": "operator", "reason": "synthetic attestation",
+           "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True},
+           "human_confirmed": True}
+    receipt = apply_attachment_identity_confirm(led, req)
+    assert receipt["outcome"] == "applied" and receipt["remote_id"] == remote
+    # replay is idempotent
+    again = apply_attachment_identity_confirm(led, req)
+    assert again["outcome"] == "applied" and again["command_id"] == req["command_id"]
+    # the held render is re-sealed to edit_only reuse of the attested remote
+    sealed = _latest_render(led)
+    assert sealed["delivery_id"] == latest["delivery_id"] and sealed["state"] == "queued"
+    spec = json.loads(sealed["spec_json"])
+    current = next(p for p in spec["parts"]["manifest"] if p["part_id"] == held["part_id"])
+    assert current["edit_only"] is True and current["prior_remote_id"] == remote
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)),
+                               [json.loads(sealed["spec_json"])], NOW + 2)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    row = led.db.execute("SELECT state,remote_id FROM notification_render_parts "
+                         "WHERE delivery_id=? AND part_id=?",
+                         (sealed["delivery_id"], held["part_id"])).fetchone()
+    assert row["state"] == "delivered" and row["remote_id"] == remote
+    assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
+
+
+def test_attestation_does_not_promote_changed_or_other_scope(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    req = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000bb",
+           "actor": "operator", "reason": "synthetic attestation",
+           "evidence": {"method": "remote_check", "ref": "synthetic", "worker_stopped": True},
+           "human_confirmed": True}
+    # stale attestation: attachment name changed after the plan was read
+    with led.db:
+        led.db.execute("UPDATE attachments SET name='renamed-after-plan.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+    receipt = apply_attachment_identity_confirm(led, req)
+    assert receipt["outcome"] == "rejected"
+    # a receipt bound to mismatched stored fields never promotes
+    bad = {**plan, "command_id": "c0ffee00-0000-4000-8000-0000000000cc",
+           "actor": "operator", "reason": "synthetic", "team_id": "T_OTHER",
+           "evidence": {"method": "m", "ref": "r", "worker_stopped": True},
+           "human_confirmed": True}
+    assert apply_attachment_identity_confirm(led, bad)["outcome"] == "rejected"
+    emitted = []
+    with led.db:
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 3, emitted, force=True)
+    latest2 = _latest_render(led)
+    assert latest2["state"] == "held"
