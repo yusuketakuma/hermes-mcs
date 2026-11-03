@@ -68,7 +68,8 @@ def test_worst_case_real_thread_card_with_stamp_passes_the_worker_budget(
     assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}),
                      _transport_cfg(transport, card_thread))["dispatched"]
     spec = _spec(led)
-    assert "stamp" in _ids(spec) and "tasks" in _ids(spec)
+    assert "tasks" in _ids(spec)
+    assert ("stamp" in _ids(spec)) or _ids(spec).count("stamp_press") == 5
     minted = led.db.execute("SELECT COUNT(*) FROM notification_action_tokens").fetchone()[0]
     rows = spec["parts"]["action_rows"]
     posts = (spec["parts"].get(transport) or {}).get("post_actions") or []
@@ -124,7 +125,7 @@ def test_slack_groups_stamp_choices_with_a_distinct_post_picker(led, monkeypatch
     assert "initial_option" not in stamp_control
     stamp_row = stamp_control["options"]
     assert [e["text"]["text"] for e in stamp_row] == [
-        "👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
+        "👀見ました", "🙆承知", "🙏感謝", "👍いいね", "✅完了"]
     planned = [b for row in spec["parts"]["action_rows"] for b in row]
     expected = [b["token"] for b in planned if b["id"] == "stamp_press"]
     expected += [b["token"] for b in planned if b["id"] == "stamp"]
@@ -192,12 +193,19 @@ def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
     from discord_testkit import _fake_discord
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     spec = _rendered_spec(led, monkeypatch, transport)
+    # Retained multi-post envelopes include a form even when the current
+    # single-post writer would only emit the five direct choices.
+    if "stamp" not in _ids(spec):
+        spec["parts"]["action_rows"].append([{
+            "id": "stamp", "ui": "button", "label": "別の投稿", "token": "f" * 32}])
     for i, row in enumerate(spec["parts"]["action_rows"]):
         if row and row[0]["id"] == "stamp_press":
             spec["parts"]["action_rows"][i] = row[:stamp_count]
     spec["parts"]["action_rows"] = [r for r in spec["parts"]["action_rows"] if r]
     from adapters.common.envelopes import canonical
-    card_payload = {k: spec["parts"][k] for k in ("containers", "footer", "action_rows", "preview_text")
+    card_payload = {k: spec["parts"][k] for k in ("containers", "footer", "action_rows", "preview_text",
+                                                "processing_display_version", "section_divider_version",
+                                                "slack_thread_policy")
                     if k in spec["parts"]}
     spec["parts"]["manifest"][0]["sha256"] = hashlib.sha256(canonical(card_payload)).hexdigest()
     expected = [b["token"] for row in spec["parts"]["action_rows"] for b in row if "token" in b]
@@ -246,7 +254,7 @@ def test_stamp_row_is_left_out_rather_than_break_the_row_budget(led, monkeypatch
     mids = tuple(range(100, 120))
     _seed_thread(led, mids=mids)
     _add_request(led)
-    _llm_extract(led, 101, {"summary": "合成要約", "requests": []})   # a current extraction -> 誤りを報告
+    _llm_extract(led, 100, {"summary": "合成要約", "requests": []})   # a current extraction -> 誤りを報告
     led.db.commit()
     assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}),
                      _transport_cfg(transport, False))["dispatched"]
@@ -261,7 +269,8 @@ def test_stamp_row_is_left_out_rather_than_break_the_row_budget(led, monkeypatch
     assert len(stamp_rows) <= 1
     if stamp_rows:
         assert rows.index(stamp_rows[0]) == 1 and len(stamp_rows[0]) == 5
-    assert "stamp" in _ids(spec)                       # the form stays the fallback
+    assert "stamp" in _ids(spec) or _ids(spec).count("stamp_press") == 5
+    # A single-post card keeps all five direct choices; multi-post cards keep the form.
     from adapters.lineworks import cards as lineworks_cards
     from adapters.slack import cards as slack_cards
     {"discord": worker_spec.validate, "slack": slack_cards.validate,

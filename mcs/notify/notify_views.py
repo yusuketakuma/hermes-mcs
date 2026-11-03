@@ -502,7 +502,34 @@ def unacked_view(db, transport, now=None, projects=None,
                  AND m.source_generation=c.source_generation
                  AND m.shown=(SELECT shown FROM notification_view_manifests
                               WHERE card_id=c.card_id
-                              ORDER BY manifest_id DESC LIMIT 1)) AS acknowledged
+                              ORDER BY manifest_id DESC LIMIT 1)) AS acknowledged,
+               (c.transport='slack' AND c.kind='thread'
+                AND CASE WHEN json_valid(c.anchor_key)
+                         THEN json_extract(c.anchor_key,'$.source') END IS NULL
+                AND EXISTS (SELECT 1 FROM messages pending
+                    WHERE pending.project_id=c.project_id AND pending.parent_id=c.root_message_id
+                      AND pending.body_state IS NOT 'deleted'
+                      AND NOT EXISTS (SELECT 1 FROM notification_cards reply
+                          WHERE reply.card_key=c.card_key || '|reply:' || pending.message_id
+                            AND reply.kind='thread' AND reply.transport=c.transport
+                            AND reply.project_id=c.project_id AND reply.root_message_id=c.root_message_id
+                            AND reply.profile IS c.profile AND reply.application_id IS c.application_id
+                            AND reply.team_id IS c.team_id AND reply.channel_id IS c.channel_id
+                            AND EXISTS (SELECT 1 FROM notification_renders sent
+                                JOIN notification_renders parent ON parent.card_id=c.card_id
+                                  AND parent.render_rev=c.applied_render_rev AND parent.state='delivered'
+                                WHERE sent.card_id=reply.card_id AND sent.render_rev=reply.applied_render_rev
+                                  AND sent.state='delivered' AND sent.route_epoch=parent.route_epoch
+                                  AND sent.transport=c.transport AND parent.transport=c.transport
+                                  AND sent.profile IS c.profile AND parent.profile IS c.profile
+                                  AND sent.application_id IS c.application_id AND parent.application_id IS c.application_id
+                                  AND sent.team_id IS c.team_id AND parent.team_id IS c.team_id
+                                  AND sent.channel_id IS c.channel_id AND parent.channel_id IS c.channel_id)
+                            AND CASE WHEN json_valid(reply.anchor_key)
+                                     THEN json_extract(reply.anchor_key,'$.source') END=pending.message_id
+                            AND reply.message_id IS NOT NULL AND reply.thread_id=c.thread_id
+                            AND reply.thread_state='created'
+                            AND reply.delivery_state IN ('delivered','update_failed')))) AS pending_replies
            FROM notification_cards c
            LEFT JOIN notification_triage t
              ON t.card_id=c.card_id AND t.state='assigned'
@@ -517,8 +544,12 @@ def unacked_view(db, transport, now=None, projects=None,
     rows = _in_scope(rows, projects)
     # A click on another card can observe new source material before sweep
     # persists this card's generation. Its older acknowledgement is stale.
-    rows = [r for r in rows if not r["acknowledged"]
-            or render_source_generation(r, source_fingerprint(db, r)) != r["source_generation"]]
+    current = []
+    for row in rows:
+        changed = bool(row["acknowledged"]) and render_source_generation(row, source_fingerprint(db, row)) != row["source_generation"]
+        if not row["acknowledged"] or changed or row["pending_replies"]:
+            current.append({**row, "reply_waiting": bool(row["acknowledged"] and not changed and row["pending_replies"])})
+    rows = current
     groups: dict = {}
     for r in rows:
         groups.setdefault(r["project_id"], []).append(r)
@@ -539,7 +570,8 @@ def unacked_view(db, transport, now=None, projects=None,
             stamp_counts(meta) is None for _, reactions in with_reactions for _, meta in reactions)
         for c, reactions in with_reactions:
             at = datetime.fromtimestamp(c["created_at"], JST)
-            kind = "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート"
+            kind = ("🧵 返信（カード準備中）" if c["reply_waiting"] else
+                    "🧵 投稿" if c["kind"] == "thread" else "🔔 アラート")
             line = f"・{kind} {at:%m-%d %H:%M}〜"
             if c["owner"]:
                 owner = notify_render.presenter(transport).owner_label(

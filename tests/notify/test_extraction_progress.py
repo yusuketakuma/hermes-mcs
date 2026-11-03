@@ -29,7 +29,7 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
     assert progress == {"processing": 1, "complete": 1, "attention": 1, "unknown": 0,
                         "completed": 4, "total": 7, "posts": 3, "limited": False}
     text = notify_views.patient_summary_text(led.db, 1, cfg={})[1]
-    assert "処理中1・完了1・要確認1（7区間中4区間完了）" in text
+    assert "未完了1・完了1・要確認1（7区間中4区間完了）" in text
     assert "完了は抽出処理のみ" not in text
     assert "CANARY" not in text and "CANARY" not in str(progress)
 
@@ -180,8 +180,8 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
     assert progress[state] == 1 and progress["complete"] == 0
     text = notify_render._summary_block(led.db, 1, cfg=cfg)["text"]
-    assert ("解析要確認" in text) == (state == "attention")
-    assert ("解析更新中" in text) == (state == "processing")
+    assert ("! 要確認" in text) == (state == "attention")
+    assert ("◐ 未完了" in text) == (state == "processing")
     assert "SOURCE_CANARY" not in text
     content = notify_render.card_content(led.db, card, cfg=cfg)
     header = next(item for item in content["containers"] if item.get("provider_scope") == "header")
@@ -221,4 +221,5 @@ def test_signal_and_digest_body_preserve_legacy_progress(led, monkeypatch, kind,
     body = notify_render.card_body_text(
         led.db, card, {"shown": json.dumps(["synthetic-signal"])}, stamps=False, cfg={})[1]
     assert "合成症状" in body and "合成原文" in body
-    assert (label + "（3区間中1区間完了）" in body) == (layout == 1)
+    assert (("◐ 一部 1/3" if state == "processing" else "! 要確認") in body) == (layout == 1)
+    assert label not in body

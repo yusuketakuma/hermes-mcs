@@ -43,7 +43,7 @@ def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tm
     # parts: card_thread=False cannot silently remove the body/files.
     assert "本文" in "".join(spec["parts"]["thread_body_parts"])
     assert all(len(chunk) <= 1900 for chunk in spec["parts"]["thread_body_parts"])
-    assert all(b["id"] != "body" for row in spec["parts"]["action_rows"] for b in row)
+    assert sum(b["id"] == "body" for row in spec["parts"]["action_rows"] for b in row) == 1
     path = tmp_path / "data" / "lineworks_render" / (render["delivery_id"] + ".json")
     assert path.exists() and not list((tmp_path / "data" / "slack_render").iterdir())
     raw = path.read_bytes()

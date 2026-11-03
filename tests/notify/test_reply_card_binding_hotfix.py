@@ -168,6 +168,10 @@ def test_old_queued_channel_fallback_is_resealed_before_grant(led, cfg, monkeypa
         event, root, reply = _scene(led, cfg)
     old = _latest_render(led, reply["card_id"])
     assert "thread_id" not in json.loads(old["spec_json"])["delivery"]
+    # The previous worker queued this envelope before the current hold gate.
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET state='queued' WHERE delivery_id=?",
+                       (old["delivery_id"],))
     thread = _deliver_root(led, root, cfg)
     result = _begin(led, old, cfg, 300)
     assert result["error"] == "denied_reply_thread_changed"
@@ -215,6 +219,8 @@ def test_single_post_layout_omits_other_post_stamp_picker_but_keeps_direct_stamp
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
     spec = json.loads(_latest_render(led)["spec_json"])
     ids = [button["id"] for row in spec["parts"]["action_rows"] for button in row]
-    assert ("stamp" in ids) is not reply_cards
+    single = reply_cards or cfg["notify"]["interactive"] == "slack"
+    assert ("stamp" in ids) is not single
     assert "stamp_press" in ids
-    assert spec["parts"].get("post_source_id") == (100 if reply_cards else None)
+    assert spec["parts"].get("post_source_id") == (100 if single else None)
+    assert ids.count("stamp_press") == 5

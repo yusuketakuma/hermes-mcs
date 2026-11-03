@@ -54,7 +54,7 @@ def test_lineworks_notice_is_a_room_post_headed_with_the_patient(world):
     head, alarm = spec["parts"]["containers"][:2]
     assert head["type"] == "heading"
     assert head["text"].startswith(notify_render.patient_heading(store.db, 1) + " · ")
-    assert alarm == {"type": "text", "text": "🚨 緊急度高・再確認候補"}
+    assert alarm == {"type": "text", "rule": True, "text": "🚨 緊急度高・再確認候補"}
     assert spec["parts"]["preview_text"].startswith("🚨 緊急度高 ")
     # a re-entry while the render is live never seals a second post
     assert not notify_cards.dispatch_intent(store, dict(event), lw)["dispatched"]

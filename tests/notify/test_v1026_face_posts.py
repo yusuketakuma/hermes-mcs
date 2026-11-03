@@ -1,6 +1,4 @@
-"""Slack thread cards carry each post's stamps and folded original on the card face;
-attachments stay in the thread, old thread chunks are rewritten on update, and an
-oversized post falls back to the thread (synthetic fixtures only)."""
+"""Each Slack post keeps its original and stamps on its own card (synthetic only)."""
 import notify_parts
 import json
 
@@ -31,33 +29,43 @@ def _spec(led):
     return json.loads(_latest_render(led)["spec_json"])
 
 
+
+def _post_specs(led, event):
+    delivered_source(led, mids=(100,), cfg=SLACK)
+    assert _dispatch(led, event, SLACK, now=NOW + 1)["dispatched"]
+    specs = [json.loads(_latest_render(led, row[0])["spec_json"]) for row in
+             led.db.execute("SELECT card_id FROM notification_cards WHERE kind='thread' ORDER BY card_id")]
+    assert {spec["parts"]["post_source_id"] for spec in specs} == set(json.loads(event["payload"])["message_ids"])
+    return specs
+
+
 def test_face_groups_stamps_below_all_folded_originals(led, monkeypatch):
     monkeypatch.setattr(notify_render, "thread_stamp_row", lambda *_a, **_k: STAMP)
     _seed_thread(led, mids=(100, 101))
     with led.db:
         led.db.execute("UPDATE messages SET body_text='合成の元投稿' WHERE message_id=100")
         led.db.execute("UPDATE messages SET body_text='合成の返信本文' WHERE message_id=101")
-    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}), SLACK)
-    spec = _spec(led)
-    validate(spec)
-    posts = spec["parts"]["slack"]["face_posts"]
-    assert [p["original"] for p in posts] == ["合成の元投稿", "合成の返信本文"]
-    assert all(p["stamps"] == [STAMP] for p in posts)
-    assert spec["parts"]["thread_body_parts"] == []
-    assert not [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
-    blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
-    folds = [i for i, b in enumerate(blocks) if b.get("type") == "container"]
-    assert [b["title"]["text"] for b in (blocks[i] for i in folds)] == ["原文（6字）", "原文（7字）"]
-    stamp_at = [i for i, b in enumerate(blocks) if b["type"] == "context"
-                and STAMP in json.dumps(b, ensure_ascii=False)]
-    assert len(stamp_at) == 2 and min(stamp_at) > max(folds)
-    assert all(spec["parts"]["containers"][p["at"]]["text"]
-               in blocks[i]["elements"][0]["text"] for p, i in zip(posts, stamp_at))
-    assert blocks[folds[0]]["child_blocks"][0]["text"]["text"] == "合成の元投稿"
-    assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
-    # the reply's own line and summary sit between the two folds
-    between = blocks[folds[0] + 1:folds[1] - 1]
-    assert [b["type"] for b in between][:2] == ["divider", "context"]
+    event = _intent(led, payload={"message_ids": [100, 101]})
+    _dispatch(led, event, SLACK)
+    specs = _post_specs(led, event)
+    for spec, original in zip(specs, ("合成の元投稿", "合成の返信本文"), strict=True):
+        validate(spec)
+        posts = spec["parts"]["slack"]["face_posts"]
+        assert [p["original"] for p in posts] == [original]
+        assert posts[0]["stamps"] == [STAMP]
+        assert spec["parts"]["thread_body_parts"] == []
+        assert not [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]
+        blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
+        folds = [i for i, block in enumerate(blocks) if block.get("type") == "container"]
+        assert len(folds) == 1 and blocks[folds[0]]["title"]["text"] == f"原文（{len(original)}字）"
+        stamp_at = [i for i, block in enumerate(blocks) if block["type"] == "context"
+                    and STAMP in json.dumps(block, ensure_ascii=False)]
+        assert len(stamp_at) == 1 and stamp_at[0] > folds[0]
+        header = spec["parts"]["containers"][posts[0]["at"]]["text"]
+        assert header in json.dumps(blocks[:folds[0]], ensure_ascii=False)
+        assert STAMP in json.dumps(blocks[stamp_at[0]], ensure_ascii=False)
+        assert blocks[folds[0]]["child_blocks"][0]["text"]["text"] == original
+        assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
 
 
 def test_update_rewrites_old_thread_chunks_and_moves_body_to_face(led, monkeypatch):
@@ -86,13 +94,17 @@ def test_oversized_post_falls_back_to_the_thread(led, monkeypatch):
     with led.db:
         led.db.execute("UPDATE messages SET body_text='短い合成本文' WHERE message_id=100")
         led.db.execute("UPDATE messages SET body_text=? WHERE message_id=101", ("長い合成本文" * 10,))
-    _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}), SLACK)
-    spec = _spec(led)
-    validate(spec)
-    assert [p["original"] for p in spec["parts"]["slack"]["face_posts"]] == ["短い合成本文"]
-    names = {p["name"] for p in spec["parts"]["manifest"] if p["kind"] == "body_part"}
+    event = _intent(led, payload={"message_ids": [100, 101]})
+    _dispatch(led, event, SLACK)
+    root, reply = _post_specs(led, event)
+    for spec in (root, reply):
+        validate(spec)
+    assert [p["original"] for p in root["parts"]["slack"]["face_posts"]] == ["短い合成本文"]
+    assert not root["parts"]["thread_body_parts"]
+    assert not reply["parts"].get("slack", {}).get("face_posts")
+    names = {p["name"] for p in reply["parts"]["manifest"] if p["kind"] == "body_part"}
     assert names == {"m:101:header#1", "m:101#1"}
-    assert "長い合成本文" in "".join(spec["parts"]["thread_body_parts"])
+    assert "長い合成本文" * 10 in "".join(reply["parts"]["thread_body_parts"])
     assert _card(led)["kind"] == "thread"
 
 
@@ -115,12 +127,14 @@ def test_block_cap_sends_the_rest_of_the_page_to_the_thread(led, monkeypatch):
     monkeypatch.setattr(notify_render, "thread_stamp_row", lambda *_a, **_k: "a\nb\nc\nd")
     mids = tuple(range(100, 108))
     _seed_thread(led, mids=mids)
-    _dispatch(led, _intent(led, payload={"message_ids": list(mids)}), SLACK)
-    spec = _spec(led)
-    validate(spec)
-    posts = spec["parts"]["slack"]["face_posts"]
-    assert 0 < len(posts) < len(mids)
-    blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
-    assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
-    names = {p["name"] for p in spec["parts"]["manifest"] if p["kind"] == "body_part"}
-    assert names == {f"m:{m}#1" for m in mids[len(posts):]} | {f"m:{m}:header#1" for m in mids[len(posts):]}
+    event = _intent(led, payload={"message_ids": list(mids)})
+    _dispatch(led, event, SLACK)
+    specs = _post_specs(led, event)
+    assert len(specs) == len(mids)
+    for spec in specs:
+        validate(spec)
+        posts = spec["parts"]["slack"]["face_posts"]
+        assert len(posts) == 1
+        blocks = slack_presentation.render_parts(spec["parts"], card_kind="thread")
+        assert len(blocks) <= present_slack.face_block_count(spec["parts"], posts) <= present_slack.BLOCK_MAX
+        assert not [p for p in spec["parts"]["manifest"] if p["kind"] == "body_part"]

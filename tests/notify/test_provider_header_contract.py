@@ -77,7 +77,7 @@ def test_v4_header_rejects_inconsistent_metadata(fault):
     (["jev", "openai"], ("openai", "jev", "local"), (100,), ["jev", "openai"]),
     (["local", "jev"], ("jev", "local"), (100,), ["local", "jev"]),
     (["jev", "openai"], ("jev", "local"), (100,), None),
-    (["jev", "openai"], ("openai", "jev", "local"), (100, 101), None),
+    (["jev", "openai"], ("openai", "jev", "local"), (100, 101), ["jev", "openai"]),
     (None, ("openai", "jev", "local"), (100,), None),
 ])
 def test_writer_displays_only_proven_visible_single_post_sequence(led, monkeypatch, sequence, visible, posts, expected):

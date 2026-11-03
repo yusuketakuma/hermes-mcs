@@ -162,13 +162,35 @@ def test_unacked_leaves_out_old_cards(led):
     assert _click(led, spec, "unacked")["list"]["items"] == []
 
 
+def _ack_slack_root(led):
+    from notify_testkit import _dispatch, _intent, _seed_thread, _latest_render
+    from slack_testkit import SLACK, SCOPE
+    from test_notify_slack import _command, _drain, _settle_parts
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    assert _drain(led, _command(render))["granted"]
+    receipt = _command(render, "transport_receipt")
+    assert _drain(led, receipt)["applied"]
+    _settle_parts(led, render)
+    token = next(b["token"] for row in spec["parts"]["action_rows"] for b in row if b["id"] == "ack")
+    assert _drain(led, {"version": 2, "transport": "slack", "op": "notification",
+        "command_id": token + ":" + "f" * 16, "actor": "slack:T_SYNTHETIC:U_SYNTHETIC",
+        "token": token, "origin": {**SCOPE, "message_id": receipt["message_id"]}})["outcome"] == "applied"
+    return dict(led.db.execute("SELECT * FROM notification_cards WHERE card_id=1").fetchone())
+
+
 @pytest.mark.parametrize("transport", ["discord", "slack", "lineworks"])
 def test_unacked_observes_new_content_before_a_card_refresh(led, transport):
-    spec = _delivered_card(led)
-    _click(led, spec, "ack")
-    _deliver(led)
-    led.db.execute("UPDATE notification_cards SET transport=?", (transport,))
-    led.db.commit()
+    if transport == "slack":
+        _ack_slack_root(led)
+    else:
+        spec = _delivered_card(led)
+        _click(led, spec, "ack")
+        _deliver(led)
+        led.db.execute("UPDATE notification_cards SET transport=?", (transport,))
+        led.db.commit()
     assert notify_views.unacked_view(led.db, transport, NOW, [1])["items"] == []
     _msg(led, 102, parent=100, body="合成の未確認返信")
     # No sweep or click on this card has persisted a new source generation.
@@ -176,6 +198,42 @@ def test_unacked_observes_new_content_before_a_card_refresh(led, transport):
     assert view["head"][0] == "未確認 1件（うち担当者あり 0件）"
     assert [item["project_id"] for item in view["items"]] == [1]
     assert notify_views.unacked_view(led.db, transport, NOW, [2])["items"] == []
+
+
+@pytest.mark.parametrize("case", ["missing", "pending", "same-scope", "team", "channel", "route", "render-team", "deleted", "project"])
+def test_unacked_pending_reply_keeps_scope_and_parent_ack(led, case):
+    root = _ack_slack_root(led)
+    before = [tuple(row) for row in led.db.execute("SELECT * FROM notification_acknowledgements")]
+    _msg(led, 102, parent=100, body="合成の未配信返信")
+    with led.db:
+        if case in ("deleted", "project"):
+            led.db.execute("UPDATE messages SET " + ("body_state='deleted'" if case == "deleted" else "project_id=2")
+                           + " WHERE message_id=102")
+        elif case != "missing":
+            reply = {key: value for key, value in root.items() if key != "card_id"}
+            reply.update(card_key=root["card_key"] + "|reply:102", anchor_key=json.dumps({"source": 102}),
+                         message_id=None if case == "pending" else "1790000000.000222")
+            if case == "team":
+                reply["team_id"] = "T_OTHER"
+            elif case == "channel":
+                reply["channel_id"] = "C_OTHER"
+            led.db.execute("INSERT INTO notification_cards (" + ",".join(reply) + ") VALUES ("
+                           + ",".join("?" for _ in reply) + ")", tuple(reply.values()))
+            reply_id = led.db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            # The view consumes retained delivery metadata, not the network.
+            sent = dict(led.db.execute("SELECT * FROM notification_renders WHERE card_id=1 AND state='delivered'").fetchone())
+            sent.update(card_id=reply_id, delivery_id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", correlation="synthetic-reply")
+            if case == "route":
+                sent["route_epoch"] += 1
+            elif case == "render-team":
+                sent["team_id"] = "T_OTHER"
+            led.db.execute("INSERT INTO notification_renders (" + ",".join(sent) + ") VALUES ("
+                           + ",".join("?" for _ in sent) + ")", tuple(sent.values()))
+    view = notify_views.unacked_view(led.db, "slack", NOW, [1])
+    waiting = [item for item in view["items"] if "返信（カード準備中）" in item["text"]]
+    assert bool(waiting) is (case not in ("same-scope", "deleted", "project"))
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM notification_acknowledgements")] == before
+    assert notify_views.unacked_view(led.db, "slack", NOW, [2])["items"] == []
 
 
 def test_search_opens_modal_then_answers_hits(led):
