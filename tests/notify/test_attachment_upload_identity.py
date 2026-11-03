@@ -724,8 +724,23 @@ def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, m
     assert len(world.client.upload_calls) == uploads
     # GC clears sealed manifests; receipts still drive later recovery
     assert notify_cards.gc(led, SLACK, now=NOW + 100, limit=10)["spec_json_cleared"] >= 1
+    remotes = {r[0]: r[1] for r in led.db.execute(
+        "SELECT part_id,remote_id FROM notification_render_parts WHERE delivery_id=? "
+        "AND kind='attachment_part'", (held_render["delivery_id"],))}
+    uploads = len(world.client.upload_calls)
     with led.db:
         led.db.execute("UPDATE attachments SET name='post-gc.bin' WHERE attachment_id=?", (aid2,))
         emitted = []
         notify_cards.issue_render(led.db, 1, SLACK, NOW + 101, emitted, force=True)
-    assert _latest_render(led)["state"] != "held" or emitted
+    spec, = emitted
+    manifest = {p["part_id"]: p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part"}
+    assert all(p["edit_only"] and p["prior_remote_id"] == remotes[pid]
+               for pid, p in manifest.items())
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), emitted, NOW + 101)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    rows = {r[0]: (r[1], r[2]) for r in led.db.execute(
+        "SELECT part_id,state,remote_id FROM notification_render_parts "
+        "WHERE delivery_id=? AND kind='attachment_part'", (spec["delivery_id"],))}
+    assert all(state == "delivered" and remote == remotes[pid]
+               for pid, (state, remote) in rows.items())
+    assert len(world.client.upload_calls) == uploads
