@@ -10,7 +10,7 @@
     <text x="22" y="64" font-size="15">MCS 1.1.1 · 推論エンジン 1.0</text>
     <rect x="18" y="88" width="354" height="98" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
     <text x="34" y="119" font-size="19" font-weight="700">1　新着・履歴を取り込む</text>
-    <text x="34" y="147" font-size="15">新着はローカルで即時処理</text>
+    <text x="34" y="147" font-size="15">新着はローカルを優先</text>
     <text x="34" y="171" font-size="15">履歴・患者背景はクラウド優先</text>
     <path d="M195 194V211" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
     <rect x="18" y="222" width="354" height="150" rx="14" fill="#e8f0fd" stroke="#a4bddc"/>

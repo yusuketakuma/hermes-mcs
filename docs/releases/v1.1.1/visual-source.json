@@ -4,8 +4,8 @@
   "renderer": "macOS qlmanage -t -s 1000 on 1000x1000 wrapper, drawing translated x=305; magick crop 390x940+305+0 +repage -strip",
   "comparison": "No before/after comparison. Current development implementation only.",
   "source_checkout": {
-    "head": "a910c7ee3d427e9dacdfce77e743257ec93dbd9c",
-    "status": "committed implementation; release metadata and deployment tracked separately"
+    "head": "d2f83974a3a66e715e86677d321ddbb78f075bfe",
+    "status": "local main release preparation; new Slack feature, deployment and publication tracked separately"
   },
   "evidence": [
     {
@@ -14,7 +14,7 @@
     },
     {
       "path": "mcs/extract/llm/extract_llm.py",
-      "sha256": "89fad302a62b5ebce4f354d7fc7a9b9c2bd150110cf3afefbae7ca12a8dc026b"
+      "sha256": "156ca1e8bda4bfecffa83b6c360836d7d636ed3a9c6ccd3af70657bf777fcdfc"
     },
     {
       "path": "mcs/llm/cloud_inference.py",
@@ -22,7 +22,7 @@
     },
     {
       "path": "mcs/llm/cloud_policy.py",
-      "sha256": "c1b5cc041dee26b0dc814dc628f13204c248a5bb44a2d323b9a7da63c841e501"
+      "sha256": "da861b288804fb2b5736297601b01da28cb986c39f42ea5d12b536d676d70533"
     },
     {
       "path": "mcs/patients/patient_context_refresh.py",
@@ -30,15 +30,15 @@
     },
     {
       "path": "mcs/semantic/semantic_jev.py",
-      "sha256": "4af718f3ba8666337e5798f899f2a41f911cb0aa81904c57a3f58669621936dd"
+      "sha256": "c17f8dc1bafbb2daf77f99d9f6e83dc8f136dc2ce184ae699a77490645187eb0"
     },
     {
       "path": "mcs/notify/notify_render.py",
-      "sha256": "80611084a300c12136ddcf25dea40ac823a372423e5cecd43586d539254395bc"
+      "sha256": "fba0c32a5b750a1adabab727767d06f877d40b75e6138ca779c0f7abc26a512b"
     },
     {
       "path": "mcs/notify/notify_transport.py",
-      "sha256": "0c68f2f41982c1ae8d00e99189db5b79af81e5708739e4999d5a8abc2c57a032"
+      "sha256": "3d68efde980d60530bad7aa29d97beb124f3397945090fea415e57fa5384eb91"
     },
     {
       "path": "docs/development/LLM_RUNTIME.md",
@@ -59,10 +59,10 @@
     "unknown delivery is not automatically resent",
     "new attachment analysis is outside 1.1.1"
   ],
-  "checked": "PNG opened locally at native width 390px, height 940px; no clipped or overlapping labels",
+  "checked": "PNG opened locally at native width 390px, height 940px; no clipped or overlapping labels; local priority wording avoids an unmeasured immediate-processing claim",
   "sha256": {
-    "svg": "664d849ec912500440ed5586ac700adb2b4cb13794a0bd1ca0fe554319353b03",
-    "png": "6063208b90152927a3f2cac2dc1669cefd6f6808687f24a4dd8a1266dd0f23a5"
+    "svg": "a88b58a83e0b011c58ab4c2371bfa261b6940aaf51ef92587b76390b687419be",
+    "png": "d56525f3e4f73bba9b30b63134d060effe303d23fb0911c23c20b19d31bf781c"
   },
   "published_reference": {
     "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/releases/v1.1.1/inference-flow.png",
