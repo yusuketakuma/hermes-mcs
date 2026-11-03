@@ -231,6 +231,8 @@ def test_failed_card_read_is_unknown_and_reaches_monitor(stored, tmp_path, monke
     monkeypatch.setattr(notify_scope, "health_cards", read)
     report = health_report.build_health(stored, {"errors": [], "notify": {}}, run_status, cfg={})
     cards = report["cards"]
+    assert cards["completion"]["status"] == "unknown"
+    assert cards["completion"]["observed_at"] == NOW
     assert cards["status"] == "unknown"
     assert cards["reason"] == ("observation_limit" if failure == "sql_limit" else "observation_unavailable")
     assert all(cards[name] is None for name in ("pending", "attempts_unsettled", "layout_inventory",

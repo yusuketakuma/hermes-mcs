@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "保存結果と通知全体の完了、保留の解決手順を表示",
+  "summary": "ジョブ完了、有効な保存結果、カード本体と本文・添付全体の配送を分け、長期保留には種類に合った既存の解決操作を案内します。",
+  "upgrade": "追加操作は不要です。送信結果が不明な記録の自動解除や再送、人承認条件の変更は行いません。",
+  "details": ["配送時間は取得記録から全パートのreceipt確定までの最新20件を対象とし、相手側への到着時刻や既読を意味しません。", "新着・過去分・QCの待機開始、取得からの経過、巡回と現在世代の完了を区別します。時間目標が未定義なら未定義と示します。", "観測できない値は理由付きの不明として扱い、0件や完了として扱いません。"],
+  "refs": ["mcs/notify/notify_scope.py", "mcs/notify/notify_recovery.py", "mcs/views/operational_progress.py", "mcs/ops/semantic_observe.py", "mcs/ingest/health_report.py"]
+}

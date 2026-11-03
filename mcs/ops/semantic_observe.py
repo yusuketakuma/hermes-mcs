@@ -104,6 +104,14 @@ def observe(db_path: str = DB, cfg: dict | None = None, days: int = 14, *,
         # only this component unavailable, not the queues read before it.
         quality = snapshot["current_quality"] = _bounded_quality(
             c, cfg, budget.checkpoint, deadline)
+        if snapshot.get("pipeline_progress", {}).get("status") == "recorded":
+            snapshot["pipeline_progress"]["result_validity"] = {
+                "status": "recorded" if quality.get("available") else "unavailable",
+                "reason": quality.get("reason"),
+                "basis": "current_terminal_summary_audit_pair_not_clinical_accuracy",
+                **{key: quality.get(key) for key in
+                   ("denominator", "complete", "incomplete", "audit_statuses")},
+            }
         limited = quality.get("reason") in _LIMIT_REASONS
         snapshot["observation"] = {"status": "partial" if limited else "complete",
                                    "at": started,
@@ -418,6 +426,12 @@ def main() -> int:
           f"jev_s={r['jev_s']})")
     pipeline = snap["pipeline_progress"]
     if pipeline["status"] == "recorded":
+        scheduled_at = pipeline["last_scheduler_at"]
+        scheduled = (time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(scheduled_at))
+                     if scheduled_at is not None else "未確認")
+        print(f"観測範囲{pipeline['completion_observation_window_s']:.0f}秒 | "
+              f"最終巡回: {scheduled} | 更新時間目標: 未設定（target_not_defined）")
+        print("完了時刻は現世代ジョブの記録。臨床上の正確性・通知全体の送信完了とは別集計")
         for name, title in (("arrival", "新着"), ("backfill", "履歴"),
                             ("qc", "抽出品質チェック"), ("unclassified", "分類不明")):
             slot = pipeline["queues"][name]
@@ -426,8 +440,17 @@ def main() -> int:
                      if rate["status"] == "recorded" else f"算出不能: {rate['reason']}")
             eta = (f"{estimate['seconds'] / 3600:.1f}時間（追加なし・条件不変の場合）"
                    if estimate["status"] == "conditional" else f"算出不能: {estimate['reason']}")
+            completed_at = rate["latest_completed_at"]
+            completed = (time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(completed_at))
+                         if completed_at is not None else "観測範囲では未確認")
+            age = slot["oldest_acquired_age_s"]
+            acquired = f"{age:.0f}秒" if age is not None else "未確認"
+            wait_age = slot["oldest_age_s"]
+            waiting = f"{wait_age:.0f}秒" if wait_age is not None else "未確認"
             print(f"{title}: 待ち{slot['pending']}件、失敗{slot['failed']}件、"
-                  f"再試行時刻待ち{slot['retry_wait']}件 | 速度 {speed} | 見通し {eta}")
+                  f"再試行時刻待ち{slot['retry_wait']}件 | 速度 {speed} | 見通し {eta} | "
+                  f"最終完了 {completed} | 最古待機 {waiting} | "
+                  f"取得時刻が確認できる待ちの最古 {acquired}（取得時刻不明{slot['acquisition_time_unknown']}件）")
     else:
         print(f"工程別の進捗: 未確認（{pipeline['reason']}）")
     collection = snap["collection_progress"]

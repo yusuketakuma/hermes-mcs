@@ -615,8 +615,9 @@ def build_health(db, result: dict, status: str,
             deadline: float | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
     notification completion, extract/QC backlog lag, and current
-    extraction-generation coverage. New observations expose only counts,
-    fixed reasons and timestamps; message bodies are never queried here.
+    extraction-generation coverage. Observations expose only counts,
+    fixed reasons and timestamps. Notification freshness checks may read
+    bounded source rows; no source body is included in the report.
     `run_id` binds this evidence to the source run that produced it.
     `deadline` (monotonic, e.g. the watchdog's hard deadline) bounds every
     observation together with the shared pool — past it each section must
@@ -655,7 +656,9 @@ def build_health(db, result: dict, status: str,
             "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
             "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
             "last_delivered_at"))
-        cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc))
+        cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc),
+                            completion={"status": "unknown", "observed_at": now,
+                                        "reason": _observation_failure(exc)})
     cards_unknown = cards_health.get("status") == "unknown"
     incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])

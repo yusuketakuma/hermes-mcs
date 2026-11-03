@@ -411,6 +411,37 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      *_PREFLIGHT_ERRORS)
 
 
+def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
+    """Describe existing recovery requirements without creating an approval payload."""
+    known = (*PART_HOLD_REASONS, "timeouterror", "connectionerror", "worker_crash",
+             "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch")
+    code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
+    card = kind == "card"
+    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part")
+                 and isinstance(attempt_id, str) and bool(attempt_id.strip()))
+    not_sent = {"worker_stopped": True,
+                "proof_any_of": ["no_journal_started", "api_rejected", "remote_absent"],
+                "journal_must_not_contradict": True}
+    if transport == "lineworks":
+        not_sent["remote_absent_requires_duplicate_risk_accepted"] = not card
+        not_sent["remote_absence_is_not_delivery_proof"] = True
+    if not card and transport == "slack" and code in _PREFLIGHT_ERRORS:
+        not_sent["conditional_proof"] = _PREFLIGHT_PROOF
+        not_sent["conditional_proof_requires_current_sealed_preflight"] = True
+    return {"error_code": code, "available": available,
+            "reason": None if available else "attempt_or_transport_unverified",
+            "command": "ops.card_resolve" if card else "ops.card_part_resolve",
+            "preview": None if card else "card_part_plan",
+            "next_action": "inspect_remote_and_journal" if available else "inspect_worker_journal",
+            "requirements": {"human_confirmation": True, "actor": True, "reason": True,
+                             "evidence_fields": ["method", "ref"],
+                             "worker_stopped_for_all_results": not card,
+                             "mark_delivered": {"remote_identity": "message_id" if card else "remote_id"},
+                             "mark_not_sent": not_sent},
+            "final_scope_and_journal_validation_required": True,
+            "automatic_resend": False}
+
+
 def part_hold_report(ledger) -> dict:
     """Dry-run counts of held/unknown parts by fixed reason and of specs GC keeps; reads only.
 

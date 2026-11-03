@@ -669,6 +669,96 @@ def layout_migration_counts(db) -> list:
         ORDER BY c.transport,c.layout,c.delivery_state""")]
 
 
+def _delivery_latency(db, retired, now):
+    """Sample root ingestion to full-plan receipt confirmation, never remote arrival or reading."""
+    from stats_math import finite_number, percentile
+    from notify_render import source_fingerprint
+    live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
+    samples, excluded, examined = [], {}, 0
+    for row in db.execute(
+            "SELECT c.*,r.delivery_id,r.render_rev rendered_rev,r.created_at render_created_at,"
+            "m.first_seen,v.card_id manifest_card_id,v.render_rev manifest_rev,"
+            "v.source_generation manifest_source,v.presentation_generation manifest_presentation,"
+            "v.shown,v.invalidated FROM notification_renders r "
+            "JOIN notification_cards c ON c.card_id=r.card_id "
+            "LEFT JOIN messages m ON m.message_id=c.root_message_id AND m.project_id=c.project_id "
+            "LEFT JOIN notification_view_manifests v ON v.manifest_id=r.manifest_id "
+            "WHERE r.op IN ('create','update') AND r.state='delivered' AND r.parts_state='complete' "
+            "AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer WHERE newer.card_id=r.card_id) "
+            "AND EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id) "
+            "AND NOT EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id AND p.state!='delivered')"
+            + live + " ORDER BY r.updated_at DESC LIMIT 20", retired):
+        examined += 1
+        reason = None
+        shown = None
+        if isinstance(row['shown'], str) and len(row['shown']) <= 65536:
+            try:
+                shown = json.loads(row['shown'])
+            except (ValueError, RecursionError):
+                pass
+        if (row['kind'] != 'thread' or not isinstance(shown, list)
+                or not all(type(mid) is int and mid > 0 for mid in shown)
+                or row['root_message_id'] not in shown or not valid_hash(row['source_fp'])
+                or row['manifest_card_id'] != row['card_id'] or row['manifest_rev'] != row['rendered_rev']
+                or row['manifest_source'] != row['source_generation']
+                or row['manifest_presentation'] != row['presentation_generation'] or row['invalidated'] != 0):
+            reason = 'source_binding_unverified'
+        elif source_fingerprint(db, row) != row['source_fp']:
+            reason = 'source_changed'
+        else:
+            times = [part[0] for part in db.execute(
+                "SELECT updated_at FROM notification_render_parts WHERE delivery_id=?", (row['delivery_id'],))]
+            first, created = row['first_seen'], row['render_created_at']
+            if (not all(finite_number(at) for at in (first, created, *times))
+                    or any(at < 0 or at > now for at in (first, created, *times))):
+                reason = 'timestamps_unavailable'
+            elif first > created or min(times) < created:
+                reason = 'timestamps_reversed'
+            else:
+                samples.append(max(times) - first)
+        if reason:
+            excluded[reason] = excluded.get(reason, 0) + 1
+    return {"status": "recorded" if samples else "unavailable", "observed_at": now,
+            "reason": None if samples else 'no_verified_delivery_samples',
+            "scope": "latest_20_complete_root_thread_renders_nonretired_transport",
+            "basis": "root_first_seen_to_all_parts_receipt_confirmation_not_remote_arrival_or_readership",
+            "sample_limit": 20, "examined": examined, "count": len(samples),
+            "unavailable_by_reason": excluded,
+            "min_s": min(samples) if samples else None, "max_s": max(samples) if samples else None,
+            "p50_s": percentile(samples, .5), "p95_s": percentile(samples, .95)}
+
+
+def _delivery_completion(db, cfg, now):
+    """Count latest render delivery evidence, separately from clinical validity or readership."""
+    retired = retired_transports(cfg)
+    live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
+    row = db.execute(
+        "WITH latest AS (SELECT r.delivery_id,r.state,r.parts_state FROM notification_renders r "
+        "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update') "
+        "AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer "
+        "WHERE newer.card_id=r.card_id)" + live + "), "
+        "parts AS (SELECT p.delivery_id,COUNT(*) n,SUM(p.state!='delivered') unfinished,"
+        "SUM(p.state='unknown') unknown FROM notification_render_parts p "
+        "JOIN latest l ON l.delivery_id=p.delivery_id GROUP BY p.delivery_id) "
+        "SELECT COUNT(*) total,COALESCE(SUM(l.state='delivered'),0) primary_delivered,"
+        "COALESCE(SUM(l.state='delivered' AND l.parts_state='complete' AND p.n>0 "
+        "AND p.unfinished=0),0) all_parts_delivered,"
+        "COALESCE(SUM(l.state='unknown' OR COALESCE(p.unknown,0)>0),0) unknown,"
+        "COALESCE(SUM(l.state='delivered' AND p.n IS NULL),0) parts_unobserved "
+        "FROM latest l LEFT JOIN parts p ON p.delivery_id=l.delivery_id", retired).fetchone()
+    complete = row['all_parts_delivered']
+    return {"status": "recorded", "observed_at": now,
+            "scope": "latest_create_or_update_render_per_card_nonretired_transport",
+            "basis": "stored_delivery_receipts_not_current_clinical_validity_or_readership",
+            "total": row['total'], "primary_delivered": row['primary_delivered'],
+            "all_parts_delivered": complete,
+            "primary_only_delivered": row['primary_delivered'] - complete,
+            "unknown": row['unknown'], "incomplete": row['total'] - complete,
+            "parts_unobserved": row['parts_unobserved'],
+            "reason": "part_plan_unobserved" if row['parts_unobserved'] else None,
+            "latency": _delivery_latency(db, retired, now)}
+
+
 def health_cards(db, cfg=None) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
@@ -676,6 +766,7 @@ def health_cards(db, cfg=None) -> dict:
     transport (after a notify.interactive switch) are reported only as
     ``retired_unsettled`` and leave the live counts."""
     now = time.time()
+    from notify_recovery import recovery_guidance
     retired = retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     live = f" AND r.transport NOT IN ({marks})" if retired else ""
@@ -729,6 +820,23 @@ def health_cards(db, cfg=None) -> dict:
             "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
             f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks}) "
             "ORDER BY a.created_at LIMIT 20", retired)] if retired else []
+    unknown_parts = []
+    for row in db.execute(
+            "SELECT r.delivery_id,r.card_id,r.transport,r.payload_hash AS manifest_sha256,"
+            "p.part_id,p.payload_sha256,p.kind,p.state,p.error_code,"
+            "COALESCE(p.attempt_id,(SELECT a.attempt_id FROM notification_delivery_attempts a "
+            "WHERE a.delivery_id=r.delivery_id AND p.kind='card' ORDER BY a.created_at DESC LIMIT 1)) attempt_id,"
+            "COALESCE(p.updated_at,r.updated_at) observed_at FROM notification_render_parts p "
+            "JOIN notification_renders r USING(delivery_id) WHERE p.state='unknown' "
+            "ORDER BY p.updated_at LIMIT 20"):
+        item = dict(row)
+        at = item.pop('observed_at')
+        item['age_s'] = (round(max(0, now - at), 1)
+                         if type(at) in (int, float) and math.isfinite(at) and 0 <= at <= now else None)
+        item['recovery'] = recovery_guidance(item['kind'], item['transport'],
+                                              item['error_code'], item['attempt_id'])
+        item['error_code'] = item['recovery'].pop('error_code')
+        unknown_parts.append(item)
     return {
         "pending": states.get("pending", 0),
         "delivered": states.get("delivered", 0),
@@ -738,12 +846,9 @@ def health_cards(db, cfg=None) -> dict:
         "revoked": states.get("revoked", 0),
         "oldest_pending_age_s": round(now - oldest, 1) if oldest else 0,
         "layout_inventory": layout_migration_counts(db),
-        "unknown_parts": [dict(row) for row in db.execute(
-            "SELECT r.delivery_id,r.card_id,r.transport,r.payload_hash AS manifest_sha256,"
-            "p.part_id,p.payload_sha256 FROM notification_render_parts p "
-            "JOIN notification_renders r USING(delivery_id) WHERE p.state='unknown' "
-            "ORDER BY p.updated_at LIMIT 20")],
-        "unknown_part_resolution": "card_part_resolve_planで部品を確認し、人承認付きops.card_part_resolveで解除してください。",
+        "unknown_parts": unknown_parts,
+        "unknown_part_resolution": "カード本体はops.card_resolve、本文・添付はcard_part_planで確認後、人承認付きops.card_part_resolveを使ってください。",
+        "completion": _delivery_completion(db, cfg, now),
         "renders_queued": queued,
         "renders_unknown": unknown,
         "attempts_unsettled": unsettled["c"],

@@ -39,7 +39,9 @@ def _cohort(kind, payload):
 def _queue():
     return {"unit": "jobs", "pending": 0, "failed": 0, "done": 0, "unknown": 0,
             "due_by_schedule": 0, "retry_wait": 0, "schedule_unknown": 0,
-            "oldest_age_s": None}
+            "oldest_age_s": None, "oldest_enqueued_at": None,
+            "oldest_acquired_at": None, "oldest_acquired_age_s": None,
+            "acquisition_time_unknown": 0}
 
 
 def _queue_counts(db, projects, now, checkpoint, payload_checkpoint):
@@ -47,7 +49,7 @@ def _queue_counts(db, projects, now, checkpoint, payload_checkpoint):
     params = {"semantic": JOB_KIND, "qc": QC_JOB_KIND, "now": now,
               "projects": None if projects is None else json.dumps(projects),
               "max_payload": _MAX_JOB_PAYLOAD}
-    scope = ("kind IN (:semantic,:qc) AND (:projects IS NULL OR project_id IN "
+    scope = ("fetch_jobs.kind IN (:semantic,:qc) AND (:projects IS NULL OR fetch_jobs.project_id IN "
              "(SELECT value FROM json_each(:projects)))")
     # Preserve the observer's per-cell limit before a Python callback parses
     # payloads. The bounded offending sample is never included in the report.
@@ -94,8 +96,14 @@ def _queue_counts(db, projects, now, checkpoint, payload_checkpoint):
               SUM(CASE WHEN state='pending' AND {numeric('next_try')}
                        AND next_try>:now THEN 1 ELSE 0 END) AS waiting,
               MIN(CASE WHEN state='pending' AND {numeric('created_at')}
-                       AND created_at<=:now THEN created_at END) AS oldest
-            FROM fetch_jobs WHERE {scope} GROUP BY cohort,status
+                       AND created_at<=:now THEN created_at END) AS oldest,
+              MIN(CASE WHEN state='pending' AND {numeric('m.first_seen')}
+                       AND m.first_seen<=:now THEN m.first_seen END) AS acquired,
+              SUM(CASE WHEN state='pending' AND {numeric('m.first_seen')}
+                       AND m.first_seen<=:now THEN 1 ELSE 0 END) AS acquired_known
+            FROM fetch_jobs LEFT JOIN messages m ON fetch_jobs.state='pending'
+              AND m.message_id=fetch_jobs.message_id AND m.project_id=fetch_jobs.project_id
+            WHERE {scope} GROUP BY cohort,status
         """, params):
             checkpoint()
             slot = queues[row["cohort"]]
@@ -104,7 +112,11 @@ def _queue_counts(db, projects, now, checkpoint, payload_checkpoint):
                 slot["due_by_schedule"] = row["due"]
                 slot["retry_wait"] = row["waiting"]
                 slot["schedule_unknown"] = row["count"] - row["due"] - row["waiting"]
+                slot["oldest_enqueued_at"] = row["oldest"]
                 slot["oldest_age_s"] = None if row["oldest"] is None else now - row["oldest"]
+                slot["oldest_acquired_at"] = row["acquired"]
+                slot["oldest_acquired_age_s"] = None if row["acquired"] is None else now - row["acquired"]
+                slot["acquisition_time_unknown"] = row["count"] - row["acquired_known"]
     except sqlite3.Error:
         if callback_error is not None:
             raise callback_error from None
@@ -181,13 +193,24 @@ def pipeline_progress(db, cfg, *, now, checkpoint=lambda: None,
         }
     return {"status": "recorded", "observed_at": now, "enabled": enabled,
             "scope": "stored_jobs_in_configured_projects", "queues": queues,
-            "schedule_basis": "next_try_only_not_admission_or_lease"}
+            "schedule_basis": "next_try_only_not_admission_or_lease",
+            "queue_age_basis": "fetch_jobs.created_at",
+            "acquisition_age_basis": "messages.first_seen_not_posted_at",
+            "completion_basis": "recorded_current_job_completion_not_clinical_or_delivery",
+            "last_scheduler_at": rates["arrival"]["latest_scheduler_at"],
+            "scheduler_basis": "recorded_current_config_drain_pass_not_completion",
+            "completion_observation_window_s": RATE_WINDOW_S,
+            "slo": {"status": "target_not_defined", "target_s": None},
+            "result_validity": {"status": "not_evaluated",
+                "basis": "current_terminal_summary_audit_pair_not_clinical_accuracy"}}
 
 
 def _rates(db, cfg, projects, now, checkpoint):
     expected = config_generation(cfg)
     first = last = None
     completed = {stage: set() for stage in _STAGES}
+    latest_completed = {stage: None for stage in _STAGES}
+    latest_scheduler = None
     incomplete = False
     seen_records = False
     obsolete = 0
@@ -209,6 +232,8 @@ def _rates(db, cfg, projects, now, checkpoint):
             # matching records do not describe the current continuous period.
             break
         start, end = _time(obs.get("started_at")), _time(obs.get("finished_at"))
+        if start is not None and end is not None and start < end <= now:
+            latest_scheduler = max(latest_scheduler or end, end)
         if (start is None or end is None or not start < end <= now
                 or obs.get("complete") is not True or not isinstance(metrics, list)
                 or len(metrics) > 64):
@@ -243,6 +268,7 @@ def _rates(db, cfg, projects, now, checkpoint):
                 obsolete += 1
                 continue
             completed[binding[1]].add(key)
+            latest_completed[binding[1]] = max(latest_completed[binding[1]] or at, at)
     reason = ("incomplete_or_legacy_metrics" if incomplete else
               "no_recorded_window" if not seen_records else
               "no_matching_generation" if first is None else
@@ -253,7 +279,8 @@ def _rates(db, cfg, projects, now, checkpoint):
         "unit": "distinct_completed_jobs", "binding": "current_job_generation_and_config",
         "completed": None if reason else len(keys),
         "window_started_at": first, "window_finished_at": now,
-        "latest_record_at": last, "window_s": window,
+        "latest_record_at": last, "latest_scheduler_at": latest_scheduler,
+        "latest_completed_at": latest_completed[stage], "window_s": window,
         "per_hour": None if reason else len(keys) * 3600 / window,
         "excluded_obsolete_or_out_of_scope": obsolete,
     } for stage, keys in completed.items()}
