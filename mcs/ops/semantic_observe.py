@@ -346,6 +346,9 @@ def _extract_recent(c, *, checkpoint=lambda: None) -> dict:
         if not isinstance(integrity, dict):
             continue
         recent["artifacts"] += 1
+        # Batch rows repeat one call's measurements without a stable call identity.
+        if integrity.get("batch", 1) != 1:
+            integrity = {}
         values["calls"].append(integrity.get("calls"))
         timings = integrity.get("timings")
         timings = timings if isinstance(timings, dict) else {}

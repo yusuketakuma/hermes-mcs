@@ -12,6 +12,21 @@ import semantic_observe
 from semantic_testkit import _cfg, _message, _audit_pair as _pair
 
 
+@pytest.mark.parametrize("batch", [1, 2])
+def test_extract_metrics_do_not_count_shared_batch_measurements_per_artifact(batch):
+    with sqlite3.connect(":memory:") as db:
+        db.execute("CREATE TABLE artifacts (artifact_id INTEGER, kind TEXT, meta TEXT)")
+        integrity = {"calls": 1, "batch": batch, "timings": {
+            "prompt_ms": 2.0, "predicted_ms": 3.0}, "usage": {"total_tokens": 10}}
+        db.executemany("INSERT INTO artifacts VALUES (?, 'extract_llm', ?)",
+                       [(i, json.dumps({"integrity": integrity})) for i in range(2)])
+        observed = semantic_observe._extract_recent(db)
+        assert observed["artifacts"] == 2
+        expected = {"calls": 2, "prompt_ms": 4.0, "predicted_ms": 6.0, "tokens": 20}
+        assert {key: observed[key] for key in expected} == (
+            expected if batch == 1 else dict.fromkeys(expected))
+
+
 def test_observation_and_status_share_current_denominator_not_history(tmp_path):
     db_path = str(tmp_path / "ledger.db")
     db = Ledger(db_path)
