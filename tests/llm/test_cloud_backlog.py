@@ -862,3 +862,54 @@ def test_phase_progress_never_waits_indefinitely_for_blocked_log_output(monkeypa
     with backlog._phase_progress("semantic"):
         pass
     assert joins == [0.1]
+
+
+@pytest.mark.parametrize("value", [None, True, False, -1, float("nan"), float("inf"),
+                                  float("-inf"), 10 ** 400, "synthetic-private-detail", [], {}])
+def test_timing_observation_does_not_fabricate_unmeasured_seconds(value):
+    record = backlog._pass_timing_observation({
+        "transport": {key: value for key in backlog._TRANSPORT_SECONDS},
+        "run_lock_lost_detail": {"kind": "llm", "transport_s": value,
+                                 "reacquire_s": value, "window_s": value}})
+    assert record["transport"] == dict.fromkeys(backlog._TRANSPORT_SECONDS)
+    assert record["run_lock_lost_detail"] == {
+        "kind": "llm", "transport_s": None, "reacquire_s": None, "window_s": None}
+    assert record["request_slot_wait_s"] is record["worker_rss_bytes"] is None
+    assert "synthetic-private-detail" not in json.dumps(record, allow_nan=False)
+
+
+@pytest.mark.parametrize("detail", [None, [], True, {"kind": "synthetic-private-detail"},
+                                   {"kind": ["llm"]}, {"kind": {"private": "detail"}}])
+def test_timing_observation_filters_unknown_lock_loss_kind(detail):
+    record = backlog._pass_timing_observation({"run_lock_lost_detail": detail})
+    assert record["run_lock_lost_detail"] is None
+    assert record["transport"] == dict.fromkeys(backlog._TRANSPORT_SECONDS)
+
+
+def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import semantic_drain
+    state, _ = carry_worker
+    measured = dict(zip(backlog._TRANSPORT_SECONDS, (12.125, 7.5, 4, 0)))
+    detail = {"kind": "jev", "transport_s": 3.25, "reacquire_s": 5, "window_s": 6}
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {"done": 1})
+    def semantic(*args, **kwargs):
+        state.alive = False
+        return {"done": 0, "transport": {**measured, "private": "synthetic-private-detail"},
+                "run_lock_lost_detail": {**detail, "project_id": "synthetic-private-detail",
+                                         "error": "synthetic-private-detail"}}
+    monkeypatch.setattr(semantic_drain, "run_due", semantic)
+    backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    passes = [r for r in records if r["event"] == "cloud_backlog_pass"]
+    assert len(passes) == 2 and state.closed
+    assert [p["done_unit"] for p in passes] == ["messages", "jobs"]
+    assert all(p["completion_basis"] ==
+               "saved_work_units_not_patient_clinical_or_delivery_completion" for p in passes)
+    assert passes[0]["transport"] == dict.fromkeys(backlog._TRANSPORT_SECONDS)
+    assert passes[0]["run_lock_lost_detail"] is None
+    assert passes[1]["transport"] == measured
+    assert passes[1]["run_lock_lost_detail"] == detail
+    assert passes[1]["transport_basis"] == "unlocked_call_wall_not_gpu_or_http_only"
+    assert passes[1]["request_slot_wait_s"] is passes[1]["worker_rss_bytes"] is None
+    assert "synthetic-private-detail" not in json.dumps(records, allow_nan=False)
