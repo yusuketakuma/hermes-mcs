@@ -276,7 +276,12 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         if (lock_lost is None and stage not in _PRESEND_REFUSAL_STAGES
                 and not (isinstance(stage, str) and stage.startswith("llm_admission:"))):
             for selected in providers.values():
-                selected.discard()
+                try:
+                    selected.discard()
+                except Exception:
+                    # An undiscardable receipt stays settled and visible; a
+                    # bookkeeping failure must not replace the guard error.
+                    pass
         raise
     finally:
         _job_providers.reset(providers_token)
