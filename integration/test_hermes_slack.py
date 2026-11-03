@@ -7,6 +7,7 @@ import asyncio
 import json
 import socket
 from contextlib import suppress
+import pytest
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,11 +265,9 @@ def test_connected_secondary_sdk_client_posts_card_without_retrying(tmp_path, mo
     assert client.retry_handlers is original_handlers
 
 
-def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
-    """The durable part path over the REAL AsyncWebClient — every wire
-    call goes through the stubbed HTTP layer with retry_handlers=[],
-    body chunks post under thread_ts, and files.uploadV2 runs its
-    three-step external upload into the same thread."""
+@pytest.mark.parametrize("grouped", [False, True], ids=["legacy-thread", "private-file-group"])
+def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch, grouped):
+    """Drive legacy and grouped parts through the pinned SDK with synthetic HTTP."""
     import hashlib
 
     from adapters.common import envelopes, journal, registry
@@ -291,6 +290,7 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     replies = []
     seen = []
     ts_n = [1]
+    uploaded = []
 
     async def fake_http(**request):
         url = request["api_url"]
@@ -304,11 +304,15 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
         elif method == "upload":
             return {"status_code": 200, "body": b"", "headers": {}}
         elif method == "files.getUploadURLExternal":
+            uploaded.append(f"F_INT_{len(uploaded) + 1:04d}")
             data = {"ok": True,
                     "upload_url": "https://files.slack.com/upload/v1/SYN",
-                    "file_id": "F_INT_0001"}
+                    "file_id": uploaded[-1]}
         elif method == "files.completeUploadExternal":
-            data = {"ok": True, "files": [{"id": "F_INT_0001"}]}
+            data = {"ok": True, "files": [{"id": uploaded[-1]}]}
+        elif method == "chat.update":
+            js = request["req_args"].get("json", {})
+            data = {"ok": True, "channel": js.get("channel"), "ts": js.get("ts")}
         elif method == "chat.postMessage":
             js = request["req_args"].get("json", {})
             ts = f"1790000000.{ts_n[0]:06d}"
@@ -316,6 +320,9 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
                 replies.append({"ts": ts, "text": js.get("text"),
                                 "bot_id": "B_INT"})
             data = {"ok": True, "channel": js.get("channel"), "ts": ts}
+        elif method == "conversations.history":
+            root_ts = request["req_args"].get("params", {}).get("oldest")
+            data = {"ok": True, "messages": [{"ts": root_ts, "text": "<card>", "bot_id": "B_INT"}]}
         elif method == "conversations.replies":
             root = request["req_args"].get("params", {}).get("ts")
             data = {"ok": True, "messages": [
@@ -380,6 +387,16 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
          "sha256": hashlib.sha256(blob).hexdigest(),
          "bytes": len(blob)},
     ]
+    if grouped:
+        from adapters.common.spec import file_group_sha256
+        other = root / "attachments" / "second.bin"
+        other.write_bytes(b"synthetic-second-upload")
+        parts["manifest"].append({"part_id": "attach:0002", "kind": "attachment_part", "index": 5,
+            "attachment_id": 2, "name": "second.bin", "path": str(other),
+            "sha256": hashlib.sha256(other.read_bytes()).hexdigest(), "bytes": other.stat().st_size})
+        parts["slack"] = {"file_group": True}
+        parts["manifest"].append({"part_id": "file_group", "kind": "file_group", "index": 6,
+                                   "sha256": file_group_sha256(spec)})
     claim = {"spec": spec, "attempt_id": "a" * 16,
              "worker_id": worker._worker_id,
              "payload_hash": envelopes.payload_hash(spec),
@@ -399,11 +416,12 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     assert card_ts["result"] == "delivered"
     root_ts = card_ts["message_id"]
     methods = [m for m, _, _ in seen]
-    # card post + two thread replies + the upload trio — no hidden call
+    # Card/body posts, each upload trio and the optional group update are explicit.
     assert methods.count("chat.postMessage") == 3
-    assert methods.count("files.getUploadURLExternal") == 1
-    assert methods.count("upload") == 1
-    assert methods.count("files.completeUploadExternal") == 1
+    assert methods.count("files.getUploadURLExternal") == (2 if grouped else 1)
+    assert methods.count("upload") == (2 if grouped else 1)
+    assert methods.count("files.completeUploadExternal") == (2 if grouped else 1)
+    assert methods.count("chat.update") == (1 if grouped else 0)
     # every send-side call ran with retries stripped — the shared
     # client's own list is untouched and still the SDK default
     assert all(handlers == [] for _, handlers, _ in seen[1:])
@@ -413,26 +431,38 @@ def test_real_sdk_drives_thread_parts_and_upload(tmp_path, monkeypatch):
     assert all(p["json"]["thread_ts"] == root_ts for p in posts[1:])
     assert [p["json"]["text"] for p in posts[1:]] \
         == spec["parts"]["thread_body_parts"]
-    complete = next(r for m, _, r in seen
-                    if m == "files.completeUploadExternal")
-    assert complete["params"]["channel_id"] == "C_SYNTHETIC"
-    assert complete["params"]["thread_ts"] == root_ts
-    assert "F_INT_0001" in complete["params"]["files"]
+    completed = [r for m, _, r in seen if m == "files.completeUploadExternal"]
+    for complete in completed:
+        if grouped:
+            assert "channel_id" not in complete["params"] and "thread_ts" not in complete["params"]
+        else:
+            assert complete["params"]["channel_id"] == "C_SYNTHETIC"
+            assert complete["params"]["thread_ts"] == root_ts
+    assert "F_INT_0001" in completed[0]["params"]["files"]
+    if grouped:
+        update = next(r for m, _, r in seen if m == "chat.update")["json"]
+        assert update["channel"] == "C_SYNTHETIC" and update["ts"] == root_ts
+        assert update["file_ids"] == "F_INT_0001,F_INT_0002"
+        assert [r["data"] for m, _, r in seen if m == "upload"] == [blob, b"synthetic-second-upload"]
     # the exact verified bytes hit the external upload URL
     raw = next(r for m, _, r in seen if m == "upload")
     assert raw["data"] == blob
     # every part journaled its own delivered receipt with a remote id
     rows = [r for rs in journal.scan(dirs["state"]).values() for r in rs
             if r.get("phase") == "receipt" and r.get("part_id")]
-    assert {r["part_id"] for r in rows} \
-        == {"thread", "body:0001", "body:0002", "attach:0001"}
+    assert {r["part_id"] for r in rows} == ({"thread", "body:0001", "body:0002", "attach:0001"}
+                                             | ({"attach:0002", "file_group"} if grouped else set()))
+    assert all(row["result"] == "delivered" for row in rows)
+    results = [r for rs in journal.scan(dirs["state"]).values() for r in rs
+               if r.get("phase") == "result" and r.get("part_id")]
+    assert all(row["result"] == "delivered" and isinstance(row.get("remote_id"), str)
+               and row["remote_id"] for row in results)
+    if grouped:
+        assert next(row["remote_id"] for row in results if row["part_id"] == "file_group") == root_ts
 
 
-def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatch):
-    """Late reply over the REAL AsyncWebClient: an update render's first
-    chunk of a post new to the card goes to the card's original thread
-    once, with reply_broadcast=true in the wire JSON; a replay re-binds
-    that reply from conversations.replies instead of posting again."""
+def test_real_sdk_keeps_a_late_post_in_its_existing_thread_once(tmp_path, monkeypatch):
+    """Keep a late post in its thread and rebind a retry without broadcasting."""
     from adapters.common import registry
     from adapters.slack import paths as slack_paths
     from adapters.slack.delivery import (
@@ -509,7 +539,7 @@ def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatc
     posts = [r for m, _, r in seen if m == "chat.postMessage"]
     assert len(posts) == 1
     assert posts[0]["json"]["thread_ts"] == root_ts
-    assert posts[0]["json"]["reply_broadcast"] is True
+    assert posts[0]["json"].get("reply_broadcast", False) is False
     assert first == {"result": "delivered", "remote_id": replies[0]["ts"]}
     assert again == first                    # re-bound, never re-posted
     assert all(handlers == [] for m, handlers, _ in seen if m != "auth.test")
