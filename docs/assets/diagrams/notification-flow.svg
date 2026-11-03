@@ -74,11 +74,11 @@
           <rect x="336" y="252" width="148" height="56" rx="6" fill="#f6f4ef"/>
           <rect x="336" y="252" width="148" height="56" rx="6" fill="#087f5b" fill-opacity="0.08" stroke="#087f5b" stroke-width="1.4"/>
           <text x="348" y="274" fill="#202124" font-size="14" font-weight="600">カード</text>
-          <text x="348" y="294" fill="#66716f" font-size="12">患者・要約・ボタン</text>
+          <text x="348" y="294" fill="#66716f" font-size="12">原文・添付・操作</text>
 
           <rect x="524" y="252" width="148" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
-          <text x="536" y="274" fill="#202124" font-size="14" font-weight="600">スレッド</text>
-          <text x="536" y="294" fill="#66716f" font-size="12">本文・添付・💊薬剤</text>
+          <text x="536" y="274" fill="#202124" font-size="14" font-weight="600">返信・長い本文</text>
+          <text x="536" y="294" fill="#66716f" font-size="12">返信カード・本文</text>
 
           <rect x="336" y="348" width="148" height="56" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
           <text x="348" y="370" fill="#202124" font-size="14" font-weight="600">確認・担当</text>
