@@ -19,6 +19,9 @@ def test_services_failure_uses_owned_runner_and_fixed_diagnostics(
     script.parent.mkdir(parents=True)
     script.write_text('# fully synthetic service entry\n')
     monkeypatch.setattr(module, 'REPO', str(tmp_path))
+    if kind == 'update':
+        # Run-log installation has separate coverage; exercise owned service cleanup.
+        monkeypatch.setattr(module, '_prepare_run_log', lambda: None)
     if kind == 'recovery':
         monkeypatch.setattr(module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
         monkeypatch.setattr(module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
@@ -66,6 +69,9 @@ def test_service_timeout_stops_its_synthetic_helper_tree(tmp_path, monkeypatch, 
         f'Path({str(pidfile)!r}).write_text(str(child.pid))\n'
         'time.sleep(30)\n')
     monkeypatch.setattr(module, 'REPO', str(tmp_path))
+    if kind == 'update':
+        # Run-log installation has separate coverage; exercise owned service cleanup.
+        monkeypatch.setattr(module, '_prepare_run_log', lambda: None)
     if kind == 'recovery':
         monkeypatch.setattr(module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
         monkeypatch.setattr(module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
