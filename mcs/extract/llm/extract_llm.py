@@ -1357,6 +1357,14 @@ def llm_extract(body: str, *, context: str | None = None,
             elif record.get("state") == "hint_gaps_resolved" and any(
                     result.get(field) for field in ("_items_dropped", "_evidence_dropped")):
                 record = {**record, "state": "unresolved"}
+            if (quality_status is None and isinstance(cached.get("_quality_result"), dict)
+                    and not _quality_record_consistent(record, _hint_coverage(result, piece_hints, piece))):
+                # Terminal history cannot prove an unused repair. Preserve it;
+                # only an explicitly pending candidate may enter the repair path.
+                _CALL_NOTES.defer_reason = "quality_checkpoint_unverified"
+                if meta_out is not None:
+                    meta_out.update(failure_reason="quality_checkpoint_unverified", _quality_hold=True)
+                return _DEFERRED
             if quality_status is None:
                 sizes.append(len(piece))
                 replayed = isinstance(cached.get("_quality_result"), dict) and record == cached["_quality_result"]
@@ -5987,6 +5995,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         _CALL_NOTES.transport = r["_transport"] = None
         _CALL_NOTES.transport_at = r["_transport_at"] = None
         _CALL_NOTES.defer_reason = r["_defer_reason"] = None
+        r.pop("_quality_hold", None)
         if time.monotonic() > deadline:
             r["_defer_reason"] = "deadline"
             return _DEFERRED, chunks_out
@@ -5995,6 +6004,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r["_provider_evidence"] = meta.pop("_provider_evidence", None)
             return result, chunks_out
         finally:
+            if meta.pop("_quality_hold", False) is True:
+                r["_quality_hold"] = True
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
             r["_defer_reason"] = getattr(_CALL_NOTES, "defer_reason", None)
@@ -6173,6 +6184,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if held and not _current(ledger, r["message_id"], r["content_hash"]):
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
+                if r.pop("_quality_hold", False) is True:
+                    # Reuse the exact source/owner/lease CAS wait in _release;
+                    # an early quality refusal must also yield to later rows.
+                    r["_commit_hold"] = True
                 deferred += 1
                 _defer_note(r.get("_defer_reason") or "other")
                 # Keep the existing finite claim for an unresolved paid unit;

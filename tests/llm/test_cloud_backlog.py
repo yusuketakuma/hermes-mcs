@@ -599,6 +599,8 @@ def test_worker_keeps_paid_carry_when_extract_return_omits_carry(carry_worker, m
 @pytest.mark.parametrize('reasons,expected', [
     ({'deadline': 1, 'busy': 1, 'synthetic-private-detail': 8}, {'deadline': 1, 'busy': 1}),
     ({'deadline': 1, 'synthetic-private-detail': 1}, {'unclassified': 2}),
+    ({'quality_checkpoint_unverified': 1, 'busy': 1},
+     {'quality_checkpoint_unverified': 1, 'busy': 1}),
 ])
 def test_worker_does_not_settle_old_carry_after_update_fence(
         carry_worker, monkeypatch, capsys, reasons, expected):
