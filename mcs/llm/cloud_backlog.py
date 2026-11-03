@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager, closing
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -19,6 +20,28 @@ if __name__ == "__main__":
 from run_log_install import helper_path, LogInstallError
 
 _parent = None
+
+
+_TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s")
+
+
+def _pass_timing_observation(result):
+    """Forward only measured transport/reacquire seconds and fixed lock-loss detail."""
+    def seconds(value):
+        return (value if type(value) in (int, float)
+                and 0 <= value <= sys.float_info.max and math.isfinite(value) else None)
+    transport = result.get("transport")
+    transport = transport if isinstance(transport, dict) else {}
+    record = {"transport": {key: seconds(transport.get(key)) for key in _TRANSPORT_SECONDS},
+              "transport_basis": "unlocked_call_wall_not_gpu_or_http_only",
+              "request_slot_wait_s": None, "worker_rss_bytes": None,
+              "run_lock_lost_detail": None}
+    detail = result.get("run_lock_lost_detail")
+    if isinstance(detail, dict) and detail.get("kind") in ("llm", "jev"):
+        record["run_lock_lost_detail"] = {
+            "kind": detail["kind"], **{key: seconds(detail.get(key))
+                for key in ("transport_s", "reacquire_s", "window_s")}}
+    return record
 
 
 def _event(event, **values):
@@ -384,7 +407,10 @@ def worker(parent, *, index=None):
                             os.close(lock)
                     record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
                         "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
+                        "done_unit": "messages" if phase % 2 == 0 else "jobs",
+                        "completion_basis": "saved_work_units_not_patient_clinical_or_delivery_completion",
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                    record.update(_pass_timing_observation(result))
                     if not allow_exit_settle:
                         done = result.get("done")
                         record["done"] = done if type(done) is int and done >= 0 else 0
