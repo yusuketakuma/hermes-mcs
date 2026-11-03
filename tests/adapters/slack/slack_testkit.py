@@ -193,6 +193,22 @@ def _updates(w):
     return [kw for kind, kw in w.client.calls if kind == "update"]
 
 
+def legacy_attachment_parts(monkeypatch):
+    """Model an older caption-in-thread plan without weakening current validators."""
+    import notify_parts
+    build = notify_parts.build_manifest
+
+    def legacy_manifest(*args, **kwargs):
+        parts, hold = build(*args, **kwargs)
+        parts["manifest"] = [part for part in parts["manifest"] if part["kind"] != "file_group"]
+        parts.get("slack", {}).pop("file_group", None)
+        if not parts.get("slack"):
+            parts.pop("slack", None)
+        return parts, hold
+
+    monkeypatch.setattr(notify_parts, "build_manifest", legacy_manifest)
+
+
 def _attach(led, tmp_path, mid=100, name="syn.bin",
             blob=b"synthetic-bytes", state="downloaded"):
     """Seed a real on-disk file as a downloaded attachment on a shown

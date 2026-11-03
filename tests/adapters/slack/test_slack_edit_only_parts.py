@@ -17,17 +17,24 @@ def test_renamed_attachment_edits_existing_upload_across_two_updates(led, tmp_pa
     import notify_cards
     import notify_spool
     from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
+    from slack_testkit import legacy_attachment_parts
 
+    legacy_attachment_parts(monkeypatch)
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     _seed_thread(led, mids=(100,))
     attachment_id, path, blob = _attach(led, tmp_path, name="synthetic-original.bin")
     assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+    from adapters.slack.cards import validate
+    validate(json.loads(_latest_render(led)["spec_json"]))
     world = _mkworld(led)
     asyncio.run(_granted_card(world.worker, led, world.root))
     first = json.loads(_latest_render(led)["spec_json"])
     first_part = next(p for p in first["parts"]["manifest"] if p["kind"] == "attachment_part")
     old_name = first_part["name"]
-    assert old_name == "synthetic-original.bin" and len(world.client.upload_calls) == 1
+    assert old_name == "synthetic-original.bin" and len(world.client.upload_calls) == 1, [
+        dict(row) for row in led.db.execute(
+            "SELECT kind,state,error_code FROM notification_render_parts WHERE delivery_id=?",
+            (first["delivery_id"],))]
     file_message = next(m for m in world.client.replies[ROOT_TS] if m.get("files"))
     remote_id = file_message["files"][0]["id"]
     target_ts = file_message["ts"]
@@ -331,6 +338,7 @@ def test_slack_user_identity_preserves_file_and_thread_preflight_checks(led, fau
         target["files"][0][fault] = {"id": "F_OTHER", "name": "other.pdf", "size": 11,
                                       "editable": True, "is_external": True, "mode": "external",
                                       "sha256": "b" * 64}[fault]
+    w.client._files["F_SYN"] = dict(target["files"][0])
     before = writes(w)
     out = asyncio.run(w.worker._attachment_part(
         spec, part, {"thread_id": ROOT_TS, "history": None, "consumed": set()}))

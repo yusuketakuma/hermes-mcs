@@ -1165,7 +1165,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                         or len(child_proofs) != own_counts.get(own_rid)
                         or own_remotes.get((entry["part_id"], own_sha)) != {rid}
                         or any(proof is None or proof[:4] != expected_child
-                               or proof[5] != "file" for proof in child_proofs)):
+                               or proof[5] not in ("file", "private_stage") for proof in child_proofs)):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
         if inherited_part and a.get("unavailable") and (
                 rid or ("attachment", a["attachment_id"]) in uncertain_attachments):

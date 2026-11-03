@@ -93,12 +93,13 @@ def _file_message(client, *, size=10, thread=ROOT_TS):
 def test_non_integer_remote_size_cannot_bind_or_authorize_caption_edit(world, remote_size, sealed_size):
     part = _file_part(sealed_size)
     message = _file_message(world.client, size=remote_size)
+    world.client._files["F_SYN"] = dict(message["files"][0])
     context = {"thread_id": ROOT_TS, "history": [message], "consumed": set()}
     assert asyncio.run(world.worker._file_remote_match(ROOT_TS, part, context, prior_only=True)) is None
     out = asyncio.run(world.worker._attachment_part(_spec(part, update=True), part, context))
     assert out == {"result": "unknown", "error_code": "edit_target_unverified"}
     assert context["consumed"] == set()
-    assert [op for op, _ in world.client.calls] == ["auth_test"]
+    assert [op for op, _ in world.client.calls] == ["auth_test", "files_info"]
 
 
 def test_cached_other_thread_cannot_bind_body_file_or_rewrite_prior(world):
@@ -116,10 +117,13 @@ def test_cached_other_thread_cannot_bind_body_file_or_rewrite_prior(world):
 @pytest.mark.parametrize("size", [10, 4267])
 def test_exact_remote_size_guard_is_preserved(world, size):
     part = _file_part()
-    context = {"thread_id": ROOT_TS, "history": [_file_message(world.client, size=size)], "consumed": set()}
+    message = _file_message(world.client, size=size)
+    world.client._files["F_SYN"] = dict(message["files"][0])
+    context = {"thread_id": ROOT_TS, "history": [message], "consumed": set()}
     out = asyncio.run(world.worker._attachment_part(_spec(part, update=True), part, context))
     assert out["result"] == ("delivered" if size == 10 else "unknown")
-    assert [op for op, _ in world.client.calls] == (["auth_test", "update"] if size == 10 else ["auth_test"])
+    assert [op for op, _ in world.client.calls] == (
+        ["auth_test", "update"] if size == 10 else ["auth_test", "files_info"])
 
 
 @pytest.mark.parametrize(("original", "remote"), [

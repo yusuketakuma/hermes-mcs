@@ -26,6 +26,8 @@ def test_parent_attachment_is_reused_only_with_complete_same_thread_evidence(
     # the reply received its own card. All payloads and receipts are synthetic.
     planner = notify_parts._thread_plan_ids
     with monkeypatch.context() as legacy:
+        from slack_testkit import legacy_attachment_parts
+        legacy_attachment_parts(legacy)
         legacy.setattr(notify_parts, "_thread_plan_ids", lambda *a, **kw: [100, 201])
         assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
     assert notify_parts._thread_plan_ids is planner
@@ -84,6 +86,11 @@ def test_parent_attachment_is_reused_only_with_complete_same_thread_evidence(
     receipt = led.db.execute("SELECT state,remote_id,error_code FROM notification_render_parts WHERE delivery_id=? AND attachment_id=?",
                              (current["delivery_id"], aid)).fetchone()
     assert receipt["state"] == "delivered" and receipt["remote_id"] == part["remote_id"], dict(receipt)
+    assert led.db.execute("SELECT parts_state FROM notification_renders WHERE delivery_id=?",
+                          (current["delivery_id"],)).fetchone()[0] == "complete", [
+        dict(row) for row in led.db.execute(
+            "SELECT kind,state,error_code FROM notification_render_parts WHERE delivery_id=?",
+            (current["delivery_id"],))]
     assert led.db.execute("SELECT remote_id FROM notification_render_parts WHERE delivery_id=? AND attachment_id=?",
                           (old["delivery_id"], aid)).fetchone()[0] == part["remote_id"]
     emitted = []
@@ -102,6 +109,7 @@ def test_parent_attachment_is_reused_only_with_complete_same_thread_evidence(
     assert len(world.client.upload_calls) == uploads
     # Parent evidence must not hide conflicting or unsettled child evidence.
     import notify_render
+    from mcs_util import canonical, payload_hash
     for child_state, child_remote in (("delivered", "F_OTHER"), ("unknown", part["remote_id"]),
                                       ("pending", part["remote_id"])):
         led.db.execute("SAVEPOINT child_receipt_conflict")
@@ -115,3 +123,34 @@ def test_parent_attachment_is_reused_only_with_complete_same_thread_evidence(
         finally:
             led.db.execute("ROLLBACK TO child_receipt_conflict")
             led.db.execute("RELEASE child_receipt_conflict")
+    for fault in ("source", "scope"):
+        led.db.execute("SAVEPOINT child_sealed_identity")
+        try:
+            damaged = copy.deepcopy(update)
+            if fault == "source":
+                damaged["card_key"] += "|foreign-source"
+            else:
+                damaged["delivery"]["channel_id"] = "C_OTHER"
+            led.db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
+                           (canonical(damaged).decode(), payload_hash(damaged), update["delivery_id"]))
+            current_card = led.db.execute("SELECT * FROM notification_cards WHERE card_id=?",
+                                          (reply["card_id"],)).fetchone()
+            content = notify_render.card_content(led.db, current_card, cfg=SLACK)
+            _, hold = notify_cards._build_spec(led.db, current_card, content, "update",
+                                               update["render_rev"] + 1, SLACK, NOW + 3)
+            assert hold == "attachment_upload_identity_unverified", fault
+        finally:
+            led.db.execute("ROLLBACK TO child_sealed_identity")
+            led.db.execute("RELEASE child_sealed_identity")
+    led.db.execute("SAVEPOINT child_group_unknown")
+    try:
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' "
+                       "WHERE delivery_id=? AND kind='file_group'", (update["delivery_id"],))
+        emitted = []
+        assert notify_cards.issue_render(led.db, reply["card_id"], SLACK, NOW + 3,
+                                         emitted, force=True) is None
+        assert emitted == []
+        assert len(world.client.upload_calls) == uploads
+    finally:
+        led.db.execute("ROLLBACK TO child_group_unknown")
+        led.db.execute("RELEASE child_group_unknown")

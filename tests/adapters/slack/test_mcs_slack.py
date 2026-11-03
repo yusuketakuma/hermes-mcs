@@ -1196,12 +1196,21 @@ def test_slack_attachment_uploads_inside_bound_thread(led, tmp_path):
     kinds = [p["kind"] for p in spec["parts"]["manifest"]]
     assert kinds.count("attachment_part") == 2
     asyncio.run(_granted_card(w.worker, led, w.root))
-    # every upload rides the card's own thread root on the bound
-    # channel — nothing ever posts at channel top level
+    # Each file is prepared privately; one update binds the complete set
+    # to this card on the bound channel, with no separate file-share post.
     assert len(w.client.upload_calls) == 2
-    assert all(u["channel"] == SCOPE["channel_id"]
-               and u["thread_ts"] == "1790000000.000001"
+    assert all(u.get("channel") is None and u.get("thread_ts") is None
                for u in w.client.upload_calls)
+    shared = [payload for operation, payload in w.client.calls
+              if operation == "update" and "file_ids" in payload]
+    assert len(shared) == 1
+    assert shared[0]["channel"] == SCOPE["channel_id"]
+    assert shared[0]["ts"] == "1790000000.000001"
+    assert shared[0]["file_ids"] == [
+        _parts(led, render["delivery_id"])[f"attach:{aid:04d}"]["remote_id"] for aid, _, _ in ids]
+    group = _parts(led, render["delivery_id"])["file_group"]
+    assert group["state"] == "delivered" and group["remote_id"] == shared[0]["ts"]
+    assert not any(message.get("files") for rows in w.client.replies.values() for message in rows)
     by_name = {u["filename"]: u for u in w.client.upload_calls}
     for aid, f, blob in ids:
         u = by_name[f.name]
@@ -1268,7 +1277,9 @@ def test_slack_attachment_timeout_is_unknown_no_resend(led, tmp_path):
             if c[0] == "files_upload_v2"] == attempts
 
 
-def test_slack_attachment_update_binds_remote_file(led, tmp_path):
+def test_slack_attachment_update_binds_remote_file(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
     _seed_thread(led)
     aid, f, blob = _attach(led, tmp_path)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -1295,7 +1306,9 @@ def test_slack_attachment_update_binds_remote_file(led, tmp_path):
 
 @pytest.mark.parametrize("editable", [False, True])
 def test_slack_sealed_prior_file_without_remote_hash_reuses_only_immutable_upload(
-        led, tmp_path, editable):
+        led, tmp_path, editable, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
     _seed_thread(led)
     _attach(led, tmp_path)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
@@ -1323,7 +1336,9 @@ def test_slack_sealed_prior_file_without_remote_hash_reuses_only_immutable_uploa
 
 
 @pytest.mark.parametrize("invalid_proof", ["foreign", "external", "hash_conflict", "no_receipt"])
-def test_slack_prior_file_receipt_never_bypasses_remote_proof(led, tmp_path, invalid_proof):
+def test_slack_prior_file_receipt_never_bypasses_remote_proof(led, tmp_path, invalid_proof, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
     _seed_thread(led)
     _attach(led, tmp_path)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]

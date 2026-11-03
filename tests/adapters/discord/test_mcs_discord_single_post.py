@@ -197,7 +197,9 @@ RETRY_FAULTS = [500, ConnectionResetError(54, "Connection reset by peer")]
 def test_card_create_sdk_retry_never_reaches_wire(tmp_path, fault):
     bot = WireBot(faults=[fault])
     w, _ = _mk(tmp_path, bot)
-    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(_spec([])))))
+    spec = _spec([])
+    (Path(w._dirs["render"]) / (spec["delivery_id"] + ".json")).write_text(json.dumps(spec))
+    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(spec))))
     # one committed POST, the SDK's re-POST stopped before the wire —
     # an honest unknown, never a duplicate card reported as delivered
     assert len(bot.wire.posts()) == 1 and bot.wire.committed == 1

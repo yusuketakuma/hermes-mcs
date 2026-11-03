@@ -236,7 +236,11 @@ def test_spec_text_budget_covers_multiline_quotes(world):
     spec["parts"]["action_rows"] = []
     spec["parts"]["containers"].append(
         {"type": "quote", "text": "x\n" * 1500})
-    view = cards.build_view(spec)
+    with pytest.raises(ValueError, match="discord_section_budget"):
+        cards.build_view(spec)
+    legacy = json.loads(json.dumps(spec))
+    legacy["parts"].pop("section_divider_version", None)
+    view = cards.build_view(legacy)
     rendered = sum(len(getattr(item, "content", None) or "")
                    for child in view.items[0].children
                    for item in (child, *getattr(child, "children", ())))

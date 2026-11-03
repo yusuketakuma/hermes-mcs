@@ -923,6 +923,8 @@ def test_confirmed_invalid_blocks_retries_once_with_same_method_and_scope(led, s
         return True
 
     w.worker._send_allowed = allowed
+    with open(w.worker._dirs["render"] + "/" + spec["delivery_id"] + ".json", "w") as stream:
+        json.dump(spec, stream)
     kwargs = {"channel": "SYNTHETIC_CHANNEL", "text": "合成本文",
               "thread_ts" if method == "post" else "ts": ROOT_TS}
     gate = w.worker._retry_gate(spec)
