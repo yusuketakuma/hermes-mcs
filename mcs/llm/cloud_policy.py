@@ -1096,17 +1096,32 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
             reservations.setdefault(previous['reservation_id'], []).append((previous, maximum))
-        for row in records:
-            if row['kind'] != KINDS[1]:
-                continue
-            result = _receipt_meta(row['meta'])
-            matches = reservations.get(result.get('reservation_id'), [])
-            if len(matches) != 1:
-                raise ValueError('reservation_missing')
-            previous, maximum = matches[0]
-            _settled(previous, maximum, [(result, row)])
     except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
         raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
+    checked_results = {}
+    for row in records:
+        if row['kind'] != KINDS[1]:
+            continue
+        try:
+            result = _receipt_meta(row['meta'])
+            rid = result.get('reservation_id')
+            if not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None:
+                raise ValueError('result_invalid')
+            checked_results.setdefault(rid, []).append((result, row))
+        except (InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+    for rid, results in checked_results.items():
+        matches = reservations.get(rid, [])
+        if len(matches) != 1:
+            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
+        previous, maximum = matches[0]
+        try:
+            # Validate the complete result set: two individually valid rows
+            # are still ambiguous accounting, including on a same-prompt retry.
+            _settled(previous, maximum, results)
+        except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+    del checked_results
     result_map = None
     disposition_ids = None
     for row in rows:
@@ -1585,16 +1600,26 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
     c = _cfg(cfg)
     candidate = _request_identity(c, body, route=route, project_id=project_id, unit_key=unit_key,
         message_id=message_id, owner=owner, selection=selection, input_binding=input_binding)
-    with _accounting_snapshot(ledger.db):
-        _guard_repeated_request(ledger, candidate, current_body=body)
-        # An orphan result cannot prove this is a fresh request. Validate the
-        # existing accounting snapshot even when a circuit would short-circuit caps.
-        if _tally(ledger).invalid:
-            raise AnthropicError("budget_exceeded", "cloud_unit_unresolved")
-        return (block_reason(ledger, c, route, project_id, model=candidate['model'])
-                or setting_block_reason(c)
-                or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
-                                       input_bound=input_bound(body), selection=selection))
+    try:
+        with _accounting_snapshot(ledger.db):
+            _guard_repeated_request(ledger, candidate, current_body=body)
+            # An orphan result cannot prove this is a fresh request. Validate the
+            # existing accounting snapshot even when a circuit would short-circuit caps.
+            if _tally(ledger).invalid:
+                raise AnthropicError("pricing_unverified", "cloud_unit_unresolved")
+            return (block_reason(ledger, c, route, project_id, model=candidate['model'])
+                    or setting_block_reason(c)
+                    or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
+                                           input_bound=input_bound(body), selection=selection))
+    except AnthropicError as error:
+        if error.kind == 'pricing_unverified' and not ledger.db.in_transaction:
+            try:
+                _circuit_result(ledger, error)
+            except Exception:
+                # Failure to record the circuit must never turn an accounting
+                # refusal into a fresh/local input or replace its fixed category.
+                pass
+        raise
 
 
 def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None,
