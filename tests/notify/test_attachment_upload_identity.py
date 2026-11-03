@@ -562,3 +562,80 @@ def test_attestation_rejects_unsafe_and_changed_state(led, uploaded):
     with led.db:
         notify_cards.issue_render(led.db, 1, SLACK, NOW + 3, emitted, force=True)
     assert _latest_render(led)["state"] == "held"
+
+
+def test_source_change_after_plan_rejects_and_history_bound(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    req = _confirm_req(plan, 0xEE)
+    # the card's source material changes between plan and apply → stale_source
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='tampered body',content_hash=? WHERE message_id=100",
+                       ("f" * 64,))
+    assert apply_attachment_identity_confirm(led, req)["outcome"] == "rejected"
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='updated source',content_hash=? WHERE message_id=100",
+                       ("e" * 64,))
+    plan2 = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    receipt = apply_attachment_identity_confirm(led, _confirm_req(plan2, 0xEF))
+    assert receipt["outcome"] == "applied"
+    # tampering with the stored payload_hash never promotes an identity
+    with led.db:
+        led.db.execute("UPDATE command_receipts SET payload_hash=? WHERE command_id=?",
+                       ("0" * 64, _confirm_req(plan2, 0xEF)["command_id"]))
+        led.db.execute("UPDATE attachments SET name='second-rename.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, emitted, force=True)
+    assert _latest_render(led)["state"] == "held"
+
+
+def test_second_command_same_target_dedups_conflicting_rejects(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    first = apply_attachment_identity_confirm(led, _confirm_req(plan, 0xF1))
+    assert first["outcome"] == "applied"
+    # a second command_id for the same target sees the render already sealed:
+    # rejecting the stale plan keeps the attestation without re-holding or
+    # widening the approved identity
+    second = apply_attachment_identity_confirm(led, _confirm_req(plan, 0xF2))
+    assert second["outcome"] == "rejected" and second["error"] == "part_not_confirmable"
+    # a conflicting remote for the same target is rejected at plan comparison
+    conflicting = _confirm_req(plan, 0xF3)
+    conflicting["remote_id"] = "F_CONFLICTING"
+    assert apply_attachment_identity_confirm(led, conflicting)["outcome"] == "rejected"
+
+
+def test_confirmed_then_second_rename_recovers_without_new_upload(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    did, pid = prior["delivery_id"], part["part_id"]
+    remote = led.db.execute("SELECT remote_id FROM notification_render_parts "
+                            "WHERE delivery_id=? AND part_id=?", (did, pid)).fetchone()[0]
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    assert apply_attachment_identity_confirm(led, _confirm_req(plan, 0xF4))["outcome"] == "applied"
+    sealed = _latest_render(led)
+    assert sealed["state"] == "queued"
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                          (sealed["delivery_id"], held["part_id"])).fetchone()[0] == "delivered"
+    uploads = len(world.client.upload_calls)
+    # a later rename recovers through the now-sealed delivered identity — no new
+    # approval and no second upload of the same bytes
+    with led.db:
+        led.db.execute("UPDATE attachments SET name='renamed-again.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 5, emitted, force=True)
+    spec, = emitted
+    current = next(p for p in spec["parts"]["manifest"] if p["part_id"] == held["part_id"])
+    assert current["edit_only"] is True and current["prior_remote_id"] == remote
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), emitted, NOW + 5)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    row = led.db.execute("SELECT state,remote_id FROM notification_render_parts "
+                         "WHERE delivery_id=? AND part_id=?",
+                         (spec["delivery_id"], held["part_id"])).fetchone()
+    assert row["state"] == "delivered" and row["remote_id"] == remote
+    assert len(world.client.upload_calls) == uploads

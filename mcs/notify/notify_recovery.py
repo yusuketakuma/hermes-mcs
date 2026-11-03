@@ -962,7 +962,8 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
     return receipt
 
 
-def _confirmed_history_rows(db, card, part_id, attachment_id, sha256, size):
+def _confirmed_history_rows(db, card, part_id, attachment_id, sha256, size,
+                            through_rev=None):
     """Delivered rows that prove one attachment identity inside this card's thread."""
     return db.execute(
         """SELECT p.delivery_id,p.part_id,p.attachment_id,p.payload_sha256,p.bytes,p.name,
@@ -974,8 +975,10 @@ def _confirmed_history_rows(db, card, part_id, attachment_id, sha256, size):
              AND EXISTS(SELECT 1 FROM notification_render_parts t
                         WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
                           AND t.state='delivered' AND t.remote_id=?)
+             AND (? IS NULL OR r.render_rev<=?)
            ORDER BY p.delivery_id""",
-        (card["card_id"], part_id, attachment_id, sha256, size, card["thread_id"])).fetchall()
+        (card["card_id"], part_id, attachment_id, sha256, size, card["thread_id"],
+         through_rev, through_rev)).fetchall()
 
 
 def _confirmed_history_digest(rows):
@@ -1026,13 +1029,16 @@ def attachment_identity_confirm_plan(ledger, delivery_id, part_id) -> dict:
     if not rows or len(delivered) != 1:
         return {"error": "remote_identity_unverified"}
     remote_id, delivered_name = delivered.pop()
+    import notify_render
     return {"version": 1, "cmd": "ops.attachment_identity_confirm",
             **stored_scope(render), "transport": "slack",
             "card_id": card["card_id"], "card_key": card["card_key"],
             "thread_id": card["thread_id"], "message_id": card["message_id"],
-            "root_message_id": card["root_message_id"], "source_fp": card["source_fp"],
+            "root_message_id": card["root_message_id"],
+            "source_fp": notify_render.source_fingerprint(db, card),
             "route_epoch": render["route_epoch"], "correlation": render["correlation"],
             "history_sha256": _confirmed_history_digest(rows),
+            "through_rev": max(row["render_rev"] for row in rows),
             "delivery_id": delivery_id, "part_id": part_id,
             "attachment_id": part["attachment_id"], "sha256": part["payload_sha256"],
             "bytes": part["bytes"], "name": delivered_name, "remote_id": remote_id,
@@ -1048,7 +1054,7 @@ def validate_attachment_identity_confirm(req) -> str | None:
     allowed = {"version", "cmd", "command_id", "actor", "human_confirmed", "reason",
                "transport", "card_id", "card_key", "thread_id", "message_id",
                "root_message_id", "source_fp", "route_epoch", "correlation",
-               "history_sha256", "delivery_id", "part_id", "attachment_id",
+               "history_sha256", "through_rev", "delivery_id", "part_id", "attachment_id",
                "sha256", "bytes", "name", "remote_id", "manifest_sha256",
                "payload_sha256", "expected_state", "evidence"} | set(scope_fields("slack"))
     if req.keys() - allowed:
@@ -1072,6 +1078,8 @@ def validate_attachment_identity_confirm(req) -> str | None:
         return "bad_root_message_id"
     if type(req.get("route_epoch")) is not int or req["route_epoch"] < 1:
         return "bad_route_epoch"
+    if type(req.get("through_rev")) is not int or req["through_rev"] < 1:
+        return "bad_through_rev"
     for key in ("card_key", "thread_id", "message_id", "correlation"):
         if not valid_text(req.get(key), 128):
             return "bad_" + key
@@ -1147,6 +1155,8 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
             return None
         part["prior_remote_id"], part["edit_only"], part["name"] = remote, True, name
         used.add(remote)
+        db.execute("UPDATE notification_render_parts SET name=? WHERE delivery_id=? AND part_id=?",
+                   (name, delivery_id, row["part_id"]))
     db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
                (canonical(spec).decode(), payload_hash(spec), delivery_id))
     db.execute("UPDATE notification_renders SET state='queued',parts_state='pending' WHERE delivery_id=?",
@@ -1188,16 +1198,27 @@ def apply_attachment_identity_confirm(ledger, req, cfg=None, now=None) -> dict:
                 # An approval is rejected — never silently queued — while an
                 # attempt owns the card, parts are in flight, a restore freezes
                 # writes, or the journal cannot be read.
+                import notify_render
                 if (cards.unsettled_attempt(db, card["card_id"])
                         or _preflight_unsettled_parts(db, card["card_id"])
                         or cards._restore_hold_active(db, card_id=card["card_id"])):
                     error = "confirm_unsafe"
+                elif notify_render.source_fingerprint(db, card) != req["source_fp"]:
+                    error = "stale_source"
                 else:
                     try:
-                        notify_journal.scan_journals(
+                        attempts, incomplete = notify_journal.scan_journals(
                             notify_spool.notify_dirs(notify_spool.data_root(ledger)))
                     except OSError:
                         error = "journal_unverifiable"
+                    else:
+                        if (incomplete or any(
+                                row.get("delivery_id") == req["delivery_id"]
+                                and (record["tainted"]
+                                     or row.get("result") in ("delivered", "unknown"))
+                                for record in attempts.values()
+                                for row in record["rows"])):
+                            error = "journal_contradicts_proof"
         if error is None:
             receipt.update(outcome="applied", scope=stored_scope(render),
                            projects=card_projects(db, render, card),
@@ -1205,7 +1226,7 @@ def apply_attachment_identity_confirm(ledger, req, cfg=None, now=None) -> dict:
                            thread_id=req["thread_id"], message_id=req["message_id"],
                            root_message_id=req["root_message_id"], source_fp=req["source_fp"],
                            route_epoch=req["route_epoch"], correlation=req["correlation"],
-                           history_sha256=req["history_sha256"],
+                           history_sha256=req["history_sha256"], through_rev=req["through_rev"],
                            attachment_id=req["attachment_id"],
                            sha256=req["sha256"], bytes=req["bytes"], name=req["name"],
                            remote_id=req["remote_id"], manifest_sha256=req["manifest_sha256"],

@@ -635,6 +635,7 @@ def _confirmed_upload_identities(db, card):
                "source_fp": receipt.get("source_fp"), "route_epoch": receipt.get("route_epoch"),
                "correlation": receipt.get("correlation"),
                "history_sha256": receipt.get("history_sha256"),
+               "through_rev": receipt.get("through_rev"),
                "delivery_id": receipt.get("delivery_id"), "part_id": receipt.get("part_id"),
                "attachment_id": receipt.get("attachment_id"), "sha256": receipt.get("sha256"),
                "bytes": receipt.get("bytes"), "name": receipt.get("name"),
@@ -649,7 +650,7 @@ def _confirmed_upload_identities(db, card):
             continue
         history = notify_recovery._confirmed_history_rows(
             db, card, receipt["part_id"], receipt["attachment_id"],
-            receipt["sha256"], receipt["bytes"])
+            receipt["sha256"], receipt["bytes"], through_rev=receipt["through_rev"])
         if (not history or notify_recovery._confirmed_history_digest(history)
                 != receipt["history_sha256"]):
             continue
