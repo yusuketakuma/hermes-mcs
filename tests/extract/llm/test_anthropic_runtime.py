@@ -670,10 +670,12 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
     monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-openai" if name == "openai" else None)
     seen = []
 
-    class Client:
+    original_client = worker.openai_client.OpenAIClient
+    class Client(original_client):
         def __init__(self, key, *, model, effort):
             assert key == "synthetic-openai"
             assert (model, effort) == ("gpt-6-luna", "medium")
+            super().__init__(key, model=model, effort=effort)
 
         def complete(self, prompt, **kwargs):
             kwargs["before_attempt"]()
@@ -1185,7 +1187,10 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
     reads = [0]
     def load():
         reads[0] += 1
-        if reads[0] >= fails_on_read:
+        reserved = led.db.execute("SELECT 1 FROM artifacts WHERE kind='cloud_usage_reserve' LIMIT 1").fetchone()
+        # Keep the post-reservation scenario tied to the actual accounting
+        # boundary, independent of extra read-only pre-send checks.
+        if (bool(reserved) if fails_on_read == 4 else reads[0] >= fails_on_read):
             raise error_type("synthetic")
         return cfg
     monkeypatch.setattr(worker, "load_config", load)
@@ -1208,10 +1213,11 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
 def test_transient_read_error_after_reservation_stays_unsent_and_discarded(routed, monkeypatch):
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
-    reads = [0]
+    failed = [False]
     def load():
-        reads[0] += 1
-        if reads[0] == 4:
+        reserved = led.db.execute("SELECT 1 FROM artifacts WHERE kind='cloud_usage_reserve' LIMIT 1").fetchone()
+        if reserved and not failed[0]:
+            failed[0] = True
             raise mcs_util.ProviderSettingsUnreadable("synthetic")
         return cfg
     monkeypatch.setattr(worker, "load_config", load)
@@ -1747,9 +1753,9 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     next_unit = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         message_id=2, unit_key="synthetic-next", deadline=deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(cloud_client.CloudNotSent) as denied:
+    with pytest.raises(cloud_inference.CloudFallback, match="cloud_send_blocked"):
         next_unit("different synthetic request", deadline=deadline, max_tokens=100)
-    assert (denied.value.kind, denied.value.detail) == ("budget_exceeded", "daily_cap")
+    assert not next_unit.possibly_sent
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
     assert not led.db.in_transaction
 

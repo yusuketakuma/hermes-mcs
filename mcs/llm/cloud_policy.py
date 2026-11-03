@@ -1077,16 +1077,36 @@ def _selection_differs(previous, candidate, current_body):
 
 def _guard_repeated_request(ledger, candidate, *, current_body=None):
     """Keep an unresolved or already answered logical request from being sent again."""
-    rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
-        "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
+    records = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+        "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
         "WHEN json_type(meta)!='object' THEN 1 "
         "WHEN json_extract(meta,'$.route')=? AND "
         "(json_extract(meta,'$.unit_key')=? OR ? IN ('semantic_backlog','patient_context','reextract')) THEN 1 "
         "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
         "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",
-        (KINDS[0], candidate['project_id'], candidate['message_id'], candidate['route'],
+        (KINDS[0], KINDS[1], candidate['project_id'], candidate['message_id'], candidate['route'],
          candidate['route'], candidate['unit_key'], candidate['route'])).fetchall()
+    rows = [row for row in records if row['kind'] == KINDS[0]]
+    # Fiscal totals have a month window; same-input evidence does not. A
+    # retained result without its exact reservation cannot prove a fresh input.
+    reservations = {}
+    try:
+        for row in rows:
+            previous = _receipt_meta(row['meta'])
+            maximum = _reserve_valid(previous, row)
+            reservations.setdefault(previous['reservation_id'], []).append((previous, maximum))
+        for row in records:
+            if row['kind'] != KINDS[1]:
+                continue
+            result = _receipt_meta(row['meta'])
+            matches = reservations.get(result.get('reservation_id'), [])
+            if len(matches) != 1:
+                raise ValueError('reservation_missing')
+            previous, maximum = matches[0]
+            _settled(previous, maximum, [(result, row)])
+    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+        raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
     result_map = None
     disposition_ids = None
     for row in rows:
@@ -1522,6 +1542,61 @@ def resume(ledger):
     ledger.artifact_add("cloud_control", "running")
 
 
+def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner,
+                      selection, input_binding):
+    # A reservation and a pre-send history check must identify the same input.
+    if not isinstance(body, dict):
+        raise AnthropicError("contract_error", "model_not_allowed")
+    body_tokens = body.get("max_output_tokens") if c["provider"] == "openai" else body.get("max_tokens")
+    model = _selection_model(c, selection, body_tokens)
+    if body.get("model") != model:
+        raise AnthropicError("contract_error", "model_not_allowed")
+    if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    if c["provider"] == "openai" and (body.get("service_tier") != "default"
+            or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):
+        raise AnthropicError("contract_error", "openai_price_contract_invalid")
+    meta = {"route": route, "project_id": project_id, "message_id": message_id,
+            "unit_key": str(unit_key), "model": model, "max_tokens": body_tokens,
+            "request_fp": payload_hash(body), "logical_request_fp": _logical_request_fp(body),
+            "logical_target_id": (message_id if route == 'semantic_backlog' and isinstance(owner, dict)
+                                  and owner.get('semantic_target_id') == message_id else None),
+            "owner": owner or {}}
+    if selection is not None:
+        meta.update(effort=selection["effort"], profile=selection["profile"])
+    if input_binding is not None:
+        if not isinstance(input_binding, str) or re.fullmatch(r'[0-9a-f]{64}', input_binding) is None:
+            raise AnthropicError('contract_error', 'input_binding_invalid')
+        meta['input_binding'] = input_binding
+    if (route == 'semantic_backlog' and isinstance(owner, dict)
+            and owner.get('semantic_target_id') == message_id
+            and all(isinstance(owner.get(k), str) and owner[k]
+                    for k in ('semantic_source', 'semantic_generation', 'semantic_phase'))):
+        meta['logical_unit_fp'] = payload_hash({
+            'target': message_id, 'source': owner['semantic_source'],
+            'generation': owner['semantic_generation'], 'phase': owner['semantic_phase']})
+
+    return meta
+
+
+def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
+                              message_id=None, owner=None, selection=None, input_binding=None):
+    """Check the same input's prior sends before deciding a fresh send is blocked."""
+    c = _cfg(cfg)
+    candidate = _request_identity(c, body, route=route, project_id=project_id, unit_key=unit_key,
+        message_id=message_id, owner=owner, selection=selection, input_binding=input_binding)
+    with _accounting_snapshot(ledger.db):
+        _guard_repeated_request(ledger, candidate, current_body=body)
+        # An orphan result cannot prove this is a fresh request. Validate the
+        # existing accounting snapshot even when a circuit would short-circuit caps.
+        if _tally(ledger).invalid:
+            raise AnthropicError("budget_exceeded", "cloud_unit_unresolved")
+        return (block_reason(ledger, c, route, project_id, model=candidate['model'])
+                or setting_block_reason(c)
+                or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
+                                       input_bound=input_bound(body), selection=selection))
+
+
 def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None,
                    on_reserved_tx=None, selection=None, input_binding=None):
     """Bind one unit's accounting; callers supply the same guard before and after this hook."""
@@ -1535,49 +1610,20 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         raise ValueError("cloud_reservation_hook_invalid")
 
     def reserve(body, timeout):
-        if not isinstance(body, dict):
-            raise AnthropicError("contract_error", "model_not_allowed")
-        body_tokens = body.get("max_output_tokens") if c["provider"] == "openai" else body.get("max_tokens")
-        model = _selection_model(c, selection, body_tokens)
-        if body.get("model") != model:
-            raise AnthropicError("contract_error", "model_not_allowed")
-        if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
-            raise AnthropicError("contract_error", "cloud_profile_invalid")
-        if c["provider"] == "openai" and (body.get("service_tier") != "default"
-                or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):
-            raise AnthropicError("contract_error", "openai_price_contract_invalid")
+        meta = _request_identity(c, body, route=route, project_id=project_id, unit_key=unit_key,
+            message_id=message_id, owner=owner, selection=selection, input_binding=input_binding)
         if ledger.db.in_transaction:
             raise AnthropicError("budget_exceeded", "owner_transaction_active")
-        bound = input_bound(body)
-        tokens = body_tokens
+        bound, tokens, model = input_bound(body), meta['max_tokens'], meta['model']
         try:
             maximum = max_cost(tokens, input_bound=bound, model=model)
         except AnthropicError as error:
             _circuit_result(ledger, error)
             raise
-        meta = {"reservation_id": uuid.uuid4().hex, "route": route, "project_id": project_id,
-                "unit_key": str(unit_key), "message_id": message_id, "model": model,
-                "price_version": _price_definition(model)["price_version"], "request_fp": payload_hash(body),
-                "logical_request_fp": _logical_request_fp(body),
-                "logical_target_id": (message_id if route == 'semantic_backlog' and isinstance(owner, dict)
-                                      and owner.get('semantic_target_id') == message_id else None),
-                "max_cost_usd": str(maximum), "max_tokens": tokens, "input_bound": bound,
-                "input_chars": sum(len(text) for text in _texts(body)),
-                "timeout_seconds": float(timeout),
-                "owner": owner or {}}
-        if selection is not None:
-            meta.update(effort=selection["effort"], profile=selection["profile"])
-        if input_binding is not None:
-            if not isinstance(input_binding, str) or re.fullmatch(r'[0-9a-f]{64}', input_binding) is None:
-                raise AnthropicError('contract_error', 'input_binding_invalid')
-            meta['input_binding'] = input_binding
-        if (route == 'semantic_backlog' and isinstance(owner, dict)
-                and owner.get('semantic_target_id') == message_id
-                and all(isinstance(owner.get(k), str) and owner[k]
-                        for k in ('semantic_source', 'semantic_generation', 'semantic_phase'))):
-            meta['logical_unit_fp'] = payload_hash({
-                'target': message_id, 'source': owner['semantic_source'],
-                'generation': owner['semantic_generation'], 'phase': owner['semantic_phase']})
+        meta.update(reservation_id=uuid.uuid4().hex,
+                    price_version=_price_definition(model)["price_version"],
+                    max_cost_usd=str(maximum), input_bound=bound,
+                    input_chars=sum(len(text) for text in _texts(body)), timeout_seconds=float(timeout))
 
         def check():
             _guard_repeated_request(ledger, meta, current_body=body)

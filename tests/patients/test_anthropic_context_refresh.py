@@ -75,15 +75,19 @@ def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_whe
         seen.append(kwargs)
         return "monthly_cap"
     monkeypatch.setattr(worker.cloud_policy, "budget_block_reason", blocked)
-    class Provider:
-        client = worker.openai_client.OpenAIClient("synthetic-key", model=selection["model"], effort=selection["effort"])
-        def __init__(self):
-            self.ledger = ledger
-            self.selection = selection
-        def __call__(self, *_args, **_kwargs):
-            pytest.fail("budget-blocked request must not be sent")
-    with pytest.raises(context_refresh.Deferred):
-        context_refresh._ask(cfg, {"synthetic": "request"}, clock.mono + 1000, lambda: True, provider=Provider())
+    clock.mono = time.monotonic()
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
+    monkeypatch.setattr(worker.cloud_policy, 'selected_key', lambda *a: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(cloud_inference.writer_lock, 'updater_state', lambda: (False, 1))
+    provider = cloud_inference.CloudInferenceUnit(ledger, cfg, route='patient_context',
+        purpose='quality_repair', selection=selection, project_id=1, unit_key='synthetic-repair',
+        deadline=clock.mono + 1000, current=lambda: True, dispatch=lambda fn, **kw: fn())
+    monkeypatch.setattr(provider.client, 'complete', lambda *a, **kw: pytest.fail('no fresh send'))
+    with pytest.raises(cloud_inference.CloudFallback, match='cloud_send_blocked'):
+        context_refresh._ask(cfg, {'synthetic': 'request'}, clock.mono + 1000,
+                             lambda: True, provider=provider)
+    assert not ledger.artifacts('cloud_usage_reserve')
     assert seen[0]["max_tokens"] == 32768 and seen[0]["selection"] == selection
     assert seen[0]["input_bound"] > 0
 
