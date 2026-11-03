@@ -33,7 +33,7 @@ def test_check_ignore_failure_is_reported_by_preflight(updater, tmp_path, monkey
     assert "check_ignore_failed" in errors
 
 
-def test_corrupt_live_db_recovery_escalates_without_empty_consent_hold(
+def test_corrupt_live_db_recovery_retains_restore_hold_without_empty_consent(
         updater, tmp_path, monkeypatch):
     _repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
@@ -50,10 +50,16 @@ def test_corrupt_live_db_recovery_escalates_without_empty_consent_hold(
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text) or True)
     assert updater.recover_interrupted() == 1
-    assert "live_db_unreadable" in updater.journal_store.load_state(updater.STATE_PATH)["executed"][
-        "synthetic-unreadable"]["detail"]
+    held = updater.journal_store.load_state(updater.STATE_PATH)
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert report["result"] == "restore_consent_blocked"
+    assert "rollback db restore: live_db_unreadable" in report["detail"]
+    assert "writers_stopped" not in report  # A marker alone is not proof that writers stopped.
+    assert held["executed"] == state["executed"]
+    assert "restore_consent" not in held
+    assert Path(updater.MARKER_PATH).exists()
     assert notices == [] and restarts == []
-    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
+    assert held["applying"]["restore_incomplete"] is True
     assert Path(live).read_bytes() == damaged
     assert not Path(updater.DATA, "restore_pending.json").exists()
     assert not Path(updater.RESTORE_REPORT_PATH).exists()
