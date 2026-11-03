@@ -1074,7 +1074,8 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     def run(argv, **kwargs):
         calls.append(argv)
         if argv == [str(command), '-p', 'default', 'gateway', 'restart']:
-            assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+            assert kwargs['stdin'] == subprocess.DEVNULL
+            assert kwargs['stdout'] is kwargs['stderr'] and kwargs['stdout'].fileno() >= 0
             assert kwargs['env']['HERMES_HOME'] == str(host / '.hermes')
             running[0] = 202
             return subprocess.CompletedProcess(argv, 0)

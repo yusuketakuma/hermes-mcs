@@ -930,12 +930,14 @@ def _gateway_restart_run(data, agents, uid):
     import shlex
     import shutil
 
+    # One normal collection run (480s), lock wait (150s), PID observation (30s).
+    deadline = time.monotonic() + 660
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
 
     def snapshot(target):
         result = subprocess.run(["launchctl", "print", target], capture_output=True,
-                                text=True, timeout=10)
+                                text=True, timeout=max(0.001, min(10, deadline - time.monotonic())))
         if result.returncode:
             return None
         text = result.stdout or ""
@@ -1048,7 +1050,8 @@ def _gateway_restart_run(data, agents, uid):
 
     issued = False
     try:
-        plist = plistlib.loads(_read_regular_bytes(expected, 1024 * 1024))
+        definition = _read_regular_bytes(expected, 1024 * 1024)
+        plist = plistlib.loads(definition)
         args = plist.get("ProgramArguments")
         if plist.get("Label") != label or not isinstance(args, list) or not args \
                 or not all(isinstance(arg, str) for arg in args) \
@@ -1075,42 +1078,83 @@ def _gateway_restart_run(data, agents, uid):
             raise ValueError("gateway_service_not_owned")
         if launcher is None:
             raise ValueError("gateway_restart_launcher_unavailable")
-        found = []
-        for domain in ("gui", "user"):
-            target = f"{domain}/{int(uid)}/{label}"
-            pid = snapshot(target)
-            if pid is not None:
-                found.append((target, pid))
-        if not found:
-            raise ValueError("gateway_service_unavailable")
-        if len({pid for _, pid in found}) > 1:
-            raise ValueError("gateway_service_ambiguous")
-        target, old_pid = found[0]
-        # A restore hold is not permission to resume the gateway. Unknown
-        # marker contents hold too; only an explicit restored marker permits it.
-        marker = Path(data, "restore_pending.json")
-        if os.path.lexists(marker):
-            restore = _read_local_json(marker)
-            if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
-                    or ("phase" not in restore and "restored_at" in restore)):
-                raise ValueError("gateway_restart_restore_hold")
-        issued = True
+        def current():
+            if (_read_regular_bytes(expected, 1024 * 1024) != definition
+                    or os.path.realpath(launcher) not in launchers
+                    or not os.path.isfile(launcher) or not os.access(launcher, os.X_OK)):
+                raise ValueError("gateway_service_not_owned")
+            marker = Path(data, "restore_pending.json")
+            if os.path.lexists(marker):
+                restore = _read_local_json(marker)
+                if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
+                        or ("phase" not in restore and "restored_at" in restore)):
+                    raise ValueError("gateway_restart_restore_hold")
+            found = []
+            for domain in ("gui", "user"):
+                target = f"{domain}/{int(uid)}/{label}"
+                pid = snapshot(target)
+                if pid is not None:
+                    found.append((target, pid))
+            if not found:
+                raise ValueError("gateway_service_unavailable")
+            if len({pid for _, pid in found}) > 1:
+                raise ValueError("gateway_service_ambiguous")
+            return found[0]
+
+        def busy_refusal(output):
+            # Match the official noninteractive guard, never arbitrary errors.
+            # Session descriptions are ephemeral and never enter the receipt.
+            if len(output) > 65536:
+                return False
+            lines = output.decode("utf-8", errors="replace").strip().splitlines()
+            if len(lines) < 4:
+                return False
+            match = re.fullmatch(r"✗ Refusing to restart the gateway: ([1-9][0-9]*) live session\(s\) would be interrupted\.", lines[0])
+            return bool(match and all(line.startswith("  • ") for line in lines[1:-2])
+                        and lines[-2] == "  Let them finish, or interrupt them deliberately:"
+                        and lines[-1] == "    hermes gateway restart --yes   # interrupts "
+                        + match.group(1) + " live session(s)")
+
+        target, old_pid = current()
         env = dict(os.environ, HOME=str(home), HERMES_HOME=hermes_home)
-        result = subprocess.run([launcher, "-p", "default", "gateway", "restart"],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, env=env, cwd="/", timeout=300)
-        if result.returncode:
-            _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
-                                    service=target, previous_pid=old_pid or None)
-            return 1
-        until = time.monotonic() + 30
-        while time.monotonic() < until:
-            pid = snapshot(target)
+        while time.monotonic() < deadline:
+            target, pid = current()
             if pid and pid != old_pid:
                 _gateway_restart_report(data, "supervisor_restart_verified", service=target,
                                         previous_pid=old_pid or None, pid=pid)
                 return 0
-            time.sleep(0.2)
+            if time.monotonic() >= deadline:
+                raise ValueError("gateway_restart_busy_timeout")
+            issued = True
+            # Unlinked private output avoids persisting live-session descriptions.
+            with tempfile.TemporaryFile() as output:
+                result = subprocess.run([launcher, "-p", "default", "gateway", "restart"],
+                                        stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                                        env=env, cwd="/",
+                                        timeout=max(0.001, min(300, deadline - time.monotonic())))
+                output.seek(0)
+                refused = result.returncode == 1 and busy_refusal(output.read(65537))
+            if not result.returncode:
+                break
+            if not refused:
+                _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
+                                        service=target, previous_pid=old_pid or None)
+                return 1
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(5, remaining))
+        else:
+            _gateway_restart_report(data, "unknown", error="gateway_restart_busy_timeout",
+                                    service=target, previous_pid=old_pid or None)
+            return 1
+        until = min(deadline, time.monotonic() + 30)
+        while time.monotonic() < until:
+            target, pid = current()
+            if pid and pid != old_pid:
+                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
+                                        previous_pid=old_pid or None, pid=pid)
+                return 0
+            time.sleep(min(0.2, max(0, until - time.monotonic())))
         _gateway_restart_report(data, "unknown", error="gateway_pid_not_replaced",
                                 service=target, previous_pid=old_pid or None)
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError,
