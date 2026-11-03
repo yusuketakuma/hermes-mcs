@@ -509,6 +509,8 @@ def _presentation_fp(card, content, cfg=None) -> str:
     """The stamp button is presentation: only an enabled gate changes the
     fingerprint, so default-off cards keep the stored value (no mass re-render)."""
     fp = content_fingerprint(content)
+    if content.get('slack_card_files'):
+        fp = payload_hash({'display': fp, 'slack_card_files': content['slack_card_files']})
     if _stamp_enabled(cfg) and card["kind"] == "thread" and positive(card["project_id"]):
         fp = hashlib.sha256(f"{fp}:stamp".encode()).hexdigest()
     return fp
@@ -730,6 +732,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         spec["parts"]["slack_thread_policy"] = 1
     if positive(post_source_id):
         spec["parts"]["post_source_id"] = post_source_id
+    if content.get('slack_card_files') and op == 'update':
+        spec['parts']['slack'] = {'file_ids': [item['file_id'] for item in content['slack_card_files']]}
     if card["kind"] == "signal" and present.SOURCE_THREAD and card["thread_id"]:
         target = signal_thread_target(db, card, cfg)
         if target is not None and card["thread_id"] == target["thread_id"] and notify_scope.scope_matches(card, target):
@@ -764,7 +768,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
         spec["parts"]["thread_drug_actions"] = True
-    own = {}
+    own = dict(spec['parts'].get(card['transport']) or {})
     if post_mids:
         own["post_actions"] = _post_actions(db, card, content, post_mids, now)
     if face_posts:
@@ -954,6 +958,9 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
         import processing_route
         content_options["visible_providers"] = processing_route.visible_providers()
     content = card_content(db, card, cfg=cfg, **content_options)
+    files = notify_parts.slack_card_files(db, card, content)
+    if files:
+        content['slack_card_files'] = files
     if (card["transport"] == "lineworks" and card["kind"] == "thread"
             and not content.get("urgent")):
         from notify_render import structured_block, extraction_failed, progress_state

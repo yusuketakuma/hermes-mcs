@@ -696,6 +696,47 @@ def _same_thread_delivered_parts(db, card):
     return body, attachments, identities
 
 
+def slack_card_files(db, card, content) -> list:
+    """Bind fully delivered files of one empty, fetched source post to its Slack card."""
+    mid = own_post(card) if card["transport"] == "slack" and card["kind"] == "thread" else None
+    if not positive(mid) or mid not in content["shown"] or not card["thread_id"] or not card["message_id"]:
+        return []
+    source = db.execute("SELECT body_state,body_text FROM messages WHERE message_id=? AND project_id=?",
+                        (mid, card["project_id"])).fetchone()
+    if (source is None or source['body_state'] != 'full'
+            or source['body_text'] is not None and (not isinstance(source['body_text'], str) or source['body_text'].strip())):
+        return []
+    latest = db.execute("SELECT state,parts_state FROM notification_renders WHERE card_id=? "
+                        "ORDER BY render_rev DESC LIMIT 1", (card['card_id'],)).fetchone()
+    if latest is None or latest['state'] != 'delivered' or latest['parts_state'] != 'complete':
+        return []
+    attachments = _plan_attachments(db, [mid])
+    if not attachments or len(attachments) > MAX_PARTS - 2:
+        return []
+    _, _, remotes, _, uncertain, counts = _prior_remote_ids(db, card)
+    _, verified, identities = _same_thread_delivered_parts(db, card)
+    out, seen = [], set()
+    for part in attachments:
+        key = f"attach:{part['attachment_id']:04d}"
+        prior = verified.get(key)
+        if (part.get('unavailable') or prior is None or ('part', key) in uncertain
+                or ('attachment', part['attachment_id']) in uncertain):
+            return []
+        fid, digest, _caption = prior
+        proofs = identities.get(fid, [])
+        expected = (key, part['attachment_id'], part.get('sha256'), part.get('bytes'), part['name'])
+        if (not isinstance(fid, str) or re.fullmatch(r'F[A-Z0-9]{1,63}', fid) is None or fid in seen
+                or digest != part.get('sha256') or not valid_hash(digest)
+                or type(part.get('bytes')) is not int or part['bytes'] < 0
+                or remotes.get((key, digest)) != {fid} or not proofs or len(proofs) != counts.get(fid)
+                or any(proof is None or proof[:5] != expected or proof[5] not in ('file', 'operator_edit') for proof in proofs)):
+            return []
+        seen.add(fid)
+        out.append({'attachment_id': part['attachment_id'], 'sha256': digest,
+                    'bytes': part['bytes'], 'file_id': fid})
+    return out
+
+
 def _lineworks_update_budget(db, card, keyed):
     """Keep each source post to its initial chunks plus three later messages."""
     previous, sent, initial = {}, {}, {}
@@ -882,6 +923,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         visible["section_divider_version"] = parts["section_divider_version"]
     if "slack_thread_policy" in parts:
         visible["slack_thread_policy"] = parts["slack_thread_policy"]
+    if (parts.get('slack') or {}).get('file_ids'):
+        visible['slack_file_ids'] = parts['slack']['file_ids']
     card_payload = canonical(visible)
     manifest = [{"part_id": "card", "kind": "card", "index": 0,
                  "sha256": hashlib.sha256(card_payload).hexdigest(),

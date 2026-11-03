@@ -397,6 +397,8 @@ class SlackCardAdapter:
             if op == "update":
                 send = sender.chat_update
                 kwargs["ts"] = message_id
+                if (spec['parts'].get('slack') or {}).get('file_ids'):
+                    kwargs['file_ids'] = spec['parts']['slack']['file_ids']
             else:
                 send = sender.chat_postMessage
                 kwargs.update(unfurl_links=False, unfurl_media=False)
