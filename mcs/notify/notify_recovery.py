@@ -813,7 +813,7 @@ def _preflight_shared_file(db, card, part, remote, identities):
     for proof in identities.get(remote, ()):
         if proof is None or proof[:5] != expected:
             continue
-        if proof[5] not in ("private_stage", "file", "collected", "operator_edit", "operator_verified"):
+        if proof[5] not in ("private_stage", "private_operator_edit", "file", "collected", "operator_edit", "operator_verified"):
             continue
         shared = db.execute("SELECT p.delivery_id,p.error_code,p.state,p.remote_id FROM notification_renders r "
                             "JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
@@ -821,7 +821,7 @@ def _preflight_shared_file(db, card, part, remote, identities):
                             "AND p.kind='file_group' AND p.part_id='file_group'",
                             (card["card_id"], proof[6])).fetchone()
         if shared is None:
-            if proof[5] != "private_stage":
+            if proof[5] not in ("private_stage", "private_operator_edit"):
                 return True  # Legacy public uploads have no private-stage group.
         elif (shared[2] == "delivered" and shared[3] == card["message_id"]
               and (shared[1] is None or shared[1] == "operator_part_resolve"
