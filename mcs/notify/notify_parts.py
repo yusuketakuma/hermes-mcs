@@ -598,6 +598,71 @@ def _manual_edit_receipts(db, rows):
     return verified
 
 
+def _confirmed_upload_identities(db, card):
+    """Human-attested collected upload identities for this card, from applied receipts only.
+
+    A stored receipt is re-validated end to end before any proof is honoured:
+    the original request is reconstructed from the receipt, run through the
+    command validator, and its digest must equal the stored payload_hash for the
+    same command_id — a tampered or forged receipt_json alone never promotes."""
+    import notify_recovery
+    confirmed = set()
+    for raw, stored_digest, command_id in db.execute(
+            "SELECT receipt_json,payload_hash,command_id FROM command_receipts WHERE outcome='applied' "
+            "AND CASE WHEN json_valid(receipt_json) THEN "
+            "json_extract(receipt_json,'$.kind')='ops.attachment_identity_confirm' AND "
+            "json_extract(receipt_json,'$.card_id')=? ELSE 0 END", (card["card_id"],)):
+        try:
+            receipt = strict_json(raw)
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if (not isinstance(receipt, dict) or receipt.get("command_id") != command_id
+                or receipt.get("card_id") != card["card_id"]
+                or type(receipt.get("attachment_id")) is not int
+                or not valid_hash(receipt.get("sha256"))
+                or type(receipt.get("bytes")) is not int or receipt["bytes"] < 0
+                or not isinstance(receipt.get("name"), str) or not 0 < len(receipt["name"]) <= 200
+                or not isinstance(receipt.get("remote_id"), str) or not receipt["remote_id"]
+                or not scope_matches(card, receipt.get("scope"))):
+            continue
+        req = {"version": 1, "cmd": "ops.attachment_identity_confirm",
+               "command_id": command_id, "actor": receipt.get("actor"),
+               "human_confirmed": True, "reason": receipt.get("reason"),
+               "transport": (receipt.get("scope") or {}).get("transport", "slack"),
+               "card_id": receipt.get("card_id"), "card_key": receipt.get("card_key"),
+               "thread_id": receipt.get("thread_id"), "message_id": receipt.get("message_id"),
+               "root_message_id": receipt.get("root_message_id"),
+               "source_fp": receipt.get("source_fp"), "route_epoch": receipt.get("route_epoch"),
+               "correlation": receipt.get("correlation"),
+               "history_sha256": receipt.get("history_sha256"),
+               "through_rev": receipt.get("through_rev"),
+               "delivery_id": receipt.get("delivery_id"), "part_id": receipt.get("part_id"),
+               "attachment_id": receipt.get("attachment_id"), "sha256": receipt.get("sha256"),
+               "bytes": receipt.get("bytes"), "name": receipt.get("name"),
+               "remote_id": receipt.get("remote_id"),
+               "manifest_sha256": receipt.get("manifest_sha256"),
+               "payload_sha256": receipt.get("payload_sha256"), "expected_state": "held",
+               "evidence": receipt.get("evidence"),
+               **{key: value for key, value in (receipt.get("scope") or {}).items()
+                  if key != "transport"}}
+        if (notify_recovery.validate_attachment_identity_confirm(req) is not None
+                or payload_hash(req) != stored_digest):
+            continue
+        history = notify_recovery._confirmed_history_rows(
+            db, card, receipt["part_id"], receipt["attachment_id"],
+            receipt["sha256"], receipt["bytes"], through_rev=receipt["through_rev"])
+        if (not history or notify_recovery._confirmed_history_digest(history)
+                != receipt["history_sha256"]):
+            continue
+        # Promotion is bound to the exact rows the approval attested — a later
+        # delivered row carrying the same tuple is never promoted by it.
+        confirmed.update(
+            (row["delivery_id"], row["part_id"], row["render_rev"],
+             row["attachment_id"], row["payload_sha256"], row["bytes"],
+             row["name"], row["remote_id"]) for row in history)
+    return confirmed
+
+
 def _attachment_identity_proof(row, card, kind, edit_only, uploaded):
     return payload_hash({"delivery_id": row["delivery_id"], "render_rev": row["render_rev"],
                          "payload_hash": row["payload_hash"], "scope": stored_scope(row),
@@ -653,6 +718,7 @@ def _same_thread_delivered_parts(db, card):
                      AND t.kind='thread' AND t.state='delivered' AND t.remote_id=?)
         ORDER BY r.render_rev,p.idx""", (card["card_id"], card["thread_id"])).fetchall()
     manual = _manual_edit_receipts(db, rows) if card["transport"] == "slack" else {}
+    confirmed = _confirmed_upload_identities(db, card) if card["transport"] == "slack" else ()
     for row in rows:
         if not scope_matches(row, stored_scope(card)):
             continue
@@ -684,6 +750,15 @@ def _same_thread_delivered_parts(db, card):
                                 break
                 if identity is None and not operator and proofs is None:
                     identity = _collected_attachment_identity(row)
+                if (identity is not None and identity[5] == "collected"
+                        and (row["delivery_id"], row["part_id"], row["render_rev"],
+                             row["part_attachment_id"], row["payload_sha256"],
+                             row["part_bytes"], row["name"],
+                             str(row["remote_id"])) in confirmed):
+                    # An applied ops.attachment_identity_confirm receipt attests
+                    # this collected upload — distinguishable from a sealed file
+                    # proof and never auto-promoted.
+                    identity = (*identity[:5], "operator_verified", *identity[6:])
                 identities.setdefault(str(row["remote_id"]), []).append(
                     identity)
             try:
@@ -1129,7 +1204,11 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
             elif rid:
                 proofs = attachment_identities.get(rid, [])
-                sealed = [proof for proof in proofs if proof is not None and proof[5] == "file"]
+                # operator_verified is a receipt-attested upload identity: it is
+                # honoured like a sealed file proof for reuse but never created
+                # by the writer — only by an applied human approval.
+                sealed = [proof for proof in proofs if proof is not None
+                          and proof[5] in ("file", "operator_verified")]
                 collected = [proof for proof in proofs if proof is not None and proof[5] == "collected"]
                 manual_edits = [proof for proof in proofs if proof is not None and proof[5] == "operator_edit"]
                 expected = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
@@ -1147,7 +1226,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                         or a["bytes"] < 0 or not (sealed or collected and manual_edits)
                         or len(proofs) != receipt_counts.get(rid)
                         or len(prior_remotes.get((entry["part_id"], sha), ())) != 1
-                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected", "operator_edit")
+                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected", "operator_edit", "operator_verified")
                                for proof in proofs)
                         or len({proof[4] for proof in proofs}) != 1 or sha != a.get("sha256")):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"

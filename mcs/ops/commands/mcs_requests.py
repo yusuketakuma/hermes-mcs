@@ -141,6 +141,9 @@ def validate(req):
     if req.get("cmd") == "ops.card_part_resolve":
         from notify_recovery import validate_card_part_resolve
         return validate_card_part_resolve(req)
+    if req.get("cmd") == "ops.attachment_identity_confirm":
+        from notify_recovery import validate_attachment_identity_confirm
+        return validate_attachment_identity_confirm(req)
     if req.get("cmd") == "ops.card_resolve":
         # Scope is derived from the stored render/coverage, not the
         # envelope — the positive project_id rule does not apply and a

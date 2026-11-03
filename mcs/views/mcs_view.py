@@ -708,13 +708,14 @@ class View:
         for their own actor inside their own channel/application, and
         only projects they are authorized for; operator-only results
         (card_resolve) are withheld entirely."""
-        if receipt.get("kind") not in ("notification", "refresh",
-                                       "ops.card_resolve", "ops.card_part_resolve"):
+        if receipt.get("kind") not in ("notification", "refresh", "ops.card_resolve",
+                                       "ops.card_part_resolve", "ops.attachment_identity_confirm"):
             # Ordinary request receipts carry full before/after records
             # and use project_id, not the card channel's projects list.
             # They must stay behind the project-scoped receipt reader.
             return {"outcome": "rejected", "error": "receipt_kind_mismatch"}
-        if receipt.get("kind") in ("ops.card_resolve", "ops.card_part_resolve") \
+        if receipt.get("kind") in ("ops.card_resolve", "ops.card_part_resolve",
+                                 "ops.attachment_identity_confirm") \
                 and context.get("operator") is not True:
             return {"outcome": "rejected", "error": "operator_only"}
         actor = receipt.get("actor")
@@ -881,12 +882,17 @@ def _parser():
     plan.add_argument("--part-id", required=True)
     plan.add_argument("--include-related", action="store_true",
                       help="Include every unresolved attachment in the same latest Slack update; never approve it")
+    plan2 = subs.add_parser("attachment_identity_plan",
+                            help="Local operator: inspect a held attachment identity without approving a write")
+    plan2.add_argument("--delivery-id", required=True)
+    plan2.add_argument("--part-id", required=True)
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context", "local_measurements"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
             action_names = ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss",
-                            "signal_policy", "refstat_approve", "card_resolve", "card_part_resolve")
+                            "signal_policy", "refstat_approve", "card_resolve", "card_part_resolve",
+                            "attachment_identity_confirm")
             parsers = [actions.add_parser(action) for action in action_names]
             for write in parsers:
                 write.add_argument("--confirm-human", action="store_true", required=True,
@@ -909,7 +915,8 @@ def _parser():
             # and wrong; notification_receipt keys on command_id only
             projectless = (kind in ("status", "signals", "cross_lists", "response_observations",
                                     "notification_receipt", "read_model")
-                           or (kind == "control" and action_names[index] in ("card_resolve", "card_part_resolve")))
+                           or (kind == "control" and action_names[index] in ("card_resolve", "card_part_resolve",
+                                               "attachment_identity_confirm")))
             child.add_argument("--project", type=int,
                                required=not projectless)
             if kind == "read_model":
@@ -1002,6 +1009,12 @@ def main(argv=None):
             from notify_recovery import card_part_resolve_plan
             result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"],
                                             include_related=args["include_related"])
+        elif args["kind"] == "attachment_identity_plan":
+            if (not requests.valid_uuid(args["delivery_id"])
+                    or not valid_text(args["part_id"], 64)):
+                raise ValueError("bad_part_identity")
+            from notify_recovery import attachment_identity_confirm_plan
+            result = attachment_identity_confirm_plan(view.db, args["delivery_id"], args["part_id"])
         elif action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))
             if not isinstance(req, dict) or req.keys() & {"cmd", "version", "project_id", "human_confirmed"}:
@@ -1018,7 +1031,7 @@ def main(argv=None):
                 version = TRANSPORT_VERSIONS[transport]
             req = {**req, "cmd": command, "version": version,
                    "human_confirmed": confirmed}
-            if action not in ("card_resolve", "card_part_resolve"):
+            if action not in ("card_resolve", "card_part_resolve", "attachment_identity_confirm"):
                 req["project_id"] = args["project"]
             result = requests.enqueue(req, cmd_dir)
         elif args["kind"] == "notification_receipt":
@@ -1035,7 +1048,7 @@ def main(argv=None):
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 1 if (result.get("outcome") == "unknown" or
-                     (args["kind"] == "card_part_plan" and "error" in result)) else 0
+                     (args["kind"] in ("card_part_plan", "attachment_identity_plan") and "error" in result)) else 0
     except (ValueError, OSError, sqlite3.Error, RecursionError) as error:
         # User text/SQL/paths must never be interpolated into error logs.
         code = safe_error_code(error)

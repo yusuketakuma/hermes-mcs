@@ -960,3 +960,293 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
     if specs:
         notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)), specs, now)
     return receipt
+
+
+def _confirmed_history_rows(db, card, part_id, attachment_id, sha256, size,
+                            through_rev=None):
+    """Delivered rows that prove one attachment identity inside this card's thread."""
+    return db.execute(
+        """SELECT p.delivery_id,p.part_id,p.attachment_id,p.payload_sha256,p.bytes,p.name,
+                  p.remote_id,r.render_rev FROM notification_render_parts p
+           JOIN notification_renders r ON r.delivery_id=p.delivery_id
+           WHERE r.card_id=? AND p.part_id=? AND p.kind='attachment_part'
+             AND p.state='delivered' AND p.remote_id IS NOT NULL
+             AND p.attachment_id=? AND p.payload_sha256=? AND p.bytes=?
+             AND EXISTS(SELECT 1 FROM notification_render_parts t
+                        WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
+                          AND t.state='delivered' AND t.remote_id=?)
+             AND (? IS NULL OR r.render_rev<=?)
+           ORDER BY p.delivery_id""",
+        (card["card_id"], part_id, attachment_id, sha256, size, card["thread_id"],
+         through_rev, through_rev)).fetchall()
+
+
+def _confirmed_history_digest(rows):
+    return payload_hash([tuple(row) for row in rows])
+
+
+def attachment_identity_confirm_plan(ledger, delivery_id, part_id) -> dict:
+    """Read the exact collected identity a held attachment part would be approved for.
+
+    Plans one held attachment_part whose collected remote identity an operator may
+    attest; never approves, settles or renders. Missing or ineligible targets return
+    an error; the caller owns the transaction."""
+    from mcs_util import valid_hash
+    db = cards.connection(ledger)
+    render = render_row(db, delivery_id)
+    part = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                      (delivery_id, part_id)).fetchone()
+    if (render is None or part is None or render["op"] != "update"
+                or render["transport"] != "slack" or render["state"] != "held"
+                or render["parts_state"] != "held" or render["card_id"] is None
+                or part["kind"] != "attachment_part" or part["state"] != "held"
+                or part["error_code"] != "attachment_upload_identity_unverified"
+                or part["attempt_id"] is not None):
+        return {"error": "part_not_confirmable"}
+    card = card_row(db, render["card_id"])
+    if card is None or card["transport"] != "slack" or not card["thread_id"] \
+            or not scope_matches(render, stored_scope(card)):
+        return {"error": "scope_unverified"}
+    if (type(part["attachment_id"]) is not int or part["attachment_id"] <= 0
+                or not valid_hash(part["payload_sha256"])
+                or type(part["bytes"]) is not int or part["bytes"] < 0
+                or not isinstance(part["name"], str) or not 0 < len(part["name"]) <= 200):
+        return {"error": "attachment_identity_unverified"}
+    current = db.execute(
+        "SELECT attachment_id,sha256,bytes,name FROM attachments WHERE attachment_id=?",
+        (part["attachment_id"],)).fetchone()
+    if (current is None or current["sha256"] != part["payload_sha256"]
+                or current["bytes"] != part["bytes"] or current["name"] != part["name"]):
+        return {"error": "attachment_source_changed"}
+    # The attested identity is the file: same attachment bytes delivered to this
+    # thread under a single remote id and a single recorded name. A rename in the
+    # new render is exactly the edit_only reuse this approval must unlock, so the
+    # delivered name is bound, not the pending one. The whole delivered history is
+    # digest-bound so a later row can never widen or quietly change the attestation.
+    rows = _confirmed_history_rows(db, card, part_id, part["attachment_id"],
+                                   part["payload_sha256"], part["bytes"])
+    delivered = {(row["remote_id"], row["name"]) for row in rows}
+    if not rows or len(delivered) != 1:
+        return {"error": "remote_identity_unverified"}
+    remote_id, delivered_name = delivered.pop()
+    import notify_render
+    return {"version": 1, "cmd": "ops.attachment_identity_confirm",
+            **stored_scope(render), "transport": "slack",
+            "card_id": card["card_id"], "card_key": card["card_key"],
+            "thread_id": card["thread_id"], "message_id": card["message_id"],
+            "root_message_id": card["root_message_id"],
+            "source_fp": notify_render.source_fingerprint(db, card),
+            "route_epoch": render["route_epoch"], "correlation": render["correlation"],
+            "history_sha256": _confirmed_history_digest(rows),
+            "through_rev": max(row["render_rev"] for row in rows),
+            "delivery_id": delivery_id, "part_id": part_id,
+            "attachment_id": part["attachment_id"], "sha256": part["payload_sha256"],
+            "bytes": part["bytes"], "name": delivered_name, "remote_id": remote_id,
+            "manifest_sha256": render["payload_hash"],
+            "payload_sha256": part["payload_sha256"], "expected_state": "held"}
+
+
+def validate_attachment_identity_confirm(req) -> str | None:
+    """Validate human attestation of one collected attachment upload identity."""
+    from mcs_util import valid_text, valid_hash
+    if not isinstance(req, dict):
+        return "bad_command"
+    allowed = {"version", "cmd", "command_id", "actor", "human_confirmed", "reason",
+               "transport", "card_id", "card_key", "thread_id", "message_id",
+               "root_message_id", "source_fp", "route_epoch", "correlation",
+               "history_sha256", "through_rev", "delivery_id", "part_id", "attachment_id",
+               "sha256", "bytes", "name", "remote_id", "manifest_sha256",
+               "payload_sha256", "expected_state", "evidence"} | set(scope_fields("slack"))
+    if req.keys() - allowed:
+        return "unknown_field"
+    if type(req.get("version")) is not int or req["version"] != 1 \
+            or req.get("cmd") != "ops.attachment_identity_confirm":
+        return "bad_version"
+    if req.get("transport") != "slack":
+        return "bad_transport"
+    if not valid_uuid(req.get("command_id")) or not valid_uuid(req.get("delivery_id")):
+        return "bad_command_identity"
+    if req.get("human_confirmed") is not True:
+        return "human_confirmation_required"
+    for key, limit in (("actor", 120), ("reason", 2000), ("part_id", 64),
+                       ("name", 200), ("remote_id", 64)):
+        if not valid_text(req.get(key), limit):
+            return "bad_" + key
+    if type(req.get("card_id")) is not int or req["card_id"] <= 0:
+        return "bad_card_id"
+    if type(req.get("root_message_id")) is not int or req["root_message_id"] <= 0:
+        return "bad_root_message_id"
+    if type(req.get("route_epoch")) is not int or req["route_epoch"] < 1:
+        return "bad_route_epoch"
+    if type(req.get("through_rev")) is not int or req["through_rev"] < 1:
+        return "bad_through_rev"
+    for key in ("card_key", "thread_id", "message_id", "correlation"):
+        if not valid_text(req.get(key), 128):
+            return "bad_" + key
+    if type(req.get("attachment_id")) is not int or req["attachment_id"] <= 0:
+        return "bad_attachment_id"
+    if type(req.get("bytes")) is not int or req["bytes"] < 0:
+        return "bad_bytes"
+    for key in scope_fields("slack"):
+        if not valid_text(req.get(key), 200):
+            return "bad_" + key
+    if any(not valid_hash(req.get(key)) for key in ("sha256", "manifest_sha256", "payload_sha256",
+                                                    "history_sha256", "source_fp")):
+        return "bad_hash"
+    if req.get("expected_state") != "held":
+        return "bad_expected_state"
+    evidence = req.get("evidence")
+    if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped"}:
+        return "bad_evidence"
+    if not valid_text(evidence.get("method"), 200) or not valid_text(evidence.get("ref"), 500):
+        return "bad_evidence"
+    if evidence.get("worker_stopped") is not True:
+        return "worker_not_proven_stopped"
+    return None
+
+
+def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
+    """Re-seal one unpublished held update whose held attachment parts are all
+    attested by applied ops.attachment_identity_confirm receipts.
+
+    The held spec never reached the wire, so its manifest may be restricted to
+    edit_only reuse of the attested remote identities — never a fresh upload of
+    files an approval already bound. Any unattested held part keeps the render
+    held; stored rows and attempts are otherwise untouched."""
+    import notify_parts
+    from mcs_util import loads_dict
+    current = render_row(db, delivery_id)
+    if (current is None or current["state"] != "held" or current["parts_state"] != "held"
+            or current["spec_published"] != 0 or current["first_published_at"] is not None
+            or current["op"] != "update" or current["card_id"] != card["card_id"]
+            or not scope_matches(current, stored_scope(card))
+            or db.execute("SELECT 1 FROM notification_delivery_attempts WHERE delivery_id=?",
+                          (delivery_id,)).fetchone()):
+        return None
+    saved = {row["part_id"]: row for row in db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=?", (delivery_id,))}
+    if any(row["state"] != "held" or row["attempt_id"] is not None
+           or (row["kind"] not in ("card", "thread")
+               and row["error_code"] != "attachment_upload_identity_unverified")
+           for row in saved.values()):
+        return None
+    spec = loads_dict(current["spec_json"])
+    manifest = spec.get("parts", {}).get("manifest") if isinstance(spec, dict) else None
+    if (spec is None or payload_hash(spec) != current["payload_hash"] or not isinstance(manifest, list)
+            or len(manifest) != len(saved) or {p.get("part_id") for p in manifest} != set(saved)
+            or spec.get("delivery_id") != delivery_id or spec.get("render_rev") != current["render_rev"]):
+        return None
+    confirmed = {(att_id, sha, size): (remote, name)
+                 for _did, _pid, _rev, att_id, sha, size, name, remote in
+                 notify_parts._confirmed_upload_identities(db, card)}
+    used, renamed = set(), []
+    for part in manifest:
+        row = saved.get(part.get("part_id"))
+        if (row is None or any(row[key] != part.get(field) for key, field in (
+                ("kind", "kind"), ("idx", "index"), ("payload_sha256", "sha256"),
+                ("bytes", "bytes"), ("attachment_id", "attachment_id")))):
+            return None
+        if part.get("kind") != "attachment_part":
+            continue
+        attested = confirmed.get((part.get("attachment_id"), part.get("sha256"), part.get("bytes")))
+        remote, name = attested if attested is not None else (None, None)
+        if (remote is None or remote in used or part.get("unavailable") is True
+                or part.get("broadcast") is True):
+            return None
+        part["prior_remote_id"], part["edit_only"], part["name"] = remote, True, name
+        used.add(remote)
+        renamed.append((name, row["part_id"]))
+    for name, part_id in renamed:
+        db.execute("UPDATE notification_render_parts SET name=? WHERE delivery_id=? AND part_id=?",
+                   (name, delivery_id, part_id))
+    db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
+               (canonical(spec).decode(), payload_hash(spec), delivery_id))
+    db.execute("UPDATE notification_renders SET state='queued',parts_state='pending' WHERE delivery_id=?",
+               (delivery_id,))
+    db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL WHERE delivery_id=?",
+               (delivery_id,))
+    db.execute("UPDATE notification_cards SET delivery_state='delivered' WHERE card_id=?",
+               (card["card_id"],))
+    return spec
+
+
+def apply_attachment_identity_confirm(ledger, req, cfg=None, now=None) -> dict:
+    """Record an attested collected upload identity; never settles or sends."""
+    db = cards.connection(ledger)
+    now = time.time() if now is None else now
+    if cfg is None:
+        import mcs_util
+        cfg = mcs_util.load_config(mcs_util.CONF_PATH)
+    digest, specs = payload_hash(req), []
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        found, old = replay_receipt(db, req.get("command_id"), digest)
+        if found:
+            return old
+        error = validate_attachment_identity_confirm(req)
+        receipt = {"kind": "ops.attachment_identity_confirm", "command_id": req.get("command_id"),
+                   "actor": req.get("actor"), "reason": req.get("reason"),
+                   "delivery_id": req.get("delivery_id"), "part_id": req.get("part_id"),
+                   "processed_at": now}
+        render = card = None
+        if error is None:
+            plan = attachment_identity_confirm_plan(db, req["delivery_id"], req["part_id"])
+            error = plan.get("error")
+            if not error and any(req.get(key) != value for key, value in plan.items()):
+                error = "stale_part_plan"
+            if not error:
+                render = render_row(db, req["delivery_id"])
+                card = card_row(db, render["card_id"])
+                # An approval is rejected — never silently queued — while an
+                # attempt owns the card, parts are in flight, a restore freezes
+                # writes, or the journal cannot be read.
+                import notify_render
+                if (cards.unsettled_attempt(db, card["card_id"])
+                        or _preflight_unsettled_parts(db, card["card_id"])
+                        or cards._restore_hold_active(db, card_id=card["card_id"])):
+                    error = "confirm_unsafe"
+                elif notify_render.source_fingerprint(db, card) != req["source_fp"]:
+                    error = "stale_source"
+                else:
+                    try:
+                        attempts, incomplete = notify_journal.scan_journals(
+                            notify_spool.notify_dirs(notify_spool.data_root(ledger)))
+                    except OSError:
+                        error = "journal_unverifiable"
+                    else:
+                        if (incomplete or any(
+                                row.get("delivery_id") == req["delivery_id"]
+                                and (record["tainted"]
+                                     or row.get("result") in ("delivered", "unknown"))
+                                for record in attempts.values()
+                                for row in record["rows"])):
+                            error = "journal_contradicts_proof"
+        if error is None:
+            receipt.update(outcome="applied", scope=stored_scope(render),
+                           projects=card_projects(db, render, card),
+                           card_id=req["card_id"], card_key=req["card_key"],
+                           thread_id=req["thread_id"], message_id=req["message_id"],
+                           root_message_id=req["root_message_id"], source_fp=req["source_fp"],
+                           route_epoch=req["route_epoch"], correlation=req["correlation"],
+                           history_sha256=req["history_sha256"], through_rev=req["through_rev"],
+                           attachment_id=req["attachment_id"],
+                           sha256=req["sha256"], bytes=req["bytes"], name=req["name"],
+                           remote_id=req["remote_id"], manifest_sha256=req["manifest_sha256"],
+                           payload_sha256=req["payload_sha256"], evidence=req["evidence"],
+                           replan="withheld")
+        else:
+            receipt.update(outcome="rejected", error=error)
+        db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                   (req["command_id"], digest, None, None,
+                    receipt["outcome"], canonical(receipt).decode(), now))
+        if error is None:
+            sealed = _seal_confirmed_update(db, req["delivery_id"], card)
+            if sealed is not None:
+                specs.append(sealed)
+                db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                           (canonical({**receipt, "replan": "sealed"}).decode(), req["command_id"]))
+                receipt["replan"] = "sealed"
+        cards.mark_snapshot_dirty(db)
+    if specs:
+        notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)), specs, now)
+    return receipt
