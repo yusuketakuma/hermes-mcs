@@ -62,7 +62,7 @@ def test_removed_key_hides_provider_despite_used_evidence(led, monkeypatch):
 def test_registered_cloud_logos_remain_visible_when_cloud_mode_is_off(led, monkeypatch, provider):
     monkeypatch.setattr(mcs_util, "private_env_problem", lambda name, root=None: None)
     monkeypatch.setattr(processing_route, "provider_states",
-                        lambda *a, **k: dict.fromkeys(processing_route.PROVIDERS, "unknown"))
+                        lambda *a, **k: dict.fromkeys(processing_route.PROVIDERS, "done"))
     cfg = {**SLACK, "cloud_llm": {"mode": "off", "provider": provider}}
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
@@ -133,5 +133,5 @@ def test_writer_v3_contract_rejects_invalid_visibility(led, monkeypatch, fault):
         next(c for c in parts["containers"] if c.get("rule"))["visible_providers"] = ["jev", "local"]
     else:
         header["text"] += " fabricated"
-    with pytest.raises(ValueError, match="bad_provider_states"):
+    with pytest.raises(ValueError, match="bad_processing_display" if fault == "v2" else "bad_provider_states"):
         validate(spec)

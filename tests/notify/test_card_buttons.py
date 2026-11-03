@@ -799,6 +799,9 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     spec_mod.validate(spec)
     _, est = spec_mod._containers_cost(spec["parts"]["containers"])
     est += spec_mod._footer_cost(spec["parts"]["footer"])[1]
+    if spec["parts"].get("section_divider_version") == 1:
+        est += 14 * sum(bool(c.get("rule")) and c["type"] != "meta"
+                        for c in spec["parts"]["containers"])
     est += sum(len(line) + 4
                for post in spec["parts"].get("discord", {}).get("face_posts", [])
                for line in post["stamps"])
