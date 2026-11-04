@@ -29,7 +29,7 @@ _REAL_WRITER_CURRENT = worker._writer_current
 def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, monkeypatch, start, finish, unknown):
     led, clock, _ = runtime
     settings = cloud_policy.cloud_config({'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1],
-                                                        'daily_request_budget': 1}})[0]
+                                                        'daily_request_budget': 1, 'routes': ['patient_context']}})[0]
     cfg = {**CFG, 'cloud_llm': settings,
            'semantic': {**CFG['semantic'], 'project_ids': [1], 'daily_request_budget': 3000}}
     monkeypatch.setattr(worker, '_writer_current', _REAL_WRITER_CURRENT)

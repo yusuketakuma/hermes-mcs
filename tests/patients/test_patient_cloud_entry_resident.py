@@ -26,7 +26,8 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
     ledger, clock, local = runtime
     seed(ledger, body='完全合成の住環境の記録。')
     clock.mono = time.monotonic()
-    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
+    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1],
+                               'routes': ['patient_context']}}
     monkeypatch.setattr(extract_llm, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_policy, 'selected_key', lambda *a: 'synthetic-key')

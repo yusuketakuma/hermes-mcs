@@ -16,7 +16,7 @@ __all__ = ['runtime']
 @pytest.fixture
 def cloud_schedule(runtime, monkeypatch):
     led, _, _ = runtime
-    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1, 2]}}
+    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1, 2], 'routes': ['patient_context']}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on')
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
