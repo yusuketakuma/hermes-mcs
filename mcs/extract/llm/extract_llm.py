@@ -5027,6 +5027,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND {current_v4_id()} IS NULL AND EXISTS ("
                    f"SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id "
                    + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION}))")
+        pending = f"({pending}) AND NOT EXISTS ({_hold_sql()})"
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
