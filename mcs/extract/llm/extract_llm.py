@@ -2238,6 +2238,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 _verify_atomic_witness(ledger.db, r, witness)
                 if outcome == "written":
                     _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
+    except cloud_inference.CloudObservationIncomplete:
+        return False
     except cloud_inference.CloudFallback:
         if isinstance(r, dict) and r.get("_cloud_discard"):
             r["_cloud_discard"]()
@@ -4220,6 +4222,8 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                     _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except _CheckpointChanged:
         return _commit_rejected(r, "checkpoint")
+    except cloud_inference.CloudObservationIncomplete:
+        return _commit_rejected(r, "cloud_guard")
     except cloud_inference.CloudFallback:
         if r.get("_cloud_discard"):
             r["_cloud_discard"]()
@@ -6309,6 +6313,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if r.get("_cloud_guard"):
             try:
                 r["_cloud_guard"]()
+            except cloud_inference.CloudObservationIncomplete:
+                r["_commit_hold"] = True
+                deferred += 1
+                _defer_note("cloud_guard", settled)
+                if settled is not None:
+                    settled['deferred'] += 1
+                return False
             except cloud_inference.CloudFallback:
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
