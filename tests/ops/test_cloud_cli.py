@@ -746,6 +746,70 @@ def test_bound_failure_at_accounting_returns_partial_report(world, monkeypatch):
     assert report["accounting"]["pricing_unverified"] is True
 
 
+def test_period_budget_interruption_marks_the_right_section(world, monkeypatch):
+    root, _path, config = world
+    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+
+    def broken(ledger, cfg):
+        raise sqlite3.OperationalError("synthetic failure")
+
+    monkeypatch.setattr(cli.policy, "window_history_pruned", broken)
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert report["interrupted_section"] == "period_budget"
+    assert report["sections_verified"] == ["accounting"]
+    assert "accounting" not in report["sections_unverified"]
+
+
+def test_failed_block_reason_is_not_counted_verified(world, monkeypatch):
+    root, _path, config = world
+
+    def interrupted(ledger, *, model):
+        ledger.db.set_progress_handler(lambda: 1, 1)
+        raise ValueError("observation_budget_exceeded")
+
+    monkeypatch.setattr(cli.policy, "global_block_reason", interrupted)
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert report["interrupted_section"] == "usage_calibration"
+    assert report["sections_verified"] == ["accounting"]
+    assert "block_reason" in report["sections_unverified"]
+
+
+def _cloud_args(action):
+    import argparse
+    parser = argparse.ArgumentParser()
+    cli.add_parsers(parser.add_subparsers(dest="command", required=True))
+    return parser.parse_args(["cloud-llm", action])
+
+
+def _cloud_json(capsys):
+    return json.loads(capsys.readouterr().out.split("\n件数・文字数", 1)[0])
+
+
+def test_compare_and_log_on_unverified_partial_report_none_not_zeros(world, monkeypatch, capsys):
+    root, _path, config = world
+    monkeypatch.setattr(cli, "READ_BYTES", 64)
+    assert _cloud_args("compare").fn(_cloud_args("compare")) == 0
+    result = _cloud_json(capsys)
+    assert result["comparisons"] is None and result["observation"]["state"] == "partial"
+    assert _cloud_args("log").fn(_cloud_args("log")) == 0
+    result = _cloud_json(capsys)
+    assert result["entries"] is None and result["observation"]["state"] == "partial"
+
+
+def test_compare_keeps_observed_zero_when_log_was_verified(world, monkeypatch, capsys):
+    root, _path, config = world
+    monkeypatch.setattr(mcs_util, "HOME", str(root))
+    fake = {"state": "partial", "incomplete_reason": "read_deadline",
+            "interrupted_section": "source_repair_evidence_holds",
+            "sections_verified": ["accounting", "artifact_log"], "log": []}
+    monkeypatch.setattr(cli, "observe", lambda *a, **k: fake)
+    assert _cloud_args("compare").fn(_cloud_args("compare")) == 0
+    result = _cloud_json(capsys)
+    assert result["units"] == 0 and result["observation"]["state"] == "partial"
+
+
 def test_unverified_accounting_attaches_retained_observation(world, monkeypatch):
     root, _path, config = world
     monkeypatch.setattr(cli.policy, "usage_report", lambda *a, **k: {

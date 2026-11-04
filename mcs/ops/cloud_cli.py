@@ -463,7 +463,9 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         completed, phase = [], "accounting"
         try:
             accounting = policy.usage_report(borrowed)
-            completed.append("accounting")
+            if accounting and not accounting.get("pricing_unverified"):
+                completed.append("accounting")
+            phase = "period_budget"
             if settings["window_budget_usd"] is not None:
                 try:
                     # rows maintenance already pruned from the period cannot be counted: unknown, not a smaller sum
@@ -475,17 +477,20 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                     spent = None   # an unverifiable tally is shown as unknown, never as 0
                 period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
                           "spent_or_reserved_usd": spent}
-            completed.append("period_budget")
+            if period is not None:
+                completed.append("period_budget")
             phase = "block_reason"
             try:
                 reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
             except (sqlite3.Error, ValueError, policy.AnthropicError):
                 # A bounded read that stops here stays blocked, not a generic error or an implicit eligible.
                 reason = "block_reason_unverified"
-            completed.append("block_reason")
+            else:
+                completed.append("block_reason")
             phase = "usage_calibration"
             calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
-            completed.append("usage_calibration")
+            if calibration is not None:
+                completed.append("usage_calibration")
             phase = "routes"
             routes = _route_counts(db, cfg, planning, deadline)
             completed.append("routes")
@@ -537,7 +542,10 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                     evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
                                       else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
                                       else "read_failed"}
-            completed.append("source_repair_evidence_holds")
+            if evidence_holds_wanted and isinstance(evidence_holds, dict) and (
+                    "unknown" not in evidence_holds
+                    and evidence_holds.get("unattributable_accounting_rows") is not None):
+                completed.append("source_repair_evidence_holds")
             phase = "retained_records"
             holds_unverified = isinstance(evidence_holds, dict) and (
                 "unknown" in evidence_holds or evidence_holds.get("unattributable_accounting_rows") is None)
@@ -547,8 +555,9 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 try:
                     retained_observation = cloud_observation.observe(db, now=now)
                 except (ValueError, sqlite3.Error):
-                    retained_observation = cloud_observation._unknown("observation_unavailable")
-            completed.append("retained_records")
+                    retained_observation = cloud_observation.unknown("observation_unavailable")
+            if isinstance(retained_observation, dict) and retained_observation.get("state") != "unknown":
+                completed.append("retained_records")
             phase = None
         except (ValueError, sqlite3.Error, policy.AnthropicError) as error:
             # The bound was already spent: stop early, keep verified sections, mark the
@@ -557,7 +566,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             try:
                 retained_observation = cloud_observation.observe(db, now=now)
             except (ValueError, sqlite3.Error):
-                retained_observation = cloud_observation._unknown("observation_unavailable")
+                retained_observation = cloud_observation.unknown("observation_unavailable")
             return _incomplete_report(settings, key=key, error=error, interrupted=phase,
                                       completed=completed, accounting=accounting,
                                       evidence_holds=evidence_holds, log=log,
@@ -772,15 +781,16 @@ def command(args):
                 with _reader() as (db, _deadline):
                     result = cloud_observation.observe(db)
             except (OSError, ValueError, sqlite3.Error):
-                result = cloud_observation._unknown("observation_unavailable")
+                result = cloud_observation.unknown("observation_unavailable")
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["state"] == "complete" else 1
         report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None),
                          evidence_holds_wanted=action in ("plan", "estimate"))
+        log_verified = "artifact_log" in report.get("sections_verified", ("artifact_log",))
         if action == "log":
-            result = {"entries": report["log"]}
+            result = {"entries": report["log"] if log_verified else None}
         elif action == "compare":
-            result = _comparison_report(report["log"])
+            result = _comparison_report(report["log"]) if log_verified else {"comparisons": None}
         else:
             result = {k: v for k, v in report.items() if k != "log"}
         if action in ("log", "compare") and report.get("state") == "partial":

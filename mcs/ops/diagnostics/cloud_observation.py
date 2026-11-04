@@ -15,7 +15,7 @@ _VALID_META = ("CASE WHEN typeof(meta)='text' AND length(CAST(meta AS BLOB))<=32
                "AND json_valid(meta) THEN CASE WHEN json_type(meta)='object' THEN meta END END")
 
 
-def _unknown(reason):
+def unknown(reason):
     return {"state": "unknown", "reason": reason, "scope": "retained_records",
             "unresolved_requests": None, "missing_results": None, "unsettled_results": None,
             "settled_requests": None, "oldest_unresolved_age_s": None, "unresolved_over_10m": None,
@@ -132,7 +132,7 @@ def observe(db, *, now=None):
         if row["records_scanned"] > MAX_ROWS:
             # Prefix-only sample: a reserve whose result sits past the bound is not
             # a lower bound on unresolved; global counts stay unverified (None).
-            return {**_unknown("observation_limit"),
+            return {**unknown("observation_limit"),
                     "observed": {"coverage": "artifact_id_prefix", "scan_limit": MAX_ROWS,
                                  "records_scanned": row["records_scanned"],
                                  "reserves_scanned": row["reserves_scanned"],
@@ -143,7 +143,7 @@ def observe(db, *, now=None):
                                  "reserves_without_result_in_prefix": row["missing_results"],
                                  "invalid_or_unmatched_groups": row["invalid_groups"]}}
         if row["invalid_groups"]:
-            return {**_unknown("invalid_or_unmatched_records"), "state": "partial",
+            return {**unknown("invalid_or_unmatched_records"), "state": "partial",
                     "records_scanned": row["records_scanned"],
                     "invalid_groups_observed": row["invalid_groups"]}
         return {"state": "complete", "reason": None, "scope": "retained_records",
@@ -156,12 +156,12 @@ def observe(db, *, now=None):
         reason = ("proof_budget_exceeded" if proof_exceeded
                   else "observation_budget_exceeded" if "observation_budget" in str(error)
                   else "read_failure")
-        return {**_unknown(reason), "observed": _counts_or_none(db)}
+        return {**unknown(reason), "observed": _counts_or_none(db)}
     except sqlite3.Error as error:
         code = getattr(error, "sqlite_errorcode", None)
         reason = ("proof_budget_exceeded" if proof_exceeded
                   else "read_deadline" if code == sqlite3.SQLITE_INTERRUPT else "read_failure")
-        return {**_unknown(reason), "observed": _counts_or_none(db)}
+        return {**unknown(reason), "observed": _counts_or_none(db)}
     finally:
         try:
             db.create_function("mcs_cloud_observe", 12, None)
