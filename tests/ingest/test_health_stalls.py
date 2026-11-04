@@ -195,8 +195,10 @@ def test_signal_deadline_deferral_reaches_health_before_run_deadline(db, monkeyp
     assert result["deferred_stages"] == ["signals"]
     assert result["run"]["overshoot_s"] == 0
     health = health_report.build_health(db.db, result, "partial", cfg=cfg)
-    assert health["overall"] == "degraded"
-    assert "stage_errors" in health["state_reasons"]
+    assert health["overall"] == "ok"
+    assert health["run_status"] == "partial"
+    assert "stage_errors" not in health["state_reasons"]
+    assert health['collection_diagnostics']['errors']['categories']['deferred'] == 1
     assert "run_deadline_exceeded" not in health["state_reasons"]
     assert health["run"]["deferred_stages"] == ["signals"]
 

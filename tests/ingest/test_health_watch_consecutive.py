@@ -115,7 +115,7 @@ def test_alert_text_states_the_observed_count_and_elapsed_time(tmp_path):
     _tick(tmp_path, 1000)
     _tick(tmp_path, 1600)
     lines = health_watch._alert_lines(_tick(tmp_path, 2200))
-    assert any(line.startswith("継続: 同じ異常を3回続けて観測（初回 ") and "約20分継続" in line
+    assert any(line.startswith("継続: 監視理由ごとの連続観測は最大3回（該当理由の初回 ") and "約20分継続" in line
                for line in lines)
     assert not any("30分" in line for line in lines)
 
