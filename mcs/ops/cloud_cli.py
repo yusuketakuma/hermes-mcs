@@ -24,6 +24,10 @@ READ_ROWS = 100000
 READ_BYTES = 16 * 1024 * 1024
 
 
+class _ReaderLimit(ValueError):
+    """A shared observation reader limit was reached."""
+
+
 def pending_key_presence(root=None):
     """Preview only booleans for keys that init will save, never their values."""
     return {"jev": bool(os.environ.get("TYPESAFE_API_KEY") or jev.api_key(root)),
@@ -52,17 +56,41 @@ def _reader(root=None):
             consumed_rows += 1
             consumed_bytes += sum(len(value) * 4 if isinstance(value, str) else len(value)
                                   if isinstance(value, bytes) else 8 for value in values)
-            _checkpoint(deadline, consumed_rows)
+            if time.monotonic() >= deadline:
+                bounded_row.stop_reason = "read_deadline"
+                raise _ReaderLimit("read_deadline")
+            if consumed_rows > READ_ROWS:
+                bounded_row.stop_reason = "observation_budget_exceeded"
+                raise _ReaderLimit("observation_budget_exceeded")
             if consumed_bytes > READ_BYTES:
-                raise ValueError("observation_budget_exceeded")
+                bounded_row.stop_reason = "observation_budget_exceeded"
+                raise _ReaderLimit("observation_budget_exceeded")
             return sqlite3.Row(cursor, values)
 
+        def interrupt_on_deadline():
+            if time.monotonic() >= deadline:
+                bounded_row.stop_reason = "read_deadline"
+                return 1
+            return 0
+
+        bounded_row.stop_reason = None
         db.row_factory = bounded_row
         db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 2 * 1024 * 1024)
         db.execute("PRAGMA query_only=ON")
-        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        db.set_progress_handler(interrupt_on_deadline, 1000)
         db.execute("BEGIN")
         yield db, deadline
+
+
+def _check_reader(db, deadline):
+    reason = getattr(db.row_factory, 'stop_reason', None)
+    if reason or time.monotonic() >= deadline:
+        raise _ReaderLimit(reason or 'read_deadline')
+
+
+def _raise_reader_interrupt(error):
+    if isinstance(error, sqlite3.Error) and getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_INTERRUPT:
+        raise error
 
 
 def _checkpoint(deadline, rows=0):
@@ -463,6 +491,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         completed, phase = [], "accounting"
         try:
             accounting = policy.usage_report(borrowed)
+            _check_reader(db, deadline)
             if accounting and not accounting.get("pricing_unverified"):
                 completed.append("accounting")
             phase = "period_budget"
@@ -470,10 +499,13 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 try:
                     # rows maintenance already pruned from the period cannot be counted: unknown, not a smaller sum
                     # judged apart from the run window: an expired period can still be too old to count
-                    spent = (None if policy.window_history_pruned(borrowed, settings)
-                             or time.time() - mcs_util.until_epoch(settings["window_start"]) > policy.WINDOW_HISTORY_S
+                    pruned = policy.window_history_pruned(borrowed, settings)
+                    _check_reader(db, deadline)
+                    spent = (None if pruned or time.time() - mcs_util.until_epoch(settings["window_start"]) > policy.WINDOW_HISTORY_S
                              else str(policy.window_spend(borrowed, settings)))
+                    _check_reader(db, deadline)
                 except (policy.AnthropicError, ValueError, ArithmeticError):
+                    _check_reader(db, deadline)
                     spent = None   # an unverifiable tally is shown as unknown, never as 0
                 period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
                           "spent_or_reserved_usd": spent}
@@ -481,8 +513,14 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                     completed.append("period_budget")
             phase = "block_reason"
             try:
-                reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
-            except (sqlite3.Error, ValueError, policy.AnthropicError):
+                reason = policy.global_block_reason(borrowed, model=settings["model"])
+                _check_reader(db, deadline)
+                if not reason:
+                    reason = policy.budget_block_reason(borrowed, settings)
+                    _check_reader(db, deadline)
+            except (sqlite3.Error, ValueError, policy.AnthropicError) as error:
+                _raise_reader_interrupt(error)
+                _check_reader(db, deadline)
                 # A bounded read that stops here stays blocked, not a generic error or an implicit eligible.
                 reason = "block_reason_unverified"
             else:
@@ -535,9 +573,13 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 # instead of failing the estimate it accompanies.
                 try:
                     evidence_holds = policy.evidence_hold_counts(db, now=now)
+                    _check_reader(db, deadline)
                 except ValueError:   # the reader's row/byte budget
+                    _check_reader(db, deadline)
                     evidence_holds = {"unknown": "observation_budget_exceeded"}
                 except sqlite3.Error as error:
+                    _raise_reader_interrupt(error)
+                    _check_reader(db, deadline)
                     code = getattr(error, "sqlite_errorcode", None)
                     evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
                                       else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
@@ -554,24 +596,37 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 import cloud_observation
                 try:
                     retained_observation = cloud_observation.observe(db, now=now)
-                except (ValueError, sqlite3.Error):
+                except (ValueError, sqlite3.Error) as error:
+                    _raise_reader_interrupt(error)
+                    _check_reader(db, deadline)
                     retained_observation = cloud_observation.unknown("observation_unavailable")
-            if isinstance(retained_observation, dict) and retained_observation.get("state") != "unknown":
+                _check_reader(db, deadline)
+                if (isinstance(retained_observation, dict) and retained_observation.get('state') == 'unknown'
+                        and retained_observation.get('reason') == 'read_deadline'):
+                    raise _ReaderLimit('read_deadline')
+            if isinstance(retained_observation, dict) and retained_observation.get("state") == "complete":
                 completed.append("retained_records")
             phase = None
         except (ValueError, sqlite3.Error, policy.AnthropicError) as error:
             # The bound was already spent: stop early, keep verified sections, mark the
             # rest unknown, and attach whatever the bounded snapshot can still see.
             import cloud_observation
-            try:
-                retained_observation = cloud_observation.observe(db, now=now)
-            except (ValueError, sqlite3.Error):
+            if (_reader_failure_reason(error) in ('observation_budget_exceeded', 'read_deadline')
+                    or getattr(db.row_factory, 'stop_reason', None)):
                 retained_observation = cloud_observation.unknown("observation_unavailable")
+            else:
+                try:
+                    retained_observation = cloud_observation.observe(db, now=now)
+                except (ValueError, sqlite3.Error):
+                    retained_observation = cloud_observation.unknown("observation_unavailable")
+            if isinstance(retained_observation, dict) and retained_observation.get('state') == 'complete':
+                completed.append('retained_records')
             return _incomplete_report(settings, key=key, error=error, interrupted=phase,
                                       completed=completed, accounting=accounting,
                                       evidence_holds=evidence_holds, log=log,
                                       holds_wanted=evidence_holds_wanted,
-                                      retained=retained_observation, days=days)
+                                      retained=retained_observation, days=days, period=period,
+                                      reason=reason, calibration=calibration, routes=routes, counts=counts)
     calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
     ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
     output_mean = calibration["output_tokens_per_request"] if calibration else None
@@ -656,6 +711,8 @@ _SECTION_ORDER = ("accounting", "period_budget", "block_reason", "usage_calibrat
 
 
 def _reader_failure_reason(error):
+    if isinstance(error, _ReaderLimit):
+        return str(error) if str(error) in ('read_deadline', 'observation_budget_exceeded') else 'read_failure'
     if isinstance(error, sqlite3.Error):
         code = getattr(error, "sqlite_errorcode", None)
         return ("read_deadline" if code == sqlite3.SQLITE_INTERRUPT
@@ -666,7 +723,7 @@ def _reader_failure_reason(error):
 
 
 def _incomplete_report(settings, *, key, error, interrupted, completed, accounting,
-                       evidence_holds, log, holds_wanted, retained, days):
+                       evidence_holds, log, holds_wanted, retained, days, period, reason, calibration, routes, counts):
     """Honest partial report once a bounded read is spent: verified sections keep their
     data, interrupted and untouched sections are named unknown, nothing is guessed."""
     report = {"mode": settings["mode"], "key_present": key,
@@ -680,6 +737,13 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
               "accounting": accounting or {"daily_requests": None, "monthly_cost_usd": None,
                   "settled_cost_usd": None, "max_reserved_cost_usd": None,
                   "unresolved_requests": None, "pricing_unverified": True},
+              "period_budget": period if 'period_budget' in completed else None,
+              "block_reason": reason if 'block_reason' in completed else None,
+              "usage_calibration": ({key: str(value) if isinstance(value, Decimal) else value
+                                     for key, value in calibration.items()}
+                                    if 'usage_calibration' in completed else None),
+              "routes": routes if 'routes' in completed else None,
+              "history_days": list(counts.values()) if 'history_days' in completed else None,
               "retained_records_observation": retained,
               "log": log if "artifact_log" in completed else [],
               "additional_runtime_checks": "source_claim_deadline_and_current_config"}
