@@ -642,7 +642,7 @@ def test_provider_bundle_cache_is_scoped_to_one_render(led, monkeypatch):
     card = {**_card(led), "layout": 3}
     caches = []
 
-    def states(_db, _pid, _mid, *, cfg=None, bundle_cache=None, sequence_out=None):
+    def states(_db, _pid, _mid, *, cfg=None, bundle_cache=None, sequence_out=None, followup=False):
         caches.append(bundle_cache)
         return dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
 
