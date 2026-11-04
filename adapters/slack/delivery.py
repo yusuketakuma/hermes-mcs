@@ -955,10 +955,12 @@ class DeliveryWorker(_BaseWorker):
         prior = str(part["prior_remote_id"])
         if (not self._sender._owns(spec.get("delivery", {}))
                 or part not in spec.get("parts", {}).get("manifest", [])):
+            self._log("edit_preflight_held", reason="edit_scope_unverified")
             return {"result": "unknown", "error_code": "file_target_unverified"}
         sender = self._sender.single_attempt()
         info = getattr(sender, "files_info", None) if sender is not None else None
         if info is None:
+            self._log("edit_preflight_held", reason="edit_native_client_unverified")
             return {"result": "unknown", "error_code": "sdk_capability_missing"}
         try:
             data = _payload(await call_native(info, file=prior, limit=1))
@@ -969,12 +971,14 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "unknown", "error_code": "edit_target_unverified"}
         file_obj = data.get("file") if isinstance(data, dict) else None
         if data.get("ok") is not True or not isinstance(file_obj, dict):
+            self._log("edit_preflight_held", reason="file_info_unverified")
             return {"result": "unknown", "error_code": "edit_target_unverified"}
-        if (file_obj.get("id") != prior
-                or (part.get("operator_verified") is not True and (
-                    not self._sender._bot_user_id
-                    or file_obj.get("user") != self._sender._bot_user_id))
-                or _file_problem(file_obj, part)):
+        reason = ("edit_reference_missing" if file_obj.get("id") != prior
+                  else "edit_author_unverified" if part.get("operator_verified") is not True and (
+                      not self._sender._bot_user_id or file_obj.get("user") != self._sender._bot_user_id)
+                  else _file_problem(file_obj, part))
+        if reason:
+            self._log("edit_preflight_held", reason=reason)
             return {"result": "unknown", "error_code": "edit_file_unverified"}
         return {"result": "delivered", "remote_id": prior,
                 "attachment_origin": "edit"}
