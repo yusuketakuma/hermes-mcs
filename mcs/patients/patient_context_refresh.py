@@ -3255,24 +3255,154 @@ def _scan_check(db):
 
 
 class _ScanCursor(sqlite3.Cursor):
+    @property
+    def row_factory(self):
+        return sqlite3.Cursor.row_factory.__get__(self)
+
+    @row_factory.setter
+    def row_factory(self, value):
+        self.connection._uncaptured_read()
+        sqlite3.Cursor.row_factory.__set__(self, value)
+
+    def execute(self, sql, parameters=()):
+        _scan_check(self.connection)
+        previous = getattr(self, '_read_handle', None)
+        if previous is not None:
+            previous.close()
+        self._read_handle = None
+        observed = getattr(self.connection, 'read_witness', None)
+        if observed is not None:
+            from patient_readiness_witness import freeze_parameters
+            try:
+                parameters = freeze_parameters(parameters)
+            except ValueError:
+                observed.fail()
+        try:
+            result = super().execute(sql, parameters)
+        except BaseException:
+            if observed is not None:
+                observed.fail()
+            raise
+        if observed is not None:
+            self._read_handle = observed.start(sql, parameters, self.description)
+        return result
+
     def fetchone(self):
         _scan_check(self.connection)
         row = super().fetchone()
         _scan_check(self.connection)
+        observed = getattr(self, '_read_handle', None)
+        if observed is not None:
+            if row is None:
+                observed.eof()
+            else:
+                observed.row(row)
         return row
 
     def __iter__(self):
-        while (row := self.fetchone()) is not None:
-            yield row
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
 
     def fetchall(self):
         return list(self)
 
+    def fetchmany(self, size=None):
+        _scan_check(self.connection)
+        size = self.arraysize if size is None else size
+        rows = super().fetchmany(size)
+        _scan_check(self.connection)
+        observed = getattr(self, '_read_handle', None)
+        if observed is not None:
+            if type(size) is not int or size <= 0:
+                self.connection._uncaptured_read()
+            else:
+                for row in rows:
+                    observed.row(row)
+                if len(rows) < size:
+                    observed.eof()
+        return rows
+
+    def close(self):
+        observed = getattr(self, '_read_handle', None)
+        if observed is not None:
+            observed.close()
+            self._read_handle = None
+        return super().close()
+
+    def __del__(self):
+        observed = getattr(self, '_read_handle', None)
+        if observed is not None:
+            observed.close()
+
 
 class _ScanConnection(sqlite3.Connection):
+    @property
+    def row_factory(self):
+        return sqlite3.Connection.row_factory.__get__(self)
+
+    @row_factory.setter
+    def row_factory(self, value):
+        self._uncaptured_read()
+        sqlite3.Connection.row_factory.__set__(self, value)
+
+    @property
+    def text_factory(self):
+        return sqlite3.Connection.text_factory.__get__(self)
+
+    @text_factory.setter
+    def text_factory(self, value):
+        self._uncaptured_read()
+        sqlite3.Connection.text_factory.__set__(self, value)
+
+    def cursor(self, factory=None):
+        observed = getattr(self, 'read_witness', None)
+        if factory not in (None, _ScanCursor) and observed is not None:
+            observed.fail()
+        return super().cursor(factory=factory or _ScanCursor)
+
     def execute(self, sql, parameters=()):
-        _scan_check(self)
-        return self.cursor(factory=_ScanCursor).execute(sql, parameters)
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().executescript(*args, **kwargs)
+
+    def _uncaptured_read(self):
+        observed = getattr(self, 'read_witness', None)
+        if observed is not None:
+            observed.fail()
+
+    def create_function(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().create_function(*args, **kwargs)
+
+    def create_aggregate(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().create_aggregate(*args, **kwargs)
+
+    def create_window_function(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().create_window_function(*args, **kwargs)
+
+    def create_collation(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().create_collation(*args, **kwargs)
+
+    def set_authorizer(self, callback):
+        self._uncaptured_read()
+        result = super().set_authorizer(callback)
+        self.witness_authorizer_present = callback is not None
+        self.witness_authorizer_epoch = getattr(self, 'witness_authorizer_epoch', 0) + 1
+        return result
 
 
 @contextmanager
@@ -3289,9 +3419,14 @@ def _candidate_reader(ledger, deadline):
         if identity != (after.st_dev, after.st_ino):
             raise _ScanInterrupted('patient_context_scan_changed')
         db.row_factory = sqlite3.Row
+        db.witness_authorizer_present = False
+        db.witness_authorizer_epoch = 0
+        db.execute('PRAGMA query_only=ON')
         db.scan_until = deadline - COMMIT_MARGIN
         db.set_progress_handler(lambda: int(time.monotonic() >= db.scan_until), 1000)
         db.execute('BEGIN')
+        import extract_llm
+        extract_llm.pending_pred(db)  # register the same deterministic UDF before observing reads
         yield SimpleNamespace(db=db)
         current = os.stat(path)
         if identity != (current.st_dev, current.st_ino):
