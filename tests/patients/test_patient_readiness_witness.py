@@ -1,9 +1,11 @@
 """Synthetic SQL witnesses retain exact observations without storing rows."""
+import json
 import sqlite3
 
 import pytest
 
 import patient_readiness_witness as witness
+import drug_map
 
 
 class OwnedConnection(sqlite3.Connection):
@@ -26,6 +28,7 @@ def dbs(tmp_path):
     setup.execute('PRAGMA journal_mode=WAL')
     setup.execute('CREATE TABLE observations(id INTEGER PRIMARY KEY, project_id INTEGER, value)')
     setup.execute('CREATE TABLE financial(id INTEGER PRIMARY KEY, project_id INTEGER, meta TEXT)')
+    setup.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, kind TEXT, content TEXT)')
     setup.executemany('INSERT INTO observations VALUES (?,?,?)', [(1, 1, 'a'), (2, 1, 'b'), (3, 2, 'c')])
     setup.commit()
     reader = sqlite3.connect(path, factory=OwnedConnection)
@@ -70,6 +73,84 @@ def matches(result, writer, *, clock=lambda: 0, deadline=100):
         return result.matches(writer, deadline, clock)
     finally:
         writer.rollback()
+
+
+@pytest.mark.parametrize('mutation,expected', [
+    ('cursor', True), ('generation_id', False), ('generation_hash', False),
+    ('generation_approval', False), ('generation_version', False),
+    ('invalid_cursor', False), ('invalid_to_other', False), ('deleted', False),
+    ('null_generation', False), ('later_valid', True), ('later_invalid', False),
+])
+def test_drug_generation_only_compares_validity_and_entire_generation(dbs, mutation, expected):
+    reader, writer = dbs
+    generation = ['synthetic', 'a' * 64, False, drug_map.RESOLVER_VERSION]
+    original = {'dictionary': generation, 'cursor': 1}
+    if mutation == 'invalid_to_other':
+        original = {'dictionary': generation, 'cursor': -1}
+    writer.execute('INSERT INTO artifacts VALUES(1,?,?)', (drug_map.PROGRESS_KIND, json.dumps(original)))
+    writer.commit()
+    with witness.Recording(reader, drug_generation_only=True) as recording:
+        assert not recording.drug_progress_observed
+        collect(recording, reader, drug_map.ANNOTATION_PROGRESS_SQL, (drug_map.PROGRESS_KIND,))
+        assert recording.drug_progress_observed
+        result = recording.seal()
+    assert result is not None
+    changed = {'dictionary': list(generation), 'cursor': 1}
+    if mutation in ('cursor', 'later_valid'):
+        changed['cursor'] = 2
+    elif mutation == 'generation_id':
+        changed['dictionary'][0] = 'another-synthetic'
+    elif mutation == 'generation_hash':
+        changed['dictionary'][1] = 'b' * 64
+    elif mutation == 'generation_approval':
+        changed['dictionary'][2] = True
+    elif mutation == 'generation_version':
+        changed['dictionary'][3] = 'wrong-version'
+    elif mutation == 'invalid_cursor':
+        changed['cursor'] = True
+    elif mutation == 'invalid_to_other':
+        changed['cursor'] = -2
+    elif mutation == 'null_generation':
+        changed['dictionary'] = None
+    elif mutation == 'later_invalid':
+        changed['cursor'] = -1
+    if mutation == 'deleted':
+        writer.execute('DELETE FROM artifacts WHERE artifact_id=1')
+    elif mutation.startswith('later_'):
+        writer.execute('INSERT INTO artifacts VALUES(2,?,?)', (drug_map.PROGRESS_KIND, json.dumps(changed)))
+    else:
+        writer.execute('UPDATE artifacts SET content=? WHERE artifact_id=1', (json.dumps(changed),))
+    writer.commit()
+    assert matches(result, writer) is expected
+
+
+@pytest.mark.parametrize('opt_in,alter_sql', [(False, False), (True, True)])
+def test_drug_progress_requires_opt_in_and_exact_query(dbs, opt_in, alter_sql):
+    reader, writer = dbs
+    progress = {'dictionary': None, 'cursor': 1}
+    writer.execute('INSERT INTO artifacts VALUES(1,?,?)', (drug_map.PROGRESS_KIND, json.dumps(progress)))
+    writer.commit()
+    sql = drug_map.ANNOTATION_PROGRESS_SQL + (' ' if alter_sql else '')
+    with witness.Recording(reader, drug_generation_only=opt_in) as recording:
+        collect(recording, reader, sql, (drug_map.PROGRESS_KIND,))
+        assert not recording.drug_progress_observed
+        result = recording.seal()
+    progress['cursor'] = 2
+    writer.execute('UPDATE artifacts SET content=?', (json.dumps(progress),))
+    writer.commit()
+    assert not matches(result, writer)
+
+
+def test_missing_drug_progress_is_not_valid_progress(dbs):
+    reader, writer = dbs
+    with witness.Recording(reader, drug_generation_only=True) as recording:
+        collect(recording, reader, drug_map.ANNOTATION_PROGRESS_SQL, (drug_map.PROGRESS_KIND,))
+        assert recording.drug_progress_observed
+        result = recording.seal()
+    writer.execute('INSERT INTO artifacts VALUES(1,?,?)',
+                   (drug_map.PROGRESS_KIND, json.dumps({'dictionary': None, 'cursor': 1})))
+    writer.commit()
+    assert not matches(result, writer)
 
 
 @pytest.mark.parametrize('mutation', ['update', 'delete', 'insert', 'other_patient'])
