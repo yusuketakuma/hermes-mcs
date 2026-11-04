@@ -27,6 +27,8 @@ KIND = "med_ref"
 MAX_BYTES = 8 * 1024 * 1024
 MAX_ENTRIES = 20000
 PROGRESS_KIND = "med_ref_progress"
+ANNOTATION_PROGRESS_SQL = ("SELECT content FROM artifacts WHERE kind=? "
+                           "ORDER BY artifact_id DESC LIMIT 1")
 SCAN_BATCH = 100
 MAX_ALIASES = 100
 _GENERIC = {fold_surface(s) for s in ("薬", "処方薬", "内服薬", "降圧薬")}
@@ -589,13 +591,10 @@ def current_refs_with_progress(db: sqlite3.Connection, mid: int, progress: dict 
     return refs
 
 
-def read_annotation_progress(db: sqlite3.Connection) -> dict | None:
-    row = db.execute("SELECT content FROM artifacts WHERE kind=? "
-                     "ORDER BY artifact_id DESC LIMIT 1", (PROGRESS_KIND,)).fetchone()
-    if row is None:
-        return None
+def parse_annotation_progress(raw) -> dict:
+    """Validate a stored dictionary generation and cursor without reading state."""
     try:
-        progress = parse_command(row[0])
+        progress = parse_command(raw)
     except (ValueError, TypeError, RecursionError):
         return {"invalid": True}
     if not isinstance(progress, dict) or set(progress) != {"dictionary", "cursor"}:
@@ -610,6 +609,11 @@ def read_annotation_progress(db: sqlite3.Connection) -> dict | None:
             or type(generation[2]) is not bool or generation[3] != RESOLVER_VERSION):
         return {"invalid": True}
     return progress
+
+
+def read_annotation_progress(db: sqlite3.Connection) -> dict | None:
+    row = db.execute(ANNOTATION_PROGRESS_SQL, (PROGRESS_KIND,)).fetchone()
+    return None if row is None else parse_annotation_progress(row[0])
 
 
 def generation_signature(db: sqlite3.Connection) -> str:
