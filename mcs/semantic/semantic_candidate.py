@@ -20,7 +20,7 @@ _MODULES = ('inference_version', 'inference_dependency_loss', 'patient_context_a
             'semantic', 'semantic_drain', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'extraction_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_publication', 'semantic_conversion', 'patient_context_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
+            'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'extraction_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_publication', 'semantic_conversion', 'patient_context_plan', 'patient_context_scan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
 # Runtime paths and callable registries are bound by loaded source, not runtime values.
