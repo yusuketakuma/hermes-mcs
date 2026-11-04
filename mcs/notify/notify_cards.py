@@ -2481,9 +2481,11 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
     keeps. Slack attachment edits rejected before writing keep both specs
-    until their unknown result is resolved. Rows, hashes,
-    correlations and part metadata stay for audit. Bounded per call —
-    the rest waits for the next tick."""
+    until their unknown result is resolved. Definitive Slack body length
+    rejections keep both sealed copies until matching delivery proof exists. Rows, hashes,
+    correlations and part metadata stay for audit. Each clearing pass handles
+    at most limit eligible renders; retained candidates are scanned in finite
+    pages so they cannot starve later cleanup."""
     db = connection(ledger)
     now = time.time() if now is None else now
     with db:
@@ -2492,8 +2494,28 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             (now,)).rowcount
         cleared = 0
         coverage_cache = {}
-        for r in db.execute(
-                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,c.kind FROM notification_renders r
+        proof_state = (set(), set(), coverage_cache)
+
+        def candidates(query):
+            # Retained rows must not fill LIMIT forever. Scan finite stable-key
+            # pages, with at most limit mutations and shared proof checks.
+            after, remaining = None, max(0, limit)
+            while remaining:
+                bounds = " AND (r.updated_at,r.delivery_id)>(?,?)" if after else ""
+                rows = db.execute(query + bounds + " ORDER BY r.updated_at,r.delivery_id LIMIT ?",
+                                  (*after, remaining) if after else (remaining,)).fetchall()
+                if not rows:
+                    return
+                after = (rows[-1]["updated_at"], rows[-1]["delivery_id"])
+                retained = notify_scope.unresolved_length_deliveries(
+                    db, [row["delivery_id"] for row in rows], proof_state=proof_state)
+                for row in rows:
+                    if row["delivery_id"] not in retained:
+                        remaining -= 1
+                        yield row
+
+        for r in candidates(
+                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,r.updated_at,c.kind FROM notification_renders r
                    LEFT JOIN notification_cards c ON c.card_id=r.card_id
                    WHERE r.spec_json IS NOT NULL
                      AND CASE WHEN json_valid(r.spec_json) THEN NOT (
@@ -2535,7 +2557,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                                 WHERE h.released_at IS NULL
                                   AND (h.delivery_id=r.delivery_id
                                        OR h.card_id=r.card_id))))
-                   ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
+                   """):
             witness = (_signal_route_witness(r["spec_json"]) if r["kind"] == "signal"
                        and r["op"] == "create" and r["state"] == "delivered" else None)
             if witness is None and r['op'] == 'update':
@@ -2559,8 +2581,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         removed = 0
         root = notify_spool.data_root(ledger)
         dirs = notify_spool.notify_dirs(root)
-        for r in db.execute(
-                "SELECT delivery_id,transport FROM notification_renders r "
+        for r in candidates(
+                "SELECT delivery_id,transport,updated_at FROM notification_renders r "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "AND spec_published=1 AND parts_state!='pending' "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
@@ -2569,7 +2591,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 "WHERE p.delivery_id=r.delivery_id AND r.transport='slack' "
                 "AND p.state='unknown' AND (p.kind='file_group' OR (p.kind='attachment_part' "
                 "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')))) "
-                "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
+                ):
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             try:
