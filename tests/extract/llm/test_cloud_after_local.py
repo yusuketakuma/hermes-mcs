@@ -5,8 +5,13 @@ import time
 
 import pytest
 
+import cloud_inference
 import cloud_policy
 import extract_llm as worker
+import mcs_util
+import semantic_candidate
+import semantic_policy
+from candidate_testkit import approved_config
 from extract_testkit import _message
 from test_anthropic_runtime import AnthropicClient, _current_artifacts, _use_real_cloud_accounting, routed
 
@@ -342,6 +347,61 @@ def test_projection_added_mid_race_keeps_required_cloud_pass(local_then_cloud, m
     financial, count = _financial_rows(ledger), len(cloud_calls)
     assert _cloud_pass(ledger)['done'] == 0
     assert _financial_rows(ledger) == financial and len(cloud_calls) == count
+
+
+def _worker_cloud_pass(ledger, cfg, carry=None):
+    """The resident backlog worker's exact cloud call (mcs/llm/cloud_backlog.py)."""
+    return worker.run_pending(ledger, limit=1, budget_s=900, per_write_lock=True,
+                              workers=1, background=True, cloud_only=True,
+                              prioritize_patients=True,
+                              admitted_ids=worker.cloud_backlog_admissions(ledger, cfg),
+                              carry=carry or [])
+
+
+def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_cloud,
+                                                                    tmp_path, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    v4_id = _seal_canonical_v4(ledger)
+    sealed_v4 = _v4_row(ledger, v4_id)
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', None)
+    cfg = {**cfg, 'semantic': {'mode': 'shadow',
+        'fact_source': 'canonical', 'project_ids': [1]}}
+    cfg['cloud_llm']['mode'] = 'on'   # candidate_fingerprint covers cloud_llm
+    cfg = approved_config(cfg)
+    assert not semantic_policy.semantic_config(cfg, key_present=True)[1]
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
+    # The generic legacy admission set is closed under canonical — that
+    # closure used to leave the required cloud pass with zero targets.
+    assert worker.legacy_admissions(ledger, cfg) == set()
+    assert worker.cloud_backlog_admissions(ledger, cfg) == {1}
+    report = _worker_cloud_pass(ledger, cfg)
+    assert report['done'] == 1 and len(cloud_calls) == 1
+    assert _v4_row(ledger, v4_id) == sealed_v4
+    financial, count = _financial_rows(ledger), len(cloud_calls)
+    assert _worker_cloud_pass(ledger, cfg, carry=report.get('carry'))['done'] == 0
+    assert _financial_rows(ledger) == financial and len(cloud_calls) == count
+
+
+@pytest.mark.parametrize('semantic', ["typo", {"fact_source": "canonical"}, {"fact_source": "legacy"}])
+def test_semantic_gate_failures_never_smuggle_sealed_source_into_worker(local_then_cloud,
+                                                                       semantic, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    _seal_canonical_v4(ledger)
+    cfg = {**cfg, 'semantic': semantic}
+    cfg['cloud_llm']['mode'] = 'on'
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
+    admitted = worker.cloud_backlog_admissions(ledger, cfg)
+    if semantic == {"fact_source": "legacy"}:
+        assert admitted is None   # noncanonical keeps the unrestricted lane
+        return
+    assert admitted == set()      # typo and gate-less canonical stay fail-closed
+    report = _worker_cloud_pass(ledger, cfg)
+    assert report['done'] == 0 and not cloud_calls
 
 
 def test_hold_still_vetoes_cloud_pass_on_a_sealed_source(local_then_cloud):
