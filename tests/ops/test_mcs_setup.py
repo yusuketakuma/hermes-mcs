@@ -10,6 +10,7 @@ import mcs_config
 import scheduled_jobs
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2555,16 +2556,17 @@ def test_gateway_lifecycle_refused_in_test_sandbox(monkeypatch, tmp_path, verb):
     """Under MCS_TEST_SANDBOX a gateway lifecycle call never runs a real hermes executable: it
     writes the LaunchAgent under the real account home whatever HOME/HERMES_HOME a test set."""
     monkeypatch.setenv("MCS_TEST_SANDBOX", "1")
-    marker = tmp_path / "spawned"
-    exe = tmp_path / "hermes"
-    exe.write_text(f"#!/bin/sh\ntouch {marker}\n")
-    exe.chmod(0o755)
-    r = service_management.hermes_cli(str(exe), '', 'gateway', verb)
-    assert r is not None and r.returncode == 126 and "MCS_TEST_SANDBOX" in r.stderr
-    assert not marker.exists()
-    # read-only verbs still run
-    assert service_management.hermes_cli(str(exe), '', 'gateway', 'status').returncode == 0
-    assert marker.exists()
+    with tempfile.TemporaryDirectory(prefix='mcs-synthetic-gateway-') as directory:
+        marker = Path(directory) / "spawned"
+        exe = Path(directory) / "hermes"
+        exe.write_text(f"#!/bin/sh\ntouch {marker}\n")
+        exe.chmod(0o755)
+        r = service_management.hermes_cli(str(exe), '', 'gateway', verb)
+        assert r is not None and r.returncode == 126 and "MCS_TEST_SANDBOX" in r.stderr
+        assert not marker.exists()
+        # read-only verbs still run
+        assert service_management.hermes_cli(str(exe), '', 'gateway', 'status').returncode == 0
+        assert marker.exists()
 
 
 def test_alerts_need_an_interactive_transport():
