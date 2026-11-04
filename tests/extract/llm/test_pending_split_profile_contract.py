@@ -1,5 +1,5 @@
-"""Persisted raw splits carry no provider metadata: a profile-effort change leaves
-them unverifiable instead of silently rebound (fully synthetic)."""
+"""Persisted raw splits carry no provider metadata: the resumed frame must match
+the saved context exactly through the finite supported contracts (fully synthetic)."""
 import pytest
 
 import cloud_inference
@@ -32,37 +32,37 @@ def _frozen(ledger):
 
 
 def _persist_split(ledger, row, frame, contract):
-    # Raw split form written by the real writer: split_size but no provider_leaf.
+    # Raw split form written by the real writer: strict {} body, a small
+    # split_size below the chunk size, and no provider contract evidence.
     bound = {**row, '_provider_contract': contract, '_frame': frame}
-    return ledger.artifact_add('extract_llm_chunk', '{"symptoms":[]}',
+    return ledger.artifact_add('extract_llm_chunk', '{}',
         project_id=1, message_id=1, model=openai_client.MODEL,
         meta={VERSION_KEY: CURRENT_VERSION, 'hash': row['content_hash'],
               'ver': worker.EXTRACT_VERSION, 'chunk': 0,
               'context': worker._chunk_context(bound, frame['text'], checkpoint=True),
-              'chunk_size': worker._CHUNK_SIZE, 'split_size': worker._CHUNK_SIZE,
+              'chunk_size': worker._CHUNK_SIZE, 'split_size': worker._CHUNK_SIZE // 3,
               'piece_sha256': 'a' * 64, 'actual_model': openai_client.MODEL,
               'plan_version': worker.PLAN_VERSION})
 
 
-def test_same_contract_split_resumes(routed):
+@pytest.mark.parametrize('resume_effort', ['low', 'medium'],
+                         ids=['same-contract', 'effort-changed'])
+def test_plain_split_resumes_under_current_contract(routed, resume_effort):
     ledger, *_ = routed
     row, frame = _frozen(ledger)
     _persist_split(ledger, row, frame, _contract('low'))
     picked = worker._pending_context_frame(
-        ledger.db, {**row, '_provider_contract': _contract('low')},
+        ledger.db, {**row, '_provider_contract': _contract(resume_effort)},
         attempt=ATTEMPT, enabled=False)
     assert picked is not None and picked['artifact_id'] == frame['artifact_id']
 
 
-@pytest.mark.parametrize('resume', [
-    pytest.param(_contract('medium'), id='effort-changed'),
-    pytest.param({'backend': 'openai', 'model': openai_client.MODEL, 'prompt': '0' * 16},
-                 id='unproven-contract')])
-def test_changed_contract_leaves_split_unverifiable(routed, resume):
+def test_unknown_saved_contract_evidence_stays_held(routed):
     ledger, *_ = routed
     row, frame = _frozen(ledger)
-    _persist_split(ledger, row, frame, _contract('low'))
+    _persist_split(ledger, row, frame,
+                   {'backend': 'openai', 'model': openai_client.MODEL, 'prompt': '0' * 16})
     with pytest.raises(ValueError, match='pending_context_unverifiable'):
         worker._pending_context_frame(
-            ledger.db, {**row, '_provider_contract': resume},
+            ledger.db, {**row, '_provider_contract': _contract('low')},
             attempt=ATTEMPT, enabled=False)
