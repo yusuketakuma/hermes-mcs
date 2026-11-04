@@ -3256,6 +3256,13 @@ def _scan_check(db):
 
 class _ScanCursor(sqlite3.Cursor):
     @property
+    def description(self):
+        active = getattr(self.connection, 'read_witness', None)
+        if active is not None and getattr(self, '_read_owner', None) is not active:
+            active.fail()
+        return sqlite3.Cursor.description.__get__(self)
+
+    @property
     def row_factory(self):
         return sqlite3.Cursor.row_factory.__get__(self)
 
@@ -3265,12 +3272,18 @@ class _ScanCursor(sqlite3.Cursor):
         sqlite3.Cursor.row_factory.__set__(self, value)
 
     def execute(self, sql, parameters=()):
-        _scan_check(self.connection)
+        observed = getattr(self.connection, 'read_witness', None)
+        try:
+            _scan_check(self.connection)
+        except BaseException:
+            if observed is not None:
+                observed.fail()
+            raise
         previous = getattr(self, '_read_handle', None)
         if previous is not None:
             previous.close()
         self._read_handle = None
-        observed = getattr(self.connection, 'read_witness', None)
+        self._read_owner = observed
         if observed is not None:
             from patient_readiness_witness import freeze_parameters
             try:
@@ -3287,10 +3300,26 @@ class _ScanCursor(sqlite3.Cursor):
             self._read_handle = observed.start(sql, parameters, self.description)
         return result
 
+    def executemany(self, *args, **kwargs):
+        self.connection._uncaptured_read()
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        self.connection._uncaptured_read()
+        return super().executescript(*args, **kwargs)
+
     def fetchone(self):
-        _scan_check(self.connection)
-        row = super().fetchone()
-        _scan_check(self.connection)
+        active = getattr(self.connection, 'read_witness', None)
+        if active is not None and getattr(self, '_read_owner', None) is not active:
+            active.fail()
+        try:
+            _scan_check(self.connection)
+            row = super().fetchone()
+            _scan_check(self.connection)
+        except BaseException:
+            if active is not None:
+                active.fail()
+            raise
         observed = getattr(self, '_read_handle', None)
         if observed is not None:
             if row is None:
@@ -3311,11 +3340,19 @@ class _ScanCursor(sqlite3.Cursor):
     def fetchall(self):
         return list(self)
 
-    def fetchmany(self, size=None):
-        _scan_check(self.connection)
-        size = self.arraysize if size is None else size
-        rows = super().fetchmany(size)
-        _scan_check(self.connection)
+    def fetchmany(self, *args, **kwargs):
+        active = getattr(self.connection, 'read_witness', None)
+        if active is not None and getattr(self, '_read_owner', None) is not active:
+            active.fail()
+        try:
+            _scan_check(self.connection)
+            rows = super().fetchmany(*args, **kwargs)
+            size = args[0] if args else kwargs.get('size', self.arraysize)
+            _scan_check(self.connection)
+        except BaseException:
+            if active is not None:
+                active.fail()
+            raise
         observed = getattr(self, '_read_handle', None)
         if observed is not None:
             if type(size) is not int or size <= 0:
@@ -3328,11 +3365,18 @@ class _ScanCursor(sqlite3.Cursor):
         return rows
 
     def close(self):
+        active = getattr(self.connection, 'read_witness', None)
         observed = getattr(self, '_read_handle', None)
         if observed is not None:
             observed.close()
             self._read_handle = None
-        return super().close()
+        self._read_owner = None
+        try:
+            return super().close()
+        except BaseException:
+            if active is not None:
+                active.fail()
+            raise
 
     def __del__(self):
         observed = getattr(self, '_read_handle', None)
@@ -3396,6 +3440,14 @@ class _ScanConnection(sqlite3.Connection):
     def create_collation(self, *args, **kwargs):
         self._uncaptured_read()
         return super().create_collation(*args, **kwargs)
+
+    def set_progress_handler(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().set_progress_handler(*args, **kwargs)
+
+    def set_trace_callback(self, *args, **kwargs):
+        self._uncaptured_read()
+        return super().set_trace_callback(*args, **kwargs)
 
     def set_authorizer(self, callback):
         self._uncaptured_read()
