@@ -1,115 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="1000" height="440" viewBox="0 0 1000 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-overview-title flow-overview-desc" id="flow-overview-root">
-        <title id="flow-overview-title">収集・保存・整理・通知の流れ</title>
-        <desc id="flow-overview-desc">MCSの連絡をこのMacで収集・保存・抽出し、Slack・Discord・LINE WORKSへカードとして通知し、職員の操作を記録する流れ。</desc>
-        <defs>
-      <style>
-      #flow-overview-root { --color-paper: #f6f4ef;
-      --color-ink: #202124;
-      --color-muted: #66716f;
-      --color-accent: #087f5b;
-      --font-sans: 'Hiragino Sans', 'Noto Sans CJK JP', 'Yu Gothic', sans-serif;
-      --font-mono: Menlo, 'SF Mono', ui-monospace, monospace; }
-      #flow-overview-root { font-family: var(--font-sans); color: var(--color-ink); }
-      #flow-overview-root .diagram-container { width: 100%; overflow-x: auto; }
-      #flow-overview-root .diagram-container { overflow-x: visible; }</style>
-          <marker id="flow-overview-fo-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#66716f"/></marker>
-          <marker id="flow-overview-fo-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#087f5b"/></marker>
-          <marker id="flow-overview-fo-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#1264a3"/></marker>
-        </defs>
-        <rect width="100%" height="100%" fill="#f6f4ef"/>
-
-        <!-- zone: this Mac -->
-        <rect x="204" y="68" width="572" height="284" rx="8" fill="#202124" fill-opacity="0.02" stroke="#202124" stroke-opacity="0.14" stroke-width="0.8"/>
-        <rect x="220" y="72" width="76" height="16" rx="2" fill="#f6f4ef"/>
-        <text x="258" y="84" fill="#66716f" font-size="12" font-weight="500" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">このMac</text>
-
-        <!-- arrows first -->
-        <line x1="180" y1="144" x2="226" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
-        <line x1="384" y1="144" x2="414" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
-        <line x1="572" y1="144" x2="602" y2="144" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
-        <line x1="494" y1="180" x2="494" y2="234" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
-        <path d="M 572,272 H 674 Q 682,272 682,264 V 182" fill="none" stroke="#66716f" stroke-width="1.2" marker-end="url(#flow-overview-fo-arrow)"/>
-        <line x1="760" y1="132" x2="818" y2="132" stroke="#087f5b" stroke-width="1.4" marker-end="url(#flow-overview-fo-arrow-accent)"/>
-        <line x1="820" y1="156" x2="762" y2="156" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow)"/>
-        <line x1="572" y1="288" x2="818" y2="288" stroke="#1264a3" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow-link)"/>
-        <path d="M 452,180 V 200 Q 452,208 444,208 H 314 Q 306,208 306,216 V 234" fill="none" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#flow-overview-fo-arrow)"/>
-
-        <!-- arrow labels (masked, gap from strokes) -->
-        <rect x="692" y="212" width="80" height="16" fill="#f1efeb"/>
-        <text x="732" y="224" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">要約・緊急度</text>
-        <rect x="768" y="104" width="44" height="16" fill="#f6f4ef"/>
-        <text x="790" y="116" fill="#087f5b" font-size="12" font-weight="500" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">カード</text>
-        <rect x="772" y="168" width="40" height="16" fill="#f6f4ef"/>
-        <text x="792" y="180" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">操作</text>
-        <rect x="708" y="296" width="40" height="16" fill="#f1efeb"/>
-        <text x="728" y="308" fill="#1264a3" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">任意</text>
-        <rect x="340" y="184" width="80" height="16" fill="#f1efeb"/>
-        <text x="380" y="196" fill="#66716f" font-size="12" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" text-anchor="middle">エクスポート</text>
-
-        <!-- nodes -->
-        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">
-          <!-- MCS (input) -->
-          <rect x="24" y="108" width="156" height="72" rx="6" fill="#f6f4ef"/>
-          <rect x="24" y="108" width="156" height="72" rx="6" fill="#edf0ee" stroke="#66716f" stroke-width="1"/>
-          <text x="36" y="132" fill="#202124" font-size="14" font-weight="600">MCS</text>
-          <text x="36" y="152" fill="#66716f" font-size="12">医療・介護チャット</text>
-          <text x="36" y="168" fill="#66716f" font-size="12">10分ごとに未読を取得</text>
-
-          <!-- collect -->
-          <rect x="228" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
-          <text x="240" y="132" fill="#202124" font-size="14" font-weight="600">収集</text>
-          <text x="240" y="152" fill="#66716f" font-size="12">投稿・返信・添付</text>
-          <text x="240" y="168" fill="#66716f" font-size="12">保存後に既読化</text>
-
-          <!-- ledger (store) -->
-          <rect x="416" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
-          <text x="428" y="132" fill="#202124" font-size="14" font-weight="600">台帳</text>
-          <text x="428" y="152" fill="#66716f" font-size="12">記録・検索・タスク</text>
-          <text x="428" y="168" fill="#66716f" font-size="11" font-family="Menlo,'SF Mono',monospace">SQLite · FTS5</text>
-
-          <!-- notify (focal) -->
-          <rect x="604" y="108" width="156" height="72" rx="6" fill="#f6f4ef"/>
-          <rect x="604" y="108" width="156" height="72" rx="6" fill="#087f5b" fill-opacity="0.08" stroke="#087f5b" stroke-width="1.4"/>
-          <text x="616" y="132" fill="#202124" font-size="14" font-weight="600">通知</text>
-          <text x="616" y="152" fill="#66716f" font-size="12">カード・スレッド</text>
-          <text x="616" y="168" fill="#66716f" font-size="12">確認・担当・タスク</text>
-
-          <!-- extract (local LLM) -->
-          <rect x="416" y="236" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
-          <text x="428" y="260" fill="#202124" font-size="14" font-weight="600">抽出</text>
-          <text x="428" y="280" fill="#66716f" font-size="12">ローカルLLM</text>
-          <text x="428" y="296" fill="#66716f" font-size="12">要約・薬剤・緊急度</text>
-
-          <!-- knowledge export (optional) -->
-          <rect x="228" y="236" width="156" height="72" rx="6" fill="#f6f4ef" stroke="#66716f" stroke-width="1" stroke-dasharray="4,3"/>
-          <text x="240" y="260" fill="#202124" font-size="14" font-weight="600">知識ストア出力</text>
-          <text x="240" y="280" fill="#66716f" font-size="12">Markdown</text>
-          <text x="240" y="296" fill="#66716f" font-size="12">明示的に実行</text>
-
-          <!-- chat -->
-          <rect x="820" y="108" width="156" height="72" rx="6" fill="#ffffff" stroke="#202124" stroke-width="1"/>
-          <text x="832" y="132" fill="#202124" font-size="14" font-weight="600">チャット</text>
-          <text x="832" y="152" fill="#66716f" font-size="12">Slack（推奨）</text>
-          <text x="832" y="168" fill="#66716f" font-size="12">Discord・LINE WORKS</text>
-
-          <!-- external audit API (optional) -->
-          <rect x="820" y="236" width="156" height="72" rx="6" fill="#f6f4ef" stroke="#1264a3" stroke-width="1" stroke-dasharray="4,3"/>
-          <text x="832" y="260" fill="#202124" font-size="14" font-weight="600">外部の監査API</text>
-          <text x="832" y="280" fill="#66716f" font-size="12">意味チェック</text>
-          <text x="832" y="296" fill="#66716f" font-size="12">既定OFF</text>
-        </g>
-
-        <!-- legend strip -->
-        <line x1="24" y1="372" x2="976" y2="372" stroke="#202124" stroke-opacity="0.12" stroke-width="0.8"/>
-        <g font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif" font-size="12" fill="#66716f">
-          <line x1="24" y1="404" x2="56" y2="404" stroke="#66716f" stroke-width="1.2"/>
-          <text x="64" y="408">主な流れ</text>
-          <line x1="160" y1="404" x2="192" y2="404" stroke="#66716f" stroke-width="1" stroke-dasharray="5,4"/>
-          <text x="200" y="408">戻り・明示的な操作</text>
-          <line x1="352" y1="404" x2="384" y2="404" stroke="#1264a3" stroke-width="1" stroke-dasharray="5,4"/>
-          <text x="392" y="408">外部送信（任意・既定OFF）</text>
-          <rect x="592" y="396" width="24" height="16" rx="3" fill="#087f5b" fill-opacity="0.08" stroke="#087f5b" stroke-width="1.2"/>
-          <text x="624" y="408">職員が見る通知</text>
-        </g>
-      </svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="1152" viewBox="0 0 390 1152" role="img" aria-labelledby="flow-overview-title flow-overview-desc" id="flow-overview-root"><title id="flow-overview-title">MCSの収集・ローカル解析・クラウド解析</title><desc id="flow-overview-desc">原文を保存し、条件付きの背景入力からローカル常駐と設定時の独立クラウドworkerで解析し、根拠・品質・現在性を照合して保存する。対象の保存記録が条件を満たすと患者コンテキストを更新し、その完成を全通知の前提にせず通知・検索・本人記録まとめへ使う概念図。</desc><defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #flow-overview-root { font-family: "Hiragino Sans",sans-serif; }
+      #flow-overview-root .diagram-container { overflow-x:auto }</style><marker id="flow-overview-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#66716f"/></marker></defs><rect width="390" height="1152" fill="#f6f4ef"/>
+<text x="20" y="34" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="20" fill="#202124" font-weight="600">収集から、解析・保存・活用まで</text>
+<text x="20" y="59" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">概念図 · 完全合成 / 実データなし</text>
+<path d="M195 172 V194" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M195 320 V340 Q195 348 187 348 H107 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M195 320 V340 Q195 348 203 348 H283 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M107 588 V612 Q107 620 115 620 H171 V642" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M283 588 V612 Q283 620 275 620 H219 V642" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M171 814 V838 Q171 846 163 846 H107 V868" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M219 814 V838 Q219 846 227 846 H283 V868" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<rect x="20" y="84" width="350" height="88" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="111" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">1  MCS収集 → 原文保存</text>
+<text x="32" y="137" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得した投稿・添付の情報を</text>
+<text x="32" y="160" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">このMacのSQLiteへ保存</text>
+<rect x="20" y="196" width="350" height="124" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="223" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">2  利用できる背景を入力へ</text>
+<text x="32" y="249" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定時、スレッド履歴・患者背景を利用</text>
+<text x="32" y="272" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得範囲・鮮度などの条件を確認</text>
+<text x="32" y="295" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">未取得の情報を、取得済みとして扱わない</text>
+<rect x="20" y="372" width="174" height="216" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">3  ローカル常駐</text>
+<text x="32" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">新着を優先して解析</text>
+<text x="32" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">このMacのLLMを利用</text>
+<text x="32" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">原文から情報を抽出</text>
+<text x="32" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">履歴も順次処理</text>
+<rect x="204" y="372" width="166" height="216" rx="8" fill="#e2efe8" stroke="#087f5b"/>
+<text x="216" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">4  クラウド</text>
+<text x="216" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定時の独立worker</text>
+<text x="216" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">Anthropic / OpenAI</text>
+<text x="216" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">履歴・患者背景を解析</text>
+<text x="216" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">予算・対象を確認</text>
+<text x="216" y="517" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">送信前の条件を確認</text>
+<rect x="20" y="644" width="350" height="168" rx="8" fill="#e2efe8" stroke="#087f5b"/>
+<text x="32" y="671" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">5  照合して保存・再開</text>
+<text x="32" y="697" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">推論エンジン v1.0・原文根拠と照合</text>
+<text x="32" y="720" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">品質・保存対象の現在性を確認</text>
+<text x="32" y="743" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">部分結果と送信の証拠を保持して保存再開</text>
+<text x="32" y="766" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">結果不明をローカルへ無条件に再送しない</text>
+<rect x="20" y="868" width="174" height="172" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">6  患者背景を更新</text>
+<text x="32" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">対象の保存記録が</text>
+<text x="32" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">現行世代・必要品質を</text>
+<text x="32" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">満たすと更新</text>
+<text x="32" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">次の解析への利用も</text>
+<text x="32" y="1013" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定・鮮度条件に従う</text>
+<rect x="204" y="868" width="166" height="172" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="216" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">7  通知・活用</text>
+<text x="216" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">通知 / 検索</text>
+<text x="216" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">本人記録まとめ</text>
+<text x="216" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">患者背景の完成を</text>
+<text x="216" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">全通知の前提に</text>
+<text x="216" y="1013" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">しない</text>
+<text x="20" y="1076" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="13" fill="#66716f">実線：保存した情報の流れ</text>
+<text x="20" y="1101" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">処理完了と、必要な品質を満たすことは別に確認。</text>
+<text x="20" y="1126" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">クラウドの利用先・範囲は設定と送信条件に従う。</text>
+</svg>
