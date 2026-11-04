@@ -218,6 +218,13 @@ def _writer_current(*, full: bool = False) -> bool:
     return current and (not full or writer_lock.updater_state() == _WRITER_STATE)
 
 
+def _unsealed_source_pred(r) -> str:
+    """A sealed (v4-adopted) source still admits a required contract-bound
+    cloud write; every other caller keeps the sealed-source fence."""
+    return ("1=1" if isinstance(r, dict) and r.get("_required_cloud_contract")
+            else f"{current_v4_id()} IS NULL")
+
+
 def _source_writable(db, r) -> bool:
     if isinstance(r, dict) and r.get('_source_binding') is not None:
         from inference_dependency_loss import source_binding
@@ -226,7 +233,7 @@ def _source_writable(db, r) -> bool:
     return _writer_current() and db.execute(
         "SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
         "AND m.content_hash=? AND (m.body_state IS NULL OR m.body_state='full') "
-        "AND length(m.body_text)>0 " + f"AND {current_v4_id()} IS NULL",
+        "AND length(m.body_text)>0 " + f"AND {_unsealed_source_pred(r)}",
         (r["message_id"], r["project_id"], r["content_hash"])).fetchone() is not None
 
 
@@ -2278,7 +2285,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
     if any(key not in r.keys() for key in ("project_id", "parent_id", "posted_at", "posted_at_ts")):
         source = ledger.db.execute(
             "SELECT * FROM messages m WHERE message_id=? AND content_hash=? "
-            f"AND {current_v4_id()} IS NULL", (r["message_id"], r["content_hash"])).fetchone()
+            f"AND {_unsealed_source_pred(r)}", (r["message_id"], r["content_hash"])).fetchone()
         if source is None:
             return _commit_rejected(diagnostic_row, "source_or_owner")                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
@@ -2313,7 +2320,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
     source = ledger.db.execute(
         "SELECT m.* FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
         "AND (body_state IS NULL OR body_state='full') "
-        f"AND {current_v4_id()} IS NULL",
+        f"AND {_unsealed_source_pred(r)}",
         (r["message_id"], r["content_hash"], r["project_id"])).fetchone()
     if source is None:
         return _commit_rejected(diagnostic_row, "source_or_owner")
@@ -2459,7 +2466,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
             "WHERE message_id=? AND content_hash=? AND project_id=? "
             "AND (body_state IS NULL OR body_state='full') "
-            f"AND {current_v4_id()} IS NULL",
+            f"AND {_unsealed_source_pred(r)}",
             (KIND, content, actual_model, meta_json, created_at,
              r["message_id"], r["content_hash"], r["project_id"]))
         if not cur.rowcount:
@@ -5027,7 +5034,9 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
     priority = patient_priority.activity_order_sql('m.project_id') + ', ' if prioritize_patients else ''
     pending = pending_pred(db)
     if cloud_followup:
-        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND {current_v4_id()} IS NULL AND EXISTS ("
+        # A sealed (v4-adopted) source still needs its required cloud pass:
+        # the sealed-source fence lives on the write side, not on selection.
+        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND EXISTS ("
                    f"SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id "
                    + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION}))")
         pending = f"({pending}) AND NOT EXISTS ({_hold_sql()})"
@@ -5692,7 +5701,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and qc is None and not r["thin_src"] \
+        if prefilter and not cloud_only and qc is None and not r["thin_src"] \
                 and not r["human_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable
