@@ -270,3 +270,28 @@ def test_completed_cloud_prefix_does_not_consume_followup_selection_limit(local_
     rows = _current_artifacts(ledger)
     assert len(rows) == 2
     assert all(json.loads(row['meta'])['provider_provenance']['providers'] == ['anthropic'] for row in rows)
+
+
+
+def test_hold_created_after_selection_prevents_cloud_claim(local_then_cloud, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    local, _meta = _current(ledger)
+    cfg['cloud_llm']['mode'] = 'on'
+    original = worker._claim
+    reached = []
+    before = _financial_rows(ledger)
+    def concurrent_hold(db, row, *args, **kwargs):
+        if not reached:
+            with db.db:
+                worker._record_hold_tx(db, row, local, 'protected_loss')
+            reached.append(row['message_id'])
+        return original(db, row, *args, **kwargs)
+    monkeypatch.setattr(worker, '_claim', concurrent_hold)
+    result = _cloud_pass(ledger)
+    assert reached == [1] and result['done'] == 0
+    assert not cloud_calls and _financial_rows(ledger) == before
+    assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
+    current, _meta = _current(ledger)
+    assert current['artifact_id'] == local['artifact_id']
+    assert len(ledger.artifacts(worker.UPGRADE_KIND)) == 1
