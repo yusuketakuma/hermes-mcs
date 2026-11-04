@@ -105,6 +105,8 @@ import semantic_facts
 import extraction_context
 import patient_priority
 import patient_context_scan
+import patient_context_schedule
+import patient_readiness_witness
 import extraction_medications
 import drug_map
 import drug_mentions
@@ -197,7 +199,9 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", __file__),
 _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__file__,
                              "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__,
                              "patient_priority": patient_priority.__file__,
-                             "patient_context_scan": patient_context_scan.__file__})
+                             "patient_context_scan": patient_context_scan.__file__,
+                             "patient_context_schedule": patient_context_schedule.__file__,
+                             "patient_readiness_witness": patient_readiness_witness.__file__})
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in _LOADED_SOURCE_PATHS.items()}
