@@ -434,14 +434,17 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     notify_flush.flush(led)
     asyncio.run(_late_slack_cycle(world, led))
     notify_flush.flush(led)
-    assert all(_late_followup_state(led, eid) == "accepted" for eid in events), {
+    assert all(_late_followup_state(led, eid) == "accepted" for eid in events), json.dumps({
         "outbox": [tuple(row) for row in led.db.execute(
             "SELECT event_id,state,route,next_try,progress FROM notify_outbox")],
         "intents": [tuple(row) for row in led.db.execute(
             "SELECT event_id,state,delivery_id FROM notification_intent_cards")],
+        "renders": [tuple(row) for row in led.db.execute(
+            "SELECT delivery_id,render_rev,state,spec_published FROM notification_renders")],
         "parts": [tuple(row) for row in led.db.execute(
-            "SELECT kind,state,remote_id FROM notification_render_parts")],
-    }
+            "SELECT delivery_id,part_id,kind,state,remote_id,error_code "
+            "FROM notification_render_parts")],
+    }, ensure_ascii=False)
     expected = {"synthetic.png": blob, "synthetic-second.pdf": second_blob}
     assert len(world.client.upload_calls) == 2
     assert {call["filename"]: call["file"] for call in world.client.upload_calls} == expected
