@@ -36,6 +36,13 @@ def _bookmark(value):
     return {**value, 'activity_after': None if activity is None else list(activity)}
 
 
+def advance_turn(patient_scan):
+    """Reserve only the next turn before a cancellable candidate query."""
+    state = _bookmark(patient_scan)
+    state['turn'] = (state['turn'] + 1) % 4
+    return state
+
+
 def plan(db, patient_scan):
     """Read one patient and return the next bookmark for the caller's CAS."""
     state = _bookmark(patient_scan)

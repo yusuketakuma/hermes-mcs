@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import local_llm
 import initial_import_state
@@ -23,6 +24,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred, r
 from writer_lock import acquire_run_lock
 import patient_context_plan as context_plan
 import patient_context_scan as context_scan
+import patient_context_schedule as context_schedule
 import mcs_queries as context_queries
 import patient_context_projection as context_state
 
@@ -222,9 +224,13 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
         db.execute("BEGIN")
     try:
         scope = context_queries.patient_context_scope(db, pid)
-        sources = list(context_queries.patient_context_sources(db, pid, hydrate=hydrate)) if scope else []
+        sources = []
+        if scope:
+            for source in context_queries.patient_context_sources(db, pid, hydrate=hydrate):
+                _scan_check(db)
+                sources.append(source)
         signed = [(context_plan.source_key(s), context_plan.source_signature(s), bool(s.get("historical"))) for s in sources
-                  if cutoff is None or (s.get("first_seen") or 0) <= cutoff]
+                  if _scan_check(db) is None and (cutoff is None or (s.get("first_seen") or 0) <= cutoff)]
         contract = _contract(cfg, pid) if contract is None else contract
         dependencies = dependency_loss.read(db, pid)
         acquisition = initial_import_state.acquisition_status(db, pid)
@@ -2755,7 +2761,8 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
     stored = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
-    scans = [stored.get(context_plan.source_key(source), {}) for source in snapshot["sources"] if context_plan.source_usable(source)]
+    scans = [stored.get(context_plan.source_key(source), {}) for source in snapshot["sources"]
+             if _scan_check(db) is None and context_plan.source_usable(source)]
     recheck_available = False
     quality_required = bool(snapshot["contract"].get("provider") or _has_prior_quality_failure(db, pid))
     if (not estimate and quality_required
@@ -3230,6 +3237,154 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     return outcome
 
 
+class _ScanInterrupted(Deferred):
+    """The candidate read did not establish complete coverage."""
+
+
+def _scan_check(db):
+    until = getattr(db, 'scan_until', None)
+    if until is not None and time.monotonic() >= until:
+        raise _ScanInterrupted('patient_context_scan_incomplete')
+
+
+class _ScanCursor(sqlite3.Cursor):
+    def fetchone(self):
+        _scan_check(self.connection)
+        row = super().fetchone()
+        _scan_check(self.connection)
+        return row
+
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
+
+    def fetchall(self):
+        return list(self)
+
+
+class _ScanConnection(sqlite3.Connection):
+    def execute(self, sql, parameters=()):
+        _scan_check(self)
+        return self.cursor(factory=_ScanCursor).execute(sql, parameters)
+
+
+@contextmanager
+def _candidate_reader(ledger, deadline):
+    """Own cancellation and a stable read snapshot without touching the writer."""
+    path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+    if not path:
+        raise _ScanInterrupted('patient_context_scan_unavailable')
+    before = os.stat(path)
+    with closing(sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True,
+                                timeout=0, factory=_ScanConnection)) as db:
+        after = os.stat(path)
+        identity = before.st_dev, before.st_ino
+        if identity != (after.st_dev, after.st_ino):
+            raise _ScanInterrupted('patient_context_scan_changed')
+        db.row_factory = sqlite3.Row
+        db.scan_until = deadline - COMMIT_MARGIN
+        db.set_progress_handler(lambda: int(time.monotonic() >= db.scan_until), 1000)
+        db.execute('BEGIN')
+        yield SimpleNamespace(db=db)
+        current = os.stat(path)
+        if identity != (current.st_dev, current.st_ino):
+            raise _ScanInterrupted('patient_context_scan_changed')
+
+
+def _advance_patient_scan(ledger, expected, bookmark, deadline, admit):
+    import extract_llm
+
+    timeout = ledger.db.execute('PRAGMA busy_timeout').fetchone()[0]
+    remaining_ms = max(0, int((deadline - COMMIT_MARGIN - time.monotonic()) * 1000))
+    ledger.db.execute(f'PRAGMA busy_timeout={min(timeout, remaining_ms)}')
+    try:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
+                or not extract_llm._writer_current(full=True)
+                or _latest(ledger.db, PROGRESS, 0) != expected):
+            ledger.db.rollback()
+            return None
+        content, meta = expected
+        content = {**content, 'patient_scan': bookmark}
+        _replace(ledger, PROGRESS, 0, content, meta)
+        if not extract_llm._writer_current(full=True):
+            ledger.db.rollback()
+            return None
+        ledger.db.commit()
+        return content, _artifact_meta(PROGRESS, meta, None)
+    except BaseException:
+        ledger.db.rollback()
+        raise
+
+    finally:
+        ledger.db.execute(f'PRAGMA busy_timeout={timeout}')
+
+
+def _scan_covered(db, seen):
+    return db.execute('SELECT 1 FROM patients WHERE project_id>0 AND project_id NOT IN '
+                      '(SELECT value FROM json_each(?)) ORDER BY project_id LIMIT 1',
+                      (json.dumps(sorted(seen)),)).fetchone() is None
+
+
+def _select_patient(ledger, cfg, now, deadline, admit, complete):
+    """Advance a bounded scan before evaluating each patient's current evidence."""
+    scanned, waiting, seen = 0, 0, set()
+    best, selected = {}, None
+    rotation = _latest(ledger.db, PROGRESS, 0)
+    covered = False
+    try:
+        with _candidate_reader(ledger, deadline) as reader:
+            for _ in range(8):
+                _scan_check(reader.db)
+                original = rotation[0].get('patient_scan')
+                reserved = context_schedule.advance_turn(original)
+                rotation = _advance_patient_scan(ledger, rotation, reserved, deadline, admit)
+                if rotation is None:
+                    raise _ScanInterrupted('patient_context_scan_changed')
+                # Expensive activity ordering must not consume the fair turn's chance.
+                reader.db.scan_until = min(deadline - COMMIT_MARGIN, time.monotonic() + 1.0)
+                try:
+                    plan = context_schedule.plan(reader.db, original)
+                finally:
+                    reader.db.scan_until = deadline - COMMIT_MARGIN
+                rotation = _advance_patient_scan(ledger, rotation, plan['next'], deadline, admit)
+                if rotation is None:
+                    raise _ScanInterrupted('patient_context_scan_changed')
+                pid = plan['project_id']
+                if pid is None or pid in seen:
+                    if _scan_covered(reader.db, seen):
+                        covered = True
+                        break
+                    continue
+                seen.add(pid)
+                scanned += 1
+                published = _published_version(reader.db, pid)
+                snapshot, progress, pending = _pending(reader.db, pid, cfg, now=now)
+                _scan_check(reader.db)
+                if _out_of_scope(snapshot):
+                    continue
+                ready = _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
+                                         allow_dependency_repair=True)
+                _scan_check(reader.db)
+                if not snapshot['dependencies']['complete']:
+                    pending['A'] = False
+                waiting += int(snapshot['unfinished'] or not ready)
+                if ready and any(pending.values()):
+                    selected = pid
+                    best = {lane: (snapshot, progress, published) for lane, due in pending.items() if due}
+                    break
+                if _scan_covered(reader.db, seen):
+                    covered = True
+                    break
+    except (sqlite3.Error, OSError, _ScanInterrupted):
+        best, selected, covered = {}, None, False
+    except ValueError as exc:
+        if exc.args != ('patient_scan_bookmark_invalid',) and exc.args != ('patient_scan_source_invalid',):
+            raise
+        best, selected, covered = {}, None, False
+    return best, selected, rotation, scanned, waiting, covered
+
+
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Keep one completed unit's existing save path resumable within its deadline."""
     import extract_llm
@@ -3247,68 +3402,46 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     if time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     started = time.monotonic()
-    scanned = 0
-    waiting = 0
-    best = {}
-    # Keep patient order across clock changes and new source revisions.
-    patients = ledger.db.execute(
-        "SELECT p.project_id FROM patients p LEFT JOIN artifacts a ON a.artifact_id=("
-        "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=p.project_id "
-        "AND message_id IS NULL AND " + current_meta_pred("meta", target=CURRENT_VERSION)
-        + " ORDER BY artifact_id DESC LIMIT 1) "
-        "ORDER BY COALESCE(p.is_archived,0)!=0, CASE WHEN json_valid(a.content) THEN "
-        "CASE WHEN json_type(a.content,'$.last_attempt_unit')='integer' "
-        "AND json_extract(a.content,'$.last_attempt_unit')>=0 "
-        "THEN json_extract(a.content,'$.last_attempt_unit') ELSE 0 END ELSE 0 END, "
-        "p.project_id", (PROGRESS,)).fetchall()
-    for row in patients:
-        if time.monotonic() + COMMIT_MARGIN >= deadline:
-            return {"status": "deferred", "done": 0}
-        pid = row[0]
-        scanned += 1
-        published_version = _published_version(ledger.db, pid)
-        snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
-        if _out_of_scope(snapshot):
-            continue
-        ready = _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                 allow_dependency_repair=True)
-        if not snapshot["dependencies"]["complete"]:
-            pending["A"] = False
-        waiting += int(snapshot["unfinished"] or not ready)
-        if not ready or not any(pending.values()):
-            continue
-        best = {lane: (snapshot, progress, published_version) for lane, due in pending.items() if due}
-        break
+    best, pid, scan_rotation, scanned, waiting, covered = _select_patient(
+        ledger, cfg, now, deadline, admit, complete)
     stats = {"scanned": scanned, "scan_ms": int((time.monotonic() - started) * 1000)}
-    rotation, _ = _latest(ledger.db, PROGRESS, 0)
+    if scan_rotation is None:
+        return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+    rotation = scan_rotation[0]
     lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
     if lane is None:
-        return {"status": "deferred" if waiting else "complete", "done": 0,
-                **({"reason": "patient_context_waiting"} if waiting else {}), **stats}
+        return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
+                **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
+                   if waiting or not covered else {}), **stats}
     snapshot, progress, frozen_ver = best[lane]
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
     ledger.db.execute("BEGIN IMMEDIATE")
     try:
-        if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
-                or not extract_llm._writer_current(full=True)
-                or _published_version(ledger.db, pid) != frozen_ver
-                or _latest(ledger.db, PROGRESS, 0)[0] != rotation
-                or _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] != snapshot["source_sig"]
-                or not _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                        allow_dependency_repair=lane != "A")):
+        with _candidate_reader(ledger, deadline) as reader:
+            current = (time.monotonic() + COMMIT_MARGIN < deadline and admit()
+                and extract_llm._writer_current(full=True)
+                and _published_version(ledger.db, pid) == frozen_ver
+                and _latest(ledger.db, PROGRESS, 0) == scan_rotation
+                and _snapshot(reader.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
+                and _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
+                                     allow_dependency_repair=lane != "A"))
+        if not current:
             ledger.db.rollback()
             return {"status": "source_changed", "done": 0, **stats}
         progress = {**progress, "last_attempt": now,
                     "last_attempt_unit": rotation.get("units", 0) + 1,
                     "night_id": night_id, "source_sig": snapshot["source_sig"]}
         _replace(ledger, PROGRESS, pid, progress, {})
-        _replace(ledger, PROGRESS, 0, {"cursor": next_cursor, "units": rotation.get("units", 0) + 1}, {})
+        _replace(ledger, PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
         if not extract_llm._writer_current(full=True):
             ledger.db.rollback()
             return {"status": "source_changed", "done": 0, **stats}
         ledger.db.commit()
         # Our scheduling write participates in the same publisher fence as later work.
         frozen_ver = _published_version(ledger.db, pid)
+    except (sqlite3.Error, OSError, _ScanInterrupted):
+        ledger.db.rollback()
+        return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
     except BaseException:
         ledger.db.rollback()
         raise
