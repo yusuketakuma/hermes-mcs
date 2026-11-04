@@ -3079,7 +3079,7 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None):
 def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False):
     """Require current post-level evidence before any context lane runs."""
     import extract_llm
-    import semantic_drain
+    import semantic_store
     import semantic_intake_hold
     import semantic_policy
     from mcs_queries import paused
@@ -3134,7 +3134,7 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             if policy["mode"] == "off":
                 if not _raw_extraction_current(db, row, cfg)[0]:
                     return False
-            elif semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg,
+            elif semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
                        **({'deadline': deadline} if policy['summary_mode'] == 'off'
                           and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped"):
                 return False

@@ -207,7 +207,7 @@ def test_all_stage_join_keeps_source_proofs_but_waits_for_rollup_witness(store, 
     import rollup
     _save(store)
     # This unit tests composition of owner proofs, not model generation.
-    monkeypatch.setattr(drain, '_reprocess_target_state', lambda *args, **kwargs: 'current')
+    monkeypatch.setattr(semantic_store, 'reprocess_target_state', lambda *args, **kwargs: 'current')
     monkeypatch.setattr(patient_context_refresh, 'inference_coverage', lambda *args: {
         VERSION_KEY: proof_version, 'complete': True, 'status': 'complete',
         'publication_eligible': False, 'sources': {key: 0 for key in
@@ -437,7 +437,7 @@ def test_other_scheduler_update_during_planning_is_never_overwritten(store, monk
         with sqlite3.connect(path) as other:
             other.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.other_owner',7) WHERE kind='semantic_sched'")
         return state
-    monkeypatch.setattr(drain, '_reprocess_target_state', concurrent)
+    monkeypatch.setattr(semantic_store, 'reprocess_target_state', concurrent)
     before = drain._sched_state(store)['inference_reprocess']
     result = _replay(store)
     assert result['status'] == 'source_changed' and result['processed'] == 0
@@ -829,7 +829,7 @@ def test_old_bookmark_waits_without_losing_results_or_reopening_jobs(store, monk
         store.db.execute("UPDATE fetch_jobs SET state='failed', attempts=6 WHERE kind='semantic'")
     store.artifact_add('patient_rollup', '{"synthetic":"preserve"}', project_id=1,
                        meta={VERSION_KEY: CURRENT_VERSION})
-    monkeypatch.setattr(drain, '_reprocess_target_state', lambda *args, **kwargs: 'current')
+    monkeypatch.setattr(semantic_store, 'reprocess_target_state', lambda *args, **kwargs: 'current')
     monkeypatch.setattr(patient_context_refresh, 'inference_coverage', lambda *args: {
         VERSION_KEY: CURRENT_VERSION, 'complete': True})
     monkeypatch.setattr(rollup, 'rebuild', lambda *args, **kwargs: pytest.fail('rollup must stay unchanged'))
@@ -964,7 +964,7 @@ def test_same_epoch_waiting_does_not_walk_or_reseed_blocked_inputs(store,monkeyp
     before = dict(_job(store))
     report = _waiting(store)
     assert report['phase']=='waiting' and report['coverage']['counts']=={wanted:1}
-    monkeypatch.setattr(drain,'_reprocess_target_state',lambda *a, **kw: pytest.fail('stable waiting rescanned a message'))
+    monkeypatch.setattr(semantic_store,'reprocess_target_state',lambda *a, **kw: pytest.fail('stable waiting rescanned a message'))
     monkeypatch.setattr(drain,'_reprocess_patient_state',lambda *a: pytest.fail('stable waiting rescanned a patient'))
     for _ in range(10):
         same = _replay(store,limit=1)
@@ -1014,7 +1014,7 @@ def test_only_a_new_source_or_meaning_generation_reopens_an_evaluated_input(stor
 def test_patient_dependency_taxonomy_is_not_a_runnable_message_or_current_proof(store,monkeypatch,terminal,repairable,wanted):
     import patient_context_refresh
     _save(store)
-    monkeypatch.setattr(drain,'_reprocess_target_state',lambda *a, **kw: 'current')
+    monkeypatch.setattr(semantic_store,'reprocess_target_state',lambda *a, **kw: 'current')
     monkeypatch.setattr(patient_context_refresh,'inference_coverage',lambda *a: {
         VERSION_KEY:CURRENT_VERSION,'complete':False,'publication_eligible':False,'status':'dependency_gap',
         'sources':dict.fromkeys(('total','eligible','scanned','audited','pending','held','failed','incomplete','excluded'),0),
@@ -1070,7 +1070,7 @@ def test_job_state_change_during_planning_is_fenced_without_losing_the_saved_cur
             assert runtime.transition(store,runtime.JobToken.from_row(_job(store)),'done')
             changed.append(True)
         return result
-    monkeypatch.setattr(drain,'_reprocess_target_state',concurrent)
+    monkeypatch.setattr(semantic_store,'reprocess_target_state',concurrent)
     report = _replay(store)
     assert report['status']=='source_changed' and report['processed']==0
     assert drain._sched_state(store)['inference_reprocess']==before
@@ -1269,13 +1269,13 @@ def test_old_waiting_classification_is_rechecked_without_reopening_existing_atte
         state = original_target(*args, **kwargs)
         return 'body_unavailable' if state == 'empty_body' else state
 
-    monkeypatch.setattr(drain, '_reprocess_target_state', old_target)
+    monkeypatch.setattr(semantic_store, 'reprocess_target_state', old_target)
     monkeypatch.setattr(drain, '_reprocess_proof_generation', lambda *args: original_generation(*args) + '-old')
     old = _waiting(store, limit=1)
     assert old['coverage']['counts'] == {'failed': 1, 'body_unavailable': 1}
     before_job = dict(_job(store))
     before_outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')]
-    monkeypatch.setattr(drain, '_reprocess_target_state', original_target)
+    monkeypatch.setattr(semantic_store, 'reprocess_target_state', original_target)
     monkeypatch.setattr(drain, '_reprocess_proof_generation', original_generation)
     rechecked = _waiting(store, limit=1)
     assert rechecked['coverage']['counts'] == {'failed': 1, 'empty_body': 1}
