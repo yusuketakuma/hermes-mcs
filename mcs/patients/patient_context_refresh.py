@@ -229,8 +229,12 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
             for source in context_queries.patient_context_sources(db, pid, hydrate=hydrate):
                 _scan_check(db)
                 sources.append(source)
-        signed = [(context_plan.source_key(s), context_plan.source_signature(s), bool(s.get("historical"))) for s in sources
-                  if _scan_check(db) is None and (cutoff is None or (s.get("first_seen") or 0) <= cutoff)]
+        signed = []
+        for source in sources:
+            _scan_check(db)
+            if cutoff is None or (source.get("first_seen") or 0) <= cutoff:
+                signed.append((context_plan.source_key(source), context_plan.source_signature(source),
+                               bool(source.get("historical"))))
         contract = _contract(cfg, pid) if contract is None else contract
         dependencies = dependency_loss.read(db, pid)
         acquisition = initial_import_state.acquisition_status(db, pid)
@@ -2761,8 +2765,11 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
     stored = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
-    scans = [stored.get(context_plan.source_key(source), {}) for source in snapshot["sources"]
-             if _scan_check(db) is None and context_plan.source_usable(source)]
+    scans = []
+    for source in snapshot["sources"]:
+        _scan_check(db)
+        if context_plan.source_usable(source):
+            scans.append(stored.get(context_plan.source_key(source), {}))
     recheck_available = False
     quality_required = bool(snapshot["contract"].get("provider") or _has_prior_quality_failure(db, pid))
     if (not estimate and quality_required
