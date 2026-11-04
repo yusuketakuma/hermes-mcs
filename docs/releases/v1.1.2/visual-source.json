@@ -1,0 +1,33 @@
+{
+  "kind": "synthetic explanation; not a screenshot or measured result",
+  "source": "docs/releases/v1.1.2/cloud-continuity.svg",
+  "renderer": "macOS qlmanage -t -s 1000 on 1000x1000 wrapper, drawing translated x=305,y=70; magick crop 390x860+305+70 +repage -strip",
+  "comparison": "Before/after summarized in one flow diagram and CHANGELOG comparison table; no measured timing claims.",
+  "source_checkout": {
+    "head": "4c6727e272afda7c4c8f2c5e6e82c592f3960bbc",
+    "status": "local main release preparation; candidate SHA pending Codex notification-root-01; publication tracked separately"
+  },
+  "evidence": [
+    {
+      "path": "mcs/llm/cloud_inference.py",
+      "sha256": "b322320def31e59a6587d19f4d0e11fd62a470f1fe862f1c5a834bf60147d772"
+    },
+    {
+      "path": "mcs/llm/cloud_backlog.py",
+      "sha256": "d82c84ae1aeca6c4ebc67c6d0cbf616997cfbfc4917559643e90607912c32fd7"
+    },
+    {
+      "path": "mcs/ingest/health_report.py",
+      "sha256": "5e2d26be236959113606d7cf952973fbbcd18750f0ee7aaac85333d932fb5607"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "177e8027b8c6a3fdf01be1d8cbb99585c7e41b9268e69fe647486abc4f40faf4"
+    },
+    {
+      "path": "mcs/patients/patient_context_refresh.py",
+      "sha256": "4d2f0f1ddcd6b7f6fdf228c27fca6a868856d99288f7b7c77471735faa6b3dc3"
+    }
+  ],
+  "visual_check": "PNG rendered at native 390x860; pixel-level text-overlap review not performed in this session (recorded as unverified)"
+}

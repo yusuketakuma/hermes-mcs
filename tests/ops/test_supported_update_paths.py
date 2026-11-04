@@ -209,7 +209,7 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.1.1"
+    assert MANIFEST["target"]["version"] == "v1.1.2"
     assert RELEASES[-1]["release"] == "v1.1.0"
     assert RELEASES[-1]["schema_version"] == 10
     assert RELEASES[-1]["fixture"] == "shape-14.sql"
