@@ -84,7 +84,7 @@ version見出しは `## [X.Y.Z] — YYYY-MM-DD`、新しい順に並べる。
 
 既存のSVG原稿・PNG生成方式を再利用し、Release用はPNGを基本とする。公開URLの到達とRelease実画面での表示を別々に確認する。画像公開が禁止・未承認ならファイルと配置・参照手順まで準備し、ローカルパスは本文へ埋め込まない。準備中の固定tag画像URLは同梱ファイルと対応させ、tag公開前は到達・表示未確認と記録し、公開後に確認する。画像なしでも本文で変更と必要操作が分かることを確認する。版ごとの準備・公開条件は[視覚資料の配置手順](../releases/VISUAL_PREPARATION.md)を参照する。
 
-非公開リポジトリの画像は`raw.githubusercontent.com`へ直接リンクせず、`https://github.com/yusuketakuma/hermes-mcs/raw/refs/tags/vX.Y.Z/docs/...png`または固定commitの同一host経路を使う。README生成時は同じ画像をリポジトリ内の相対パスへ変換し、説明図の段落を独立して残す。最新版本文・export・READMEの検査で不適切な画像参照を拒否する。認証付きAPIで原本を取得できても、読者の画面で画像が表示された証拠にはならない。ブラウザーで確認できない場合は描画未確認と記録する。
+非公開リポジトリのRelease画像は、同じ公開範囲のリリース添付へPNGを配置し、`https://github.com/yusuketakuma/hermes-mcs/releases/download/vX.Y.Z/name.png`を使う。repo rawや`raw.githubusercontent.com`への直参照を避け、添付の形式・サイズ・SHA256とダウンロードしたbytesを原本へ照合する。README生成時は同じ画像のリポジトリ内相対パスへ変換し、説明図の段落を独立して残す。最新版本文・export・READMEの検査で不適切な画像参照を拒否する。認証付きAPIで原本を取得できても、読者の画面で画像が表示された証拠にはならない。ブラウザーで確認できない場合は描画未確認と記録する。
 
 ## 開発時の記録
 

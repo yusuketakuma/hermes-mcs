@@ -63,12 +63,12 @@ class ReadmeReleaseTest(unittest.TestCase):
         self.assertEqual(readme.render(rendered, changelog), rendered)
 
     def test_release_image_has_its_own_paragraph_and_a_repository_relative_source(self):
-        url = "https://github.com/yusuketakuma/hermes-mcs/raw/refs/tags/v1.1.1/docs/example.png"
+        url = "https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.1/example.png"
         alt = f"図 ({url})"
         image = f"![{alt}]({url})"
         changelog = self.changelog().replace("### 新機能", image + "\n\n### 新機能")
         rendered = readme.render(self.template(), changelog)
-        self.assertIn(f"\n\n![{alt}](docs/example.png)\n\n", rendered)
+        self.assertIn(f"\n\n![{alt}](docs/releases/v1.1.1/example.png)\n\n", rendered)
         self.assertEqual(readme.render(rendered, changelog), rendered)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

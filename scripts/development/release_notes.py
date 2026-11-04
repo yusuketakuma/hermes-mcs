@@ -20,23 +20,29 @@ GROUPS = {
 HEADINGS = [*GROUPS.values(), "更新時の注意", "技術詳細"]
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 IMAGES = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\((?P<url>[^\s)]+)\)")
+REPOSITORY_PATH = "/yusuketakuma/hermes-mcs"
 
 
 def repository_image_path(target):
-    """Map immutable, same-host GitHub image paths for this private repository."""
+    """Map versioned release assets and pinned repository images to their sources."""
     parsed = urlsplit(target)
-    prefix = "/yusuketakuma/hermes-mcs"
+    prefix = REPOSITORY_PATH
     decoded = unquote(parsed.path).casefold()
     own = decoded == prefix or decoded.startswith(prefix + "/")
     if own and parsed.hostname == "raw.githubusercontent.com":
         raise ValueError("非公開リポジトリの画像はraw.githubusercontent.comを直接参照できません")
     if not own or parsed.hostname != "github.com":
         return None
-    match = re.fullmatch(prefix + r"/raw/(?:refs/tags/v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{40})/([A-Za-z0-9_./-]+)", parsed.path)
     if (parsed.scheme != "https" or parsed.netloc != "github.com" or parsed.query
-            or parsed.fragment or match is None
+            or parsed.fragment):
+        raise ValueError("リポジトリ画像は認証情報を含まない固定URLで指定してください")
+    asset = re.fullmatch(prefix + r"/releases/download/(v[0-9]+\.[0-9]+\.[0-9]+)/([A-Za-z0-9_.-]+\.png)", parsed.path)
+    if asset is not None:
+        return f"docs/releases/{asset[1]}/{asset[2]}"
+    match = re.fullmatch(prefix + r"/raw/(?:refs/tags/v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{40})/([A-Za-z0-9_./-]+)", parsed.path)
+    if (match is None
             or any(part in ("", ".", "..") for part in match[1].split("/"))):
-        raise ValueError("リポジトリ画像は認証情報を含まない固定tag・commitのGitHub raw経路で指定してください")
+        raise ValueError("リポジトリ画像は固定tag・commitまたは版を指定したリリース添付のURLで指定してください")
     return match[1]
 
 
@@ -47,7 +53,9 @@ def check_release_images(body):
         if (parsed.scheme != "https" or not parsed.netloc or parsed.hostname is None
                 or parsed.username or parsed.password):
             raise ValueError("Release画像は認証情報を含まないHTTPS絶対URLで指定してください")
-        repository_image_path(target)
+        path = repository_image_path(target)
+        if path is not None and not parsed.path.startswith(REPOSITORY_PATH + "/releases/download/"):
+            raise ValueError("非公開repoのRelease画像はリリース添付の固定URLを使用してください")
 
 
 def version(value):

@@ -10,7 +10,7 @@
 
 1. ローカルの `docs/releases/vX.Y.Z/` のSVG・PNGと根拠記録を、リポジトリの同名配置へコピーする。原稿から再生成し、PNGを開いて文字欠け・重なりを確認する。390px相当の表示でも主要ラベルを読む。掲載する図は原則各版1〜3点にする。
 2. 画像の追加を別commitとして公開する。既存のリリースtagへ追加・付け替えせず、画像公開commitの固定SHAを記録する。
-3. その固定SHAのPNGを指す`https://github.com/owner/repo/raw/<SHA>/path.png`を使う。すでに画像を含む固定tagなら`raw/refs/tags/vX.Y.Z/path.png`も使える。非公開repoの`raw.githubusercontent.com`直参照、認証情報・一時token入りURL、変わり続けるmain参照は使わない。READMEでは生成器が同じ画像を相対パスへ変換する。公開後に読者と同じアクセス条件で取得し、PNG内容・版・ハッシュを照合する。
+3. 読者が閲覧できる固定画像を使う。非公開repoでは、原本PNGを許可された公開範囲のReleaseへ添付し、`https://github.com/owner/repo/releases/download/vX.Y.Z/name.png`を本文へ掲載する。repo rawが同じhostでも、Release内の表示成功とはみなさない。添付前にimmutable状態・同名assetを確認し、既存assetは削除・上書きしない。添付の形式・サイズ・SHA256と取得bytesを原本へ照合する。READMEは生成器が同じ原本を相対パスへ変換する。認証情報・一時token入りURLや、変わり続けるmain参照は使わない。
 4. CHANGELOGの該当変更の説明直後へ、版ごとのaltを持つ画像参照と、変更点・メリットの1〜2文を入れる。補足・技術図は末尾の折りたたみへ置く。図だけに設定・注意を置かない。README要約を生成し、同じCHANGELOGからReleaseへexport・同期する。
 5. GitHub Releasesの実画面で画像の取得と表示を確認し、スマートフォン相当の幅も確認する。URL到達、Markdown変換、実画面表示は別の結果として記録する。
 

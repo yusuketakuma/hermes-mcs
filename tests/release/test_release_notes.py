@@ -25,11 +25,14 @@ import sync_release_notes as sync  # noqa: E402 - development scripts path is in
 
 
 class ReleaseNotesTest(unittest.TestCase):
-    def test_private_repository_images_require_immutable_same_host_paths(self):
+    def test_private_repository_images_map_only_pinned_or_versioned_sources(self):
         base = "https://github.com/yusuketakuma/hermes-mcs/raw/"
         for ref in ("refs/tags/v1.1.1", "a" * 40):
             self.assertEqual(notes.repository_image_path(base + ref + "/docs/example.png"),
                              "docs/example.png")
+        asset = "https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.1/example.png"
+        self.assertEqual(notes.repository_image_path(asset), "docs/releases/v1.1.1/example.png")
+        notes.check_release_images(f"![添付]({asset})")
         for target in ("docs/example.png", "https://example.com/example.png",
                        "https://raw.githubusercontent.com/example/public/main/example.png"):
             self.assertIsNone(notes.repository_image_path(target))
@@ -44,6 +47,8 @@ class ReleaseNotesTest(unittest.TestCase):
             (base + "refs/tags/v1.1.1/docs/example.png").replace("github.com", "user@github.com"),
             (base + "refs/tags/v1.1.1/docs/example.png").replace("github.com", "github.com:443"),
             (base + "refs/tags/v1.1.1/docs/example.png").replace("/yusuketakuma", "/%79usuketakuma"),
+            asset + "?token=synthetic", asset + "#part", asset.replace("/v1.1.1/", "/main/"),
+            asset.replace("/example.png", "/../example.png"),
         ):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 notes.repository_image_path(target)
@@ -56,7 +61,8 @@ class ReleaseNotesTest(unittest.TestCase):
         text = "## [Unreleased]\n\n## [1.0.8] — 2026-10-01\n\n" + new
         history = "\n## [1.0.7] — 2026-09-29\n\n" + old
         self.assertEqual(notes.check_changelog(text + history), ["1.0.8", "1.0.7"])
-        for target in (raw, "docs/example.png", "https:docs/image.png", "https:///docs/image.png"):
+        native = "https://github.com/yusuketakuma/hermes-mcs/raw/refs/tags/v1.0.8/docs/example.png"
+        for target in (raw, native, "docs/example.png", "https:docs/image.png", "https:///docs/image.png"):
             bad = text.replace("### 不具合修正", f"![新版]({target})\n\n### 不具合修正") + history
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
