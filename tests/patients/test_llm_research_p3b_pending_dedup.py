@@ -40,7 +40,7 @@ def test_lane_a_reads_selection_snapshot_once(runtime, monkeypatch):
     result = step(runtime)
     led.db.set_trace_callback(None)
     assert result['status'] == 'progressed' and result['lane'] == 'A' and document(led)
-    assert counts == {'_pending': 1, '_snapshot': 7, 'messages': 7}
+    assert counts == {'_pending': 1, '_snapshot': 4, 'messages': 1}
 
 
 def test_lane_b_reuses_selection_snapshot(runtime, monkeypatch):
@@ -53,7 +53,7 @@ def test_lane_b_reuses_selection_snapshot(runtime, monkeypatch):
     result = step(runtime)
     led.db.set_trace_callback(None)
     assert result['status'] == 'progressed' and result['lane'] == 'B'
-    assert counts == {'_pending': 1, '_snapshot': 6, 'messages': 6}
+    assert counts == {'_pending': 1, '_snapshot': 3, 'messages': 0}
     assert led.db.execute('SELECT count(*) FROM artifacts WHERE kind=?', (context_refresh.SCAN,)).fetchone()[0] == 1
 
 
@@ -65,19 +65,23 @@ def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
         for _ in range(3):
             assert step(runtime)['lane'] == 'A'
         del calls[:]
-    original = context_refresh._latest
+    original = context_refresh._select_patient
     edited = []
-    def latest(db, kind, pid, mid=None):
-        if (kind, pid) == (context_refresh.PROGRESS, 0) and not edited:
+    def select_then_edit(*args, **kwargs):
+        selected = original(*args, **kwargs)
+        assert selected[1] == 1 and lane in selected[0]
+        if not edited:
             edited.append(1)
             body = '変更後の完全合成の居住記録。'
-            db.execute("UPDATE messages SET body_html=?,body_text=?,content_hash=? WHERE message_id=1",
-                       (body, body, hashlib.sha256(body.encode()).hexdigest()))
-            db.commit()
-        return original(db, kind, pid, mid)
-    monkeypatch.setattr(context_refresh, '_latest', latest)
+            led.db.execute("UPDATE messages SET body_html=?,body_text=?,content_hash=? WHERE message_id=1",
+                           (body, body, hashlib.sha256(body.encode()).hexdigest()))
+            led.db.commit()
+        return selected
+    monkeypatch.setattr(context_refresh, '_select_patient', select_then_edit)
     result = step(runtime)
     assert result['status'] == 'source_changed' and not led.db.in_transaction
+    assert edited == [1] and calls == []
+    monkeypatch.setattr(context_refresh, '_select_patient', original)
     if lane == 'A':
         assert calls == [] and document(led) is None
     else:
@@ -102,7 +106,7 @@ def test_result_reports_scan_size(runtime):
 
 @pytest.mark.parametrize('during_pending', [False, True])
 def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, during_pending):
-    led, clock, _ = runtime
+    led, clock, calls = runtime
     seed(led)
     newest = {'attempts': 5, 'next_try': clock.wall + 3600,
               'failure': 'TimeoutError', 'last_attempt': clock.wall,
@@ -119,7 +123,7 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
                           json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION}), clock.wall))
             conn.commit()
 
-    pending, latest = context_refresh._pending, context_refresh._latest
+    pending, select_patient = context_refresh._pending, context_refresh._select_patient
 
     def racing_pending(*args, **kwargs):
         result = pending(*args, **kwargs)
@@ -127,19 +131,24 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
             publish()
         return result
 
-    def racing_latest(db, kind, pid, mid=None):
-        if not during_pending and (kind, pid) == (context_refresh.PROGRESS, 0):
+    def racing_selection(*args, **kwargs):
+        selected = select_patient(*args, **kwargs)
+        if not during_pending:
+            assert selected[1] == 1 and selected[0]
             publish()
-        return latest(db, kind, pid, mid)
+        return selected
 
     def fail_summary(*args):
         raise TimeoutError('synthetic')
 
     monkeypatch.setattr(context_refresh, '_pending', racing_pending)
-    monkeypatch.setattr(context_refresh, '_latest', racing_latest)
+    monkeypatch.setattr(context_refresh, '_select_patient', racing_selection)
     monkeypatch.setattr(context_refresh, '_summary', fail_summary)
     try:
-        assert step(runtime)['status'] == 'source_changed'
+        result = step(runtime)
+        assert result['status'] == 'deferred' and result['done'] == 0
+        assert result['reason'] == 'patient_context_readiness_unverified'
+        assert inserted == [True] and calls == []
         assert document(led, context_refresh.PROGRESS) == newest
         assert not led.db.in_transaction
     finally:
