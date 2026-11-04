@@ -797,14 +797,17 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                     or _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof)))
     scope = snapshot.get("scope") or {}
     acquired_empty = bool(counts["total"] or scope.get("fetch_state") == "complete")
+    cloud_extraction_ready = _cloud_extraction_ready(db, pid, cfg)
     complete = (not _out_of_scope(snapshot) and options(cfg)["enabled"] and acquired_empty
                 and counts["eligible"] == counts["audited"] + counts["skipped"] and not counts["incomplete"]
                 and not progress.get("held") and not progress.get("failure") and current
-                and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"])
+                and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"]
+                and cloud_extraction_ready)
     fetch_allowed = snapshot["acquisition"]["complete"]
     eligible = bool(complete and options(cfg)["publication"] and not scope.get("is_archived") and fetch_allowed)
     status = ("out_of_scope" if _out_of_scope(snapshot) else "off" if not options(cfg)["enabled"]
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
+              else "cloud_extraction_pending" if not cloud_extraction_ready
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
               else "quality_unknown" if (progress.get("source_sig") == snapshot["source_sig"]
@@ -3024,6 +3027,36 @@ def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metri
                                     metrics=metrics, source_repair=source_repair)
 
 
+def _required_cloud_extraction_contract(cfg, pid):
+    """Resolve the configured extraction requirement independently of key availability."""
+    import cloud_policy
+    import extract_llm
+    settings = cloud_inference.resolve_cloud_settings(cfg)
+    if settings["mode"] != "on" or not cloud_policy.eligible(settings, "reextract", pid):
+        return None
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=extract_llm.HOME)
+    if errors or selection is None:
+        raise ValueError("patient_cloud_extraction_contract_unverified")
+    return cloud_inference.cloud_provider_contract(selection=selection)
+
+
+def _cloud_extraction_ready(db, pid, cfg, *, deadline=None):
+    """Require verified selected-cloud results before treating patient context as complete."""
+    import extract_llm
+    try:
+        contract = _required_cloud_extraction_contract(cfg, pid)
+        if contract is None:
+            return True
+        for row in db.execute("SELECT * FROM messages WHERE project_id=? AND body_state IS NOT 'deleted' "
+                              "AND body_text IS NOT NULL AND body_text!=''", (pid,)):
+            if (deadline is not None and time.monotonic() + COMMIT_MARGIN >= deadline
+                    or extract_llm.cloud_completion(db, row, contract) != "complete"):
+                return False
+        return True
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return False
+
+
 def _raw_extraction_current(db, row, cfg):
     """Check the stored post extraction against its source and actual backend."""
     import extract_llm
@@ -3037,6 +3070,9 @@ def _raw_extraction_current(db, row, cfg):
                           "'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
                         (extract_llm.KIND, candidate["message_id"], pid)).fetchone()
     meta = loads_dict(latest[0]) if latest else None
+    required = _required_cloud_extraction_contract(cfg, pid)
+    if required is not None:
+        return extract_llm.cloud_completion(db, row, required) == "complete", meta
     cloud = _saved_cloud_contract(meta)
     if cloud is not None:
         candidate["_provider_contract"] = cloud
@@ -3099,7 +3135,8 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                 or not snapshot["acquisition"]["complete"]
                 or not (snapshot["dependencies"]["complete"] or repairable)
                 or semantic_intake_hold.has_unstored(db, pid)
-                or complete is not None and not complete(pid)):
+                or complete is not None and not complete(pid)
+                or not _cloud_extraction_ready(db, pid, cfg, deadline=deadline)):
             return False
         if db.execute(f"SELECT 1 FROM messages m WHERE m.project_id=? AND "
                       f"(({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()})) LIMIT 1",
