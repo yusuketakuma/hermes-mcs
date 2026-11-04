@@ -6305,9 +6305,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if held and not _current(ledger, r["message_id"], r["content_hash"]):
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
-                if r.pop("_quality_hold", False) is True:
+                if (r.pop("_quality_hold", False) is True
+                        or not cloud_only and r.get("_defer_reason") == "cloud_unit_unresolved"):
                     # Reuse the exact source/owner/lease CAS wait in _release;
-                    # an early quality refusal must also yield to later rows.
+                    # an unresolved resident unit must also yield to later rows.
                     r["_commit_hold"] = True
                 deferred += 1
                 _defer_note(r.get("_defer_reason") or "other")
