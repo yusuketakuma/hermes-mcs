@@ -386,7 +386,7 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
 def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypatch):
     led, _, local_calls = runtime
     seed(led, body='生活環境: 完全合成の居住記録。')
-    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
+    cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1], 'routes': ['patient_context']}}
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: None)
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)

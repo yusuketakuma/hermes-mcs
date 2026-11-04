@@ -130,7 +130,8 @@ def cloud(runtime, monkeypatch):
     led.synthetic_cloud_dispositions = discarded
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda root=None: "synthetic-key")
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: worker.cloud_policy.resolve_settings(
-        {"cloud_llm": {"mode": mode[0], "project_ids": [1], "provider": "anthropic"}}, worker.HOME)[0])
+        {"cloud_llm": {"mode": mode[0], "project_ids": [1], "provider": "anthropic",
+                        "routes": ["patient_context"]}}, worker.HOME)[0])
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: mode[0])
     class Provider:
         model = "claude-haiku-5-5"
@@ -932,7 +933,7 @@ def test_cloud_budget_wait_uses_verified_local_context(runtime, cloud, monkeypat
 
 def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime, cloud, monkeypatch):
     led, _, _ = runtime
-    settings = {"mode": "on", "project_ids": [1]}
+    settings = {"mode": "on", "project_ids": [1], "routes": ["patient_context"]}
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: worker.cloud_policy.cloud_config(
         {"cloud_llm": settings})[0])
     seed(led, body="見出しのない完全合成の居住記録。")
@@ -1799,7 +1800,8 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
     from contextlib import nullcontext
 
     original = cloud_inference.CloudInferenceUnit
-    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1],
+                                           'routes':['patient_context']})
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
@@ -1824,7 +1826,8 @@ def source_repair(runtime, cloud, monkeypatch):
     from contextlib import nullcontext
 
     led, _, _ = runtime
-    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1],
+                                           'routes':['patient_context']})
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     original_provider = cloud_inference.CloudInferenceUnit
@@ -1937,7 +1940,8 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
     from contextlib import nullcontext
 
     led, _, _ = runtime
-    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'openai', 'project_ids':[1]})
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'openai', 'project_ids':[1],
+                                           'routes':['patient_context']})
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
@@ -2784,7 +2788,8 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
     from contextlib import nullcontext
 
     led, _, _ = runtime
-    monkeypatch.setitem(CFG, 'cloud_llm', {'mode': 'on', 'provider': 'openai', 'project_ids': [1]})
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode': 'on', 'provider': 'openai', 'project_ids': [1],
+                                           'routes': ['patient_context']})
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')

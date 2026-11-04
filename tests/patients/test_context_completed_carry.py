@@ -25,7 +25,7 @@ from test_patient_context_refresh import CFG, document, runtime as runtime, seed
 def _completed(runtime, cloud, monkeypatch, lane):
     led, clock, local_calls = runtime
     settings, errors = cloud_policy.cloud_config({"cloud_llm": {
-        "mode": "on", "provider": "anthropic", "project_ids": [1],
+        "mode": "on", "provider": "anthropic", "project_ids": [1], "routes": ["patient_context"],
         "daily_request_budget": 100,
     }})
     assert not errors
