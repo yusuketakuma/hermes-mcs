@@ -94,6 +94,7 @@ class _Handle:
     def __init__(self, owner, entry):
         self._owner, self._entry = owner, entry
         self._position, self._closed = 0, False
+        self._eof = False
 
     def row(self, row):
         if self._closed or not self._owner._active:
@@ -123,12 +124,14 @@ class _Handle:
 
     def eof(self):
         if self._closed:
-            self._owner.fail()
+            if not self._eof:
+                self._owner.fail()
             return
         if (self._position < len(self._entry['rows'])
                 or self._entry['eof'] is not None and self._entry['eof'] != self._position):
             self._owner.fail()
         self._entry['eof'] = self._position
+        self._eof = True
         self.close()
 
     def close(self):
@@ -161,14 +164,16 @@ class Recording:
         self._guard = {'valid': True, 'closed': False}
 
     def _authorize(self, action, first, second, database, source):
-        if not self._valid or self._sealed:
+        if self._sealed:
             self.fail()
-            return sqlite3.SQLITE_DENY
         allowed = action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_RECURSIVE)
         if action == sqlite3.SQLITE_READ:
             allowed = database in (None, 'main', 'temp')
         elif action == sqlite3.SQLITE_FUNCTION:
-            allowed = isinstance(second, str) and second.lower() in _FUNCTIONS
+            name = second.lower() if isinstance(second, str) else ''
+            if name not in _FUNCTIONS:
+                self.fail()
+            allowed = bool(name) and name != 'load_extension'
         elif action == sqlite3.SQLITE_PRAGMA:
             name = first.lower() if isinstance(first, str) else ''
             allowed = name in _PRAGMAS and (name not in _PRAGMA_NO_ARGUMENT or second is None)
