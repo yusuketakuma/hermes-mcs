@@ -879,7 +879,7 @@ def _parser():
                         default=Path(HOME) / "data/snapshots/ledger-snapshot.db")
     parser.add_argument("--cmd-dir", type=Path, default=Path(HOME) / "data/cmd")
     subs = parser.add_subparsers(dest="kind", required=True)
-    plan = subs.add_parser("card_part_plan", help="Local operator: inspect an unknown part without approving a write")
+    plan = subs.add_parser("card_part_plan", help="Local operator: inspect a recoverable part without approving a write")
     plan.add_argument("--delivery-id", required=True)
     plan.add_argument("--part-id", required=True)
     plan.add_argument("--include-related", action="store_true",

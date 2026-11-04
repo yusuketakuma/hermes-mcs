@@ -1,6 +1,6 @@
 # 通知partの配送結果を確認する
 
-この手順は、ローカルの運用者が、配送結果が`unknown`になった本文・添付等のpartを個別に確認するためのものです。チャットの操作ツールには公開していません。カード全体の復旧は従来の`control card_resolve`を使います。
+この手順は、ローカルの運用者が、配送結果が`unknown`になった本文・添付等のpartを個別に確認するためのものです。後述のSlackグループ共有では、準備不足により実行しなかった記録がある`not_sent`も扱います。チャットの操作ツールには公開していません。カード全体の復旧は従来の`control card_resolve`を使います。
 
 管理者は、保存された`data/health.json`の`cards.unknown_parts`で対象の配送IDとpart IDを確認できます。
 一覧は最大20件で、保存時点の情報です。載っていない対象を配送済み・0件とは判断せず、
@@ -34,7 +34,7 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   card_part_plan --delivery-id DELIVERY_UUID --part-id PART_ID
 ```
 
-結果はJSONです。保存された通知先scope、配送ID、part ID、attempt ID、manifestとpayloadのSHA256、期待状態`unknown`を返します。患者本文や添付内容は返しません。対象なし・対象がunknown以外・カード本体の場合はエラーと終了コード1になります。計画の表示は承認・enqueue・再送を行いません。
+結果はJSONです。保存された通知先scope、配送ID、part ID、attempt ID、manifestとpayloadのSHA256、期待状態を返します。期待状態は通常`unknown`で、後述のSlackグループ共有だけは`not_sent`も対象です。患者本文や添付内容は返しません。対象なし・復旧対象外の状態・カード本体の場合はエラーと終了コード1になります。計画の表示は承認・enqueue・再送を行いません。
 
 snapshotは保存時点の情報です。現行状態と異なれば適用時に拒否されます。古い計画のhashやattemptを手で書き換えて通してはいけません。
 
@@ -53,7 +53,7 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `remote_id` | `mark_delivered`の場合、照合済みの配送先投稿ID |
 | `evidence.method` / `evidence.ref` | 確認方法と、非機密の証拠参照 |
 | `evidence.worker_stopped` | 停止を確認した場合に限り`true` |
-| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`を使用 |
+| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`、準備不足で実行しなかったグループ共有には`dependency_rejected`を使用 |
 | `evidence.duplicate_risk_accepted` | LINE WORKSで`remote_absent`を根拠にする場合、重複リスクを人が受け入れた時だけ`true` |
 
 送信結果が不明というだけで`mark_not_sent`を選ばないでください。既存journalの配送成功記録と矛盾する証拠、読めないjournal、古い計画は既存validatorと適用処理が拒否します。
@@ -123,6 +123,32 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 
 承認済みJSON全体には既存の16,384 bytes上限が適用されます。上限を超える計画を分割して
 通してはいけません。各対象を確認した人の承認とworker停止の証拠は、まとめる場合も必要です。
+
+### Slackで添付の準備不足によりグループ共有を実行しなかった場合
+
+新しい通知計画のカード本体を送信したワーカーが、添付の準備結果を確認できずに
+グループ共有を実行しなかった場合、`file_group`を`not_sent`・`stage_receipt_missing`として記録します。
+この記録は、グループ共有APIを呼ぶ前の拒否結果です。過去のjournalに記録がないことから推定しません。
+結果不明の添付は`unknown`のままです。各添付を配送先の証拠で確認し、通常の個別復旧で確定してください。
+
+全添付の結果が確定しても、添付を準備した記録だけではカードへの共有完了を示しません。
+内容が変わっていない場合は、`card_part_plan`で対象の`file_group`を読み、
+`expected_state=not_sent`の計画に`result=mark_not_sent`と
+`evidence.proof=dependency_rejected`を指定して、運用者が別途承認してください。
+`remote_id`と`related_plans`は指定できません。ワーカーの停止確認、理由、人の承認はこの操作でも必要です。
+
+適用処理は、保存されたscope・hash・attemptと完全なjournalの開始・拒否結果・receiptを照合します。
+カードとスレッド、全添付の配送結果が確認でき、元のファイルID集合を再利用できる場合だけ、
+既存の再計画処理で後継通知を作ります。別のファイルの追加や新規アップロードを含む計画は拒否します。
+承認の適用や後継計画の発行は共有完了の証拠ではありません。ワーカー復帰後の配信結果を確認してください。
+
+結果不明の添付が残る間は、通常の内容更新も待機します。全添付の配送結果が確定し、
+グループ共有を実行しなかった記録がある場合は、内容の変更や新しい通知をきっかけに、
+従来の送信条件で通常の更新が進むことがあります。
+
+古い`pending`でattemptがないグループ共有や、journalが失われた・圧縮済みのため
+拒否結果を照合できないものは、この方法では復旧できません。保存状態やattemptを手で作らず、
+元の記録を保持してください。添付の確認だけを根拠に、過去のグループ共有を未送信とは判断しません。
 
 ## 3. 承認済みのJSONをenqueueする
 

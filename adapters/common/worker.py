@@ -608,7 +608,8 @@ class DeliveryWorker:
             return
         ctx = {"card_message_id": message_id, "thread": None,
                "thread_id": spec["delivery"].get("thread_id"),
-               "history": None, "consumed": set()}
+               "history": None, "consumed": set(),
+               "_fresh_primary_drive": claim.get("worker_id") == self._worker_id}
         records = await asyncio.to_thread(self._jview.refresh)
         await self._drive_parts(claim, manifest, ctx, records)
 
@@ -731,11 +732,15 @@ class DeliveryWorker:
                 continue
             if "started" in phases:
                 continue              # unknown — reconcile reports it
-            if kind == "file_group" and any(
+            blocked_group = kind == "file_group" and any(
                     p.get("kind") == "attachment_part" and not p.get("unavailable")
-                    and p["part_id"] not in ctx.get("part_remotes", {}) for p in manifest):
-                return  # A private stage is not a visible file receipt.
+                    and p["part_id"] not in ctx.get("part_remotes", {}) for p in manifest)
+            if blocked_group and not (self.transport == "slack" and ctx.get("_fresh_primary_drive") is True
+                                      and claim.get("worker_id") == self._worker_id):
+                return  # Legacy absence never proves a group was not sent.
             if kind != "thread" and not ctx.get("thread_id"):
+                if blocked_group:
+                    return
                 continue              # held — dependents need a thread
             # revocation withdraws the spec file (the worker never reads
             # the DB); the manifest in memory must not outrun it
@@ -745,6 +750,8 @@ class DeliveryWorker:
             if not await self._send_allowed(spec):
                 return                # retain unfinished parts for resume
             await self._attempt_part(claim, part, ctx)
+            if blocked_group:
+                return  # The local stage_receipt_missing result is durable; stages remain unknown.
         self._reg.put_parts_done(spec["delivery_id"])
 
     async def _republish_part_receipt(self, claim: dict, part: dict,
