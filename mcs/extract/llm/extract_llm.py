@@ -6988,6 +6988,64 @@ def legacy_admissions(ledger, cfg) -> set | None:
         return set()
 
 
+def _required_cloud_backlog_ids(ledger) -> set:
+    """Ids still owing the selected required cloud contract, pre-bounded by
+    the receipted human history scope and the configured project scope.
+    The caller's subset stays a pre-filter: the authoritative source, frame,
+    claim and paid-contract gates re-run inside run_pending."""
+    raw_cfg = load_config()
+    cfg = cloud_inference.resolve_cloud_settings(raw_cfg)
+    if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
+        return set()
+    selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract",
+                                                     purpose="backlog", root=HOME)
+    if errors or selection is None:
+        return set()
+    scope, params = "", []
+    for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
+        if cfg[key] is not None and (cfg[key] or not exclude):
+            scope += " AND m.project_id " + ("NOT " if exclude else "") \
+                + "IN (SELECT value FROM json_each(?))"
+            params.append(json.dumps(cfg[key]))
+    cutoff = time.time() - 600
+    return {row[0] for row in ledger.db.execute(
+        f"SELECT m.message_id FROM messages m WHERE {ELIGIBLE_MESSAGE} "
+        "AND m.first_seen IS NOT NULL AND m.first_seen<=? "
+        "AND (m.notified_at IS NULL OR m.notified_at<=?) AND NOT EXISTS "
+        "(SELECT 1 FROM message_revisions r WHERE r.message_id=m.message_id "
+        "AND r.observed_at>?) "
+        f"AND NOT EXISTS ({_hold_sql()}) "
+        f"AND {cloud_policy.history_scope_target_sql('m.message_id')} "
+        f"AND EXISTS (SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' "
+        f"AND a.message_id=m.message_id {current_extract_pred()} "
+        f"AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})"
+        f"{scope} ORDER BY m.message_id DESC LIMIT 30000",
+        (cutoff, cutoff, cutoff, *params))}
+
+
+def cloud_backlog_admissions(ledger, cfg) -> set | None:
+    """Admission set for the resident cloud backlog worker.
+
+    Noncanonical fact_source keeps `legacy_admissions` (None) — unrestricted.
+    Under a validated canonical config the sealed-source cloud pass is not
+    legacy inference: the conversion ids are unioned with sources still
+    owing the required cloud contract inside the human-receipted history
+    scope. Any config or read failure keeps the fail-closed base set."""
+    base = legacy_admissions(ledger, cfg)
+    if base is None:
+        return None
+    try:
+        if not isinstance(cfg, dict):
+            return base
+        import semantic_policy
+        policy, error = semantic_policy.runtime_config(cfg)
+        if error or policy.get("fact_source") != "canonical":
+            return base
+        return base | _required_cloud_backlog_ids(ledger)
+    except Exception:
+        return base
+
+
 _admission_closed_last = None
 
 

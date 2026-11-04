@@ -436,7 +436,7 @@ def worker(parent, *, index=None):
                             result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
                                 per_write_lock=True, workers=1, background=True,
                                 cloud_only=True, prioritize_patients=True,
-                                admitted_ids=extract_llm.legacy_admissions(ledger, cfg), carry=carry)
+                                admitted_ids=extract_llm.cloud_backlog_admissions(ledger, cfg), carry=carry)
                         carry = result.get("carry", carry)
                         if result.get("updated"):
                             allow_exit_settle = False
