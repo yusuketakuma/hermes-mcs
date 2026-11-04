@@ -776,6 +776,22 @@ def test_failed_block_reason_is_not_counted_verified(world, monkeypatch):
     assert "block_reason" in report["sections_unverified"]
 
 
+def test_unverified_period_spend_is_not_counted_verified(world, monkeypatch):
+    root, _path, config = world
+    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    monkeypatch.setattr(cli.policy, "window_history_pruned", lambda ledger, cfg: True)
+
+    def interrupted(ledger, *, model):
+        ledger.db.set_progress_handler(lambda: 1, 1)
+        return None
+
+    monkeypatch.setattr(cli.policy, "global_block_reason", interrupted)
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert "period_budget" in report["sections_unverified"]
+    assert "period_budget" not in report["sections_verified"]
+
+
 def _cloud_args(action):
     import argparse
     parser = argparse.ArgumentParser()

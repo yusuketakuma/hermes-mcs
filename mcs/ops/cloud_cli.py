@@ -477,8 +477,8 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                     spent = None   # an unverifiable tally is shown as unknown, never as 0
                 period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
                           "spent_or_reserved_usd": spent}
-            if period is not None:
-                completed.append("period_budget")
+                if spent is not None:
+                    completed.append("period_budget")
             phase = "block_reason"
             try:
                 reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
