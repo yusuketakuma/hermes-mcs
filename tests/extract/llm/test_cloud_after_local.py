@@ -178,6 +178,68 @@ def test_unknown_paid_cloud_keeps_local_prior_and_never_resends(local_then_cloud
     assert current['artifact_id'] == local['artifact_id'] and current['content'] == local['content']
 
 
+def _stale_prior(ledger, artifact_id):
+    """Make a current local artifact stale so a mixed (non-cloud-only) pass
+    still owes this row a cloud unit — the same pending+cloud-eligible shape
+    the ordinary lane hands to the broad fallback arm."""
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.extract_version',?) "
+                          "WHERE artifact_id=?", (worker.EXTRACT_VERSION - 1, artifact_id))
+
+
+def _extract_artifacts(ledger):
+    return ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=1 "
+                             "ORDER BY artifact_id", (worker.KIND,)).fetchall()
+
+
+def test_unsent_observation_incomplete_defers_without_local_fallback(local_then_cloud, monkeypatch):
+    ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    local, _meta = _current(ledger)
+    cfg['cloud_llm']['mode'] = 'on'
+    _stale_prior(ledger, local['artifact_id'])
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: False)
+    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
+    assert report['done'] == 0 and report['deferred'] == 1
+    assert report['defer_reasons'].get('cloud_guard') == 1
+    assert not cloud_calls, 'a refused send must not reach the wire'
+    assert len(local_calls) == 1, 'unverified observation must not fall back to local'
+    rows = _extract_artifacts(ledger)
+    assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
+    assert not _financial_rows(ledger), 'nothing was sent or billed'
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    assert _cloud_pass(ledger)['done'] == 1
+    current, meta = _current(ledger)
+    assert meta['provider_provenance']['providers'] == ['anthropic']
+
+
+def test_paid_response_observation_incomplete_keeps_answer_and_defers(local_then_cloud, monkeypatch):
+    ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    local, _meta = _current(ledger)
+    cfg['cloud_llm']['mode'] = 'on'
+    _stale_prior(ledger, local['artifact_id'])
+    real_load = cloud_inference.load_config
+    def unreadable_after_send():
+        return {} if cloud_calls else real_load()
+    monkeypatch.setattr(cloud_inference, 'load_config', unreadable_after_send)
+    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
+    assert report['done'] == 0 and report['deferred'] == 1
+    assert report['defer_reasons'].get('cloud_guard') == 1
+    assert len(cloud_calls) == 1, 'the paid response was received once'
+    assert len(local_calls) == 1, 'an adopted-paid answer must not fall back to local'
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+    assert len(ledger.artifacts('cloud_usage_result')) == 1
+    assert not ledger.artifacts('cloud_usage_disposition'), 'paid answer must not be discarded'
+    rows = _extract_artifacts(ledger)
+    assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
+    monkeypatch.setattr(cloud_inference, 'load_config', real_load)
+    assert _cloud_pass(ledger)['done'] == 1
+    assert len(cloud_calls) == 1, 'the kept response must be recovered, not resent'
+    current, meta = _current(ledger)
+    assert meta['provider_provenance']['providers'] == ['anthropic']
+
+
 def test_source_edit_between_selection_and_claim_cannot_send_old_input(local_then_cloud, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
