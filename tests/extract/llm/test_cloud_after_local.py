@@ -192,6 +192,26 @@ def _extract_artifacts(ledger):
                              "ORDER BY artifact_id", (worker.KIND,)).fetchall()
 
 
+def _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls):
+    claim, = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim'").fetchall()
+    payload = json.loads(claim['payload'])
+    source = ledger.db.execute('SELECT content_hash FROM messages WHERE project_id=? AND message_id=?',
+                                (claim['project_id'], claim['message_id'])).fetchone()
+    assert payload['hash'] == source['content_hash']
+    assert type(payload['owner_token']) is str and payload['owner_token']
+    assert claim['state'] == 'pending'
+    assert claim['next_try'] - claim['updated_at'] == worker._PREPARE_HOLD_S
+    assert time.time() < claim['next_try']
+    financial, sends = _financial_rows(ledger), len(cloud_calls)
+    assert _cloud_pass(ledger)['done'] == 0
+    assert len(cloud_calls) == sends and _financial_rows(ledger) == financial
+    assert [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM fetch_jobs WHERE kind='extract_claim'")] == [tuple(claim)]
+    # Advance the synthetic clock to the actual CAS expiry without editing the claim.
+    monkeypatch.setattr(worker.time, 'time', lambda: claim['next_try'])
+    return financial
+
+
 def test_unsent_observation_incomplete_defers_without_local_fallback(local_then_cloud, monkeypatch):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
@@ -208,7 +228,9 @@ def test_unsent_observation_incomplete_defers_without_local_fallback(local_then_
     assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
     assert not _financial_rows(ledger), 'nothing was sent or billed'
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls)
     assert _cloud_pass(ledger)['done'] == 1
+    assert len(cloud_calls) == 1
     current, meta = _current(ledger)
     assert meta['provider_provenance']['providers'] == ['anthropic']
 
@@ -234,8 +256,10 @@ def test_paid_response_observation_incomplete_keeps_answer_and_defers(local_then
     rows = _extract_artifacts(ledger)
     assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
     monkeypatch.setattr(cloud_inference, 'load_config', real_load)
+    financial = _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls)
     assert _cloud_pass(ledger)['done'] == 1
     assert len(cloud_calls) == 1, 'the kept response must be recovered, not resent'
+    assert _financial_rows(ledger) == financial
     current, meta = _current(ledger)
     assert meta['provider_provenance']['providers'] == ['anthropic']
 
