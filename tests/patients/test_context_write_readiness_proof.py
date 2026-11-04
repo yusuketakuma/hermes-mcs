@@ -383,7 +383,7 @@ def test_unknown_immediately_after_response_keeps_real_finance_and_recovers_with
         assert any(json.loads(row['meta']).get('disposition') == 'discarded_scope' for row in results)
         assert not led.artifacts(refresh.KIND) and not local_calls
         return
-    assert outcome['status'] == 'deferred' 
+    assert outcome['status'] == 'deferred'
     assert not local_calls and not led.artifacts('cloud_usage_disposition')
     reserves = led.artifacts('cloud_usage_reserve', project_id=1)
     results = led.artifacts('cloud_usage_result', project_id=1)
