@@ -3150,10 +3150,11 @@ def _pending_context_frame(db, r, *, attempt, enabled):
     """Resume the exact frozen attempt before creating any new medication reference inputs."""
     records = []
     legacy_binding = None
-    for row in db.execute("SELECT meta,content FROM artifacts WHERE kind='extract_llm_chunk' "
+    for row in db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,content "
+                          "FROM artifacts WHERE kind='extract_llm_chunk' "
                           "AND project_id=? AND message_id=? AND model=?",
                           (r["project_id"], r["message_id"], r["_target"][1])):
-        meta = loads_dict(row[0])
+        meta = loads_dict(row[5])
         if (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
                 and meta.get("ver") == EXTRACT_VERSION
                 and inference.is_current(meta, target=_INFERENCE_VERSION)
@@ -3165,7 +3166,7 @@ def _pending_context_frame(db, r, *, attempt, enabled):
                     and not any(key in meta for key in ("provider_leaf", "backend", "prompt", "config_generation",
                         "quality_status", "quality_pass", "quality_lease", "split_size", "context_snapshot"))):
                 try:
-                    decoded = strict_json(row[1])
+                    decoded = strict_json(row[6])
                 except (ValueError, TypeError, RecursionError):
                     decoded = {}
                 if not isinstance(decoded, dict):
@@ -3177,7 +3178,11 @@ def _pending_context_frame(db, r, *, attempt, enabled):
                         continue
             if not mcs_util.valid_hash(meta.get("context")):
                 raise ValueError("pending_context_unverifiable")
-            records.append(meta)
+            plain_plan = (("split_size" in meta or meta.get("chunk") == -1)
+                          and "provider_leaf" not in meta and "checkpoint_provider_contract" not in meta
+                          and _provider_strict_dict(row[6]) == {})
+            content_hash = hashlib.sha256(row[6].encode()).hexdigest() if isinstance(row[6], str) else None
+            records.append((meta, tuple(row[:6]), content_hash, plain_plan))
     if not records:
         return None
     contracts = _context_contracts()
@@ -3205,14 +3210,58 @@ def _pending_context_frame(db, r, *, attempt, enabled):
         old_target = {**r, **doc["source"], "_source_binding": meta["source_binding"]}
         frames.append((frame, old_target))
     candidates = {}
-    for record in records:
+    for record, witness, content_hash, plain_plan in records:
         matched = []
         leaf = record.get("provider_leaf")
-        contract = leaf.get("provider_contract") if isinstance(leaf, dict) else r.get("_provider_contract")
-        for frame, target in frames:
-            target = {**target, "_provider_contract": contract, "_frame": frame}
-            if _chunk_context(target, frame["text"], checkpoint=True) == record["context"]:
-                matched.append((frame, target))
+        evidence = None
+        if "provider_leaf" in record:
+            evidence = _leaf_evidence(_EvidenceLeaf({}, leaf))
+            if evidence is None:
+                raise ValueError("pending_context_unverifiable")
+            choices = (leaf.get("provider_contract"),)
+        elif "checkpoint_provider_contract" in record:
+            choices = (record["checkpoint_provider_contract"],)
+        else:
+            choices = (r.get("_provider_contract"),)
+            size, split, key = (record.get("chunk_size"), record.get("split_size"), record.get("chunk"))
+            # Old plain length plans carry no provider proof. Recognize only
+            # exact historical context hashes from the existing finite contracts.
+            layout = type(key) is int and key == -1 and "split_size" not in record
+            split_plan = (type(split) is int and type(size) is int and 0 < split < size
+                          and (type(key) is int and key >= 0 or isinstance(key, str)
+                               and re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key)))
+            if (type(size) is int and 1 <= size <= _CHUNK_SIZE and (layout or split_plan)
+                    and record.get("actual_model") == r["_target"][1]
+                    and plain_plan):
+                choices = cloud_inference.supported_cloud_contracts(r["_target"][1])
+                if r.get("_provider_contract") is None:
+                    choices = (None, *choices)
+        for contract in choices:
+            if (contract is not None and (not cloud_inference.is_supported_cloud_contract(contract)
+                    or contract.get("model") != r["_target"][1])):
+                raise ValueError("pending_context_unverifiable")
+            if ("provider_leaf" in record and "checkpoint_provider_contract" in record
+                    and record["checkpoint_provider_contract"] != contract):
+                raise ValueError("pending_context_unverifiable")
+            for frame, target in frames:
+                target = {**target, "_provider_contract": contract, "_frame": frame}
+                if any(name in record and record[name] != value for name, value in _frame_meta(target).items()):
+                    continue
+                if _chunk_context(target, frame["text"], checkpoint=True) == record["context"]:
+                    saved = db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,content "
+                                       "FROM artifacts WHERE artifact_id=?", (witness[0],)).fetchone()
+                    if (saved is None or tuple(saved[:6]) != witness or not isinstance(saved[6], str)
+                            or hashlib.sha256(saved[6].encode()).hexdigest() != content_hash):
+                        raise ValueError("pending_context_unverifiable")
+                    if evidence is not None:
+                        try:
+                            expected = _leaf_record(record, target, evidence, saved[6])
+                            valid = expected is not None and mcs_util.canonical(leaf) == mcs_util.canonical(expected)
+                        except (ValueError, TypeError, KeyError, RecursionError):
+                            valid = False
+                        if not valid:
+                            raise ValueError("pending_context_unverifiable")
+                    matched.append((frame, target))
         if len(matched) != 1:
             raise ValueError("pending_context_unverifiable")
         frame, target = matched[0]
@@ -4185,6 +4234,8 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
+                meta["checkpoint_provider_contract"] = r.get("_provider_contract")
+                meta.update(_frame_meta(r))
             evidence = _leaf_evidence(value)
             quality_status = value.get("_quality_status")
             quality_origin = getattr(value, "quality_origin", None)

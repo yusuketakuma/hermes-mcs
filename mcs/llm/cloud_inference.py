@@ -333,13 +333,17 @@ def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", s
     return dict(_CLOUD_CONTRACT)
 
 
+def supported_cloud_contracts(model=None):
+    """Enumerate the existing finite provider contracts, optionally for one model."""
+    contracts = [dict(_CLOUD_CONTRACT)] if model in (None, _CLOUD_CONTRACT["model"]) else []
+    contracts.extend(cloud_provider_contract(selection={"provider": "openai", "model": selected, "effort": effort})
+                     for selected, effort in sorted(openai_client.VALID_MODEL_EFFORTS)
+                     if model is None or selected == model)
+    return tuple(contracts)
+
+
 def is_supported_cloud_contract(contract):
-    if contract == _CLOUD_CONTRACT:
-        return True
-    if not isinstance(contract, dict) or contract.get("backend") != "openai":
-        return False
-    return any(contract == cloud_provider_contract(selection={"provider": "openai", "model": model, "effort": effort})
-               for model, effort in openai_client.VALID_MODEL_EFFORTS)
+    return isinstance(contract, dict) and contract in supported_cloud_contracts(contract.get("model"))
 
 
 def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id, route,
