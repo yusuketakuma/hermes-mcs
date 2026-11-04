@@ -2,6 +2,8 @@
 import getpass
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -193,15 +195,31 @@ def _tree(tmp_path, *, shebang="#!/bin/sh\n", body='echo "argv=$*" "pp=${PYTHONP
 def trusted_host_ancestors(tmp_path, monkeypatch):
     # Model trusted install ancestry outside the synthetic tree. Linux /tmp
     # is shared; fixture files/directories retain every real permission check.
-    ancestors = {(info.st_dev, info.st_ino) for parent in tmp_path.parents
-                 for info in (parent.stat(),)}
+    ancestors = set()
+
+    def register_ancestors(path):
+        ancestors.update((info.st_dev, info.st_ino) for parent in path.parents
+                         for info in (parent.stat(),))
+
+    register_ancestors(tmp_path)
     original = setup._safe_owner
     monkeypatch.setattr(setup, "_safe_owner", lambda info: original(info) or (
         (info.st_dev, info.st_ino) in ancestors and info.st_uid in (os.getuid(), 0)))
+    return register_ancestors
+
+
+@pytest.fixture
+def sandbox_hermes_tree(trusted_host_ancestors):
+    # Keep the actual executable inside the process guard's existing temporary root.
+    with tempfile.TemporaryDirectory(prefix='mcs-synthetic-hermes-') as directory:
+        root = Path(directory)
+        trusted_host_ancestors(root)  # The root and all inner paths retain actual permission checks.
+        yield root
 
 
 @pytest.mark.usefixtures("trusted_host_ancestors")
-def test_the_mcs_shim_runs_its_venv_command_directly_with_a_minimal_environment(tmp_path, monkeypatch):
+def test_the_mcs_shim_runs_its_venv_command_directly_with_a_minimal_environment(sandbox_hermes_tree, monkeypatch):
+    tmp_path = sandbox_hermes_tree
     shim, real = _tree(tmp_path)
     for key, value in (("PYTHONPATH", "/synthetic/inject"), ("DYLD_INSERT_LIBRARIES", "/synthetic/lib"),
                        ("BASH_ENV", "/synthetic/rc"), ("HERMES_HOME", str(tmp_path / "hh"))):
