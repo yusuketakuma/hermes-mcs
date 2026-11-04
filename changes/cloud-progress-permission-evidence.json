@@ -1,0 +1,7 @@
+{
+  "category": "fixed",
+  "title": "クラウド送信の承認証拠が不明な場合も進捗を表示",
+  "summary": "クラウド抽出が必要な投稿で、履歴の送信承認や原文の証拠を確認できない場合は、アイコンの横に「?」を表示します。完了表示や表示の省略で未完了を隠しません。",
+  "upgrade": "追加設定は不要です。通知workerとHermes gatewayを新しいコードへ切り替えると適用されます。無効・設定上の対象外は引き続き表示対象に含めません。人承認、送信権限、再送の条件は変更しません。",
+  "refs": ["mcs/notify/processing_route.py", "tests/notify/test_real_cloud_followup_display.py"]
+}

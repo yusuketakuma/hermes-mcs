@@ -28,12 +28,21 @@ def test_selected_cloud_has_no_invented_transport_status(led, monkeypatch, compl
 
 
 @pytest.mark.parametrize("mode,eligible,scope", [("off", True, True), ("shadow", True, True),
-                                              ("on", False, True), ("on", True, False)])
+                                              ("on", False, True)])
 def test_disabled_or_out_of_scope_cloud_is_not_pending(led, monkeypatch, mode, eligible, scope):
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": mode, "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: eligible)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: scope)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+
+
+def test_unverified_history_permission_does_not_hide_required_cloud(led, monkeypatch):
+    _seed_thread(led, mids=(100,))
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
+    monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
+    monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: False)
+    monkeypatch.setattr(extract_llm, "cloud_completion", lambda *args: pytest.fail("unapproved source read"))
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
 
 
 def test_unresolved_contract_is_visible_without_reading_key(led, monkeypatch):

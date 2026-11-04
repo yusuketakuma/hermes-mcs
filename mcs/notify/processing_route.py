@@ -128,16 +128,16 @@ def cloud_followup(db, project_id, message_id, cfg):
     settings = cloud_inference.resolve_cloud_settings(cfg)
     if settings["mode"] != "on" or not cloud_policy.eligible(settings, "reextract", project_id):
         return None
-    if not cloud_policy.history_thread_allowed(db, project_id, message_id):
-        return None
     provider = settings["provider"]
     if provider not in ("anthropic", "openai"):
         return None
-    row = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
-                     (project_id, message_id)).fetchone()
-    if row is None or row["body_state"] != "full" or not row["body_text"]:
-        return None
     try:
+        row = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                         (project_id, message_id)).fetchone()
+        if row is None or row["body_state"] != "full" or not row["body_text"]:
+            return None
+        if not cloud_policy.history_thread_allowed(db, project_id, message_id):
+            return provider, "unverified"
         selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=extract_llm.HOME)
         if errors or selection is None:
             return provider, "unverified"
