@@ -246,6 +246,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         except cloud_client.CloudNotSent as error:
             reason = cloud_client.not_sent_reason(error)
             raise runtime.LLMNotSent("cloud_not_sent" if reason == "not_sent" else reason) from error
+        except cloud_inference.CloudObservationIncomplete:
+            raise runtime.LLMNotSent('cloud_not_sent') from None
         except cloud_inference.CloudBusy:
             if local_fallback is not None:
                 return local(prompt, timeout)

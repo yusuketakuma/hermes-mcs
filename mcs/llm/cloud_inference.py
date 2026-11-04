@@ -28,6 +28,10 @@ class CloudBusy(CloudFallback):
     """No shared cloud capacity was reserved or sent."""
 
 
+class CloudObservationIncomplete(CloudFallback):
+    """Defer adoption without discarding a received answer or starting a fallback."""
+
+
 def _current_cloud_settings():
     try:
         return resolve_cloud_settings(load_config())
@@ -109,21 +113,29 @@ class CloudInferenceUnit:
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
                 denied = (errors or chosen is None or dict(chosen) != dict(self.selection)
-                          or (inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
-                                          or tightened(caps(now)) or cloud_policy.setting_block_reason(now)))
                           or writer_lock.updater_state() != updater
                           or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
                           or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                           # A paid result is kept while its scope holds, even if the send window closes.
-                          or (cloud_policy.block_reason(ledger, now, route, project_id, model=self.model) if inference
-                              else not cloud_policy.eligible(now, route, project_id))
+                          or not cloud_policy.eligible(now, route, project_id)
                           or not current())
+            except CloudObservationIncomplete:
+                raise
             except Exception:
                 # An unreadable guard is a denial; the result callback must still
                 # settle any already received or provably unsent attempt.
                 raise CloudFallback("cloud_unit_changed") from None
             if denied:
                 raise CloudFallback("cloud_unit_changed")
+            if inference:
+                try:
+                    waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
+                               or tightened(caps(now)) or cloud_policy.setting_block_reason(now)
+                               or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model))
+                except Exception:
+                    raise CloudObservationIncomplete("cloud_admission_unverified") from None
+                if waiting:
+                    raise CloudObservationIncomplete("cloud_admission_unavailable")
             if inference and dispatch_current is not None:
                 try:
                     allowed = dispatch_current() is True
@@ -174,6 +186,9 @@ class CloudInferenceUnit:
             def write():
                 try:
                     guard(inference=False)
+                except CloudObservationIncomplete:
+                    # Unknown readiness does not prove the paid response lost its scope.
+                    outcome = dict(metadata)
                 except CloudFallback:
                     if self.final_disposition is None:
                         self.final_disposition = discard_reason() if discard_reason else "discarded_scope"
@@ -287,6 +302,8 @@ class CloudInferenceUnit:
                         cache_prefix=prefix)
             self.commit_guard()
             return answer
+        except CloudObservationIncomplete:
+            raise
         except CloudFallback as error:
             if str(error) == "cloud_unit_changed":
                 self.discard()
