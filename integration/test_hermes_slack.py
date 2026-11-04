@@ -22,7 +22,7 @@ from adapters.common.spec import token_map  # noqa: E402
 from slack_card_testkit import _spec  # noqa: E402
 
 
-def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypatch):
+def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(socket.socket, "connect",
                         lambda *_: (_ for _ in ()).throw(
                             AssertionError("no network in integration test")))
@@ -129,7 +129,15 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
         "slack_profile": "cco",
         "slack_allowed_user_ids": ["U_OPERATOR"],
     }
-    data_root = tmp_path / "mcs-data"
+    import mcs_util
+    import run_log
+
+    mcs_root = tmp_path / "mcs"
+    mcs_root.mkdir(mode=0o700)
+    data_root = mcs_root / "data"
+    data_root.mkdir(mode=0o700)
+    monkeypatch.setattr(mcs_util, "HOME", str(mcs_root))
+    run_log.initialize(str(data_root))
     for name in ("slack_render", "flags", "cmd_int", "cmd_results"):
         (data_root / name).mkdir(parents=True)
     (data_root / "flags" / "notify.json").write_text(json.dumps({
@@ -194,6 +202,11 @@ def test_real_hermes_discovery_keeps_slack_inert_until_opt_in(tmp_path, monkeypa
         "result": "delivered", "message_id": "1790000000.000001",
     }
     assert len(fresh_client.calls) == 2
+    events = [json.loads(line) for line in (data_root / "mcs.log").read_text().splitlines()]
+    assert {"worker_owner", "worker_started"} <= {event["event"] for event in events}
+    assert data_root.stat().st_mode & 0o777 == 0o700
+    assert (data_root / "mcs.log").stat().st_mode & 0o777 == 0o600
+    assert "mcs_log_write_failed" not in capsys.readouterr().err
     # The native app exposes all four protocol actions, exactly once.
     # Keeping the earlier disabled-app assertions protects opt-in semantics.
     from adapters.slack.cards import LINK_ACTION, MENU_ACTION
