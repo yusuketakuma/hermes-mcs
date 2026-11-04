@@ -1,10 +1,10 @@
 {
-  "status": "102 changes prepared at a01c463f; production d07b5160 follow-up application, operational acceptance and publication are recorded separately",
+  "status": "107 changes prepared at b39697ea; candidate16d04056 applied and natural progress observed; final combined candidate and publication on hold",
   "baseline": {
     "previous_release": "v1.1.0",
     "production_sha": "2673b767b9cba56a0ca169eeebe1d0c6c63143e6"
   },
-  "fragment_count": 102,
+  "fragment_count": 107,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -619,6 +619,36 @@
       "id": "terminal-quality-checkpoint-hold",
       "title": "現在の確認項目と矛盾する保存候補を保留して後続の抽出へ進行",
       "sha256": "4db390ad045859070777920cfacffc081a54dfa0383dedf9bed8aba33691a50a"
+    },
+    {
+      "path": "changes/archive/1.1.1/checkpoint-paid-preservation-and-rejection-reasons.json",
+      "id": "checkpoint-paid-preservation-and-rejection-reasons",
+      "title": "抽出候補を保存できない場合も課金済み回答を保持",
+      "sha256": "342f6c8b21937c394daa3bc12092bb1f09f421ee6be5456745dc65641d7ace7e"
+    },
+    {
+      "path": "changes/archive/1.1.1/resident-fixed-error-observation.json",
+      "id": "resident-fixed-error-observation",
+      "title": "常駐解析の停止理由を安全に識別",
+      "sha256": "fdf9af6ebc94692cbbd334b6216bf6888bff4d96bd13325bfa1784e2d342ee64"
+    },
+    {
+      "path": "changes/archive/1.1.1/split-provider-contract-history.json",
+      "id": "split-provider-contract-history",
+      "title": "クラウドの処理条件を変えた後も元の分割履歴を正確に識別",
+      "sha256": "3f3eece5da8fee298efad288e112cdabf9e124a732c5719bb5688676e7c39559"
+    },
+    {
+      "path": "changes/archive/1.1.1/uncertain-negation-checkpoint-revalidation.json",
+      "id": "uncertain-negation-checkpoint-revalidation",
+      "title": "未確認の抽出候補を読み戻せず保存が拒否される問題を修正",
+      "sha256": "782814f0830d8515ebdcc0972db5594f21c28506e3b62d556b55666ae014081f"
+    },
+    {
+      "path": "changes/archive/1.1.1/extract-claim-transaction-recovery.json",
+      "id": "extract-claim-transaction-recovery",
+      "title": "解析の保存待ち処理でDB障害後の再試行を維持",
+      "sha256": "0e498a02c4901d1dab7222e6928e07e8d669465c450dc4829217013f15ecf0e1"
     }
   ]
 }
