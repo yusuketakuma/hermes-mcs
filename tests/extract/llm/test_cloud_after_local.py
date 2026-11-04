@@ -278,12 +278,13 @@ def test_completed_cloud_prefix_does_not_consume_followup_selection_limit(local_
 
 
 
-def _seal_canonical_v4(ledger):
+def _seal_canonical_v4(ledger, mid=1):
     """Seal the source with a current v4 projection, as semantic adoption does."""
     from semantic_projection import PROJECTION_VERSION
     import inference_version
     source = ledger.db.execute(
-        "SELECT content_hash, project_id, message_id FROM messages WHERE message_id=1").fetchone()
+        "SELECT content_hash, project_id, message_id FROM messages WHERE message_id=?",
+        (mid,)).fetchone()
     meta = {"hash": source["content_hash"], "engine_version": 4,
             "projection_version": PROJECTION_VERSION,
             inference_version.VERSION_KEY: inference_version.CURRENT_VERSION}
@@ -364,16 +365,20 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     assert _local_pass(ledger)['done'] == 1
     v4_id = _seal_canonical_v4(ledger)
     sealed_v4 = _v4_row(ledger, v4_id)
-    # A raw-only history source (no extract artifact at all) must also reach
-    # the cloud lane under canonical — the local-first admission shape used
-    # to exclude it entirely.
+    # Raw history sources must also reach the cloud lane under canonical:
+    # msg2 unsealed (pending arm) and msg3 sealed without an extract artifact
+    # (canonical raw — the sealed cloud_followup arm covers it).
     ledger.save_messages([_message(mid=2, body='完全合成の経過補記です。',
-                                   posted_at='2026-09-19T01:00:00+09:00')])
+                                   posted_at='2026-09-19T01:00:00+09:00'),
+                          _message(mid=3, body='完全合成の経過補記その2です。',
+                                   posted_at='2026-09-19T02:00:00+09:00')])
     with ledger.db:
-        ledger.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (time.time() - 1200,))
-        ledger.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=2',
+        ledger.db.execute('UPDATE messages SET first_seen=? WHERE message_id IN (2,3)',
+                          (time.time() - 1200,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id IN (2,3)',
                           (time.time() - 1200,))
         cloud_policy.capture_history_tx(ledger.db, 'synthetic-canonical-raw', time.time())
+        v3_id = _seal_canonical_v4(ledger, 3)   # seal commits; keep it last in the block
     monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
     monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', None)
     cfg = {**cfg, 'semantic': {'mode': 'shadow',
@@ -391,11 +396,13 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     assert worker.cloud_backlog_admissions(ledger, cfg) is None
     first = _worker_cloud_pass(ledger, cfg)
     second = _worker_cloud_pass(ledger, cfg, carry=first.get('carry'))
-    assert first['done'] == 1 and second['done'] == 1 and len(cloud_calls) == 2
+    third = _worker_cloud_pass(ledger, cfg, carry=second.get('carry'))
+    assert first['done'] == 1 and second['done'] == 1 and third['done'] == 1
+    assert len(cloud_calls) == 3
     done_ids = sorted(row[0] for row in ledger.db.execute(
         "SELECT DISTINCT message_id FROM artifacts WHERE kind='extract_llm'"))
-    assert done_ids == [1, 2]   # sealed local-complete and raw-only both ran
-    assert _v4_row(ledger, v4_id) == sealed_v4
+    assert done_ids == [1, 2, 3]   # sealed local-complete, raw, and sealed-raw all ran
+    assert _v4_row(ledger, v4_id) == sealed_v4 and _v4_row(ledger, v3_id) is not None
     financial, count = _financial_rows(ledger), len(cloud_calls)
     assert _worker_cloud_pass(ledger, cfg)['done'] == 0
     assert _financial_rows(ledger) == financial and len(cloud_calls) == count
