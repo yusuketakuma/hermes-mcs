@@ -2,6 +2,7 @@
 from contextlib import closing, nullcontext
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,6 +66,71 @@ def paid(tmp_path, monkeypatch):
 
 def _ask(unit, tokens=100):
     return unit('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=tokens)
+
+
+@pytest.mark.parametrize('observation', ['unknown', 'changed'])
+def test_post_response_observation_distinguishes_unknown_from_changed_scope(paid, observation):
+    path, _cfg, calls, _locks, _state, unit, _restart = paid
+    def current():
+        if calls:
+            if observation == 'unknown':
+                raise cloud_inference.CloudObservationIncomplete('cloud_current_unverified')
+            return False
+        return True
+    with closing(Ledger(path)) as ledger:
+        provider = unit(ledger, current=current)
+        error = (cloud_inference.CloudObservationIncomplete if observation == 'unknown'
+                 else cloud_inference.CloudFallback)
+        with pytest.raises(error):
+            _ask(provider)
+        assert len(calls) == 1
+        result = ledger.artifacts('cloud_usage_result')[0]
+        metadata = json.loads(result['meta'])
+        assert metadata['http_class'] == 'http_200'
+        assert json.loads(result['content'])['text'] == '{"synthetic":"answer"}'
+        assert bool(metadata.get('disposition')) is (observation == 'changed')
+        assert provider.discarded is (observation == 'changed')
+        before = cloud_policy.usage_report(ledger)
+    with closing(Ledger(path)) as ledger:
+        if observation == 'unknown':
+            answer = _ask(unit(ledger, owner='verified-restart'))
+            assert answer['reused_response'] is True
+            assert cloud_policy.usage_report(ledger) == before
+        else:
+            with pytest.raises(cloud_client.CloudNotSent):
+                _ask(unit(ledger, owner='verified-restart'))
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize('waiting', ['deadline', 'owner', 'budget', 'read_error'])
+def test_temporary_send_gate_keeps_previously_paid_answer(paid, monkeypatch, waiting):
+    path, cfg, calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(path)) as ledger:
+        provider = unit(ledger)
+        original = _ask(provider)
+        before = [tuple(row) for row in ledger.db.execute(
+            "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")]
+        with monkeypatch.context() as patch:
+            if waiting == 'deadline':
+                later = time.monotonic() + 1000
+                patch.setattr(cloud_inference, 'time', SimpleNamespace(monotonic=lambda: later))
+            elif waiting == 'owner':
+                patch.setattr(cloud_backlog, 'owner_alive', lambda: False)
+            elif waiting == 'budget':
+                patch.setitem(cfg['cloud_llm'], 'daily_cost_limit_usd', 0)
+            else:
+                def unreadable(*args, **kwargs):
+                    raise ValueError('synthetic accounting read failure')
+                patch.setattr(cloud_policy, 'block_reason', unreadable)
+            with pytest.raises(cloud_inference.CloudObservationIncomplete):
+                provider.guard()
+            provider.commit_guard()  # A send denial does not revoke adoption authority.
+            assert not provider.discarded and provider.final_disposition is None
+        recovered = _ask(unit(ledger, owner='verified-restart'))
+        assert recovered.pop('reused_response') is True and recovered == original
+        assert len(calls) == 1
+        assert [tuple(row) for row in ledger.db.execute(
+            "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")] == before
 
 
 def test_restart_reuses_atomic_paid_answer_without_capacity_reservation_or_new_bill(paid):

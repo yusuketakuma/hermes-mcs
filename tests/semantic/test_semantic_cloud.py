@@ -179,6 +179,7 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
 @pytest.mark.parametrize("detail,stage", [
     ("synthetic refusal", "cloud_not_sent"),
     ("checkpoint_unverified", "checkpoint_unverified"),
+    ("cloud_admission_unavailable", "cloud_not_sent"),
 ])
 def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatch, detail, stage):
     """A pre-send refusal is a harmless budget wait: the provider that already
@@ -204,6 +205,8 @@ def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatc
             if len(calls) == 1:
                 self.completed_reservations.append({'reservation_id': 'synthetic'})
                 return {'status': 200, 'text': '{"facts": []}', 'finish_reason': 'stop'}
+            if detail == 'cloud_admission_unavailable':
+                raise cloud_inference.CloudObservationIncomplete(detail)
             raise extract_llm.cloud_client.CloudNotSent('budget_exceeded', detail)
 
         def discard(self):
