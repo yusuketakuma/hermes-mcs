@@ -5036,9 +5036,11 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
     if cloud_followup:
         # A sealed (v4-adopted) source still needs its required cloud pass:
         # the sealed-source fence lives on the write side, not on selection.
-        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND EXISTS ("
+        # A canonical raw source (v4 row, no extract artifact) is the same
+        # case — it matches through the sealed arm instead of local pending.
+        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND ({current_v4_id()} IS NOT NULL OR EXISTS ("
                    f"SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id "
-                   + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION}))")
+                   + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})))")
         pending = f"({pending}) AND NOT EXISTS ({_hold_sql()})"
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
