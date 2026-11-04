@@ -3030,12 +3030,20 @@ def _release(ledger, r, lease: float | None):
             raise
         # A changed source or expired claim follows the existing exact-owner
         # cleanup, without holding the replacement occurrence or another owner.
-    ledger.db.execute(
-        "DELETE FROM fetch_jobs WHERE kind='extract_claim' "
-        "AND project_id=? AND message_id=? AND next_try=? "
-        "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ?",
-        (r["project_id"], r["message_id"], lease, token))
-    ledger.db.commit()
+    try:
+        ledger.db.execute(
+            "DELETE FROM fetch_jobs WHERE kind='extract_claim' "
+            "AND project_id=? AND message_id=? AND next_try=? "
+            "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ?",
+            (r["project_id"], r["message_id"], lease, token))
+        ledger.db.commit()
+    except BaseException:
+        try:
+            ledger.db.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+
 
 
 def _renew(ledger, r, lease: float) -> float | None:
@@ -3051,16 +3059,24 @@ def _renew(ledger, r, lease: float) -> float | None:
     # next settle drops it; same length as a fresh claim
     new = max(lease, now + _EXTRACT_LEASE_S + TIMEOUT + 30)
     token = r.get("_claim_token") if isinstance(r, dict) else None
-    cur = ledger.db.execute(
-        "UPDATE fetch_jobs SET next_try=?, updated_at=? "
-        "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
-        "AND next_try=? AND next_try>? "
-        "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ? "
-        "AND EXISTS (SELECT 1 FROM messages m "
-        "WHERE m.message_id=fetch_jobs.message_id "
-        "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
-        (new, now, r["project_id"], r["message_id"], lease, now, token, r["content_hash"]))
-    ledger.db.commit()
+    try:
+        cur = ledger.db.execute(
+            "UPDATE fetch_jobs SET next_try=?, updated_at=? "
+            "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
+            "AND next_try=? AND next_try>? "
+            "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ? "
+            "AND EXISTS (SELECT 1 FROM messages m "
+            "WHERE m.message_id=fetch_jobs.message_id "
+            "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
+            (new, now, r["project_id"], r["message_id"], lease, now, token, r["content_hash"]))
+        ledger.db.commit()
+    except BaseException:
+        try:
+            ledger.db.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+
     if cur.rowcount > 0 and isinstance(r, dict):
         r["_current_lease"] = new
         if "_cloud_lease" in r:
