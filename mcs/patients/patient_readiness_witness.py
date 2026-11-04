@@ -90,6 +90,19 @@ def _columns(description):
     return names
 
 
+def _row_digest(row, drug_progress):
+    encoded = _values(tuple(row))  # Also enforce the original raw-value size limit.
+    if drug_progress:
+        import drug_map
+        progress = drug_map.parse_annotation_progress(row[0])
+        if not progress.get('invalid'):
+            generation = progress['dictionary']
+            values = ('valid_drug_generation', None) if generation is None else (
+                'valid_drug_generation', *generation)
+            encoded = _values(values)
+    return hashlib.sha256(encoded).digest()
+
+
 class _Handle:
     def __init__(self, owner, entry):
         self._owner, self._entry = owner, entry
@@ -105,8 +118,8 @@ class _Handle:
         try:
             if not isinstance(row, sqlite3.Row):
                 raise ValueError('witness_row')
-            digest = hashlib.sha256(_values(tuple(row))).digest()
             entry, pos = self._entry, self._position
+            digest = _row_digest(row, entry['drug_progress'])
             if entry['eof'] is not None and pos >= entry['eof']:
                 raise ValueError('witness_inconsistent')
             if pos < len(entry['rows']):
@@ -153,8 +166,10 @@ class _IgnoredHandle:
 
 class Recording:
     """Record only deterministic reads on an owned, already active snapshot."""
-    def __init__(self, db):
+    def __init__(self, db, *, drug_generation_only=False):
         self._db = db
+        # Only use this when the entire observed closure ignores the cursor.
+        self._drug_generation_only = drug_generation_only is True
         self._entries = {}
         self._active = self._valid = False
         self._open = self._rows = self._bytes = self._handles = 0
@@ -162,6 +177,10 @@ class Recording:
         self._authorizer_epoch = None
         self._sealed = False
         self._guard = {'valid': True, 'closed': False}
+
+    @property
+    def drug_progress_observed(self):
+        return any(entry['drug_progress'] for entry in self._entries.values())
 
     def _authorize(self, action, first, second, database, source):
         if self._sealed:
@@ -243,7 +262,14 @@ class Recording:
                 self._bytes += len(sql.encode('utf-8')) + len(encoded) + len(_values(columns))
                 if len(self._entries) >= MAX_QUERIES or self._bytes > MAX_BYTES:
                     raise ValueError('witness_limit')
-                entry = {'sql': sql, 'params': values, 'columns': columns, 'rows': [], 'eof': None}
+                drug_progress = False
+                if self._drug_generation_only:
+                    import drug_map
+                    drug_progress = (sql == drug_map.ANNOTATION_PROGRESS_SQL
+                                     and values == (drug_map.PROGRESS_KIND,)
+                                     and columns == ('content',))
+                entry = {'sql': sql, 'params': values, 'columns': columns, 'rows': [],
+                         'eof': None, 'drug_progress': drug_progress}
                 self._entries[key] = entry
             elif entry['columns'] != columns:
                 raise ValueError('witness_inconsistent')
@@ -266,7 +292,8 @@ class Recording:
                     or getattr(self._db, 'witness_authorizer_epoch', None) != self._authorizer_epoch
                     or (self._db.execute('PRAGMA data_version').fetchone()[0], self._db.total_changes) != self._before):
                 return None
-            entries = tuple((e['sql'], e['params'], e['columns'], tuple(e['rows']), e['eof'] is not None)
+            entries = tuple((e['sql'], e['params'], e['columns'], tuple(e['rows']),
+                             e['eof'] is not None, e['drug_progress'])
                             for e in self._entries.values())
             self._sealed = True  # a seal is a one-shot end to observation
             return Witness(entries, self._guard)
@@ -287,7 +314,7 @@ class Witness:
                     or not db.in_transaction or db.row_factory is not sqlite3.Row):
                 return False
             before = db.total_changes
-            for sql, params, columns, rows, eof in self._entries:
+            for sql, params, columns, rows, eof, drug_progress in self._entries:
                 if clock() >= deadline:
                     return False
                 cursor = db.execute(sql, params)
@@ -299,7 +326,7 @@ class Witness:
                             return False
                         row = cursor.fetchone()
                         if (not isinstance(row, sqlite3.Row)
-                                or hashlib.sha256(_values(tuple(row))).digest() != expected):
+                                or _row_digest(row, drug_progress) != expected):
                             return False
                     if eof and (clock() >= deadline or cursor.fetchone() is not None):
                         return False
