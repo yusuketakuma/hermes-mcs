@@ -6222,6 +6222,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if _CALL_NOTES.defer_reason == "checkpoint_unverified":
                     meta["_quality_hold"] = True
                 return _DEFERRED
+            except cloud_inference.CloudObservationIncomplete:
+                # Unverifiable readiness is not a denial: keep a received paid
+                # answer and the claim, defer instead of local fallback.
+                _CALL_NOTES.defer_reason = "cloud_guard"
+                return _DEFERRED
             except cloud_inference.CloudBusy:
                 _CALL_NOTES.defer_reason = "busy"
                 return _DEFERRED
