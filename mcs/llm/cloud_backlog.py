@@ -355,6 +355,7 @@ def worker(parent, *, index=None):
         allow_exit_settle = True
         waiting = {"code": None, "at": 0.0}
         carry_failures = 0
+        semantic_lock_failures = 0
         capacity_checked = float("-inf")
 
         def wait(code):
@@ -442,17 +443,20 @@ def worker(parent, *, index=None):
                     else:
                         lock = writer_lock.acquire_run_lock()
                         if lock is None:
-                            # a busy run lock keeps this worker on the same
-                            # semantic turn: short wait/reacquire cycles under
-                            # the usual parent/fence/memory guards, so an
-                            # unexecuted semantic job stays ahead of the next
-                            # extract attempt.
+                            # Give a brief lock contention time to clear, but
+                            # do not indefinitely starve the extract turn.
                             if (waiting["code"] != "writer_lock_busy"
                                     or time.monotonic() - waiting["at"] >= 60):
                                 waiting.update(code="writer_lock_busy", at=time.monotonic())
                                 _event("cloud_backlog_deferred", reason="writer_lock_busy", phase="semantic")
+                            semantic_lock_failures += 1
                             time.sleep(1)
+                            if semantic_lock_failures >= 3:
+                                semantic_lock_failures = 0
+                                phase += 1
+                                _event("cloud_backlog_deferred", reason="writer_lock_yield", phase="semantic")
                             continue
+                        semantic_lock_failures = 0
                         waiting["code"] = None
                         try:
                             # The loop guards ran before the lock wait: a
