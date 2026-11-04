@@ -251,14 +251,35 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
     else:
         pytest.fail("source negative did not become held")
     before = len(led.synthetic_jev_requests)
-    saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
-    changes = led.db.total_changes
+    def held_state():
+        return {
+            table: [tuple(row) for row in led.db.execute(f'SELECT * FROM "{table}"')]
+            for (table,) in led.db.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                                          "AND name NOT IN ('artifacts','sqlite_sequence') ORDER BY name")
+        }
+
+    def clinical_artifacts():
+        return [tuple(row) for row in led.db.execute(
+            "SELECT * FROM artifacts WHERE kind IS NOT ? OR project_id IS NOT 0 ORDER BY artifact_id",
+            (context_refresh.PROGRESS,))]
+
+    saved, originals = clinical_artifacts(), held_state()
+    rotation = dict(led.artifacts(context_refresh.PROGRESS, project_id=0)[0])
     for _ in range(3):
         clock.wall += 61
         again = step(runtime)
         assert again.get("reason") == "patient_context_waiting" and again["done"] == 0
-        assert led.db.total_changes == changes
-        assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
+        assert clinical_artifacts() == saved and held_state() == originals
+        current = dict(led.artifacts(context_refresh.PROGRESS, project_id=0)[0])
+        prior_content, content = json.loads(rotation['content']), json.loads(current['content'])
+        # Only the durable scan bookmark may move; quality, paid receipts and lane progress stay exact.
+        assert content.pop('patient_scan') != prior_content.pop('patient_scan')
+        assert content == prior_content
+        context_refresh.context_schedule.advance_turn(json.loads(current['content'])['patient_scan'])
+        for key in rotation.keys() - {'artifact_id', 'content', 'created_at'}:
+            assert current[key] == rotation[key]
+        assert len(led.artifacts(context_refresh.PROGRESS, project_id=0)) == 1
+        rotation = current
     assert len(led.synthetic_jev_requests) == before
     assert led.artifacts("patient_context_source_quality_fail_v1", project_id=1)
     assert not led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
@@ -1127,6 +1148,8 @@ def test_scope_withdrawn_while_waiting_for_writer_records_disposition(runtime, c
     attempts = []
     def locked():
         attempts.append(1)
+        with led.db:
+            led.db.execute("UPDATE messages SET body_text=body_text || '訂正' WHERE message_id=1")
         allowed[0] = False
         return None
     monkeypatch.setattr(context_refresh, "acquire_run_lock", locked)
