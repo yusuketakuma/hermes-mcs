@@ -354,8 +354,12 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
             ledger.db.execute("BEGIN IMMEDIATE")
         if inference_dependency_loss.source_binding(ledger.db, target["project_id"], target["message_id"]) != target["_source_binding"]:
             raise ValueError("context_source_changed")
+        # A required contract-bound cloud pass still needs context on a
+        # v4-sealed source; every other caller keeps the sealed-source fence.
+        unsealed = ("1=1" if isinstance(target, dict) and target.get("_required_cloud_contract")
+                    else f"{current_v4_id()} IS NULL")
         source = ledger.db.execute("SELECT * FROM messages m WHERE project_id=? AND message_id=? "
-                                   f"AND {current_v4_id()} IS NULL",
+                                   f"AND {unsealed}",
                                    (target["project_id"], target["message_id"])).fetchone()
         if (source is None or any(source[key] != target.get(key) for key in (
                 "content_hash", "posted_at", "posted_at_ts", "parent_id")) or source["body_state"] not in (None, "full")

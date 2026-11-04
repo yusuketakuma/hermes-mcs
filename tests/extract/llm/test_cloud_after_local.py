@@ -273,6 +273,115 @@ def test_completed_cloud_prefix_does_not_consume_followup_selection_limit(local_
 
 
 
+def _seal_canonical_v4(ledger):
+    """Seal the source with a current v4 projection, as semantic adoption does."""
+    from semantic_projection import PROJECTION_VERSION
+    import inference_version
+    source = ledger.db.execute(
+        "SELECT content_hash, project_id, message_id FROM messages WHERE message_id=1").fetchone()
+    meta = {"hash": source["content_hash"], "engine_version": 4,
+            "projection_version": PROJECTION_VERSION,
+            inference_version.VERSION_KEY: inference_version.CURRENT_VERSION}
+    cursor = ledger.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+        " VALUES('semantic_facts_v4',?,?,'{}','synthetic-v4',?,?)",
+        (source["project_id"], source["message_id"], json.dumps(meta), time.time()))
+    ledger.db.commit()
+    return cursor.lastrowid
+
+
+def _v4_row(ledger, artifact_id):
+    return tuple(ledger.db.execute(
+        "SELECT * FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone())
+
+
+def test_canonical_projection_does_not_cancel_required_cloud_pass(local_then_cloud):
+    ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    local, _meta = _current(ledger)
+    v4_id = _seal_canonical_v4(ledger)
+    sealed_v4 = _v4_row(ledger, v4_id)
+    cfg['cloud_llm']['mode'] = 'on'
+    report = _cloud_pass(ledger)
+    assert report['done'] == 1 and len(cloud_calls) == 1, (
+        'a sealed canonical projection must not cancel the required cloud pass')
+    rows = _current_artifacts(ledger)
+    assert len(rows) == 1   # the cloud artifact supersedes the local extract row
+    assert json.loads(rows[0]['meta'])['provider_provenance']['providers'] == ['anthropic']
+    source = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
+    assert worker.cloud_completion(ledger.db, source, _selected_contract(cfg)) == 'complete'
+    assert _v4_row(ledger, v4_id) == sealed_v4   # rawcloud write never touches the projection
+    assert local['content'] != rows[0]['content'] or rows[0]['artifact_id'] != local['artifact_id']
+    before, count = _financial_rows(ledger), len(cloud_calls)
+    assert _cloud_pass(ledger)['done'] == 0
+    assert _financial_rows(ledger) == before and len(cloud_calls) == count
+
+
+@pytest.mark.parametrize('boundary', ['claim', 'publish'])
+def test_projection_added_mid_race_keeps_required_cloud_pass(local_then_cloud, monkeypatch, boundary):
+    ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    cfg['cloud_llm']['mode'] = 'on'
+    sealed = []
+    target = '_claim' if boundary == 'claim' else '_commit_extraction_atomic'
+    original = getattr(worker, target)
+    def concurrent_seal(db, row, *args, **kwargs):
+        if not sealed:
+            with db.db:
+                sealed.append(_seal_canonical_v4(db))
+        return original(db, row, *args, **kwargs)
+    monkeypatch.setattr(worker, target, concurrent_seal)
+    report = _cloud_pass(ledger)
+    assert sealed and report['done'] == 1 and len(cloud_calls) == 1
+    rows = _current_artifacts(ledger)
+    assert len(rows) == 1
+    cloud_meta = json.loads(rows[0]['meta'])
+    assert cloud_meta['provider_provenance']['providers'] == ['anthropic']
+    assert cloud_meta['backend'] == 'anthropic' and cloud_meta.get('source_binding')
+    assert _v4_row(ledger, sealed[0]) is not None
+    financial, count = _financial_rows(ledger), len(cloud_calls)
+    assert _cloud_pass(ledger)['done'] == 0
+    assert _financial_rows(ledger) == financial and len(cloud_calls) == count
+
+
+def test_hold_still_vetoes_cloud_pass_on_a_sealed_source(local_then_cloud):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
+    assert _local_pass(ledger)['done'] == 1
+    local, _meta = _current(ledger)
+    with ledger.db:
+        worker._record_hold_tx(ledger, dict(ledger.db.execute(
+            'SELECT * FROM messages WHERE message_id=1').fetchone()), local, 'protected_loss')
+    v4_id = _seal_canonical_v4(ledger)
+    cfg['cloud_llm']['mode'] = 'on'
+    before = _financial_rows(ledger)
+    report = _cloud_pass(ledger)
+    assert report['done'] == 0 and not cloud_calls and _financial_rows(ledger) == before
+    assert _v4_row(ledger, v4_id) is not None
+    current, meta = _current(ledger)
+    assert current['artifact_id'] == local['artifact_id']
+    assert meta['provider_provenance']['providers'] == ['local']
+
+
+def test_low_signal_greeting_is_not_prefilter_settled_in_cloud_only(local_then_cloud, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
+    monkeypatch.setattr(worker, '_prefilter_enabled', lambda: True)
+    ledger.save_messages([_message(2, body='こんにちは。', posted_at='2026-09-19T00:00:00+09:00')])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-low-signal-followup', time.time())
+    cfg['cloud_llm']['mode'] = 'on'
+    report = worker.run_pending(ledger, limit=2, workers=1, budget_s=180,
+                                cloud_only=True, background=True)
+    assert report['done'] == 2 and len(cloud_calls) == 2
+    rows = ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind=? AND message_id=2 ORDER BY artifact_id DESC",
+        (worker.KIND,)).fetchall()
+    assert rows and all('prefilter' not in json.loads(row['meta']) for row in rows)
+    meta = json.loads(rows[0]['meta'])
+    assert meta['provider_provenance']['providers'] == ['anthropic']
+
+
 def test_hold_created_after_selection_prevents_cloud_claim(local_then_cloud, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
