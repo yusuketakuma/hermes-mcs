@@ -16,7 +16,6 @@ import uuid
 
 import cloud_policy as policy
 import mcs_util
-from mcs_queries import json_or_null, source_extract_pred
 import semantic_jev as jev
 
 READ_SECONDS = 5.0
@@ -243,44 +242,42 @@ def _route_counts(db, cfg, settings, deadline):
             item["requests_estimate"] += pending["summary_units"] + chunks
     if "reextract" in settings["routes"]:
         import extract_llm as extract
+        import cloud_inference
+        selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
+        if errors or selection is None:
+            raise ValueError("cloud_profile_unverified")
+        contract = cloud_inference.cloud_provider_contract(selection=selection)
         scope, params = _source_scope(settings)
-        query = extract._selection_sql(db, "DESC", scope, fresh=False).replace(
+        scope += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
+                  "AND COALESCE(human_src,0)=0 AND attempts=0 "
+                  f"AND NOT EXISTS ({extract._hold_sql()}) AND "
+                  + policy.history_scope_target_sql('m.message_id'))
+        query = extract._selection_sql(db, "DESC", scope, cloud_followup=True).replace(
             "m.body_text,", "length(m.body_text) AS body_length,")
         now = time.time()
         rows = db.execute(query, (extract.KIND, extract.EXTRACT_VERSION, *params,
             None, None, None, now, extract.KIND, extract.EXTRACT_VERSION, now, READ_ROWS + 1))
-        for count, row in enumerate(rows, 1):
-            _checkpoint(deadline, count)
-            if row["qc_src"] or row["thin_src"] or row["human_src"] or row["attempts"]:
-                continue
-            if db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND EXISTS ({extract._hold_sql()})",
-                          (row["message_id"],)).fetchone():
-                continue
-            # Same source-bound prior as the worker, projecting metadata only.
-            prior = db.execute("SELECT a.meta FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
-                f"WHERE a.kind=? AND m.message_id=? AND m.project_id=? AND m.content_hash=? {source_extract_pred()} "
-                "AND (m.body_state IS NULL OR m.body_state='full') AND length(m.body_text)>0 "
-                f"AND COALESCE(json_extract({json_or_null('a.content')},'$._error'),0)=0 "
-                "ORDER BY a.artifact_id DESC LIMIT 1", (extract.KIND, row["message_id"], row["project_id"], row["content_hash"])).fetchone()
-            meta = mcs_util.loads_dict(prior[0]) if prior else None
-            if ((not meta or type(meta.get("extract_version")) is not int)
-                    and not policy.history_thread_allowed(db, row["project_id"], row["message_id"])):
-                continue
-            if not policy.history_target_ready(db, row["project_id"], row["message_id"]):
-                continue
-            released = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
-                f"AND EXISTS ({extract._hold_sql(released=True)})", (row["message_id"],)).fetchone()
-            if (meta and type(meta.get("extract_version")) is int
-                    and meta["extract_version"] >= extract.EXTRACT_VERSION
-                    and extract.inference.is_current(meta, target=extract._INFERENCE_VERSION) and not released):
-                continue
-            item = out["reextract"]
-            item["targets"] += 1
-            item["input_chars"] += row["body_length"] or 0
-            requests = max(1, math.ceil((row["body_length"] or 0) / extract._CHUNK_SIZE))
-            item["basic_requests_estimate"] += 1
-            item["chunk_extra_requests_estimate"] += requests - 1
-            item["requests_estimate"] += requests
+        with policy.history_selection_check(db) as receipt_check:
+            for count, row in enumerate(rows, 1):
+                _checkpoint(deadline, count)
+                if (not policy.history_target_ready(db, row["project_id"], row["message_id"])
+                        or not receipt_check(row["project_id"], row["message_id"])):
+                    continue
+                # Keep the broad scan metadata-only; read one bounded source
+                # only when strict completion needs its original clinical text.
+                source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                                    (row["project_id"], row["message_id"])).fetchone()
+                completion = extract.cloud_completion(db, source, contract) if source is not None else None
+                _check_reader(db, deadline)  # proof readers may catch a bounded-row interruption
+                if completion in ("complete", "attention"):
+                    continue
+                item = out["reextract"]
+                item["targets"] += 1
+                item["input_chars"] += row["body_length"] or 0
+                requests = max(1, math.ceil((row["body_length"] or 0) / extract._CHUNK_SIZE))
+                item["basic_requests_estimate"] += 1
+                item["chunk_extra_requests_estimate"] += requests - 1
+                item["requests_estimate"] += requests
     if "semantic_backlog" in settings["routes"]:
         scope, params = _source_scope(settings, "j")
         rows = db.execute(

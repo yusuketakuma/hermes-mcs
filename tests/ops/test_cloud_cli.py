@@ -52,6 +52,7 @@ def world(tmp_path, monkeypatch):
         with db.db:
             db.db.execute("UPDATE messages SET first_seen=?", (now - 3600,))
             db.db.execute("UPDATE message_revisions SET observed_at=?", (now - 3600,))
+            cloud_policy.capture_history_tx(db.db, "synthetic-estimate-history", now)
     return tmp_path, path, config
 
 
@@ -161,7 +162,7 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
 
 
 @pytest.mark.parametrize("public_version", [None, "0.1", inference.CURRENT_VERSION])
-def test_reextract_estimate_tracks_public_generation_even_at_the_same_internal_version(world, public_version):
+def test_reextract_estimate_includes_local_results_of_each_public_generation(world, public_version):
     root, path, config = world
     with closing(Ledger(str(path))) as db:
         meta = {"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION}
@@ -170,7 +171,7 @@ def test_reextract_estimate_tracks_public_generation_even_at_the_same_internal_v
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1, meta=meta)
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     report = cli.observe(config, root=str(root))
-    assert report["routes"]["reextract"]["targets"] == int(public_version != inference.CURRENT_VERSION)
+    assert report["routes"]["reextract"]["targets"] == 1  # Local completion never proves the required cloud pass.
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
@@ -580,6 +581,7 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
             meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION - 1})
         with db.db:
             db.db.execute("UPDATE message_revisions SET observed_at=? WHERE message_id=1", (cli.time.time() - 3600,))
+            cloud_policy.capture_history_tx(db.db, "synthetic-chunk-estimate", cli.time.time())
     report = cli.observe(config, root=str(root))
     parts = report["estimate_components"]
     assert parts["current_backlog"]["reextract"]["basic_requests_estimate"] == 1
@@ -934,7 +936,10 @@ def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypa
     root, _path, config = world
     _real_interrupt(monkeypatch)
     report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
-    assert report["source_repair_evidence_holds"] == {"unknown": "deadline"}
+    assert report["source_repair_evidence_holds"] == {"unknown": "observation_incomplete"}
+    assert report["state"] == "partial"
+    assert report["interrupted_section"] == "source_repair_evidence_holds"
+    assert report["incomplete_reason"] == "read_deadline"
     assert report["routes"]["reextract"]["targets"] == 1
 
 
