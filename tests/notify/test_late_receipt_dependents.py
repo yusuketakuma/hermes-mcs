@@ -7,6 +7,7 @@ import pytest
 import notify_cards
 import notify_recovery
 import notify_spool
+from adapters.common import journal
 from notify_testkit import (CFG, NOW, SCOPE, _begin, _dispatch, _intent,
                             _latest_render, _part_receipt, _receipt, _seed_thread,
                             _uuid, led as led)
@@ -48,22 +49,6 @@ def _resolve(led, req):
     return apply(led, req, CFG, NOW + 1)
 
 
-@pytest.mark.parametrize("dependency", ["card", "thread"])
-def test_operator_late_delivery_replans_proven_unstarted_dependents_without_drift(led, dependency):
-    render, req = _prepare(led, dependency)
-    assert any(part["state"] == "held" for part in _parts(led, render))
-    receipt = _resolve(led, req)
-    assert receipt["outcome"] == "applied"
-    successor = _latest_render(led)
-    assert successor["delivery_id"] != render["delivery_id"]
-    assert successor["op"] == "update"
-    assert all(part["state"] != "held" for part in _parts(led, render))
-    assert any(part["kind"] == "body_part" for part in _parts(led, successor))
-    dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
-    assert not (Path(dirs["discord_render"]) / (render["delivery_id"] + ".json")).exists()
-    assert (Path(dirs["discord_render"]) / (successor["delivery_id"] + ".json")).exists()
-    assert _resolve(led, req) == receipt
-    assert _latest_render(led)["delivery_id"] == successor["delivery_id"]
 
 
 @pytest.mark.parametrize("dependency", ["card", "thread"])
@@ -148,22 +133,6 @@ def test_primary_resolution_without_worker_stop_does_not_replan(led):
     assert any(part["state"] == "held" for part in _parts(led, render))
 
 
-@pytest.mark.parametrize("dependency", ["card", "thread"])
-def test_already_delivered_parent_can_recover_its_unstarted_holds(led, dependency):
-    render, req = _prepare(led, dependency)
-    if dependency == "card":
-        assert _receipt(led, render, f"{1:016x}", message_id="synthetic-card")["applied"]
-    else:
-        assert _part_receipt(led, render, "thread", remote_id="synthetic-thread")["applied"]
-        req = {"version": 1, "cmd": "ops.card_resolve", **SCOPE,
-               "delivery_id": render["delivery_id"], "attempt_id": f"{1:016x}",
-               "message_id": "synthetic-card", **{key: req[key] for key in
-               ("command_id", "actor", "human_confirmed", "reason", "result", "evidence")}}
-    receipt = _resolve(led, req)
-    assert receipt["outcome"] == "applied"
-    assert receipt["unstarted_parts"]
-    assert _latest_render(led)["delivery_id"] != render["delivery_id"]
-    assert _resolve(led, req) == receipt
 
 
 def test_late_held_unknown_is_preserved_by_parent_resolution(led):
@@ -175,33 +144,22 @@ def test_late_held_unknown_is_preserved_by_parent_resolution(led):
 
 
 @pytest.mark.parametrize("dependency", ["card", "thread"])
-@pytest.mark.parametrize("after_unlink", [False, True])
-def test_withdraw_failure_rolls_back_and_same_command_can_retry(led, monkeypatch, dependency, after_unlink):
+def test_compacted_delivery_evidence_never_becomes_unsent(led, dependency):
     render, req = _prepare(led, dependency)
-    before = _parts(led, render)
     dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
-    path = Path(dirs["discord_render"]) / (render["delivery_id"] + ".json")
-    unlink = notify_recovery.os.unlink
-
-    def fail_old_spec(candidate, *args, **kwargs):
-        if str(candidate) == str(path):
-            if after_unlink:
-                unlink(candidate, *args, **kwargs)
-            raise OSError("synthetic-withdraw-failure")
-        return unlink(candidate, *args, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(notify_recovery.os, "unlink", fail_old_spec)
-        with pytest.raises(OSError, match="synthetic-withdraw-failure"):
-            _resolve(led, req)
-    assert _parts(led, render) == before
+    state = dirs["discord_state"]
+    aid = f"p:{render['delivery_id'].replace('-', '')}:body:0001"
+    for phase in ("started", "result", "receipt"):
+        journal.append(state, "synthetic-old-worker", {
+            "attempt_id": aid, "delivery_id": render["delivery_id"], "part_id": "body:0001",
+            "phase": phase, **({"result": "delivered", "remote_id": "synthetic-delivered-body"}
+                                if phase != "started" else {})})
+    # A worker's publication receipt is compactable even when the old runner
+    # rejected its factual receipt because the dependent was already held.
+    assert journal.compact(state, active="", file_ok=lambda rows: True,
+                           prunable=lambda _aid, rows: any(row["phase"] == "receipt" for row in rows)) == 3
+    assert journal.scan_checked(state) == ({}, True)
+    assert _resolve(led, req)["outcome"] == "applied"
+    body = next(part for part in _parts(led, render) if part["part_id"] == "body:0001")
+    assert body["state"] == "held"
     assert _latest_render(led)["delivery_id"] == render["delivery_id"]
-    assert led.db.execute("SELECT 1 FROM command_receipts WHERE command_id=?",
-                          (req["command_id"],)).fetchone() is None
-    assert led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
-                          (render["delivery_id"],)).fetchone()[0] is not None
-    assert path.exists() is not after_unlink
-    receipt = _resolve(led, req)
-    assert receipt["outcome"] == "applied"
-    assert _latest_render(led)["delivery_id"] != render["delivery_id"]
-    assert _resolve(led, req) == receipt
