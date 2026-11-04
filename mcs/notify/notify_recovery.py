@@ -20,6 +20,8 @@ from notify_scope import (card_projects, card_row, render_row, stored_scope,
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
 _PREFLIGHT_ERRORS = ("edit_target_unverified", "edit_history_unverified")
+_DEPENDENCY_PROOF = "dependency_rejected"
+_DEPENDENCY_ERROR = "stage_receipt_missing"
 
 
 # receipt note for an operator-declared LINE WORKS remote absence
@@ -369,6 +371,8 @@ def _journal_contradiction(ledger, req) -> str | None:
 def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=False) -> dict:
     """Read sealed identity on a borrowed ledger/db without writes or source text.
 
+    Unknown parts and Slack groups with a recorded local dependency refusal
+    are eligible; the latter require a separate positive journal proof at apply.
     Missing or ineligible parts return an error; transaction ownership stays
     with the caller, including snapshot readers and the recovery transaction."""
     db = cards.connection(ledger)
@@ -377,13 +381,17 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
                       (delivery_id, part_id)).fetchone()
     if render is None or part is None:
         return {"error": "unknown_part"}
-    if part["kind"] == "card" or part["state"] != "unknown" or not part["attempt_id"]:
+    dependency = (render["transport"] == "slack" and part["kind"] == "file_group"
+                  and part["part_id"] == "file_group" and part["state"] == "not_sent"
+                  and part["error_code"] == _DEPENDENCY_ERROR
+                  and part["attempt_id"] == f"p:{delivery_id.replace('-', '')}:file_group")
+    if part["kind"] == "card" or (part["state"] != "unknown" and not dependency) or not part["attempt_id"]:
         return {"error": "part_not_resolvable"}
     plan = {"version": 1, "cmd": "ops.card_part_resolve", **stored_scope(render),
             "transport": render["transport"],
             "delivery_id": delivery_id, "part_id": part_id, "attempt_id": part["attempt_id"],
             "manifest_sha256": render["payload_hash"], "payload_sha256": part["payload_sha256"],
-            "expected_state": "unknown"}
+            "expected_state": part["state"]}
     if include_related:
         if render["transport"] != "slack" or render["op"] != "update" or render["card_id"] is None:
             return {"error": "related_parts_unresolvable"}
@@ -413,7 +421,7 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
 
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
-    known = (*PART_HOLD_REASONS, "timeouterror", "connectionerror", "worker_crash",
+    known = (*PART_HOLD_REASONS, _DEPENDENCY_ERROR, "timeouterror", "connectionerror", "worker_crash",
              "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch")
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
@@ -429,6 +437,8 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     if not card and transport == "slack" and code in _PREFLIGHT_ERRORS:
         not_sent["conditional_proof"] = _PREFLIGHT_PROOF
         not_sent["conditional_proof_requires_current_sealed_preflight"] = True
+    if kind == "file_group" and transport == "slack" and code == _DEPENDENCY_ERROR:
+        not_sent["proof_any_of"] = [_DEPENDENCY_PROOF]
     return {"error_code": code, "available": available,
             "reason": None if available else "attempt_or_transport_unverified",
             "command": "ops.card_resolve" if card else "ops.card_part_resolve",
@@ -475,7 +485,7 @@ def part_hold_report(ledger) -> dict:
 
 
 def validate_card_part_resolve(req) -> str | None:
-    """Validate human approval of exactly one sealed unknown part."""
+    """Validate human approval of one sealed part recovery."""
     from mcs_util import valid_text
     from mcs_util import valid_hash
     if not isinstance(req, dict):
@@ -502,7 +512,7 @@ def validate_card_part_resolve(req) -> str | None:
             return "bad_" + key
     if any(not valid_hash(req.get(key)) for key in ("manifest_sha256", "payload_sha256")):
         return "bad_hash"
-    if req.get("expected_state") != "unknown" or req.get("result") not in _RESOLVE_RESULTS:
+    if req.get("expected_state") not in ("unknown", "not_sent") or req.get("result") not in _RESOLVE_RESULTS:
         return "bad_resolution"
     evidence = req.get("evidence")
     if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted"}:
@@ -511,6 +521,11 @@ def validate_card_part_resolve(req) -> str | None:
         return "bad_evidence"
     if evidence.get("worker_stopped") is not True:
         return "worker_not_proven_stopped"
+    if req["expected_state"] == "not_sent":
+        if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
+                or evidence.get("proof") != _DEPENDENCY_PROOF or "remote_id" in req or "related_plans" in req):
+            return "bad_dependency_resolution"
+        return None
     if "related_plans" in req:
         if (transport != "slack" or req["result"] != "mark_not_sent"
                 or evidence.get("proof") != _PREFLIGHT_PROOF):
@@ -551,7 +566,7 @@ def validate_card_part_resolve(req) -> str | None:
     return None
 
 
-def _preflight_journal_error(attempts, incomplete, req, render, part):
+def _preflight_journal_error(attempts, incomplete, req, render, part, *, result="unknown", kind="attachment_part"):
     # These Slack outcomes identify a local refusal or explicit API rejection.
     # An incomplete attempt or another outcome cannot prove a rejected edit,
     # even when the operator can see the original upload.
@@ -564,7 +579,7 @@ def _preflight_journal_error(attempts, incomplete, req, render, part):
     if len(rows) < 3 or phases[:2] != ["started", "result"] or any(p != "receipt" for p in phases[2:]):
         return "local_preflight_unproven"
     identity = {"attempt_id": req["attempt_id"], "delivery_id": req["delivery_id"],
-                "part_id": req["part_id"], "kind": "attachment_part"}
+                "part_id": req["part_id"], "kind": kind}
     worker = rows[0].get("worker_id")
     if not isinstance(worker, str) or not worker:
         return "local_preflight_unproven"
@@ -577,13 +592,12 @@ def _preflight_journal_error(attempts, incomplete, req, render, part):
                     and witness.get("part_id") == req["part_id"] for witness in witnesses):
                 return "local_preflight_unproven"
     echo = {**stored_scope(render), **identity, "version": 2, "op": "part_receipt",
-            **{key: render[key] for key in ("render_rev", "payload_hash", "route_epoch", "correlation")},
-            "result": "unknown"}
+            **{key: render[key] for key in ("render_rev", "payload_hash", "route_epoch", "correlation")}}
     for index, row in enumerate(rows):
         if (any(row.get(key) != value for key, value in identity.items())
                 or row.get("v") != 1 or row.get("worker_id") != worker):
             return "local_preflight_unproven"
-        if index >= 1 and row.get("result") != "unknown":
+        if index >= 1 and row.get("result") != result:
             return "local_preflight_unproven"
         if index == 0 and row.get("result") is not None:
             return "local_preflight_unproven"
@@ -594,6 +608,7 @@ def _preflight_journal_error(attempts, incomplete, req, render, part):
             expected_error = part["error_code"] if index == 1 else None
             if (not isinstance(env, dict) or notify_cmds.validate_int(env)
                     or any(env.get(key) != value for key, value in echo.items())
+                    or env.get("result") != ("unknown" if index == 0 else result)
                     or env.get("remote_id") is not None
                     or env.get("error_code") != expected_error
                     or row.get("error_code") != expected_error):
@@ -610,6 +625,14 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
         except OSError:
             return "journal_unverifiable"
     attempts, incomplete = journal_evidence
+    if req.get("expected_state") == "not_sent":
+        db = cards.connection(ledger)
+        render = render_row(db, req["delivery_id"])
+        part = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                          (req["delivery_id"], req["part_id"])).fetchone()
+        error = _preflight_journal_error(attempts, incomplete, req, render, part,
+                                        result="not_sent", kind="file_group")
+        return "dependency_rejection_unproven" if error else None
     if req["evidence"].get("proof") == _PREFLIGHT_PROOF:
         db = cards.connection(ledger)
         render = render_row(db, req["delivery_id"])
@@ -1000,7 +1023,7 @@ def _file_group_retry_error(db, render, card, candidates):
 
 
 def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
-    """Resolve explicitly approved unknown parts through the normal receipt path."""
+    """Resolve explicitly approved eligible parts through the normal receipt path."""
     db = cards.connection(ledger)
     now = time.time() if now is None else now
     if cfg is None:

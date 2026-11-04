@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "添付の準備不足で実行しなかったグループ共有を明示承認で再試行",
+  "summary": "Slackの新しい通知で添付の準備結果を確認できない場合、グループ共有を実行しなかった事実を配送記録に残します。内容が変わっていない場合も、全添付の配送結果を確定した後、元のファイル集合を対象に別途承認して再試行できます。",
+  "upgrade": "追加設定は不要です。Hermes pluginを使用中の場合はgatewayの再起動が必要です。過去のpendingや失われた配送記録を未送信とはみなさず、自動で復旧しません。",
+  "details": ["結果不明の添付は確認が済むまで変更せず、結果不明のグループ共有を自動で再送しません。", "明示再試行にはexpected_state=not_sent、proof=dependency_rejected、同じ試行の完全なjournal、ワーカー停止確認と人の承認が必要です。", "内容の変更や新しい通知による通常の更新条件、送信先・原文・添付の同一性確認、再計画で新しいファイルを追加しない条件は維持します。"],
+  "refs": ["adapters/common/worker.py", "mcs/notify/notify_recovery.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+}
