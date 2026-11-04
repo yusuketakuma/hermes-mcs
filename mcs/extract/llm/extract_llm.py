@@ -7532,6 +7532,7 @@ def _main() -> int:
                     # a transient failure ('database is locked') must not
                     # kill the resident worker — log, back off, retry
                     print(json.dumps({"event": "extract_loop_error",
+                                      **cloud_backlog._exception_observation(e),
                                       "error": type(e).__name__, "pid": os.getpid(),
                                       "ts": time.time()}),
                           file=sys.stderr, flush=True)

@@ -1,5 +1,9 @@
 """Regressions for the v4 extractor and drug_map (synthetic only)."""
 import time
+import json
+import sqlite3
+
+import pytest
 
 import drug_map
 import extract_llm
@@ -52,7 +56,8 @@ def test_left_is_counted_only_for_a_short_selection(tmp_path, monkeypatch):
     db.close()
 
 
-def test_resident_loop_survives_a_transient_error(monkeypatch, capsys):
+@pytest.mark.parametrize("kind", ["plain_sqlite", "coded_sqlite", "known_runtime", "private_runtime"])
+def test_resident_loop_survives_a_transient_error(monkeypatch, capsys, kind):
     now = [0.0]
     calls = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
@@ -68,13 +73,25 @@ def test_resident_loop_survives_a_transient_error(monkeypatch, capsys):
     def run(*args, **kwargs):
         calls.append(1)
         if len(calls) == 1:
-            import sqlite3
-            raise sqlite3.OperationalError("database is locked")
+            if kind in ("plain_sqlite", "coded_sqlite"):
+                error = sqlite3.OperationalError("synthetic-private-error-detail")
+                if kind == "coded_sqlite":
+                    error.sqlite_errorcode, error.sqlite_errorname = sqlite3.SQLITE_BUSY, "SQLITE_BUSY"
+                raise error
+            raise RuntimeError("extract_insert_unverified" if kind == "known_runtime"
+                               else "synthetic-private-error-detail")
         return {"done": 1, "failed": 0, "left": 1, "selected": 1}
     monkeypatch.setattr(extract_llm, "run_pending", run)
     assert extract_llm.main() == 0
     assert len(calls) >= 2 and now[0] >= 30
-    assert "extract_loop_error" in capsys.readouterr().err
+    output = capsys.readouterr().err
+    event = next(json.loads(line) for line in output.splitlines()
+                 if json.loads(line).get("event") == "extract_loop_error")
+    assert "synthetic-private-error-detail" not in output
+    assert event["error"] == event["class"] == ("OperationalError" if "sqlite" in kind else "RuntimeError")
+    assert event.get("error_code") == ("extract_insert_unverified" if kind == "known_runtime" else None)
+    assert event.get("sqlite_errorname") == ("SQLITE_BUSY" if kind == "coded_sqlite" else None)
+    assert event.get("sqlite_errorcode") == (sqlite3.SQLITE_BUSY if kind == "coded_sqlite" else None)
 
 
 def test_unusable_dictionary_scans_only_existing_refs(tmp_path):
