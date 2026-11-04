@@ -2070,6 +2070,28 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
         (KIND, mid, content_hash, EXTRACT_VERSION)).fetchone() is not None
 
 
+def cloud_completion(db, row, contract):
+    """Read a source-bound cloud execution separately from clinical completeness."""
+    if not isinstance(contract, dict) or set(contract) != {"backend", "model", "prompt"}:
+        return None
+    source = {**dict(row), "_provider_contract": dict(contract)}
+    binding = inference_dependency_loss.source_binding(db, source["project_id"], source["message_id"])
+    if not mcs_util.valid_hash(binding):
+        return None
+    prior = _prior_extract(db, source)
+    meta = _provider_strict_dict(prior["meta"]) if prior is not None else None
+    if (meta is None or meta.get("source_binding") != binding
+            or any(meta.get(key) != value for key, value in contract.items())
+            or prior["model"] != contract["model"]):
+        return None
+    evidence = _prior_provider_evidence(prior, prior["content"], binding)
+    if not evidence["complete"] or evidence["providers"] != [contract["backend"]]:
+        return None
+    result = _finish_progress(db, _progress_steps(db, source, model=contract["model"],
+        expected_artifact_id=prior["artifact_id"], required_contract=contract))
+    return result["state"] if result.get("execution_verified") is True else None
+
+
 UPGRADE_KIND = "extract_upgrade_v1"
 
 
@@ -2969,9 +2991,13 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
         if isinstance(r, dict) and r.get('_cloud_mode') in ('on', 'shadow'):
             now = time.time()
             current = ledger.db.execute(
-                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?'),
+                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?',
+                               cloud_followup=bool(r.get('_required_cloud_contract'))),
                 (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
                  KIND, EXTRACT_VERSION, now, 1)).fetchone()
+            if (r.get('_required_cloud_contract') and cloud_completion(ledger.db, r, r['_required_cloud_contract']) is not None):
+                ledger.db.commit()
+                return None
             if current is None or any(current[key] != r.get(key)
                                       for key in ('qc_src', 'thin_src', 'human_src', 'attempts')):
                 ledger.db.commit()
@@ -4117,8 +4143,12 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
             state = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
             if not _checkpoint_state_matches(r, expected, used_keys, state):
                 return _commit_rejected(r, "checkpoint")
-            if check_current and _current(ledger, r["message_id"], r["content_hash"]):
-                return "current"
+            if check_current:
+                required = r.get("_required_cloud_contract")
+                already_current = (cloud_completion(ledger.db, r, required) is not None if required is not None
+                                   else _current(ledger, r["message_id"], r["content_hash"]))
+                if already_current:
+                    return "current"
             if expected_prior is not None:
                 prior = _prior_extract(ledger.db, r)
                 if prior is None or _prior_identity(prior) != expected_prior:
@@ -4350,7 +4380,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     return True
 
 
-def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
+def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, required_contract=None):
     """Apply the shared progress decision, yielding only independent SQL probes."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not isinstance(model, str) or not model or not row or row["body_state"] != "full":
@@ -4390,6 +4420,9 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
             return out
         r["_frame"] = frame
         context = frame["text"]
+        if required_contract is not None and (
+                not _frame_references_current(db, r, frame) or not _medication_reference_current(db, r)):
+            return out
     else:
         context = _thread_context(db, r)
     size = _saved_chunk_size(db, r, context)
@@ -4462,7 +4495,7 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
                     type(validation.get(key)) is not int or validation[key] < 0
                     for key in ("items_dropped", "evidence_dropped"))):
             return out
-        if bound and not extract_quality.completeness_resolved(meta):
+        if bound and required_contract is None and not extract_quality.completeness_resolved(meta):
             return out
         if (bound and isinstance(integrity, dict)
                 and ("completeness" in integrity or "completeness_chunks" in integrity)):
@@ -4512,7 +4545,10 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
                         db, r, context, document, integrity, used,
                         chunk_size=size, saved_state=(ps, sv)):
                     return out
+        if required_contract is not None and bound and not meta.get("error") and valid is not None:
+            out["execution_verified"] = True
         if (bound and not meta.get("error") and valid is not None
+                and extract_quality.completeness_resolved(meta)
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
                 and not any(isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                             for key in ("qc_fix", "human_fix"))):
@@ -4963,7 +4999,8 @@ def upgrade_status(db, *, model: str | None) -> dict:
 
 def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                    archived: bool | None = None, rehold: bool | None = None,
-                   prioritize_patients: bool = False, bounded: bool = True) -> str:
+                   prioritize_patients: bool = False, bounded: bool = True,
+                   cloud_followup: bool = False) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
@@ -4988,6 +5025,11 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                         + "EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
                           " AND COALESCE(p.is_archived,0)!=0)")
     priority = patient_priority.activity_order_sql('m.project_id') + ', ' if prioritize_patients else ''
+    pending = pending_pred(db)
+    if cloud_followup:
+        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND {current_v4_id()} IS NULL AND EXISTS ("
+                   f"SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id "
+                   + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION}))")
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
@@ -5004,7 +5046,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                           AND claim.message_id=m.message_id
                           AND claim.next_try > ?)
         AND ({_retry_budget_sql()})
-        AND {pending_pred(db)}
+        AND ({pending})
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
       ORDER BY {priority}m.posted_at_ts {order}, m.message_id {order}
@@ -5358,8 +5400,13 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         # quality gates remain in this same query before its SQL limit.
         adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
         adm_params.append(json.dumps(sorted(exclude_ids)))
+    required_contract = None
     if cloud_only:
-        cfg = cloud_inference.resolve_cloud_settings(load_config())
+        raw_cfg = load_config()
+        cfg = cloud_inference.resolve_cloud_settings(raw_cfg)
+        selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract", purpose="backlog", root=HOME)
+        if not errors and selection is not None:
+            required_contract = cloud_inference.cloud_provider_contract(selection=selection)
         if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
             owner = getattr(ledger, '_cloud_state_owner', None)
             if owner is not None and prioritize_patients:
@@ -5387,7 +5434,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             raise _CloudSelectionIncomplete('deadline')
         cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
                                                fresh, archived, rehold, bounded=not cloud_only,
-                                               prioritize_patients=prioritize_patients), (
+                                               prioritize_patients=prioritize_patients, cloud_followup=cloud_only), (
             KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
             shard[1] if shard else None,
@@ -5404,7 +5451,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 if deadline is not None and time.monotonic() >= deadline:
                     raise _CloudSelectionIncomplete('deadline')
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
-                        and receipt_check(row["project_id"], row["message_id"])):
+                        and receipt_check(row["project_id"], row["message_id"])
+                        and required_contract is not None
+                        and cloud_completion(ledger.db, row, required_contract) is None):
                     selected.append(row)
                     if len(selected) >= n:
                         break
@@ -5635,6 +5684,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             r["_cloud_selection"] = selection
         if mode == "on":
             r["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
+            if cloud_only:
+                r["_required_cloud_contract"] = r["_provider_contract"]
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
