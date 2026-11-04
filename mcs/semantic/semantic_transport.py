@@ -130,7 +130,7 @@ def inference_requests() -> list:
 # dynamic (llm_admission:<state>) and checked by prefix at the discard site.
 _PRESEND_REFUSAL_STAGES = frozenset({
     "cloud_not_sent", "cloud_unit_unresolved", "cloud_owner_transaction",
-    "cloud_deadline", "cloud_budget_blocked", "cloud_pricing_unverified",
+    "cloud_deadline", "cloud_budget_blocked", "cloud_pricing_unverified", "checkpoint_unverified",
     "cloud_capacity", "cloud_profile_unavailable", "realtime_target",
     "probe_unsent", "long_output_needs_budget", "llm_turn_busy",
     "llm_unreachable", "llm_unavailable"})

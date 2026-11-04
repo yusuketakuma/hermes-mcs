@@ -810,11 +810,13 @@ def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_p
     started = set()
 
     def persist(ledger, r, chunks, *a, **k):
-        real_persist(ledger, r, chunks, *a, **k)
+        saved = real_persist(ledger, r, chunks, *a, **k)
+        assert saved
         if any(isinstance(v, dict) and v.get("_quality_status") == "started"
                for v in chunks.values()):
             started.add(r["message_id"])
             offset[0] = 10_000.0            # saved, then the ack wait hits the deadline
+        return saved
     monkeypatch.setattr(extract_llm, "_persist_chunks", persist)
     repairs = []
 

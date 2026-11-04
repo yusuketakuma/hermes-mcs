@@ -1435,7 +1435,7 @@ def test_refused_unit_yields_selection_without_bypassing_send_guard(cloud_candid
     ("cloud_disabled", "prepare_cloud_disabled"),
     ("profile", "prepare_profile_unavailable"),
     ("medication", "prepare_medication_changed"),
-    ("context", "prepare_context_invalid"),
+    ("context", "prepare_context_other"),
     ("database", "prepare_database_unavailable"),
 ])
 def test_prepare_refusal_reports_fixed_reason_without_private_error(cloud_candidates, monkeypatch, cause, expected):

@@ -1209,6 +1209,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
+    Other safe deferrals, including source/currentness, provider and checkpoint
+    refusals, also yield _DEFERRED without a completed result.
 
     `context` is an optional thread-context block (already formatted);
     it is reference-only and never becomes evidence. `hints` is the
@@ -1598,8 +1600,10 @@ def llm_extract(body: str, *, context: str | None = None,
         callback = on_chunk_replay if replayed and on_chunk_replay is not None else on_chunk
         if callback is not None:
             accepted = callback(key, checkpoint)
-            if accepted is False and (repair is not None or replayed and on_chunk_replay is not None):
+            if accepted is False:
                 _CALL_NOTES.defer_reason = "checkpoint_unverified"
+                if meta_out is not None:
+                    meta_out["_quality_hold"] = True
                 return _DEFERRED
         return [v]
 
@@ -2224,6 +2228,10 @@ def _verify_created_artifact_tx(db, artifact_id, *, kind, project_id, message_id
 def _commit_rejected(r, reason):
     """Return the unchanged rejection outcome while retaining only a fixed diagnostic."""
     if isinstance(r, dict):
+        if reason == "completeness":
+            detail = r.get("_completeness_reject_reason")
+            if type(detail) is str and detail in cloud_backlog._COMPLETENESS_REJECTION_REASONS:
+                reason = detail
         r["_commit_reject_reason"] = ("commit_" + reason
             if type(reason) is str and reason in cloud_backlog._COMMIT_REJECTION_REASONS else "commit_rejected")
     return "rejected"
@@ -3752,6 +3760,14 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
     merged document is checked: well-formed terminal records whose claimed
     remainder still covers the document's unresolved hints. Run-time
     metadata alone cannot mint a resolved claim."""
+    if isinstance(r, dict):
+        r.pop("_completeness_reject_reason", None)
+
+    def reject(reason):
+        if isinstance(r, dict) and reason in cloud_backlog._COMPLETENESS_REJECTION_REASONS:
+            r["_completeness_reject_reason"] = reason
+        return False
+
     try:
         completeness = integrity.get("completeness")
         chunks_n = integrity.get("completeness_chunks")
@@ -3759,17 +3775,18 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
             document = (content if isinstance(content, dict)
                         else _provider_strict_dict(content))
             if document is None or not isinstance(completeness, dict) or not completeness:
-                return False
+                return reject("completeness_shape")
             expected = _hint_coverage(document, _rule_hints(r), r["body_text"])
             if set(completeness) == {"0"}:
                 if type(chunks_n) is not int or chunks_n != 1:
-                    return False
+                    return reject("completeness_shape")
                 claim = completeness["0"]
                 if (not isinstance(claim, dict) or not set(claim) <= {
                         "state", "remaining_hint_candidates", "checked_hint_candidates"}):
-                    return False
-                return _quality_record_consistent(
+                    return reject("completeness_shape")
+                return (_quality_record_consistent(
                     {k: claim[k] for k in ("state", "remaining_hint_candidates")}, expected)
+                    or reject("completeness_coverage"))
             # Older committed results carry per-leaf claims whose checkpoint
             # evidence was already cleaned. Prove what the merged document
             # still binds: well-formed terminal records — a resolved record
@@ -3780,7 +3797,7 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
             # content alone cannot prove, and the claim is still rejected
             # when it resolves work the document does not.
             if type(chunks_n) is not int or chunks_n != len(completeness):
-                return False
+                return reject("completeness_shape")
             total = 0
             for claim in completeness.values():
                 if (not isinstance(claim, dict)
@@ -3790,10 +3807,11 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
                         or claim["remaining_hint_candidates"] < 0
                         or (claim["state"] == "hint_gaps_resolved"
                             and claim["remaining_hint_candidates"] != 0)):
-                    return False
+                    return reject("completeness_shape")
                 total += claim["remaining_hint_candidates"]
-            return (expected["state"] != "dispatch_unknown"
-                    and total >= expected["remaining_hint_candidates"])
+            return ((expected["state"] != "dispatch_unknown"
+                     and total >= expected["remaining_hint_candidates"])
+                    or reject("completeness_coverage"))
         size = r["_chunk_size"] if chunk_size is None else chunk_size
         splits, saved = (saved_state if saved_state is not None
                          else _saved_chunk_state(db, r, context, chunk_size=size))
@@ -3803,11 +3821,11 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
             key, piece = stack.pop()
             seen += 1
             if seen > _PROGRESS_MAX_NODES:
-                return False
+                return reject("completeness_layout")
             if key in splits:
                 parts = plan_chunks(piece, splits[key])
                 if len(parts) < 2 or "".join(parts) != piece:
-                    return False
+                    return reject("completeness_layout")
                 stack.extend((f"{key}:{index}", part)
                              for index, part in reversed(list(enumerate(parts))))
             else:
@@ -3820,15 +3838,15 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
                 # after being superseded by a split — its leaf claim moved
                 # to the children, so the parent must be a layout parent.
                 if key not in splits:
-                    return False
+                    return reject("completeness_pending")
             elif key not in pieces:
-                return False
+                return reject("completeness_adopted")
             else:
                 adopted.append(key)
         if (not isinstance(completeness, dict) or type(chunks_n) is not int
                 or chunks_n != len(adopted)
                 or set(completeness) != {str(key) for key in adopted}):
-            return False
+            return reject("completeness_adopted")
         for key in adopted:
             leaf = {k: v for k, v in saved[key].items()
                     if k not in ("_quality_result", "_provider_leaf")}
@@ -3846,12 +3864,12 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
                         and any(leaf.get(field) for field in ("_items_dropped", "_evidence_dropped"))):
                     allowed = {**durable, "state": "unresolved"}
                 if claim != allowed:
-                    return False
+                    return reject("completeness_terminal")
             if not _quality_record_consistent(claim, expected):
-                return False
+                return reject("completeness_coverage")
         return True
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
-        return False
+        return reject("completeness_validation")
 
 
 def _verify_inline_extract_proof(db, r, context, document, proof):
@@ -4004,6 +4022,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                               used_keys, *, check_current, mark_context=None, expected_prior=None):
     if isinstance(r, dict):
         r.pop("_commit_reject_reason", None)
+        r.pop("_completeness_reject_reason", None)
     if ledger.db.in_transaction:
         return _commit_rejected(r, "transaction")
     r.pop("_inline_extract_proof", None)
@@ -5462,6 +5481,28 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     return rows, fresh_selected
 
 
+_PREPARE_CONTEXT_REASONS = {
+    ("load", "pending_context_unverifiable"): "prepare_context_load_unverifiable",
+    ("load", "pending_context_reference_changed"): "prepare_context_load_reference_changed",
+    ("medication", "medication_reference_input_invalid"): "prepare_context_medication_input_invalid",
+    ("medication", "medication_reference_snapshot_invalid"): "prepare_context_medication_snapshot_invalid",
+    ("prepare", "context_transaction_owned"): "prepare_context_prepare_transaction_owned",
+    ("prepare", "invalid_context_options"): "prepare_context_prepare_options_invalid",
+    ("prepare", "context_budget_exceeded"): "prepare_context_prepare_budget_exceeded",
+    ("prepare", "context_medication_hints_invalid"): "prepare_context_prepare_medication_invalid",
+    ("prepare", "context_source_changed"): "prepare_context_prepare_source_changed",
+    ("prepare", "context_snapshot_invalid"): "prepare_context_prepare_snapshot_invalid",
+}
+
+
+def _prepare_context_rejection(stage, error):
+    """Classify only one exact known code at its fixed preparation stage."""
+    args = error.args
+    if len(args) == 1 and type(args[0]) is str:
+        return _PREPARE_CONTEXT_REASONS.get((stage, args[0]), "prepare_context_other")
+    return "prepare_context_other"
+
+
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                   background=False, cloud_only=False, load_checkpoints=True, deadline=None,
                   blocked_reasons=None, blocked_rows=None) -> tuple[list, int, int]:
@@ -5542,14 +5583,17 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         auto = retry_meta.get("auto_retry")
         attempt = {key: r.get(key) for key in ("qc_src", "human_src", "thin_src")}
         attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
+        stage = "load"
         try:
             frame = _pending_context_frame(ledger.db, r, attempt=attempt, enabled=enabled)
             if frame is None:
                 hint_deadline = time.monotonic() + 1.0
                 if deadline is not None:
                     hint_deadline = min(hint_deadline, deadline)
+                stage = "medication"
                 medication_hints = extraction_medications.build(ledger.db, cfg, r["body_text"],
                     private=mode != "on", deadline=hint_deadline)
+                stage = "prepare"
                 frame = extraction_context.prepare(ledger, r, model=r["_target"][1],
                     contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
                     version=EXTRACT_VERSION, medication_hints=medication_hints,
@@ -5561,8 +5605,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         except sqlite3.Error:
             block("prepare_database_unavailable")
             continue
-        except ValueError:
-            block("prepare_context_invalid")
+        except ValueError as error:
+            block(_prepare_context_rejection(stage, error))
             continue
         context = r["_context"] = r["_frame"]["text"]
         saved = {}
@@ -5872,11 +5916,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         skipped += row_skipped
         context_blocked += row_blocked
         for refused_row, reason in refused:
-            if reason == "prepare_context_invalid" and time.monotonic() < deadline and _writer_current(full=True):
+            if reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
                 _claim(ledger, refused_row, _PREPARE_HOLD_S)
-        if jobs or not any(reason == "prepare_context_invalid" for _, reason in refused) or time.monotonic() >= deadline:
+        if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES for _, reason in refused) or time.monotonic() >= deadline:
             break
         # A rejected head must not spend the healthy-job limit. Seeing a source
         # once per pass and the existing deadline bound an all-held backlog.
@@ -6017,8 +6061,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
-                current=lambda: not r.get("_checkpoint_conflict")
-                    and _owns_current_source(ledger, r, r["_cloud_lease"]),
+                current=lambda: _owns_current_source(ledger, r, r["_cloud_lease"]),
+                dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
                 cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True)))
         if provider is not None:
@@ -6034,6 +6078,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return result
             except cloud_client.CloudNotSent as error:
                 _CALL_NOTES.defer_reason = cloud_client.not_sent_reason(error)
+                if _CALL_NOTES.defer_reason == "checkpoint_unverified":
+                    meta["_quality_hold"] = True
                 return _DEFERRED
             except cloud_inference.CloudBusy:
                 _CALL_NOTES.defer_reason = "busy"

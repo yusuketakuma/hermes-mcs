@@ -295,12 +295,26 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "paused", "mode_off", "out_of_scope", "jev_skip_unverified",
                   "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
                   "prepare_profile_unavailable", "prepare_medication_changed",
-                  "prepare_context_invalid", "prepare_database_unavailable", "other"}
+                  "prepare_context_invalid", "prepare_database_unavailable", "other",
+                  "cloud_capacity", "cloud_profile_unavailable", "cloud_source_unverified",
+                  "cloud_target_unverified", "audit_pending", "loops_incomplete"}
+_PREPARE_CONTEXT_REJECTION_CODES = frozenset({
+    "prepare_context_invalid", "prepare_context_other", "prepare_context_load_unverifiable",
+    "prepare_context_load_reference_changed", "prepare_context_medication_input_invalid",
+    "prepare_context_medication_snapshot_invalid", "prepare_context_prepare_transaction_owned",
+    "prepare_context_prepare_options_invalid", "prepare_context_prepare_budget_exceeded",
+    "prepare_context_prepare_medication_invalid", "prepare_context_prepare_source_changed",
+    "prepare_context_prepare_snapshot_invalid",
+})
+_DEFER_REASONS.update(_PREPARE_CONTEXT_REJECTION_CODES)
 _COMMIT_REJECTION_REASONS = frozenset({
     "transaction", "source_or_owner", "checkpoint", "prior_changed", "quality_proof",
     "completeness", "context", "reference", "medication", "retained_proof", "result_seal",
     "insert_fence", "cloud_guard",
 })
+_COMPLETENESS_REJECTION_REASONS = frozenset("completeness_" + reason for reason in (
+    "shape", "layout", "pending", "adopted", "terminal", "coverage", "validation"))
+_COMMIT_REJECTION_REASONS |= _COMPLETENESS_REJECTION_REASONS
 _COMMIT_REJECTION_CODES = frozenset("commit_" + reason for reason in _COMMIT_REJECTION_REASONS)
 _DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
 

@@ -176,7 +176,11 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
     assert semantic_runtime._circuit_state(led, kind="cloud_circuit")["consecutive_failures"] == 0
 
 
-def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatch):
+@pytest.mark.parametrize("detail,stage", [
+    ("synthetic refusal", "cloud_not_sent"),
+    ("checkpoint_unverified", "checkpoint_unverified"),
+])
+def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatch, detail, stage):
     """A pre-send refusal is a harmless budget wait: the provider that already
     settled a chunk keeps its receipt — only scope/lease loss may discard."""
     import extract_llm
@@ -200,13 +204,13 @@ def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatc
             if len(calls) == 1:
                 self.completed_reservations.append({'reservation_id': 'synthetic'})
                 return {'status': 200, 'text': '{"facts": []}', 'finish_reason': 'stop'}
-            raise extract_llm.cloud_client.CloudNotSent('budget_exceeded', 'synthetic refusal')
+            raise extract_llm.cloud_client.CloudNotSent('budget_exceeded', detail)
 
         def discard(self):
             self.discarded = True
 
     monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Provider)
-    with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
+    with pytest.raises(transport.runtime.LLMNotSent, match=stage):
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct) as chat:
             assert json.loads(chat('synthetic first')) == {'facts': []}

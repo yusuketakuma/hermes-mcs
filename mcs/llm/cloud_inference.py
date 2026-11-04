@@ -41,7 +41,7 @@ class CloudInferenceUnit:
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
-                 purpose=None, selection=None, cache_heads=(), input_binding=None):
+                 purpose=None, selection=None, cache_heads=(), input_binding=None, dispatch_current=None):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
         resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
@@ -124,6 +124,13 @@ class CloudInferenceUnit:
                 raise CloudFallback("cloud_unit_changed") from None
             if denied:
                 raise CloudFallback("cloud_unit_changed")
+            if inference and dispatch_current is not None:
+                try:
+                    allowed = dispatch_current() is True
+                except Exception:
+                    allowed = False
+                if not allowed:
+                    raise cloud_client.CloudNotSent("not_sent", "checkpoint_unverified")
         self.guard = lambda: dispatch(guard)
         def commit_guard():
             dispatch(lambda: guard(inference=False), result=True)
@@ -137,7 +144,8 @@ class CloudInferenceUnit:
                 unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
                 message_id=message_id, owner=owner, discard_reason=discard_reason,
                 max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
-                purpose="quality_repair", cache_heads=self._cache_heads, input_binding=self.input_binding)
+                purpose="quality_repair", cache_heads=self._cache_heads, input_binding=self.input_binding,
+                dispatch_current=dispatch_current)
             self._children.append(child)
             return child
         self.spawn_quality_repair = spawn_quality_repair

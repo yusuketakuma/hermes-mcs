@@ -36,6 +36,8 @@ def not_sent_reason(error):
         return "cloud_unit_unresolved"
     if detail == "owner_transaction_active":
         return "cloud_owner_transaction"
+    if detail == "checkpoint_unverified":
+        return "checkpoint_unverified"
     if detail in {"deadline", "expired", "not_started"}:
         return "cloud_deadline"
     if detail in {"daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
