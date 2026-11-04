@@ -11,7 +11,6 @@ import pytest
 
 from anthropic_client import AnthropicClient
 import cloud_policy
-import cloud_client
 from cloud_policy import record_disposition_tx as real_record_disposition_tx
 from cloud_policy import record_result as real_record_result
 from cloud_policy import usage_reserver as real_usage_reserver
@@ -649,9 +648,13 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     report = worker.run_pending(led, budget_s=180)
-    assert report["done"] == 1 and not calls and len(reserves) == 1
+    waits = change in ('stop', 'daily_cap', 'monthly_cap', 'window_start')
+    assert report["done"] == int(not waits) and not calls and len(reserves) == 1
+    assert report['deferred'] == int(waits)
+    if waits:
+        assert report['defer_reasons'] == {'cloud_guard': 1}
     assert not led.artifacts("cloud_usage_disposition")
-    assert len(local) == 1
+    assert len(local) == int(not waits)
     artifact = led.artifacts(worker.KIND)[0]
     assert "backend" not in json.loads(artifact["meta"])
 
@@ -1157,10 +1160,11 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     deadline = time.monotonic() + 180
     def provider():
         return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
-                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn(),
+                                     input_binding="a" * 64)
 
     first = provider()
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         first("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(posts) == len(reserves) == len(results) == 1
@@ -1168,13 +1172,14 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     assert result["reservation_id"] == reservation["reservation_id"]
     assert result["http_class"] == "http_200" and result["error_kind"] is None
     assert result["usage"]["input_tokens"] == 10 and result["usage"]["output_tokens"] == 5
-    assert result["disposition"] == "discarded_scope" and not led.db.in_transaction
+    assert result.get("disposition") is None and not led.db.in_transaction
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not first.discarded and first.final_disposition is None
+    saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
     unavailable[0] = False
-    with pytest.raises(cloud_inference.CloudFallback):
-        first("synthetic", deadline=deadline, max_tokens=100)
-    with pytest.raises(cloud_client.CloudNotSent) as blocked:
-        provider()("synthetic", deadline=deadline, max_tokens=100)
-    assert (blocked.value.kind, blocked.value.detail) == ("budget_exceeded", "cloud_unit_unresolved")
+    assert first("synthetic", deadline=deadline, max_tokens=100)['reused_response'] is True
+    assert provider()("synthetic", deadline=deadline, max_tokens=100)['reused_response'] is True
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
 
 
@@ -1199,7 +1204,8 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
     deadline = time.monotonic() + 180
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
+    reason = "cloud_guard_unverified" if fails_on_read in (1, 4) else "cloud_config_unverified"
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match=reason):
         provider("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(reserves) == len(results) == (1 if fails_on_read == 4 else 0)
@@ -1207,10 +1213,12 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
         result = json.loads(results[0]["meta"])
         assert result["http_class"] == "not_sent" and result["usage"] is None
         assert result["reservation_id"] == json.loads(reserves[0]["meta"])["reservation_id"]
+    assert not led.artifacts('cloud_usage_disposition')
+    assert not provider.discarded and provider.final_disposition is None
     assert not provider.possibly_sent and not led.db.in_transaction
 
 
-def test_transient_read_error_after_reservation_stays_unsent_and_discarded(routed, monkeypatch):
+def test_transient_read_error_after_reservation_stays_unsent_without_scope_discard(routed, monkeypatch):
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     failed = [False]
@@ -1226,17 +1234,17 @@ def test_transient_read_error_after_reservation_stays_unsent_and_discarded(route
     deadline = time.monotonic() + 180
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
     assert meta["http_class"] == "not_sent" and meta["usage"] is None
-    disposition, = led.artifacts("cloud_usage_disposition")
-    assert json.loads(disposition["meta"])["disposition"] == "discarded_scope"
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not provider.discarded and provider.final_disposition is None
     assert not provider.possibly_sent and not led.db.in_transaction
 
 
-def test_capacity_read_failure_discards_previously_settled_response(routed, monkeypatch):
+def test_config_read_failure_preserves_previously_settled_response(routed, monkeypatch):
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     unavailable, posts = [False], []
@@ -1254,17 +1262,19 @@ def test_capacity_read_failure_discards_previously_settled_response(routed, monk
     monkeypatch.setattr(AnthropicClient, "request", request)
     deadline = time.monotonic() + 180
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
-                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn(),
+                                     input_binding="b" * 64)
     provider("synthetic", deadline=deadline, max_tokens=100)
     unavailable[0] = True
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
     assert len(posts) == 1 and meta["http_class"] == "http_200"
     assert meta["usage"]["input_tokens"] == 10 and meta["usage"]["output_tokens"] == 5
-    disposition, = led.artifacts("cloud_usage_disposition")
-    assert json.loads(disposition["meta"])["disposition"] == "discarded_scope"
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not provider.discarded and provider.final_disposition is None
+    assert json.loads(result['content'])['text'] == '{"symptoms":[]}'
     assert not led.db.in_transaction
 
 
@@ -1911,3 +1921,77 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
     if damage == 'repair_answer_changed':
         assert evidence_failures == [(response['reservation_id'], expected_finish)]
     assert len(sends) == first_sends
+
+
+@pytest.mark.parametrize('boundary', ['settings', 'empty_settings', 'missing_settings', 'reservation_caps', 'explicit_scope'])
+def test_intermediate_setting_reads_preserve_unknown_or_explicit_scope_category(routed, monkeypatch, boundary):
+    led, cfg, calls, _reserves, _results = routed
+    _use_real_cloud_accounting(monkeypatch)
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route='reextract', project_id=1,
+        unit_key='synthetic-read-gap', deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    before = [tuple(row) for row in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    if boundary == 'settings':
+        def unreadable():
+            raise mcs_util.ProviderSettingsUnreadable('synthetic-private-read-failure')
+        monkeypatch.setattr(cloud_inference, 'load_config', unreadable)
+        with pytest.raises(cloud_inference.CloudObservationIncomplete):
+            cloud_inference._current_cloud_settings()
+    elif boundary in ('empty_settings', 'missing_settings'):
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {} if boundary == 'empty_settings' else None)
+        with pytest.raises(cloud_inference.CloudObservationIncomplete, match='cloud_config_unverified'):
+            cloud_inference._current_cloud_settings()
+    elif boundary == 'reservation_caps':
+        monkeypatch.setattr(cloud_inference, '_current_cloud_settings', lambda: {})
+        with pytest.raises(cloud_inference.CloudObservationIncomplete):
+            provider.reserve(provider.client.body('synthetic prompt', 100, None), 30)
+    else:
+        changed = cloud_inference.CloudFallback('cloud_unit_changed')
+        def revoked():
+            raise changed
+        monkeypatch.setattr(cloud_inference, '_current_cloud_settings', revoked)
+        with pytest.raises(cloud_inference.CloudFallback) as error:
+            provider.reserve(provider.client.body('synthetic prompt', 100, None), 30)
+        assert error.value is changed
+        assert not isinstance(error.value, cloud_inference.CloudObservationIncomplete)
+    assert not calls and not provider.possibly_sent and provider.final_disposition is None
+    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    assert not led.db.in_transaction
+
+
+def test_new_unit_deadline_preserves_paid_response_without_local_fallback(routed, monkeypatch):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    posts, local = [], []
+
+    def request(self, method, body, timeout, **kwargs):
+        posts.append(1)
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"symptoms":[]}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    monkeypatch.setattr(AnthropicClient, "request", request)
+    deadline = time.monotonic() + 180
+    def unit(end):
+        return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+            unit_key="synthetic-paid-deadline", input_binding="c" * 64, deadline=end,
+            current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    assert unit(deadline)("synthetic", deadline=deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
+    saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    expired = time.monotonic() + 1
+    blocked = unit(expired)
+    def mixed_call():
+        try:
+            return blocked("synthetic", deadline=expired, max_tokens=100)
+        except cloud_inference.CloudObservationIncomplete:
+            raise
+        except cloud_inference.CloudFallback:
+            local.append(1)
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_unit_deadline"):
+        mixed_call()
+    assert not local and not blocked.discarded and blocked.final_disposition is None
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
+    assert unit(deadline)("synthetic", deadline=deadline, max_tokens=100)["reused_response"] is True
+    assert len(posts) == 1 and not led.artifacts("cloud_usage_disposition")
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
+    assert not led.db.in_transaction

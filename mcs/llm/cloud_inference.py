@@ -34,9 +34,14 @@ class CloudObservationIncomplete(CloudFallback):
 
 def _current_cloud_settings():
     try:
-        return resolve_cloud_settings(load_config())
+        cfg = load_config()
+        if not isinstance(cfg, dict) or not cfg:
+            raise CloudObservationIncomplete("cloud_config_unverified")
+        return resolve_cloud_settings(cfg)
+    except CloudFallback:
+        raise
     except Exception:
-        raise CloudFallback("cloud_unit_changed") from None
+        raise CloudObservationIncomplete("cloud_config_unverified") from None
 
 
 class CloudInferenceUnit:
@@ -176,8 +181,10 @@ class CloudInferenceUnit:
             try:
                 current_cfg = {"cloud_llm": _current_cloud_settings()}
                 current_caps = caps(current_cfg["cloud_llm"])
+            except CloudFallback:
+                raise
             except Exception:
-                raise CloudFallback("cloud_unit_changed") from None
+                raise CloudObservationIncomplete("cloud_config_unverified") from None
             reserved_caps.clear()
             reserved_caps.update(current_caps)
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
@@ -260,7 +267,7 @@ class CloudInferenceUnit:
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
-                raise CloudFallback("cloud_unit_deadline")
+                raise CloudObservationIncomplete("cloud_unit_deadline")
             # the fixed extraction heads are long enough to cache; the small repair head is not
             prefix = next((head for head in self._cache_heads if prompt.startswith(head)), None)
             selected_tokens = self.selection["max_tokens"]
