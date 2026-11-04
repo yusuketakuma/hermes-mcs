@@ -13,6 +13,7 @@ import pytest
 import cloud_policy
 import extract_llm
 import cloud_inference
+import inference_dependency_loss
 from anthropic_client import AnthropicClient
 from ledger import Ledger
 import semantic_drain
@@ -223,6 +224,24 @@ def _cloud_pass(led, *, limit=1):
 
 def _claim_count(led):
     return led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
+
+
+def _complete_cloud_tx(ledger, source):
+    """Simulate another worker's source-bound, completed cloud artifact."""
+    assert ledger.db.in_transaction
+    selection, errors = cloud_policy.resolve_profile(
+        extract_llm.load_config(), route='reextract', purpose='backlog')
+    assert not errors and selection is not None
+    contract = cloud_inference.cloud_provider_contract(selection=selection)
+    row = dict(source)
+    row.update(_source_binding=inference_dependency_loss.source_binding(
+        ledger.db, row['project_id'], row['message_id']),
+        _target=('', contract['model']), _provider_contract=contract,
+        _provider_evidence=extract_llm._provider_evidence([contract['backend']], True))
+    integrity = {'completeness_chunks': 1, 'completeness': {
+        '0': {'state': 'hint_gaps_resolved', 'remaining_hint_candidates': 0}}}
+    assert extract_llm._replace_current_tx(ledger, row, '{"symptoms":[]}', integrity=integrity) == 'written'
+    assert extract_llm.cloud_completion(ledger.db, row, contract) == 'complete'
 
 
 def test_bounded_extract_selection_preserves_owner_cursor_and_handler(cloud_candidates, monkeypatch):
@@ -472,7 +491,7 @@ def test_two_connections_refill_a_claim_lost_after_selection(cloud_candidates, m
     assert len(_current_artifacts(led)) == 2 and _claim_count(led) == 0
 
 
-@pytest.mark.parametrize("change", ["completed", "retry"])
+@pytest.mark.parametrize("change", ["completed", "local", "retry"])
 def test_cloud_claim_rechecks_pending_after_another_worker_changes_it(cloud_candidates, monkeypatch, change):
     led, _, calls, reservations, results = cloud_candidates
     selected = _select(led, "extract")
@@ -487,8 +506,13 @@ def test_cloud_claim_rechecks_pending_after_another_worker_changes_it(cloud_cand
                     extract_llm.inference.VERSION_KEY: extract_llm._INFERENCE_VERSION}
             if change == "retry":
                 meta.update(error=1, attempts=1, next_try=0)
-            ledger.artifact_add(extract_llm.KIND, '{"symptoms":[]}',
-                                project_id=row["project_id"], message_id=first, meta=meta)
+            if change == 'completed':
+                with ledger.db:
+                    ledger.db.execute('BEGIN IMMEDIATE')
+                    _complete_cloud_tx(ledger, row)
+            else:
+                ledger.artifact_add(extract_llm.KIND, '{"symptoms":[]}',
+                                    project_id=row["project_id"], message_id=first, meta=meta)
             changed.append(first)
         return original_claim(ledger, row, lease_s)
 
@@ -496,7 +520,8 @@ def test_cloud_claim_rechecks_pending_after_another_worker_changes_it(cloud_cand
     report = _cloud_pass(led)
     assert changed == [first] and report["done"] == 1
     assert len(calls) == len(reservations) == len(results) == 1
-    assert reservations[0]["identity"]["message_id"] == selected[1]["message_id"]
+    assert reservations[0]["identity"]["message_id"] == (
+        first if change == 'local' else selected[1]["message_id"])
     assert _claim_count(led) == 0
 
 
@@ -762,12 +787,11 @@ def test_cloud_priority_walk_resumes_across_deadlines_and_unrelated_writes(cloud
             led.artifact_add('synthetic_unrelated_observation', '{}')
             clock[0] += 1
         else:
-            for row in actual:
-                observed.append(row['message_id'])
-                led.artifact_add(extract_llm.KIND, '{"symptoms":[]}', project_id=row['project_id'],
-                    message_id=row['message_id'], meta={'hash': row['content_hash'],
-                    'extract_version': extract_llm.EXTRACT_VERSION,
-                    extract_llm.inference.VERSION_KEY: extract_llm._INFERENCE_VERSION})
+            with led.db:
+                led.db.execute('BEGIN IMMEDIATE')
+                for row in actual:
+                    observed.append(row['message_id'])
+                    _complete_cloud_tx(led, row)
             if observed == expected:
                 break
             clock[0] += 1
@@ -868,10 +892,7 @@ def test_cloud_priority_wrap_discovers_new_rows_after_fixed_highwater(cloud_cand
         led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=65', (time.time() - 1200,))
         led.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=65', (time.time() - 1200,))
         for row in first:
-            led.artifact_add_tx(extract_llm.KIND, '{"symptoms":[]}', project_id=row['project_id'],
-                message_id=row['message_id'], meta={'hash': row['content_hash'],
-                'extract_version': extract_llm.EXTRACT_VERSION,
-                extract_llm.inference.VERSION_KEY: extract_llm._INFERENCE_VERSION})
+            _complete_cloud_tx(led, row)
     assert _select(led, 'extract', deadline=time.monotonic() + 120) == []
     after_wrap = _select(led, 'extract', deadline=time.monotonic() + 120)
     assert all(row['message_id'] != 65 for row in after_wrap)  # not in the old receipt
