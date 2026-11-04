@@ -364,6 +364,16 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     assert _local_pass(ledger)['done'] == 1
     v4_id = _seal_canonical_v4(ledger)
     sealed_v4 = _v4_row(ledger, v4_id)
+    # A raw-only history source (no extract artifact at all) must also reach
+    # the cloud lane under canonical — the local-first admission shape used
+    # to exclude it entirely.
+    ledger.save_messages([_message(mid=2, body='完全合成の経過補記です。',
+                                   posted_at='2026-09-19T01:00:00+09:00')])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (time.time() - 1200,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=2',
+                          (time.time() - 1200,))
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-canonical-raw', time.time())
     monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
     monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', None)
     cfg = {**cfg, 'semantic': {'mode': 'shadow',
@@ -374,14 +384,20 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     # The generic legacy admission set is closed under canonical — that
-    # closure used to leave the required cloud pass with zero targets.
+    # closure used to leave the required cloud pass with zero targets. A
+    # cloud_only pass runs no legacy inference, so the safe canonical
+    # admission is unrestricted; the receipted scope and contract still gate.
     assert worker.legacy_admissions(ledger, cfg) == set()
-    assert worker.cloud_backlog_admissions(ledger, cfg) == {1}
-    report = _worker_cloud_pass(ledger, cfg)
-    assert report['done'] == 1 and len(cloud_calls) == 1
+    assert worker.cloud_backlog_admissions(ledger, cfg) is None
+    first = _worker_cloud_pass(ledger, cfg)
+    second = _worker_cloud_pass(ledger, cfg, carry=first.get('carry'))
+    assert first['done'] == 1 and second['done'] == 1 and len(cloud_calls) == 2
+    done_ids = sorted(row[0] for row in ledger.db.execute(
+        "SELECT DISTINCT message_id FROM artifacts WHERE kind='extract_llm'"))
+    assert done_ids == [1, 2]   # sealed local-complete and raw-only both ran
     assert _v4_row(ledger, v4_id) == sealed_v4
     financial, count = _financial_rows(ledger), len(cloud_calls)
-    assert _worker_cloud_pass(ledger, cfg, carry=report.get('carry'))['done'] == 0
+    assert _worker_cloud_pass(ledger, cfg)['done'] == 0
     assert _financial_rows(ledger) == financial and len(cloud_calls) == count
 
 
