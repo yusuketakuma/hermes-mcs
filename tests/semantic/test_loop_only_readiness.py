@@ -139,6 +139,66 @@ def test_worker_proves_zero_candidates_and_readiness(runtime, fact_source):
     assert _ready(runtime, cfg)
 
 
+@pytest.mark.parametrize('borrowed', [False, True])
+@pytest.mark.parametrize('damaged', [False, True])
+def test_store_readiness_preserves_transaction_and_rejects_invalid_proof(runtime, monkeypatch, borrowed, damaged):
+    import builtins
+    import socket
+
+    led = _seed(runtime)
+    cfg = _config()
+    assert _run(led, cfg, client=_FakeJev())['done'] == 1
+    if damaged:
+        with led.db:
+            led.db.execute("UPDATE artifacts SET content='{}' WHERE kind=?", (drain.KIND_LOOP_COMPLETION,))
+    scfg, errors = semantic_policy.runtime_config(cfg)
+    assert not errors
+    row = led.db.execute('SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m '
+                         'JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=1').fetchone()
+    before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    if borrowed:
+        led.db.execute('BEGIN')
+    importer = builtins.__import__
+
+    def read_only_import(name, *args, **kwargs):
+        if name == 'semantic_drain':
+            pytest.fail('reader imported semantic worker')
+        return importer(name, *args, **kwargs)
+
+    def no_network(*args, **kwargs):
+        pytest.fail('reader attempted network access')
+
+    monkeypatch.setattr(builtins, '__import__', read_only_import)
+    monkeypatch.setattr(socket.socket, 'connect', no_network)
+    assert semantic_store.reprocess_target_state(led, row, scfg, cfg=cfg) == ('held' if damaged else 'current')
+    assert led.db.in_transaction is borrowed
+    assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    if borrowed:
+        led.db.rollback()
+
+
+def test_store_import_does_not_load_semantic_worker():
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    code = '''import sys
+sys.path.insert(0, sys.argv[1])
+import _mcs_path
+class NoWorker:
+    def find_spec(self, fullname, *args):
+        if fullname == 'semantic_drain':
+            raise AssertionError('reader imported semantic worker')
+sys.meta_path.insert(0, NoWorker())
+import semantic_store
+assert 'semantic_drain' not in sys.modules
+'''
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(root / 'mcs')],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+
+
 def test_done_job_without_worker_receipt_is_not_completion(runtime):
     led = _seed(runtime)
     cfg = _config()
@@ -538,11 +598,11 @@ def test_loop_manifest_deadline_rolls_back_and_preserves_outer_progress_handler(
             return result
 
         with monkeypatch.context() as scope:
-            scope.setattr(drain, "time", fake_time)
-            scope.setattr(drain, "strict_json", parse)
+            scope.setattr(semantic_store, "time", fake_time)
+            scope.setattr(semantic_store, "strict_json", parse)
             return original_manifest(*args, **kwargs)
 
-    monkeypatch.setattr(drain, "_loop_completion_manifest", manifest)
+    monkeypatch.setattr(semantic_store, "_loop_completion_manifest", manifest)
     led.db.set_progress_handler(lambda: progress.append(True) and 0, 1)
     try:
         result = drain.run_due(led, cfg, {"errors": []}, outer_deadline,
@@ -581,7 +641,7 @@ def test_loop_manifest_sqlite_interrupt_rolls_back_and_keeps_outer_handler(runti
         armed[0] = True
         return original_manifest(*args, **kwargs)
 
-    monkeypatch.setattr(drain, "_loop_completion_manifest", manifest)
+    monkeypatch.setattr(semantic_store, "_loop_completion_manifest", manifest)
     led.db.set_progress_handler(progress_handler, 1)
     try:
         result = _run(led, cfg, client=_FakeJev())

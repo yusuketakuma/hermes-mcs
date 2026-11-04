@@ -7,6 +7,7 @@ import pytest
 import patient_context_refresh as refresh
 import rollup
 import semantic_drain as drain
+import semantic_store
 import semantic_jev
 from test_anthropic_context_refresh import CFG, cloud as cloud, drain as finish_cloud
 from test_patient_context_refresh import runtime as runtime, seed, step
@@ -35,7 +36,7 @@ def test_negative_quality_reopens_completed_bookmark(runtime, cloud, monkeypatch
     assert ledger.artifacts("patient_context_source_quality_skipped_v1")
     rollup.rebuild(ledger, 1, cfg=CFG)
     # Post-level interpretation is independent of this patient-quality epoch.
-    monkeypatch.setattr(drain, "_reprocess_target_state", lambda *_args, **_kwargs: "current")
+    monkeypatch.setattr(semantic_store, "reprocess_target_state", lambda *_args, **_kwargs: "current")
     before = _bookmark(ledger, CFG)
     assert before["complete"] and before["patient_counts"] == {"current": 1}
     protected_jobs = [tuple(row) for row in ledger.db.execute(

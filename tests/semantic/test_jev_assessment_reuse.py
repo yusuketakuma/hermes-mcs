@@ -54,7 +54,7 @@ def test_corrupt_complete_assessment_never_reaches_following_stage(tmp_path, mon
             meta[fault] = True
         return {'content': content, 'meta': meta, 'model': model}, []
 
-    monkeypatch.setattr(drain, '_primary_assessment_history', artifact)
+    monkeypatch.setattr(semantic_store, '_primary_assessment_history', artifact)
     client = _FakeJev()
     try:
         result = drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
