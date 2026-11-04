@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "患者背景の修復証拠を共通の読取経路へ集約",
+  "summary": "保存済みの患者背景を読む際の修復証拠の検証を、解析workerから独立した共通経路へまとめます。通常の解析と保存済み回答の再検証は同じ変換処理を使い、原文・会計証拠・未確認の扱いは維持します。",
+  "upgrade": "追加設定は不要です。更新後は解析workerを新しいコードへ切り替えてください。変更対象のソース識別値は通常の変更検知へ含め、古い候補の承認や保留を新しい候補のものとして流用しません。",
+  "details": [
+    "読取は呼出元のDB接続とトランザクションを借用し、修復を送信せず、元の予約・回答・品質判定と保存内容を照合します。接続の開閉、commit、rollbackやモデルの呼出しは引き受けません。",
+    "送信・時刻・予算・処理権・保存と公開の所有は解析workerに残します。既存の入口、保存形式、モデル、推論エンジンv1.0、人承認、結果不明の再送禁止を変更しません。"
+  ],
+  "refs": ["mcs/core/patient_context_artifacts.py", "mcs/patients/patient_context_refresh.py", "mcs/patients/patient_context_scan.py", "mcs/semantic/semantic_candidate.py"]
+}

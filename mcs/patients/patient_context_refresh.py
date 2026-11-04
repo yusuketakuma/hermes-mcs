@@ -22,6 +22,7 @@ from mcs_util import html_to_text, loads_dict, strict_json, valid_hash
 from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred, read_version
 from writer_lock import acquire_run_lock
 import patient_context_plan as context_plan
+import patient_context_scan as context_scan
 import mcs_queries as context_queries
 import patient_context_projection as context_state
 
@@ -52,14 +53,7 @@ _DEPENDENCY_CODE = hashlib.sha256(Path(dependency_loss.__file__).read_bytes()).h
 COMMIT_MARGIN = cloud_inference.COMMIT_MARGIN
 
 
-def _quality_kind(kind, identity):
-    """Select the existing receipt family for one explicitly bound purpose."""
-    purpose = identity.get("purpose", "summary")
-    if purpose == "summary":
-        return kind
-    if purpose == "source" and kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY, QUALITY_SKIP):
-        return kind.replace("patient_context_summary_quality", "patient_context_source_quality", 1)
-    raise ValueError("patient_summary_quality_purpose_invalid")
+_quality_kind = context_artifacts.quality_kind
 
 
 def _quality_expected(identity, fid, selected):
@@ -77,10 +71,7 @@ def _digest(value):
                                      separators=(",", ":")).encode()).hexdigest()
 
 
-def _facts_sig(facts):
-    """Bind summary reuse to all meaning and relations, apart from discovery bookkeeping."""
-    return _digest([{k: v for k, v in fact.items() if k not in ("found_at", "found_night_id", "discovery")}
-                    for fact in facts])
+_facts_sig = context_artifacts.facts_signature
 
 
 def options(cfg):
@@ -276,21 +267,7 @@ def _cloud_input_binding(db, pid, snapshot):
 
 
 
-def _route_contract(meta):
-    """Validate the actual backend and return its pinned selection contract."""
-    actual = meta.get("contract")
-    if not isinstance(actual, dict):
-        return None
-    if "route_contract" in meta:
-        route = meta["route_contract"]
-        if (not isinstance(route, dict) or "provider" not in route
-                or actual != {key: value for key, value in route.items() if key != "provider"}
-                or meta.get("provider") or meta.get("model") != actual.get("model")):
-            return None
-        return route
-    if meta.get("provider") != actual.get("provider"):
-        return None
-    return actual
+_route_contract = context_artifacts.route_contract
 
 
 def _scan_read_binding(sources, contract, cfg):
@@ -1368,11 +1345,7 @@ def _stored_quality_answers(db, pid, audit_key, fact_ids, *, purpose="summary"):
     return answers
 
 
-def _quality_failed(db, pid, identity):
-    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
-                      + current_meta_pred("meta", target=CURRENT_VERSION)
-                      + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.failure_key') END=? LIMIT 1",
-                      (_quality_kind(QUALITY_FAIL, identity), pid, identity["failure_key"])).fetchone() is not None
+_quality_failed = context_artifacts.quality_failed
 
 
 def _quality_skip_evidence(db, pid, identity, selected, threshold):
@@ -1805,11 +1778,7 @@ def _new_summary_repair_response(db, pid, identity, provider, prompt, response, 
     return proof
 
 
-def _repair_response(content):
-    """Read the protected versioned proof from an internal candidate."""
-    if not isinstance(content, dict) or 'repair_response' in content:
-        raise ValueError('patient_repair_evidence_invalid')
-    return content.get(_INTERNAL_PROOF)
+_repair_response = context_artifacts.repair_response
 
 
 def _summary_repair_response(db, pid, original, repaired, content, meta, prompt):
@@ -2086,17 +2055,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         os.close(fd)
 
 
-def _source_occurrence(db, pid, source):
-    """Read exact raw occurrence fields without changing the v2 input-key formula."""
-    scope = context_queries.patient_context_scope(db, pid)
-    binding = (dependency_loss.source_binding_from_row(source)
-               if source.get("source") == "chat" and "_source_revision" in source else
-               dependency_loss.source_binding(db, pid, source["message_id"],
-                   **({"source_key":context_plan.source_key(source)} if source["source"] == "karte_summary" else {})))
-    if not scope or not valid_hash(binding):
-        raise ValueError("nightly_source_repair_changed")
-    return {"source_binding":binding, "first_seen":source.get("first_seen"),
-            "scope":{key:scope.get(key) for key in ("project_id","project_type","karte_id","is_archived")}}
+_source_occurrence = context_artifacts.source_occurrence
 
 
 def _source_repair_header(db, pid, repair_input_key):
@@ -2193,147 +2152,10 @@ def _source_repair_parts(db, pid, source, contract, repair_input_key, *, require
     return chunks, unique, _digest(material)
 
 
-def _source_repair_inputs(db, pid, captured, threshold):
-    """Only explicit, confident normal FAIL permits one extraction repair."""
-    import semantic_runtime
-    identity, protected, codes = captured['identity'], {}, set()
-    by_id = {fact['id']:fact for fact in captured['facts']}
-    evidence_hash = hashlib.sha256()
-    for offset in range(0, len(identity['fact_ids']), 12):
-        ids = identity['fact_ids'][offset:offset + 12]
-        evidence = semantic_runtime.patient_source_question_evidence(db, pid, identity, ids)
-        if evidence['problems'] or set(evidence['answers']) != set(ids) or set(evidence['references']) != set(ids):
-            raise ValueError('nightly_source_repair_unresolved')
-        for fid in ids:
-            answer = evidence['answers'][fid]
-            if answer['confidence'] < threshold or answer['choice'] == 'ambiguous':
-                raise ValueError('nightly_source_repair_unresolved')
-            evidence_hash.update(bytes.fromhex(_digest([fid, evidence['references'][fid]])))
-            if fid in by_id and answer['choice'] == 'supports':
-                protected[fid] = by_id[fid]
-            elif fid in by_id and answer['choice'] in ('not_supported','contradicts'):
-                codes.add(answer['choice'])
-            elif fid not in by_id and answer['choice'] == 'missing':
-                codes.add('missing')
-            elif answer['choice'] != identity['passing_choices'][fid]:
-                raise ValueError('nightly_source_repair_unresolved')
-    if not codes or not _quality_failed(db, pid, identity):
-        raise ValueError('nightly_source_repair_unresolved')
-    return list(protected.values()), sorted(codes), evidence_hash.hexdigest()
+_source_repair_inputs = context_artifacts.source_repair_inputs
 
 
-def _verify_source_repair_rows(db, pid, source_key, origin, rows):
-    import cloud_inference
-    import semantic_audit
-    assessment, threshold = origin.get('quality_assessment'), origin.get('quality_threshold')
-    if (not isinstance(assessment, dict) or set(assessment) != {'code', 'policy'}
-            or any(not valid_hash(value) for value in assessment.values())
-            or type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
-            or not cloud_inference.is_supported_cloud_contract(origin.get('repair_provider'))):
-        raise ValueError('nightly_source_repair_invalid')
-    db.execute('SAVEPOINT source_repair_replay')
-    try:
-        sources = list(context_queries.patient_context_sources(db, pid, mid=source_key))
-        if len(sources) != 1:
-            raise ValueError('nightly_source_repair_invalid')
-        source = sources[0]
-        occurrence = _source_occurrence(db, pid, source)
-        if (_digest(occurrence) != _digest(origin['source_occurrence'])
-                or context_plan.source_signature(source) != origin['source_sig']
-                or source['body_length'] != origin['body_length']):
-            raise ValueError('nightly_source_repair_invalid')
-        bindings = {}
-        for (raw,) in db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=? "
-                                 "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=?",
-                                 (CHUNK, pid, source_key)):
-            meta = loads_dict(raw)
-            if (not isinstance(meta, dict) or meta.get('source_sig') != origin['source_sig']
-                    or _digest(meta.get('source_occurrence')) != _digest(occurrence)
-                    or _route_contract(meta) != origin['contract']):
-                continue
-            binding = {key: meta.get(key) for key in ('contract', 'provider')}
-            bindings[_digest(binding)] = binding
-        if len(bindings) != 1:
-            raise ValueError('nightly_source_repair_invalid')
-        scan_meta = {'source_sig':origin['source_sig'], **next(iter(bindings.values()))}
-        scan_content = {'complete':True, 'source_occurrence_version':1, 'source_occurrence':occurrence,
-                        'audited_chunks_sig':origin['original_chunks_sig']}
-        original_rows = context_artifacts.original_quality_rows(db, pid, source_key,
-            {'meta':json.dumps(scan_meta), 'content':json.dumps(scan_content)}, origin['source_sig'],
-            origin['contract'], occurrence, origin['body_length'])
-        facts = {}
-        for row in original_rows:
-            document = loads_dict(row['content'])
-            values = document.get('facts') if isinstance(document, dict) else None
-            if not isinstance(values, list) or len(context_plan.validated_source_facts(source, values)) != len(values):
-                raise ValueError('nightly_source_repair_invalid')
-            for fact in values:
-                if fact['id'] in facts and _facts_sig([facts[fact['id']]]) != _facts_sig([fact]):
-                    raise ValueError('nightly_source_repair_invalid')
-                facts[fact['id']] = fact
-        identity, _ = semantic_audit.patient_source_quality_identity(source, list(facts.values()), occurrence,
-            origin['contract'], origin['original_chunks_sig'], assessment)
-        if (identity['source_input_key'] != origin['repair_input_key']
-                or identity['audit_key'] != origin['original_audit_key']
-                or identity['failure_key'] != origin['original_failure_key']):
-            raise ValueError('nightly_source_repair_invalid')
-        protected, codes, receipts = _source_repair_inputs(db, pid, {'identity':identity, 'facts':list(facts.values())}, threshold)
-        if (receipts != origin['original_receipts_sig']
-                or _facts_sig(sorted(protected, key=lambda fact:fact['id'])) != origin['protected_sig']):
-            raise ValueError('nightly_source_repair_invalid')
-        groups = {}
-        for row in rows:
-            meta, doc = strict_json(row['meta']), strict_json(row['content'])
-            groups.setdefault(meta['unit_key'], []).append((row, meta, doc))
-        for unit_key, parts in groups.items():
-            parts.sort(key=lambda part: part[2]['part'])
-            row, meta, first = parts[0]
-            proof = _repair_response(first)
-            if (not isinstance(proof, dict)
-                    or set(proof) != {'version','answer_text','cursor','split','night_id','receipt_sig','finish_reason'}
-                    or type(proof['version']) is not int or proof['version'] != 1
-                    or type(proof['cursor']) is not int or type(proof['split']) is not int
-                    or not isinstance(proof['night_id'], str) or not valid_hash(proof['receipt_sig'])
-                    or proof['finish_reason'] not in ('stop', 'length')
-                    or any(_INTERNAL_PROOF in part[2] or 'repair_response' in part[2] for part in parts[1:])):
-                raise ValueError('nightly_source_repair_invalid')
-            planned, cursor, normalized, _, _ = context_plan.scan_plan(
-                source, {'cursor':proof['cursor'], 'split':proof['split']})
-            start = sum(map(len, planned[:cursor]))
-            span = [start, start + len(planned[cursor])]
-            if (cursor != proof['cursor'] or normalized.get('split', 0) != proof['split']
-                    or first['chunk_span'] != span
-                    or unit_key != _digest(['source-repair-unit/1', origin['repair_input_key'], span,
-                                             proof['split'], PLAN_VERSION])):
-                raise ValueError('nightly_source_repair_invalid')
-            def replay(payload):
-                evidence = cloud_inference.verify_cloud_repair_evidence(db,
-                    reservation_artifact_id=meta['reservation_artifact_id'], reservation_id=meta['reservation_id'],
-                    route='patient_context', project_id=pid, message_id=source['message_id'] or None,
-                    unit_key=unit_key, owner={'repair_input_key':origin['repair_input_key'],'unit_key':unit_key},
-                    prompt=json.dumps(payload, ensure_ascii=False), answer_text=proof['answer_text'],
-                    contract=origin['repair_provider'], finish_reason=proof['finish_reason'])
-                if (evidence['witness'] != proof['receipt_sig'] or evidence['witness'] != first['receipt_sig']
-                        or evidence['result'].get('answer_finish_reason_v1') != proof['finish_reason']):
-                    raise ValueError('nightly_source_repair_invalid')
-                if proof['finish_reason'] == 'length':
-                    raise ValueError('nightly_length_stop')
-                return strict_json(proof['answer_text'])
-            result = _scan({}, source, {'cursor':proof['cursor'], 'split':proof['split']}, proof['night_id'],
-                float('inf'), lambda:True, source_repair={'codes':codes, 'protected':protected,
-                    'historical_by_id':{fid:{'historical':fact['historical']} if 'historical' in fact else {}
-                                        for fid, fact in facts.items()}}, replay=replay)
-            saved_facts = [fact for _row, _meta, doc in parts for fact in doc['facts']]
-            def replay_facts(values):
-                return [{key:value for key,value in fact.items() if key != 'found_at'} for fact in values]
-            if ((first['phase'] == 'split') != (result.get('chunk_span') is None)
-                    or first['phase'] == 'complete' and (result.get('chunk_span') != first['chunk_span']
-                        or replay_facts(result['facts']) != replay_facts(saved_facts)
-                        or any(type(fact.get('found_at')) not in (int, float)
-                               or not math.isfinite(fact['found_at']) for fact in saved_facts))):
-                raise ValueError('nightly_source_repair_invalid')
-    finally:
-        db.execute('RELEASE source_repair_replay')
+_verify_source_repair_rows = context_artifacts.verify_source_repair_rows
 
 
 def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, current, deadline, admit, threshold):
@@ -3193,86 +3015,13 @@ def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None):
 
 def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metrics=None, source_repair=None,
           evidence_out=None, replay=None):
-    chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
-    chunk = chunks[cursor]
-    split = saved.get("split", 0)
-    # passed bounded repairs on this source: a health/status count, never content
-    repairs = saved.get("repairs", 0) if type(saved.get("repairs")) is int else 0
-    prior_repairs = repairs
-    original = (context_plan.source_facts(source, source["items"], night_id=night_id, discovery="new_report", found_at=time.time())
-                if source_repair is None else source_repair["protected"])
-    if source_repair is not None:
-        items = []  # No unverified seed from the rejected original candidate.
-    if not covered:
-        payload = {"instruction": context_plan.SCAN_INSTRUCTION,
-            **context_plan.scan_schema(), "already_found": items, "source": chunk}
-        if source_repair is not None:
-            payload["source_quality_findings"] = source_repair["codes"]
-        def asked(body):
-            """The answer, or the finer re-plan when it stopped at the answer budget."""
-            try:
-                if replay is not None:
-                    return replay(body), None
-                return _ask(cfg, body, deadline, admit, **({"provider": provider} if provider else {}),
-                            **({"evidence_out": evidence_out} if evidence_out is not None else {})), None
-            except ValueError as exc:
-                finer = str(exc) == "nightly_length_stop" and context_plan.split_scan(source, saved, cursor)
-                if not finer:
-                    raise
-                # nothing was accepted from this chunk: resume on the finer plan, keeping facts
-                return None, {**finer, "complete": False, "facts": saved.get("facts", []), "audited": False,
-                              **({"repairs": repairs} if repairs else {})}
-        answer, replan = asked(payload)
-        if replan:
-            return replan
-        try:
-            checked = context_plan.scan_items(answer, chunk)
-        except ValueError as exc:
-            if str(exc) == "nightly_scan_capacity":
-                finer = context_plan.split_scan(source, saved, cursor)
-                if finer:
-                    return {**finer, "complete": False, "facts": [], "audited": False, "repairs": repairs}
-                raise ValueError("nightly_unsplittable_assertion") from exc
-            if str(exc) != "nightly_unsupported_items" or source_repair is not None:
-                raise
-            # one bounded repair: name the refused items by index and fixed reason only;
-            # it must pass whole and keep every item that already passed on its own
-            kept = context_plan.grounded_items(answer, chunk)
-            if metrics is not None:
-                metrics["rejected"] = len(context_plan.rejected_items(answer, chunk))
-            answer, replan = asked({**payload, "instruction": payload["instruction"]
-                                    + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
-                                    "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
-                                    "rejected": context_plan.rejected_items(answer, chunk)})
-            if replan:
-                return replan
-            checked = context_plan.scan_items(answer, chunk)
-            if any(item not in checked for item in kept):
-                raise ValueError("nightly_unsupported_items")
-            repairs += 1
-        items += checked
-    if metrics is not None:
-        metrics.setdefault("rejected", 0)
-        metrics["repairs"] = repairs - prior_repairs
-    offset = sum(map(len, chunks[:cursor]))
-    facts = {f["id"]: f for f in original if offset <= f["evidence_span"][0] < offset + len(chunk)}
-    known = {f["id"] for f in original}
-    for fact in context_plan.source_facts(source, items, night_id=night_id, discovery="backfill_found", offset=offset, chunk=chunk, found_at=time.time()):
-        if source_repair is not None and fact["id"] in source_repair.get("historical_by_id", {}):
-            # A Karte moving into history changes display placement, not the
-            # meaning of an existing support question or its original answer.
-            fact.pop("historical", None)
-            fact.update(source_repair["historical_by_id"][fact["id"]])
-        if fact["id"] in known:
-            fact["discovery"] = "new_report"
-        if source_repair is not None and fact["id"] in facts:
-            if _facts_sig([facts[fact["id"]]]) != _facts_sig([fact]):
-                raise ValueError("nightly_source_repair_protected")
-            continue  # Retain the original supported fact, including its bookkeeping.
-        facts[fact["id"]] = fact
-    return {"chunk_span": [offset, offset + len(chunk)], "cursor": cursor + 1, "chunks": len(chunks), "complete": cursor + 1 == len(chunks),
-            "facts": list(facts.values()), "audited": False, **({"split": split} if split else {}),
-            **({"repairs": repairs} if repairs else {})}
+    def answer(payload):
+        if replay is not None:
+            return replay(payload)
+        return _ask(cfg, payload, deadline, admit, **({"provider": provider} if provider else {}),
+                    **({"evidence_out": evidence_out} if evidence_out is not None else {}))
+    return context_scan.scan_source(source, saved, night_id, answer_for=answer, clock=time.time,
+                                    metrics=metrics, source_repair=source_repair)
 
 
 def _raw_extraction_current(db, row, cfg):
