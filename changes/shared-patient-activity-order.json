@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "背景抽出と意味解析の患者順位を共通化",
+  "summary": "背景抽出と意味解析が、活動中の区分・最新の活動日時・患者の識別順を同じ計算から参照します。",
+  "upgrade": "更新後、常駐workerを新しいコードへ切り替えると適用されます。既存の並び順と送信・公開条件を維持する整理で、追加設定は不要です。",
+  "details": [
+    "SQLとPythonに分かれていた日時・同時刻・日時不明の順位を、状態や送信権限を持たない患者順位moduleへ集約します。",
+    "ジョブの公平な順番、占有、予算、原文照合は既存の処理側が引き続き所有します。",
+    "新しいmoduleを読み込んだソースの変更検知と候補の識別値に含めます。"
+  ],
+  "refs": ["mcs/patients/patient_priority.py", "mcs/extract/llm/extract_llm.py", "mcs/semantic/semantic_drain.py"]
+}

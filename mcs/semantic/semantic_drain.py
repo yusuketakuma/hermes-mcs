@@ -21,6 +21,7 @@ import semantic_render
 import semantic_extraction
 import semantic_store
 import semantic_transport
+import patient_priority
 
 from functools import wraps, partial
 import json
@@ -4210,8 +4211,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # the kind this worker served last goes second.
             # QC re-seeding refreshes next_try: its new generation must
             # queue behind QC that was already waiting, despite an old id.
-            priority = ("(SELECT MAX(m.posted_at_ts) FROM messages m "
-                        "WHERE m.project_id=fetch_jobs.project_id) DESC, project_id, ") if prioritize_patients else ""
+            priority = patient_priority.activity_order_sql('fetch_jobs.project_id') + ', ' if prioritize_patients else ''
             rows = [row for kind in sorted(
                         kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                     for row in ledger.db.execute(
@@ -4374,7 +4374,7 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
         check_deadline()
         rows = db.execute(
             'SELECT j.job_id,j.kind,j.project_id,COALESCE(p.is_archived,0), '
-            '(SELECT MAX(m.posted_at_ts) FROM messages m WHERE m.project_id=j.project_id) '
+            + patient_priority.latest_activity_sql('j.project_id') + ' '
             'FROM fetch_jobs j NOT INDEXED LEFT JOIN patients p ON p.project_id=j.project_id '
             'WHERE j.job_id>? AND j.job_id<=? '
             'ORDER BY j.job_id LIMIT ?',
@@ -4385,9 +4385,7 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
                     # SQLite orders NULL timestamps last for DESC and NULL
                     # project IDs first for ASC.
                     heapq.heappush(progress['rows'], (
-                        archived, latest is None, -(latest or 0),
-                        project_id is not None, project_id if project_id is not None else 0,
-                        job_id))
+                        *patient_priority.priority_key(project_id, latest, archived=bool(archived)), job_id))
             progress['cursor'] = rows[-1][0]
         if len(rows) < _CLOUD_SELECTION_PAGE:
             progress['collecting'] = False

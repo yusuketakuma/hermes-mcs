@@ -103,6 +103,8 @@ import mcs_util
 import semantic_assembly
 import semantic_facts
 import extraction_context
+import patient_priority
+import patient_context_scan
 import extraction_medications
 import drug_map
 import drug_mentions
@@ -193,7 +195,9 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", __file__),
                        ("extract_validation", extract_validation.__file__),
                        ("extract_quality", extract_quality.__file__)))
 _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__file__,
-                             "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__})
+                             "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__,
+                             "patient_priority": patient_priority.__file__,
+                             "patient_context_scan": patient_context_scan.__file__})
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in _LOADED_SOURCE_PATHS.items()}
@@ -4983,8 +4987,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         archived_sql = (" AND " + ("" if archived else "NOT ")
                         + "EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
                           " AND COALESCE(p.is_archived,0)!=0)")
-    priority = ("(SELECT MAX(latest.posted_at_ts) FROM messages latest "
-                "WHERE latest.project_id=m.project_id) DESC, m.project_id ASC, ") if prioritize_patients else ""
+    priority = patient_priority.activity_order_sql('m.project_id') + ', ' if prioritize_patients else ''
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
@@ -5449,8 +5452,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                     state['maxima'][pid] = posted
             if len(page) < _CLOUD_PRIORITY_PAGE:
                 maxima = state.pop('maxima')
-                state['ordered'] = sorted(maxima, key=lambda pid: (
-                    maxima[pid] is None, -maxima[pid] if maxima[pid] is not None else 0, pid))
+                state['ordered'] = sorted(maxima, key=lambda project_id:
+                    patient_priority.priority_key(project_id, maxima[project_id]))
                 if time.monotonic() >= deadline:
                     raise _CloudSelectionIncomplete('deadline')
 
