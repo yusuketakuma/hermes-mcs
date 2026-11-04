@@ -244,6 +244,26 @@ def _complete_cloud_tx(ledger, source):
     assert extract_llm.cloud_completion(ledger.db, row, contract) == 'complete'
 
 
+def _complete_local_tx(ledger, source):
+    """Simulate a separate worker finishing the current source locally."""
+    assert ledger.db.in_transaction
+    row = dict(ledger.db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?',
+                                 (source['project_id'], source['message_id'])).fetchone())
+    target = extract_llm._resolved_llm()
+    row.update(_source_binding=inference_dependency_loss.source_binding(
+        ledger.db, row['project_id'], row['message_id']), _target=target,
+        _provider_evidence=extract_llm._provider_evidence(['local'], True))
+    integrity = {'completeness_chunks': 1, 'completeness': {
+        '0': {'state': 'hint_gaps_resolved', 'remaining_hint_candidates': 0}}}
+    assert extract_llm._replace_current_tx(ledger, row, '{"symptoms":[]}', integrity=integrity) == 'written'
+    assert extract_llm.progress_for_message(ledger.db, row, model=target[1])['state'] == 'complete'
+    selection, errors = cloud_policy.resolve_profile(
+        extract_llm.load_config(), route='reextract', purpose='backlog')
+    assert not errors and selection is not None
+    contract = cloud_inference.cloud_provider_contract(selection=selection)
+    assert extract_llm.cloud_completion(ledger.db, row, contract) != 'complete'
+
+
 def test_bounded_extract_selection_preserves_owner_cursor_and_handler(cloud_candidates, monkeypatch):
     led, *_ = cloud_candidates
     connect, opened, progress = sqlite3.connect, [], []
@@ -506,10 +526,10 @@ def test_cloud_claim_rechecks_pending_after_another_worker_changes_it(cloud_cand
                     extract_llm.inference.VERSION_KEY: extract_llm._INFERENCE_VERSION}
             if change == "retry":
                 meta.update(error=1, attempts=1, next_try=0)
-            if change == 'completed':
+            if change in ('completed', 'local'):
                 with ledger.db:
                     ledger.db.execute('BEGIN IMMEDIATE')
-                    _complete_cloud_tx(ledger, row)
+                    (_complete_cloud_tx if change == 'completed' else _complete_local_tx)(ledger, row)
             else:
                 ledger.artifact_add(extract_llm.KIND, '{"symptoms":[]}',
                                     project_id=row["project_id"], message_id=first, meta=meta)
