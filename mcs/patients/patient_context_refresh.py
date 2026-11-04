@@ -3094,14 +3094,20 @@ def _raw_extraction_current(db, row, cfg):
     return extract_llm.progress_for_message(db, candidate, model=model)["state"] == "complete", meta
 
 
-def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None):
+def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, observed_out=None):
     """Check pending and current extraction QC using the shared source proof."""
     import extract_llm
     import semantic_policy
     import semantic_qc
     from mcs_queries import current_qc_pred, qc_source_id
 
-    scope, params = semantic_qc.qc_scope_sql(time.time())
+    qc_now = time.time()
+    scope, params = semantic_qc.qc_scope_sql(qc_now)
+    if observed_out is not None:
+        observed_out["qc_at"] = qc_now
+        observed_out['qc_cohort'] = tuple(row[0] for row in db.execute(
+            'SELECT m.message_id FROM messages m WHERE m.project_id=? AND ' + scope
+            + ' ORDER BY m.message_id', (pid, *params)))
     target_sql = ' AND m.message_id=?' if message_id is not None else ''
     target_params = (message_id,) if message_id is not None else ()
     version = extract_llm.EXTRACT_VERSION
@@ -3126,7 +3132,7 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None):
     return True
 
 
-def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False):
+def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False, observed_out=None):
     """Require current post-level evidence before any context lane runs."""
     import extract_llm
     import semantic_store
@@ -3140,6 +3146,8 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
         db.execute("BEGIN")
     try:
         snapshot = _snapshot(db, pid, cfg, hydrate=False)
+        if observed_out is not None:
+            observed_out["snapshot"] = snapshot
         policy, errors = semantic_policy.runtime_config(cfg)
         coverage = snapshot["dependencies"].get("coverage", {})
         repairable = (allow_dependency_repair and coverage.get("terminal") == 0
@@ -3190,7 +3198,8 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                           and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped"):
                 return False
         if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
-                and not _extraction_qc_ready(db, pid, policy, deadline=deadline)):
+                and not _extraction_qc_ready(db, pid, policy, deadline=deadline,
+                                              **({"observed_out": observed_out} if observed_out is not None else {}))):
             return False
         return time.monotonic() + COMMIT_MARGIN < deadline
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -3198,6 +3207,135 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
     finally:
         if owns_read:
             db.rollback()
+
+
+def _readiness_environment(cfg, pid, *, dictionary=False, db=None):
+    import extract_llm
+    import semantic_jev
+    import semantic_policy
+    import semantic_runtime
+
+    policy, errors = semantic_policy.runtime_config(cfg)
+    if errors:
+        raise ValueError('patient_context_environment_unverified')
+    state = [semantic_runtime.config_generation(cfg),
+             semantic_runtime.config_generation({'semantic': policy}),
+             extract_llm.resolved_model(cfg), _required_cloud_extraction_contract(cfg, pid),
+             _contract(cfg, pid), CURRENT_VERSION]
+    if policy['mode'] != 'off':
+        state.append(bool(semantic_jev.api_key()))
+    if dictionary:
+        import drug_map
+        active, status = drug_map.active_dictionary(db, cfg)
+        if active is None or status != 'active':
+            raise ValueError('patient_context_dictionary_unverified')
+        state.append((active.dict_id, active.sha256, active.approved))
+    return _digest(state)
+
+
+def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None):
+    from patient_readiness_witness import Recording
+
+    observed, proof = {}, None
+    try:
+        before = _readiness_environment(cfg, pid)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, cloud_inference.CloudFallback):
+        before = None
+    # In readiness, annotation progress is read only by private-frame currency
+    # checks; derive/cursor scheduling is outside this observed closure.
+    with Recording(reader.db, drug_generation_only=True) as recording:
+        ready = _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
+            allow_dependency_repair=allow_dependency_repair, observed_out=observed)
+        if ready and write_scope is not None and observed.get('snapshot') is not None:
+            actual = next((row for row in observed['snapshot']['sources']
+                if context_plan.source_key(row) == write_scope['source_key']), None)
+            observed['write'] = {
+                'source_key': write_scope['source_key'], 'scan_sig': _scan_sig(reader.db, pid),
+                'occurrence': _digest(_source_occurrence(reader.db, pid, actual)) if actual is not None else None,
+                'cloud_input': _cloud_input_binding(reader.db, pid, observed['snapshot']) if write_scope['cloud'] else None,
+                'cloud': write_scope['cloud']}
+        witness = recording.seal() if ready else None
+    try:
+        if (ready and witness is not None and observed.get('snapshot') is not None
+                and before is not None and before == _readiness_environment(cfg, pid)):
+            dictionary = recording.drug_progress_observed
+            proof = {'witness': witness, 'snapshot': observed['snapshot'],
+                     'dictionary': dictionary, 'qc_cohort': observed.get('qc_cohort'), 'qc_at': observed.get('qc_at'),
+                     'environment': _readiness_environment(cfg, pid, dictionary=dictionary, db=reader.db),
+                     'repair': allow_dependency_repair, 'write': observed.get('write')}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, cloud_inference.CloudFallback):
+        proof = None
+    return ready, proof, observed.get('snapshot')
+
+
+def _capture_readiness(ledger, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None):
+    try:
+        changes = ledger.db.total_changes
+        with _candidate_reader(ledger, deadline) as reader:
+            ready, proof, snapshot = _observe_readiness(reader, pid, cfg, deadline=deadline, complete=complete,
+                                      allow_dependency_repair=allow_dependency_repair, write_scope=write_scope)
+            if ledger.db.total_changes != changes:
+                proof = None
+            if proof is not None:
+                proof['writer'] = ledger.db
+                proof['writer_changes'] = changes
+            return ready, proof, snapshot
+    except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, RuntimeError, OverflowError, TimeoutError, _ScanInterrupted):
+        return False, None, None
+
+
+def _full_write_readiness(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair):
+    observed = {}
+    changes = ledger.db.total_changes
+    ready = _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+        allow_dependency_repair=allow_dependency_repair, observed_out=observed)
+    snapshot = observed.get('snapshot') or _snapshot(ledger.db, pid, cfg, hydrate=False)
+    if not ledger.db.in_transaction or ledger.db.total_changes != changes:
+        return 'unknown', snapshot, None
+    if proof is not None and snapshot['source_sig'] != proof['snapshot']['source_sig']:
+        return 'changed', snapshot, None
+    verified = ready and time.monotonic() + COMMIT_MARGIN < deadline
+    return ('verified' if verified else 'unknown'), snapshot, None
+
+
+def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair):
+    """Return verified, changed or unknown without treating read denial as changed input."""
+    try:
+        if time.monotonic() + COMMIT_MARGIN >= deadline:
+            return 'unknown', None, None
+        # A separate connection cannot observe writes already made by this TX.
+        if (proof is None or proof.get('writer') is not ledger.db
+                or proof.get('writer_changes') != ledger.db.total_changes):
+            return _full_write_readiness(ledger, pid, cfg, proof, deadline=deadline, complete=complete,
+                                        allow_dependency_repair=allow_dependency_repair)
+        with _candidate_reader(ledger, deadline) as reader:
+            if ((proof.get('repair') == allow_dependency_repair
+                    or not allow_dependency_repair and proof['snapshot']['dependencies']['complete'])
+                    and proof['environment'] == _readiness_environment(cfg, pid,
+                        dictionary=proof['dictionary'], db=reader.db)
+                    and proof['witness'].matches(reader.db, deadline - COMMIT_MARGIN, time.monotonic)):
+                cohort = proof['qc_cohort']
+                if cohort is not None:
+                    import semantic_qc
+                    scope, params = semantic_qc.qc_scope_sql(time.time())
+                    current = {row[0] for row in reader.db.execute(
+                        'SELECT m.message_id FROM messages m WHERE m.project_id=? AND ' + scope,
+                        (pid, *params))}
+                    if time.time() < proof['qc_at'] or not current.issubset(cohort):
+                        proof = None
+                if proof is not None:
+                    if complete is not None and not complete(pid):
+                        return 'unknown', proof['snapshot'], proof.get('write')
+                    if (ledger.db.total_changes != proof['writer_changes'] or not ledger.db.in_transaction):
+                        return 'unknown', None, None
+                    _scan_check(reader.db)
+                    return 'verified', proof['snapshot'], proof.get('write')
+        # Unsupported or changed observations retain the existing clinical proof.
+        return _full_write_readiness(ledger, pid, cfg, proof, deadline=deadline, complete=complete,
+                                    allow_dependency_repair=allow_dependency_repair)
+    except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, RuntimeError, OverflowError, TimeoutError, _ScanInterrupted,
+            cloud_inference.CloudFallback):
+        return 'unknown', None, None
 
 
 def _completed_cloud_receipts(ledger, provider):
@@ -3563,8 +3701,15 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 _scan_check(reader.db)
                 if _out_of_scope(snapshot):
                     continue
-                ready = _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
-                                         allow_dependency_repair=True)
+                changes = ledger.db.total_changes
+                ready, proof, _ = _observe_readiness(reader, pid, cfg, deadline=deadline, complete=complete,
+                                                    allow_dependency_repair=True)
+                if ledger.db.total_changes != changes:
+                    proof = None
+                if proof is not None:
+                    proof['writer'] = ledger.db
+                    proof['writer_changes'] = ledger.db.total_changes
+                snapshot['_readiness_proof'] = proof
                 _scan_check(reader.db)
                 if not snapshot['dependencies']['complete']:
                     pending['A'] = False
@@ -3614,21 +3759,23 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
                    if waiting or not covered else {}), **stats}
     snapshot, progress, frozen_ver = best[lane]
+    selected_proof = snapshot.pop("_readiness_proof", None)
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
     try:
         with _scan_writer_wait(ledger.db, deadline):
             ledger.db.execute("BEGIN IMMEDIATE")
-            with _candidate_reader(ledger, deadline) as reader:
-                current = (time.monotonic() + COMMIT_MARGIN < deadline and admit()
-                    and extract_llm._writer_current(full=True)
-                    and _published_version(ledger.db, pid) == frozen_ver
-                    and _latest(ledger.db, PROGRESS, 0) == scan_rotation
-                    and _snapshot(reader.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
-                    and _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
-                                         allow_dependency_repair=lane != "A"))
+            ready, actual, _ = _readiness_for_write(ledger, pid, cfg, selected_proof,
+                deadline=deadline, complete=complete, allow_dependency_repair=lane != "A")
+            current = (time.monotonic() + COMMIT_MARGIN < deadline and admit()
+                and extract_llm._writer_current(full=True)
+                and _published_version(ledger.db, pid) == frozen_ver
+                and _latest(ledger.db, PROGRESS, 0) == scan_rotation
+                and ready == "verified" and actual is not None and actual['source_sig'] == snapshot['source_sig'])
             if not current:
                 ledger.db.rollback()
-                return {"status": "source_changed", "done": 0, **stats}
+                changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
+                return {"status": "source_changed" if changed else "deferred", "done": 0,
+                        **({"reason": "patient_context_readiness_unverified"} if not changed else {}), **stats}
             progress = {**progress, "last_attempt": now,
                         "last_attempt_unit": rotation.get("units", 0) + 1,
                         "night_id": night_id, "source_sig": snapshot["source_sig"]}
@@ -3679,34 +3826,90 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     source_quality_keys = None
     quality_skipped = False
     source_quality_skipped = False
+    write_proof = [selected_proof]
+    readiness_state = ["verified"]
     selected_source = [None]
     selected_occurrence = [None]
     cloud_input = _cloud_input_binding(ledger.db, pid, snapshot) if cloud_settings is not None else None
 
     def current(*, after_commit=False):
-        latest = _snapshot(ledger.db, pid, cfg, hydrate=False)
-        actual = next((row for row in latest["sources"] if selected_source[0] is not None
-                       and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
-        return (admit() and latest["source_sig"] == snapshot["source_sig"]
-                and (cloud_input is None or _cloud_input_binding(ledger.db, pid, latest) == cloud_input)
-                and _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                     allow_dependency_repair=lane != "A")
-                and (after_commit or _scan_sig(ledger.db, pid) == frozen_scan_sig
-                     and _published_version(ledger.db, pid) == frozen_ver)
-                and (selected_source[0] is None or actual is not None
-                     and _digest(_source_occurrence(ledger.db, pid, actual)) == _digest(selected_occurrence[0])))
+        readiness_state[0] = 'unknown'
+        try:
+            if ledger.db.in_transaction:
+                ready, latest, write_state = _readiness_for_write(ledger, pid, cfg, write_proof[0], deadline=deadline,
+                    complete=complete, allow_dependency_repair=lane != "A")
+                readiness_state[0] = ready
+                if ready != 'verified' or latest is None:
+                    if latest is not None and latest['source_sig'] != snapshot['source_sig']:
+                        readiness_state[0] = 'changed'
+                    return False
+            else:
+                write_state = None
+                latest = _snapshot(ledger.db, pid, cfg, hydrate=False)
+                ready = _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                         allow_dependency_repair=lane != "A")
+                readiness_state[0] = 'verified' if ready else 'unknown'
+                if latest['source_sig'] != snapshot['source_sig']:
+                    readiness_state[0] = 'changed'
+                ready = 'verified' if ready else 'unknown'
+            actual = next((row for row in latest["sources"] if selected_source[0] is not None
+                           and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
+            cached = (write_state is not None and write_state['cloud'] == (cloud_input is not None)
+                and write_state['source_key'] == (context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None))
+            unchanged = (latest["source_sig"] == snapshot["source_sig"]
+                    and (cloud_input is None or (write_state['cloud_input'] if cached
+                         else _cloud_input_binding(ledger.db, pid, latest)) == cloud_input)
+                    and ready == "verified"
+                    and (after_commit or (write_state['scan_sig'] if cached else _scan_sig(ledger.db, pid)) == frozen_scan_sig
+                         and _published_version(ledger.db, pid) == frozen_ver)
+                    and (selected_source[0] is None or actual is not None
+                         and (write_state['occurrence'] if cached else _digest(_source_occurrence(ledger.db, pid, actual)))
+                             == _digest(selected_occurrence[0])))
+            if not unchanged:
+                if ready == 'verified':
+                    readiness_state[0] = 'changed'
+                return False
+            if not admit():
+                readiness_state[0] = 'unknown'
+                return False
+            return True
+        except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError,
+                RuntimeError, OverflowError, TimeoutError, _ScanInterrupted, cloud_inference.CloudFallback):
+            readiness_state[0] = 'unknown'
+            return False
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
+        def provider_current():
+            try:
+                allowed = current(after_commit=after_commit)
+            except Exception:
+                raise cloud_inference.CloudObservationIncomplete('patient_context_readiness_unverified') from None
+            if allowed:
+                return True
+            if readiness_state[0] != 'changed':
+                raise cloud_inference.CloudObservationIncomplete('patient_context_readiness_unverified')
+            return False
+
         return cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
-            current=lambda: current(after_commit=after_commit),
+            current=provider_current,
             dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]},
             selection=cloud_selection, input_binding=cloud_input)
 
+    def guard_provider(unit):
+        readiness_state[0] = 'not_checked'
+        unit.commit_guard()
+
     def discard_if_changed():
         if provider is not None:
+            if not current():
+                if readiness_state[0] == 'changed':
+                    provider.discard()
+                return
             try:
-                provider.commit_guard()
+                guard_provider(provider)
+            except cloud_inference.CloudObservationIncomplete:
+                return
             except cloud_inference.CloudFallback:
                 provider.discard()
 
@@ -3731,7 +3934,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if reset:
                     saved.clear()
                 value = fn(provider, reset)
-                provider.commit_guard()
+                guard_provider(provider)
                 meta["provider"] = provider.contract
                 meta["model"] = provider.model
                 return value
@@ -3739,6 +3942,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 # nothing left the wire: defer the unit — it must not take a
                 # local slot or re-send next tick as if the refusal never ran
                 raise Deferred("nightly_cloud_not_sent") from error
+            except cloud_inference.CloudObservationIncomplete as error:
+                raise Deferred('patient_context_readiness_unverified') from error
             except (cloud_inference.CloudFallback, ValueError) as error:
                 changed = isinstance(error, cloud_inference.CloudFallback) and str(error) == "cloud_unit_changed"
                 paid = provider.possibly_sent
@@ -4017,7 +4222,11 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     changes = ledger.db.total_changes
     if quality_fence is not None and quality_fence != (version, changes):
         return {"status": "source_changed", "done": 0}
-    fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
+    _, write_proof[0], ready_snapshot = _capture_readiness(ledger, pid, cfg, deadline=deadline,
+        complete=complete, allow_dependency_repair=lane != "A",
+        write_scope={'source_key': context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None,
+                     'cloud': cloud_input is not None})
+    fresh = ready_snapshot or _snapshot(ledger.db, pid, cfg, hydrate=False)
     scans_now = _scan_sig(ledger.db, pid)
     # A finished inference is worth a short wait: the tick and lane 2 hold
     # the run lock for minutes, and dropping the result would send the
@@ -4054,11 +4263,15 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         or notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is not None):
                     return {"status": "source_changed", "done": 0}
                 try:
-                    provider.commit_guard()
+                    guard_provider(provider)
                     if _completed_cloud_receipts(ledger, provider) != completed_receipts:
                         raise ValueError("nightly_cloud_receipt_changed")
-                except (cloud_inference.CloudFallback, ValueError):
+                except cloud_inference.CloudObservationIncomplete:
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_readiness_unverified"}
+                except cloud_inference.CloudFallback:
                     discard_if_changed()
+                    return {"status": "source_changed", "done": 0}
+                except ValueError:
                     return {"status": "source_changed", "done": 0}
                 version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
                 changes = ledger.db.total_changes
@@ -4124,10 +4337,13 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         ledger.db.rollback()
                         return {"status": "source_changed", "done": 0}
                 try:
-                    provider.commit_guard()
+                    guard_provider(provider)
                     if completed_receipts is not None:
                         if _completed_cloud_receipts(ledger, provider) != completed_receipts:
                             raise cloud_inference.CloudFallback("cloud_unit_changed")
+                except cloud_inference.CloudObservationIncomplete:
+                    ledger.db.rollback()
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_readiness_unverified"}
                 except cloud_inference.CloudFallback:
                     ledger.db.rollback()
                     if (completed_receipts is None or extract_llm._writer_current(full=True)
@@ -4137,19 +4353,30 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 except ValueError:
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
-            if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version:
-                # An unrelated writer does not invalidate completed inference.
-                fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
+            ready, actual, write_state = _readiness_for_write(ledger, pid, cfg, write_proof[0], deadline=deadline,
+                complete=complete, allow_dependency_repair=lane != "A")
+            if actual is not None:
+                fresh = actual
+            if write_state is not None:
+                scans_now = write_state['scan_sig']
+            elif ledger.db.execute("PRAGMA data_version").fetchone()[0] != version:
                 scans_now = _scan_sig(ledger.db, pid)
             selected_now = next((row for row in fresh["sources"] if selected_source[0] is not None
                                  and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
-            moved = (not _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                          allow_dependency_repair=lane != "A")
-                     or fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+            if ready != 'verified':
+                ledger.db.rollback()
+                changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
+                if changed and provider is not None:
+                    provider.discard()
+                return {"status": "source_changed" if changed else "deferred", "done": 0,
+                        **({"reason": "patient_context_readiness_unverified"} if not changed else {})}
+            moved = (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
                      or _published_version(ledger.db, pid) != frozen_ver
                      or snapshot["contract"].get(VERSION_KEY) != CURRENT_VERSION
                      or selected_source[0] is not None and (selected_now is None
-                         or _digest(_source_occurrence(ledger.db, pid, selected_now)) != _digest(selected_occurrence[0])))
+                         or (write_state['occurrence'] if write_state is not None
+                             and write_state['source_key'] == context_plan.source_key(selected_source[0])
+                             else _digest(_source_occurrence(ledger.db, pid, selected_now))) != _digest(selected_occurrence[0])))
             if moved or time.monotonic() >= deadline:
                 # another publisher (a second lane-3 process) wrote this
                 # patient's context or progress since selection: our
@@ -4290,8 +4517,10 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         try:
             comparison = cloud_for(unit_key, mid, after_commit=True)
             cloud_value = fn(comparison, False, measured, True)
-            comparison.commit_guard()
+            guard_provider(comparison)
         except cloud_client.CloudNotSent:
+            cloud_value = None
+        except cloud_inference.CloudObservationIncomplete:
             cloud_value = None
         except cloud_inference.CloudFallback as error:
             if comparison is not None and str(error) == "cloud_unit_changed":
