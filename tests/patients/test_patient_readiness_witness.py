@@ -183,16 +183,15 @@ def test_freeze_parameters_rejects_adapters_and_copies_mutable_inputs():
             witness.freeze_parameters(invalid)
 
 
-def test_unknown_udf_and_writes_are_denied_even_if_prepared_before_recording(dbs):
+def test_unknown_udf_stays_readable_but_writes_are_denied(dbs):
     reader, _ = dbs
     calls = []
     reader.create_function('unsafe_func', 0, lambda: calls.append('called') or 1)
     assert reader.execute('SELECT unsafe_func()').fetchone()[0] == 1
     calls.clear()
     with witness.Recording(reader) as recording:
-        with pytest.raises(sqlite3.Error):
-            reader.execute('SELECT unsafe_func()').fetchone()
-        assert recording.seal() is None and calls == []
+        assert reader.execute('SELECT unsafe_func()').fetchone()[0] == 1
+        assert recording.seal() is None and calls == ['called']
     with witness.Recording(reader) as recording:
         with pytest.raises(sqlite3.Error):
             reader.execute('DELETE FROM observations')
@@ -218,6 +217,51 @@ def test_failed_observation_no_transaction_and_budget_limits_fail_closed(dbs, mo
         collect(recording, reader, 'SELECT id FROM observations ORDER BY id')
         assert recording.seal() is None
     with witness.Recording(writer) as recording:
+        assert recording.seal() is None
+
+
+def test_limit_disables_witness_without_changing_following_reads(dbs, monkeypatch):
+    reader, _ = dbs
+    monkeypatch.setattr(witness, 'MAX_ROWS', 1)
+    with witness.Recording(reader) as recording:
+        sql = 'SELECT id FROM observations ORDER BY id'
+        cursor = reader.execute(sql)
+        handle = recording.start(sql, (), cursor.description)
+        values = []
+        for row in cursor:
+            values.append(row[0])
+            handle.row(row)
+        handle.eof()
+        cursor.close()
+        assert values == [1, 2, 3]
+        assert reader.execute('SELECT count(*) FROM observations').fetchone()[0] == 3
+        assert recording.seal() is None
+
+
+def test_repeated_eof_is_harmless_but_a_later_row_invalidates(dbs):
+    reader, writer = dbs
+    sql = 'SELECT id FROM observations WHERE id=1'
+    with witness.Recording(reader) as recording:
+        cursor = reader.execute(sql)
+        handle = recording.start(sql, (), cursor.description)
+        row = cursor.fetchone()
+        handle.row(row)
+        assert cursor.fetchone() is None
+        handle.eof()
+        assert cursor.fetchone() is None
+        handle.eof()
+        cursor.close()
+        result = recording.seal()
+    assert result is not None and matches(result, writer)
+    with witness.Recording(reader) as recording:
+        cursor = reader.execute(sql)
+        handle = recording.start(sql, (), cursor.description)
+        row = cursor.fetchone()
+        handle.row(row)
+        assert cursor.fetchone() is None
+        handle.eof()
+        handle.row(row)
+        cursor.close()
         assert recording.seal() is None
 
 
@@ -254,11 +298,13 @@ def test_unrelated_commit_during_owned_read_keeps_snapshot_witness(dbs):
 
 def test_nondeterministic_function_and_mutating_pragma_fail_closed(dbs):
     reader, _ = dbs
-    for sql in ('SELECT CURRENT_TIMESTAMP', 'PRAGMA query_only=OFF'):
-        with witness.Recording(reader) as recording:
-            with pytest.raises(sqlite3.Error):
-                reader.execute(sql).fetchone()
-            assert recording.seal() is None
+    with witness.Recording(reader) as recording:
+        assert isinstance(reader.execute('SELECT CURRENT_TIMESTAMP').fetchone()[0], str)
+        assert recording.seal() is None
+    with witness.Recording(reader) as recording:
+        with pytest.raises(sqlite3.Error):
+            reader.execute('PRAGMA query_only=OFF').fetchone()
+        assert recording.seal() is None
 
 
 def test_sealed_observation_cannot_accept_later_sql(dbs):
@@ -267,8 +313,7 @@ def test_sealed_observation_cannot_accept_later_sql(dbs):
         collect(recording, reader, 'SELECT id FROM observations WHERE id=1')
         result = recording.seal()
         assert result is not None
-        with pytest.raises(sqlite3.Error):
-            reader.execute('SELECT value FROM observations WHERE id=2').fetchone()
+        assert reader.execute('SELECT value FROM observations WHERE id=2').fetchone()[0] == 'b'
     assert not matches(result, writer)
 
 
