@@ -722,7 +722,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
 
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") == 4:
-        spec["parts"]["processing_display_version"] = 1
+        spec["parts"]["processing_display_version"] = 2
     if card["layout"] >= 3 and op != "revoke":
         spec["parts"]["section_divider_version"] = 1
     post_source_id = own_post(card)

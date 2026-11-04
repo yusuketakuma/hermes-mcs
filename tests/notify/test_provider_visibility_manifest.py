@@ -162,6 +162,7 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
 
 @pytest.mark.parametrize('old_marker,new_marker,reuse', [
     (None, None, True), (None, 1, False), (1, None, False), (1, 1, True),
+    (1, 2, False), (2, 1, False), (2, 2, True),
 ])
 def test_lineworks_reuse_respects_display_format(monkeypatch, old_marker, new_marker, reuse):
     old_parts = _parts(4, ['jev', 'local'])

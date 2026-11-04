@@ -213,7 +213,7 @@ def render_text(parts: dict, head: str = "【{}】", lit=str,
         kind = item["type"]
         if kind == "meta":
             continue
-        if parts.get("processing_display_version") == 1 and item.get("provider_scope") == "header":
+        if parts.get("processing_display_version") in (1, 2) and item.get("provider_scope") == "header":
             import processing_route
             item = {**item, "text": processing_route.compact_header(item)}
         if item.get("rule") and lines:
@@ -1029,6 +1029,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
         post_sequences = []
+        post_cloud_providers = []
         bundle_cache = {}
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
@@ -1038,9 +1039,11 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             sequence = {}
             if _provider_version >= 2 and m["body_state"] != "deleted":
                 states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
-                                                          bundle_cache=bundle_cache, sequence_out=sequence)
+                                                          bundle_cache=bundle_cache, sequence_out=sequence,
+                                                          followup=_provider_version == 4)
                 post_line.update(text=_cap_card_text(line, 500), provider_states=states)
             post_sequences.append(sequence.get("sequence"))
+            post_cloud_providers.append(sequence.get("cloud_provider"))
             blocks = [post_line]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
@@ -1153,7 +1156,11 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                 if item.get("type") == "text" and item.get("rule"):
                     post_states.append(item.get("provider_states", dict.fromkeys(
                         processing_route.PROVIDERS, "unknown")))
-        states = processing_route.aggregate_provider_states(post_states)
+        states = processing_route.aggregate_provider_states(post_states, followup=_provider_version == 4)
+        required = {post_cloud_providers[i] for i in pages_idx[page]}
+        visible_providers = [key for key in processing_route.PROVIDERS if key in visible_providers or key in required]
+        if _provider_version == 4:
+            containers[1]["visible_providers"] = visible_providers
         header = containers[1]
         if _provider_version == 2:
             prefix = header["text"].replace(header_placeholder, "", 1).strip(" ·")
@@ -1163,6 +1170,11 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         shown_progress = [(progress_by_mid or {}).get(msgs[i]["message_id"])
                           for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
         status = _page_processing_status(shown_progress)
+        if _provider_version == 4:
+            if any(value in ("attention", "unverified") for value in states.values()):
+                status = "attention"
+            elif "incomplete" in states.values() and status in ("complete", "unknown"):
+                status = "processing"
         if _provider_version == 4:
             header["processing_status"] = status
         visible_posts = [i for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
