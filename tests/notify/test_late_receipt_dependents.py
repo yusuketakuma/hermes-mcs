@@ -1,0 +1,165 @@
+"""Synthetic late delivery evidence and dependency recovery without content drift."""
+import json
+from pathlib import Path
+
+import pytest
+
+import notify_cards
+import notify_recovery
+import notify_spool
+from adapters.common import journal
+from notify_testkit import (CFG, NOW, SCOPE, _begin, _dispatch, _intent,
+                            _latest_render, _part_receipt, _receipt, _seed_thread,
+                            _uuid, led as led)
+
+
+def _parts(led, render):
+    return [dict(row) for row in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx",
+        (render["delivery_id"],))]
+
+
+def _prepare(led, dependency):
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    render = _latest_render(led)
+    assert _begin(led, render)["granted"]
+    if dependency == "card":
+        assert _receipt(led, render, f"{1:016x}", result="unknown",
+                        message_id=None)["applied"]
+        req = {"version": 1, "cmd": "ops.card_resolve", **SCOPE,
+               "delivery_id": render["delivery_id"], "attempt_id": f"{1:016x}",
+               "message_id": "synthetic-card"}
+    else:
+        assert _receipt(led, render, f"{1:016x}", message_id="synthetic-card")["applied"]
+        assert _part_receipt(led, render, "thread", result="unknown",
+                             remote_id=None)["applied"]
+        req = {**notify_recovery.card_part_resolve_plan(led, render["delivery_id"], "thread"),
+               "remote_id": "synthetic-thread"}
+    req.update(command_id=_uuid(990), actor="synthetic-operator", human_confirmed=True,
+               reason="合成の配信確認", result="mark_delivered",
+               evidence={"method": "synthetic_lookup", "ref": "synthetic-proof",
+                         "worker_stopped": True})
+    return render, req
+
+
+def _resolve(led, req):
+    apply = (notify_recovery.apply_card_resolve if req["cmd"] == "ops.card_resolve"
+             else notify_recovery.apply_card_part_resolve)
+    return apply(led, req, CFG, NOW + 1)
+
+
+
+
+@pytest.mark.parametrize("dependency", ["card", "thread"])
+def test_late_factual_dependent_receipts_settle_dependency_holds(led, dependency):
+    render, _ = _prepare(led, dependency)
+    # Factual receipts can overtake the parent receipt in the command queue.
+    body = _part_receipt(led, render, "body:0001", remote_id="synthetic-body")
+    assert body["applied"]
+    assert _part_receipt(led, render, "body:0001", remote_id="synthetic-body")["applied"]
+    assert _part_receipt(led, render, "body:0001", remote_id="other-body")["error"] == "part_conflict"
+    if dependency == "card":
+        assert _receipt(led, render, f"{1:016x}", message_id="synthetic-card")["applied"]
+        assert _part_receipt(led, render, "thread", remote_id="synthetic-thread")["applied"]
+    else:
+        assert _part_receipt(led, render, "thread", remote_id="synthetic-thread")["applied"]
+    for part in _parts(led, render):
+        if part["kind"] == "body_part" and part["part_id"] != "body:0001":
+            assert _part_receipt(led, render, part["part_id"],
+                                 remote_id="synthetic-" + part["part_id"])["applied"]
+    assert all(part["state"] == "delivered" for part in _parts(led, render))
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+
+
+@pytest.mark.parametrize("mutation,error", [("channel_id", "scope_mismatch"),
+                                           ("payload_hash", "payload_hash_mismatch"),
+                                           ("render_rev", "render_rev_mismatch"),
+                                           ("attempt_id", "attempt_mismatch")])
+def test_late_held_receipt_requires_exact_identity(led, mutation, error):
+    render, _ = _prepare(led, "thread")
+    value = 99 if mutation == "render_rev" else "foreign"
+    out = _part_receipt(led, render, "body:0001", remote_id="synthetic-body",
+                        mutate=lambda req: req.update({mutation: value}))
+    assert not out["applied"] and out["error"] == error
+    assert next(part for part in _parts(led, render) if part["kind"] == "body_part")["state"] == "held"
+
+
+@pytest.mark.parametrize("block", ["unknown", "started", "tainted", "revoked", "attempt", "independent"])
+def test_operator_recovery_does_not_guess_held_parts_unsent(led, block):
+    render, req = _prepare(led, "thread")
+    body = next(part for part in _parts(led, render) if part["kind"] == "body_part")
+    if block in ("unknown", "attempt", "independent"):
+        with led.db:
+            if block == "unknown":
+                led.db.execute("UPDATE notification_render_parts SET state='unknown',attempt_id=? "
+                               "WHERE delivery_id=? AND part_id=?",
+                               ("synthetic-inflight", render["delivery_id"], body["part_id"]))
+            elif block == "attempt":
+                led.db.execute("UPDATE notification_render_parts SET attempt_id='synthetic-inflight' "
+                               "WHERE delivery_id=? AND part_id=?", (render["delivery_id"], body["part_id"]))
+            else:
+                led.db.execute("UPDATE notification_render_parts SET error_code='card_revoked' "
+                               "WHERE delivery_id=? AND part_id=?", (render["delivery_id"], body["part_id"]))
+    elif block == "revoked":
+        with led.db:
+            notify_cards.revoke_card(led.db, render["card_id"], NOW)
+    else:
+        dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
+        witness = {"attempt_id": f"p:{render['delivery_id'].replace('-', '')}:{body['part_id']}",
+                   "delivery_id": render["delivery_id"], "part_id": body["part_id"], "phase": "started"}
+        (Path(dirs["discord_state"]) / "journal-synthetic.jsonl").write_text(
+            json.dumps(witness) + "\n" if block == "started" else "{broken\n")
+    before = _parts(led, render)
+    assert _resolve(led, req)["outcome"] == "applied"
+    after = {part["part_id"]: part for part in _parts(led, render)}
+    assert after[body["part_id"]]["state"] == next(part for part in before if part["part_id"] == body["part_id"])["state"]
+    assert not any(part["error_code"] == "dependency_not_started" for part in after.values())
+
+
+def test_independent_held_part_does_not_accept_a_late_fact(led):
+    render, _ = _prepare(led, "thread")
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET error_code='card_revoked' "
+                       "WHERE delivery_id=? AND kind='body_part'", (render["delivery_id"],))
+    assert _part_receipt(led, render, "body:0001", remote_id="synthetic-body")["error"] == "part_conflict"
+
+
+def test_primary_resolution_without_worker_stop_does_not_replan(led):
+    render, req = _prepare(led, "card")
+    req["evidence"].pop("worker_stopped")
+    assert _resolve(led, req)["outcome"] == "applied"
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+    assert any(part["state"] == "held" for part in _parts(led, render))
+
+
+
+
+def test_late_held_unknown_is_preserved_by_parent_resolution(led):
+    render, req = _prepare(led, "thread")
+    assert _part_receipt(led, render, "body:0001", result="unknown", remote_id=None)["applied"]
+    assert _resolve(led, req)["outcome"] == "applied"
+    assert next(part for part in _parts(led, render) if part["kind"] == "body_part")["state"] == "unknown"
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]
+
+
+@pytest.mark.parametrize("dependency", ["card", "thread"])
+def test_compacted_delivery_evidence_never_becomes_unsent(led, dependency):
+    render, req = _prepare(led, dependency)
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
+    state = dirs["discord_state"]
+    aid = f"p:{render['delivery_id'].replace('-', '')}:body:0001"
+    for phase in ("started", "result", "receipt"):
+        journal.append(state, "synthetic-old-worker", {
+            "attempt_id": aid, "delivery_id": render["delivery_id"], "part_id": "body:0001",
+            "phase": phase, **({"result": "delivered", "remote_id": "synthetic-delivered-body"}
+                                if phase != "started" else {})})
+    # A worker's publication receipt is compactable even when the old runner
+    # rejected its factual receipt because the dependent was already held.
+    assert journal.compact(state, active="", file_ok=lambda rows: True,
+                           prunable=lambda _aid, rows: any(row["phase"] == "receipt" for row in rows)) == 3
+    assert journal.scan_checked(state) == ({}, True)
+    assert _resolve(led, req)["outcome"] == "applied"
+    body = next(part for part in _parts(led, render) if part["part_id"] == "body:0001")
+    assert body["state"] == "held"
+    assert _latest_render(led)["delivery_id"] == render["delivery_id"]

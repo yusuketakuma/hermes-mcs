@@ -570,8 +570,8 @@ def body_coverage_witness(db, delivery_id, cache):
     return _body_delivery_coverage(db, render_row(db, delivery_id), cache)[0]
 
 
-def incomplete_parts_health(db, now: float, cfg=None) -> dict:
-    """Read unfinished parts, excluding only matching later delivery evidence."""
+def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
+    """Read unfinished parts after applying the shared delivery proofs."""
     retired = retired_transports(cfg)
     live = (f" AND r.transport NOT IN ({','.join('?' * len(retired))})"
             if retired else "")
@@ -587,8 +587,12 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         for transport in SUPPORTED_TRANSPORTS)
     proof_params = tuple(whitespace for transport in SUPPORTED_TRANSPORTS
                          for _ in scope_fields(transport))
+    selected = (f" AND r.delivery_id IN ({','.join('?' * len(delivery_ids))})"
+                if delivery_ids is not None else "")
+    if delivery_ids is not None and not delivery_ids:
+        return
     rows = db.execute(
-        "SELECT p.delivery_id,p.part_id,p.state,p.kind,p.error_code,r.card_id,"
+        "SELECT p.delivery_id,p.part_id,p.state,p.kind,p.error_code,r.card_id,r.transport,"
         "COALESCE(p.updated_at,r.created_at) oldest,"
         "EXISTS(SELECT 1 FROM notification_renders newer "
         "WHERE newer.card_id=r.card_id AND newer.render_rev>r.render_rev "
@@ -625,12 +629,9 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         # content hash must agree, while attachment IDs identify their source.
         " AND ((p.kind='body_part' AND p.name IS NOT NULL AND p.name!='' AND sent.name=p.name) "
         "   OR (p.kind='attachment_part' AND p.attachment_id>0 AND sent.attachment_id=p.attachment_id) "
-        "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live,
-        proof_params + retired)
-    states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
-    by_plan = {"current": 0, "superseded": 0}
-    cards, checked, covered, cache = set(), set(), set(), {}
-    oldest = None
+        "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live + selected,
+        proof_params + retired + tuple(delivery_ids or ()))
+    checked, covered, cache = proof_state if proof_state is not None else (set(), set(), {})
     for row in rows:
         if row['kind'] == 'body_part' and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS:
             if row['card_id'] not in checked:
@@ -641,6 +642,22 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
                 checked.add(row['card_id'])
             if (row['delivery_id'], row['part_id']) in covered:
                 continue
+        yield row
+
+
+def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
+    """Retain sealed Slack bodies until the same delivery proofs resolve their rejection."""
+    return {row['delivery_id'] for row in _incomplete_part_rows(db, delivery_ids=delivery_ids, proof_state=proof_state)
+            if row['transport'] == 'slack' and row['kind'] == 'body_part'
+            and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS}
+
+
+def incomplete_parts_health(db, now: float, cfg=None) -> dict:
+    """Read unfinished parts, excluding only matching later delivery evidence."""
+    states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
+    by_plan = {"current": 0, "superseded": 0}
+    cards, oldest = set(), None
+    for row in _incomplete_part_rows(db, cfg):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
         cards.add(row['card_id'])

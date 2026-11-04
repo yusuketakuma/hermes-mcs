@@ -51,7 +51,8 @@ from contextlib import suppress
 from mcs_contract import project_url
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_requests import canonical, payload_hash, positive
-from mcs_util import loads_dict, valid_hash
+from mcs_util import loads_dict, strict_json, valid_hash, valid_text
+from safe_io import read_private_bytes
 from notify_render import (
     anchor_keys, card_content, content_fingerprint,
     mmdd, project_display_name, preview_header, preview_line, signal_evidence,
@@ -2481,19 +2482,61 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
     keeps. Slack attachment edits rejected before writing keep both specs
-    until their unknown result is resolved. Rows, hashes,
-    correlations and part metadata stay for audit. Bounded per call —
-    the rest waits for the next tick."""
+    until their unknown result is resolved. Definitive Slack body length
+    rejections keep both sealed copies until matching delivery proof exists. Rows, hashes,
+    correlations and part metadata stay for audit. Each clearing pass examines
+    at most limit candidates; a private restart-safe cursor rotates past
+    retained rows without changing delivery facts."""
     db = connection(ledger)
     now = time.time() if now is None else now
+    root = notify_spool.data_root(ledger)
+    dirs = notify_spool.notify_dirs(root)
+    database = os.stat(db.execute("PRAGMA database_list").fetchone()["file"])
+    cursor = {"version": 1, "database": [database.st_dev, database.st_ino],
+              "positions": {"spec_json": None, "spec_files": None}}
+    try:
+        saved = strict_json(read_private_bytes(os.path.join(dirs["flags"], "notify_gc_cursor.json"), 4096))
+        if (not isinstance(saved, dict) or saved.keys() != cursor.keys()
+                or type(saved["version"]) is not int or saved["version"] != 1
+                or saved["database"] != cursor["database"]
+                or not isinstance(saved["database"], list)
+                or any(type(value) is not int for value in saved["database"])
+                or not isinstance(saved["positions"], dict)
+                or saved["positions"].keys() != cursor["positions"].keys()):
+            raise ValueError("invalid_gc_cursor")
+        for after in saved["positions"].values():
+            if after is not None and (not isinstance(after, list) or len(after) != 2
+                    or notify_scope._finite(after[0]) is None or not valid_text(after[1], 128)):
+                raise ValueError("invalid_gc_cursor")
+        cursor = saved
+    except (OSError, ValueError, TypeError, RecursionError):
+        pass  # Cursor loss only repeats bounded read-only proof checks.
     with db:
         tokens = db.execute(
             "DELETE FROM notification_action_tokens WHERE expires_at<?",
             (now,)).rowcount
         cleared = 0
         coverage_cache = {}
-        for r in db.execute(
-                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,c.kind FROM notification_renders r
+        proof_state = (set(), set(), coverage_cache)
+
+        def candidates(query, phase):
+            after = cursor["positions"][phase]
+            if limit <= 0:
+                return
+            bounds = " AND (r.updated_at,r.delivery_id)>(?,?)" if after else ""
+            rows = db.execute(query + bounds + " ORDER BY r.updated_at,r.delivery_id LIMIT ?",
+                              (*after, limit) if after else (limit,)).fetchall()
+            position = [rows[-1]["updated_at"], rows[-1]["delivery_id"]] if len(rows) == limit else None
+            if position is not None and (notify_scope._finite(position[0]) is None
+                                        or not valid_text(position[1], 128)):
+                position = None
+            cursor["positions"][phase] = position
+            retained = notify_scope.unresolved_length_deliveries(
+                db, [row["delivery_id"] for row in rows], proof_state=proof_state)
+            yield from (row for row in rows if row["delivery_id"] not in retained)
+
+        for r in candidates(
+                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,r.updated_at,c.kind FROM notification_renders r
                    LEFT JOIN notification_cards c ON c.card_id=r.card_id
                    WHERE r.spec_json IS NOT NULL
                      AND CASE WHEN json_valid(r.spec_json) THEN NOT (
@@ -2535,7 +2578,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                                 WHERE h.released_at IS NULL
                                   AND (h.delivery_id=r.delivery_id
                                        OR h.card_id=r.card_id))))
-                   ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
+                   """, "spec_json"):
             witness = (_signal_route_witness(r["spec_json"]) if r["kind"] == "signal"
                        and r["op"] == "create" and r["state"] == "delivered" else None)
             if witness is None and r['op'] == 'update':
@@ -2557,10 +2600,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
         # its restart-resume can replay — removing it would strand
         # parts the journal could still finish.
         removed = 0
-        root = notify_spool.data_root(ledger)
-        dirs = notify_spool.notify_dirs(root)
-        for r in db.execute(
-                "SELECT delivery_id,transport FROM notification_renders r "
+        for r in candidates(
+                "SELECT delivery_id,transport,updated_at FROM notification_renders r "
                 "WHERE state IN ('delivered','not_sent','cancelled') "
                 "AND spec_published=1 AND parts_state!='pending' "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
@@ -2568,8 +2609,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
                 "WHERE p.delivery_id=r.delivery_id AND r.transport='slack' "
                 "AND p.state='unknown' AND (p.kind='file_group' OR (p.kind='attachment_part' "
-                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')))) "
-                "ORDER BY updated_at LIMIT ?", (limit,)).fetchall():
+                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')))) ",
+                "spec_files"):
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")
             try:
@@ -2583,6 +2624,10 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             # cleanup so a bounded GC can reach older files on later ticks.
             db.execute("UPDATE notification_renders SET spec_published=0 "
                        "WHERE delivery_id=?", (r["delivery_id"],))
+    # Publish only after the page's DB transaction committed. Failed cursor
+    # publication repeats a page; it never authorizes deleting a held spec.
+    os.makedirs(dirs["flags"], mode=0o700, exist_ok=True)
+    notify_spool.publish_file(dirs["flags"], "notify_gc_cursor.json", canonical(cursor))
     # cmd_results files are a transport artifact — the durable audit
     # lives in command_receipts. The plugin polls a result for
     # minutes at most; anything a week old is dead weight.
