@@ -259,7 +259,7 @@ def test_health_written_before_categories_still_validates_and_renders(db):
     old = copy.deepcopy(block)
     del old["errors"]["categories"]
     assert diagnostics.validated(old, fine=True) == old
-    assert diagnostics.detail_lines(old, "errors") == ["収集エラー1件: 通信1件"]
+    assert diagnostics.detail_lines(old, "errors") == ["処理異常1件: 通信1件"]
     assert diagnostics.guidance(old) is None
 
 

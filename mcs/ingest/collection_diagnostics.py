@@ -277,7 +277,14 @@ def detail_lines(value, section: str) -> list[str]:
                    if "categories" in block else
                    "、".join(f"{ERROR_LABELS[k]}{n}件" for k, n in block["reasons"].items() if n))
         partial = "（先頭256件の内訳）" if block["state"] == "partial" else ""
-        return [f"収集エラー{block['total']}件{partial}" + (f": {details}" if details else "")]
+        if "categories" in block:
+            deferred = block["categories"].get("deferred", 0)
+            summary = f"処理異常{block['scanned'] - deferred}件 / 先送り{deferred}件"
+            if block['scanned'] < block['total']:
+                summary += f" / 未分類{block['total'] - block['scanned']}件"
+        else:
+            summary = f"処理異常{block['total']}件"
+        return [summary + partial + (f": {details}" if details else "")]
     details = "、".join(f"{FETCH_LABELS[k]}{n}件" for k, n in block["reasons"].items() if n)
     lines = [f"取得未完了{block['projects']}件" + (f": {details}" if details else "")]
     if block["parent_bodies"]:

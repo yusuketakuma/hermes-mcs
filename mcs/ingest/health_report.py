@@ -852,7 +852,9 @@ def build_health(db, result: dict, status: str,
     # stages rerun next tick on the new code. The run row keeps
     # 'partial' + code_changed for audit, but it must not degrade
     # health or fire a monitoring alert by itself.
-    real_errors = [e for e in errors if e != "code_changed"]
+    from collection_diagnostics import classify
+    recorded_errors = [e for e in errors if e != "code_changed"]
+    real_errors = [e for e in recorded_errors if classify(e) != "deferred"]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (real_errors or coll["collection"] != "ok"
@@ -946,7 +948,7 @@ def build_health(db, result: dict, status: str,
         "semantic_intake_diagnostic_unpersisted": diagnostic_unpersisted,
         "semantic_intake_source": source,
         "collection_diagnostics": collection_diagnostics_health(
-            db, real_errors, now, seconds=remaining()),
+            db, recorded_errors, now, seconds=remaining()),
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
         "disk_low": disk_low,
         "notify": {"state": notify_state,

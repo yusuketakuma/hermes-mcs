@@ -250,6 +250,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
         and _count(parts.get('total')) and all(_count(n) for n in states.values())
         and sum(states.values()) == parts['total'] else None)
+    report['notify_parts_breakdown'] = _part_breakdown(parts, report['notify_incomplete_parts'])
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -720,7 +721,7 @@ _REASON_JA = {
                    f"{_COLLECTION_LOG} の末尾を確認。続く場合は {_CHECK}"),
     "session_expired": ("MCSのログインが切れ、自動の再ログインも失敗しました",
                         "MCSに手動でログインし直す（docs/guides/INSTALLATION.md の session_expired）"),
-    "stage_errors": ("収集の一部の処理でエラーがありました",
+    "stage_errors": ("収集または収集後の処理でエラーがありました",
                      f"次回の収集で再試行されます。続く場合は {_COLLECTION_LOG} を確認"),
     "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
     "run_deadline_exceeded": ("収集が制限時間を超えました",
@@ -833,6 +834,28 @@ def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
 
 
+def _part_breakdown(parts, total):
+    if not isinstance(parts, dict) or not _count(total):
+        return None
+    states, plans = parts.get('by_state'), parts.get('by_plan')
+    if (not isinstance(states, dict) or set(states) != {'pending', 'unknown', 'not_sent', 'held'}
+            or not isinstance(plans, dict) or set(plans) != {'current', 'superseded'}
+            or not all(_count(n) for n in (*states.values(), *plans.values()))
+            or sum(states.values()) != total or sum(plans.values()) != total):
+        return None
+    return {'by_state': dict(states), 'by_plan': dict(plans)}
+
+
+def _collection_known_empty(report: dict) -> bool:
+    from collection_diagnostics import validated
+
+    value = validated(report.get("collection_diagnostics"), fine=True)
+    return (not report.get("observations_recorded")
+            and report.get("semantic_intake_unstored") not in ("present", "unverified")
+            and value is not None and value["incomplete"]["state"] == "known"
+            and value["incomplete"]["projects"] == 0 and value["incomplete"]["parent_bodies"] == 0)
+
+
 def _impact(report: dict, reasons) -> str:
     """One sentence a staff member can act on: what is affected and
     whether collection itself is still running."""
@@ -841,8 +864,11 @@ def _impact(report: dict, reasons) -> str:
     areas = []
     for r in reasons or []:
         for prefix, name in _AREA_JA:
-            if r.startswith(prefix) and name not in areas:
-                areas.append(name)
+            if r.startswith(prefix):
+                if prefix == "collection_incomplete" and _collection_known_empty(report):
+                    name = "収集判定の確認"
+                if name not in areas:
+                    areas.append(name)
     parts = []
     if areas:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
@@ -948,6 +974,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             action = _STANDALONE_ACTION.get(base, action)
         elif report.get("notify_transport") == "lineworks":
             action = _LINEWORKS_ACTION.get(base, action)
+        if base == 'collection_incomplete' and _collection_known_empty(report):
+            meaning = "収集判定と現在の患者別の取得内訳に差があります"
+            action = ("前回の収集判定または今回の観測対象との差をdoctorで確認。"
+                      "現在の患者別の未取得は0件ですが、収集全体の完了は断定できません")
         if base == 'collection_incomplete' and report.get('semantic_intake_unstored') in ('present', 'unverified'):
             meaning = ('保存できず、未取得の可能性が残る記録があります'
                        if report['semantic_intake_unstored'] == 'present'
@@ -984,6 +1014,13 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         elif base == "notification_parts_incomplete":
             n = report.get('notify_incomplete_parts')
             extra = f" {n}件" if _count(n) else ""
+            detail = _part_breakdown(report.get('notify_parts_breakdown'), n)
+            if detail is not None:
+                states, plans = detail['by_state'], detail['by_plan']
+                labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
+                          ('処理待ち', states['pending']), ('保留', states['held'])]
+                extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
+                          + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
         elif base in ("backup_not_verified", "backup_deferred_deadline"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
@@ -1033,8 +1070,8 @@ def _alert_lines(report: dict) -> list[str]:
         if type(count) is int and count >= STREAK_ALERT and finite_number(first) \
                 and finite_number(at) and 0 <= at - first:
             # observed count and the actual elapsed time, never a nominal cadence
-            lines.append(f"継続: 同じ異常を{count}回続けて観測"
-                         f"（初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
+            lines.append(f"継続: 監視理由ごとの連続観測は最大{count}回"
+                         f"（該当理由の初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
         lines.append("原因と対処:")
         lines.extend(_reason_rows(report, reasons))
         interrupt = report.get("last_interrupt")
