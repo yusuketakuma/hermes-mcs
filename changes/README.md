@@ -17,7 +17,7 @@ schema・運用手順・著名リポジトリとの比較は`docs/development/RE
 ```
 
 これは形式例であり、実在する変更の記録ではない。実際の変更はコードで検証する。
-`category`: `security` / `breaking` / `added` / `changed` / `fixed`。
+`category`: `breaking` / `added` / `changed` / `fixed`。
 `upgrade`: 必要操作・既定値・対象・適用条件を明記。「不要」も明記する。
 `refs`: PR番号・commit SHA・変更されたソースパスのいずれかを必須とする。
 性能向上・精度向上の数値は実測がある場合だけ書く。
