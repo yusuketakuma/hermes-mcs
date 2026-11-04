@@ -106,7 +106,11 @@ def test_post_response_observation_distinguishes_unknown_from_changed_scope(paid
 def test_temporary_send_gate_keeps_previously_paid_answer(paid, monkeypatch, waiting):
     path, cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        provider = unit(ledger)
+        checking = [True]
+        def current():
+            assert checking[0], 'temporary send denial must precede expensive source proof'
+            return True
+        provider = unit(ledger, current=current)
         original = _ask(provider)
         before = [tuple(row) for row in ledger.db.execute(
             "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")]
@@ -123,7 +127,9 @@ def test_temporary_send_gate_keeps_previously_paid_answer(paid, monkeypatch, wai
                     raise ValueError('synthetic accounting read failure')
                 patch.setattr(cloud_policy, 'block_reason', unreadable)
             with pytest.raises(cloud_inference.CloudObservationIncomplete):
+                checking[0] = False
                 provider.guard()
+            checking[0] = True
             provider.commit_guard()  # A send denial does not revoke adoption authority.
             assert not provider.discarded and provider.final_disposition is None
         recovered = _ask(unit(ledger, owner='verified-restart'))
@@ -131,6 +137,78 @@ def test_temporary_send_gate_keeps_previously_paid_answer(paid, monkeypatch, wai
         assert len(calls) == 1
         assert [tuple(row) for row in ledger.db.execute(
             "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")] == before
+
+
+@pytest.mark.parametrize('fault', ['empty_config', 'config_read', 'profile', 'key', 'source_read'])
+def test_unreadable_post_response_guard_preserves_recoverable_answer(paid, monkeypatch, fault):
+    path, cfg, calls, _locks, _state, unit, _restart = paid
+    load, profile, key = cloud_inference.load_config, cloud_policy.resolve_profile, cloud_policy.selected_key
+    def observed_load():
+        if calls and fault == 'empty_config':
+            return {}
+        if calls and fault == 'config_read':
+            raise OSError('synthetic unreadable config')
+        return load()
+    def observed_profile(*args, **kwargs):
+        return (None, ['synthetic unavailable']) if calls and fault == 'profile' else profile(*args, **kwargs)
+    def observed_key(*args, **kwargs):
+        return None if calls and fault == 'key' else key(*args, **kwargs)
+    def current():
+        if calls and fault == 'source_read':
+            raise ValueError('synthetic unreadable source')
+        return True
+    with closing(Ledger(path)) as ledger:
+        with monkeypatch.context() as patch:
+            patch.setattr(cloud_inference, 'load_config', observed_load)
+            patch.setattr(cloud_policy, 'resolve_profile', observed_profile)
+            patch.setattr(cloud_policy, 'selected_key', observed_key)
+            provider = unit(ledger, current=current)
+            with pytest.raises(cloud_inference.CloudObservationIncomplete):
+                _ask(provider)
+            assert not provider.discarded and provider.final_disposition is None
+        result = ledger.artifacts('cloud_usage_result')[0]
+        assert json.loads(result['meta'])['http_class'] == 'http_200'
+        assert not json.loads(result['meta']).get('disposition')
+        before = cloud_policy.usage_report(ledger)
+        recovered = _ask(unit(ledger, owner='verified-restart'))
+        assert recovered['reused_response'] is True
+        assert len(calls) == 1 and cloud_policy.usage_report(ledger) == before
+
+
+def test_transient_unknown_requires_a_new_authoritative_check_before_returning_answer(paid):
+    path, _cfg, calls, _locks, _state, unit, _restart = paid
+    checks = []
+    def current():
+        if calls:
+            checks.append(True)
+            if len(checks) == 1:
+                raise cloud_inference.CloudObservationIncomplete('cloud_current_unverified')
+        return True
+    with closing(Ledger(path)) as ledger:
+        provider = unit(ledger, current=current)
+        answer = _ask(provider)
+        assert answer['text'] == '{"synthetic":"answer"}'
+        assert len(checks) >= 2 and len(calls) == 1
+        assert not provider.discarded and provider.final_disposition is None
+
+
+def test_explicit_scope_withdrawal_remains_final_even_if_profile_cannot_be_read(paid, monkeypatch):
+    path, cfg, calls, _locks, _state, unit, _restart = paid
+    profile = cloud_policy.resolve_profile
+    with closing(Ledger(path)) as ledger:
+        with monkeypatch.context() as patch:
+            patch.setattr(cloud_inference, 'load_config', lambda: (
+                {**cfg, 'cloud_llm': {**cfg['cloud_llm'], 'mode': 'off'}} if calls else cfg))
+            patch.setattr(cloud_policy, 'resolve_profile', lambda *a, **k: (
+                (None, ['synthetic unavailable']) if calls else profile(*a, **k)))
+            provider = unit(ledger)
+            with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'):
+                _ask(provider)
+            assert provider.discarded
+            assert json.loads(ledger.artifacts('cloud_usage_result')[0]['meta'])['disposition'] == 'discarded_scope'
+        with pytest.raises(cloud_client.CloudNotSent):
+            _ask(unit(ledger, owner='verified-restart'))
+        assert len(calls) == 1
 
 
 def test_restart_reuses_atomic_paid_answer_without_capacity_reservation_or_new_bill(paid):
