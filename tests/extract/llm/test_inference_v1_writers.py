@@ -336,11 +336,11 @@ def test_all_cached_leaves_keep_coverage_without_meta_out(source, monkeypatch, r
 
 @pytest.mark.parametrize("state", ["unresolved", "dispatch_unknown", "skipped_budget"])
 def test_cached_unfinished_quality_is_never_complemented_as_resolved(source, monkeypatch, state):
-    _, row = source
+    body = "本人の体温は38.0度です。"
     _synthetic_inference(monkeypatch, lambda *a, **k: pytest.fail("terminal cached candidate redispatched"))
     meta, checkpoints = {}, {}
-    record = {"state": state, "remaining_hint_candidates": 0}
-    llm.llm_extract(row["body_text"], chunks_in={0: {"summary": "合成", "_quality_result": record}},
+    record = {"state": state, "remaining_hint_candidates": 1}
+    llm.llm_extract(body, chunks_in={0: {"summary": "合成", "_quality_result": record}},
         chunks_out=checkpoints, meta_out=meta)
     assert meta["completeness_chunks"] == 1 and meta["completeness"]["0"] == record
     assert not llm.extract_quality.completeness_resolved({inference.VERSION_KEY: inference.CURRENT_VERSION,

@@ -66,7 +66,7 @@ def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(checkpo
     ("transaction", "transaction"), ("owner", "source_or_owner"),
     ("conflict", "checkpoint"), ("missing_checkpoint", "checkpoint"),
     ("layout", "checkpoint"), ("prior", "prior_changed"),
-    ("completeness", "completeness"), ("context", "context"),
+    ("completeness", "completeness_coverage"), ("context", "context"),
     ("reference", "reference"), ("medication", "medication"),
 ])
 def test_commit_rejection_retains_only_fixed_diagnostic_and_preserves_rows(checkpointed, monkeypatch, boundary, reason):

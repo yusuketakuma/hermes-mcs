@@ -31,6 +31,14 @@ def _rows(ledger):
     return list(ledger.db.execute("SELECT * FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id"))
 
 
+def _source_with_unresolved_hint(ledger):
+    body = "本人の体温は38.0度です。" + "合成の連絡です。" * 16
+    ledger.save_messages([_message(body=body)])
+    row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = dependency_loss.source_binding(ledger.db, 1, 1)
+    return row
+
+
 def test_identical_success_replay_keeps_checkpoint_and_rerenders(source, monkeypatch):
     ledger, row = source
     renders = []
@@ -63,7 +71,8 @@ def test_deferred_later_piece_reuses_completed_piece_without_new_rows(source, mo
 
 @pytest.mark.parametrize("status", ["unresolved", "dispatch_unknown", "skipped_budget"])
 def test_deferred_later_piece_does_not_duplicate_replayed_unconfirmed_checkpoint(source, monkeypatch, status):
-    ledger, row = source
+    ledger, _ = source
+    row = _source_with_unresolved_hint(ledger)
     size = 50
     assert len(llm.plan_chunks(row["body_text"], size)) > 1
     checkpoint = {"_quality_result": {"state": status, "remaining_hint_candidates": 1}}
@@ -90,7 +99,8 @@ def test_deferred_later_piece_does_not_duplicate_replayed_unconfirmed_checkpoint
 
 
 def test_ordinary_callback_still_receives_unsaved_caller_chunk(source, monkeypatch):
-    ledger, row = source
+    ledger, _ = source
+    row = _source_with_unresolved_hint(ledger)
     size = 50
     checkpoint = {"_quality_result": {"state": "dispatch_unknown", "remaining_hint_candidates": 1}}
     assert not _rows(ledger)
@@ -216,7 +226,8 @@ def test_replay_rejects_a_child_after_its_parent_split_changes(source):
 
 @pytest.mark.parametrize("workers", [1, 2])
 def test_run_pending_reuses_unconfirmed_checkpoint_without_writing_it_again(source, monkeypatch, workers):
-    ledger, first = source
+    ledger, _ = source
+    first = _source_with_unresolved_hint(ledger)
     ledger.save_messages([_message(mid=2, body=first["body_text"])])
     monkeypatch.setattr(llm, "_CHUNK_SIZE", 50)
     monkeypatch.setattr(llm, "load_config", lambda: {
