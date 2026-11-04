@@ -3550,13 +3550,15 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         prior_kind = content.pop("__quality_prior_kind_v1", None) if isinstance(content, dict) else None
         repair = content.pop("__quality_repair_v1", None) if isinstance(content, dict) else None
         validated = extract_validation.validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
-        if validated is not None and not validated.get("_items_dropped") and not validated.get("_evidence_dropped"):
+        if validated is not None:
+            repeated_loss = bool(validated.get("_items_dropped") or validated.get("_evidence_dropped"))
             for counter in ("_items_dropped", "_evidence_dropped"):
                 if type(content.get(counter)) is int and content[counter] >= 0:
                     validated[counter] = max(validated.get(counter, 0), content[counter])
             strict_meta = _provider_strict_dict(raw_meta)
             proof = strict_meta.get("provider_leaf") if strict_meta is not None else None
             evidence = _leaf_evidence(_EvidenceLeaf({}, proof))
+            matches = False
             if (artifact_project == r["project_id"] and evidence is not None
                     and isinstance(r.get("_source_binding"), str) and r["_source_binding"]
                     and type(meta.get("plan_version")) is int
@@ -3592,6 +3594,12 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                         validated.quality_origin_id = origin_ref if validated.quality_origin is not None else None
                         if meta.get("quality_status") == "started" and prior_kind in ("raw", "cached"):
                             validated.quality_prior_kind = prior_kind
+            # A known uncertainty may be counted again during validation. Keep
+            # it only when the complete source-bound provider seal and payload
+            # (including retained losses) reproduce exactly. New content loss,
+            # increased losses and unproven legacy payloads remain unreadable.
+            if repeated_loss and not matches:
+                continue
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
             elif meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in (
