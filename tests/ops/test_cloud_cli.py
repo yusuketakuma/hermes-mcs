@@ -757,7 +757,7 @@ def test_period_budget_interruption_marks_the_right_section(world, monkeypatch):
     report = cli.observe(config, root=str(root))
     assert report["state"] == "partial"
     assert report["interrupted_section"] == "period_budget"
-    assert report["sections_verified"] == ["accounting"]
+    assert report["sections_verified"] == ["accounting", "retained_records"]
     assert "accounting" not in report["sections_unverified"]
 
 
@@ -790,6 +790,92 @@ def test_unverified_period_spend_is_not_counted_verified(world, monkeypatch):
     assert report["state"] == "partial"
     assert "period_budget" in report["sections_unverified"]
     assert "period_budget" not in report["sections_verified"]
+
+
+@pytest.mark.parametrize('phase', ['accounting', 'period_budget', 'block_reason', 'source_repair_evidence_holds'])
+def test_actual_shared_reader_budget_stops_at_original_section(world, monkeypatch, phase):
+    import cloud_observation
+
+    root, _path, config = world
+    config['cloud_llm'].update(window_start='2026-10-26T00:00:00+09:00', window_budget_usd=80)
+    observed = []
+
+    def exhaust(db):
+        monkeypatch.setattr(cli, 'READ_BYTES', 1)
+        try:
+            db.execute("SELECT 'synthetic-private-detail'").fetchone()
+        except ValueError:
+            observed.append('swallowed')  # policy helpers may turn this into unknown
+
+    if phase == 'accounting':
+        def accounting(ledger):
+            exhaust(ledger.db)
+            return {'pricing_unverified': True}
+        monkeypatch.setattr(cli.policy, 'usage_report', accounting)
+    elif phase == 'period_budget':
+        def pruned(ledger, settings):
+            exhaust(ledger.db)
+            return False
+        monkeypatch.setattr(cli.policy, 'window_history_pruned', pruned)
+    elif phase == 'block_reason':
+        def blocked(ledger, *, model):
+            exhaust(ledger.db)
+            return 'pricing_unverified'
+        monkeypatch.setattr(cli.policy, 'global_block_reason', blocked)
+    else:
+        def holds(db, *, now):
+            exhaust(db)
+            return {'unknown': 'observation_budget_exceeded'}
+        monkeypatch.setattr(cli.policy, 'evidence_hold_counts', holds)
+
+    monkeypatch.setattr(cloud_observation, 'observe', lambda *a, **kw: pytest.fail('exhausted reader reused'))
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    assert observed == ['swallowed']
+    assert report['state'] == 'partial' and report['interrupted_section'] == phase
+    assert report['incomplete_reason'] == 'observation_budget_exceeded'
+    assert phase in report['sections_unverified'] and phase not in report['sections_verified']
+    assert report['retained_records_observation']['state'] == 'unknown'
+    assert 'synthetic-private-detail' not in json.dumps(report)
+    if phase == 'source_repair_evidence_holds':
+        assert all(key in report['sections_verified'] for key in (
+            'accounting', 'period_budget', 'block_reason', 'usage_calibration', 'routes', 'history_days', 'artifact_log'))
+        assert report['period_budget']['spent_or_reserved_usd'] is not None
+        assert report['block_reason'] is None
+        assert isinstance(report['usage_calibration'], dict)
+        assert isinstance(report['routes'], dict) and isinstance(report['history_days'], list)
+        assert isinstance(report['log'], list)
+
+
+@pytest.mark.parametrize('state', ['complete', 'partial', 'unknown'])
+def test_partial_report_marks_retained_records_verified_only_if_complete(world, monkeypatch, state):
+    import cloud_observation
+
+    root, _path, config = world
+    monkeypatch.setattr(cli, '_route_counts', lambda *a, **kw: (_ for _ in ()).throw(ValueError('synthetic failure')))
+    monkeypatch.setattr(cloud_observation, 'observe', lambda *a, **kw: {'state': state})
+    report = cli.observe(config, root=str(root))
+    assert report['state'] == 'partial' and report['interrupted_section'] == 'routes'
+    assert report['retained_records_observation']['state'] == state
+    assert ('retained_records' in report['sections_verified']) is (state == 'complete')
+    assert ('retained_records' in report['sections_unverified']) is (state != 'complete')
+    assert report['routes'] is None and report['history_days'] is None
+    json.dumps(report)
+
+
+def test_sqlite_interrupt_during_block_check_stops_in_that_section(world, monkeypatch):
+    import cloud_observation
+
+    root, _path, config = world
+
+    def interrupted(ledger, *, model):
+        ledger.db.set_progress_handler(lambda: 1, 1)
+        ledger.db.execute('SELECT 1').fetchone()
+
+    monkeypatch.setattr(cli.policy, 'global_block_reason', interrupted)
+    monkeypatch.setattr(cloud_observation, 'observe', lambda *a, **kw: pytest.fail('interrupted reader reused'))
+    report = cli.observe(config, root=str(root))
+    assert report['state'] == 'partial' and report['interrupted_section'] == 'block_reason'
+    assert report['incomplete_reason'] == 'read_deadline'
 
 
 def _cloud_args(action):
