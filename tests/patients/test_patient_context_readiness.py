@@ -160,22 +160,63 @@ def test_latest_ready_active_before_archive(runtime, monkeypatch):
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
     result = step(runtime)
     assert result["status"] == "progressed"
-    # Untested active patients start at ordinal zero, with project ID as the tie-break.
-    assert refresh._latest(led.db, refresh.PROGRESS, 1)[0]
-    assert not refresh._latest(led.db, refresh.PROGRESS, 2)[0]
+    # Skip the newest unready active patient, then choose the latest ready active patient.
+    assert not refresh._latest(led.db, refresh.PROGRESS, 1)[0]
+    assert refresh._latest(led.db, refresh.PROGRESS, 2)[0]
     assert not refresh._latest(led.db, refresh.PROGRESS, 3)[0]
     assert not refresh._latest(led.db, refresh.PROGRESS, 4)[0]
 
 
 def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatch):
-    led, _, calls = runtime
-    seed(led)
-    results = iter((True, False))
-    monkeypatch.setattr(refresh, "_inference_ready", lambda *_a, **_kw: next(results))
+    led, clock, calls = runtime
+    cfg = {**CONTEXT_CFG, 'semantic': {**CONTEXT_CFG['semantic'], 'extract_qc': 'annotate'}}
+    seed(led, proof=False)
+    with led.db:
+        led.db.execute('UPDATE messages SET posted_at_ts=? WHERE message_id=1', (clock.wall,))
+    _proof(led, 1, 1, cfg)
+    raw = led.artifacts('extract_llm', project_id=1)[0]
+    raw_meta = json.loads(raw['meta'])
+    led.artifact_add('extract_qc', '{}', project_id=1, message_id=1,
+                     meta={VERSION_KEY: CURRENT_VERSION, 'hash': raw_meta['hash'],
+                           'extract_version': extract_llm.EXTRACT_VERSION,
+                           'source_artifact_id': raw['artifact_id']})
+    assert _ready(runtime, cfg)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
-    before = led.db.total_changes
-    assert step(runtime)["status"] == "source_changed"
-    assert led.db.total_changes == before
+    select, recheck = refresh._select_patient, refresh._readiness_for_write
+    selected, observed = {}, []
+
+    def remove_proof(*args, **kwargs):
+        result = select(*args, **kwargs)
+        assert result[1] == 1 and result[0]
+        bookmark = result[2][0]['patient_scan']
+        refresh.context_schedule.advance_turn(bookmark)  # validate the durable scan bookmark
+        assert set(result[2][0]) == {'patient_scan'}
+        with led.db:
+            removed = led.db.execute("DELETE FROM artifacts WHERE kind='extract_qc' AND project_id=1")
+        assert removed.rowcount > 0
+        selected['changes'] = led.db.total_changes
+        selected['tables'] = {
+            table: [tuple(row) for row in led.db.execute(f'SELECT * FROM "{table}"')]
+            for (table,) in led.db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        }
+        return result
+
+    def actual_recheck(*args, **kwargs):
+        assert led.db.in_transaction
+        value = recheck(*args, **kwargs)
+        observed.append(value[0])
+        return value
+
+    monkeypatch.setattr(refresh, '_select_patient', remove_proof)
+    monkeypatch.setattr(refresh, '_readiness_for_write', actual_recheck)
+    result = step(runtime, cfg=cfg)
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_readiness_unverified'
+    assert observed == ['unknown']
+    assert led.db.total_changes == selected['changes']
+    for table, rows in selected['tables'].items():
+        assert [tuple(row) for row in led.db.execute(f'SELECT * FROM "{table}"')] == rows
+    assert not refresh._latest(led.db, refresh.PROGRESS, 1)[0]
+    assert not refresh._latest(led.db, refresh.KIND, 1)[0]
     assert not calls
 
 
