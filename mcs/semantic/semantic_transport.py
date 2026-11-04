@@ -134,6 +134,8 @@ _PRESEND_REFUSAL_STAGES = frozenset({
     "cloud_capacity", "cloud_profile_unavailable", "realtime_target",
     "probe_unsent", "long_output_needs_budget", "llm_turn_busy",
     "llm_unreachable", "llm_unavailable"})
+# An unreadable observation cannot prove scope loss even after a paid response.
+_NON_DISCARD_STAGES = _PRESEND_REFUSAL_STAGES | {'cloud_guard'}
 
 
 @contextmanager
@@ -247,7 +249,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             reason = cloud_client.not_sent_reason(error)
             raise runtime.LLMNotSent("cloud_not_sent" if reason == "not_sent" else reason) from error
         except cloud_inference.CloudObservationIncomplete:
-            raise runtime.LLMNotSent('cloud_not_sent') from None
+            raise runtime.LLMNotSent('cloud_guard') from None
         except cloud_inference.CloudBusy:
             if local_fallback is not None:
                 return local(prompt, timeout)
@@ -280,7 +282,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         # settled chunks/receipts stay. Scope or lease loss and every other
         # guard failure still discards the unit's dispositions.
         stage = getattr(error, "stage", None)
-        if (lock_lost is None and stage not in _PRESEND_REFUSAL_STAGES
+        if (lock_lost is None and stage not in _NON_DISCARD_STAGES
                 and not (isinstance(stage, str) and stage.startswith("llm_admission:"))):
             for selected in providers.values():
                 try:

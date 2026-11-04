@@ -179,7 +179,7 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
 @pytest.mark.parametrize("detail,stage", [
     ("synthetic refusal", "cloud_not_sent"),
     ("checkpoint_unverified", "checkpoint_unverified"),
-    ("cloud_admission_unavailable", "cloud_not_sent"),
+    ("cloud_admission_unavailable", "cloud_guard"),
 ])
 def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatch, detail, stage):
     """A pre-send refusal is a harmless budget wait: the provider that already

@@ -108,34 +108,43 @@ class CloudInferenceUnit:
                 raise CloudFallback("cloud_unit_changed")
             try:
                 live = load_config()
+                if not isinstance(live, dict) or not live:
+                    raise CloudObservationIncomplete('cloud_config_unverified')
+                if isinstance(live.get('cloud_llm'), dict) and live['cloud_llm'].get('mode') == 'off':
+                    raise CloudFallback('cloud_unit_changed')
                 now = resolve_cloud_settings(live)
                 chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
+                if errors or chosen is None:
+                    raise CloudObservationIncomplete('cloud_profile_unverified')
+                live_key = cloud_policy.selected_key(HOME, {"cloud_llm": now})
+                if not live_key:
+                    raise CloudObservationIncomplete('cloud_key_unverified')
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
-                denied = (errors or chosen is None or dict(chosen) != dict(self.selection)
+                denied = (dict(chosen) != dict(self.selection)
                           or writer_lock.updater_state() != updater
-                          or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
+                          or updater[0] or live_key != key
                           or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                           # A paid result is kept while its scope holds, even if the send window closes.
-                          or not cloud_policy.eligible(now, route, project_id)
-                          or not current())
+                          or not cloud_policy.eligible(now, route, project_id))
+                if not denied and inference:
+                    try:
+                        waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
+                                   or tightened(caps(now)) or cloud_policy.setting_block_reason(now)
+                                   or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model))
+                    except Exception:
+                        raise CloudObservationIncomplete("cloud_admission_unverified") from None
+                    if waiting:
+                        raise CloudObservationIncomplete("cloud_admission_unavailable")
+                denied = denied or not current()
             except CloudObservationIncomplete:
                 raise
+            except CloudFallback:
+                raise
             except Exception:
-                # An unreadable guard is a denial; the result callback must still
-                # settle any already received or provably unsent attempt.
-                raise CloudFallback("cloud_unit_changed") from None
+                raise CloudObservationIncomplete("cloud_guard_unverified") from None
             if denied:
                 raise CloudFallback("cloud_unit_changed")
-            if inference:
-                try:
-                    waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
-                               or tightened(caps(now)) or cloud_policy.setting_block_reason(now)
-                               or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model))
-                except Exception:
-                    raise CloudObservationIncomplete("cloud_admission_unverified") from None
-                if waiting:
-                    raise CloudObservationIncomplete("cloud_admission_unavailable")
             if inference and dispatch_current is not None:
                 try:
                     allowed = dispatch_current() is True
