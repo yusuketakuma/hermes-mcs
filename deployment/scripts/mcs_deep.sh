@@ -16,6 +16,10 @@ fi
 "$PY" -I __RUN_LOG_HELPER__ exec --data-dir __DATA__ -- \
   "$PY" __REPO__/mcs/ingest/run_check.py "$@"
 rc=$?
+if [ "$rc" -eq 0 ]; then
+  "$PY" -I __RUN_LOG_HELPER__ exec --data-dir __DATA__ -- \
+    "$PY" __REPO__/mcs/ops/mcs_ocr.py --run || true
+fi
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs deep: run_check exited %d — see %s\n' "$rc" "$LOG"
 fi

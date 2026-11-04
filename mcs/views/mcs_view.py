@@ -532,12 +532,16 @@ class View:
         return loop_links(self.db, pid, request_id=request_id, loop_id=loop_id)
 
     def _attachments(self, project, message_id, limit, cursor):
+        from attachment_ocr import view as ocr_view
+
         self._require_message(project, message_id)
         result = self._page("""SELECT attachment_id AS _key,attachment_id,message_id,name,state,
               downloaded_at,created_at,bytes,sha256,error FROM attachments WHERE message_id=?""",
                             [message_id], ["attachment_id"], ["attachments", project, message_id], limit, cursor)
         for item in result["items"]:
             item["error"] = _reason(item["error"])
+            item["ocr"] = ocr_view(self.db, item["attachment_id"], project_id=project,
+                                   include_text=True)
         return result
 
     def _semantic(self, pid, mid):

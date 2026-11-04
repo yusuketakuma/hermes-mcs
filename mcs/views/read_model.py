@@ -217,6 +217,7 @@ def _attachments(db, scope: str, project_id=None):
     detail scope (a name is user-authored content)."""
     if not table_exists(db, "attachments"):
         return None
+    from attachment_ocr import view as ocr_view
     out = []
     sql = ("SELECT a.attachment_id, a.message_id, a.name, a.bytes, "
            "a.sha256, a.state FROM attachments a")
@@ -229,6 +230,8 @@ def _attachments(db, scope: str, project_id=None):
         item = {"attachment_id": r["attachment_id"],
                 "message_id": r["message_id"], "bytes": r["bytes"],
                 "sha256": r["sha256"], "state": r["state"]}
+        item["ocr"] = ocr_view(db, r["attachment_id"], project_id=project_id,
+                               include_text=scope == "detail")
         if scope == "detail":
             item["name"] = r["name"]
         out.append(item)

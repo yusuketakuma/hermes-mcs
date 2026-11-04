@@ -259,7 +259,8 @@ def test_aggregate_scope_contains_no_raw_content(tmp_path):
     assert "sender" not in blob      # sender names stay off aggregate
     att = model["attachments"][0]
     assert set(att) == {"attachment_id", "message_id", "bytes",
-                        "sha256", "state"}
+                        "sha256", "state", "ocr"}
+    assert att["ocr"] == {"state": "unavailable", "page_count": 0}
     detail = read_model.read_model(db.db, scope="detail")
     assert detail["attachments"][0]["name"] == "SYNTH_SECRET_FILENAME.pdf"
     db.close()

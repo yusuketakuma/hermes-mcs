@@ -22,6 +22,8 @@
 #                             更新対象フォルダの外にある既存のものを指定します。
 #   --force-repo              既存の導入先をこのフォルダへ切り替えます。
 #                             プラグイン・復旧ツール・サービスの参照先が変わります。
+#   --with-yomitoku           非商用OCR専用 Python 3.13 環境とモデルを導入。
+#                             OCRの利用開始は attachment_ocr の別途設定が必要です。
 #   --no-brew                 基本ソフトの導入を省略（導入済みの場合）。
 #   --no-llm                  ローカル AI の導入を省略。別途 OpenAI 互換
 #                             サーバーを 127.0.0.1:8080 で動かしてください。
@@ -72,6 +74,7 @@ RUNTIME_EXPLICIT=0
 RECOVERY_OPTION=""
 RECOVERY_PYTHON=""
 SKIP_BREW=0; SKIP_LLM=0; SKIP_PLUGIN=0; SKIP_SERVICES=0; SKIP_RECOVERY=0
+WITH_YOMITOKU=0
 FORCE_REPO=0
 ARG_HOME=""
 while [ $# -gt 0 ]; do
@@ -79,6 +82,7 @@ while [ $# -gt 0 ]; do
         --mode)       [ $# -ge 2 ] || { printf '%s\n' '--mode の後に hermes または standalone を指定してください' >&2; exit 2; }
                       RUNTIME_MODE="$2"; RUNTIME_EXPLICIT=1; shift
                       case "$RUNTIME_MODE" in hermes|standalone) ;; *) printf '%s\n' '--mode は hermes または standalone を指定してください' >&2; exit 2 ;; esac ;;
+        --with-yomitoku) WITH_YOMITOKU=1 ;;
         --no-brew)     SKIP_BREW=1 ;;
         --recovery-python) if [ $# -lt 2 ] || [ -z "$2" ]; then printf '%s\n' '--recovery-python の後に Python の絶対パスを指定してください' >&2; exit 2; fi
                       RECOVERY_OPTION="$2"; shift ;;
@@ -910,6 +914,9 @@ dry_run_plan() {
         plan_line "6/6 復旧" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
         plan_line "" "起動設定 $WATCH_PLIST [$(state "$WATCH_PLIST")]; 変更があるか未起動の場合だけ org.mcs.recovery を起動・再起動"
     fi
+    if [ "$WITH_YOMITOKU" -eq 1 ]; then
+        plan_line "追加OCR" "$MCS_ROOT/ocr-venv に Python 3.13・Yomitoku 0.16.0・CPU liteモデルを導入（非商用向け、利用開始は別途設定）"
+    fi
     plan_line "省略項目の保存" "$MCS_ROOT/config.json （更新計画の install_args に表示。旧記録は保持）"
 }
 
@@ -1080,6 +1087,7 @@ set --
 [ "$SKIP_LLM" -eq 0 ] || set -- "$@" --no-llm
 [ "$SKIP_PLUGIN" -eq 0 ] || set -- "$@" --no-plugin
 [ "$SKIP_RECOVERY" -eq 0 ] || set -- "$@" --no-recovery
+[ "$WITH_YOMITOKU" -eq 0 ] || set -- "$@" --with-yomitoku
 OPTIONS_BASE=empty
 OPTIONS_ACTION=inspect
 [ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
@@ -1087,6 +1095,19 @@ if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$
     OPTIONS_PY="${MODE_PY:-}"
     [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
     [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
+    _ocr_previous=$("$OPTIONS_PY" -I - "$REPO/mcs" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" <<'PYOCR'
+import sys
+sys.path.insert(0, sys.argv[1])
+import _mcs_path
+import install_options
+install_options.inspect(sys.argv[2], sys.argv[3])
+print(int('--with-yomitoku' in (install_options.selection(sys.argv[2], sys.argv[3]) or [])))
+PYOCR
+    ) || die "以前のOCR導入設定を確認できません。変更は行っていません"
+    if [ "$_ocr_previous" = 1 ] && [ "$WITH_YOMITOKU" -eq 0 ]; then
+        WITH_YOMITOKU=1
+        set -- "$@" --with-yomitoku
+    fi
     OPTIONS_BASE="$("$OPTIONS_PY" "$REPO/mcs/ops/install_options.py" "$OPTIONS_ACTION" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" - "$@")" \
         || die "導入設定を変更せず中止しました。旧記録と設定を確認してください"
 fi
@@ -1365,6 +1386,12 @@ case ":$PATH:" in
     *) warn "$HERMES_BIN_DIR が PATH にありません。hermes を使えるようシェルの設定で PATH に追加してください" ;;
 esac
 sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
+fi
+
+if [ "$WITH_YOMITOKU" -eq 1 ]; then
+    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
+        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
+    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
 fi
 
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command

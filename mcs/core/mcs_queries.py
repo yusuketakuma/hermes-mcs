@@ -1241,6 +1241,34 @@ def patient_context_scope(db, pid):
     return dict(row) if row else None
 
 
+def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True):
+    """Read current attachment pages as distinct sources without attributing them to a sender."""
+    from attachment_ocr import current
+    from snapshot_access import table_exists
+
+    if not table_exists(db, "attachments"):
+        return
+    params = (pid, mid) if mid is not None else (pid,)
+    for row in db.execute(
+            "SELECT a.attachment_id,m.message_id,m.posted_at_ts FROM attachments a "
+            "JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=? "
+            + ("AND m.message_id=? " if mid is not None else "")
+            + "ORDER BY m.message_id,a.attachment_id", params):
+        document = current(db, row["attachment_id"], project_id=pid)
+        if document is None:
+            continue
+        for page in document["pages"]:
+            text = page["text"]
+            text_hash = page["text_hash"]
+            yield {"message_id": f"attachment_ocr:{document['artifact_id']}:{page['page']}",
+                   "parent_message_id": row["message_id"], "project_id": pid,
+                   "source": "attachment_ocr", "source_kind": "attachment_ocr",
+                   "attachment_id": row["attachment_id"], "artifact_id": document["artifact_id"],
+                   "page": page["page"], "text_hash": text_hash, "content_hash": text_hash,
+                   "posted_at_ts": row["posted_at_ts"], "body_length": len(text),
+                   **({"body_text": text} if hydrate else {})}
+
+
 def patient_context_sources(db, pid, *, hydrate=True, mid=None):
     """Read only the patient's original records, never previous generated prose."""
     from patient_context import context_items, extract_context, project_context_items

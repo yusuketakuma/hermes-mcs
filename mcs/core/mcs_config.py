@@ -91,6 +91,12 @@ def _stamps_config(value):
     return f"MCSスタンプの設定を確認してください（{problem}）" if problem else None
 
 
+def _attachment_ocr_config(value):
+    from attachment_ocr import config_error
+    problem = config_error({"attachment_ocr": value})
+    return f"添付OCRの設定を確認してください（{problem}）" if problem else None
+
+
 def recovery_python_problem(path, update_repo=None, *, checkout=REPO):
     """An independent runtime cannot live in either mutable checkout."""
     if not isinstance(path, str) or not os.path.isabs(path):
@@ -143,6 +149,7 @@ CONFIG_RULES = {
     "metadata_refresh_publish": (False, _bool),
     "metadata_actors":       (False, _bool),
     "stamps":                (False, _stamps_config),
+    "attachment_ocr":        (False, _attachment_ocr_config),
     "optional_features":     (False, _optional_features),
     "sdc":                   (False, _dict),
     "clinical_metadata":     (False, _bool),

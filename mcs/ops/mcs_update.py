@@ -151,7 +151,7 @@ from update_policy import REINSTALL_ERRORS  # noqa: E402
 T_INSTALL = 3600
 # S5: only the labels listed above are touched; install.sh-owned
 # ai.mcs.llamaserver / org.mcs.recovery must never be.
-PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "models/")
+PROTECTED = ("data/", "config.json", ".env", "chrome-profile/", "venv/", "ocr-venv/", "models/")
 # drainer stray sweep: interpreter argv0 + script path — never matches
 # `vim extract_llm.py` or `pytest ...` (H7/F13)
 # pgrep uses POSIX ERE; BSD pgrep does not recognize Python's \S.
@@ -1041,6 +1041,11 @@ def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None)
             ["diff", "--quiet", "HEAD", tag, "--",
              "deployment/requirements-standalone.txt"], **({} if deadline is None else {"deadline": deadline})).returncode != 0:
         errors.append("standalone_requirements_changed")
+    if "--with-yomitoku" in (recorded_install_args() or []) and _git(
+            ["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/requirements-ocr.txt", "scripts/setup_yomitoku.py"],
+            **({} if deadline is None else {"deadline": deadline})).returncode != 0:
+        errors.append("ocr_requirements_changed")
     return errors
 
 
@@ -1920,6 +1925,8 @@ def _reinstall(applying: dict) -> None:
         return
     expected_base = _verify_install_options_base(applying)
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
+    if "--with-yomitoku" in (recorded_install_args() or []) and "--with-yomitoku" not in args:
+        args.append("--with-yomitoku")
     env = os.environ.copy()
     env.pop('MCS_INSTALL_UPDATE_LOCK_FD', None)
     try:
