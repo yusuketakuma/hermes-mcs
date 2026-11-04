@@ -23,7 +23,8 @@ _PROVIDERS = (("anthropic", "Anthropic", "https://www.anthropic.com/images/icons
               ("jev", "Jev", "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png"))
 _PROVIDER_NAMES = tuple((key, name) for key, name, _ in _PROVIDERS) + (("local", "💻"),)
 _STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
-                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
+                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり",
+                 "incomplete": "未完了", "attention": "要確認", "unverified": "状況未確認"}
 _STATE_MARKS = {"done": "✓", "partial": "✓↷", "skipped": "↷", "unused": "−", "pending": "…", "failed": "!", "unknown": "?", "used": "✓"}
 
 
@@ -261,7 +262,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             if len(prefix) > CONTEXT_MAX:
                 blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
                 prefix = prefix[-CONTEXT_MAX:]
-            blocks.append(_provider_context(states, prefix, visible, sequence, compact=version == 4 and parts.get("processing_display_version") == 1))
+            blocks.append(_provider_context(states, prefix, visible, sequence, compact=version == 4 and parts.get("processing_display_version") in (1, 2)))
             continue
         if card_kind == "thread" and item.get("rule") and kind == "text":
             states = item.get("provider_states")

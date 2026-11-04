@@ -75,7 +75,7 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
         t = c["type"]
         if t == "meta":
             continue                       # correlation — not displayed
-        if spec["parts"].get("processing_display_version") == 1 and c.get("provider_scope") == "header":
+        if spec["parts"].get("processing_display_version") in (1, 2) and c.get("provider_scope") == "header":
             from processing_route import compact_header
             c = {**c, "text": compact_header(c)}
         if c.get("rule") and cur:

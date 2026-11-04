@@ -10,11 +10,13 @@ from mcs_util import payload_hash, strict_json
 
 PROVIDERS = ("anthropic", "openai", "jev", "local")
 PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
-COMPACT_MARKS = {"done": "✓", "partial": "◐", "used": "●", "pending": "…", "failed": "!"}
+COMPACT_MARKS = {"done": "✓", "partial": "◐", "used": "●", "pending": "…", "failed": "!",
+                 "incomplete": "…", "attention": "!", "unverified": "?"}
 COMPACT_STATUS_LABELS = {"解析未完了・要確認": "! 要確認", "状況不明": "? 状況未取得",
                          "解析中": "◐ 未完了", "結果を準備中": "◐ 未完了", "解析完了": "✓ 完了"}
 STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
-                "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
+                "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり",
+                "incomplete": "未完了", "attention": "要確認", "unverified": "状況未確認"}
 
 
 def visible_providers(root=None):
@@ -30,9 +32,17 @@ def visible_providers(root=None):
     return (*result, "jev", "local")
 
 
-def aggregate_provider_states(posts):
+def aggregate_provider_states(posts, *, followup=False):
     if len(posts) == 1:
         return dict(posts[0])
+    if followup:
+        result = {}
+        for key in PROVIDERS:
+            values = [post[key] for post in posts]
+            result[key] = next((state for state in ("attention", "unverified", "incomplete") if state in values),
+                               "done" if values and all(value == "done" for value in values)
+                               else "used" if any(value in ("done", "partial") for value in values) else "unknown")
+        return result
     return {key: ("used" if any(post[key] in ("done", "partial") for post in posts)
                   else "unknown") for key in PROVIDERS}
 
@@ -107,12 +117,53 @@ def _extract_jev_state(db, project_id, message_id, source_id, source_hash, versi
     return "unknown"
 
 
-def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, sequence_out=None):
+def cloud_followup(db, project_id, message_id, cfg):
+    """Read the required cloud pass without inferring whether a request was sent."""
+    import cloud_inference
+    import cloud_policy
+    import extract_llm
+
+    if not isinstance(cfg, dict):
+        return None
+    settings = cloud_inference.resolve_cloud_settings(cfg)
+    if settings["mode"] != "on" or not cloud_policy.eligible(settings, "reextract", project_id):
+        return None
+    if not cloud_policy.history_thread_allowed(db, project_id, message_id):
+        return None
+    provider = settings["provider"]
+    if provider not in ("anthropic", "openai"):
+        return None
+    row = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                     (project_id, message_id)).fetchone()
+    if row is None or row["body_state"] != "full" or not row["body_text"]:
+        return None
+    try:
+        selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=extract_llm.HOME)
+        if errors or selection is None:
+            return provider, "unverified"
+        provider = selection["provider"]
+        contract = cloud_inference.cloud_provider_contract(selection=selection)
+        state = extract_llm.cloud_completion(db, row, contract)
+        return provider, {"complete": "done", "attention": "attention", None: "incomplete"}.get(state, "unverified")
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, cloud_inference.CloudFallback):
+        return provider, "unverified"
+
+
+def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, sequence_out=None, followup=False):
     """Return only states supported by current per-post execution evidence."""
     states = dict.fromkeys(PROVIDERS, "unknown")
     sequence = None
 
     def result():
+        if followup:
+            try:
+                cloud = cloud_followup(db, project_id, message_id, cfg)
+            except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+                cloud = None
+            if cloud is not None:
+                states[cloud[0]] = cloud[1]
+                if sequence_out is not None:
+                    sequence_out["cloud_provider"] = cloud[0]
         if sequence_out is not None:
             sequence_out["sequence"] = sequence
         return states

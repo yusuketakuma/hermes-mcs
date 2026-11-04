@@ -384,7 +384,7 @@ def validate(spec) -> dict:
         _err("bad_containers")
     if "processing_display_version" in parts and (
             type(parts["processing_display_version"]) is not int
-            or parts["processing_display_version"] != 1
+            or parts["processing_display_version"] not in (1, 2)
             or parts.get("provider_states_version") != 4):
         _err("bad_processing_display")
     if "section_divider_version" in parts and (
@@ -413,6 +413,8 @@ def validate(spec) -> dict:
             _err("bad_provider_states")
         labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                   "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
+        if parts.get("processing_display_version") == 2:
+            labels.update(incomplete="未完了", attention="要確認", unverified="状況未確認")
         providers = (("anthropic", "Anthropic"), ("openai", "OpenAI"),
                      ("jev", "Jev"), ("local", "💻"))
 
@@ -492,6 +494,9 @@ def validate(spec) -> dict:
             else:
                 aggregate = {key: ("used" if any(post[key] in ("done", "partial") for post in posts)
                                   else "unknown") for key, _ in providers}
+            if parts.get("processing_display_version") == 2:
+                from processing_route import aggregate_provider_states
+                aggregate = aggregate_provider_states(posts, followup=True)
             if values != aggregate:
                 _err("bad_provider_states")
             ordered = list(sequence) if version == 4 and sequence else []

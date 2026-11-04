@@ -48,6 +48,7 @@ BODY = "次回訪問時に残薬を確認してください。服薬カレンダ
 class Screen:
     def __init__(self, number, title, subtitle, height=800):
         self.height = height
+        self.cloud_followup = number == 1
         # Screen 2 illustrates only the Anthropic key being registered.
         self.providers = (("anthropic", "jev", "local") if number == 2
                           else ("anthropic", "openai", "jev", "local"))
@@ -198,18 +199,23 @@ class Screen:
         """Show a compact synthetic processing status and relevant provider icons."""
         labels = {"processing": "◐ 未完了", "preparing": "◐ 未完了", "complete": "✓ 完了",
                   "attention": "! 要確認", "unknown": "? 状況未取得"}
-        status = self.processing[post]
+        status = "processing" if self.cloud_followup and post == 0 else self.processing[post]
         self.text(x, y + 18, labels[status], 15, MUTED)
         providers = [key for key in ("jev", "local") if key in self.providers] if status == "complete" else []
+        followup = self.cloud_followup and post == 0
+        if followup:
+            providers = ["local", "openai"]
         for index, provider in enumerate(providers):
+            mark = "…" if followup and provider == "openai" else "✓"
+            label = "未完了" if mark == "…" else "実行済み"
             left = x + 110 + index * 75
             if provider == "local":
                 self.text(left, y + 18, "💻", 20)
             else:
                 data = base64.b64encode((ROOT / "resources/provider-icons" / f"{provider}.png").read_bytes()).decode("ascii")
                 self.parts.append(f'<image x="{left}" y="{y}" width="22" height="22" '
-                                  f'href="data:image/png;base64,{data}"><title>{provider} 実行済み</title></image>')
-            self.text(left + 28, y + 18, "✓", 18, MUTED)
+                                  f'href="data:image/png;base64,{data}"><title>{provider} {label}</title></image>')
+            self.text(left + 28, y + 18, mark, 18, MUTED)
         return y + 48
 
     def finish(self):
