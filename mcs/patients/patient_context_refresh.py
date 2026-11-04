@@ -3291,33 +3291,39 @@ def _candidate_reader(ledger, deadline):
             raise _ScanInterrupted('patient_context_scan_changed')
 
 
+@contextmanager
+def _scan_writer_wait(db, deadline):
+    timeout = db.execute('PRAGMA busy_timeout').fetchone()[0]
+    remaining_ms = max(0, int((deadline - COMMIT_MARGIN - time.monotonic()) * 1000))
+    db.execute(f'PRAGMA busy_timeout={min(timeout, remaining_ms)}')
+    try:
+        yield
+    finally:
+        db.execute(f'PRAGMA busy_timeout={timeout}')
+
+
 def _advance_patient_scan(ledger, expected, bookmark, deadline, admit):
     import extract_llm
 
-    timeout = ledger.db.execute('PRAGMA busy_timeout').fetchone()[0]
-    remaining_ms = max(0, int((deadline - COMMIT_MARGIN - time.monotonic()) * 1000))
-    ledger.db.execute(f'PRAGMA busy_timeout={min(timeout, remaining_ms)}')
-    try:
-        ledger.db.execute('BEGIN IMMEDIATE')
-        if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
-                or not extract_llm._writer_current(full=True)
-                or _latest(ledger.db, PROGRESS, 0) != expected):
+    with _scan_writer_wait(ledger.db, deadline):
+        try:
+            ledger.db.execute('BEGIN IMMEDIATE')
+            if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
+                    or not extract_llm._writer_current(full=True)
+                    or _latest(ledger.db, PROGRESS, 0) != expected):
+                ledger.db.rollback()
+                return None
+            content, meta = expected
+            content = {**content, 'patient_scan': bookmark}
+            _replace(ledger, PROGRESS, 0, content, meta)
+            if not extract_llm._writer_current(full=True):
+                ledger.db.rollback()
+                return None
+            ledger.db.commit()
+            return content, _artifact_meta(PROGRESS, meta, None)
+        except BaseException:
             ledger.db.rollback()
-            return None
-        content, meta = expected
-        content = {**content, 'patient_scan': bookmark}
-        _replace(ledger, PROGRESS, 0, content, meta)
-        if not extract_llm._writer_current(full=True):
-            ledger.db.rollback()
-            return None
-        ledger.db.commit()
-        return content, _artifact_meta(PROGRESS, meta, None)
-    except BaseException:
-        ledger.db.rollback()
-        raise
-
-    finally:
-        ledger.db.execute(f'PRAGMA busy_timeout={timeout}')
+            raise
 
 
 def _scan_covered(db, seen):
@@ -3415,28 +3421,29 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                    if waiting or not covered else {}), **stats}
     snapshot, progress, frozen_ver = best[lane]
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
-    ledger.db.execute("BEGIN IMMEDIATE")
     try:
-        with _candidate_reader(ledger, deadline) as reader:
-            current = (time.monotonic() + COMMIT_MARGIN < deadline and admit()
-                and extract_llm._writer_current(full=True)
-                and _published_version(ledger.db, pid) == frozen_ver
-                and _latest(ledger.db, PROGRESS, 0) == scan_rotation
-                and _snapshot(reader.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
-                and _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
-                                     allow_dependency_repair=lane != "A"))
-        if not current:
-            ledger.db.rollback()
-            return {"status": "source_changed", "done": 0, **stats}
-        progress = {**progress, "last_attempt": now,
-                    "last_attempt_unit": rotation.get("units", 0) + 1,
-                    "night_id": night_id, "source_sig": snapshot["source_sig"]}
-        _replace(ledger, PROGRESS, pid, progress, {})
-        _replace(ledger, PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
-        if not extract_llm._writer_current(full=True):
-            ledger.db.rollback()
-            return {"status": "source_changed", "done": 0, **stats}
-        ledger.db.commit()
+        with _scan_writer_wait(ledger.db, deadline):
+            ledger.db.execute("BEGIN IMMEDIATE")
+            with _candidate_reader(ledger, deadline) as reader:
+                current = (time.monotonic() + COMMIT_MARGIN < deadline and admit()
+                    and extract_llm._writer_current(full=True)
+                    and _published_version(ledger.db, pid) == frozen_ver
+                    and _latest(ledger.db, PROGRESS, 0) == scan_rotation
+                    and _snapshot(reader.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
+                    and _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
+                                         allow_dependency_repair=lane != "A"))
+            if not current:
+                ledger.db.rollback()
+                return {"status": "source_changed", "done": 0, **stats}
+            progress = {**progress, "last_attempt": now,
+                        "last_attempt_unit": rotation.get("units", 0) + 1,
+                        "night_id": night_id, "source_sig": snapshot["source_sig"]}
+            _replace(ledger, PROGRESS, pid, progress, {})
+            _replace(ledger, PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
+            if not extract_llm._writer_current(full=True):
+                ledger.db.rollback()
+                return {"status": "source_changed", "done": 0, **stats}
+            ledger.db.commit()
         # Our scheduling write participates in the same publisher fence as later work.
         frozen_ver = _published_version(ledger.db, pid)
     except (sqlite3.Error, OSError, _ScanInterrupted):
