@@ -5,7 +5,7 @@
   "upgrade": "更新後は cloud-llm outstanding / plan / estimate の表示に適用されます。追加設定は不要です。",
   "details": [
     "outstanding: 行数上限・証拠サイズ上限・読取り期限で止まっても、種別ごとの下限件数と artifact_id 昇順 prefix の検証済み組数を coverage 付きで返します。prefix で result が見つからない予約は limit 外に result があり得るため未精算の下限に数えず、全体の未精算・欠落・精算件数は未検証のまま不明（null）を維持します。",
-    "plan/estimate: 送信可否判定のブロック理由の読取りが上限で失敗したとき、レポート全体を汎用エラーにせず send_decision=block_reason_unverified で確定ブロックに留め、同じ観測スナップショットを retained_records_observation に添えます。会計が未検証（pricing_unverified）または修復保留の件数が数え切れないときも同じスナップショットを添えます。",
+    "plan/estimate: 読取り予算・期限がどの段階で尽きても、レポート全体を汎用エラーにせず早期終了して send_decision=observation_incomplete の部分レポートを返します。検証済みの節はそのまま表示し、中断・未到達の節は名前を明記して不明とし、保持記録の観測スナップショットを retained_records_observation に添えます。ブロック理由だけが未検証の場合は send_decision=block_reason_unverified で確定ブロックに留めます。会計が未検証（pricing_unverified）または修復保留の件数が数え切れないときも同じスナップショットを添えます。",
     "観測上限（100000行/16MiB）と送信可否の安全条件は緩和していません。ペイロード・予約ID・本文は出力に含みません。"
   ],
   "refs": ["mcs/ops/diagnostics/cloud_observation.py", "mcs/ops/cloud_cli.py"]

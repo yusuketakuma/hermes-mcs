@@ -416,8 +416,10 @@ def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, 
 def test_reader_has_row_and_time_budgets(world, monkeypatch):
     root, _, config = world
     monkeypatch.setattr(cli, "READ_ROWS", 1)
-    with pytest.raises(ValueError, match="observation_budget_exceeded"):
-        cli.observe(config, root=str(root))
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert report["incomplete_reason"] == "observation_budget_exceeded"
+    assert report["send_decision"] == "observation_incomplete"
 
 
 @pytest.mark.parametrize("content", ["{broken", "{}", "[]", '{"mcs_login_id":"synthetic"}',
@@ -690,6 +692,58 @@ def test_block_reason_bound_failure_is_structured_with_observation(world, monkey
     retained = report["retained_records_observation"]
     assert retained["state"] == "complete" and retained["scope"] == "retained_records"
     assert retained["records_scanned"] == 0
+
+
+def test_exhausted_reader_budget_returns_partial_report(world, monkeypatch):
+    # The real failure: the reader budget is spent inside the block check, so every
+    # later query fails too. The report must stay a structured partial, not a generic error.
+    root, _path, config = world
+    monkeypatch.setattr(cli, "READ_BYTES", 64)
+
+    def heavy(ledger, *, model):
+        ledger.db.execute("SELECT printf('%.4096c','x') AS pad").fetchone()
+        return None
+
+    monkeypatch.setattr(cli.policy, "global_block_reason", heavy)
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    assert report["state"] == "partial"
+    assert report["send_decision"] == "observation_incomplete"
+    assert report["incomplete_reason"] == "observation_budget_exceeded"
+    assert report["interrupted_section"] in report["sections_unverified"]
+    assert "accounting" in report["sections_verified"] + report["sections_unverified"]
+    assert report["retained_records_observation"]["state"] == "unknown"
+
+
+def test_deadline_inside_reader_returns_partial_report(world, monkeypatch):
+    root, _path, config = world
+
+    def interrupted(ledger, *, model):
+        ledger.db.set_progress_handler(lambda: 1, 1)   # every later statement aborts
+        return None
+
+    monkeypatch.setattr(cli.policy, "global_block_reason", interrupted)
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert report["send_decision"] == "observation_incomplete"
+    assert report["incomplete_reason"] == "read_deadline"
+    assert report["retained_records_observation"]["state"] == "unknown"
+    assert report["retained_records_observation"]["observed"] is None
+
+
+def test_bound_failure_at_accounting_returns_partial_report(world, monkeypatch):
+    root, _path, config = world
+    original = cli.policy.usage_report
+
+    def failing(ledger, **kw):
+        ledger.db.set_progress_handler(lambda: 1, 1)
+        return original(ledger, **kw)
+
+    monkeypatch.setattr(cli.policy, "usage_report", failing)
+    report = cli.observe(config, root=str(root))
+    assert report["state"] == "partial"
+    assert report["interrupted_section"] == "accounting"
+    assert report["sections_verified"] == []
+    assert report["accounting"]["pricing_unverified"] is True
 
 
 def test_unverified_accounting_attaches_retained_observation(world, monkeypatch):

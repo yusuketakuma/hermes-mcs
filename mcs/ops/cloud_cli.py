@@ -458,80 +458,111 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             raise ValueError("project_invalid")
     with _reader(root) as (db, deadline):
         borrowed = SimpleNamespace(db=db)
-        accounting = policy.usage_report(borrowed)
-        period = None
-        if settings["window_budget_usd"] is not None:
-            try:
-                # rows maintenance already pruned from the period cannot be counted: unknown, not a smaller sum
-                # judged apart from the run window: an expired period can still be too old to count
-                spent = (None if policy.window_history_pruned(borrowed, settings)
-                         or time.time() - mcs_util.until_epoch(settings["window_start"]) > policy.WINDOW_HISTORY_S
-                         else str(policy.window_spend(borrowed, settings)))
-            except (policy.AnthropicError, ValueError, ArithmeticError):
-                spent = None   # an unverifiable tally is shown as unknown, never as 0
-            period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
-                      "spent_or_reserved_usd": spent}
+        accounting = period = reason = calibration = routes = counts = log = None
+        evidence_holds = retained_observation = None
+        completed, phase = [], "accounting"
         try:
-            reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
-        except (sqlite3.Error, ValueError, policy.AnthropicError):
-            # A bounded read that stops here stays blocked, not a generic error or an implicit eligible.
-            reason = "block_reason_unverified"
-        calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
-        routes = _route_counts(db, cfg, planning, deadline)
-        counts = {}
-        scope, params = _source_scope(planning)
-        for n, row in enumerate(db.execute("SELECT CAST((m.posted_at_ts+32400)/86400 AS INTEGER) AS day,"
-            "COUNT(*) AS posts,COUNT(DISTINCT m.project_id) AS patients,COALESCE(SUM(length(m.body_text)),0) AS chars,"
-            "COALESCE(SUM(MAX(1,(COALESCE(length(m.body_text),0)+2999)/3000)),0) AS scan_requests "
-            "FROM messages m WHERE m.posted_at_ts>=? AND m.posted_at_ts<=?" + scope + " GROUP BY day",
-            (start, now, *params)), 1):
-            _checkpoint(deadline, n)
-            counts[row["day"]] = dict(row)
-        log = []
-        sql, args = "created_at>=?", [start]
-        if project is not None:
-            sql += " AND project_id=?"
-            args.append(project)
-        for n, row in enumerate(db.execute("SELECT kind,created_at,model,meta FROM artifacts WHERE kind IN "
-                "('cloud_usage_reserve','cloud_usage_result','cloud_usage_dryrun','cloud_usage_disposition','cloud_compare_v1') AND "
-                + sql + " ORDER BY artifact_id LIMIT ?", (*args, READ_ROWS + 1)), 1):
-            _checkpoint(deadline, n)
-            meta = mcs_util.loads_dict(row["meta"])
-            if not isinstance(meta, dict):
-                continue
-            # Explicit projection: IDs, hashes, owner data and content never leave this query.
-            safe = _safe_log(row, meta)
-            if "openai_error_code" in safe or "openai_429_diagnostic" in safe:
+            accounting = policy.usage_report(borrowed)
+            completed.append("accounting")
+            if settings["window_budget_usd"] is not None:
                 try:
-                    policy._accounting_meta(row["meta"])
-                except policy.AnthropicError:
-                    safe.pop("openai_error_code", None)
-                    safe.pop("openai_429_diagnostic", None)
-            log.append(safe)
-        _checkpoint(deadline)
-        evidence_holds = None
-        if evidence_holds_wanted:
-            # Last read of the snapshot: a deadline or size stop leaves it unknown
-            # instead of failing the estimate it accompanies.
+                    # rows maintenance already pruned from the period cannot be counted: unknown, not a smaller sum
+                    # judged apart from the run window: an expired period can still be too old to count
+                    spent = (None if policy.window_history_pruned(borrowed, settings)
+                             or time.time() - mcs_util.until_epoch(settings["window_start"]) > policy.WINDOW_HISTORY_S
+                             else str(policy.window_spend(borrowed, settings)))
+                except (policy.AnthropicError, ValueError, ArithmeticError):
+                    spent = None   # an unverifiable tally is shown as unknown, never as 0
+                period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
+                          "spent_or_reserved_usd": spent}
+            completed.append("period_budget")
+            phase = "block_reason"
             try:
-                evidence_holds = policy.evidence_hold_counts(db, now=now)
-            except ValueError:   # the reader's row/byte budget
-                evidence_holds = {"unknown": "observation_budget_exceeded"}
-            except sqlite3.Error as error:
-                code = getattr(error, "sqlite_errorcode", None)
-                evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
-                                  else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
-                                  else "read_failed"}
-        holds_unverified = isinstance(evidence_holds, dict) and (
-            "unknown" in evidence_holds or evidence_holds.get("unattributable_accounting_rows") is None)
-        retained_observation = None
-        if reason == "block_reason_unverified" or accounting["pricing_unverified"] or holds_unverified:
-            # Same bounded snapshot: cause and prefix coverage, never a guessed total.
+                reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
+            except (sqlite3.Error, ValueError, policy.AnthropicError):
+                # A bounded read that stops here stays blocked, not a generic error or an implicit eligible.
+                reason = "block_reason_unverified"
+            completed.append("block_reason")
+            phase = "usage_calibration"
+            calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
+            completed.append("usage_calibration")
+            phase = "routes"
+            routes = _route_counts(db, cfg, planning, deadline)
+            completed.append("routes")
+            phase = "history_days"
+            counts = {}
+            scope, params = _source_scope(planning)
+            for n, row in enumerate(db.execute("SELECT CAST((m.posted_at_ts+32400)/86400 AS INTEGER) AS day,"
+                "COUNT(*) AS posts,COUNT(DISTINCT m.project_id) AS patients,COALESCE(SUM(length(m.body_text)),0) AS chars,"
+                "COALESCE(SUM(MAX(1,(COALESCE(length(m.body_text),0)+2999)/3000)),0) AS scan_requests "
+                "FROM messages m WHERE m.posted_at_ts>=? AND m.posted_at_ts<=?" + scope + " GROUP BY day",
+                (start, now, *params)), 1):
+                _checkpoint(deadline, n)
+                counts[row["day"]] = dict(row)
+            completed.append("history_days")
+            phase = "artifact_log"
+            log = []
+            sql, args = "created_at>=?", [start]
+            if project is not None:
+                sql += " AND project_id=?"
+                args.append(project)
+            for n, row in enumerate(db.execute("SELECT kind,created_at,model,meta FROM artifacts WHERE kind IN "
+                    "('cloud_usage_reserve','cloud_usage_result','cloud_usage_dryrun','cloud_usage_disposition','cloud_compare_v1') AND "
+                    + sql + " ORDER BY artifact_id LIMIT ?", (*args, READ_ROWS + 1)), 1):
+                _checkpoint(deadline, n)
+                meta = mcs_util.loads_dict(row["meta"])
+                if not isinstance(meta, dict):
+                    continue
+                # Explicit projection: IDs, hashes, owner data and content never leave this query.
+                safe = _safe_log(row, meta)
+                if "openai_error_code" in safe or "openai_429_diagnostic" in safe:
+                    try:
+                        policy._accounting_meta(row["meta"])
+                    except policy.AnthropicError:
+                        safe.pop("openai_error_code", None)
+                        safe.pop("openai_429_diagnostic", None)
+                log.append(safe)
+            _checkpoint(deadline)
+            completed.append("artifact_log")
+            phase = "source_repair_evidence_holds"
+            if evidence_holds_wanted:
+                # Last read of the snapshot: a deadline or size stop leaves it unknown
+                # instead of failing the estimate it accompanies.
+                try:
+                    evidence_holds = policy.evidence_hold_counts(db, now=now)
+                except ValueError:   # the reader's row/byte budget
+                    evidence_holds = {"unknown": "observation_budget_exceeded"}
+                except sqlite3.Error as error:
+                    code = getattr(error, "sqlite_errorcode", None)
+                    evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
+                                      else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
+                                      else "read_failed"}
+            completed.append("source_repair_evidence_holds")
+            phase = "retained_records"
+            holds_unverified = isinstance(evidence_holds, dict) and (
+                "unknown" in evidence_holds or evidence_holds.get("unattributable_accounting_rows") is None)
+            if reason == "block_reason_unverified" or accounting["pricing_unverified"] or holds_unverified:
+                # Same bounded snapshot: cause and prefix coverage, never a guessed total.
+                import cloud_observation
+                try:
+                    retained_observation = cloud_observation.observe(db, now=now)
+                except (ValueError, sqlite3.Error):
+                    retained_observation = cloud_observation._unknown("observation_unavailable")
+            completed.append("retained_records")
+            phase = None
+        except (ValueError, sqlite3.Error, policy.AnthropicError) as error:
+            # The bound was already spent: stop early, keep verified sections, mark the
+            # rest unknown, and attach whatever the bounded snapshot can still see.
             import cloud_observation
             try:
                 retained_observation = cloud_observation.observe(db, now=now)
             except (ValueError, sqlite3.Error):
                 retained_observation = cloud_observation._unknown("observation_unavailable")
+            return _incomplete_report(settings, key=key, error=error, interrupted=phase,
+                                      completed=completed, accounting=accounting,
+                                      evidence_holds=evidence_holds, log=log,
+                                      holds_wanted=evidence_holds_wanted,
+                                      retained=retained_observation, days=days)
     calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
     ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
     output_mean = calibration["output_tokens_per_request"] if calibration else None
@@ -609,6 +640,44 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "provider": settings["provider"], "model": settings["model"],
         "provider_budgets": settings["provider_budgets"],
         "usd_jpy": settings["usd_jpy"], "log": log}
+
+
+_SECTION_ORDER = ("accounting", "period_budget", "block_reason", "usage_calibration", "routes",
+                  "history_days", "artifact_log", "source_repair_evidence_holds", "retained_records")
+
+
+def _reader_failure_reason(error):
+    if isinstance(error, sqlite3.Error):
+        code = getattr(error, "sqlite_errorcode", None)
+        return ("read_deadline" if code == sqlite3.SQLITE_INTERRUPT
+                else "value_too_large" if code == sqlite3.SQLITE_TOOBIG else "read_failure")
+    if isinstance(error, ValueError):
+        return "observation_budget_exceeded" if "observation_budget" in str(error) else "read_failure"
+    return getattr(error, "kind", None) or "policy_unverified"
+
+
+def _incomplete_report(settings, *, key, error, interrupted, completed, accounting,
+                       evidence_holds, log, holds_wanted, retained, days):
+    """Honest partial report once a bounded read is spent: verified sections keep their
+    data, interrupted and untouched sections are named unknown, nothing is guessed."""
+    report = {"mode": settings["mode"], "key_present": key,
+              "send_decision": "observation_incomplete",
+              "state": "partial", "incomplete_reason": _reader_failure_reason(error),
+              "interrupted_section": interrupted,
+              "sections_verified": list(completed),
+              "sections_unverified": [section for section in _SECTION_ORDER if section not in completed],
+              "provider": settings["provider"], "model": settings["model"],
+              "usd_jpy": settings["usd_jpy"], "days": days, "until": settings["until"],
+              "accounting": accounting or {"daily_requests": None, "monthly_cost_usd": None,
+                  "settled_cost_usd": None, "max_reserved_cost_usd": None,
+                  "unresolved_requests": None, "pricing_unverified": True},
+              "retained_records_observation": retained,
+              "log": log if "artifact_log" in completed else [],
+              "additional_runtime_checks": "source_claim_deadline_and_current_config"}
+    if holds_wanted:
+        report["source_repair_evidence_holds"] = (
+            evidence_holds if isinstance(evidence_holds, dict) else {"unknown": "observation_incomplete"})
+    return report
 
 
 def apply_control_tx(db, req, now):
@@ -714,6 +783,9 @@ def command(args):
             result = _comparison_report(report["log"])
         else:
             result = {k: v for k, v in report.items() if k != "log"}
+        if action in ("log", "compare") and report.get("state") == "partial":
+            result["observation"] = {key: report[key]
+                                     for key in ("state", "incomplete_reason", "interrupted_section")}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
         return 0
