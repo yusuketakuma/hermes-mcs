@@ -229,8 +229,8 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
-    # a busy run lock never bounces the turn: the worker keeps short
-    # wait/reacquire cycles until the unexecuted semantic job goes first
+    # One or two busy acquisitions retain the semantic turn; a longer wait
+    # yields to extract, covered by the bounded-contention test below.
     assert seen == ["extract", "semantic"]
     assert len(acquisitions) == 2 + retries
     idle = [2] if done == 0 else []
@@ -377,6 +377,78 @@ def carry_worker(tmp_path, monkeypatch):
                         lambda *a, **kw: state.events.append("semantic") or {"done": 1})
     monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
     return state, fake_ledger
+
+
+@pytest.mark.parametrize('blocked_turns', [1, 2])
+def test_semantic_lock_contention_yields_and_revisits(carry_worker, tmp_path, monkeypatch, capsys, blocked_turns):
+    import extract_llm
+    import semantic_drain
+    import writer_lock
+    state, _ = carry_worker
+    acquisitions, waits = [], []
+
+    def acquire():
+        acquisitions.append(True)
+        if 2 <= len(acquisitions) <= 1 + blocked_turns * 3:
+            return None
+        # A broken unbounded retry must terminate the test without extra work.
+        if len(acquisitions) > 2 + blocked_turns * 3:
+            state.alive = False
+            return None
+        return os.open(tmp_path / 'lock', os.O_CREAT | os.O_RDWR, 0o600)
+
+    def extract(*args, **kwargs):
+        state.events.append('extract')
+        return {'done': 1}
+
+    def semantic(*args, **kwargs):
+        state.events.append('semantic')
+        state.alive = False
+        return {'done': 1}
+
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    monkeypatch.setattr(semantic_drain, 'run_due', semantic)
+    monkeypatch.setattr(backlog.time, 'sleep', waits.append)
+    backlog.worker(991)
+    assert state.events == ['extract'] * (blocked_turns + 1) + ['semantic']
+    assert len(acquisitions) == 2 + blocked_turns * 3
+    assert waits == [1] * (blocked_turns * 3)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    yields = [r for r in records if r.get('reason') == 'writer_lock_yield']
+    assert len(yields) == blocked_turns and all(r['phase'] == 'semantic' for r in yields)
+    assert state.closed
+
+
+@pytest.mark.parametrize('fence', ['parent', 'generation'])
+def test_semantic_lock_yield_rechecks_fence_before_extract(carry_worker, tmp_path, monkeypatch, fence):
+    import extract_llm
+    import semantic_drain
+    import writer_lock
+    state, _ = carry_worker
+    acquisitions, waits = [], []
+
+    def acquire():
+        acquisitions.append(True)
+        return (os.open(tmp_path / 'lock', os.O_CREAT | os.O_RDWR, 0o600)
+                if len(acquisitions) == 1 else None)
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(waits) == 3:
+            if fence == 'parent':
+                state.alive = False
+            else:
+                state.generation = (False, 2)
+
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(extract_llm, 'run_pending',
+                        lambda *a, **kw: state.events.append('extract') or {'done': 1})
+    monkeypatch.setattr(semantic_drain, 'run_due', lambda *a, **kw: pytest.fail('stale semantic work'))
+    monkeypatch.setattr(backlog.time, 'sleep', sleep)
+    backlog.worker(991)
+    assert state.events == ['extract'] and waits == [1, 1, 1]
+    assert state.closed
 
 
 @pytest.mark.parametrize('diagnostics,expected', [
