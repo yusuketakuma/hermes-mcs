@@ -384,7 +384,11 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 **v1.1.1 · 2026-11-04** — **添付を投稿ごとにまとめて解析の待ちを改善**
 
-親投稿と各返信の添付を、対応するSlackカードの原文の下にまとめます。新着のローカル推論中もクラウド結果を保存できるようにし、患者ごとの処理順序と履歴選択のメモリ使用を改善します。保存済みの有料回答は、入力と証跡を照合して再利用します。モデル・予算・推論エンジンv1.0・人承認の条件は維持します。 ![推論、根拠の確認、保存待ちの再開から患者背景と通知へつなぐ説明図](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/releases/v1.1.1/inference-flow.png) 説明図は実画面や速度の測定結果ではありません。保存待ちの間も、通知には未完了・保留を区別して表示します。添付表示の説明例は[Slack画面集](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.1/docs/screenshots/slack-gallery/README.md)で確認できます。
+親投稿と各返信の添付を、対応するSlackカードの原文の下にまとめます。新着のローカル推論中もクラウド結果を保存できるようにし、患者ごとの処理順序と履歴選択のメモリ使用を改善します。保存済みの有料回答は、入力と証跡を照合して再利用します。モデル・予算・推論エンジンv1.0・人承認の条件は維持します。
+
+![推論、根拠の確認、保存待ちの再開から患者背景と通知へつなぐ説明図](docs/releases/v1.1.1/inference-flow.png)
+
+説明図は実画面や速度の測定結果ではありません。保存待ちの間も、通知には未完了・保留を区別して表示します。添付表示の説明例は[Slack画面集](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.1/docs/screenshots/slack-gallery/README.md)で確認できます。
 
 | 変更 | 以前（1.1.0） | 今回（1.1.1） | 利用者への効果 |
 |---|---|---|---|

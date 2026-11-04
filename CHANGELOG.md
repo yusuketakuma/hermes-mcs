@@ -18,7 +18,7 @@
 | ローカルとクラウドの解析 | ローカル通信中の共有ロックが別処理の保存を待たせる | 通信中だけロックを解放し、患者を前回の処理順序で選ぶ | 別処理の保存を進め、新着が続く患者への偏りを防ぐ |
 | メモリと中断後の再開 | 全投稿の並べ替え情報や保存前の回答をメモリに保持する | 投稿を少しずつ読み、保存済みの回答と会計記録を照合して再利用する | 履歴選択のメモリ使用と、中断後の重複した有料推論を抑える |
 
-![推論、根拠の確認、保存待ちの再開から患者背景と通知へつなぐ説明図](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/releases/v1.1.1/inference-flow.png)
+![推論、根拠の確認、保存待ちの再開から患者背景と通知へつなぐ説明図](https://github.com/yusuketakuma/hermes-mcs/raw/refs/tags/v1.1.1/docs/releases/v1.1.1/inference-flow.png)
 
 説明図は実画面や速度の測定結果ではありません。保存待ちの間も、通知には未完了・保留を区別して表示します。添付表示の説明例は[Slack画面集](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.1/docs/screenshots/slack-gallery/README.md)で確認できます。
 

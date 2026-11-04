@@ -25,6 +25,47 @@ import sync_release_notes as sync  # noqa: E402 - development scripts path is in
 
 
 class ReleaseNotesTest(unittest.TestCase):
+    def test_private_repository_images_require_immutable_same_host_paths(self):
+        base = "https://github.com/yusuketakuma/hermes-mcs/raw/"
+        for ref in ("refs/tags/v1.1.1", "a" * 40):
+            self.assertEqual(notes.repository_image_path(base + ref + "/docs/example.png"),
+                             "docs/example.png")
+        for target in ("docs/example.png", "https://example.com/example.png",
+                       "https://raw.githubusercontent.com/example/public/main/example.png"):
+            self.assertIsNone(notes.repository_image_path(target))
+        for target in (
+            "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.1/docs/example.png",
+            base + "main/docs/example.png", base + "refs/heads/main/docs/example.png",
+            base + "refs/tags/v1.1.1/../example.png", base + "refs/tags/v1.1.1/docs//example.png",
+            base + "refs/tags/v1.1.1/docs/%2e%2e/example.png",
+            base + "refs/tags/v1.1.1/docs%2fexample.png",
+            base + "refs/tags/v1.1.1/docs/example.png?token=synthetic",
+            base + "refs/tags/v1.1.1/docs/example.png#part",
+            (base + "refs/tags/v1.1.1/docs/example.png").replace("github.com", "user@github.com"),
+            (base + "refs/tags/v1.1.1/docs/example.png").replace("github.com", "github.com:443"),
+            (base + "refs/tags/v1.1.1/docs/example.png").replace("/yusuketakuma", "/%79usuketakuma"),
+        ):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                notes.repository_image_path(target)
+
+    def test_latest_image_gate_preserves_historical_notes_and_checks_export(self):
+        old = notes.render([self.item()], "旧版", "旧版の説明です。")
+        raw = "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.0.7/docs/example.png"
+        old = old.replace("### 不具合修正", f"![旧版]({raw})\n\n### 不具合修正")
+        new = notes.render([self.item()], "新版", "新版の説明です。")
+        text = "## [Unreleased]\n\n## [1.0.8] — 2026-10-01\n\n" + new
+        history = "\n## [1.0.7] — 2026-09-29\n\n" + old
+        self.assertEqual(notes.check_changelog(text + history), ["1.0.8", "1.0.7"])
+        for target in (raw, "docs/example.png", "https:docs/image.png", "https:///docs/image.png"):
+            bad = text.replace("### 不具合修正", f"![新版]({target})\n\n### 不具合修正") + history
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "CHANGELOG.md").write_text(bad)
+                with self.assertRaises(SystemExit):
+                    notes.main(["--root", tmp, "export", "--version", "1.0.8",
+                                "--output", str(root / "out.md")])
+                self.assertFalse((root / "out.md").exists())
+
     def item(self):
         return dict(category="fixed", title="重複を修正", summary="返信を更新します。",
                     upgrade="再起動が必要です。", details=["投稿IDを再利用。"],

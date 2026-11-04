@@ -31,8 +31,10 @@ def render_block(changelog):
     intro, _ = body.split("### ", 1)
     paragraphs = [p.strip() for p in intro.strip().split("\n\n") if p.strip()]
     headline = paragraphs[0]
-    summary = " ".join(p.replace("\n", " ") for p in paragraphs[1:]
-                       if not p.startswith((">", "|")))
+    summary = "\n\n".join(p for p in paragraphs[1:] if not p.startswith((">", "|")))
+    summary = release_notes.IMAGES.sub(
+        lambda match: f"![{match['alt']}]({release_notes.repository_image_path(match['url']) or match['url']})",
+        summary)
     warnings = [p for p in paragraphs[1:] if p.startswith(">")]
     out = [f"**v{version} · {date}** — {headline}", "", summary, ""]
     for warning in warnings:
@@ -107,6 +109,10 @@ def check_review(root, version):
 
 
 def check_links(root, readme):
+    for match in release_notes.IMAGES.finditer(readme):
+        path = release_notes.repository_image_path(match["url"])
+        if path is not None:
+            local_file(root, path)
     anchors = set(re.findall(r'<a (?:name|id)="([^"]+)"\s*>', readme))
     targets = re.findall(r'\[[^\]\n]*\]\(([^\s)]+)\)', readme)
     for target in targets:
