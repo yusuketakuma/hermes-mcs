@@ -347,3 +347,27 @@ def test_metadata_at_exact_expiry_is_unpublishable(tmp_path, monkeypatch):
         with pytest.raises(rollup.RollupSourceUnverified, match='rollup_expiry_unverified'):
             rollup.rebuild(ledger, 1)
         assert _cached(ledger.db) == before and not ledger.db.in_transaction
+
+
+@pytest.mark.parametrize('kind', ['extract_claim', 'history', 'thread', 'reply', 'synthetic_unknown'])
+def test_claim_renewal_does_not_invalidate_unchanged_rollup_inputs(tmp_path, monkeypatch, kind):
+    with closing(_seed(tmp_path)) as ledger:
+        now = rollup.time.time()
+        monkeypatch.setattr(rollup.time, 'time', lambda: now)
+        with ledger.db:
+            job = ledger.db.execute(
+                "INSERT INTO fetch_jobs(kind,project_id,message_id,state,next_try,updated_at) "
+                "VALUES(?,1,1,'pending',?,?)", (kind, now + 900, now)).lastrowid
+        before = rollup.rebuild(ledger, 1)
+        clinical = rollup.build_rollup(ledger.db, 1)
+        def renew(other):
+            other.execute('UPDATE fetch_jobs SET next_try=?,updated_at=? WHERE job_id=?',
+                          (now + 1800, now + 1, job))
+        _race(ledger, monkeypatch, renew)
+        if kind == 'extract_claim':
+            assert rollup.rebuild(ledger, 1) == before
+        else:
+            with pytest.raises(rollup.RollupSourceChanged):
+                rollup.rebuild(ledger, 1)
+        assert rollup.build_rollup(ledger.db, 1) == clinical
+        assert not ledger.db.in_transaction

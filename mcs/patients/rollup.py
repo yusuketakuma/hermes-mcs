@@ -1555,7 +1555,10 @@ def _publication_source_signature(db, project_id, *, deadline=None):
               ('messages', 'project_id=?', (project_id,)),
               ('message_revisions', members, (project_id,)),
               ('attachments', members, (project_id,)),
-              ('fetch_jobs', 'project_id=? OR ' + members, (project_id, project_id)),
+              # Worker leases do not feed rollup readers; capture/semantic and
+              # unknown job kinds remain witnessed, including the table schema.
+              ('fetch_jobs', "kind IS NOT 'extract_claim' AND (project_id=? OR " + members + ')',
+               (project_id, project_id)),
               ('requests', 'project_id=?', (project_id,)),
               ('artifacts', 'project_id=? OR ' + members
                + " OR kind IN ('semantic_policy','med_ref_progress')", (project_id, project_id)),
