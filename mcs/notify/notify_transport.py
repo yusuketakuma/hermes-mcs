@@ -588,12 +588,13 @@ def settle_part_receipt(db, req, now) -> dict:
         "AND part_id=?",
         (req["delivery_id"], req["part_id"])).fetchone() \
         if render is not None else None
-    error = _part_receipt_check(render, part, req)
+    error = _part_receipt_check(db, render, part, req)
     if error:
         receipt = {"applied": False, "error": error,
                    "delivery_id": req["delivery_id"],
                    "part_id": req["part_id"]}
-    elif part["state"] in ("delivered", "not_sent", "held"):
+    elif part["state"] in ("delivered", "not_sent") or (
+            part["state"] == "held" and part["error_code"] is not None):
         # terminal already: same fact is idempotent, a different
         # fact is a conflict — never silently overwrite
         prior = part["state"]
@@ -683,7 +684,7 @@ def settle_part_receipt(db, req, now) -> dict:
     cards.mark_snapshot_dirty(db)
     return receipt
 
-def _part_receipt_check(render, part, req) -> str | None:
+def _part_receipt_check(db, render, part, req) -> str | None:
     if render is None:
         return "unknown_delivery"
     if part is None:
@@ -693,6 +694,14 @@ def _part_receipt_check(render, part, req) -> str | None:
     err = _sealed_echo(render, req)
     if err:
         return err
+    if part["state"] == "held" and part["error_code"] is None:
+        expected = f"p:{render['delivery_id'].replace('-', '')}:{part['part_id']}"
+        if req.get("attempt_id") != expected or part["attempt_id"] not in (None, expected):
+            return "attempt_mismatch"
+        card = card_row(db, render["card_id"]) if render["card_id"] is not None else None
+        if render["state"] not in ("delivered", "unknown") or (
+                card is not None and card["delivery_state"] == "revoked"):
+            return "part_conflict"
     if req["result"] == "delivered" \
             and not (isinstance(req.get("remote_id"), str)
                      and req["remote_id"]):
