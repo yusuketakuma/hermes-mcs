@@ -207,6 +207,54 @@ def test_sql_projection_preserves_json_types_for_accounting_validation(world, da
     assert report['settled_requests'] is None and report['unresolved_requests'] is None
 
 
+def test_observation_limit_keeps_prefix_coverage_without_inventing_totals(world, monkeypatch):
+    ledger, _ = world
+    now = 1793240000.0
+    first = _reserve(ledger, now - 30)
+    _result(ledger, first, now - 20, outcome='settled')   # pair fully inside the prefix
+    _reserve(ledger, now - 10)                            # a result may sit beyond the bound
+    monkeypatch.setattr(observation, 'MAX_ROWS', 2)
+    result = _observe(ledger, now)
+    assert result['state'] == 'unknown' and result['reason'] == 'observation_limit'
+    assert result['unresolved_requests'] is None and result['missing_results'] is None
+    observed = result['observed']
+    assert observed['coverage'] == 'artifact_id_prefix' and observed['scan_limit'] == 2
+    assert observed['records_scanned'] == 3
+    assert (observed['reserves_scanned'], observed['results_scanned']) == (2, 1)
+    assert observed['verified_pairs'] == 1 and observed['settled_pairs'] == 1
+    # A prefix reserve without its result is never an unresolved lower bound.
+    assert observed['reserves_without_result_in_prefix'] == 1
+
+
+def test_proof_budget_reports_reason_and_bounded_counts(world, monkeypatch):
+    ledger, _ = world
+    now = 1793240000.0
+    _reserve(ledger, now - 10)
+    monkeypatch.setattr(observation, 'MAX_PROOF_BYTES', 1)
+    result = _observe(ledger, now)
+    assert result['state'] == 'unknown' and result['reason'] == 'proof_budget_exceeded'
+    assert result['unresolved_requests'] is None
+    assert result['observed']['records_by_kind'] == {'cloud_usage_reserve': 1}
+    assert result['observed']['truncated'] is False
+
+
+def test_interrupted_scan_reports_deadline_and_bounded_counts(world):
+    ledger, _ = world
+    now = 1793240000.0
+    _reserve(ledger, now - 10)
+    calls = []
+    ledger.db.commit()
+    ledger.db.execute('BEGIN')
+    ledger.db.set_progress_handler(lambda: calls.append(1) or int(len(calls) == 1), 1)
+    try:
+        result = observation.observe(ledger.db, now=now)
+    finally:
+        ledger.db.rollback()
+        ledger.db.set_progress_handler(None, 0)
+    assert result['state'] == 'unknown' and result['reason'] == 'read_deadline'
+    assert result['observed']['records_by_kind'] == {'cloud_usage_reserve': 1}
+
+
 def test_internal_proof_budget_is_bounded_and_does_not_write(world, monkeypatch):
     ledger, _ = world
     now = 1793240000.0

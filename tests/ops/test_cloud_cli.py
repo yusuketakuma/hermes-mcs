@@ -677,6 +677,39 @@ def _real_interrupt(monkeypatch):
     monkeypatch.setattr(cli.policy, "evidence_hold_counts", interrupted)
 
 
+def test_block_reason_bound_failure_is_structured_with_observation(world, monkeypatch):
+    root, _path, config = world
+    _key(root)
+
+    def interrupted(ledger, *, model):
+        raise ValueError("observation_budget_exceeded")
+
+    monkeypatch.setattr(cli.policy, "global_block_reason", interrupted)
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    assert report["send_decision"] == "block_reason_unverified"
+    retained = report["retained_records_observation"]
+    assert retained["state"] == "complete" and retained["scope"] == "retained_records"
+    assert retained["records_scanned"] == 0
+
+
+def test_unverified_accounting_attaches_retained_observation(world, monkeypatch):
+    root, _path, config = world
+    monkeypatch.setattr(cli.policy, "usage_report", lambda *a, **k: {
+        "daily_requests": None, "monthly_cost_usd": None, "settled_cost_usd": None,
+        "max_reserved_cost_usd": None, "unresolved_requests": None, "pricing_unverified": True})
+    report = cli.observe(config, root=str(root))
+    assert report["retained_records_observation"]["state"] == "complete"
+
+
+def test_unverifiable_hold_counts_attach_retained_observation(world, monkeypatch):
+    root, _path, config = world
+    monkeypatch.setattr(cli.policy, "evidence_hold_counts", lambda db, *, now: {
+        "unattributable_accounting_rows": None, "old_reserved_repair_slots": 0,
+        "unparseable_repair_slots": 0, "reserved_age_s": 600, "scan_limit": 20000})
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    assert report["retained_records_observation"]["state"] == "complete"
+
+
 def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypatch):
     root, _path, config = world
     _real_interrupt(monkeypatch)

@@ -471,7 +471,11 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 spent = None   # an unverifiable tally is shown as unknown, never as 0
             period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
                       "spent_or_reserved_usd": spent}
-        reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
+        try:
+            reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
+        except (sqlite3.Error, ValueError, policy.AnthropicError):
+            # A bounded read that stops here stays blocked, not a generic error or an implicit eligible.
+            reason = "block_reason_unverified"
         calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
         counts = {}
@@ -518,6 +522,16 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
                                   else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
                                   else "read_failed"}
+        holds_unverified = isinstance(evidence_holds, dict) and (
+            "unknown" in evidence_holds or evidence_holds.get("unattributable_accounting_rows") is None)
+        retained_observation = None
+        if reason == "block_reason_unverified" or accounting["pricing_unverified"] or holds_unverified:
+            # Same bounded snapshot: cause and prefix coverage, never a guessed total.
+            import cloud_observation
+            try:
+                retained_observation = cloud_observation.observe(db, now=now)
+            except (ValueError, sqlite3.Error):
+                retained_observation = cloud_observation._unknown("observation_unavailable")
     calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
     ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
     output_mean = calibration["output_tokens_per_request"] if calibration else None
@@ -554,6 +568,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
         "max_concurrency": settings["max_concurrency"], "concurrency_scope": "all_processes",
         **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
+        **({"retained_records_observation": retained_observation} if retained_observation is not None else {}),
         "period_budget": period, "until": settings["until"],
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
