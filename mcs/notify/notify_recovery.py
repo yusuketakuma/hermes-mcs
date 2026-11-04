@@ -7,6 +7,7 @@ holds and journals constrain operator evidence before any card or part is reboun
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from mcs_requests import canonical, payload_hash, positive, replay_receipt, valid_uuid
@@ -14,7 +15,7 @@ import notify_cards as cards
 import notify_spool
 import notify_journal
 import notify_transport
-from notify_scope import (card_projects, card_row, render_row, stored_scope,
+from notify_scope import (card_projects, card_row, delivery_scope, render_row, stored_scope,
                           scope_fields, scope_matches, TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
@@ -118,7 +119,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                    "delivery_id": req.get("delivery_id"),
                    "attempt_id": req.get("attempt_id"),
                    "processed_at": now}
-        attempt = render = None
+        attempt = render = card = None
+        settled = False
         hold = None
         if error is None:
             attempt = db.execute(
@@ -188,11 +190,17 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                                 error_code=f"resolve:{req['result']}")
                 receipt["outcome"] = "applied"
                 receipt["attempt_state"] = result
-                if card is not None:
-                    cards.issue_render(db, card["card_id"], cfg, now, specs)
+                settled = True
         else:
             receipt["outcome"] = "rejected"
             receipt["error"] = error
+        if error is None and hold is None and card is not None and receipt["outcome"] == "applied":
+            released = (_release_dependency_holds(ledger, render, cfg, now)
+                        if req["result"] == "mark_delivered" and req["evidence"].get("worker_stopped") is True else [])
+            if released:
+                receipt["unstarted_parts"] = released
+            if settled or released:
+                cards.issue_render(db, card["card_id"], cfg, now, specs, force=bool(released))
         if req.get("transport") == "lineworks" and req.get("evidence", {}).get("proof") == "remote_absent":
             receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
         db.execute(
@@ -202,6 +210,59 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
         cards.mark_snapshot_dirty(db)
     notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
+
+
+def _release_dependency_holds(ledger, render, cfg, now):
+    # Only a stopped worker and complete journal can prove a held part never started.
+    db = cards.connection(ledger)
+    card = card_row(db, render["card_id"]) if render["card_id"] is not None else None
+    latest = _latest_delivery_id(db, render["card_id"]) if card is not None else None
+    current = render_row(db, render["delivery_id"])
+    if (card is None or latest["delivery_id"] != render["delivery_id"]
+            or current["state"] != "delivered" or card["delivery_state"] != "delivered"
+            or not scope_matches(render, delivery_scope(cfg) or {})
+            or cards._render_gates(db, card["card_id"], cfg) is None
+            or notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None
+            or cards.resend_exhausted(db, card["card_id"])):
+        return []
+    unfinished = db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind!='card' "
+        "AND state IN ('pending','unknown','held')", (render["delivery_id"],)).fetchall()
+    if not unfinished or any(part["state"] != "held" or part["error_code"] is not None
+                             or part["attempt_id"] is not None for part in unfinished):
+        return []
+    try:
+        attempts, incomplete = notify_journal.scan_journals(
+            notify_spool.notify_dirs(notify_spool.data_root(ledger)))
+    except OSError:
+        return []
+    if incomplete:
+        return []
+    candidates = {part["part_id"] for part in unfinished}
+    identities = {f"p:{render['delivery_id'].replace('-', '')}:{part_id}" for part_id in candidates}
+    for aid, record in attempts.items():
+        for row in record["rows"]:
+            witnesses = [row] + [row[key] for key in ("begin_envelope", "receipt_envelope")
+                                 if isinstance(row.get(key), dict)]
+            matches = aid in identities or any(
+                witness.get("delivery_id") == render["delivery_id"] and witness.get("part_id") in candidates
+                for witness in witnesses)
+            if matches and row.get("phase") not in ("claimed", "begin", "denied"):
+                return []
+    # The worker reads files, not DB state. Withhold the old plan before a
+    # successor can commit; on failure the whole command rolls back for retry.
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(ledger))
+    try:
+        os.unlink(os.path.join(dirs[render["transport"] + "_render"], render["delivery_id"] + ".json"))
+    except FileNotFoundError:
+        pass
+    db.executemany(
+        "UPDATE notification_render_parts SET state='not_sent',error_code='dependency_not_started',"
+        "updated_at=? WHERE delivery_id=? AND part_id=?",
+        [(now, render["delivery_id"], part_id) for part_id in sorted(candidates)])
+    import notify_parts
+    notify_parts.update_state(db, render["delivery_id"], now)
+    return sorted(candidates)
 
 
 def hold_events(hold) -> list[int] | None:
@@ -1108,12 +1169,17 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                     receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
         if error is not None:
             receipt.update(outcome="rejected", error=error)
-        db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
-                   (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
         if (error is None and not preflight and not group_retry and card is not None and card["delivery_state"] != "update_failed"
                 and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
                 and not cards.resend_exhausted(db, card["card_id"])):
-            cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
+            released = (_release_dependency_holds(ledger, render, cfg, now)
+                        if req["result"] == "mark_delivered" else [])
+            if released:
+                receipt["unstarted_parts"] = released
+            cards.issue_render(db, card["card_id"], cfg, now, specs,
+                               force=req["result"] == "mark_not_sent" or bool(released))
+        db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                   (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
         cards.mark_snapshot_dirty(db)
     if specs:
         notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)), specs, now)
