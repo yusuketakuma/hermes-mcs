@@ -4,7 +4,7 @@ import math
 import re
 
 from clinical_values import (_FLOW_AFTER, _nearest_vital_label, _vital_numbers, grounded_vitals,
-                             lab_candidate, written_day)
+                             lab_candidate, measurement_day, written_day)
 from patient_context_projection import paired_date_conflict
 from mcs_util import valid_hash
 import original_source_keys
@@ -154,7 +154,7 @@ def _supported_vital_list(quote, wanted, condition, date_kind):
 def _supported_item(item, values, date_kind):
     """Require one source quote to bind the person, name, value, unit and time."""
     quote = item.get("quote")
-    if not isinstance(quote, str) or _OTHER.search(quote):
+    if not isinstance(quote, str) or _OTHER.search(quote) or measurement_day(quote) is None:
         return False
     wanted = {field: next(iter(values[field])) for field in ("observation_name", "value", "unit", date_kind)}
     condition = next(iter(values["condition"])) if values["condition"] else None
@@ -212,7 +212,7 @@ def _supported_item(item, values, date_kind):
     unit, value = wanted["unit"], wanted["value"]
     if (key is None or unit not in _VITAL_UNITS[key] or not re.fullmatch(r"\d+(?:[.．]\d+)?", value)
             or not re.search(r"測定|計測|観測|観察", clause)
-            or written_day(clause) != ("ymd", written_day(wanted[date_kind])[1])):
+            or measurement_day(clause) != ("ymd", written_day(wanted[date_kind])[1])):
         return False
     number = float(value.replace("．", "."))
     if not math.isfinite(number) or number > 1e20:

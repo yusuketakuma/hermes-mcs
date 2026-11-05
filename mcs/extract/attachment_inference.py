@@ -17,6 +17,7 @@ import cloud_policy
 import extract_llm
 import local_llm
 import original_source_keys
+import attachment_feedback
 import patient_priority
 import writer_lock
 from mcs_util import load_config
@@ -65,7 +66,9 @@ def _guard(ledger, source, cfg, generation):
             or attachment_ocr.config_error(live)
             or not live.get('attachment_ocr', {}).get('enabled', False)
             or original_source_keys.binding(ledger.db, source['project_id'], source['source_key'])
-            != source['_source_binding'] or _contract(cfg) != _contract(live)):
+            != source['_source_binding'] or _contract(cfg) != _contract(live)
+            or attachment_feedback.revision(ledger.db, source['project_id'], source['source_key'],
+                                            source['_source_binding']) != source.get('_feedback_revision', 0)):
         raise ValueError('attachment_inference_source_changed')
 
 
@@ -216,6 +219,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                 source = original_source_keys.source(ledger.db, row['project_id'], key)
                 if source is None or _stored(ledger.db, row['project_id'], key, stage, cfg) is not None:
                     continue
+                source['_feedback_revision'] = attachment_feedback.revision(
+                    ledger.db, row['project_id'], key, source['_source_binding'])
                 if used >= limit or time.monotonic() >= deadline:
                     finished = False
                     break
@@ -246,7 +251,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                                    if stage == 'local' else {})
                     with extract_llm.pin_target(local_llm.resolve(cfg)):
                         result = extract_llm.llm_extract(source['body_text'], deadline=deadline, meta_out=meta,
-                                                       posted_at=None, provider=unit, **checkpoints)
+                                                       posted_at=None, provider=unit,
+                                                       feedback=attachment_feedback.notes(ledger.db, source), **checkpoints)
                     if (not isinstance(result, dict) or meta.get('_quality_hold')
                             or not _save(ledger, source, cfg, generation, stage, result, meta, unit, local)):
                         counts['deferred'] += 1

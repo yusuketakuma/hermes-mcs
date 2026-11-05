@@ -52,15 +52,15 @@ def test_exact_reviewed_refactor_preserves_old_token_and_actual_runtime_map(revi
     assert after['attachment_inference'] != before['attachment_inference']
 
 
-def test_shipped_witness_matches_independent_baseline_and_keeps_parser_migration_distinct():
+def test_historical_refactor_witness_cannot_bless_new_clinical_or_feedback_behaviour():
     actual = dict(extract_llm._LOADED_SOURCE_DIGESTS)
     witness = contract._WITNESS
     assert witness['schema'] == contract.WITNESS_SCHEMA
     assert set(witness['components']) <= actual.keys()
     assert 'attachment_ocr' not in witness['components']
-    # Isolate the mechanical refactor from the separately reviewed table parser fix.
-    refactor_only = {**actual, 'attachment_ocr': BASELINE_OCR}
-    assert _calculate(refactor_only, code=attachment_inference._CODE) == BASELINE_ORACLE
+    assert {'attachment_feedback', 'attachment_observation_seeds', 'measurement_sources'} <= actual.keys()
+    assert contract._compatible(attachment_inference._CODE, actual, VERSIONS) is None
+    assert _calculate(actual, code=attachment_inference._CODE) != BASELINE_ORACLE
     assert attachment_inference._contract(CFG) != BASELINE_ORACLE
     assert extract_llm._LOADED_SOURCE_DIGESTS == actual
 

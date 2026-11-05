@@ -1243,10 +1243,11 @@ def patient_context_scope(db, pid):
 
 def attachment_context_items(document, source):
     """Seed context with separately validated clinical mentions and their exact source quotes."""
+    from attachment_observation_seeds import seeds as observation_seeds
     from patient_context_projection import clinical_state_fact
 
     body = source["body_text"]
-    seeds = []
+    seeds = observation_seeds(document, source)
     for field, category, target in (("meds", "medications", "medication_management"),
                                     ("symptoms", "symptoms", "symptoms")):
         entries = document.get(field)
@@ -1264,10 +1265,24 @@ def attachment_context_items(document, source):
     return merged_context(document, {"patient_context": seeds}, body)
 
 
+def _attachment_ocr_keys(db, pid, mid):
+    from attachment_ocr import current
+
+    params = (pid, mid) if mid is not None else (pid,)
+    for row in db.execute(
+            "SELECT a.attachment_id FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+            "WHERE m.project_id=? " + ("AND m.message_id=? " if mid is not None else "")
+            + "ORDER BY m.message_id,a.attachment_id", params):
+        document = current(db, row["attachment_id"], project_id=pid)
+        if document is not None:
+            for page in document["pages"]:
+                yield f"attachment_ocr:{document['artifact_id']}:{page['page']}"
+
+
 def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
     """Read current attachment pages as distinct sources without attributing them to a sender."""
     import original_source_keys
-    from attachment_ocr import current
+    import attachment_extraction
     from snapshot_access import table_exists
 
     if (cfg is not None and not (isinstance(cfg.get("attachment_ocr"), dict)
@@ -1276,33 +1291,24 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
     if not table_exists(db, "attachments"):
         return
     external = isinstance(mid, str)
-    if external and not original_source_keys.valid(mid):
+    if external and (not original_source_keys.valid(mid)
+                     or original_source_keys.parse(mid)[0] != "attachment_ocr"):
         return
-    params = (pid, mid) if mid is not None and not external else (pid,)
-    for row in db.execute(
-            "SELECT a.attachment_id FROM attachments a JOIN messages m ON m.message_id=a.message_id "
-            "WHERE m.project_id=? " + ("AND m.message_id=? " if len(params) == 2 else "")
-            + "ORDER BY m.message_id,a.attachment_id", params):
-        document = current(db, row["attachment_id"], project_id=pid)
-        if document is None:
+    keys = (mid,) if external else _attachment_ocr_keys(db, pid, mid)
+    for key in keys:
+        record = original_source_keys.source(db, pid, key)
+        if record is None:
             continue
-        for page in document["pages"]:
-            key = f"attachment_ocr:{document['artifact_id']}:{page['page']}"
-            if external and mid != key:
-                continue
-            record = original_source_keys.source(db, pid, key)
-            if record is not None:
-                import attachment_extraction
-                analysis = (None if record["empty"] else
-                            attachment_extraction.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
-                record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
-                record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
-                    record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
-                record["items"] = (attachment_context_items(analysis["document"], record)
-                                   if analysis and record["extraction_ready"] and hydrate else [])
-                if not hydrate:
-                    record.pop("body_text")
-                yield record
+        analysis = (None if record["empty"] else
+                    attachment_extraction.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
+        record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
+        record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
+            record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
+        record["items"] = (attachment_context_items(analysis["document"], record)
+                           if analysis and record["extraction_ready"] and hydrate else [])
+        if not hydrate:
+            record.pop("body_text")
+        yield record
 
 
 def attachment_ocr_coverage(db, pid, cfg, *, mid=None):

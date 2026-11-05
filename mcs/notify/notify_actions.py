@@ -170,7 +170,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
         tok_params = json.loads(tok["params"] or "{}")
     except (json.JSONDecodeError, TypeError):
         tok_params = {}
-    if action in ("meds", "summary", "search") and tok_params.get("ephemeral"):
+    if action in ("meds", "summary", "search", "report") and tok_params.get("ephemeral"):
         if tok_params.get("actor") != actor:
             return {**base, "outcome": "rejected", "error": "actor_mismatch"}
         if card["transport"] == "discord" and (
@@ -253,6 +253,12 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
     # ops.extract_feedback with the full envelope. The
     # stored params go back to the caller so the plugin builds the modal
     # against what was rendered — user input never picks the target.
+    if action == "report" and "extract_ref" in tok_params:
+        import attachment_feedback
+        ref = tok_params["extract_ref"]
+        if (not isinstance(ref, dict) or attachment_feedback.target(
+                db, {"project_id": card["project_id"], **ref}, cfg=cfg) is None):
+            return {**base, "outcome": "rejected", "error": "extraction_changed"}
     if action in ("dismiss", "report"):
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": tok_params}
@@ -425,12 +431,23 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         selected = posts.index(mid)
         # the ⚠ hint only when ⚠ pins this very post (it may pin another)
         ref = context.get("extract_ref") or {}
+        report_refs = []
         view = meds_view(db, card["project_id"], mid,
                          can_report=ref.get("message_id") == mid,
-                         can_search=drug_search_available(db), page=page, cfg=cfg)
+                         can_search=drug_search_available(db), page=page, cfg=cfg, report_refs=report_refs)
         if len(posts) > 1:
             view["head"].insert(0, f"薬剤記載のある投稿 {selected + 1}/{len(posts)}（新しい順）")
         navigation, token_ctx = [], {}
+        if (notify_scope.interactive_enabled(cfg)
+                and card["transport"] == notify_scope.active_transport(cfg)):
+            for ref in report_refs:
+                pin = {key: ref[key] for key in ("message_id", "artifact_id", "source_key")}
+                _private_button(db, base, card, now, navigation, token_ctx, "report",
+                                f"添付#{ref['attachment_id']}・{ref['page']}ページの誤りを報告",
+                                {"extract_ref": pin})
+                token_ctx[navigation[-1]["token"]]["context"] = {
+                    "project_id": card["project_id"], "extract_ref": pin,
+                    "target": f"添付 #{ref['attachment_id']} · {ref['page']}ページ"}
 
         def navigate(label, target, target_page=0):
             _private_button(db, base, card, now, navigation, token_ctx, "meds", label,

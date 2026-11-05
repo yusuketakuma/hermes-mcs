@@ -163,7 +163,7 @@ def thread_drug_view(spec, *, private=False):
     import discord
     drug_actions = {"meds", "drugsearch"}
     if private:
-        drug_actions |= {"summary", "search"}
+        drug_actions |= {"summary", "search", "report"}
     rows = [[button for row in spec["parts"].get("action_rows") or []
              for button in row if button.get("id") in drug_actions]]
     buttons, _ = _button_items({"parts": {"action_rows": rows}}, drug_actions)

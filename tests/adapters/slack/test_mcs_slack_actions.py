@@ -1457,3 +1457,15 @@ def test_native_command_sends_all_chunks_while_authority_is_current(tmp_path, mo
         assert len(app.client.messages) > 1
         assert all(message["user"] == "U_OPERATOR" for message in app.client.messages)
     asyncio.run(scenario())
+
+
+def test_private_ocr_reports_do_not_hide_medication_navigation(tmp_path):
+    async def scenario():
+        actions, app, _, _ = fixture(tmp_path)
+        buttons = [{'type': 'button', 'text': {'type': 'plain_text', 'text': f'合成{n}'},
+                    'action_id': f'mcs:a:{n:032x}', 'value': f'{n:032x}'} for n in range(9)]
+        assert await actions._say(SCOPE['channel_id'], 'U_OPERATOR', '合成の薬剤詳細', navigation=buttons)
+        rows = [block for block in app.client.messages[-1]['blocks'] if block['type'] == 'actions']
+        assert [len(row['elements']) for row in rows] == [5, 4]
+        assert [button for row in rows for button in row['elements']] == buttons
+    asyncio.run(scenario())

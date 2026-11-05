@@ -5,6 +5,7 @@ import copy
 import json
 
 import attachment_ocr
+import attachment_feedback
 import extract_llm
 import extract_validation
 import local_llm
@@ -54,10 +55,13 @@ def local_checkpoints(ledger, source, cfg, *, contract, write):
         'plan': extract_llm.PLAN_VERSION, 'chunk_size': size}
     records = {}
     for row in ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=4194304 "
-            "THEN content END FROM artifacts WHERE kind=? AND project_id=? "
+            "THEN content END FROM artifacts WHERE kind=? AND project_id=? AND artifact_id>? "
             "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=? "
             "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.binding') END=? "
-            "ORDER BY artifact_id", (KIND, source['project_id'], source['source_key'],
+            "ORDER BY artifact_id", (KIND, source['project_id'],
+                                     attachment_feedback.revision(ledger.db, source['project_id'],
+                                                                  source['source_key'], source['_source_binding']),
+                                     source['source_key'],
                                      payload_hash(identity))):
         raw = extract_llm._provider_strict_dict(row[0])
         if not isinstance(raw, dict) or any(raw.get(k) != v for k, v in identity.items()):

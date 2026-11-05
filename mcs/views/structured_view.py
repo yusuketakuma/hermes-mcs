@@ -492,7 +492,7 @@ def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
     return lines
 
 
-def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True) -> tuple[list, list]:
+def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True, report_refs=None) -> tuple[list, list]:
     """Select ready attachment medications with the same clinical filters as post medications."""
     import attachment_extraction
     from mcs_util import load_config
@@ -513,18 +513,22 @@ def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True) -> t
         meds, unverified = _med_entries(source['document'], {}, refs,
                                       context=(source['body_text'], None, 'patient'))
         where = f"（添付#{source['attachment_id']}・{source['page']}ページ）"
+        if report_refs is not None and (meds or unverified):
+            report_refs.append({"message_id": mid, "artifact_id": source["extraction_artifact_id"],
+                "source_key": source["source_key"], "attachment_id": source["attachment_id"],
+                "page": source["page"], "mentions": [text + where for text, _ in meds + unverified]})
         confirmed.extend((text + where, ref) for text, ref in meds)
         uncertain.extend((text + where, ref) for text, ref in unverified)
     return confirmed, uncertain
 
 
-def medication_entries(db, mid: int, *, cfg=None) -> tuple[list, list]:
+def medication_entries(db, mid: int, *, cfg=None, report_refs=None) -> tuple[list, list]:
     """The post's current (confirmed, unverified) medication entries with
     their dictionary annotations — the 💊 薬剤を確認 view's input."""
     v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
     meds, unverified = _med_entries(mcs_queries.current_message_facts(db, mid) or {}, v1, _drug_refs(db, mid),
                                    context=_source_context(db, mid))
-    attachment_meds, attachment_unverified = attachment_medication_entries(db, mid, cfg=cfg)
+    attachment_meds, attachment_unverified = attachment_medication_entries(db, mid, cfg=cfg, report_refs=report_refs)
     return meds + attachment_meds, unverified + attachment_unverified
 
 

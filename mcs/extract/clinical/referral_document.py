@@ -51,7 +51,8 @@ _ERAS = {
 }
 
 
-def _dates(text, role):
+def written_dates(text, role="event"):
+    """Return explicit date candidates with precision and calendar validity, never imputed years."""
     result = []
     for match in _DATE.finditer(text):
         parts = match.groupdict()
@@ -146,7 +147,7 @@ def project(pages):
                 if not raw.strip():
                     continue
                 # A bare date at a page boundary cannot inherit the preceding clinical heading.
-                bare_dates = _dates(raw, 'document')
+                bare_dates = written_dates(raw, 'document')
                 remainder = raw
                 for written in bare_dates:
                     remainder = remainder.replace(written['raw'], '', 1)
@@ -160,7 +161,7 @@ def project(pages):
                 fragment_offset = offset + start
                 for fragment in fragments:
                     if fragment.strip():
-                        dates = _dates(fragment, role)
+                        dates = written_dates(fragment, role)
                         cost = 1 + (field not in _HEADER_FIELDS) + len(dates)
                         if records + cost > _MAX_RECORDS:
                             return _limited(output, pages, page_index, fragment_offset)

@@ -388,7 +388,7 @@ class Actions:
         ctx = self._reg.token(token)
         if not ctx or actor != origin.get("actor"):
             return None
-        private_meds = ctx.get("ephemeral") is True and ctx.get("action") in ("meds", "summary", "search")
+        private_meds = ctx.get("ephemeral") is True and ctx.get("action") in ("meds", "summary", "search", "report")
         if private_meds and ctx.get("actor") != actor:
             return None
         if ctx.get("action") != "task_status" and (
@@ -421,6 +421,8 @@ class Actions:
         async def still_active():
             return self._active and (authorized is None or await authorized())
 
+        controls = [{"type": "actions", "elements": navigation[start:start + 5]}
+                    for start in range(0, len(navigation or []), 5)]
         try:
             for index, chunk in enumerate(_ephemeral_chunks(text)):
                 if not await still_active():
@@ -430,11 +432,9 @@ class Actions:
                 if thread_ts:
                     kwargs["thread_ts"] = thread_ts
                 if blocks and index == 0:
-                    kwargs["blocks"] = blocks + (
-                        [{"type": "actions", "elements": navigation}] if navigation else [])
+                    kwargs["blocks"] = blocks + controls
                 elif navigation and index == 0:
-                    kwargs["blocks"] = text_sections(unescape(chunk)) + [
-                        {"type": "actions", "elements": navigation}]
+                    kwargs["blocks"] = text_sections(unescape(chunk)) + controls
                 await call_native(client.chat_postEphemeral, retry_allowed=still_active, **kwargs)
                 if blocks:
                     break  # the blocks carry the content; later chunks would repeat it
@@ -897,14 +897,14 @@ class Actions:
                         for token, context in token_ctx.items()
                         if isinstance(token, str) and _TOKEN.fullmatch(token)
                         and isinstance(context, dict)
-                        and context.get("action") in ("meds", "summary", "search")
+                        and context.get("action") in ("meds", "summary", "search", "report")
                         and context.get("ephemeral") is True
                         and context.get("actor") == rec["actor"]
                         and all(context.get(key) == pin.get(key)
                                 for key in ("card_key", "kind", "project_id",
                                             "channel_id", "team_id", "message_id"))}
                     for button in result.get("navigation") or []:
-                        if (isinstance(button, dict) and button.get("id") in ("meds", "summary", "search")
+                        if (isinstance(button, dict) and button.get("id") in ("meds", "summary", "search", "report")
                                 and button.get("ui") == "button"
                                 and isinstance(button.get("token"), str)
                                 and button.get("token") in token_ctx
@@ -914,7 +914,6 @@ class Actions:
                                 "type": "plain_text", "text": button["label"]},
                                 "action_id": "mcs:a:" + button["token"],
                                 "value": button["token"]})
-                    navigation = navigation[:5]
                 if token_ctx:
                     # the followup is already consumed: its tokens must land even while closing
                     await commands.run_native(self._reg.put_tokens, token_ctx,

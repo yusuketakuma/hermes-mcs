@@ -810,7 +810,7 @@ def _medication_reference_lines(ref, dictionary) -> str:
 
 
 def meds_view(db, project_id, message_id, *, can_report=False,
-              can_search=False, page=0, cfg=None) -> dict:
+              can_search=False, page=0, cfg=None, report_refs=None) -> dict:
     """💊 one post's medication mentions — the card's own 薬剤 selection
     (structured_view) with each mention's current dictionary candidate.
     Read-only: nothing here confirms a prescription."""
@@ -822,7 +822,8 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         return {"title": title, "head": [], "items": [], "more": 0,
                 "empty": "この投稿の薬剤情報を確認できません（削除・移動の可能性）。",
                 "notes": []}
-    meds, unverified = structured_view.medication_entries(db, message_id, cfg=cfg)
+    attachment_refs = []
+    meds, unverified = structured_view.medication_entries(db, message_id, cfg=cfg, report_refs=attachment_refs)
     dictionary, dictionary_state = drug_map.active_dictionary(db, cfg) if cfg is not None else (None, "inactive")
     if dictionary is not None and not dictionary.approved:
         dictionary, dictionary_state = None, "inactive"
@@ -875,13 +876,19 @@ def meds_view(db, project_id, message_id, *, can_report=False,
                       f"{_candidate_line(ref, active)}"
                       f"{_medication_reference_lines(ref, dictionary)}"}
              for text, ref, label in entries[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE]]
+    if report_refs is not None:
+        visible = {text for text, _, _ in entries[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE]}
+        report_refs.extend({key: value for key, value in ref.items() if key != 'mentions'}
+                           for ref in attachment_refs if visible.intersection(ref['mentions']))
     notes = []
+    if attachment_refs:
+        notes.append("添付の誤りは、対象ページの「誤りを報告」から報告してください。")
     if refs:
         notes.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}")
     if can_search:
         notes.append("候補の名称・別名は「薬剤を検索」で確認できます。")
     if can_report:
-        notes.append("抽出の誤りは「誤りを報告」→「薬」から報告できます。")
+        notes.append("投稿本文の抽出の誤りは「誤りを報告」→「薬」から報告できます。")
     if pages > 1:
         head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(entries)}件）")
     return {"title": title, "head": head,
@@ -1089,11 +1096,11 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         if item.get("event_date_text"):
             label = {"measured_on": "測定日の記載", "observed_on": "観察日の記載",
                      "onset": "発症日の記載", "last_confirmed_on": "最終確認日の記載",
-                     "referral_event": "出来事の記載"}.get(
+                     "referral_event": "出来事の記載", "pump_measurement": "測定日の記載（候補）"}.get(
                          item.get("event_date_kind"), "時点の記載")
             rest += f" · {label}: {item['event_date_text']}"
         if ocr:
-            date = item.get("event_date_text") if item.get("event_date_kind") == "referral_event" else None
+            date = item.get("event_date_text") if item.get("event_date_kind") in ("referral_event", "pump_measurement") else None
             return date or "文書日時未確認", rest, room if ocr_current else None
         dated = posted_at(item) is not None
         date = "更新日時未確認" if karte and not dated else when(item)
@@ -1314,12 +1321,14 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                 head.append(f"{day}の前後14日で記載なし: "
                             + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
     elif section == "timeline":
-        import referral_reader
         from referral_document import HEADER_FIELDS
-        view = views.timeline(ev, documents=referral_reader.read(db, project_id, cfg=cfg))
+        documents, pumps = views.document_timelines(db, project_id, cfg=cfg)
+        view = views.timeline(ev, documents=documents, pumps=pumps)
         add(view["items"], "")
         for item in view.get("document_events", []):
             add([item], "紹介状の記載（日付順）" if item["document_time_known"] else "紹介状の記載（時点不明）")
+        for item in view.get("pump_events", []):
+            add([item], "PCAの記載（未確認・日付順）" if item["document_time_known"] else "PCAの記載（未確認・時点不明）")
         for document in view.get("referral_documents", []):
             add([item for item in document["fields"] if item["field"] in HEADER_FIELDS], "紹介状の基本情報")
     else:
@@ -1347,6 +1356,10 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                           f"未解析 {document_coverage.get('pending', 0)}件"
                           + ("（表示上限あり）" if document_coverage.get("limited") else "")
                           + ("・点検未完了" if not document_coverage.get("complete") else ""))
+    pump_coverage = view.get("pump_coverage") or {}
+    if pump_coverage.get("documents"):
+        status.append(f"PCA: {pump_coverage['documents']}資料・記載値は未確認"
+                      + ("・点検未完了" if not pump_coverage.get("complete") else ""))
     if ev.get("as_of"):
         status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     if section != "care_events":

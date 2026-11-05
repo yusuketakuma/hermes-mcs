@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 
 import attachment_ocr
+import attachment_feedback
 import attachment_inference_contract
 import cloud_inference
 import cloud_policy
@@ -70,7 +71,8 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=? "
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.stage') END=? "
         "ORDER BY artifact_id DESC LIMIT 1", (KIND, pid, key, stage)).fetchone()
-    if row is None or not isinstance(row['content'], str) or len(row['content']) > 4194304:
+    if (row is None or not isinstance(row['content'], str) or len(row['content']) > 4194304
+            or row['artifact_id'] <= attachment_feedback.revision(db, pid, key, source['_source_binding'])):
         return None
     value = loads_dict(row['content']) or {}
     proof = value.get('provider_evidence')

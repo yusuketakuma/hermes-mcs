@@ -605,7 +605,34 @@ def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cu
             "as_of": ev["as_of"], "coverage": ev["coverage"]}
 
 
-def timeline(ev, categories=None, *, documents=None) -> dict:
+def document_timelines(db, project_id, *, cfg=None):
+    """Share one verified OCR read between referral and unverified device records."""
+    import ocr_document_reader
+    import pump_reader
+    import referral_reader
+
+    snapshot = ocr_document_reader.read(db, project_id, cfg=cfg)
+    return referral_reader.project(snapshot), pump_reader.project(snapshot)
+
+
+def _document_events(items, date_kind):
+    events = []
+    for item in items:
+        at = item.get("time") or {}
+        dated = (item.get("time_state") == "dated" and at.get("valid") is True
+                 and at.get("role") == "event" and at.get("precision") in ("day", "month", "year")
+                 and bool(at.get("value")))
+        value = at["value"] if dated else None
+        label = ("".join(part + unit for part, unit in zip(value.split("-"), ("年", "月", "日")))
+                 if dated else None)
+        events.append({**item, "event_date_text": label,
+                       "event_date_kind": date_kind, "document_time_known": dated})
+    events.sort(key=lambda item: (not item["document_time_known"],
+                                 (item["time"]["value"] if item["document_time_known"] else "")))
+    return events
+
+
+def timeline(ev, categories=None, *, documents=None, pumps=None) -> dict:
     """経過タイムライン: oldest first; the written event date stays apart from the posting time
     and adjacent entries carry no causal link."""
     rows = []
@@ -629,23 +656,11 @@ def timeline(ev, categories=None, *, documents=None) -> dict:
     result = {"view": "timeline", "items": rows, "order_basis": "posting_time",
               "coverage": ev.get("coverage")}
     if documents is not None:
-        events = []
-        for item in documents["events"]:
-            at = item.get("time") or {}
-            dated = (item.get("time_state") == "dated" and at.get("valid") is True
-                     and at.get("role") == "event" and at.get("precision") in ("day", "month", "year")
-                     and bool(at.get("value")))
-            value = at["value"] if dated else None
-            label = None
-            if dated:
-                parts = value.split("-")
-                label = "".join(part + unit for part, unit in zip(parts, ("年", "月", "日")))
-            events.append({**item, "event_date_text": label,
-                           "event_date_kind": "referral_event", "document_time_known": dated})
-        events.sort(key=lambda item: (not item["document_time_known"],
-                                     (item["time"]["value"] if item["document_time_known"] else "")))
-        result.update(document_events=events, referral_documents=documents["documents"],
-                      document_coverage=documents["coverage"])
+        result.update(document_events=_document_events(documents["events"], "referral_event"),
+                      referral_documents=documents["documents"], document_coverage=documents["coverage"])
+    if pumps is not None:
+        result.update(pump_events=_document_events(pumps["events"], "pump_measurement"),
+                      pump_coverage=pumps["coverage"])
     return result
 
 

@@ -47,7 +47,7 @@ CONTROL_FIELDS = {
     "signal_dismiss": _CONTROL_COMMON_FIELDS | {
         "signal_key", "reason", "reason_code", "expected_signal_artifact_id"},
     "extract_feedback": _CONTROL_COMMON_FIELDS | {
-        "message_id", "artifact_id", "field", "reason"},
+        "message_id", "artifact_id", "field", "reason", "source_key"},
     "signal_policy": _CONTROL_COMMON_FIELDS | {"policy", "reason"},
     "refstat_approve": _CONTROL_COMMON_FIELDS | {"name", "file_hash", "reason"},
     "card_resolve": _CONTROL_COMMON_FIELDS | {
@@ -328,6 +328,9 @@ def _control_reference(view, payload):
             return "signal_changed"
         payload["expected_signal_artifact_id"] = row["artifact_id"]
     elif payload["cmd"] == "ops.extract_feedback":
+        if 'source_key' in payload:
+            from attachment_feedback import target
+            return None if target(view.db, payload) is not None else 'extraction_changed'
         from mcs_queries import current_extract_pred
         if not view.db.execute(
                 "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "

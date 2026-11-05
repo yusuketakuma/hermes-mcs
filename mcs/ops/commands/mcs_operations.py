@@ -383,13 +383,16 @@ def _apply_signal_dismiss_tx(db, req: dict, now: float) -> tuple[str | None, dic
                   "signal_type": content.get("type")}
 
 
-def _apply_extract_feedback_tx(db, req: dict, now: float) \
+def _apply_extract_feedback_tx(db, req: dict, now: float, cfg=None) \
         -> tuple[str | None, dict]:
     """Human ⚠ report on one extraction: an append-only
     extract_feedback_v1 artifact pinned to the extract_llm artifact the
     card showed. Only a report on the message's CURRENT extraction is
     accepted — it re-pends that message for exactly one re-extract
     (extract_llm pending_pred); the new artifact id ends the loop."""
+    if 'source_key' in req:
+        from attachment_feedback import apply_tx
+        return apply_tx(db, req, now, cfg=cfg)
     from mcs_queries import EXTRACT_FEEDBACK_KIND, current_extract_pred
     row = db.execute(
         f"""SELECT a.artifact_id, m.content_hash FROM artifacts a
@@ -722,7 +725,7 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] == "ops.signal_policy":
         return _apply_signal_policy_tx(db, req, current)
     if req["cmd"] == "ops.extract_feedback":
-        return _apply_extract_feedback_tx(db, req, current)
+        return _apply_extract_feedback_tx(db, req, current, cfg)
     if req["cmd"] == "ops.refstat_approve":
         return _apply_refstat_approve_tx(db, req, current, filesystem_changes)
     if req["cmd"] == "ops.restore_approve":

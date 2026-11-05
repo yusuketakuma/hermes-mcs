@@ -96,7 +96,7 @@ def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(m
                                   'sources':{'pending':1, 'held':1, 'failed':0, 'incomplete':0}}}}
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: ev)
     monkeypatch.setattr(views, 'timeline', lambda *a, **kw: {'items':[]})
-    monkeypatch.setattr(__import__('referral_reader'), 'read', lambda *a, **kw: {'documents': [], 'events': [], 'coverage': {}})
+    monkeypatch.setattr(__import__('patient_context_view'), 'document_timelines', lambda *a, **kw: ({'documents': [], 'events': [], 'coverage': {}}, {'events': [], 'coverage': {}}))
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '合成の取得範囲')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     monkeypatch.setattr(notify_views, 'project_url', lambda *a: 'https://invalid.test/synthetic')

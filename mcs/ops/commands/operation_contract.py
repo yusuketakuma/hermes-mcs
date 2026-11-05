@@ -246,13 +246,17 @@ EXTRACT_FEEDBACK_FIELDS = ("summary", "urgency", "meds", "symptoms",
 
 def _v_extract_feedback(req: dict, base: set) -> str | None:
     if req.keys() - (base | {"message_id", "artifact_id", "field",
-                             "reason"}):
+                             "reason", "source_key"}):
         return "unknown_field"
     if not positive(req.get("message_id")) \
             or not positive(req.get("artifact_id")):
         return "bad_extract_ref"
     if req.get("field") not in EXTRACT_FEEDBACK_FIELDS:
         return "bad_field"
+    if 'source_key' in req:
+        from attachment_feedback import valid_key
+        if not valid_key(req['source_key']):
+            return 'bad_extract_ref'
     if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
     return None

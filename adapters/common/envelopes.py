@@ -233,13 +233,16 @@ def extract_feedback(actor: str, context: dict, field: str, reason: str,
     ``extract_ref``; the runner rejects it once that extraction is no
     longer current (extraction_changed)."""
     ref = context["extract_ref"]
-    return {"version": 1, "cmd": "ops.extract_feedback",
+    envelope = {"version": 1, "cmd": "ops.extract_feedback",
             "command_id": command_id or str(uuid.uuid4()),
             "actor": actor, "human_confirmed": True,
             "project_id": context["project_id"],
             "message_id": ref["message_id"],
             "artifact_id": ref["artifact_id"],
             "field": field, "reason": reason}
+    if 'source_key' in ref:
+        envelope['source_key'] = ref['source_key']
+    return envelope
 
 
 def signal_dismiss(actor: str, context: dict, signal_key: str,

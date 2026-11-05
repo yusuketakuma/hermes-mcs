@@ -272,7 +272,7 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
             error, extra = apply_tx(db, req, now=now,
                                    filesystem_changes=filesystem_changes,
                                    **({"cfg": cfg, "data_dir": data_dir}
-                                      if req["cmd"] in ("ops.mcs_reaction", "ops.retry") else {}))
+                                      if req["cmd"] in ("ops.mcs_reaction", "ops.retry", "ops.extract_feedback") else {}))
         elif not error:
             error, rid, before, after = _apply_request_tx(
                 db, req, pid, now)

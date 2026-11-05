@@ -1,7 +1,5 @@
 """Synthetic referral timelines keep document dates apart from clinical event dates."""
 import copy
-import sys
-from types import SimpleNamespace
 
 import pytest
 
@@ -86,9 +84,9 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
 
     def read(db, pid, *, cfg):
         calls.append((db, pid, cfg))
-        return projection
+        return projection, {"events": [], "coverage": {}}
 
-    monkeypatch.setitem(sys.modules, 'referral_reader', SimpleNamespace(read=read))
+    monkeypatch.setattr(views, 'document_timelines', read)
     monkeypatch.setattr(views, 'evidence', lambda *args, **kw: ev)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {'synthetic': True})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *args: '')
@@ -99,7 +97,7 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
     ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
     assert len(calls) == 2
     assert calls[0] == calls[1]
-    assert result == views.timeline(ev, documents=projection)
+    assert result == views.timeline(ev, documents=projection, pumps={"events": [], "coverage": {}})
     dated = [row for row in ui['items'] if row['group'] == '紹介状の記載（日付順）']
     unknown = [row for row in ui['items'] if row['group'] == '紹介状の記載（時点不明）']
     fields = [row for row in ui['items'] if row['group'] == '紹介状の基本情報']
@@ -119,9 +117,27 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
                                                ('unknown', '解析状況不明')])
 def test_unavailable_document_coverage_is_visible(monkeypatch, state, expected):
     payload = {'documents': [], 'events': [], 'coverage': {'state': state}}
-    monkeypatch.setitem(sys.modules, 'referral_reader', SimpleNamespace(read=lambda *a, **k: payload))
+    monkeypatch.setattr(views, 'document_timelines', lambda *a, **k: (payload, {'events': [], 'coverage': {}}))
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=0, now=1)
     assert f'紹介状: {expected}' in ui['notes']
+
+
+def test_pump_records_share_ocr_read_and_stay_unverified(monkeypatch):
+    import ocr_document_reader
+    import pump_document
+    import pump_reader
+    import referral_reader
+    calls = []
+    snapshot = {'project_id': 1, 'documents': [], 'coverage': {'state': 'observed', 'pending': 0, 'limited': False}}
+    monkeypatch.setattr(ocr_document_reader, 'read', lambda *a, **kw: calls.append(1) or snapshot)
+    documents, pumps = views.document_timelines(None, 1, cfg={})
+    assert len(calls) == 1
+    assert documents == referral_reader.project(snapshot) and pumps == pump_reader.project(snapshot)
+    parsed = pump_document.project([{'page': 1, 'text': 'PCAポンプ\n測定日:2026年11月5日 残量:10mL\n残量:9mL'}])
+    result = views.timeline({'items': []}, pumps={'events': parsed['events'], 'coverage': {}})
+    assert [row['document_time_known'] for row in result['pump_events']] == [True, False]
+    assert all(row['unverified'] for row in result['pump_events'])
+    assert result['pump_events'][0]['event_date_text'] == '2026年11月05日'

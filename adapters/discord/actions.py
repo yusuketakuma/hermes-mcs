@@ -334,6 +334,9 @@ class Actions:
                 "この操作は無効化されています。カードを更新しますので、"
                 "しばらくしてから最新の表示でやり直してください。")
             return
+        if ctx.get("ephemeral") is True and ctx.get("actor") != actor:
+            await self._ephemeral(interaction, "表示した本人のみ操作できます。")
+            return
         action = ctx.get("action")
 
         pids = projects.context_projects(ctx)

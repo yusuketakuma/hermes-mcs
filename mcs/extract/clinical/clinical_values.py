@@ -362,6 +362,20 @@ def written_day(text) -> tuple | None:
     return None
 
 
+_NON_MEASUREMENT_DAY = re.compile(
+    r"(?:作成|発行|記載|入力|登録|投稿|送信|印刷|予約|予定)(?:年月日|日時|日)"
+    r"|生年月日|誕生日|出生(?:年月日|日時|日)"
+)
+
+
+def measurement_day(text) -> tuple | None:
+    """Keep a single written date unless its quote also names a nonmeasurement date role."""
+    # A mixed quote stays unresolved even when another date could be the measurement date.
+    if not isinstance(text, str) or _NON_MEASUREMENT_DAY.search(unicodedata.normalize("NFKC", text)):
+        return None
+    return written_day(text)
+
+
 class LabDetails(TypedDict, total=False):
     reported_measured_on: str
     condition: str
@@ -463,13 +477,10 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         start = max((m.end() for m in re.finditer(r"[。、;；\n]", quote[:at])), default=0)
         stop = re.search(r"[。、;；\n]", quote[at:])
         clause = quote[start:at + stop.start() if stop else len(quote)]
-    dates = list(_DATE.finditer(clause))
-    if (supported and len(dates) == 1 and len(list(_DATE.finditer(quote))) == 1
-            and re.search(r"採血|検査|測定", clause)):
-        try:
-            measured_on = date(*(int(n) for n in dates[0].groups())).isoformat()
-        except ValueError:
-            pass
+    sampling_day = measurement_day(clause)
+    if (supported and sampling_day is not None and sampling_day[0] == "ymd"
+            and measurement_day(quote) == sampling_day and re.search(r"採血|検査|測定", clause)):
+        measured_on = sampling_day[1].isoformat()
     details = {}
     for key, value in (("reported_measured_on", reported), ("condition", condition)):
         if value is not None:

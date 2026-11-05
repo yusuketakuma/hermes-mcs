@@ -290,7 +290,7 @@ def _labs(message, doc, ref, patient_name, verified):
                          and context and not _UNCERTAIN.search(context) and not ambiguous_patient_context(body, anchor)
                          and not _correction_candidate(context)
                          and not _adjacent_measurement_retraction(body, span, target=name) and condition_ok)
-        observed = clinical_values.written_day(actual) if planned else None
+        observed = clinical_values.measurement_day(actual) if planned else None
         measured_on = (observed[1].isoformat() if observed and observed[0] == "ymd" else
                        candidate["measured_on"])
         key = clinical_values.lab_analyte(name) or clinical_values.fold_surface(name)
@@ -321,7 +321,7 @@ def _vitals(message, doc, ref, verified):
             span = (left, right.end() if right else len(body))
             quote = body[slice(*span)]
             subject, period = source_axes(body, *match.span())
-            date_value = clinical_values.written_day(quote)
+            date_value = clinical_values.measurement_day(quote)
             measured = date_value[1].isoformat() if date_value and date_value[0] == "ymd" else None
             suffix = _UNIT.match(body[match.end():].lstrip())
             unit = suffix[0] if suffix else None

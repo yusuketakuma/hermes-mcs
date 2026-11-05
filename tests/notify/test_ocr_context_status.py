@@ -24,7 +24,7 @@ def test_attachment_notes_follow_coverage(monkeypatch, attachments, expected):
     ev = {'coverage': {'nightly': {'attachments': {'count': 1, **attachments}}}}
     monkeypatch.setattr(patient_context_view, 'evidence', lambda *a, **kw: ev)
     monkeypatch.setattr(patient_context_view, 'timeline', lambda *a, **kw: {'items': []})
-    monkeypatch.setattr(__import__('referral_reader'), 'read', lambda *a, **kw: {'documents': [], 'events': [], 'coverage': {}})
+    monkeypatch.setattr(__import__('patient_context_view'), 'document_timelines', lambda *a, **kw: ({'documents': [], 'events': [], 'coverage': {}}, {'events': [], 'coverage': {}}))
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     view = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=0, now=0)

@@ -6,6 +6,7 @@ import pytest
 import attachment_extraction
 import attachment_ocr
 import original_source_keys
+import ocr_document_reader
 import referral_document
 import referral_reader
 from test_ocr_original_sources import seeded
@@ -82,7 +83,7 @@ def test_referral_never_adopts_unready_or_unavailable_sources(referral, monkeypa
 @pytest.mark.parametrize('bound', ['bytes', 'time'])
 def test_referral_resource_limit_is_not_reported_as_complete(referral, monkeypatch, bound):
     ledger, _ = referral
-    monkeypatch.setattr(referral_reader, 'MAX_SOURCE_BYTES' if bound == 'bytes' else 'READ_SECONDS', 0)
+    monkeypatch.setattr(ocr_document_reader, 'MAX_SOURCE_BYTES' if bound == 'bytes' else 'READ_SECONDS', 0)
     result = referral_reader.read(ledger.db, 1, cfg=CFG)
     assert not result['events'] and result['coverage']['limited'] and not result['coverage']['complete']
 

@@ -637,8 +637,8 @@ class View:
         ev = pcv.evidence(self.db, pid, cfg=cfg)
         now = self.meta["generated_at"]
         if view == "timeline":
-            import referral_reader
-            return pcv.timeline(ev, documents=referral_reader.read(self.db, pid, cfg=cfg))
+            documents, pumps = pcv.document_timelines(self.db, pid, cfg=cfg)
+            return pcv.timeline(ev, documents=documents, pumps=pumps)
         return {
             "background": lambda: pcv.role_order(pcv.background(ev), role),
             "participants": lambda: pcv.participants(self.db, pid),
