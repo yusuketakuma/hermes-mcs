@@ -23,6 +23,7 @@ from threading import Lock
 import urllib.error
 import urllib.parse
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 
 import bounded_http
 
@@ -92,6 +93,7 @@ def lane_slot(lane) -> int:
 # and every chat() of that process holds one flock across the request.
 # Realtime (lane 1) never takes it.
 TURN_LOCK_ENV = "MCS_LLM_TURN_LOCK"
+_BACKGROUND_SCOPE = ContextVar('local_llm_background_scope', default=None)
 TURN_LOCK_POLL_S = 0.2
 # A probe turn won with less than this left is reported busy, not sent:
 # a reaped probe would be cached as "plain" for the whole cooldown.
@@ -110,7 +112,7 @@ def _turn(deadline: float | None, min_s: float = 0.0):
     """Hold the backlog GPU turn for one request; yields False when the
     caller's deadline expires while waiting, or fewer than ``min_s``
     seconds remain once the turn is ours (nothing was sent either way)."""
-    path = os.environ.get(TURN_LOCK_ENV)
+    path = _turn_path()
     if not path:
         yield True
         return
@@ -143,6 +145,9 @@ def request_slot() -> int:
     count is invalid — llama.cpp treats out-of-range id_slot as
     UNPINNED, which could land on the real-time slot; fall back to the
     background slot instead."""
+    scoped = _BACKGROUND_SCOPE.get()
+    if scoped is not None:
+        return scoped[0]
     v = os.environ.get("MCS_LLM_SLOT")
     if v is not None:
         digits = v.strip()
@@ -154,6 +159,23 @@ def request_slot() -> int:
             if 0 <= slot < SLOT_COUNT:
                 return slot
     return BACKGROUND_SLOT
+
+
+def _turn_path():
+    scoped = _BACKGROUND_SCOPE.get()
+    return scoped[1] if scoped is not None else os.environ.get(TURN_LOCK_ENV)
+
+
+@contextmanager
+def background_scope(data_root):
+    """Pin this context to a background lane and the existing shared GPU turn lock."""
+    slot = request_slot()
+    token = _BACKGROUND_SCOPE.set((slot if slot in BACKGROUND_SLOTS else BACKGROUND_SLOT,
+                                  _turn_path() or os.path.join(data_root, 'llm_turn.lock')))
+    try:
+        yield
+    finally:
+        _BACKGROUND_SCOPE.reset(token)
 
 
 @contextmanager
@@ -597,7 +619,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             # a sent request that died in transport may still be decoding
             # on our slot: keep the turn until the slot reports idle
             if kind == "transport" and isinstance(error, OSError) \
-                    and os.environ.get(TURN_LOCK_ENV) \
+                    and _turn_path() \
                     and type(body.get("id_slot")) is int:
                 _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
                                 error_out)

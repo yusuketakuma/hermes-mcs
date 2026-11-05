@@ -435,14 +435,14 @@ def worker(parent, *, index=None):
                         waiting["code"] = None
                         with _phase_progress("extract"):
                             result = None
-                            if (ocr_turn and not carry and isinstance(cfg.get('attachment_ocr'), dict)
+                            try_ocr, ocr_turn = ocr_turn, not ocr_turn
+                            if (try_ocr and not carry and isinstance(cfg.get('attachment_ocr'), dict)
                                     and cfg['attachment_ocr'].get('enabled') is True):
                                 import attachment_inference
                                 ocr = attachment_inference.run_pending(ledger, cfg, stage='cloud',
                                     deadline=time.monotonic() + 120, limit=1)
                                 if ocr['done'] or ocr['deferred']:
                                     result = {**ocr, 'attachment_pages': True}
-                            ocr_turn = not ocr_turn
                             if result is None:
                                 result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
                                     per_write_lock=True, workers=1, background=True,

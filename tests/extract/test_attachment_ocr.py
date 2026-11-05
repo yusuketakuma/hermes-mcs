@@ -11,6 +11,7 @@ import sys
 import pytest
 
 import attachment_ocr as ocr
+import extract_llm
 
 
 @pytest.fixture
@@ -24,7 +25,8 @@ def setup(tmp_path, monkeypatch):
     db.row_factory = sqlite3.Row
     db.executescript("""
         CREATE TABLE messages(message_id INTEGER PRIMARY KEY,project_id INTEGER,body_state TEXT,parent_id INTEGER,body_text TEXT,posted_at_ts INTEGER);
-        CREATE TABLE patients(project_id INTEGER PRIMARY KEY,is_archived INTEGER);
+        CREATE TABLE patients(project_id INTEGER PRIMARY KEY,is_archived INTEGER,fetch_state TEXT,fetch_reason TEXT);
+        INSERT INTO patients VALUES(20,0,NULL,NULL);
         CREATE TABLE notification_meta(singleton INTEGER PRIMARY KEY,notify_dirty INTEGER);
         CREATE TABLE attachments(attachment_id INTEGER PRIMARY KEY,message_id INTEGER,state TEXT,sha256 TEXT,bytes INTEGER,local_path TEXT);
         CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,model TEXT,meta TEXT,created_at REAL);
@@ -37,6 +39,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr.os, "access", lambda *args: True)
     monkeypatch.setattr(ocr.os.path, "isfile", lambda path: True)
     monkeypatch.setattr(ocr.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
     pages = [{"page": 1, "engine": "yomitoku", "text": "合成資料", "text_hash": ocr._hash("合成資料")}]
     calls = []
 
@@ -54,6 +57,7 @@ def setup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ocr, "_runtime", runtime)
     cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/venv/bin/yomitoku"}}
+    monkeypatch.setattr(ocr, "load_config", lambda: cfg)
     yield ledger, cfg, pages, calls, path
     db.close()
 
@@ -541,8 +545,8 @@ def test_bounded_scan_reaches_backfill_beyond_completed_prefix(setup):
 
 def test_priority_uses_active_patient_activity_before_archived(setup, monkeypatch):
     ledger, cfg, pages, _, _ = setup
-    ledger.db.execute("INSERT INTO patients VALUES(20,1)")
-    ledger.db.execute("INSERT INTO patients VALUES(21,0)")
+    ledger.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=20")
+    ledger.db.execute("INSERT INTO patients VALUES(21,0,NULL,NULL)")
     ledger.db.execute("INSERT INTO messages VALUES(11,21,'full',NULL,'synthetic active',2)")
     ledger.db.execute("INSERT INTO attachments SELECT 2,11,state,sha256,bytes,local_path FROM attachments WHERE attachment_id=1")
     ledger.db.commit()
@@ -601,3 +605,17 @@ def test_queue_status_does_not_claim_unobserved_rows_have_no_failures(setup, mon
     monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
     result = ocr.run_pending(ledger, cfg)
     assert result["queue_status"] == "partial"
+
+
+@pytest.mark.parametrize('available', [False, None])
+def test_memory_refusal_never_starts_ocr_or_consumes_an_attempt(setup, monkeypatch, available):
+    ledger, cfg, _, calls, _ = setup
+    monkeypatch.setattr(extract_llm, '_context_memory_available', lambda: available)
+    changes = ledger.db.total_changes
+    result = ocr.run_pending(ledger, cfg)
+    assert result['deferred'] == 1 and result['reason'] == 'memory_deferred'
+    assert result['complete'] == result['failed'] == 0 and calls == []
+    assert ledger.db.total_changes == changes
+    assert ledger.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0] == 0
+    cursor = json.loads((Path(ledger.path).parent / 'attachment_ocr_cursor.json').read_text())
+    assert cursor['offset'] == cursor['after'] == 0

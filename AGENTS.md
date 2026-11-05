@@ -59,7 +59,7 @@ python3 ci/mine_gates.py --check
   推奨通知先と README 先頭画面は Slack、Discord は対応する選択肢として残す。
 - スタンプ: `mcs/stamps/` が種別・読取り・表示・人承認操作を所有。送信は操作者1人と MCS アカウントの設定時だけ既定ON（`stamps.enabled=false` で無効）。
   `stamp_write` の承認記録・復元用記録を通し、通信は既存の `MCSAdapter` だけ（`docs/specs/stamp-management.md`）。
-- 独立実行: `runtime_mode=standalone` の `mcs_standalone/` が単一host・6定期ジョブ・cmd取込・抽出worker2本を所有（`docs/guides/STANDALONE.md`）。未指定は Hermes 経路。
+- 独立実行: `runtime_mode=standalone` の `mcs_standalone/` が単一host・7定期ジョブ・cmd取込・抽出worker2本を所有（`docs/guides/STANDALONE.md`）。未指定は Hermes 経路。
 - 検証: `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う。
 - `resources/drug-master/`: 公式公開 master の原本と出典・版・hash の manifest（実患者データでも fixture でもない）。リリース時の更新確認・同梱検証と、私有辞書への変換・承認・有効化を分ける。
 - 文書: 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。第一層ディレクトリを足したら（ブートストラップは自動対応）この節と `deployment/` のパス表記も更新する。

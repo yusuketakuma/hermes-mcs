@@ -809,6 +809,41 @@ def _medication_reference_lines(ref, dictionary) -> str:
     return ""
 
 
+def attachment_report_view(db, project_id, message_ids, *, cursor=None, cfg=None, report_refs=None):
+    """Read ready OCR pages independently of whether their clinical extraction found any items."""
+    import attachment_report_reader
+    from patient_read_scope import patient_scope_valid
+
+    view = {'title': '添付の解析ページ', 'head': [], 'items': [], 'more': 0,
+            'notes': [], 'has_next': False, 'prev_cursor': None, 'next_cursor': None,
+            'empty': '報告できる解析済みページはありません。未解析・結果不明の資料は完了後に確認してください。'}
+    if not isinstance((cfg or {}).get('attachment_ocr'), dict) or cfg['attachment_ocr'].get('enabled') is not True:
+        view['empty'] = 'OCRは無効です。'
+        return view
+    if not patient_scope_valid(db, project_id):
+        view['empty'] = 'この患者の添付資料は確認できません。'
+        return view
+    result = attachment_report_reader.read_page(db, project_id, message_ids, cfg=cfg,
+                                                cursor=cursor, limit=MEDS_PAGE_SIZE)
+    view.update({key: result[key] for key in ('prev_cursor', 'next_cursor')})
+    view['has_next'] = result['next_cursor'] is not None
+    view['head'] = ['添付の解析ページ（抽出結果が0件のページを含む）']
+    for source in result['sources']:
+        ref = {'message_id': source['parent_message_id'], 'artifact_id': source['extraction_artifact_id'],
+               'source_key': source['source_key'], 'attachment_id': source['attachment_id'], 'page': source['page']}
+        where = f"親投稿 #{ref['message_id']} · 添付 #{ref['attachment_id']} · {ref['page']}ページ"
+        quote = source['body_text'].strip()
+        view['items'].append({'project_id': project_id,
+            'text': where + '\n原文（先頭300字）: ' + quote[:300] + ('…' if len(quote) > 300 else '')})
+        if report_refs is not None:
+            report_refs.append(ref)
+    view['notes'] = ['該当ページの「誤りを報告」から、見落しを含む解析の訂正を依頼できます。原文・元画像は変更しません。']
+    if result['limited'] or result['pending']:
+        view['notes'].append(f"点検未完了・今回の確認範囲に未解析 {result['pending']}件"
+                             + ('。続きのページで確認してください。' if result['limited'] else '。'))
+    return view
+
+
 def meds_view(db, project_id, message_id, *, can_report=False,
               can_search=False, page=0, cfg=None, report_refs=None) -> dict:
     """💊 one post's medication mentions — the card's own 薬剤 selection

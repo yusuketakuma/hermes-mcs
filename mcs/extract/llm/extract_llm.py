@@ -214,6 +214,8 @@ _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__
                              "patient_context_schedule": patient_context_schedule.__file__,
                              "patient_readiness_witness": patient_readiness_witness.__file__})
 _LOADED_SOURCE_PATHS.update({
+    'attachment_cloud_identity': str(Path(__file__).resolve().parents[1] / 'attachment_cloud_identity.py'),
+    'patient_read_scope': str(Path(__file__).resolve().parents[2] / 'core' / 'patient_read_scope.py'),
     'attachment_feedback': str(Path(__file__).resolve().parents[1] / 'attachment_feedback.py'),
     'attachment_observation_seeds': str(Path(__file__).resolve().parents[1] / 'clinical' / 'attachment_observation_seeds.py'),
     'measurement_sources': str(Path(__file__).resolve().parents[2] / 'patients' / 'measurement_sources.py'),

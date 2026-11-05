@@ -388,7 +388,7 @@ class Actions:
         ctx = self._reg.token(token)
         if not ctx or actor != origin.get("actor"):
             return None
-        private_meds = ctx.get("ephemeral") is True and ctx.get("action") in ("meds", "summary", "search", "report")
+        private_meds = ctx.get("ephemeral") is True and ctx.get("action") in ("meds", "summary", "search", "report", "body")
         if private_meds and ctx.get("actor") != actor:
             return None
         if ctx.get("action") != "task_status" and (
@@ -890,21 +890,21 @@ class Actions:
                 # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}
                 navigation = []
-                if pin and pin.get("action") in ("meds", "drugsearch", "summary", "search"):
+                if pin and pin.get("action") in ("meds", "drugsearch", "summary", "search", "body"):
                     token_ctx = {
                         token: {**context, "verified_thread_id": thread_ts,
                                 "verified_card_message_id": pin["message_id"]}
                         for token, context in token_ctx.items()
                         if isinstance(token, str) and _TOKEN.fullmatch(token)
                         and isinstance(context, dict)
-                        and context.get("action") in ("meds", "summary", "search", "report")
+                        and context.get("action") in ("meds", "summary", "search", "report", "body")
                         and context.get("ephemeral") is True
                         and context.get("actor") == rec["actor"]
                         and all(context.get(key) == pin.get(key)
                                 for key in ("card_key", "kind", "project_id",
                                             "channel_id", "team_id", "message_id"))}
                     for button in result.get("navigation") or []:
-                        if (isinstance(button, dict) and button.get("id") in ("meds", "summary", "search", "report")
+                        if (isinstance(button, dict) and button.get("id") in ("meds", "summary", "search", "report", "body")
                                 and button.get("ui") == "button"
                                 and isinstance(button.get("token"), str)
                                 and button.get("token") in token_ctx
@@ -917,7 +917,7 @@ class Actions:
                 if token_ctx:
                     # the followup is already consumed: its tokens must land even while closing
                     await commands.run_native(self._reg.put_tokens, token_ctx,
-                                              durable=bool(pin) and pin.get("action") in ("meds", "drugsearch"),
+                                              durable=bool(pin) and pin.get("action") in ("meds", "drugsearch", "body"),
                                               admission=self._native_admission, admitted=True)
                 cards = ((_parts_blocks(result) or (
                     context_list_blocks(result.get("list"), self._allowed_pid)

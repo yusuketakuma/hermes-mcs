@@ -170,7 +170,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
         tok_params = json.loads(tok["params"] or "{}")
     except (json.JSONDecodeError, TypeError):
         tok_params = {}
-    if action in ("meds", "summary", "search", "report") and tok_params.get("ephemeral"):
+    if action in ("meds", "summary", "search", "report", "body") and tok_params.get("ephemeral"):
         if tok_params.get("actor") != actor:
             return {**base, "outcome": "rejected", "error": "actor_mismatch"}
         if card["transport"] == "discord" and (
@@ -218,7 +218,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
     if action in ("prev", "next"):
         return _act_page(db, base, card, tok, tok_params, cfg, now, specs)
     if action == "body":
-        return _act_body(db, base, card, tok, cfg=cfg)
+        return _act_body(db, base, card, tok, cfg=cfg, params=tok_params, now=now)
     if action in ("summary", "mytasks", "unacked", "search", "digest",
                   "meds", "drugsearch"):
         # A 🧾 click carries no input, so the same user's later clicks on one
@@ -440,14 +440,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         navigation, token_ctx = [], {}
         if (notify_scope.interactive_enabled(cfg)
                 and card["transport"] == notify_scope.active_transport(cfg)):
-            for ref in report_refs:
-                pin = {key: ref[key] for key in ("message_id", "artifact_id", "source_key")}
-                _private_button(db, base, card, now, navigation, token_ctx, "report",
-                                f"添付#{ref['attachment_id']}・{ref['page']}ページの誤りを報告",
-                                {"extract_ref": pin})
-                token_ctx[navigation[-1]["token"]]["context"] = {
-                    "project_id": card["project_id"], "extract_ref": pin,
-                    "target": f"添付 #{ref['attachment_id']} · {ref['page']}ページ"}
+            _attachment_report_buttons(db, base, card, now, navigation, token_ctx, report_refs)
 
         def navigate(label, target, target_page=0):
             _private_button(db, base, card, now, navigation, token_ctx, "meds", label,
@@ -471,11 +464,22 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
     return {**base, "outcome": "applied", "action": "list", "list": view}
 
 
-def _private_button(db, base, card, now, navigation, token_ctx, action, label, params):
+def _attachment_report_buttons(db, base, card, now, navigation, token_ctx, refs):
+    """Use the same source pin for medication and original-page report entry points."""
+    for ref in refs:
+        pin = {key: ref[key] for key in ("message_id", "artifact_id", "source_key")}
+        _private_button(db, base, card, now, navigation, token_ctx, "report",
+                        f"添付#{ref['attachment_id']}・{ref['page']}ページの誤りを報告", {"extract_ref": pin})
+        token_ctx[navigation[-1]["token"]]["context"] = {
+            "project_id": card["project_id"], "extract_ref": pin,
+            "target": f"親投稿 #{ref['message_id']} · 添付 #{ref['attachment_id']} · {ref['page']}ページ"}
+
+
+def _private_button(db, base, card, now, navigation, token_ctx, action, label, params, *, need=None):
     """One clicker-only button of a private view; the token pins actor and card."""
     token = tokens.mint(db, card["card_id"], action, {
         **params, "ephemeral": True, "actor": base["actor"],
-        "origin_thread_id": (base.get("origin") or {}).get("thread_id")}, {}, now)
+        "origin_thread_id": (base.get("origin") or {}).get("thread_id")}, need or {}, now)
     navigation.append({"id": action, "ui": "button", "label": label,
                        "style": "secondary", "token": token})
     token_ctx[token] = {"action": action, "card_key": card["card_key"],
@@ -616,7 +620,7 @@ def _act_page(db, base, card, tok, tok_params, cfg, now, specs) -> dict:
             "page": page, "delivery_id": new_render}
 
 
-def _act_body(db, base, card, tok, *, cfg=None) -> dict:
+def _act_body(db, base, card, tok, *, cfg=None, params=None, now=None) -> dict:
     # view-only: answer with the untruncated text of the shown set
     # the click's manifest froze — no state change, no re-render
     man = db.execute(
@@ -626,9 +630,56 @@ def _act_body(db, base, card, tok, *, cfg=None) -> dict:
     if man is None or man["invalidated"]:
         return {**base, "outcome": "rejected",
                 "error": "manifest_invalid"}
+    params = params or {}
+    now = time.time() if now is None else now
+    navigation, token_ctx = [], {}
+    can_report = (isinstance(cfg, dict) and card['kind'] == 'thread' and positive(card['project_id'])
+                  and notify_scope.interactive_enabled(cfg)
+                  and card['transport'] == notify_scope.active_transport(cfg)
+                  and isinstance((cfg or {}).get('attachment_ocr'), dict)
+                  and cfg['attachment_ocr'].get('enabled') is True)
+    mids = []
+    if can_report:
+        try:
+            shown = json.loads(man['shown'] or '[]')
+        except (ValueError, TypeError):
+            shown = []
+        if not isinstance(shown, list) or any(not positive(mid) for mid in shown):
+            return {**base, 'outcome': 'rejected', 'error': 'manifest_invalid'}
+        own = own_post(card)
+        mids = [row[0] for row in db.execute("SELECT message_id FROM messages WHERE project_id=? "
+            "AND body_state IS NOT 'deleted' AND (message_id=? OR parent_id=?) "
+            "AND message_id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR message_id=?) "
+            "ORDER BY message_id", (card['project_id'], card['root_message_id'], card['root_message_id'],
+                                     json.dumps(shown), own, own))]
+        can_report = bool(mids) and db.execute('SELECT 1 FROM attachments WHERE state IN '
+            "('downloaded','pruned') AND message_id IN (SELECT value FROM json_each(?)) LIMIT 1",
+            (json.dumps(mids),)).fetchone() is not None
+    if params.get('section') == 'ocr':
+        if not can_report:
+            return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
+        from notify_views import attachment_report_view
+        refs = []
+        try:
+            view = attachment_report_view(db, card['project_id'], mids, cfg=cfg,
+                                          cursor=params.get('cursor'), report_refs=refs)
+        except ValueError:
+            return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
+        _attachment_report_buttons(db, base, card, now, navigation, token_ctx, refs)
+        for label, key in (('前の5ページ', 'prev_cursor'), ('次の5ページ', 'next_cursor')):
+            if view[key] is not None:
+                _private_button(db, base, card, now, navigation, token_ctx, 'body', label,
+                    {'section': 'ocr', 'cursor': view[key]}, need={'manifest_id': man['manifest_id']})
+        _private_button(db, base, card, now, navigation, token_ctx, 'body', '本文に戻る', {},
+                        need={'manifest_id': man['manifest_id']})
+        return {**base, 'outcome': 'applied', 'action': 'list', 'list': view,
+                'navigation': navigation, 'token_ctx': token_ctx}
     title, body_text = card_body_text(db, card, man, cfg=cfg)
-    return {**base, "outcome": "applied", "action": "body",
-            "title": title, "body": body_text}
+    if can_report:
+        _private_button(db, base, card, now, navigation, token_ctx, 'body', '添付の解析ページを確認',
+                        {'section': 'ocr'}, need={'manifest_id': man['manifest_id']})
+    return {**base, "outcome": "applied", "action": "body", "title": title, "body": body_text,
+            **({'navigation': navigation, 'token_ctx': token_ctx} if navigation else {})}
 
 
 def _act_task_status(db, base, card, tok, tok_params, cfg, now,

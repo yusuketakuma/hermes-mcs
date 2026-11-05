@@ -987,3 +987,31 @@ def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker,
     assert passes[1]["transport_basis"] == "unlocked_call_wall_not_gpu_or_http_only"
     assert passes[1]["request_slot_wait_s"] is passes[1]["worker_rss_bytes"] is None
     assert "synthetic-private-detail" not in json.dumps(records, allow_nan=False)
+
+
+def test_ocr_failure_yields_the_next_extract_turn_to_chat(carry_worker, monkeypatch):
+    import attachment_inference
+    import extract_llm
+    import mcs_util
+
+    state, _ = carry_worker
+    old_config = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+        **old_config(), 'attachment_ocr': {'enabled': True}})
+
+    def ocr(*args, **kwargs):
+        state.events.append('ocr')
+        if state.events.count('ocr') >= 2:
+            state.alive = False
+        raise OSError('synthetic OCR cursor unavailable')
+
+    def chat(*args, **kwargs):
+        state.events.append('extract')
+        state.alive = False
+        return {'done': 1}
+
+    monkeypatch.setattr(attachment_inference, 'run_pending', ocr)
+    monkeypatch.setattr(extract_llm, 'run_pending', chat)
+    backlog.worker(991)
+    assert state.events == ['ocr', 'semantic', 'extract']
+    assert state.closed

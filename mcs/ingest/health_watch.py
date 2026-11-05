@@ -725,6 +725,8 @@ _REASON_JA = {
     "attachment_ocr_status_stale": ("添付の文字起こしの実行記録が更新されていません", "OCRの実行経路と直近の実行結果を確認してください"),
     "attachment_ocr_processing_failed": ("添付の文字起こしで処理失敗を記録しました", "OCRの設定・実行環境と直近の実行結果を確認してください"),
     "attachment_ocr_local_inference_deferred": ("添付の文字起こし後のローカル解析が保留されています", "ローカルLLMの稼働状態と処理枠を確認してください。文字起こしの失敗を示すものではありません"),
+    "attachment_ocr_accounting_deferred": ("添付のクラウド会計の復旧が保留されています", "課金証拠と復旧記録を確認してください。ローカル解析は継続できます。結果不明の送信は再送しません"),
+    "attachment_ocr_memory_deferred": ("添付OCRに必要なメモリーの余裕を確認できません", "メモリーの使用状況を確認してください。余裕を確認できるまでOCRは保留します"),
     "attachment_ocr_queue_unverified": ("添付の文字起こしの未解消エラーを全件確認できていません", "OCRの状態記録と処理待ちの範囲を確認してください"),
     "attachment_ocr_processing_deferred": ("添付の文字起こしの保存・公開が保留されています", "次回のOCR実行結果と更新の保留状態を確認してください"),
     "worker_start_unverified": ("通知workerの起動を確認できません",

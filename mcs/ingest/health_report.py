@@ -42,13 +42,13 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
               "local_done", "local_deferred")
     try:
         value = json.loads(safe_io.read_private_bytes(path, limit=4096))
-        if (not isinstance(value, dict) or set(value) - {"at", "reason", "queue_status", *counts}
+        if (not isinstance(value, dict) or set(value) - {"at", "reason", "queue_status", "paid_recovery_pending", *counts}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
         known = {None, "disabled", "busy", "writer_busy", "writer_blocked", "config_invalid",
                  "database_unavailable", "runtime_unavailable", "local_processing_failed",
-                 "snapshot_deferred", "status_unavailable"}
+                 "snapshot_deferred", "status_unavailable", "memory_deferred"}
         if not isinstance(reason, (str, type(None))) or reason not in known:
             raise ValueError("ocr_status_invalid")
         if any(key in value and (type(value[key]) is not int or value[key] < 0) for key in counts):
@@ -57,16 +57,22 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
             raise ValueError("ocr_status_invalid")
         if "queue_status" in value and value["queue_status"] not in ("known", "partial"):
             raise ValueError("ocr_status_invalid")
+        if "paid_recovery_pending" in value and type(value["paid_recovery_pending"]) is not bool:
+            raise ValueError("ocr_status_invalid")
     except FileNotFoundError:
         return {"state": "unknown", "reason": "attachment_ocr_status_missing"}
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
-              **{key: value[key] for key in counts if key in value}}
+              **{key: value[key] for key in (*counts, "paid_recovery_pending") if key in value}}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
-    if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred"):
+    if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred"):
         return {**detail, "state": "failed", "reason": "attachment_ocr_processing_failed"}
+    if value.get("paid_recovery_pending") is True:
+        return {**detail, "state": "deferred", "reason": "attachment_ocr_accounting_deferred"}
+    if reason == "memory_deferred":
+        return {**detail, "state": "deferred", "reason": "attachment_ocr_memory_deferred"}
     if value.get("deferred", 0) or reason is not None:
         return {**detail, "state": "deferred", "reason": "attachment_ocr_processing_deferred"}
     if value.get("queue_status") != "known" or "pending_failed" not in value:

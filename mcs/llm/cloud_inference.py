@@ -69,6 +69,7 @@ class CloudInferenceUnit:
         key = cloud_policy.selected_key(HOME, cfg)
         self.dispatch = dispatch
         self.generation = generation
+        self.scope = scope
         self.completed_reservations = []
         self._children = []
         self.message_id = message_id
@@ -280,7 +281,8 @@ class CloudInferenceUnit:
                     return cloud_policy.recover_response(self.ledger, route=self.route,
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
                         input_binding=self._input_binding(),
-                        request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)))
+                        request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
+                        owner=self.owner, scope=self.scope)
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError):
                     raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
             saved = self.dispatch(recover, result=True)

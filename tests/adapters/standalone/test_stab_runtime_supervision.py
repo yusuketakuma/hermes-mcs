@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from mcs_standalone import runtime, service
 from writer_lock import UPDATE_MARKER_NAME
 
-# 05:11 UTC: no calendar slot of the default jobs falls on this minute
+# 05:11 UTC: only the every-minute OCR job has a current slot.
 QUIET = datetime(2026, 10, 2, 5, 11, tzinfo=timezone.utc).timestamp()
 
 
@@ -363,14 +363,16 @@ def test_slot_while_previous_run_is_still_going_is_logged_then_caught_up(tmp_pat
     assert len(started) == 2 and ("slot_catchup", {"job": "mcs_check", "slot": 1200}) in events
 
 
-def test_first_start_does_not_replay_old_slots(tmp_path, monkeypatch):
-    started = []
-    host = _host(tmp_path, monkeypatch, [])
+def test_first_start_runs_current_ocr_slot_without_replaying_old_slots(tmp_path, monkeypatch):
+    started, events = [], []
+    host = _host(tmp_path, monkeypatch, events)
     monkeypatch.setattr(runtime.subprocess, "Popen",
                         lambda argv, **kw: started.append(argv) or Child())
     monkeypatch.setattr(runtime, "BACKGROUND", {})
     host.tick(QUIET)
-    assert started == []
+    assert len(started) == 1 and set(host.children) == {'mcs_ocr'}
+    assert str(tmp_path / 'scripts' / 'mcs_ocr.sh') in started[0]
+    assert not any(event == 'slot_catchup' for event, _ in events)
     saved = json.loads((tmp_path / "data" / runtime.SCHEDULE_FILE).read_text())
     assert set(saved["fired"]) == {job for job, _ in host.schedules}
     assert (tmp_path / "data" / runtime.SCHEDULE_FILE).stat().st_mode & 0o077 == 0

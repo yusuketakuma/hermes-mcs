@@ -44,7 +44,7 @@ def test_entry_releases_the_ingestion_lock_before_ocr(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", engine)
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 0}
-    assert events == ["unlock", "ocr", "close"]
+    assert events == ["unlock", "ocr", "close", "unlock"]
 
 
 def test_ocr_config_uses_the_shared_runtime_validation():
@@ -97,7 +97,8 @@ def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_ocr.writer_lock, "wait_run_lock", lambda *args, **kwargs:
                         mcs_ocr.acquire_run_lock(str(tmp_path / "run.lock")))
     monkeypatch.setattr(mcs_ocr, "Ledger", lambda path: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: {"complete": 1})
+    pending = iter(({"complete": 1}, {"complete": 0}))
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: next(pending))
     calls = []
 
     def refresh(path, *, force, deadline):
@@ -111,7 +112,7 @@ def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
     assert calls == [str(database)]
 
 
-def test_local_inference_runs_after_ocr_without_ingestion_lock(tmp_path, monkeypatch):
+def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkeypatch):
     database = tmp_path / "synthetic.db"
     database.touch()
     cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
@@ -124,7 +125,7 @@ def test_local_inference_runs_after_ocr_without_ingestion_lock(tmp_path, monkeyp
                         events.append("ocr") or {"complete": 0})
 
     def local(ledger, settings, *, stage, deadline, limit):
-        assert events == ["ocr"] and settings is cfg
+        assert events == [] and settings is cfg
         assert stage == "local" and deadline > mcs_ocr.time.monotonic() and limit == 1
         fd = mcs_ocr.acquire_run_lock(str(tmp_path / "run.lock"))
         assert fd is not None

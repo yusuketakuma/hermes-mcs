@@ -16,6 +16,7 @@ __all__ = ['routed', 'local_then_cloud']
 @pytest.fixture
 def page_store(local_then_cloud, monkeypatch):
     ledger, cfg, local_calls, cloud_calls, answers = local_then_cloud
+    ledger.ensure_patient(1)
     cfg['attachment_ocr'] = {'enabled': True, 'executable': '/synthetic/yomitoku'}
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker.extract_llm, '_context_memory_available', lambda: True)

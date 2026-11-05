@@ -15,7 +15,7 @@ import _mcs_path  # noqa: E402,F401
 
 import attachment_ocr  # noqa: E402
 from ledger import Ledger  # noqa: E402
-from mcs_util import DB, load_config  # noqa: E402
+from mcs_util import DB, ProviderSettingsUnreadable, load_config  # noqa: E402
 import writer_lock  # noqa: E402
 from safe_io import atomic_write  # noqa: E402
 from writer_lock import acquire_run_lock  # noqa: E402
@@ -23,73 +23,153 @@ from writer_lock import acquire_run_lock  # noqa: E402
 DATA = str(Path(DB).parent)
 
 
-def run(cfg):
-    """Return aggregate status, retaining the ingestion lock only while opening the ledger."""
+DRAIN_BUDGET_S = 900
+LOCAL_CALL_S = 120
+_RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
+
+
+def _drain(ledger, cfg, generation, deadline, *, live_config):
+    import attachment_inference
+
+    result = {'local_done': 0, 'local_deferred': 0}
+    active = {'local': True, 'ocr': True}
+    local_blocked = False
+    limited = False
+    while any(active.values()) and time.monotonic() < deadline - 5:
+        for stage in ('local', 'local', 'local', 'ocr'):
+            if not active[stage] or time.monotonic() >= deadline - 5:
+                continue
+            if writer_lock.updater_state() != generation:
+                result['reason'] = 'writer_blocked'
+                return result
+            if live_config:
+                try:
+                    cfg = load_config()
+                except (OSError, ValueError, ProviderSettingsUnreadable):
+                    result['reason'] = 'config_invalid'
+                    return result
+                if attachment_ocr.config_error(cfg):
+                    result['reason'] = 'config_invalid'
+                    return result
+                if not cfg.get('attachment_ocr', {}).get('enabled', False):
+                    result['reason'] = 'disabled'
+                    return result
+            remaining = deadline - 5 - time.monotonic()
+            raw_budget = cfg['attachment_ocr'].get('timeout_seconds', 120) + 5
+            if stage == 'local' and active['ocr'] and raw_budget <= remaining < raw_budget + LOCAL_CALL_S:
+                continue
+            if stage == 'ocr' and remaining < raw_budget:
+                active['ocr'], limited = False, True
+                continue
+            try:
+                if stage == 'local':
+                    local = attachment_inference.run_pending(ledger, cfg, stage='local',
+                        deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
+                    result['local_done'] += local['done']
+                    result['local_deferred'] += local['deferred']
+                    if local.get('paid_recovery_pending') is True:
+                        result['paid_recovery_pending'] = True
+                    active['local'] = local['done'] > 0 and local['deferred'] == 0
+                    local_blocked |= local['deferred'] > 0
+                else:
+                    raw = attachment_ocr.run_pending(ledger, cfg, limit=1,
+                        deadline=min(deadline - 5, time.monotonic()
+                                     + cfg['attachment_ocr'].get('timeout_seconds', 120) + 5))
+                    for key, value in raw.items():
+                        if key == 'reason' and value is None and result.get('reason') is not None:
+                            continue
+                        result[key] = result.get(key, 0) + value if key in _RAW_COUNTS else value
+                    active['ocr'] = (any(raw.get(key, 0) for key in ('complete', 'empty', 'failed', 'unsupported'))
+                                     and not raw.get('deferred') and raw.get('reason') is None)
+                    if raw.get('complete') and not local_blocked:
+                        active['local'] = True
+            except Exception:
+                result['reason'] = 'local_processing_failed'
+                key = 'local_deferred' if stage == 'local' else 'failed'
+                result[key] = result.get(key, 0) + 1
+                active[stage] = False
+                if stage == 'local':
+                    local_blocked = True
+    if limited or any(active.values()):
+        result['queue_status'] = 'partial'
+    return result
+
+
+def run(cfg=None):
+    """Drain saved OCR and local pages independently under a single bounded job lock."""
+    live_config = cfg is None
+    try:
+        cfg = load_config() if live_config else cfg
+    except (OSError, ValueError, ProviderSettingsUnreadable):
+        return {'reason': 'config_invalid'}
     if attachment_ocr.config_error(cfg):
-        return {"reason": "config_invalid"}
-    if not cfg.get("attachment_ocr", {}).get("enabled", False):
-        return {"reason": "disabled"}
+        return {'reason': 'config_invalid'}
+    if not cfg.get('attachment_ocr', {}).get('enabled', False):
+        return {'reason': 'disabled'}
     if not Path(DB).is_file():
-        return {"reason": "database_unavailable"}
+        return {'reason': 'database_unavailable'}
     generation = writer_lock.updater_state()
     if generation[0]:
-        return {"reason": "writer_blocked"}
-    fd = acquire_run_lock(os.path.join(DATA, "run.lock"))
-    if fd is None:
-        return {"reason": "writer_busy"}
+        return {'reason': 'writer_blocked'}
+    job = acquire_run_lock(os.path.join(DATA, 'attachment_ocr_job.lock'))
+    if job is None:
+        return {'reason': 'busy'}
     ledger = None
+    deadline = time.monotonic() + DRAIN_BUDGET_S
     try:
-        if writer_lock.updater_state() != generation:
-            return {"reason": "writer_blocked"}
-        ledger = Ledger(DB)
-    finally:
-        os.close(fd)
-    try:
-        result = attachment_ocr.run_pending(
-            ledger, cfg, deadline=time.monotonic() + cfg["attachment_ocr"].get("timeout_seconds", 120) + 5, limit=1)
-        import attachment_inference
-        inference = attachment_inference.run_pending(ledger, cfg, stage='local',
-                                                     deadline=time.monotonic() + 120, limit=1)
-        result['local_done'] = inference['done']
-        result['local_deferred'] = inference['deferred']
-        if result.get("complete", 0) or result.get("empty", 0) or inference['done']:
-            fd = writer_lock.wait_run_lock(os.path.join(DATA, "run.lock"), wait_s=5,
-                                          expected_code_stamp=generation[1],
-                                          marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME))
+        fd = acquire_run_lock(os.path.join(DATA, 'run.lock'))
+        if fd is None:
+            return {'reason': 'writer_busy'}
+        try:
+            if writer_lock.updater_state() != generation:
+                return {'reason': 'writer_blocked'}
+            ledger = Ledger(DB)
+        finally:
+            os.close(fd)
+        result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
+        if result.get('reason') != 'config_invalid' and (
+                result.get('complete', 0) or result.get('empty', 0) or result['local_done']):
+            remaining = min(5, deadline - time.monotonic())
+            fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
+                  expected_code_stamp=generation[1],
+                  marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
             if fd is None:
-                result["reason"] = "snapshot_deferred"
+                result['reason'] = 'snapshot_deferred'
             else:
                 try:
                     if writer_lock.updater_state() != generation:
-                        result["reason"] = "writer_blocked"
+                        result['reason'] = 'writer_blocked'
                     else:
                         import maintenance
-                        if maintenance.refresh_snapshot(DB, force=True, deadline=time.monotonic() + 5) is None:
-                            result["reason"] = "snapshot_deferred"
+                        if maintenance.refresh_snapshot(DB, force=True,
+                                deadline=min(deadline, time.monotonic() + 5)) is None:
+                            result['reason'] = 'snapshot_deferred'
                 finally:
                     os.close(fd)
         return result
     finally:
-        ledger.close()
+        if ledger is not None:
+            ledger.close()
+        os.close(job)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", required=True,
-                        help="設定で有効にした添付OCRを1件まで実行する")
+                        help="設定で有効にした添付OCRと保存済みページの解析を期限内で進める")
     parser.parse_args()
     try:
-        result = run(load_config())
+        result = run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
-    if Path(DATA).is_dir():
+    if result != {"reason": "busy"} and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
                          lambda stream: json.dump({"at": time.time(), **result}, stream), mode=0o600)
-        except (OSError, ValueError):
+        except (OSError, ValueError, ProviderSettingsUnreadable):
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
-    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0)
+    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
                  and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
 
 

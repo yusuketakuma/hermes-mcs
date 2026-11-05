@@ -21,7 +21,7 @@ from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
 from llm_retry import http_error
-from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch
+from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch, valid_hash
 
 # Compatibility aliases: immutable versioned definitions live with providers.
 PRICE_VERSION = anthropic_client.PRICE_VERSION
@@ -1124,6 +1124,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
     del checked_results
     result_map = None
     disposition_ids = None
+    candidate_occurrence, occurrence_checked = None, False
     for row in rows:
         try:
             previous = _receipt_meta(row['meta'])
@@ -1145,6 +1146,17 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
                 prompt_verified = True
             elif _legacy_luna_low_proven(previous, current_body):
                 prompt_verified = True
+            if (candidate['route'] == 'reextract' and candidate.get('message_id') is None
+                    and isinstance(candidate.get('owner'), dict)
+                    and candidate['owner'].get('source_type') == 'attachment_ocr'):
+                from attachment_cloud_identity import occurrence
+                if not occurrence_checked:
+                    candidate_occurrence = occurrence(ledger.db, candidate)
+                    occurrence_checked = True
+                old_source = occurrence(ledger.db, previous) if candidate_occurrence is not None else None
+                if (old_source is not None
+                        and old_source[0]['source_key'] != candidate_occurrence[0]['source_key']):
+                    continue
             # Legacy reservations contain only an envelope hash. A model or
             # token-limit change cannot prove that their prompt is different.
             if result_map is None:
@@ -1705,7 +1717,8 @@ def _saved_answer(answer, metadata):
     return {key: answer[key] for key in ('text', 'finish_reason')}
 
 
-def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp):
+def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
+                     owner=None, scope=None):
     """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
     with _accounting_snapshot(ledger.db):
         rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
@@ -1714,6 +1727,10 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding')=? AND "
             "json_extract(meta,'$.request_fp')=? END ORDER BY artifact_id",
             (KINDS[0], project_id, message_id, route, unit_key, input_binding, request_fp)).fetchall()
+        if route == 'reextract' and message_id is None and owner is not None and valid_hash(scope):
+            from attachment_cloud_identity import recovery_rows
+            rows.extend(recovery_rows(ledger.db, project_id=project_id, unit_key=unit_key,
+                binding=input_binding, request_fp=request_fp, owner=owner, scope=scope))
         saved = None
         for row in rows:
             reservation = _receipt_meta(row['meta'])

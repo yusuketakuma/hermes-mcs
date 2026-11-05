@@ -15,7 +15,8 @@ import time
 import writer_lock
 import patient_priority
 from safe_io import atomic_write, read_json_nofollow
-from mcs_util import valid_hash
+from mcs_util import ProviderSettingsUnreadable, load_config, valid_hash
+from patient_read_scope import patient_scope_valid
 from worker_process import reap_worker
 
 KIND = "attachment_ocr_v1"
@@ -27,6 +28,7 @@ MAX_OUTPUT = 2 * 1024 * 1024
 MAX_PAGES = 30
 MAX_TABLE_ENTRIES = 10000
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
+EXCLUDED_STATES = frozenset({"unsupported"})
 
 # Optional packages are imported only in the separate, network-denied runtime.
 _BOOTSTRAP = r'''
@@ -156,7 +158,8 @@ def _source(db, attachment_id, project_id=None):
     if row is None:
         return None
     row = dict(row)
-    if project_id is not None and row["project_id"] != project_id:
+    if (project_id is not None and row["project_id"] != project_id
+            or not patient_scope_valid(db, row['project_id'])):
         return None
     return row if row["body_state"] != "deleted" else None
 
@@ -491,7 +494,19 @@ def _due(doc, source):
             and type(doc.get("next_try")) in (int, float) and doc["next_try"] <= time.time())
 
 
-def _settle(ledger, source, doc, root, generation):
+def _settings_current(settings):
+    try:
+        live = load_config()
+    except (OSError, ValueError, TypeError, ProviderSettingsUnreadable):
+        return False
+    current = live.get('attachment_ocr', {}) if isinstance(live, dict) else {}
+    return (not config_error(live) and current.get('enabled') is True
+            and settings.get('enabled') is True
+            and current.get('executable') == settings.get('executable')
+            and current.get('timeout_seconds', 120) == settings.get('timeout_seconds', 120))
+
+
+def _settle(ledger, source, doc, root, generation, settings):
     fd = writer_lock.acquire_run_lock(str(root / "run.lock"))
     if fd is None:
         fd = writer_lock.wait_run_lock(str(root / "run.lock"), wait_s=5,
@@ -500,7 +515,8 @@ def _settle(ledger, source, doc, root, generation):
     if fd is None:
         return False
     try:
-        if writer_lock.updater_state() != generation or generation[0]:
+        if (writer_lock.updater_state() != generation or generation[0]
+                or not _settings_current(settings)):
             return False
         with ledger.db:
             ledger.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
@@ -528,9 +544,11 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
     counts = {"complete": 0, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0}
     if config_error(cfg):
         return {**counts, "reason": "config_invalid"}
-    settings = cfg.get("attachment_ocr", {})
+    settings = dict(cfg.get("attachment_ocr", {}))
     if not settings.get("enabled", False):
         return {**counts, "reason": "disabled"}
+    if not _settings_current(settings):
+        return {**counts, "deferred": 1}
     executable = settings["executable"]
     if (not os.path.isfile(executable) or not os.access(executable, os.X_OK)
             or not os.access(str(Path(executable).parent / "python"), os.X_OK)
@@ -575,6 +593,8 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
         for row in rows:
             if used >= limit or deadline is not None and deadline - time.monotonic() < 1:
                 break
+            cursor_key = "offset" if priority else "after"
+            previous_position = cursor[cursor_key]
             if priority:
                 cursor["offset"] += 1
             else:
@@ -589,6 +609,12 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
             if deadline is not None:
                 timeout = min(timeout, deadline - time.monotonic())
             if timeout < 1 or used >= limit:
+                break
+            import extract_llm
+            if not extract_llm._context_memory_available():
+                cursor[cursor_key] = previous_position
+                counts["deferred"] += 1
+                counts["reason"] = "memory_deferred"
                 break
             used += 1
             state, pages, reason = "failed", [], "input_unavailable"
@@ -622,7 +648,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                    "runtime_contract": RUNTIME_CONTRACT, "state": state, "pages": pages,
                    "text_hash": _hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)),
                    "attempts": attempts, "next_try": time.time() + 3600, "reason": reason}
-            if _settle(ledger, source, doc, root, generation):
+            if _settle(ledger, source, doc, root, generation, settings):
                 counts[state] += 1
             else:
                 counts["deferred"] += 1

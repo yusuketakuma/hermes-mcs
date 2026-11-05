@@ -73,15 +73,17 @@ def test_ocr_replacement_keeps_old_dependency_and_rolls_back_atomically(tmp_path
         # Existing valid completions are normally not due; exercise the replacement boundary itself.
         monkeypatch.setattr(ocr, '_due', lambda *args: True)
         monkeypatch.setattr(ocr.writer_lock, 'updater_state', lambda: (False, 1))
+        settings = {'enabled': True, 'executable': '/synthetic/yomitoku', 'timeout_seconds': 120}
+        monkeypatch.setattr(ocr, 'load_config', lambda: {'attachment_ocr': dict(settings)})
         source = ocr._source(led.db, 1)
         with monkeypatch.context() as patch:
             def fail_record(*args):
                 raise RuntimeError('synthetic record failure')
             patch.setattr(ocr, 'record_dependencies_tx', fail_record)
             with pytest.raises(RuntimeError, match='synthetic record failure'):
-                ocr._settle(led, source, replacement, tmp_path, (False, 1))
+                ocr._settle(led, source, replacement, tmp_path, (False, 1), settings)
         assert originals.binding(led.db, 1, key) == before
-        assert ocr._settle(led, source, replacement, tmp_path, (False, 1))
+        assert ocr._settle(led, source, replacement, tmp_path, (False, 1), settings)
         _assert_lost(led, key, before)
         assert json.loads(led.db.execute('SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id DESC',
                                        (ocr.KIND,)).fetchone()[0])['state'] == 'failed'

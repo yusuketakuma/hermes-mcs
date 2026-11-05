@@ -31,8 +31,11 @@ def test_slack_consumed_followup_still_registers_tokens_and_answers(tmp_path, mo
     reg.put_followup(cid, {'kind': 'view', 'token': 'b' * 32, 'origin': origin,
                            'user': 'operator', 'actor': 'slack:team:operator'})
     token = 'c' * 32
+    pin = {'action': 'body', 'message_id': '1.1', 'card_key': 'synthetic-card',
+           'kind': 'thread', 'project_id': 1, 'channel_id': 'channel', 'team_id': 'team'}
     result = {'outcome': 'applied', 'action': 'body', 'title': '合成', 'body': '合成本文',
-              'projects': [1], 'token_ctx': {token: {'action': 'summary', 'synthetic': True}}}
+              'projects': [1], 'token_ctx': {token: {**pin, 'action': 'summary', 'ephemeral': True,
+                  'actor': 'slack:team:operator', 'synthetic': True}}}
 
     def read_then_close(*_args):
         gate.close()  # a stop/config change lands between the read and the answer
@@ -46,7 +49,7 @@ def test_slack_consumed_followup_still_registers_tokens_and_answers(tmp_path, mo
     action = Actions(None, settings, {'cmd_results': str(tmp_path)}, reg, None,
                      lambda *a, **k: None, native_admission=gate)
     action._active = True
-    monkeypatch.setattr(action, '_pinned', lambda *a: {'action': 'body', 'message_id': '1.1'})
+    monkeypatch.setattr(action, '_pinned', lambda *a: pin)
     monkeypatch.setattr(action, '_say', say)
     asyncio.run(action.sweep_followups())
     assert reg.followup(cid) is None

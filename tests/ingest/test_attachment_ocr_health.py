@@ -145,3 +145,26 @@ def test_local_inference_counts_are_valid_and_not_ocr_failure(tmp_path, local_do
         assert report["reason"] == "attachment_ocr_local_inference_deferred"
         text = "\n".join(health_watch._reason_rows(report, [report["reason"]]))
         assert "ローカル解析" in text
+
+
+def test_cloud_accounting_hold_is_visible_while_local_progresses(tmp_path):
+    _status(tmp_path, local_done=2, local_deferred=0, paid_recovery_pending=True)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'deferred' and report['local_done'] == 2
+    assert report['reason'] == 'attachment_ocr_accounting_deferred'
+    text = '\n'.join(health_watch._reason_rows(report, [report['reason']]))
+    assert '会計' in text and 'ローカル解析は継続' in text and '再送しません' in text
+
+
+@pytest.mark.parametrize('invalid', [1, 'true', None, []])
+def test_paid_recovery_marker_requires_explicit_boolean(tmp_path, invalid):
+    _status(tmp_path, paid_recovery_pending=invalid)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['reason'] == 'attachment_ocr_status_corrupt'
+
+
+def test_memory_admission_hold_is_not_a_processing_failure(tmp_path):
+    _status(tmp_path, reason='memory_deferred', deferred=1)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'deferred' and report['failed'] == 0
+    assert report['reason'] == 'attachment_ocr_memory_deferred'

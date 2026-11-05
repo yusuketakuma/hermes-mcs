@@ -1338,7 +1338,7 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
             state = attachment_ocr.view(db, row["attachment_id"], project_id=pid)["state"]
             identity = [row["attachment_id"], "retained" if row["state"] in ("downloaded", "pruned") else row["state"],
                         row["sha256"], row["bytes"], row["downloaded_at"], state]
-            if state == "unsupported":
+            if state in attachment_ocr.EXCLUDED_STATES:
                 result["excluded"] += 1
             else:
                 result["eligible"] += 1

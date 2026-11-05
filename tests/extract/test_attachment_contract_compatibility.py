@@ -58,7 +58,8 @@ def test_historical_refactor_witness_cannot_bless_new_clinical_or_feedback_behav
     assert witness['schema'] == contract.WITNESS_SCHEMA
     assert set(witness['components']) <= actual.keys()
     assert 'attachment_ocr' not in witness['components']
-    assert {'attachment_feedback', 'attachment_observation_seeds', 'measurement_sources'} <= actual.keys()
+    assert {'attachment_feedback', 'attachment_observation_seeds', 'attachment_cloud_identity',
+            'patient_read_scope', 'measurement_sources'} <= actual.keys()
     assert contract._compatible(attachment_inference._CODE, actual, VERSIONS) is None
     assert _calculate(actual, code=attachment_inference._CODE) != BASELINE_ORACLE
     assert attachment_inference._contract(CFG) != BASELINE_ORACLE

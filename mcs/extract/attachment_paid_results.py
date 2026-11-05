@@ -8,6 +8,7 @@ import re
 import stat
 
 import bounded_http
+import attachment_cloud_identity
 import cloud_policy
 import original_source_keys
 from mcs_util import payload_hash, strict_json
@@ -134,7 +135,10 @@ def replay(ledger, paths, cfg):
             raise ValueError('attachment_paid_source_binding_invalid')
         base = payload_hash(['attachment-inference/v1', origin['source_binding'],
                              reservation['owner']['local_artifact_id'], document['result_hash'], document['contract']])
-        if (payload_hash([base, origin['scope']]) != origin['input_binding']
+        stable = attachment_cloud_identity.input_binding({
+            'source_key': origin['source_key'], '_source_binding': origin['source_binding']})
+        if (origin['input_binding'] not in (payload_hash([base, origin['scope']]),
+                                            payload_hash([stable, origin['scope']]))
                 or origin['selection'].get('model') != reservation['model']):
             raise ValueError('attachment_paid_input_binding_invalid')
         outcome = dict(value['metadata'])

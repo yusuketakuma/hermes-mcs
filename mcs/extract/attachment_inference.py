@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -162,7 +163,9 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if generation[0] or not extract_llm._writer_current(full=True):
         return {**counts, 'deferred': 1}
     if not _recover_paid_results(ledger, generation):
-        return {**counts, 'deferred': 1}
+        if stage == 'cloud':
+            return {**counts, 'deferred': 1}
+        counts['paid_recovery_pending'] = True
     free = extract_llm.disk_free_mb(ledger.db)
     if free is None or free < extract_llm.disk_floor_mb():
         return {**counts, 'deferred': 1}
@@ -249,7 +252,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                     meta = {}
                     checkpoints = (_local_checkpoints(ledger, source, cfg, generation)
                                    if stage == 'local' else {})
-                    with extract_llm.pin_target(local_llm.resolve(cfg)):
+                    routing = local_llm.background_scope(root) if stage == 'local' else nullcontext()
+                    with routing, extract_llm.pin_target(local_llm.resolve(cfg)):
                         result = extract_llm.llm_extract(source['body_text'], deadline=deadline, meta_out=meta,
                                                        posted_at=None, provider=unit,
                                                        feedback=attachment_feedback.notes(ledger.db, source), **checkpoints)

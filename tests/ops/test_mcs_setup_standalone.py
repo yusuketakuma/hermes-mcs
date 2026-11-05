@@ -145,7 +145,7 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert plist["ProgramArguments"][7:] == [venv, "-m", "mcs_standalone", "run", "--root", str(tmp_path)]
     assert plist["StandardOutPath"] == plist["StandardErrorPath"] == os.devnull
     assert plist["AbandonProcessGroup"] is True  # Chrome outlives a tick
-    assert len(host.schedules) == 6
+    assert len(host.schedules) == 7
     assert not any(a[0] == "/x/hermes" for a in calls)
     manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
     assert manifest["cron"] == [] and [row["label"] for row in manifest["agents"]] == [

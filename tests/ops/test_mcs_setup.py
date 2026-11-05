@@ -1287,10 +1287,10 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
     assert len(boots) == len(service_contract.AGENT_LABELS) == 5
     # cron: the job whose script is already registered is skipped;
-    # the other 5 (incl. the update check) are created
+    # the other 6 (incl. OCR and the update check) are created
     creates = [" ".join(a) for a in calls
                if a[:3] == ["/x/hermes", "cron", "create"]]
-    assert len(creates) == 5
+    assert len(creates) == 6
     assert not any("mcs_check.sh" in c for c in creates)
     assert any("mcs_deep.sh" in c for c in creates)
     assert any("mcs_health.sh" in c for c in creates)
@@ -1299,12 +1299,12 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     import json as _json
     manifest = _json.loads(
         (tmp_path / "data" / "service_manifest.json").read_text())
-    assert len(manifest["scripts"]) == 7
+    assert len(manifest["scripts"]) == 8
     offsite = tmp_path / "scripts" / "mcs_offsite.sh"
     assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
     assert not any("mcs_offsite.sh" in command for command in creates)
     assert len(manifest["agents"]) == len(service_contract.AGENT_LABELS)
-    assert len(manifest["cron"]) == 6
+    assert len(manifest["cron"]) == 7
 
 
 def test_services_skips_loaded_agents_and_existing_cron(

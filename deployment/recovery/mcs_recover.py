@@ -104,7 +104,7 @@ EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
 # scheduled_jobs.CRON_JOBS; recovery must never delete what the restored code wants
 KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
 KNOWN_CRON_SCRIPTS = frozenset({
-    "mcs_check.sh", "mcs_deep.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
+    "mcs_check.sh", "mcs_deep.sh", "mcs_ocr.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
     "mcs_update.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 # runtime_mode=standalone (service_contract.desired_agent_labels): launchd calendar

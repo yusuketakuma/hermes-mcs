@@ -13,6 +13,7 @@ import measurement_timeline
 import semantic_policy
 from mcs_queries import current_extract_pred, current_fact_pred
 from mcs_util import html_to_text
+from patient_read_scope import patient_scope_valid as patient_scope_valid
 
 
 _MAX_ROWS = 5000
@@ -67,19 +68,6 @@ def boundary_fingerprint(db, project_id, message_id):
 def _unknown(reason):
     return {"records": [], "coverage": {"source_complete": False,
             "local_checks_complete": None, "scope_state": "unknown", "reader_state": reason}}
-
-
-def patient_scope_valid(db, project_id):
-    """Check patient availability without materializing unbounded source fields."""
-    row = db.execute("SELECT CASE WHEN typeof(is_archived)!='integer' OR is_archived!=0 "
-                     "OR typeof(fetch_state) NOT IN ('null','text') "
-                     "OR typeof(fetch_reason) NOT IN ('null','text') "
-                     "OR COALESCE(octet_length(fetch_state),0)>1024 "
-                     "OR COALESCE(octet_length(fetch_reason),0)>1024 THEN 0 "
-                     "WHEN fetch_state='forbidden' OR fetch_reason IN "
-                     "('forbidden','permission_denied','access_revoked') THEN 0 ELSE 1 END "
-                     "FROM patients WHERE project_id=?", (project_id,)).fetchone()
-    return row is not None and row[0] == 1
 
 
 def read_live_page(db, project_id, *, cfg, cursor=None, checkpoint=None, now=None):

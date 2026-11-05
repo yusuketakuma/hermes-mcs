@@ -287,3 +287,34 @@ def test_llama_restart_log_path_survives_the_rendered_quoting():
     exec_line = next(line for line in rendered.splitlines() if line.startswith("exec "))
     assert shlex.split(exec_line.split(" <<", 1)[0]) == [
         "exec", "/synthetic/python", "-", data, "/synthetic/helper.py"]
+
+
+def test_independent_ocr_schedule_is_not_gated_by_collection_success():
+    import scheduled_jobs
+
+    assert ('MCS attachment OCR', '* * * * *', 'mcs_ocr.sh') in scheduled_jobs.CRON_JOBS
+    for name in ('mcs_check.sh', 'mcs_deep.sh'):
+        assert 'mcs_ocr.py' not in (SCRIPTS / name).read_text()
+    assert 'mcs/ops/mcs_ocr.py --run' in (SCRIPTS / 'mcs_ocr.sh').read_text()
+
+
+def test_independent_ocr_wrapper_uses_the_shared_logged_entry(tmp_path):
+    import subprocess
+    import sys
+    import service_contract
+
+    record = tmp_path / 'argv.json'
+    python = tmp_path / 'synthetic python'
+    python.write_text(f'#!{sys.executable}\nimport json,sys\n'
+                      f'from pathlib import Path\nPath({str(record)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+    python.chmod(0o700)
+    target = tmp_path / 'ocr.sh'
+    target.write_text(service_contract.render_script((SCRIPTS / 'mcs_ocr.sh').read_text(), {
+        'PYTHON': str(python), 'DATA': str(tmp_path / 'private data'),
+        'REPO': str(tmp_path / 'synthetic repo'), 'RUN_LOG_HELPER': str(tmp_path / 'helper.py')}))
+    result = subprocess.run(['/bin/bash', str(target)], capture_output=True, text=True,
+                            env={'HOME': str(tmp_path)}, timeout=5)
+    assert result.returncode == 0 and not result.stdout and not result.stderr
+    argv = json.loads(record.read_text())
+    assert argv == ['-I', str(tmp_path / 'helper.py'), 'exec', '--data-dir', str(tmp_path / 'private data'),
+                    '--', str(python), str(tmp_path / 'synthetic repo/mcs/ops/mcs_ocr.py'), '--run']

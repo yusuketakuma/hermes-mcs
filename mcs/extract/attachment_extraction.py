@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 
 import attachment_ocr
+import attachment_cloud_identity
 import attachment_feedback
 import attachment_inference_contract
 import cloud_inference
@@ -102,9 +103,8 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
             history = history_snapshot(db, source)
             if history is None:
                 return None
-            expected_binding = payload_hash([input_binding(source, local),
-                cloud_policy.scope_generation({'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)})])
-            if any(item['reservation'].get('input_binding') != expected_binding
+            scope = cloud_policy.scope_generation({'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)})
+            if any(not attachment_cloud_identity.compatible_receipt(db, item['reservation'], source, scope)
                    or item['reservation'].get('project_id') != pid
                    or item['reservation'].get('message_id') is not None
                    or item['reservation'].get('unit_key') != key + ':cloud'
@@ -191,8 +191,7 @@ def history_snapshot(db, source, *, require_ready=False):
 
 
 def input_binding(source, local):
-    return payload_hash([SCHEMA, source['_source_binding'], local['artifact_id'], local['result_hash'],
-                         local['contract']])
+    return attachment_cloud_identity.input_binding(source)
 
 
 def save(ledger, source, cfg, stage, document, meta, unit=None, local=None, *, contract_for, write):
