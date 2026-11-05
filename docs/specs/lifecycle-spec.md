@@ -24,7 +24,7 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 **このマシンの稼働系**の、導入から更新・障害復旧までの全局面。
 
 `runtime_mode: "standalone"`（[STANDALONE.md](../guides/STANDALONE.md)）では `~/.hermes` を
-使わない。`ai.mcs.standalone`の単一hostが6定期ジョブ（wrapperは`~/.mcs/scripts`、
+使わない。`ai.mcs.standalone`の単一hostが7定期ジョブ（wrapperは`~/.mcs/scripts`、
 3600秒上限）・cmd/cmd_int取込・抽出worker2本を所有する。インタプリタは`~/.mcs/venv`。
 更新marker中は背景処理を停止し、updater以外の子処理が完了したことをheartbeatで確認する。
 更新後のhost再起動はgeneration付き要求を発行し、updaterを含む処理の完了後に行う。

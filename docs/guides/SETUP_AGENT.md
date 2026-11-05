@@ -341,7 +341,7 @@ gateway を同期するため、この操作は不要。`--no-services` を使�
 【検証】cron/launchd/gateway が登録されたこと:
 
 ```bash
-hermes cron list --all | grep -iE "mcs|llamacpp"   # 6件登録
+hermes cron list --all | grep -iE "mcs|llamacpp"   # 定期7件登録（backup.enabled=trueなら8件）
 launchctl print gui/$(id -u) 2>/dev/null | grep -E "mcs|llamaserver" | head
 hermes gateway status                # "supervised" が含まれる
 ```
@@ -451,7 +451,7 @@ LINE WORKSは独立host内で起動するため、同じ資格情報で別アダ
 
 旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
 手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
-独立hostは6定期ジョブ・2抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
+独立hostは7定期ジョブ・2抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
 
 `check`の失敗は想定内として無視しません。モード・専用venv・scope・資格情報・常駐状態・
 文書生成とのdriftを確認し、固定エラーコードで原因を報告します。

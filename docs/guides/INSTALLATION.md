@@ -238,7 +238,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・Python の無い venv・失敗した依存導入は再実行時にやり直す。clone・venv・依存導入の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
-| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
+| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期7件（`backup.enabled=true`ならoffsiteを加え8件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
 ステージ2の最後に、接続方法にかかわらず `~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
@@ -348,9 +348,9 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 ```
 
 - `services` — launchd agent 5件（cmd/cmd_int WatchPaths・extract
-  drainer×2・外部health watch）を配置・bootstrap、hermes cronの定期6件を登録（冪等・
+  drainer×2・外部health watch）を配置・bootstrap、hermes cronの定期7件を登録（冪等・
   `--dry-run` で確認可。内容差分は reconcile）。`backup.enabled=true`の場合は
-  offsite backupを追加してcron 7件になる。`notify.interactive`
+  offsite backupを追加してcron 8件になる。`notify.interactive`
   が `discord`/`slack` のとき `hermes gateway install` + `start` で
   gateway 常駐化も行う。全 wrapper・plist は
   `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画される
@@ -541,7 +541,7 @@ installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセス�
 SlackはBot/App token、DiscordはBot tokenをowner-onlyの専用ファイルへ保存します。
 LINE WORKSの秘密情報・HTTPS Callbackは[LINE WORKS手順](LINEWORKS.md)に従います。
 
-独立hostが既存と同じ6定期ジョブ、cmd/cmd_int取込、抽出worker2本を所有します。
+独立hostが既存と同じ7定期ジョブ、cmd/cmd_int取込、抽出worker2本を所有します。
 Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないでください。
 既存モードからの切替では`services`が旧manifest所有のMCSジョブだけを停止します。
 手動登録のジョブや別プロセスのLINE WORKSアダプターは、対象を確認して別途停止します。
@@ -626,11 +626,11 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 
 ## 6. スケジュール構成（Path A 導入後）
 
-収集ジョブは **hermes cron 6件 + launchd 6件** のハイブリッド
-（services 所有: cron 6件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
+収集ジョブは **hermes cron 7件 + launchd 6件** のハイブリッド
+（services 所有: cron 7件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
 `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`local.mcs-health`。install.sh 所有:
 復旧 watchdog `org.mcs.recovery`。`backup.enabled=true`の場合はoffsite backupも
-cronに追加され7件になる。別に LLM サーバ常駐の
+cronに追加され8件になる。別に LLM サーバ常駐の
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 
 ジョブ・スケジュール・実行スクリプトの一覧表は
