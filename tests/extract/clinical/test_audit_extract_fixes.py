@@ -1,4 +1,7 @@
 """抽出監査で見つかった主体・否定・時点・検査名の取り違えを完全合成データで検証する。"""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import clinical_scope
 import json
 
@@ -81,7 +84,10 @@ def test_since_yesterday_stays_current():
 def _bound_lab_store(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     store = _ledger(tmp_path)
     store.ensure_patient(1)
     with store.db:

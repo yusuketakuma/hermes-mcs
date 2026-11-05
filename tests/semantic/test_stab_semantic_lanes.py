@@ -5,6 +5,7 @@ output defers are capped per generation, and an unsaved long-output mark
 is logged and counted instead of silently dropped.
 
 Synthetic fixtures, temp DB and stubbed model/Jev clients only."""
+import semantic_due_selection
 import llm_availability
 import semantic_transport
 import json
@@ -233,6 +234,7 @@ def test_uncertain_long_defer_is_not_replaced_or_evicted(jobs_db, monkeypatch):
         jobs_db.db.execute("UPDATE fetch_jobs SET payload='{',state='failed' WHERE job_id=?", (held_id,))
         semantic_drain._sched_write(jobs_db, {'long_defers': {str(held_id): original}}, commit=False)
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_MAX', semantic_drain._LONG_DEFERS_MAX)
     with pytest.raises(ValueError, match='semantic_long_defers_capacity'):
         with semantic_drain._sched_update(jobs_db) as sched:
             semantic_drain._merge_long_defers(jobs_db, sched, {
@@ -251,6 +253,7 @@ def test_full_long_defer_map_holds_new_job_before_call(jobs_db, monkeypatch):
         jobs_db.db.execute("UPDATE fetch_jobs SET payload='{' WHERE job_id=?", (held_id,))
         semantic_drain._sched_write(jobs_db, {'long_defers': {str(held_id): original}}, commit=False)
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_MAX', semantic_drain._LONG_DEFERS_MAX)
     served = _serve(monkeypatch, lambda job: ('done', None))
     result = {'errors': []}
     out = semantic_drain.run_due(jobs_db, _cfg('shadow'), result,
@@ -307,6 +310,7 @@ def test_full_map_allows_existing_generation_but_holds_new(jobs_db, monkeypatch)
             str(existing_id): {'g': 'g41', 'n': 2},
         }}, commit=False)
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 2)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_MAX', semantic_drain._LONG_DEFERS_MAX)
     served = _serve(monkeypatch, lambda job: ('deferred', 'long_output_needs_budget'))
     result = {'errors': []}
     semantic_drain.run_due(jobs_db, _cfg('shadow'), result, time.monotonic() + 300,
@@ -327,6 +331,7 @@ def test_separate_connections_respect_reserved_capacity(jobs_db, monkeypatch):
         'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
         for job_id in (first_id, second_id)]
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_MAX', semantic_drain._LONG_DEFERS_MAX)
     path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
     other = Ledger(path)
     try:
@@ -408,11 +413,13 @@ def test_bounded_long_defer_scan_rotates(jobs_db, monkeypatch):
             str(second_id): {'g': 'g41', 'n': 3},
         }}, commit=False)
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_SCAN_BYTES', 1)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_SCAN_BYTES', semantic_drain._LONG_DEFERS_SCAN_BYTES)
     with semantic_drain._sched_update(jobs_db) as sched:
         semantic_drain._merge_long_defers(jobs_db, sched, {})
     assert str(second_id) in semantic_drain._long_defers(jobs_db)
     # Give the next pass enough room for the second row; the cursor starts there.
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_SCAN_BYTES', 100)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_SCAN_BYTES', semantic_drain._LONG_DEFERS_SCAN_BYTES)
     with semantic_drain._sched_update(jobs_db) as sched:
         semantic_drain._merge_long_defers(jobs_db, sched, {})
     assert str(second_id) not in semantic_drain._long_defers(jobs_db)
@@ -681,6 +688,7 @@ def test_full_capacity_cursor_reaches_a_job_with_an_existing_slot(jobs_db, monke
         semantic_drain._sched_write(jobs_db, {'long_defers': {str(ready): {'g': 'g999', 'n': 3}}},
                                     commit=False)
     monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    monkeypatch.setattr(semantic_due_selection, '_LONG_DEFERS_MAX', semantic_drain._LONG_DEFERS_MAX)
     served = _serve(monkeypatch, lambda job: ('deferred', 'long_output_needs_budget'))
     for _ in range(4):
         if served:

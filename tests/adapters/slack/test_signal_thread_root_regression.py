@@ -6,6 +6,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_card_renders
 import notify_spool
 from adapters.common import envelopes, registry
 from adapters.common.spec import token_map
@@ -19,7 +20,7 @@ __all__ = ["led"]
 
 
 def test_signal_worker_grants_parts_resume_and_update_original_thread(led, tmp_path, monkeypatch):
-    monkeypatch.setattr(notify_cards, "drug_search_available", lambda _db: True)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", lambda _db: True)
     _seed_thread(led)
     aid, attachment, blob = _attach(led, tmp_path, mid=101, name="synthetic-signal.bin")
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]

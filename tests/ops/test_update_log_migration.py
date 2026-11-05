@@ -1,4 +1,15 @@
 """Synthetic update log deployment, prefix recovery, and service ordering."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import hashlib
 import json
 import os
@@ -269,10 +280,34 @@ def test_cached_new_source_survives_checkout_rollback(monkeypatch, tmp_path):
     root, checkout, recovery, _ = layout(tmp_path)
     source = deploy.source_snapshot(checkout)
     monkeypatch.setattr(mcs_update, 'HOME', str(root))
+    monkeypatch.setattr(update_apply, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', mcs_update.HOME)
     monkeypatch.setattr(mcs_update, 'REPO', str(checkout))
+    monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
     monkeypatch.setattr(mcs_update, '_RUN_LOG_SOURCE', source)
+    monkeypatch.setattr(update_lifecycle_context, '_RUN_LOG_SOURCE', mcs_update._RUN_LOG_SOURCE)
     monkeypatch.setattr(mcs_update, '_RUN_LOG_SOURCE_ERROR', False)
+    monkeypatch.setattr(update_lifecycle_context, '_RUN_LOG_SOURCE_ERROR', mcs_update._RUN_LOG_SOURCE_ERROR)
     monkeypatch.setattr(mcs_update, '_service_paths', lambda: SimpleNamespace(recovery_dir=str(recovery)))
+    monkeypatch.setattr(update_execution, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_lifecycle_context, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_planning, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_preflight, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_recovery, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_restore, '_service_paths', mcs_update._service_paths)
     mcs_update._prepare_run_log()
     pointer = (recovery / deploy._pointer(str(root))).read_bytes()
     put(root / 'data/run.log', b'synthetic rollback tail\n')
@@ -309,6 +344,7 @@ def test_service_publication_waits_for_verified_log_prefix(monkeypatch, fails):
         if fails:
             raise mcs_update.UpdateError('run_log_prepare_failed')
     monkeypatch.setattr(mcs_update, '_prepare_run_log', prepare)
+    monkeypatch.setattr(update_runtime_migration, '_prepare_run_log', mcs_update._prepare_run_log)
     monkeypatch.setattr(mcs_update.owned_process, 'run_owned',
                         lambda *a, **k: trace.append('services') or SimpleNamespace(returncode=0))
     if fails:
@@ -338,7 +374,11 @@ def test_postmerge_tail_import_requires_owned_child_reap(monkeypatch, outcome):
             child.returncode = -9
     monkeypatch.setattr(mcs_update.subprocess, 'Popen', lambda *a, **k: child)
     monkeypatch.setattr(mcs_update, '_stop_update_child', stop)
+    monkeypatch.setattr(update_execution, '_stop_update_child', mcs_update._stop_update_child)
+    monkeypatch.setattr(update_runtime_migration, '_stop_update_child', mcs_update._stop_update_child)
     monkeypatch.setattr(mcs_update, '_migrate_log_tail', lambda: trace.append('tail'))
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', mcs_update._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', mcs_update._migrate_log_tail)
     monkeypatch.setattr(mcs_update.journal_store, 'load_state',
                         lambda *_: {'stages': [{'stage': 'done'}], 'applying': None})
     mcs_update._run_post_merge('a' * 40, run_lock_fd=None)
@@ -352,11 +392,26 @@ def test_recovery_reimports_tail_under_both_locks_before_empty_journal_return(mo
     monkeypatch.setattr(mcs_update.journal_store, 'load_state', lambda *_: {})
     monkeypatch.setattr(mcs_update, 'acquire_update_lock',
                         lambda: trace.append('update_lock') or os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setattr(update_apply, 'acquire_update_lock', mcs_update.acquire_update_lock)
+    monkeypatch.setattr(update_cli, 'acquire_update_lock', mcs_update.acquire_update_lock)
+    monkeypatch.setattr(update_recovery, 'acquire_update_lock', mcs_update.acquire_update_lock)
     monkeypatch.setattr(mcs_update, '_acquire_run_lock_wait',
                         lambda **_: trace.append('run_lock') or os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setattr(update_apply, '_acquire_run_lock_wait', mcs_update._acquire_run_lock_wait)
+    monkeypatch.setattr(update_recovery, '_acquire_run_lock_wait', mcs_update._acquire_run_lock_wait)
     monkeypatch.setattr(mcs_update, '_release_legacy_hold', lambda _: False)
+    monkeypatch.setattr(update_apply, '_release_legacy_hold', mcs_update._release_legacy_hold)
+    monkeypatch.setattr(update_cli, '_release_legacy_hold', mcs_update._release_legacy_hold)
+    monkeypatch.setattr(update_recovery, '_release_legacy_hold', mcs_update._release_legacy_hold)
     monkeypatch.setattr(mcs_update, '_restore_writer_hold_marker', lambda: None)
+    monkeypatch.setattr(update_lifecycle_context, '_restore_writer_hold_marker', mcs_update._restore_writer_hold_marker)
+    monkeypatch.setattr(update_recovery, '_restore_writer_hold_marker', mcs_update._restore_writer_hold_marker)
     monkeypatch.setattr(mcs_update, '_migrate_log_tail', lambda: trace.append('tail'))
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', mcs_update._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', mcs_update._migrate_log_tail)
     monkeypatch.setattr(mcs_update, '_remove_marker', lambda: trace.append('marker'))
+    monkeypatch.setattr(update_apply, '_remove_marker', mcs_update._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', mcs_update._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', mcs_update._remove_marker)
     assert mcs_update.recover_interrupted() == 0
     assert trace == ['update_lock', 'run_lock', 'tail', 'marker']

@@ -1,4 +1,5 @@
 """Unreadable stored extraction history cannot stop healthy sibling work."""
+import extract_llm_runner
 import json
 import time
 
@@ -59,6 +60,7 @@ def test_valid_thin_retry_replaces_unreadable_prior_result(tmp_path, monkeypatch
                           (poison('"summary":"SYNTH-old",'), aid))
         ledger.db.commit()
         monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kwargs: {"summary": "SYNTH-new"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         assert extract_llm.run_pending(ledger, budget_s=180)["done"] == 1
         adopted = ledger.artifacts(extract_llm.KIND)[-1]
         assert json.loads(adopted["content"])["summary"] == "SYNTH-new"

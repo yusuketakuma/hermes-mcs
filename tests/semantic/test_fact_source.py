@@ -1,6 +1,7 @@
 """fact_source gate tests (T7): legacy|shadow|canonical config
 validation, v2->v1 projection shape, and the evidence-gated activation
 command."""
+import setup_config_snapshot
 import mcs_util
 import json
 from functools import cache
@@ -138,6 +139,7 @@ def _cmd_cfg(tmp_path, monkeypatch, cfg):
     conf = tmp_path / "config.json"
     conf.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(conf))
     monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: json.loads(conf.read_text()))
     return conf
@@ -344,6 +346,7 @@ def test_fact_source_absent_config_concurrent_creation_is_never_overwritten(tmp_
     import config_edit
     conf = tmp_path / 'config.json'
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(conf))
     snapshot = config_edit._snapshot
     def concurrent(path=None):
         conf.write_text('{"unknown":"kept"}')
@@ -357,6 +360,7 @@ def test_fact_source_absent_config_concurrent_creation_is_never_overwritten(tmp_
 def test_fact_source_missing_config_is_exclusively_created(tmp_path, monkeypatch):
     conf = tmp_path / 'config.json'
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(conf))
     assert mcs_setup.cmd_fact_source(_Args('shadow')) == 0
     assert json.loads(conf.read_text()) == {'semantic': {'fact_source': 'shadow'}}
     assert conf.stat().st_mode & 0o777 == 0o600
@@ -368,6 +372,7 @@ def test_fact_source_symlink_is_never_followed(tmp_path, monkeypatch):
     conf = tmp_path / 'config.json'
     conf.symlink_to(target)
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(conf))
     assert mcs_setup.cmd_fact_source(_Args('shadow')) == 1
     assert conf.is_symlink() and target.read_text() == '{"unknown":"kept"}'
 

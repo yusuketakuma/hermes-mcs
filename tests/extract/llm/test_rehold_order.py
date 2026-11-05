@@ -3,6 +3,12 @@
 A code update changes the hold contract, so every held body re-enters
 pending; those re-runs mostly end held again. Selection keeps them in the
 same class, only after the other re-extractions. Synthetic temp DB only."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
 import json
 
 import pytest
@@ -86,6 +92,12 @@ def test_fair_oldest_turn_includes_released_holds_without_weakening_gates(
             db, 2, {2, 3}, None, True, fair_oldest=True)
         assert [r["message_id"] for r in denied] == [2]
         monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
         row = dict(db.db.execute(
             "SELECT * FROM messages WHERE message_id=1").fetchone())
         assert extract_llm._claim(db, row, lease_s=3600) is not None

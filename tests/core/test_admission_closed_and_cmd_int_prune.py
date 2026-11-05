@@ -1,5 +1,6 @@
 """A closed legacy admission is logged (once per distinct reason), and
 quarantined cmd_int requests are pruned like data/cmd ones."""
+import extract_llm_admission
 import json
 
 import extract_llm
@@ -8,6 +9,7 @@ import maintenance
 
 def test_admission_closed_is_logged_once_per_reason(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm, "_admission_closed_last", None)
+    monkeypatch.setattr(extract_llm_admission, '_admission_closed_last', extract_llm._admission_closed_last)
     for _ in range(2):
         assert extract_llm.legacy_admissions(None, {"semantic": "typo"}) == set()
     assert extract_llm.legacy_admissions(None, {}) is None

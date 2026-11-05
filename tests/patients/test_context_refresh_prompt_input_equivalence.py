@@ -1,4 +1,9 @@
 """Original nightly detail fields remain byte-identical at the scan prompt boundary."""
+
+import patient_context_quality_controller
+import patient_context_refresh_readiness
+import patient_context_refresh_sources
+import patient_context_refresh_state
 import mcs_queries
 import copy
 import hashlib
@@ -11,7 +16,6 @@ import extract_llm
 import inference_version
 import patient_context
 import patient_context_plan as context_plan
-import patient_context_refresh as context_refresh
 from extract_testkit import _ledger, _message, _hash
 from test_patient_context_refresh import runtime as runtime, seed, finish, document, CFG
 
@@ -47,13 +51,13 @@ def test_scan_requests_grounded_attributes_and_rejects_invented_values(tmp_path,
                 'evidence': body, 'subject': 'patient', 'details': [
                     {'key': 'medication_manager', 'value': '記載のない人物' if unsupported else '合成支援員', 'evidence': body},
                     {'key': 'support_method', 'value': '一包化', 'evidence': body}]}]}
-        monkeypatch.setattr(context_refresh, '_ask', ask)
+        monkeypatch.setattr(patient_context_quality_controller, '_ask', ask)
         if unsupported:
             with pytest.raises(ValueError, match='^nightly_unsupported_items$'):
-                context_refresh._scan({}, source, {}, 'synthetic', 1000, lambda: True)
+                patient_context_quality_controller._scan({}, source, {}, 'synthetic', 1000, lambda: True)
             assert len(calls) == 2
         else:
-            result = context_refresh._scan({}, source, {}, 'synthetic', 1000, lambda: True)
+            result = patient_context_quality_controller._scan({}, source, {}, 'synthetic', 1000, lambda: True)
             assert result['complete'] and len(calls) == 1
             assert [(d['key'], d['value']) for f in result['facts'] for d in f['details']] == [
                 ('medication_manager', '合成支援員'), ('support_method', '一包化')]
@@ -119,8 +123,8 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
         def ask(cfg, payload, *args):
             calls.append(copy.deepcopy(payload))
             return {"patient_context": []}
-        monkeypatch.setattr(context_refresh, "_ask", ask)
-        result = context_refresh._scan({}, source, {}, "2026-10-17", 1000.0, lambda: True)
+        monkeypatch.setattr(patient_context_quality_controller, "_ask", ask)
+        result = patient_context_quality_controller._scan({}, source, {}, "2026-10-17", 1000.0, lambda: True)
         prompt = {"instruction": EXPECTED_INSTRUCTION, "categories": EXPECTED_CATEGORIES,
                   "detail_keys": EXPECTED_DETAIL_KEYS,
                   "already_found": expected_with_reference, "source": body}
@@ -162,30 +166,30 @@ def test_detail_key_prompt_invalidates_prior_success_via_existing_checks(runtime
     with monkeypatch.context() as legacy:
         # Pin the actual previous plan bytes and the previous scan payload.
         # Stored successes are produced through the normal synthetic worker.
-        legacy.setattr(context_refresh, '_CHECKS', LEGACY_PLAN_CHECKS)
+        legacy.setattr(patient_context_refresh_state, '_CHECKS', LEGACY_PLAN_CHECKS)
         legacy.setattr(context_plan, 'scan_schema', lambda: {'categories': EXPECTED_CATEGORIES[:]})
         legacy.setattr(context_plan, 'SCAN_INSTRUCTION', LEGACY_INSTRUCTION)
-        old_contract = context_refresh._contract(CFG, 1)
+        old_contract = patient_context_refresh_state._contract(CFG, 1)
         finish(runtime)
         old_document = document(led)
-        assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is not None
-        old_snapshot = context_refresh._snapshot(led.db, 1, CFG)
-        old_scans = context_refresh._current_scans(
+        assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is not None
+        old_snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
+        old_scans = patient_context_refresh_sources._current_scans(
             led.db, 1, old_snapshot['sources'], old_contract, cfg=CFG)
         assert old_scans and all(scan['complete'] for scan in old_scans.values())
-        assert not any(context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2].values())
-    new_contract = context_refresh._contract(CFG, 1)
-    assert context_refresh._CHECKS == hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
-    assert context_refresh._CHECKS != LEGACY_PLAN_CHECKS
+        assert not any(patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2].values())
+    new_contract = patient_context_refresh_state._contract(CFG, 1)
+    assert patient_context_refresh_state._CHECKS == hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
+    assert patient_context_refresh_state._CHECKS != LEGACY_PLAN_CHECKS
     assert new_contract != old_contract
-    assert {**old_contract, 'context_checks': context_refresh._CHECKS} == new_contract
+    assert {**old_contract, 'context_checks': patient_context_refresh_state._CHECKS} == new_contract
     assert inference_version.CURRENT_VERSION == '1.0'
     assert inference_version.LLM_EXTRACT_VERSION == extract_llm.EXTRACT_VERSION == 11
-    snapshot = context_refresh._snapshot(led.db, 1, CFG)
-    assert context_refresh._current_scans(
+    snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
+    assert patient_context_refresh_sources._current_scans(
         led.db, 1, snapshot['sources'], new_contract, cfg=CFG) == {}
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
-    assert context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2]['B'] is True
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2]['B'] is True
     assert document(led) == old_document
     finish(runtime)
     source_calls = [call for call in calls if 'source' in call]
@@ -193,5 +197,5 @@ def test_detail_key_prompt_invalidates_prior_success_via_existing_checks(runtime
     assert 'detail_keys' not in source_calls[0]
     assert source_calls[1]['categories'] == EXPECTED_CATEGORIES
     assert source_calls[1]['detail_keys'] == EXPECTED_DETAIL_KEYS
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is not None
-    assert not any(context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2].values())
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is not None
+    assert not any(patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2].values())

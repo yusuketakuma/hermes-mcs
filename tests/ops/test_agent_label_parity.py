@@ -10,4 +10,4 @@ def test_agent_labels_share_catalogue_and_match_independent_recovery():
     for name in ("RESIDENT_LABELS", "WATCHER_LABELS"):
         expected = tuple(getattr(service_contract, name))
         assert tuple(getattr(rec, name)) == expected, name
-    assert rec.EXCLUDED_LABELS == service_contract.EXCLUDED_LABELS
+    assert rec.mcs_recovery_core.EXCLUDED_LABELS == service_contract.EXCLUDED_LABELS

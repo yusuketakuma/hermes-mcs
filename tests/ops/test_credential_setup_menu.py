@@ -1,4 +1,5 @@
 """認証設定の選択と保存先の振り分けを合成環境で確かめる。"""
+import setup_config_snapshot
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,6 +70,7 @@ def test_setup_entry_uses_verified_config(monkeypatch, tmp_path):
     cfg_path.write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(cfg_path))
     seen = []
     monkeypatch.setattr(menu, "run", lambda root, cfg, **kwargs: seen.append((root, cfg)) or 0)
     assert mcs_setup.main(["api-keys"]) == 0
@@ -85,6 +87,7 @@ def test_setup_entry_refuses_writable_config(monkeypatch, tmp_path):
     cfg_path.chmod(0o666)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(cfg_path))
     monkeypatch.setattr(menu, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
     assert mcs_setup.main(["api-keys"]) == 1
 
@@ -95,6 +98,7 @@ def test_setup_entry_detects_config_change_before_save(monkeypatch, tmp_path):
     cfg_path.write_text('{"runtime_mode":"hermes"}', encoding="utf-8")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(cfg_path))
     def observe(root, cfg, *, current, admission=None, on_saved=None):
         assert current()
         cfg_path.write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
@@ -116,6 +120,7 @@ def test_setup_entry_accepts_private_root_link_and_detects_same_target_replaceme
     replacement.symlink_to(target, target_is_directory=True)
     monkeypatch.setattr(mcs_setup, "HOME", str(link))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(link / "config.json"))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(link / "config.json"))
 
     def observe(root, cfg, *, current, admission=None, on_saved=None):
         assert root == str(link)
@@ -141,6 +146,7 @@ def test_setup_entry_rejects_root_link_exchange_during_config_read(monkeypatch, 
     replacement.symlink_to(target, target_is_directory=True)
     monkeypatch.setattr(mcs_setup, "HOME", str(link))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(link / "config.json"))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(link / "config.json"))
     open_real = mcs_setup.os.open
 
     def exchange_on_open(path, flags, *args, **kwargs):
@@ -181,6 +187,7 @@ def test_setup_entry_refuses_symlink_and_writable_parent(monkeypatch, tmp_path):
     cfg_path.symlink_to(target)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(cfg_path))
     monkeypatch.setattr(menu, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
     assert mcs_setup.main(["api-keys"]) == 1
     cfg_path.unlink()

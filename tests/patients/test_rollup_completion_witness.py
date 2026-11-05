@@ -1,4 +1,7 @@
 """A completion witness rechecks saved aggregation without replacing its evidence."""
+import extract_llm_provider
+
+import rollup_builder
 from contextlib import closing
 from datetime import datetime, timedelta
 import json
@@ -19,9 +22,10 @@ import rollup
 def saved(tmp_path, monkeypatch):
     cfg = {"local_llm": {"model": "synthetic-witness-model"}}
     now = [time.time() + 60]
-    monkeypatch.setattr(rollup, "time", SimpleNamespace(
+    monkeypatch.setattr(rollup_builder, "time", SimpleNamespace(
         time=lambda: now[0], monotonic=time.monotonic))
     monkeypatch.setattr(extract_llm, "resolved_model", lambda config: config["local_llm"]["model"])
+    monkeypatch.setattr(extract_llm_provider, 'resolved_model', extract_llm.resolved_model)
     with closing(_ledger(tmp_path)) as ledger:
         ledger.ensure_patient(1)
         with ledger.db:
@@ -367,8 +371,9 @@ def test_normal_dirty_route_repairs_invalid_saved_evidence(saved, corruption):
 def test_normal_dirty_route_reaches_patients_without_messages(tmp_path, monkeypatch, scope):
     cfg = {"local_llm": {"model": "synthetic-empty-model"}}
     now = time.time() + 60
-    monkeypatch.setattr(rollup, "time", SimpleNamespace(time=lambda: now, monotonic=time.monotonic))
+    monkeypatch.setattr(rollup_builder, "time", SimpleNamespace(time=lambda: now, monotonic=time.monotonic))
     monkeypatch.setattr(extract_llm, "resolved_model", lambda config: config["local_llm"]["model"])
+    monkeypatch.setattr(extract_llm_provider, 'resolved_model', extract_llm.resolved_model)
     with closing(_ledger(tmp_path)) as ledger:
         ledger.ensure_patient(1)
         if scope == "acquired_empty":

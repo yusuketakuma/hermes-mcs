@@ -1,4 +1,5 @@
 """A malformed relation answer is an INCOMPLETE receipt, never a relation."""
+import semantic_job_processor
 import semantic_policy
 import semantic_store
 import json
@@ -210,6 +211,7 @@ def test_a_known_rejection_retries_only_when_nothing_else_failed(
         return 0, True
 
     monkeypatch.setattr(semantic_drain, "update_loops", loops)
+    monkeypatch.setattr(semantic_job_processor, 'update_loops', semantic_drain.update_loops)
     db = _seeded(tmp_path)
     try:
         with db.db:

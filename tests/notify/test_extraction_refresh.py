@@ -1,4 +1,5 @@
 """Committed progress queues updates without sending or breaking source ownership."""
+import extract_llm_store
 import semantic_assembly as assembly
 import sqlite3
 from types import SimpleNamespace
@@ -42,6 +43,7 @@ def test_legacy_checkpoint_is_committed_before_refresh(tmp_path, monkeypatch):
             calls.append((pid, mid))
 
         monkeypatch.setattr(extract_llm, "_rerender_cards", queued)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
         assert extract_llm._persist_chunks(db, row, {0: {}})
         assert calls == [(row["project_id"], row["message_id"])]
     finally:

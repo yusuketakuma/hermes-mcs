@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+import cloud_usage_accounting
 import cloud_policy as c
 from anthropic_client import MODEL
 from ledger import Ledger
@@ -32,6 +33,7 @@ def test_late_result_tally_batches_retained_history(tmp_path, monkeypatch, now, 
             return original(raw)
 
         monkeypatch.setattr(c, '_accounting_meta', decode)
+        monkeypatch.setattr(cloud_usage_accounting, '_accounting_meta', decode)
         ledger.db.set_trace_callback(statements.append)
         try:
             tally = c._tally(ledger, current)

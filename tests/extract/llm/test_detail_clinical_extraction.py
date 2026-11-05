@@ -1,4 +1,11 @@
 """Synthetic full-detail and bounded dense-output extraction checks."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_runner
+import extract_llm_store
 import extraction_context
 import extract_quality
 import extract_schema
@@ -38,9 +45,13 @@ def test_unrecoverable_length_stops_shrink_input_and_keep_retry_cap(db, monkeypa
     db.save_messages([_message(body=body)])
     seen = []
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     def length(prompt, **kw):
         seen.append(prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0])
@@ -163,9 +174,13 @@ def test_missing_sampling_fields_are_never_filled_from_posting_time():
 
 def _fake_backend(monkeypatch, reply):
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     def chat(prompt, **kwargs):
         assert kwargs["max_tokens"] == 1600
@@ -260,6 +275,7 @@ def test_old_generation_valid_failed_and_checkpointed_rows_reenter_normal_pendin
         assert kwargs["chunks_in"] == {}
         return {"patient_context": [_context(body, "living")]}
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, limit=3, budget_s=200)
     assert result["done"] == 2 and len(calls) == 2
     metadata = [json.loads(row[0]) for row in db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm'")]
@@ -308,7 +324,10 @@ def test_five_information_groups_and_provenance_survive_inference_and_storage(db
         return {"symptoms": [],
                 "patient_context": [item for item in source["patient_context"] if item["evidence"] in core]}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["done"] == 1
     saved = json.loads(db.db.execute("SELECT content FROM artifacts WHERE kind='extract_llm'").fetchone()[0])
     assert saved["patient_context"] == source["patient_context"]
@@ -352,6 +371,11 @@ def test_adaptive_layout_cannot_cross_generation_context_or_shape(db, bad):
 @pytest.mark.parametrize("cached_empty", [False, True])
 def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypatch, cached_empty):
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 120)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     body = "初回完了の合成区間" + "A" * 110 + "後半密な合成区間" + "B" * 170
     db.save_messages([_message(body=body)])
     row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
@@ -378,11 +402,20 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
 
 def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch):
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 70)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     body = "親前半の処方確認です。" + "A" * 65 + "後半の残薬確認です。" + "B" * 55
     prompts = []
     def rules(row):
         return {"v": 1, "patient_context": [_context(row["body_text"], "medication_management")]}
     monkeypatch.setattr(extract_llm, "_rule_hints", rules)
+    monkeypatch.setattr(extract_llm_engine, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_prepare, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_proofs, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_runner, '_rule_hints', extract_llm._rule_hints)
     repaired = set()
     def infer(prompt, **kwargs):
         piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
@@ -399,6 +432,8 @@ def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch
             return {"symptoms": [], "labs": [{"name": "合成項目", "value": "x", "evidence": "ない引用"}]}
         return {"summary": "合成修復結果", "symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     out = extract_llm.llm_extract(body, hints=rules({"body_text": body}))
     assert out is not None and len(prompts) >= 4
 
@@ -432,7 +467,13 @@ def test_rule_hints_are_included_once_and_only_for_the_target_piece(monkeypatch,
         return {"symptoms": []}
 
     monkeypatch.setattr(extract_llm, "_rule_hints", rules)
+    monkeypatch.setattr(extract_llm_engine, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_prepare, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_proofs, '_rule_hints', extract_llm._rule_hints)
+    monkeypatch.setattr(extract_llm_runner, '_rule_hints', extract_llm._rule_hints)
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.llm_extract(body, hints=rules({"body_text": body})) is not None
     pieces = extract_llm.plan_chunks(body)
     # The empty first candidate omits a medication in each piece:
@@ -448,6 +489,11 @@ def test_rule_hints_are_included_once_and_only_for_the_target_piece(monkeypatch,
 
 def test_repair_length_stop_splits_pending_piece_and_preserves_completed_sibling(db, monkeypatch):
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 100)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     body = "先に完了する合成区間" + "D" * 90 + "修復が密な合成区間" + "E" * 75
     db.save_messages([_message(body=body)])
     roots = text_chunks(body, 100)

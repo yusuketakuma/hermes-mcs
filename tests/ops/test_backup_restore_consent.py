@@ -1,4 +1,10 @@
 """Synthetic new-terminal consent; no services, credentials or real records."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_restore
 import collection_stages
 import restore_evidence
 from contextlib import closing
@@ -172,6 +178,12 @@ def test_backup_receipt_never_authorizes_old_restore(restored, monkeypatch):
              json.dumps(approval)))
     db.close()
     monkeypatch.setattr(mcs_update, "LEDGER", str(restored / "ledger.db"))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     assert restore_evidence.find_restore_consent({'report_id': approval['plan_sha256'], 'backup_sha256': approval['binding']['plain_sha256'], 'backup_schema': backup_evidence.inventory_snapshot(restored / 'ledger.db')['schema']}, live_path=mcs_update.LEDGER) is None
     held(restored)
 

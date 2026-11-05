@@ -1,4 +1,6 @@
 """Synthetic extraction regressions for bounded context and linear medication merging."""
+import extract_llm_provider
+import extract_llm_runner
 import extract_validation
 import copy
 import sqlite3
@@ -121,7 +123,10 @@ def test_parallel_drain_releases_handled_future_results(tmp_path, monkeypatch):
     monkeypatch.setattr(futures, "ThreadPoolExecutor", Pool)
     monkeypatch.setattr(futures, "wait", wait)
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: None)
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kwargs: {"summary": "SYNTH"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     try:
         result = extract_llm.run_pending(ledger, limit=8, workers=2, budget_s=60,
                                          admitted_ids=set(range(1, 9)))

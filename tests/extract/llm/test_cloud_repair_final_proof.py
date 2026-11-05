@@ -1,4 +1,12 @@
 """Synthetic QC evidence survives a protected extract replacement."""
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 
 from contextlib import nullcontext
 import json
@@ -42,6 +50,13 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     _use_real_cloud_accounting(monkeypatch)
     cfg["cloud_llm"]["provider"] = "openai"
     monkeypatch.setattr(worker, "HOME", str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *_args: "synthetic-key")
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
@@ -187,6 +202,13 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     _use_real_cloud_accounting(monkeypatch)
     cfg["cloud_llm"]["provider"] = "openai"
     monkeypatch.setattr(worker, "HOME", str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *_args: "synthetic-key")
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
@@ -327,6 +349,8 @@ def test_dispatch_unknown_history_leaf_commits_and_stays_attention(tmp_path, mon
         return copy.deepcopy(observations)
 
     monkeypatch.setattr(worker, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
     try:
         with pytest.raises(KeyboardInterrupt):
             worker.run_pending(db, budget_s=300)

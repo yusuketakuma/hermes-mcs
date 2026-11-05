@@ -1,4 +1,5 @@
 """Attachment text uses synthetic files, a temporary ledger, and a stub OCR runtime."""
+import extract_llm_resident
 import hashlib
 import json
 import os
@@ -40,6 +41,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr.os.path, "isfile", lambda path: True)
     monkeypatch.setattr(ocr.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     pages = [{"page": 1, "engine": "yomitoku", "text": "合成資料", "text_hash": ocr._hash("合成資料")}]
     calls = []
 
@@ -611,6 +613,7 @@ def test_queue_status_does_not_claim_unobserved_rows_have_no_failures(setup, mon
 def test_memory_refusal_never_starts_ocr_or_consumes_an_attempt(setup, monkeypatch, available):
     ledger, cfg, _, calls, _ = setup
     monkeypatch.setattr(extract_llm, '_context_memory_available', lambda: available)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     changes = ledger.db.total_changes
     result = ocr.run_pending(ledger, cfg)
     assert result['deferred'] == 1 and result['reason'] == 'memory_deferred'

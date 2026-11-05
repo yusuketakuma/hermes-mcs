@@ -1,4 +1,17 @@
 """The real patient worker reaches recovery before its provider request budget."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
+
+import patient_context_quality_controller
+import patient_context_refresh_sources
+import patient_context_refresh_state
 from contextlib import nullcontext
 import json
 import time
@@ -10,7 +23,6 @@ import cloud_backlog
 import cloud_inference
 import cloud_policy
 import extract_llm
-import patient_context_refresh as refresh
 from test_patient_context_refresh import CFG, runtime, seed, step
 
 from test_cloud_entry_recovery import unrelated_reservation
@@ -29,11 +41,21 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1],
                                'routes': ['patient_context']}}
     monkeypatch.setattr(extract_llm, 'load_config', lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_policy, 'selected_key', lambda *a: 'synthetic-key')
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
     monkeypatch.setattr(cloud_inference.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(extract_llm, '_WRITER_STATE', (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm.extract, '_WRITER_STATE', (False, 1))
     monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(cloud_backlog, 'request_slot', lambda *a: nullcontext(True))
@@ -49,10 +71,10 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
             'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
     def scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, **kwargs):
-        answers.append(refresh._ask(cfg, {'source': 'synthetic resident input'}, deadline, admit, provider=provider))
+        answers.append(patient_context_quality_controller._ask(cfg, {'source': 'synthetic resident input'}, deadline, admit, provider=provider))
         # Suspend after accounting before persisting this source's scan cursor.
-        raise refresh.Deferred('synthetic_after_answer')
-    monkeypatch.setattr(refresh, '_scan', scan)
+        raise patient_context_refresh_state.Deferred('synthetic_after_answer')
+    monkeypatch.setattr(patient_context_quality_controller, '_scan', scan)
     if prior == 'saved':
         assert step(runtime, cfg=cfg)['status'] == 'deferred'
         assert len(calls) == 1
@@ -81,11 +103,11 @@ def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud
     import patient_context_plan as plan
     ledger, _clock, local = runtime
     seed(ledger, body='見出しのない完全合成の居住記録。')
-    snapshot = refresh._snapshot(ledger.db, 1, CLOUD_CFG)
+    snapshot = patient_context_refresh_sources._snapshot(ledger.db, 1, CLOUD_CFG)
     meta = {'source_sig': plan.source_signature(snapshot['sources'][0]),
             'contract': snapshot['contract'], 'provider': snapshot['contract']['provider']}
     with ledger.db:
-        refresh._replace(ledger, refresh.SCAN, 1,
+        patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, 1,
             {'cursor': 1, 'chunks': 2, 'complete': False, 'facts': []}, meta, 1)
     seen = []
     original = cloud_inference.CloudInferenceUnit
@@ -98,5 +120,5 @@ def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud
     result = cloud_step(runtime)
     assert result['status'] == 'deferred' and result['reason'] == 'nightly_cloud_budget'
     assert not local and len(seen) == 1
-    saved = refresh._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'])[1]
+    saved = patient_context_refresh_sources._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'])[1]
     assert saved['_provider_contract'] == snapshot['contract']['provider'] and saved['cursor'] == 1

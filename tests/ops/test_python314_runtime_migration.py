@@ -1,4 +1,15 @@
 """Python 3.14 runtime migration in the updater — synthetic venvs and repos only."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 from ops_testkit import select_updater_service_python
 import service_management
 import owned_process
@@ -20,6 +31,7 @@ OLD = (3, 13, 9)
 def _no_leaked_services_python(monkeypatch):
     """_use_migrated_runtime sets module state; keep it per test."""
     monkeypatch.setattr(mcs_update, "_SERVICES_PYTHON", None)
+    monkeypatch.setattr(update_runtime_migration, '_SERVICES_PYTHON', mcs_update._SERVICES_PYTHON)
 
 
 def _state(updater, **applying):
@@ -45,6 +57,8 @@ def old_interpreter(updater, monkeypatch, tmp_path):
     venv = _venv(tmp_path / "old-runtime", version_ok=False)
     monkeypatch.setattr(sys, "version_info", OLD)
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), None))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     return venv
 
 
@@ -54,6 +68,8 @@ def test_current_or_unknown_runtime_is_not_migrated(updater, monkeypatch, tmp_pa
     if runtime == "unrunnable":
         (venv / "bin" / "python3").write_text("")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), None))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     state = _state(updater)
     updater._plan_runtime_migration(state)
     assert "runtime_migration" not in state["applying"]
@@ -97,6 +113,8 @@ def test_old_journal_missing_options_base_stops_before_replanning(updater, old_i
     state = _state(updater, reinstall=True, install_options_base=None)
     before = Path(updater.STATE_PATH).read_bytes()
     monkeypatch.setattr(updater, '_plan_runtime_migration', lambda *_: pytest.fail('journal changed before check'))
+    monkeypatch.setattr(update_apply, '_plan_runtime_migration', updater._plan_runtime_migration)
+    monkeypatch.setattr(update_runtime_migration, '_plan_runtime_migration', updater._plan_runtime_migration)
     with pytest.raises(updater.UpdateError, match='install_options_unverified'):
         updater._post_merge(state)
     assert Path(updater.STATE_PATH).read_bytes() == before
@@ -131,7 +149,11 @@ def test_hermes_checkout_head_is_recorded_and_restored(updater, tmp_path, monkey
     old_head, new_head = _checkout(checkout)
     venv = _venv(checkout, version_ok=False)
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PIN", new_head)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     state = _state(updater)
@@ -240,6 +262,7 @@ def test_services_use_the_rebuilt_runtime_only_when_verified(
     if backup:
         (tmp_path / "venv.pre-python314").mkdir()
     monkeypatch.setattr(updater, "_SERVICES_PYTHON", None)
+    monkeypatch.setattr(update_runtime_migration, '_SERVICES_PYTHON', updater._SERVICES_PYTHON)
     migration = {"venv": str(venv), "backup_path": str(tmp_path / "venv.pre-python314")}
     if version_ok and backup:
         updater._use_migrated_runtime(migration)
@@ -251,7 +274,7 @@ def test_services_use_the_rebuilt_runtime_only_when_verified(
     else:
         with pytest.raises(updater.UpdateError, match="runtime_migration_unverified"):
             updater._use_migrated_runtime(migration)
-        assert updater._SERVICES_PYTHON is None
+        assert update_runtime_migration._SERVICES_PYTHON is None
 
 
 def test_post_merge_child_inherits_the_held_run_lock(updater, monkeypatch, tmp_path):
@@ -316,6 +339,7 @@ def test_post_merge_migrates_then_reconciles_with_new_python(
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     monkeypatch.setattr(updater, "_SERVICES_PYTHON", None)
+    monkeypatch.setattr(update_runtime_migration, '_SERVICES_PYTHON', updater._SERVICES_PYTHON)
     order = []
 
     def reinstall(applying):
@@ -326,11 +350,25 @@ def test_post_merge_migrates_then_reconciles_with_new_python(
         order.append("reinstall")
 
     monkeypatch.setattr(updater, "_reinstall", reinstall)
+    monkeypatch.setattr(update_runtime_migration, '_reinstall', updater._reinstall)
     monkeypatch.setattr(updater, "_services_reconcile",
-                        lambda: order.append(("services", updater._SERVICES_PYTHON)))
+                        lambda: order.append(("services", update_runtime_migration._SERVICES_PYTHON)))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "restart_agents", lambda: order.append("restart") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater._post_merge(_state(updater)) == 0
     assert order == ["reinstall", ("services", str(old_interpreter / "bin" / "python3")), "restart"]
     applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
@@ -354,8 +392,11 @@ def test_precheck_reports_unmovable_hermes_checkout_before_merge(updater, tmp_pa
     old_head, _ = _checkout(checkout)
     venv = _venv(checkout, version_ok=case == "current_python")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     if case != "unknown":
         monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({old_head}))
+        monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     if case == "branch":
         subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "-b", "local"], check=True)
     if case == "dirty":
@@ -380,6 +421,13 @@ def test_runtime_venv_follows_the_selected_service_interpreter(updater, tmp_path
     assert updater._runtime_venv({}) == (str(checkout / "venv"), str(checkout))
     # the standalone venv's parent is the MCS checkout, never a Hermes checkout
     monkeypatch.setattr(updater, "HOME", str(tmp_path / "mcs"))
+    monkeypatch.setattr(update_apply, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', updater.HOME)
     assert updater._runtime_venv({"runtime_mode": "standalone"}) == (str(tmp_path / "mcs/venv"), None)
 
 
@@ -439,8 +487,13 @@ def test_checkout_already_at_the_current_pin_with_an_old_venv_is_accepted(update
     old_head, _ = _checkout(checkout)
     venv = _venv(checkout, version_ok=False)
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset())
+    monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     monkeypatch.setattr(updater, "HERMES_PIN", old_head)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     assert updater._migration_checkout_problem({}) is None
     (checkout / "f").write_text("local edit")      # dirty stays refused at the pin too
     assert updater._migration_checkout_problem({}) == "hermes_checkout_branch_or_dirty"
@@ -451,6 +504,15 @@ def _interrupted(updater, tmp_path, monkeypatch, *, reset=False, rollback_shaped
     from ops_testkit import _git, _make_repo
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     prev = _git(repo, "rev-list", "-n1", "v1.0.0").stdout.strip()
     target = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
     assert prev != target
@@ -462,17 +524,40 @@ def _interrupted(updater, tmp_path, monkeypatch, *, reset=False, rollback_shaped
     _venv(runtime)                                          # ... and half-built the new one
     order, notices = [], []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: order.append("services"))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda snapshot, **_service_kwargs: [])
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     monkeypatch.setattr(updater, "quiesce", lambda: order.append("quiesce") or [])
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: order.append("restart") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     restore = updater._restore_runtime
     monkeypatch.setattr(updater, "_restore_runtime",
                         lambda entry: order.append("runtime") or restore(entry))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     git_out = updater._git_out
     monkeypatch.setattr(updater, "_git_out", lambda args, *a, **k: (
         order.append("reset") if args[:1] == ["reset"] else None) or git_out(args, *a, **k))
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     applying = {"tag": "v1.1.0", "sha": target, "prev_sha": prev, "reinstall": True,
                 "reinstall_done": False, "command_id": "cid-mig",
                 "runtime_migration": {"venv": str(old), "backup_path": str(old) + ".pre-python314"},
@@ -548,7 +633,12 @@ def test_undo_waiting_for_restore_consent_holds_with_drainers_stopped(updater, t
         raise updater.RestoreConsentPending({"report_id": "synthetic-report"})
 
     monkeypatch.setattr(updater, "_rollback_tree", needs_consent)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     monkeypatch.setattr(updater, "_consent_hold", lambda state, e, path: held.append(e) or "rid")
+    monkeypatch.setattr(update_apply, '_consent_hold', updater._consent_hold)
+    monkeypatch.setattr(update_recovery, '_consent_hold', updater._consent_hold)
+    monkeypatch.setattr(update_restore, '_consent_hold', updater._consent_hold)
     assert updater.recover_interrupted() == 0
     assert held and "restart" not in order and not notices
     after = updater.journal_store.load_state(updater.STATE_PATH)
@@ -600,13 +690,18 @@ def _own_checkout(updater, tmp_path, monkeypatch, *, pin=None):
     head, _ = _checkout(checkout)
     if pin == "previous":
         monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({head}))
+        monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     elif pin == "current":
         monkeypatch.setattr(updater, "HERMES_PIN", head)
+        monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+        monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     else:
         subprocess.run(["git", "-C", str(checkout), "checkout", "-q", "-b", "local/org-build"],
                        check=True)
     venv = _venv(checkout, version_ok=False)
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     return checkout, head
 
 
@@ -619,6 +714,7 @@ def test_confirmed_own_checkout_is_kept_only_when_exact_clean_and_ready(
         updater, tmp_path, monkeypatch, case, expected):
     checkout, head = _own_checkout(updater, tmp_path, monkeypatch)
     monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: case != "old_python")
+    monkeypatch.setattr(update_preflight, '_checkout_admits_python314', updater._checkout_admits_python314)
     keep = {"confirmed": head, "old_python": head, "dirty": head,
             "mismatch": "b" * 40, "invalid": "zz"}.get(case)
     if keep:
@@ -645,6 +741,7 @@ def test_an_explicit_keep_is_decided_before_the_pin_rules(
         updater, tmp_path, monkeypatch, pin, keep, ready, expected):
     checkout, head = _own_checkout(updater, tmp_path, monkeypatch, pin=pin)
     monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: ready)
+    monkeypatch.setattr(update_preflight, '_checkout_admits_python314', updater._checkout_admits_python314)
     monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, head if keep == "head" else "c" * 40)
     assert updater._migration_checkout_problem({}) == expected
 
@@ -657,8 +754,13 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
     (venv / "synthetic-deps").write_text("previous pin dependencies")
     (venv / "bin/hermes").write_text("synthetic installed CLI")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({old_head}))
+    monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     monkeypatch.setattr(updater, "HERMES_PIN", new_head)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
@@ -687,11 +789,25 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
         order.append("reinstall")
 
     monkeypatch.setattr(updater, "_reinstall", reinstall)
+    monkeypatch.setattr(update_runtime_migration, '_reinstall', updater._reinstall)
     monkeypatch.setattr(updater, "_services_reconcile",
-                        lambda: order.append(("services", updater._SERVICES_PYTHON)))
+                        lambda: order.append(("services", update_runtime_migration._SERVICES_PYTHON)))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "restart_agents", lambda: order.append("restart") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater._post_merge(state) == 0
     assert order == ["reinstall", ("services", str(venv / "bin/python3")), "restart"]
     applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
@@ -721,10 +837,16 @@ def test_supported_runtime_checkout_guards_and_idempotence(
     venv = _venv(checkout)
     (venv / "synthetic-deps").write_text("installed dependencies")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS",
                         frozenset() if case == "unknown" else frozenset({head}))
+    monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     monkeypatch.setattr(updater, "HERMES_PIN", head if case == "current" else next_head)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.setattr(updater, "_checkout_admits_python314", lambda c: case != "unready_keep")
+    monkeypatch.setattr(update_preflight, '_checkout_admits_python314', updater._checkout_admits_python314)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     if "keep" in case:
         monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV,
@@ -755,8 +877,13 @@ def test_supported_runtime_precheck_refuses_unreadable_branch_ref(updater, tmp_p
     venv = _venv(checkout)
     (venv / "synthetic-deps").write_text("installed dependencies")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PIN", target)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset({head}))
+    monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     run = updater.subprocess.run
     calls = []
@@ -798,8 +925,13 @@ def test_hidden_hermes_edits_stop_before_environment_changes(
     # Real Git hides the edit from status, but it is still operator-owned.
     assert _git(checkout, "status", "--porcelain", "--untracked-files=no").stdout == ""
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PIN", target)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.setattr(updater, "_checkout_admits_python314", lambda _: True)
+    monkeypatch.setattr(update_preflight, '_checkout_admits_python314', updater._checkout_admits_python314)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     if kept:
         monkeypatch.setenv(updater.KEEP_CHECKOUT_ENV, target)
@@ -832,7 +964,11 @@ def test_unreadable_hermes_index_stops_before_environment_changes(
     backup.mkdir()
     (backup / "dependencies").write_text("synthetic original dependencies")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PIN", head)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     run = updater.subprocess.run
 
     def unreadable_index(argv, *args, **kwargs):
@@ -865,8 +1001,13 @@ def test_nonmigrating_checkout_is_preserved_by_precheck_and_plan(
     venv = _venv(checkout)
     (venv / "dependencies").write_text("installed synthetic dependencies")
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     monkeypatch.setattr(updater, "HERMES_PIN", head if pin == "current" else target)
+    monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+    monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS", frozenset())
+    monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     if local_edit == "branch":
         _git(checkout, "checkout", "-q", "-b", "local/retained")
@@ -887,6 +1028,7 @@ def test_nonmigrating_checkout_is_preserved_by_precheck_and_plan(
 def test_old_parent_without_update_lock_refuses_reinstall_before_install(updater, monkeypatch):
     monkeypatch.delenv(updater.UPDATE_LOCK_FD_ENV, raising=False)
     monkeypatch.setattr(updater, "_reinstall", lambda applying: pytest.fail("install.sh must not start"))
+    monkeypatch.setattr(update_runtime_migration, '_reinstall', updater._reinstall)
     state = _state(updater, reinstall=True)
     with pytest.raises(updater.UpdateError, match="reinstall_requires_upgrade_tool"):
         updater._post_merge(state)

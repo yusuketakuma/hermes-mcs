@@ -1,4 +1,6 @@
 """Synthetic regression for an empty target in a multi-target bundle."""
+import semantic_job_processor
+import semantic_summary_stages
 import json
 import time
 
@@ -26,6 +28,7 @@ def test_first_empty_candidate_gets_one_repair_and_real_audit(tmp_path, monkeypa
         return result
 
     monkeypatch.setattr(semantic_drain, 'summarize', summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         cfg = _cfg('assist', budget=100, loop_mode='off')
         semantic_drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
@@ -59,6 +62,7 @@ def test_empty_repair_refunds_only_proven_pre_dispatch_stop(tmp_path, monkeypatc
         return result
 
     monkeypatch.setattr(semantic_drain, 'summarize', summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         cfg = _cfg('assist', budget=100, loop_mode='off')
         semantic_drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
@@ -93,6 +97,7 @@ def test_empty_repair_never_publishes_after_source_change(tmp_path, monkeypatch)
         return result
 
     monkeypatch.setattr(semantic_drain, 'summarize', summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         cfg = _cfg('assist', budget=100, loop_mode='off')
         semantic_drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
@@ -121,6 +126,7 @@ def test_unverified_empty_target_does_not_fail_or_hide_other_target(tmp_path, mo
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         config = _cfg("assist", budget=0, loop_mode="off")
         for _ in range(2):
@@ -184,6 +190,7 @@ def test_empty_candidate_stays_held_when_jev_returns(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         semantic_drain.run_due(db, _cfg("assist", budget=0, loop_mode="off"),
                                {"errors": []}, time.monotonic() + 300, llm_fn=_llm)
@@ -212,6 +219,7 @@ def test_completed_sibling_notice_is_idempotent_while_empty_target_is_held(tmp_p
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         for _ in range(2):
             semantic_drain.run_due(db, _cfg("enforce", budget=0, loop_mode="off"),
@@ -237,6 +245,7 @@ def test_held_empty_does_not_create_notice_without_arrival_origin(tmp_path, monk
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         db.db.execute("UPDATE notify_outbox SET state='suppressed' WHERE kind='new_messages'")
         db.db.commit()
@@ -269,6 +278,7 @@ def test_other_unfinished_target_prevents_partial_notice(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         semantic_drain.run_due(db, _cfg("enforce", budget=0, loop_mode="off"),
                                {"errors": []}, time.monotonic() + 300, llm_fn=_llm)
@@ -300,6 +310,7 @@ def test_completed_pass_is_not_lost_after_sibling_deadline_recovers(tmp_path, mo
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         cfg = _cfg("enforce", budget=100, loop_mode="off")
         semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 300,
@@ -348,6 +359,7 @@ def test_empty_repair_keeps_negative_before_later_jev_skip(tmp_path, monkeypatch
         return original_audit(client, bundle, summary, *args)
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
     try:
         semantic_drain.run_due(db, _cfg("assist", budget=100, loop_mode="off"),
@@ -435,6 +447,7 @@ def test_oversize_repair_preserves_negative_pair_after_restart(tmp_path, monkeyp
                                jev_client=_FakeJev(), llm_fn=llm)
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
     try:
         run()
@@ -558,7 +571,9 @@ def test_empty_repair_candidate_survives_interrupted_audit(
             "AND json_extract(payload,'$.target_message_id')=2 ORDER BY event_id")]
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_drain, "_obtain_summary", obtain)
+    monkeypatch.setattr(semantic_job_processor, '_obtain_summary', semantic_drain._obtain_summary)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
     try:
         cfg = _cfg("enforce", budget=100, loop_mode="off")
@@ -699,7 +714,9 @@ def interrupted_empty_repair(tmp_path, monkeypatch):
 
     state.run, state.retry, state.restart = run, retry, restart
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_drain, "_obtain_summary", obtain)
+    monkeypatch.setattr(semantic_job_processor, '_obtain_summary', semantic_drain._obtain_summary)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
     try:
         run()
@@ -731,6 +748,7 @@ def test_oversize_empty_repair_keeps_prior_pair_after_restart(interrupted_empty_
         return result
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     state.phase = "unavailable"
     llm_calls = state.llm_calls
     state.retry()

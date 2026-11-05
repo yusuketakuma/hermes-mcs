@@ -1,5 +1,6 @@
 """runtime_mode=standalone: config grants, launchd schedules and services
 without Hermes; Hermes mode keeps its existing surface."""
+import setup_integration
 import service_contract
 import service_management
 import lifecycle_io
@@ -204,7 +205,9 @@ def test_switching_retires_the_other_runtimes_jobs(monkeypatch, tmp_path):
 def test_init_stores_standalone_tokens_in_mcs_env_only(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(env))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(env))
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "synthetic-discord-token")
     monkeypatch.setattr(mcs_util, 'hermes_exe',
                         lambda *a: pytest.fail("standalone must not use Hermes"))
@@ -221,7 +224,9 @@ def test_init_stores_standalone_tokens_in_mcs_env_only(monkeypatch, tmp_path):
 def test_init_reuses_a_hermes_token_only_with_consent(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(env))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(env))
     hermes = tmp_path / "home" / ".hermes"
     hermes.mkdir(parents=True)
     (hermes / ".env").write_text("DISCORD_BOT_TOKEN=from-hermes\n")

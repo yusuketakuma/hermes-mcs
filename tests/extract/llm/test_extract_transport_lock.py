@@ -1,4 +1,6 @@
 """Realtime transport yields a borrowed writer lock without writing after fence loss."""
+import extract_llm_runner
+import extract_llm_source_contract
 from contextlib import closing
 import os
 
@@ -15,6 +17,8 @@ def locked(tmp_path, monkeypatch):
     generation = [1]
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: generation[0])
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", writer_lock.updater_state())
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0)
     path = str(tmp_path / "run.lock")
     fd = writer_lock.acquire_run_lock(path)
@@ -50,6 +54,7 @@ def test_only_transport_yields_and_source_changes_cannot_be_published(locked, mo
 
     monkeypatch.setattr(extract_llm.local_llm, "bounded_request", request)
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     outcome = extract_llm.run_pending(ledger, limit=1, budget_s=120, admitted_ids={1},
                                      allow_cloud=False, run_lock_fd=fd)
     assert calls == ["GET", "POST"]
@@ -78,6 +83,7 @@ def test_lost_transport_lock_never_flushes_or_releases_claims(locked, monkeypatc
 
     monkeypatch.setattr(extract_llm.local_llm, "bounded_request", request)
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     try:
         with pytest.raises(writer_lock.RunLockLost) as caught:
             extract_llm.run_pending(ledger, limit=1, budget_s=120, admitted_ids={1},

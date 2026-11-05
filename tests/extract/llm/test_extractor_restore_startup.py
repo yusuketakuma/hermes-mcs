@@ -1,4 +1,13 @@
 """Restore holds stop the extractor before opening a synthetic writer ledger."""
+import extract_llm_carry
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import os
 from contextlib import contextmanager
@@ -18,6 +27,13 @@ def root(tmp_path, monkeypatch):
     monkeypatch.setattr(writer_lock, "RUN_LOCK", str(data / "run.lock"))
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: extract_llm._WRITER_STATE[1])
     monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     return data
 
 
@@ -32,6 +48,7 @@ def test_restore_hold_rejects_before_ledger(root, monkeypatch, capsys, args, mar
         marker if isinstance(marker, str) else json.dumps(marker))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", *args])
     monkeypatch.setattr(extract_llm, "Ledger", lambda *_: pytest.fail("opened writer during restore"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm.main() == 1
     assert json.loads(capsys.readouterr().out)["error"] == "writer_unavailable"
     fd = writer_lock.acquire_run_lock()
@@ -45,6 +62,7 @@ def test_constructor_is_locked_and_lock_is_released(root, monkeypatch):
         assert writer_lock.acquire_run_lock() is None
         return ledger
     monkeypatch.setattr(extract_llm, "Ledger", construct)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_current_ledger() is ledger
     fd = writer_lock.acquire_run_lock()
     assert fd is not None
@@ -60,6 +78,7 @@ def test_restore_appearing_during_acquire_prevents_constructor(root, monkeypatch
         return fd
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire_then_hold)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *_: pytest.fail("opened stale writer"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_current_ledger() is None
     fd = acquire()
     assert fd is not None
@@ -70,6 +89,7 @@ def test_busy_writer_never_opens_ledger(root, monkeypatch):
     fd = writer_lock.acquire_run_lock()
     assert fd is not None
     monkeypatch.setattr(extract_llm, "Ledger", lambda *_: pytest.fail("opened unlocked writer"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     try:
         assert extract_llm._open_current_ledger() is None
     finally:
@@ -92,7 +112,11 @@ def test_restore_hold_keeps_paid_carry_without_writes(root, monkeypatch, during_
         pytest.fail("restore hold must retain paid evidence without writes")
     carry = [({"_cloud_discard": forbidden}, 0.0, forbidden)]
     monkeypatch.setattr(extract_llm, "_release", forbidden)
+    monkeypatch.setattr(extract_llm_carry, '_release', extract_llm._release)
+    monkeypatch.setattr(extract_llm_runner, '_release', extract_llm._release)
     monkeypatch.setattr(extract_llm, "_renew", forbidden)
+    monkeypatch.setattr(extract_llm_carry, '_renew', extract_llm._renew)
+    monkeypatch.setattr(extract_llm_runner, '_renew', extract_llm._renew)
     result = extract_llm._settle_carry(object(), carry, write=False, lock_context=locked())
     assert result == ({"done": 0, "held_prior": 0, "deferred": 0}, 0, set())
     assert len(carry) == 1
@@ -120,7 +144,9 @@ def test_revive_cli_keeps_lock_through_constructor_work_and_close(root, monkeypa
         locked_event('revive')
         return {'revived': 0, 'skipped_cap': 0}
     monkeypatch.setattr(extract_llm, 'Ledger', construct)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, 'revive_failed', revive)
+    monkeypatch.setattr(extract_llm_resident, 'revive_failed', extract_llm.revive_failed)
     monkeypatch.setattr(extract_llm.sys, 'argv', ['extract_llm', '--revive-failed'])
     assert extract_llm.main() == 0
     assert json.loads(capsys.readouterr().out)['revived'] == 0

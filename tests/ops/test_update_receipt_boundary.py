@@ -1,4 +1,10 @@
 """A malformed approval row cannot block or supersede a valid update."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_restore
 import restore_evidence
 import json
 import sqlite3
@@ -24,6 +30,12 @@ def test_invalid_or_legacy_receipt_time(tmp_path, monkeypatch, bad_time, expecte
                        (cid, json.dumps(receipt), 'applied', at))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     candidates, consumed = mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state())
     assert [row['command_id'] for row in candidates] == ['valid']
     assert consumed == expected_consumed
@@ -51,6 +63,12 @@ def test_ambiguous_rollback_cannot_veto_valid_approval(tmp_path, monkeypatch, ki
                        [('valid', json.dumps(valid), 'applied', 1), ('bad', raw, 'applied', 2)])
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     candidates, consumed = mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state())
     assert [row['command_id'] for row in candidates] == ['valid']
     assert consumed == []
@@ -78,6 +96,12 @@ def test_ambiguous_restore_receipt_never_grants_consent(tmp_path, monkeypatch, k
         db.execute('INSERT INTO command_receipts VALUES(?,?,?,?)', ('bad', raw, 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     assert restore_evidence.find_restore_consent(report, live_path=mcs_update.LEDGER) is None
 
 
@@ -93,6 +117,12 @@ def test_nontext_or_empty_receipt_identity_cannot_enter_execution_state(tmp_path
                    (cid, json.dumps(receipt), 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     assert mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state()) == ([], [])
 
 
@@ -108,4 +138,10 @@ def test_invalid_explicit_reviewed_base_cannot_skip_head_binding(tmp_path, monke
                    ('bad', json.dumps(receipt), 'applied', 1))
     db.close()
     monkeypatch.setattr(mcs_update, 'LEDGER', str(path))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     assert mcs_update.scan_pending_approvals(mcs_update.journal_store.default_state()) == ([], [])

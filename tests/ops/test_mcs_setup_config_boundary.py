@@ -1,6 +1,7 @@
 """Config rewrites read config.json the way load_config does: a file that
 load_config would read as {} (symlink, non-regular, oversized) is never
 treated as an empty config and overwritten. Synthetic temp files only."""
+import setup_config_snapshot
 import json
 import os
 import hashlib
@@ -41,6 +42,7 @@ def test_rewrite_refuses_config_that_load_config_reads_as_empty(
     conf = _unreadable_config(tmp_path, kind)
     before = _snapshot(conf)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(conf))
     if command == "init":
         assert mcs_setup.cmd_init(SimpleNamespace(yes=False)) == 1
     else:
@@ -56,6 +58,7 @@ def test_yes_moves_a_symlink_aside_without_touching_its_target(monkeypatch, tmp_
     real = tmp_path / "real.json"
     real.chmod(0o644)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(conf))
     assert mcs_setup._guard_config(True) is True
     (moved,) = tmp_path.glob("c.json.corrupt-*")
     assert moved.is_symlink() and not conf.exists()
@@ -67,6 +70,7 @@ def test_regular_config_within_the_limit_is_still_accepted(monkeypatch, tmp_path
     conf = tmp_path / "c.json"
     conf.write_text(json.dumps(TARGET))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(conf))
     assert mcs_setup._config_problem() is None
 
 
@@ -95,6 +99,7 @@ def _synthetic_split(monkeypatch, root):
     put(data / '.provider-settings-authority.json', {'version': 2, 'state': 'committed', 'files': hashes,
         'common_policy_sha256': provider_settings.common_policy_digest(common)})
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(root / 'config.json'))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(root / 'config.json'))
     monkeypatch.setattr(mcs_setup, 'HOME', str(root))
     monkeypatch.setattr(mcs_util, 'HOME', str(root))
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args, **kwargs: None)

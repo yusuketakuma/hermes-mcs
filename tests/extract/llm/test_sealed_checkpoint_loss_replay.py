@@ -1,4 +1,11 @@
 """Exact sealed clinical payloads may retain known loss; new loss and unknown proof cannot."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import time
 
@@ -15,7 +22,14 @@ def uncertain(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     body = '本人は合成薬Aを中止したかもしれません。'
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     ledger.save_messages([_message(body=body)])
     row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
     row.update(_source_binding=source_binding(ledger.db, 1, 1), _target=('', 'synthetic-model'),

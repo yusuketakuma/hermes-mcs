@@ -17,1983 +17,249 @@
 定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
 問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
-import ast
-import errno
-import fcntl
-import glob
-import hashlib
-import inspect
-import json
-import math
-import os
-import re
-import shutil
-import signal
-import sqlite3
-import stat
-import subprocess
-import sys
-import tempfile
-import time
-import uuid
-from contextlib import ExitStack, contextmanager, suppress
-from pathlib import Path
+import ast as ast
+import errno as errno
+import fcntl as fcntl
+import glob as glob
+import hashlib as hashlib
+import inspect as inspect
+import json as json
+import math as math
+import os as os
+import re as re
+import shutil as shutil
+import signal as signal
+import sqlite3 as sqlite3
+import stat as stat
+import subprocess as subprocess
+import sys as sys
+import tempfile as tempfile
+import time as time
+import uuid as uuid
+from contextlib import ExitStack as ExitStack, contextmanager as contextmanager, suppress as suppress
+from pathlib import Path as Path
+
+import importlib.abc
+import importlib.util
+import types
+import linecache
+
+# The entrypoint and each retained .prev select only their own complete generation.
+SUPPORT_FILES = {'mcs_recovery_gateway.py': '0914ce89045029be9db977b2265d202cd5acd5bb517d14ece05a79791ecd68c5', 'mcs_recovery_core.py': '1057815639add38bad2023960ed575ce9c6eef5de745eb8cce1fadf3d3b25578', 'mcs_recovery_services.py': '793b3d4e09e12028fb75f789f0277aea8754cb8af90035df44a31bcfef07d50a', 'mcs_recovery_database.py': '728a8fef544b9dddbbb2a92bf54e4d67eeb8abf439d2a8d1e616e292c1ea5f4a'}
+
+
+class _PinnedSourceLoader(importlib.abc.SourceLoader):
+    def __init__(self, path, raw):
+        self.path, self.raw = path, raw
+
+    def get_filename(self, fullname):
+        return self.path
+
+    def get_data(self, path):
+        if path != self.path:
+            raise OSError("recovery_support_cache_disabled")
+        return self.raw
+
+    def get_source(self, fullname):
+        return importlib.util.decode_source(self.raw)
+
+
+def _load_support():
+    root = os.path.dirname(os.path.abspath(__file__))
+    generation = hashlib.sha256(json.dumps(SUPPORT_FILES, sort_keys=True,
+        separators=(",", ":")).encode("ascii")).hexdigest()
+    bundled = os.path.join(root, "runtime-" + generation)
+    folder = bundled if os.path.lexists(bundled) else root
+    order = ("mcs_recovery_gateway.py", "mcs_recovery_core.py",
+             "mcs_recovery_services.py", "mcs_recovery_database.py")
+    if set(SUPPORT_FILES) != set(order):
+        raise ValueError("recovery_support_manifest_invalid")
+    verified = {}
+    for filename, expected in SUPPORT_FILES.items():
+        path = os.path.join(folder, filename)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 262144:
+                raise ValueError("recovery_support_invalid")
+            raw = b""
+            while len(raw) <= 262144:
+                chunk = os.read(fd, 262145 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        finally:
+            os.close(fd)
+        if len(raw) > 262144 or hashlib.sha256(raw).hexdigest() != expected:
+            raise ValueError("recovery_support_generation_mismatch")
+        verified[filename] = (path, raw)
+    namespace = "_mcs_recovery_" + uuid.uuid4().hex
+    while namespace in sys.modules:
+        namespace = "_mcs_recovery_" + uuid.uuid4().hex
+    package = types.ModuleType(namespace)
+    package.__path__ = [folder]
+    sys.modules[namespace] = package
+    loaded = {}
+    try:
+        for filename in order:
+            symbol = filename[:-3]
+            fullname = namespace + "." + symbol
+            path, raw = verified[filename]
+            logical = os.path.join(bundled, filename)
+            loader = _PinnedSourceLoader(logical, raw)
+            # A content-addressed source identity keeps inspect bound across rollback.
+            linecache.cache[logical] = (len(raw), None,
+                importlib.util.decode_source(raw).splitlines(True), logical)
+            spec = importlib.util.spec_from_loader(fullname, loader)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[fullname] = module
+            setattr(package, symbol, module)
+            loader.exec_module(module)
+            loaded[symbol] = module
+            if symbol == "mcs_recovery_core":
+                module.configure(__file__)
+    except BaseException:
+        for key in list(sys.modules):
+            if key == namespace or key.startswith(namespace + "."):
+                sys.modules.pop(key, None)
+        raise
+    return loaded
+
+
+_support = _load_support()
+
+
+mcs_recovery_gateway = _support["mcs_recovery_gateway"]
+_GATEWAY_RESTART_PROGRAM = mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
+_atomic_json = mcs_recovery_gateway._atomic_json
+_fdopen_owned = mcs_recovery_gateway._fdopen_owned
+_gateway_restart_report = mcs_recovery_gateway._gateway_restart_report
+_gateway_restart_run = mcs_recovery_gateway._gateway_restart_run
+_read_local_json = mcs_recovery_gateway._read_local_json
+_read_regular_bytes = mcs_recovery_gateway._read_regular_bytes
+request_gateway_restart = mcs_recovery_gateway.request_gateway_restart
+mcs_recovery_core = _support["mcs_recovery_core"]
+AGENTS_DIR = mcs_recovery_core.AGENTS_DIR
+CRON_LABEL_PREFIX = mcs_recovery_core.CRON_LABEL_PREFIX
+DATA = mcs_recovery_core.DATA
+ESCALATE_REALERT_S = mcs_recovery_core.ESCALATE_REALERT_S
+EXCLUDED_LABELS = mcs_recovery_core.EXCLUDED_LABELS
+GIT_LOCK_MIN_AGE_S = mcs_recovery_core.GIT_LOCK_MIN_AGE_S
+GIT_TERM_GRACE_S = mcs_recovery_core.GIT_TERM_GRACE_S
+HERMES_PY = mcs_recovery_core.HERMES_PY
+HOME = mcs_recovery_core.HOME
+KNOWN_AGENT_LABELS = mcs_recovery_core.KNOWN_AGENT_LABELS
+KNOWN_CRON_SCRIPTS = mcs_recovery_core.KNOWN_CRON_SCRIPTS
+LEDGER = mcs_recovery_core.LEDGER
+MANIFEST_PATH = mcs_recovery_core.MANIFEST_PATH
+MARKER_PATH = mcs_recovery_core.MARKER_PATH
+RECOVERY_DIR = mcs_recovery_core.RECOVERY_DIR
+REPO = mcs_recovery_core.REPO
+REPORT_PATH = mcs_recovery_core.REPORT_PATH
+RESIDENT_LABELS = mcs_recovery_core.RESIDENT_LABELS
+RUN_LOCK = mcs_recovery_core.RUN_LOCK
+SCRIPTS_DIR = mcs_recovery_core.SCRIPTS_DIR
+STALE_S = mcs_recovery_core.STALE_S
+STANDALONE_LABEL = mcs_recovery_core.STANDALONE_LABEL
+STATE_PATH = mcs_recovery_core.STATE_PATH
+T_GIT = mcs_recovery_core.T_GIT
+UPDATE_LOCK = mcs_recovery_core.UPDATE_LOCK
+WATCHER_LABELS = mcs_recovery_core.WATCHER_LABELS
+_RECOVERY_ROOT = mcs_recovery_core._RECOVERY_ROOT
+_RELEASE_GATE_FD = mcs_recovery_core._RELEASE_GATE_FD
+_RecoveryRoot = mcs_recovery_core._RecoveryRoot
+_RecoveryRootChanged = mcs_recovery_core._RecoveryRootChanged
+_alert_due = mcs_recovery_core._alert_due
+_alert_key = mcs_recovery_core._alert_key
+_awaiting_consent = mcs_recovery_core._awaiting_consent
+_check_recovery_root = mcs_recovery_core._check_recovery_root
+_clean = mcs_recovery_core._clean
+_clean_stale_git_locks = mcs_recovery_core._clean_stale_git_locks
+_drainers_key = mcs_recovery_core._drainers_key
+_ensure_recovery_marker = mcs_recovery_core._ensure_recovery_marker
+_git = mcs_recovery_core._git
+_git_out = mcs_recovery_core._git_out
+_head = mcs_recovery_core._head
+_installed_repo = mcs_recovery_core._installed_repo
+_last_report = mcs_recovery_core._last_report
+_lifetime_fds = mcs_recovery_core._lifetime_fds
+_link_identity = mcs_recovery_core._link_identity
+_load_state = mcs_recovery_core._load_state
+_local_changes_outside = mcs_recovery_core._local_changes_outside
+_open_release_gate = mcs_recovery_core._open_release_gate
+_release_control_root = mcs_recovery_core._release_control_root
+_release_scope = mcs_recovery_core._release_scope
+_remove_marker = mcs_recovery_core._remove_marker
+_report = mcs_recovery_core._report
+_root_identity = mcs_recovery_core._root_identity
+_run_owned = mcs_recovery_core._run_owned
+_runtime_config = mcs_recovery_core._runtime_config
+_runtime_mode = mcs_recovery_core._runtime_mode
+_save_state = mcs_recovery_core._save_state
+_stop_owned = mcs_recovery_core._stop_owned
+_try_lock = mcs_recovery_core._try_lock
+_unreconciled_restore = mcs_recovery_core._unreconciled_restore
+_valid_state = mcs_recovery_core._valid_state
+mcs_recovery_services = _support["mcs_recovery_services"]
+_agent_pid = mcs_recovery_services._agent_pid
+_bootstrap_agent = mcs_recovery_services._bootstrap_agent
+_launchctl = mcs_recovery_services._launchctl
+_notify = mcs_recovery_services._notify
+_owned_cron = mcs_recovery_services._owned_cron
+_reconcile_membership = mcs_recovery_services._reconcile_membership
+_restart_drainers = mcs_recovery_services._restart_drainers
+_restart_gateway = mcs_recovery_services._restart_gateway
+_restart_lineworks = mcs_recovery_services._restart_lineworks
+_restart_services = mcs_recovery_services._restart_services
+_setup_python = mcs_recovery_services._setup_python
+_standalone_drainer_problems = mcs_recovery_services._standalone_drainer_problems
+_standalone_status = mcs_recovery_services._standalone_status
+_standalone_target_supported = mcs_recovery_services._standalone_target_supported
+mcs_recovery_database = _support["mcs_recovery_database"]
+RESTORE_LOSS_NOTICE = mcs_recovery_database.RESTORE_LOSS_NOTICE
+_EFFECT_TABLES = mcs_recovery_database._EFFECT_TABLES
+_INTAKE_EVIDENCE_ROWS = mcs_recovery_database._INTAKE_EVIDENCE_ROWS
+_INTAKE_EVIDENCE_ROW_BYTES = mcs_recovery_database._INTAKE_EVIDENCE_ROW_BYTES
+_INTAKE_EVIDENCE_SECONDS = mcs_recovery_database._INTAKE_EVIDENCE_SECONDS
+_MAX_RECEIPT_BYTES = mcs_recovery_database._MAX_RECEIPT_BYTES
+_STAGING_KEYS = mcs_recovery_database._STAGING_KEYS
+_STAGING_NAME = mcs_recovery_database._STAGING_NAME
+_STORED_TABLES = mcs_recovery_database._STORED_TABLES
+_approval_receipt = mcs_recovery_database._approval_receipt
+_bound_consent = mcs_recovery_database._bound_consent
+_consent_for = mcs_recovery_database._consent_for
+_db_version = mcs_recovery_database._db_version
+_file_sha256 = mcs_recovery_database._file_sha256
+_intake_comparison = mcs_recovery_database._intake_comparison
+_intake_evidence = mcs_recovery_database._intake_evidence
+_loss_report = mcs_recovery_database._loss_report
+_mark_restored = mcs_recovery_database._mark_restored
+_record_hold = mcs_recovery_database._record_hold
+_release_staging = mcs_recovery_database._release_staging
+_replace_database = mcs_recovery_database._replace_database
+_restore_content_digest = mcs_recovery_database._restore_content_digest
+_restore_db = mcs_recovery_database._restore_db
+_restore_reconcile_pending = mcs_recovery_database._restore_reconcile_pending
+_restored_writer_compatible = mcs_recovery_database._restored_writer_compatible
+_settle_staging = mcs_recovery_database._settle_staging
+_staging_matches = mcs_recovery_database._staging_matches
+_staging_record = mcs_recovery_database._staging_record
+_table_count = mcs_recovery_database._table_count
+_watermark = mcs_recovery_database._watermark
+
 
 INTERACTIVE_GUIDE_VERSION = 1
-
-HOME = os.path.abspath(os.path.expanduser(os.environ.get("MCS_ROOT", "~/.mcs")))
-DATA = os.path.join(HOME, "data")
-RECOVERY_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def _fdopen_owned(fd, mode, **stream_kwargs):
-    """Adopt an owned FD, closing it if stream construction fails."""
-    try:
-        return os.fdopen(fd, mode, closefd=True, **stream_kwargs)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError as cleanup_error:
-            if cleanup_error.errno != errno.EBADF:
-                raise
-        raise
-
-
-def _read_regular_bytes(path, maximum=16 * 1024 * 1024, private=False):
-    """Read a bounded regular leaf without project imports, links or FIFO waits."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    with _fdopen_owned(fd, "rb") as stream:
-        metadata = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(metadata.st_mode)
-                or private and metadata.st_mode & 0o077 or metadata.st_size > maximum):
-            raise ValueError("local_state_file_invalid")
-        raw = stream.read(maximum + 1)
-        if len(raw) > maximum:
-            raise ValueError("local_state_file_too_large")
-        return raw
-
-
-def _installed_repo():
-    """The checkout install.sh recorded next to this tool — install and
-    update support a clone anywhere, while data/ always lives in ~/.mcs.
-    Falls back to ~/.mcs for installs that predate the sidecar."""
-    try:
-        path = _read_regular_bytes(os.path.join(RECOVERY_DIR, "repo_path"), 65536).decode("utf-8").strip()
-    except (OSError, ValueError):
-        return HOME
-    return path if os.path.isabs(path) else HOME
-
-
-REPO = _installed_repo()
-# install verifies recovery_python >= 3.14 for this watchdog; services are
-# still reconciled with the runtime's own interpreter (mcs_setup.HERMES_PY)
-HERMES_PY = os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python")
-STATE_PATH = os.path.join(DATA, "update_state.json")
-UPDATE_LOCK = os.path.join(DATA, "update.lock")
-RUN_LOCK = os.path.join(DATA, "run.lock")
-MARKER_PATH = os.path.join(DATA, "update_in_progress.marker")
-MANIFEST_PATH = os.path.join(DATA, "service_manifest.json")
-REPORT_PATH = os.path.join(DATA, "recovery_report.json")
-LEDGER = os.path.join(DATA, "ledger.db")
-AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
-
-RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
-WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")
-EXCLUDED_LABELS = frozenset({"ai.mcs.llamaserver", "org.mcs.recovery"})
-# current desired sets — kept in sync with service_contract.AGENT_LABELS /
-# scheduled_jobs.CRON_JOBS; recovery must never delete what the restored code wants
-KNOWN_AGENT_LABELS = frozenset(RESIDENT_LABELS + WATCHER_LABELS)
-KNOWN_CRON_SCRIPTS = frozenset({
-    "mcs_check.sh", "mcs_deep.sh", "mcs_ocr.sh", "mcs_health.sh", "mcs_llm_catchup.sh",
-    "mcs_update.sh", "llamacpp_restart_if_idle.sh", "mcs_offsite.sh"})
-SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
-# runtime_mode=standalone (service_contract.desired_agent_labels): launchd calendar
-# agents replace hermes cron, ai.mcs.standalone replaces the gateway
-# Optional offsite is host-owned, not an extra external calendar agent.
-STANDALONE_LABEL = "ai.mcs.standalone"
-CRON_LABEL_PREFIX = "ai.mcs.cron."
-KNOWN_AGENT_LABELS |= frozenset(
-    {STANDALONE_LABEL} | {CRON_LABEL_PREFIX + s[:-3].replace("_", "-")
-                          for s in KNOWN_CRON_SCRIPTS if s != "mcs_offsite.sh"})
-STALE_S = 1800
-ESCALATE_REALERT_S = 6 * 3600       # = mcs_update.ESCALATE_REALERT_S
-GIT_LOCK_MIN_AGE_S = 600
-T_GIT = 30
-
-
-GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
-
-
-
-_RELEASE_GATE_FD = None
-
-_RECOVERY_ROOT = None
-
-
-class _RecoveryRootChanged(BaseException):
-    pass
-
-
-def _root_identity(info):
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid)
-
-
-def _link_identity(info):
-    return (_root_identity(info), info.st_nlink, info.st_size,
-            info.st_mtime_ns, info.st_ctime_ns)
-
-
-class _RecoveryRoot:
-    """Hold both the named root and its target without importing checkout code."""
-
-    def __init__(self, path):
-        self.path = Path(os.path.abspath(path))
-        self.parent_fd = self.fd = None
-        try:
-            self.parent_fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            parent = os.fstat(self.parent_fd)
-            self.parent = _root_identity(parent)
-            named = os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
-            self.link = None
-            if stat.S_ISLNK(named.st_mode):
-                if named.st_uid != os.getuid() or parent.st_uid != os.getuid() or parent.st_mode & 0o022:
-                    raise ValueError('recovery_root_invalid')
-                self.link = (_link_identity(named), os.readlink(self.path.name, dir_fd=self.parent_fd))
-            elif not stat.S_ISDIR(named.st_mode):
-                raise ValueError('recovery_root_invalid')
-            flags = os.O_RDONLY | os.O_DIRECTORY | (os.O_NOFOLLOW if self.link is None else 0)
-            self.fd = os.open(self.path.name, flags, dir_fd=self.parent_fd)
-            info = os.fstat(self.fd)
-            if info.st_uid != os.getuid() or info.st_mode & 0o022:
-                raise ValueError('recovery_root_invalid')
-            self.target = _root_identity(info)
-            self.check()
-        except BaseException:
-            self.close()
-            raise
-
-    def check(self):
-        try:
-            parent = os.fstat(self.parent_fd)
-            named = os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
-            if (_root_identity(parent) != self.parent
-                    or _root_identity(os.stat(self.path.parent)) != self.parent
-                    or _root_identity(os.fstat(self.fd)) != self.target
-                    or _root_identity(os.stat(self.path.name, dir_fd=self.parent_fd)) != self.target):
-                raise _RecoveryRootChanged()
-            if self.link is None:
-                if _root_identity(named) != self.target:
-                    raise _RecoveryRootChanged()
-            elif (self.link != (_link_identity(named), os.readlink(self.path.name, dir_fd=self.parent_fd))
-                  or _link_identity(os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False))
-                  != self.link[0]):
-                raise _RecoveryRootChanged()
-            if (_root_identity(os.stat(self.path.name, dir_fd=self.parent_fd)) != self.target
-                    or _root_identity(os.stat(self.path.parent)) != self.parent):
-                raise _RecoveryRootChanged()
-        except (OSError, ValueError):
-            raise _RecoveryRootChanged() from None
-
-    def close(self):
-        if self.fd is not None:
-            os.close(self.fd)
-            self.fd = None
-        if self.parent_fd is not None:
-            os.close(self.parent_fd)
-            self.parent_fd = None
-
-
-def _check_recovery_root():
-    if _RECOVERY_ROOT is not None:
-        _RECOVERY_ROOT.check()
-
-
-def _release_control_root(runtime_home):
-    canonical = os.path.realpath(os.path.abspath(os.path.expanduser(runtime_home)))
-    namespace = hashlib.sha256(os.fsencode(canonical)).hexdigest()
-    return Path(os.path.realpath(os.path.expanduser('~'))) / '.mcs-release-control' / namespace
-
-
-def _open_release_gate(runtime_home):
-    root = _release_control_root(runtime_home)
-    directory, held = os.open('/', os.O_RDONLY | os.O_DIRECTORY), None
-    try:
-        for index, part in enumerate(root.parts[1:]):
-            private = index >= len(root.parts) - 3
-            if private:
-                try:
-                    os.mkdir(part, 0o700, dir_fd=directory)
-                    os.fsync(directory)
-                except FileExistsError:
-                    pass
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-            info = os.fstat(directory)
-            if private and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
-                raise ValueError('release_entry_hold')
-        held = os.open('release-entry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-                       0o600, dir_fd=directory)
-        info = os.fstat(held)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
-                or info.st_size != 0 or stat.S_IMODE(info.st_mode) != 0o600):
-            raise ValueError('release_entry_hold')
-        fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        for name in ('release-owner.json', 'release-owner-activation.json'):
-            try:
-                os.stat(name, dir_fd=directory, follow_symlinks=False)
-            except FileNotFoundError:
-                continue
-            raise ValueError('release_entry_hold')
-        result, held = held, None
-        return result
-    finally:
-        if held is not None:
-            os.close(held)
-        os.close(directory)
-
-
-@contextmanager
-def _release_scope(runtime_home):
-    global _RELEASE_GATE_FD
-    fd = _open_release_gate(runtime_home)
-    previous, _RELEASE_GATE_FD = _RELEASE_GATE_FD, fd
-    try:
-        yield fd
-    finally:
-        _RELEASE_GATE_FD = previous
-        os.close(fd)
-
-
-def _lifetime_fds():
-    return {} if _RELEASE_GATE_FD is None else {'pass_fds': (_RELEASE_GATE_FD,)}
-
-
-def _run_owned(argv, timeout, env, stdin=None):
-    """= owned_process.run_owned, self-contained without the checkout. subprocess.run(capture_output,
-    text) for one command in its own
-    session. On timeout or interruption that session is stopped by
-    _stop_owned and the exception re-raised. Worst case: timeout +
-    GIT_TERM_GRACE_S + the bounded reap."""
-    _check_recovery_root()
-    child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, env=env,
-                             start_new_session=True, **_lifetime_fds())
-    try:
-        out, err = child.communicate(timeout=timeout)
-    except BaseException:
-        _stop_owned(child)
-        raise
-    return subprocess.CompletedProcess(argv, child.returncode, out, err)
-
-
-def _stop_owned(child):
-    """SIGTERM first so git cleans its lock, SIGKILL after the grace,
-    then a bounded reap. Only a still-unreaped leader's group is
-    signalled — its pid (= group id) cannot have been reused."""
-    if child.returncode is None:
-        with suppress(OSError):
-            os.killpg(child.pid, signal.SIGTERM)
-        with suppress(BaseException):
-            child.communicate(timeout=GIT_TERM_GRACE_S)
-        if child.returncode is None:
-            with suppress(OSError):
-                os.killpg(child.pid, signal.SIGKILL)
-    with suppress(BaseException):
-        child.communicate(timeout=5)
-    if child.returncode is None:
-        with suppress(BaseException):
-            child.wait(timeout=5)
-    for stream in (child.stdout, child.stderr):
-        if stream is not None:
-            with suppress(OSError):
-                stream.close()   # an escaped holder must not leak our fds
-
-
-def _git(args, timeout=T_GIT):
-    _check_recovery_root()
-    try:
-        # never let git walk up into an unrelated parent repository
-        # when REPO itself is not a checkout
-        env = dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(
-            os.path.abspath(REPO)))
-        return _run_owned(["git", "-C", REPO, *args], timeout, env)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def _git_out(args, timeout=T_GIT):
-    _check_recovery_root()
-    r = _git(args, timeout)
-    return r.stdout if r and r.returncode == 0 else ""
-
-
-def _head():
-    return _git_out(["rev-parse", "HEAD"]).strip()
-
-
-def _clean():
-    r = _git(["status", "--porcelain", "-uno"])
-    return None if r is None or r.returncode != 0 else r.stdout.strip() == ""
-
-
-def _local_changes_outside(prev, target):
-    """Unsafe states before resetting to target, allowing known update versions."""
-    try:
-        if not prev or not target:
-            raise ValueError("update range unknown")
-        snapshots = []
-        for args, index in ((["ls-tree", "-rz", prev], False),
-                            (["ls-tree", "-rz", target], False),
-                            (["ls-files", "--stage", "-v", "-z"], True)):
-            result = _git(args)
-            if result is None or result.returncode != 0:
-                raise ValueError("tree/index unreadable")
-            versions = {}
-            for record in filter(None, result.stdout.split("\0")):
-                meta, sep, path = record.partition("\t")
-                fields = meta.split()
-                if index:
-                    if not fields or fields.pop(0) != "H":
-                        raise ValueError("unsupported index flags")
-                if not sep or len(fields) != 3 or path in versions:
-                    raise ValueError("tree/index malformed")
-                mode, middle, last = fields
-                blob = middle if index else last
-                if (last != "0" if index else middle != "blob") or mode not in {
-                        "100644", "100755", "120000"}:
-                    raise ValueError("tree/index type unknown")
-                parts = path.split("/")
-                if (path.startswith("/") or any(ord(c) < 32 for c in path)
-                        or any(p in {"", ".", ".."} for p in parts)):
-                    raise ValueError("tree/index path invalid")
-                versions[path] = (mode, blob)
-            snapshots.append(versions)
-        ita_views = []
-        for visibility in ("--ita-visible-in-index", "--ita-invisible-in-index"):
-            result = _git(["diff", "--cached", "--raw", "--no-renames", "--no-ext-diff",
-                           "--no-textconv", "--no-abbrev", "--no-relative", "-z", visibility, prev])
-            if result is None or result.returncode != 0:
-                raise ValueError("index intent unreadable")
-            ita_views.append(result.stdout)
-        if ita_views[0] != ita_views[1]:
-            raise ValueError("intent-to-add index")
-
-        old, new, index = snapshots
-        directories = set()
-        for path in old.keys() | new.keys():
-            parts = path.split("/")
-            directories.update("/".join(parts[:n]) for n in range(1, len(parts)))
-
-        def worktree_version(path):
-            full = Path(REPO)
-            for part in path.split("/")[:-1]:
-                full /= part
-                try:
-                    if not stat.S_ISDIR(full.lstat().st_mode):
-                        ancestor = full.relative_to(REPO).as_posix()
-                        if worktree_version(ancestor) not in {old.get(ancestor), new.get(ancestor)}:
-                            raise ValueError("unknown non-directory ancestor")
-                        return None
-                except FileNotFoundError:
-                    return None
-            full /= path.split("/")[-1]
-            try:
-                before = full.lstat()
-            except FileNotFoundError:
-                return None
-            if stat.S_ISDIR(before.st_mode) and path in directories:
-                # A known directory may replace a leaf, but no private children may be lost.
-                for child in full.iterdir():
-                    name = path + "/" + child.name
-                    if worktree_version(name) not in {old.get(name), new.get(name)}:
-                        raise ValueError("unknown directory content")
-                return None
-            digest = hashlib.sha1(usedforsecurity=False)  # Git blob identity, not authentication.
-            if stat.S_ISLNK(before.st_mode):
-                content = os.fsencode(os.readlink(full))
-                digest.update(f"blob {len(content)}\0".encode() + content)
-                return "120000", digest.hexdigest()
-            if not stat.S_ISREG(before.st_mode):
-                raise ValueError("non-file at tracked path")
-            fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with _fdopen_owned(fd, "rb") as stream:
-                opened = os.fstat(stream.fileno())
-                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-                    raise ValueError("file changed during inspection")
-                digest.update(f"blob {opened.st_size}\0".encode())
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                after = os.fstat(stream.fileno())
-                if (after.st_size, after.st_mtime_ns, after.st_mode) != (
-                        opened.st_size, opened.st_mtime_ns, opened.st_mode):
-                    raise ValueError("file changed during inspection")
-            return ("100755" if opened.st_mode & stat.S_IXUSR else "100644"), digest.hexdigest()
-
-        foreign = []
-        for path in sorted(old.keys() | new.keys() | index.keys()):
-            known = {old.get(path), new.get(path)}
-            if index.get(path) not in known:
-                foreign.append(path)
-            elif path not in index and path not in new:
-                continue  # Reset does not touch this untracked path.
-            elif worktree_version(path) not in known:
-                foreign.append(path)
-        return foreign
-    except (OSError, ValueError):
-        return None
-
-
-def _valid_state(state):
-    """Check journal shapes before any recovery decision or mutation."""
-    if not isinstance(state, dict) or type(state.get("v")) is not int \
-            or state["v"] != 1:
-        return False
-    for key in ("stages", "applied"):
-        if not isinstance(state.get(key, []), list) \
-                or any(not isinstance(row, dict) for row in state.get(key, [])):
-            return False
-    if state.get("applying") is not None and not isinstance(state["applying"], dict):
-        return False
-    for key in ("attempts", "executed", "restore_consent"):
-        if key in state and not isinstance(state[key], dict):
-            return False
-    records = [*state.get("stages", []), *state.get("applied", []),
-               state.get("applying") or {}]
-    for row in records:
-        stamp = row.get("at", 0)
-        if type(stamp) not in (int, float) or not 0 <= stamp < 1e12:
-            return False
-    return all(isinstance(row.get("stage"), str)
-               for row in state.get("stages", []))
-
-
-def _load_state():
-    try:
-        s = _read_local_json(STATE_PATH)
-        if not _valid_state(s):
-            return {"_corrupt": True}
-        return s
-    except FileNotFoundError:
-        if os.path.lexists(STATE_PATH):
-            return {"_corrupt": True}
-        return {"v": 1, "stages": [], "applied": [], "applying": None}
-    except (OSError, ValueError, RecursionError):
-        return {"_corrupt": True}
-
-
-def _read_local_json(path, maximum=None, private=False):
-    """Read a regular, non-symlink file; preserve each caller's size policy."""
-    return json.loads(_read_regular_bytes(
-        path, 16 * 1024 * 1024 if maximum is None else maximum, private).decode("utf-8"))
-
-
-def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
-    """Publish JSON durably: private mkstemp, fsync, replace, dir fsync.
-    Raises after removing the temporary file; callers keep their own error
-    policy. Also frozen into _GATEWAY_RESTART_PROGRAM."""
-    directory = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=prefix, suffix=suffix)
-    try:
-        with _fdopen_owned(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, **dump_kw)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        tmp = None
-        dfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    finally:
-        if tmp is not None:
-            with suppress(OSError):
-                os.unlink(tmp)
-
-
-def _save_state(state):
-    _check_recovery_root()
-    _atomic_json(STATE_PATH, state, ".ustate.", ensure_ascii=False, sort_keys=True)
-
-
-def _ensure_recovery_marker():
-    """Keep or create the launcher hold; it does not prove writers stopped."""
-    _check_recovery_root()
-    directory, name = os.path.split(MARKER_PATH)
-    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    try:
-        flags = os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-        try:
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags, 0o600, dir_fd=dfd)
-        except FileExistsError:
-            fd = os.open(name, os.O_RDONLY | flags, dir_fd=dfd)
-            try:
-                opened = os.fstat(fd)
-                current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
-                if (not stat.S_ISREG(opened.st_mode)
-                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
-                    raise OSError("update_marker_unverifiable")
-            finally:
-                os.close(fd)
-            return
-        with _fdopen_owned(fd, "w") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(str(time.time()))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.fsync(dfd)
-    finally:
-        os.close(dfd)
-
-
-def _report(result, detail, **extra):
-    _check_recovery_root()
-    with suppress(OSError):
-        _atomic_json(REPORT_PATH, dict({"result": result, "detail": detail,
-                                        "at": time.time()}, **extra), ".rpt.")
-
-
-def _alert_key(state, detail):
-    """Copy of mcs_update._alert_key — keep identical so both tools
-    dedup against the same recovery_report.json."""
-    reason = re.split(r"[:—(]", detail, maxsplit=1)[0].strip()
-    return hashlib.sha256(json.dumps(
-        [state.get("applying"), state.get("stages"), reason],
-        sort_keys=True, default=str).encode()).hexdigest()[:32]
-
-
-def _alert_due(result, key, now):
-    """Copy of mcs_update._alert_due: suppress only the same (result,
-    key) notified < ESCALATE_REALERT_S ago; anything else alerts."""
-    last = _last_report()
-    at = last.get("notified_at")
-    if (last.get("result"), last.get("alert_key")) == (result, key) \
-            and type(at) in (int, float) \
-            and 0 <= now - at < ESCALATE_REALERT_S:
-        return False, at
-    return True, now
-
-
-def _last_report():
-    try:
-        last = _read_local_json(REPORT_PATH)
-    except (OSError, ValueError, RecursionError):
-        return {}
-    return last if isinstance(last, dict) else {}
-
-
-def _drainers_key(state, head):
-    """Copy of mcs_update._drainers_key — keep identical: the journal +
-    HEAD drainers were last (re)started for; the same key on a later
-    pass only ensures they run instead of bouncing them again."""
-    return hashlib.sha256(json.dumps(
-        [state.get("applying"), state.get("stages"), head or None],
-        sort_keys=True, default=str).encode()).hexdigest()[:32]
-
-
-def _awaiting_consent():
-    """Standalone copy of notify_cards.restore_awaiting_consent: the
-    restore_pending marker in phase awaiting_consent — or unreadable,
-    which holds too (fail closed). None otherwise."""
-    path = os.path.join(DATA, "restore_pending.json")
-    try:
-        data = _read_local_json(path)
-    except FileNotFoundError:
-        return {"unreadable": True} if os.path.lexists(path) else None
-    except (OSError, ValueError, RecursionError):
-        return {"unreadable": True}
-    if not isinstance(data, dict) or not (
-            data.get("phase") in ("restored", "awaiting_consent")
-            or ("phase" not in data and "restored_at" in data)):
-        return {"unreadable": True}
-    return data if data.get("phase") == "awaiting_consent" else None
-
-
-
-def _unreconciled_restore():
-    """An updater/watchdog restore witness whose notification reconcile is pending.
-
-    Backup adoption has its own writer-resume proof; its marker is not this hold.
-    """
-    try:
-        marker = _read_local_json(os.path.join(DATA, "restore_pending.json"))
-    except (OSError, ValueError, RecursionError):
-        return None  # existing _awaiting_consent holds unreadable markers
-    if isinstance(marker, dict) and marker.get("by") in ("mcs_update", "mcs_recover") \
-            and (marker.get("phase") == "restored"
-                 or "phase" not in marker and "restored_at" in marker):
-        return marker
-    return None
-
-
-
-def _restored_writer_compatible():
-    """Prove a restored DB matches the exact clean checkout being resumed.
-
-    Read the canonical schema literal as data; never import restored code.
-    Unknown journal, source, target or DB identity retains the writer hold.
-    """
-    state = _load_state()
-    applying = state.get("applying")
-    marker = _unreconciled_restore()
-    if state.get("_corrupt") or not isinstance(applying, dict) \
-            or applying.get("rollback") is not True or not applying.get("sha") \
-            or not isinstance(applying.get("backup_path"), str) \
-            or marker is None or marker.get("backup_path") != applying["backup_path"]:
-        return False
-    path = os.path.join(REPO, "mcs", "core", "ledger.py")
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with _fdopen_owned(fd, "rb") as stream:
-            metadata = os.fstat(stream.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
-                return False
-            raw = stream.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            return False
-        tree = ast.parse(raw.decode("utf-8"))
-        stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name)
-                  and isinstance(node.ctx, ast.Store) and node.id == "SCHEMA_VERSION"]
-        values = [node.value for node in tree.body if isinstance(node, ast.Assign)
-                  and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-                  and node.targets[0].id == "SCHEMA_VERSION"]
-        if len(stores) != 1 or len(values) != 1 or not isinstance(values[0], ast.Constant) \
-                or type(values[0].value) is not int or values[0].value < 0:
-            return False
-        head = _head()
-        if not head or head != applying["sha"] or _clean() is not True:
-            return False
-        committed = _git(["show", head + ":mcs/core/ledger.py"])
-        if committed is None or committed.returncode != 0 \
-                or committed.stdout.encode("utf-8") != raw:
-            return False
-        return (_head() == head and _clean() is True
-                and _db_version(LEDGER) == values[0].value)
-    except (OSError, ValueError, SyntaxError, RecursionError):
-        return False
-
-
-def _restore_reconcile_pending():
-    """Keep the existing incomplete flag; the durable restore witness holds on save failure."""
-    state = _load_state()
-    applying = state.get("applying")
-    if not state.get("_corrupt") and isinstance(applying, dict):
-        applying["restore_incomplete"] = True
-        try:
-            _save_state(state)
-        except OSError:
-            pass  # never authorize resume because the journal could not be saved
-    return "restore_reconcile_pending"
 
 
 def _report_alert(result, state, detail, text, **extra):
     """Report + deduped human notice. _notify is `hermes send` directly
     (not notify_outbox — the ledger is untouched)."""
-    key = _alert_key(state, detail)
-    notify, notified_at = _alert_due(result, key, time.time())
-    _report(result, detail, alert_key=key, notified_at=notified_at,
+    key = mcs_recovery_core._alert_key(state, detail)
+    notify, notified_at = mcs_recovery_core._alert_due(result, key, time.time())
+    mcs_recovery_core._report(result, detail, alert_key=key, notified_at=notified_at,
             **extra)
     if notify:
-        _notify(text)
-
-
-def _try_lock(path):
-    _check_recovery_root()
-    data_fd = fd = None
-    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    try:
-        if _RECOVERY_ROOT is None:
-            fd = os.open(path, flags, 0o600)
-        else:
-            if os.path.dirname(os.path.abspath(path)) != os.path.abspath(DATA):
-                raise _RecoveryRootChanged()
-            data_fd = os.open(os.path.basename(DATA), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                              dir_fd=_RECOVERY_ROOT.fd)
-            if _root_identity(os.fstat(data_fd)) != _root_identity(os.stat(DATA, follow_symlinks=False)):
-                raise _RecoveryRootChanged()
-            fd = os.open(os.path.basename(path), flags, 0o600, dir_fd=data_fd)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise OSError(errno.EINVAL, "recovery_lock_not_regular")
-    except OSError:
-        if fd is not None:
-            os.close(fd)
-        return None
-    finally:
-        if data_fd is not None:
-            os.close(data_fd)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _check_recovery_root()
-        return fd
-    except OSError:
-        os.close(fd)
-        return None
-    except BaseException:
-        os.close(fd)
-        raise
-
-
-def _setup_python():
-    """Interpreter able to run mcs_setup (>= 3.14), or None."""
-    mode = _runtime_mode()
-    if mode == "standalone":
-        exe = str(Path(DATA).parent / "venv/bin/python3")
-        return exe if os.access(exe, os.X_OK) else (sys.executable if sys.version_info >= (3, 14) else None)
-    if mode != "hermes":
-        return None
-    if os.access(HERMES_PY, os.X_OK):
-        return HERMES_PY
-    if sys.version_info >= (3, 14):
-        return sys.executable
-    return None
-
-
-def _runtime_config():
-    """Read only mode and destinations from local config; never infer credentials."""
-    path = Path(DATA).parent / "config.json"
-    try:
-        cfg = _read_local_json(path, 262144)
-        return cfg if isinstance(cfg, dict) else {"runtime_mode": "invalid"}
-    except FileNotFoundError:
-        return {"runtime_mode": "invalid"} if os.path.lexists(path) else {}
-    except (OSError, ValueError, RecursionError):
-        return {"runtime_mode": "invalid"}
-
-
-def _runtime_mode():
-    return _runtime_config().get("runtime_mode", "hermes")
-
-
-def _standalone_target_supported(ref):
-    for name in ("mcs_standalone/__main__.py", "mcs/core/mcs_runtime.py"):
-        result = _git(["cat-file", "-e", f"{ref}:{name}"])
-        if not result or result.returncode:
-            return False
-    return True
-
-
-def _standalone_status():
-    path = Path(DATA, "standalone-status.json")
-    try:
-        status = _read_local_json(path, 65536, private=True)
-        if not isinstance(status, dict):
-            return None
-        pid, stamp, children = status.get("pid"), status.get("updated_at"), status.get("children")
-        if type(pid) is not int or pid <= 0 or type(stamp) not in (int, float) \
-                or not math.isfinite(stamp) or not 0 <= time.time() - stamp <= 15 \
-                or not isinstance(children, dict) or any(not isinstance(row, dict) for row in children.values()):
-            return None
-        if not isinstance(status.get("generation"), str) or len(status["generation"]) != 32:
-            return None
-        os.kill(pid, 0)
-        return status
-    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
-        return None
-
-
-def _standalone_drainer_problems():
-    status = _standalone_status()
-    if status is None:
-        return ["standalone_host_unverifiable"]
-    problems = []
-    for job in ("extract-0", "extract-2"):
-        row = status["children"].get(job) or {}
-        pid = row.get("pid")
-        try:
-            if type(pid) is not int or pid <= 0 or row.get("kind") != "background":
-                raise ValueError("invalid child")
-            os.kill(pid, 0)
-        except (OSError, ValueError, OverflowError):
-            problems.append(job)
-    return problems
-
-
-def _launchctl(args, **kw):
-    """launchctl with a bounded wait — a hung launchctl is reported as a
-    failed call, never an uncaught crash mid-escalation."""
-    try:
-        return subprocess.run(["launchctl", *args], capture_output=True,
-                              timeout=T_GIT, **kw)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def _agent_pid(label, unknown=None):
-    r = _launchctl(["print", f"gui/{os.getuid()}/{label}"], text=True)
-    if r is None or r.returncode != 0:
-        return None if r is not None and r.returncode == 113 else unknown
-    m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
-    return int(m.group(1)) if m else None
-
-
-def _bootstrap_agent(label, plist):
-    """Standalone copy of mcs_util.launchd_bootstrap (this file runs
-    outside the repo under the install-verified recovery_python — keep
-    the semantics in sync): retry any failed bootstrap up to 3x (launchd may still be
-    tearing down a just-booted-out job, "5: Input/output error"); an
-    exit 0 is not proof — success is the label answering `print`."""
-    for _ in range(3):
-        r = _launchctl(["bootstrap", f"gui/{os.getuid()}", plist])
-        if r is not None and r.returncode == 0:
-            break
-        time.sleep(1)
-    r = _launchctl(["print", f"gui/{os.getuid()}/{label}"])
-    return r is not None and r.returncode == 0
-
-
-def _restart_drainers(bounce=True):
-    """Release the update hold before launching replacement workers.
-
-    Without a marker, bounce=False leaves a running drainer alone;
-    start one not running, not loaded or
-    unverifiable (hung print — fail closed) via bootstrap unless loaded,
-    then `kickstart` without -k (never kills a running job)."""
-    _check_recovery_root()
-    mode = _runtime_mode()
-    if mode not in ("hermes", "standalone"):
-        return ["runtime_mode_unverifiable"]
-    if mode == "standalone":
-        _remove_marker()
-        if os.path.lexists(MARKER_PATH):
-            return ["update_marker_unverifiable"]
-        if _standalone_status() is None:
-            if sys.platform == "darwin":
-                target = f"gui/{os.getuid()}/ai.mcs.standalone"
-                _launchctl(["bootstrap", f"gui/{os.getuid()}", os.path.join(AGENTS_DIR, "ai.mcs.standalone.plist")])
-                _launchctl(["kickstart", target])
-            elif sys.platform.startswith("linux"):
-                with suppress(OSError, subprocess.TimeoutExpired):
-                    subprocess.run(["systemctl", "--user", "start", "mcs-standalone.service"],
-                                   capture_output=True, timeout=30)
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if not _standalone_drainer_problems():
-                return []
-            time.sleep(0.2)
-        return _standalone_drainer_problems()
-    problems = []
-    # Match the updater: marker-bound workers must retire before new imports.
-    bounce = bounce or os.path.lexists(MARKER_PATH)
-    if bounce:
-        for label in RESIDENT_LABELS:
-            _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if _agent_pid(label, unknown=-1) in (None, -1):
-                    break
-                time.sleep(0.5)
-            if _agent_pid(label, unknown=-1) is not None:
-                problems.append(label)
-        if problems:
-            return problems
-    _remove_marker()
-    if os.path.lexists(MARKER_PATH):
-        return ["update_marker_unverifiable"]
-    for label in RESIDENT_LABELS:
-        plist = os.path.join(AGENTS_DIR, label + ".plist")
-        target = f"gui/{os.getuid()}/{label}"
-        if not bounce and _agent_pid(label):
-            continue                        # running — never bounce it
-        elif not bounce:
-            r = _launchctl(["print", target])
-            if r is not None and r.returncode == 0:
-                plist = None                # loaded: kickstart only
-        if plist and os.path.exists(plist) \
-                and not _bootstrap_agent(label, plist):
-            problems.append(label)
-            continue
-        if not bounce:
-            _launchctl(["kickstart", target])
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if _agent_pid(label):
-                break
-            time.sleep(0.5)
-        if _agent_pid(label) is None:
-            problems.append(label)
-    return problems
-
-
-def _gateway_restart_report(data, status, **facts):
-    """Keep restart requests separate from verified process replacement."""
-    os.makedirs(data, exist_ok=True)
-    _atomic_json(os.path.join(data, "gateway_restart.json"),
-                 {"status": status, "at": time.time(), **facts},
-                 ".gateway-restart.", suffix="")
-
-
-def _gateway_restart_run(data, agents, uid):
-    """Resolve the owned gateway, then verify a changed PID in a detached child."""
-    # Local imports: _GATEWAY_RESTART_PROGRAM runs this source without the module header.
-    import plistlib
-    import shlex
-    import shutil
-
-    # One normal collection run (480s), lock wait (150s), PID observation (30s).
-    deadline = time.monotonic() + 660
-    label = "ai.hermes.gateway"
-    expected = os.path.realpath(os.path.join(agents, label + ".plist"))
-
-    def snapshot(target):
-        result = subprocess.run(["launchctl", "print", target], capture_output=True,
-                                text=True, timeout=max(0.001, min(10, deadline - time.monotonic())))
-        if result.returncode:
-            return None
-        text = result.stdout or ""
-        path = re.search(r"^\s*path = (.+)$", text, re.M)
-        if path is None or os.path.realpath(path.group(1).strip()) != expected:
-            raise ValueError("gateway_service_not_owned")
-        pid = re.search(r"^\s*pid = (\d+)$", text, re.M)
-        return int(pid.group(1)) if pid else 0
-
-    home = Path(agents).resolve().parent.parent
-    install = home / ".hermes/hermes-agent"
-    installs = {install}
-    launchers = {str(home / ".local/bin/hermes"), str(install / "venv/bin/hermes"),
-                 str(install / ".hermes/bin/hermes")}
-    logs = home / ".hermes/logs"
-
-    launcher = None
-
-    def owned_command(argv, plist):
-        nonlocal launcher
-        if not argv:
-            return False
-        program = argv[0]
-        if program == "hermes":
-            environment = plist.get("EnvironmentVariables") or {}
-            if not isinstance(environment, dict) or not isinstance(environment.get("PATH", os.defpath), str):
-                return False
-            program = shutil.which("hermes", path=environment.get("PATH", os.defpath)) or ""
-        if (program in launchers and os.path.realpath(program) in launchers
-                and os.path.isfile(program) and os.access(program, os.X_OK)):
-            tail = argv[1:]
-        elif (os.path.isabs(program) and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(program).name)
-              and (any(Path(program).parent == root / "venv/bin" for root in installs)
-                   or os.path.realpath(program) == os.path.realpath(sys.executable))):
-            if argv[1:3] == ["-m", "hermes_cli.main"]:
-                tail = argv[3:]
-            elif argv[1:3] == ["-I", "-c"] and len(argv) > 3:
-                # Exact isolated bootstrap emitted by hermes_cli._launchers.
-                modules = {}
-                for root in installs:
-                    common = ("import os, sys, runpy; "
-                              "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
-                              "os.environ.pop('VIRTUAL_ENV', None); "
-                              "sys.path.insert(0, " + repr(str(root)) + "); ")
-                    prefixes = (
-                        common + "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
-                        "str(__import__('hermes_constants').get_default_hermes_root()); "
-                        "import hermes_bootstrap; ",
-                        common + "sys._hermes_pin_default_home = True; import hermes_bootstrap; "
-                        "os.environ.get('HERMES_HOME') or os.environ.__setitem__('HERMES_HOME', "
-                        "str(__import__('hermes_constants').get_default_hermes_root())); ",
-                    )
-                    for prefix in prefixes:
-                        modules.update({prefix + "runpy.run_module(" + repr(module)
-                                        + ", run_name='__main__', alter_sys=True)": module
-                                        for module in ("hermes_cli.main", "hermes_cli.stderr_timestamp")})
-                module = modules.get(argv[3])
-                if module is None:
-                    return False
-                tail = argv[4:]
-                if module == "hermes_cli.stderr_timestamp":
-                    tail = ["--run-module", module, *tail]
-            else:
-                return False
-        else:
-            return False
-        if tail[:2] == ["--run-module", "hermes_cli.stderr_timestamp"]:
-            if (len(tail) < 6 or tail[2] != "--error-log" or tail[4] != "--"
-                    or Path(tail[3]) != logs / "gateway.error.log"):
-                return False
-            return owned_command(tail[5:], plist)
-        if tail[:2] != ["gateway", "run"] or not all(
-                arg in ("--external-supervisor", "--replace") for arg in tail[2:]):
-            return False
-        if program in launchers:
-            launcher = program
-        else:
-            selected_install = Path(hermes_home) / "hermes-agent"
-            candidates = [str(selected_install / "venv/bin/hermes"),
-                          str(selected_install / ".hermes/bin/hermes")]
-            if selected_install == install:
-                candidates.append(str(home / ".local/bin/hermes"))
-            launcher = next((path for path in candidates if path in launchers
-                             and os.path.realpath(path) in launchers
-                             and os.path.isfile(path) and os.access(path, os.X_OK)), None)
-        return True
-
-    def owned_jxa(argv, plist):
-        if argv[:3] != ["/usr/bin/osascript", "-l", "JavaScript"]:
-            return False
-        script = argv[4] if len(argv) == 5 and argv[3] == "-e" else argv[3] if len(argv) == 4 else ""
-        quoted = r'("(?:[^"\\]|\\.)*")'
-        terminal = re.fullmatch(r'Application\("Terminal"\)\.doScript\(' + quoted + r'\);?', script)
-        system = re.fullmatch(
-            r'ObjC\.import\("stdlib"\); const status=\$\.system\(' + quoted + r'\); '
-            r'const signal=status & 127; '
-            r'\$\.exit\(status === -1 \? 1 : signal === 0 \? \(status >> 8\) & 255 : 128 \+ signal\);',
-            script)
-        match = terminal or system
-        if match is None:
-            return False
-        shell = shlex.split(json.loads(match[1]))
-        if system:
-            if (not shell or shell[0] != "exec" or len(shell) < 6
-                    or shell[-4:] != [">>", str(logs / "gateway.log"),
-                                      "2>>", str(logs / "gateway.error.log")]):
-                return False
-            shell = shell[1:-4]
-        return owned_command(shell, plist)
-
-    issued = False
-    try:
-        definition = _read_regular_bytes(expected, 1024 * 1024)
-        plist = plistlib.loads(definition)
-        args = plist.get("ProgramArguments")
-        if plist.get("Label") != label or not isinstance(args, list) or not args \
-                or not all(isinstance(arg, str) for arg in args) \
-                or plist.get("Program", args[0]) != args[0]:
-            raise ValueError("gateway_service_not_owned")
-        environment = plist.get("EnvironmentVariables") or {}
-        if not isinstance(environment, dict):
-            raise ValueError("gateway_service_not_owned")
-        hermes_home = environment.get("HERMES_HOME", str(home / ".hermes"))
-        if not isinstance(hermes_home, str) or not os.path.isabs(hermes_home):
-            raise ValueError("gateway_service_not_owned")
-        if (Path(hermes_home).parent.name == "profiles"
-                or Path(hermes_home).resolve().parent.name == "profiles"):
-            raise ValueError("gateway_service_not_owned")
-        logs = Path(hermes_home) / "logs"
-        cwd = plist.get("WorkingDirectory")
-        if "HERMES_HOME" in environment and cwd in (hermes_home, str(Path(hermes_home) / "hermes-agent")):
-            custom = Path(hermes_home) / "hermes-agent"
-            installs.add(custom)
-            launchers.update({str(custom / "venv/bin/hermes"), str(custom / ".hermes/bin/hermes")})
-        if cwd is not None and cwd not in ({str(root) for root in installs} | {hermes_home}):
-            raise ValueError("gateway_service_not_owned")
-        if not (owned_command(args, plist) or owned_jxa(args, plist)):
-            raise ValueError("gateway_service_not_owned")
-        if launcher is None:
-            raise ValueError("gateway_restart_launcher_unavailable")
-        def current():
-            if (_read_regular_bytes(expected, 1024 * 1024) != definition
-                    or os.path.realpath(launcher) not in launchers
-                    or not os.path.isfile(launcher) or not os.access(launcher, os.X_OK)):
-                raise ValueError("gateway_service_not_owned")
-            marker = Path(data, "restore_pending.json")
-            if os.path.lexists(marker):
-                restore = _read_local_json(marker)
-                if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
-                        or ("phase" not in restore and "restored_at" in restore)):
-                    raise ValueError("gateway_restart_restore_hold")
-            found = []
-            for domain in ("gui", "user"):
-                target = f"{domain}/{int(uid)}/{label}"
-                pid = snapshot(target)
-                if pid is not None:
-                    found.append((target, pid))
-            if not found:
-                raise ValueError("gateway_service_unavailable")
-            if len({pid for _, pid in found}) > 1:
-                raise ValueError("gateway_service_ambiguous")
-            return found[0]
-
-        def busy_refusal(output):
-            # Match the official noninteractive guard, never arbitrary errors.
-            # Session descriptions are ephemeral and never enter the receipt.
-            if len(output) > 65536:
-                return False
-            lines = output.decode("utf-8", errors="replace").strip().splitlines()
-            if len(lines) < 4:
-                return False
-            match = re.fullmatch(r"✗ Refusing to restart the gateway: ([1-9][0-9]*) live session\(s\) would be interrupted\.", lines[0])
-            return bool(match and all(line.startswith("  • ") for line in lines[1:-2])
-                        and lines[-2] == "  Let them finish, or interrupt them deliberately:"
-                        and lines[-1] == "    hermes gateway restart --yes   # interrupts "
-                        + match.group(1) + " live session(s)")
-
-        target, old_pid = current()
-        env = dict(os.environ, HOME=str(home), HERMES_HOME=hermes_home)
-        while time.monotonic() < deadline:
-            target, pid = current()
-            if pid and pid != old_pid:
-                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid)
-                return 0
-            if time.monotonic() >= deadline:
-                raise ValueError("gateway_restart_busy_timeout")
-            issued = True
-            # Unlinked private output avoids persisting live-session descriptions.
-            with tempfile.TemporaryFile() as output:
-                result = subprocess.run([launcher, "-p", "default", "gateway", "restart"],
-                                        stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                        env=env, cwd="/",
-                                        timeout=max(0.001, min(300, deadline - time.monotonic())))
-                output.seek(0)
-                refused = result.returncode == 1 and busy_refusal(output.read(65537))
-            if not result.returncode:
-                break
-            if not refused:
-                _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
-                                        service=target, previous_pid=old_pid or None)
-                return 1
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                time.sleep(min(5, remaining))
-        else:
-            _gateway_restart_report(data, "unknown", error="gateway_restart_busy_timeout",
-                                    service=target, previous_pid=old_pid or None)
-            return 1
-        until = min(deadline, time.monotonic() + 30)
-        while time.monotonic() < until:
-            target, pid = current()
-            if pid and pid != old_pid:
-                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid)
-                return 0
-            time.sleep(min(0.2, max(0, until - time.monotonic())))
-        _gateway_restart_report(data, "unknown", error="gateway_pid_not_replaced",
-                                service=target, previous_pid=old_pid or None)
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError,
-            RecursionError, plistlib.InvalidFileException) as exc:
-        code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("gateway_") \
-            else "gateway_restart_unverifiable"
-        status = "unknown" if issued else "failed"
-        _gateway_restart_report(data, status, error=code)
-    return 1
-
-
-# Freeze the independent implementation before an updater changes checkout.
-# No repo imports are needed after the parent exits or rolls the tree back.
-_GATEWAY_RESTART_PROGRAM = (
-    "import errno,os,sys,json,re,stat,tempfile,time,subprocess\nfrom pathlib import Path\n"
-    "from contextlib import suppress\n" + inspect.getsource(_fdopen_owned)
-    + "\n" + inspect.getsource(_read_regular_bytes)
-    + "\n" + inspect.getsource(_read_local_json)
-    + "\n" + inspect.getsource(_atomic_json)
-    + "\n" + inspect.getsource(_gateway_restart_report)
-    + "\n" + inspect.getsource(_gateway_restart_run)
-    + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
-
-
-def request_gateway_restart(data, agents, uid):
-    """Queue a detached verified restart; callers have already saved bookkeeping."""
-    try:
-        _gateway_restart_report(data, "requested")
-        env = {key: value for key, value in os.environ.items()
-               if key not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
-        # -I: no cwd/PYTHON* on sys.path — the child needs only stdlib.
-        subprocess.Popen([sys.executable, "-I", "-c", _GATEWAY_RESTART_PROGRAM,
-                          data, agents, str(uid)], env=env, cwd="/",
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL, close_fds=True,
-                         start_new_session=True)
-        return True
-    except OSError:
-        with suppress(OSError):
-            _gateway_restart_report(data, "failed", error="gateway_restart_spawn_failed")
-        return False
-
-
-def _restart_gateway():
-    """True when the restart request was saved/started (or none applies).
-    Runs after durable bookkeeping — never undo it (mirrors
-    mcs_update.restart_gateway, which reports a lost request too)."""
-    _check_recovery_root()
-    mode = _runtime_mode()
-    if mode == "standalone":
-        live = _standalone_status()
-        if live is not None:
-            path = Path(DATA, "standalone-restart.request")
-            value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
-                     "requested_at": time.time()}
-            try:
-                _atomic_json(str(path), value, ".restart.", suffix="")
-            except OSError:
-                return False
-        return True
-    if mode != "hermes":
-        return True
-    return request_gateway_restart(DATA, AGENTS_DIR, os.getuid())
-
-
-def _restart_lineworks():
-    """= mcs_update.restart_lineworks, self-contained: after the tree
-    changed, kickstart the independent LINE WORKS adapter — a still
-    running old adapter rejects spec keys the new renderer writes and
-    holds every new card. A standalone host restarts it as its own
-    child; an unknown runtime restarts nothing. False only when the
-    request could not be issued."""
-    _check_recovery_root()
-    cfg = _runtime_config()
-    notify = cfg.get("notify")
-    if cfg.get("runtime_mode", "hermes") != "hermes" or not isinstance(notify, dict) \
-            or notify.get("interactive") != "lineworks":
-        return True
-    try:
-        subprocess.Popen(
-            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/ai.mcs.lineworks"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL, close_fds=True, start_new_session=True)
-    except OSError:
-        return False        # never issued; completion itself is never awaited
-    return True
-
-
-def _restart_services(result, gateway, lineworks=True):
-    """= mcs_update.restart_services after the durable bookkeeping of a
-    completed recovery. A lost gateway/host restart request is reported,
-    never returned as success (the journal is already consumed)."""
-    _check_recovery_root()
-    ok = _restart_gateway() if gateway else True
-    if lineworks:
-        ok = _restart_lineworks() and ok
-    if ok:
-        return 0
-    _report("restart_request_failed", "restart request not saved or started",
-            completed=result)
-    _notify("[MCS] 更新の復旧後に再起動要求を保存・起動できません。"
-            "更新記録と稼働プロセスを確認し、常駐プロセスを再起動してください。")
-    return 1
-
-
-def _clean_stale_git_locks():
-    """Only locks OLDER than GIT_LOCK_MIN_AGE_S — a fresh lock may
-    belong to an unrelated live `git` process. A free update.lock
-    proves no updater is alive, not that no git is running (H3)."""
-    _check_recovery_root()
-    removed = []
-    cutoff = time.time() - GIT_LOCK_MIN_AGE_S
-    for path in glob.glob(os.path.join(REPO, ".git", "**", "*.lock"),
-                          recursive=True):
-        try:
-            if os.path.getmtime(path) >= cutoff:
-                continue
-            os.unlink(path)
-            removed.append(path)
-        except OSError:
-            pass
-    return removed
-
-
-def _owned_cron(job_id, script_path, evidence):
-    """Require a matching owned ID/Script pair or a known wrapper identity."""
-    actual = os.path.normpath(os.path.join(SCRIPTS_DIR, script_path))
-    for row in evidence:
-        if not isinstance(row, dict) or row.get("id") != job_id:
-            continue
-        script = row.get("script")
-        if isinstance(script, str) and script and actual == os.path.normpath(
-                os.path.join(SCRIPTS_DIR, script)):
-            return True
-    # A basename alone is ambiguous in a shared Hermes scheduler.
-    return (os.path.isabs(script_path)
-            and os.path.basename(script_path) in KNOWN_CRON_SCRIPTS
-            and actual == os.path.join(SCRIPTS_DIR, os.path.basename(script_path)))
-
-
-def _reconcile_membership(snapshot):
-    """Delete owned-but-undesired cron entries + agents per the
-    pre-update manifest snapshot. Union with the CURRENT desired sets
-    so a no-op rollback never deletes what it still wants; recreation
-    belongs to the repo's own `services` run (old code re-renders)."""
-    _check_recovery_root()
-    if snapshot is None:
-        snapshot = {}
-    if (not isinstance(snapshot, dict)
-            or any(not isinstance(snapshot.get(key, []), list)
-                   or any(not isinstance(row, dict)
-                          or row.get(field) is not None and not isinstance(row[field], str)
-                          for row in snapshot.get(key, []))
-                   for key, field in (("cron", "script"), ("agents", "label")))):
-        return ["service_snapshot_invalid"]
-    problems = []
-    mode = _runtime_mode()
-    standalone = mode == "standalone"
-    if mode not in ("hermes", "standalone"):
-        return ["runtime_mode_unverifiable"]
-    try:
-        manifest = _read_local_json(MANIFEST_PATH, 262144)
-    except (OSError, ValueError, RecursionError):
-        manifest = {}
-    evidence = []
-    for source in (snapshot, manifest):
-        rows = source.get("cron", []) if isinstance(source, dict) else []
-        if isinstance(rows, list):
-            evidence.extend(rows)
-    current_cron = KNOWN_CRON_SCRIPTS - {"mcs_offsite.sh"}
-    backup = _runtime_config().get("backup", {"enabled": False})
-    if not isinstance(backup, dict) or type(backup.get("enabled")) is not bool:
-        # Unknown intent cannot authorize retirement of an owned backup job.
-        problems.append("backup_config_unverifiable")
-        current_cron |= {"mcs_offsite.sh"}
-    elif backup["enabled"] and os.path.isfile(
-            os.path.join(REPO, "deployment", "scripts", "mcs_offsite.sh")):
-        current_cron |= {"mcs_offsite.sh"}
-    desired_cron = {os.path.basename(c.get("script") or "")
-                    for c in (snapshot or {}).get("cron", [])
-                    if isinstance(c, dict)}
-    desired_agents = {a.get("label") for a in
-                      (snapshot or {}).get("agents", [])
-                      if isinstance(a, dict)}
-    for path in glob.glob(os.path.join(AGENTS_DIR, "*.plist")):
-        label = os.path.basename(path)[:-6]
-        owned = (label.startswith(("local.mcs-", "ai.mcs.extract-",
-                                   CRON_LABEL_PREFIX))
-                 or label == STANDALONE_LABEL) \
-            and label not in EXCLUDED_LABELS
-        if owned and label not in desired_agents \
-                and label not in KNOWN_AGENT_LABELS:
-            target = f"gui/{os.getuid()}/{label}"
-            _launchctl(["bootout", target])
-            check = _launchctl(["print", target])
-            if check is None or check.returncode != 113:
-                problems.append("agent_retirement_unverifiable:" + label)
-                continue
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-    # cron: remove owned mcs_*.sh entries that are neither in the
-    # snapshot nor in the current desired set
-    hermes = shutil.which("hermes") \
-        or os.path.expanduser("~/.local/bin/hermes")
-    if standalone:
-        pass  # The restored host owns one scheduler; services reconciles its native entry.
-    elif os.path.isfile(hermes):
-        try:
-            r = subprocess.run([hermes, "cron", "list", "--all"],
-                               capture_output=True, text=True,
-                               timeout=T_GIT)
-            if r.returncode != 0:
-                problems.append("cron_list_unverifiable")
-            for block in re.finditer(
-                    r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)",
-                    r.stdout if r.returncode == 0 else "", re.M):
-                jid, body = block.group(1), block.group(2)
-                fields = dict(re.findall(
-                    r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
-                script_path = (fields.get("Script") or "").strip()
-                script = os.path.basename(script_path)
-                if script.startswith("mcs_") and script.endswith(".sh") \
-                        and script not in desired_cron \
-                        and script not in current_cron \
-                        and _owned_cron(jid, script_path, evidence):
-                    removed = subprocess.run([hermes, "cron", "remove", jid],
-                                             capture_output=True, timeout=T_GIT)
-                    if removed.returncode != 0:
-                        problems.append("cron_remove_failed:" + script)
-        except (OSError, subprocess.TimeoutExpired):
-            problems.append("cron_list_unverifiable")
-    else:
-        problems.append("cron_list_unverifiable")
-    # converge content/membership with the restored tree's own services
-    setup_py = os.path.join(REPO, "mcs", "ops", "mcs_setup.py")
-    setup_python = _setup_python()
-    if os.path.isfile(setup_py) and setup_python:
-        try:
-            result = _run_owned([setup_python, setup_py, "services"],
-                                120, os.environ.copy(), stdin=subprocess.DEVNULL)
-            if result.returncode != 0:
-                problems.append("services_reconcile_failed")
-        except (OSError, subprocess.TimeoutExpired):
-            problems.append("services_reconcile_failed")
-    else:
-        problems.append("services_reconcile_unavailable")
-    return problems
-
-
-def _notify(text):
-    """Best-effort — Hermes/Discord may be the very thing that's down;
-    failure is silent by design."""
-    _check_recovery_root()
-    cfg = _runtime_config()
-    if cfg.get("runtime_mode") == "standalone":
-        # best-effort to the system-alert channel (notify_flush's choice)
-        try:
-            target = cfg.get("notify_system_target") or cfg.get("notify_target")
-            python = os.path.join(HOME, "venv", "bin", "python3")
-            entry = os.path.join(REPO, "mcs_standalone", "__main__.py")
-            if isinstance(target, str) and os.access(python, os.X_OK) \
-                    and os.path.isfile(entry) and not target.startswith("lineworks:"):
-                proc = subprocess.Popen(
-                    [python, entry, "send", "--to", target.strip(), "--quiet"],
-                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, close_fds=True,
-                    start_new_session=True)
-                try:
-                    proc.communicate(
-                        json.dumps({"text": text[:2000]}).encode(),
-                        timeout=60)
-                except subprocess.TimeoutExpired:
-                    # a wedged sender must not outlive the watchdog —
-                    # kill and reap it rather than orphaning a child
-                    proc.kill()
-                    proc.wait()
-                    raise
-        except Exception:
-            pass
-        return
-    try:
-        if cfg.get("runtime_mode", "hermes") != "hermes":
-            return
-        hermes = shutil.which("hermes") \
-            or os.path.expanduser("~/.local/bin/hermes")
-        if os.path.isfile(hermes):
-            subprocess.Popen([hermes, "send", "--to", "local",
-                              "--quiet", text],
-                             stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL,
-                             close_fds=True, start_new_session=True)
-    except Exception:
-        pass
-
-
-def _db_version(path):
-    try:
-        con = sqlite3.connect(
-            Path(path).resolve().as_uri() + "?mode=ro", uri=True)
-        try:
-            return con.execute("PRAGMA user_version").fetchone()[0]
-        finally:
-            con.close()
-    except sqlite3.Error:
-        return None
-
-
-def _mark_restored(backup_path, phase="restored", report_id=None):
-    """restore_pending marker — the runner holds every send grant
-    until its journal-vs-DB reconcile consumes this. Written BEFORE
-    the file swap (a crash between replace and write must not leave
-    senders running against a rewound DB; a stale marker is harmless).
-    Duplicated from notify_cards.mark_restored because this script
-    must keep working when the repo's own modules are broken.
-    phase='awaiting_consent' holds sends while the schema-bump DB
-    replace waits on a bound ops.restore_approve receipt."""
-    marker = os.path.join(DATA, "restore_pending.json")
-    payload = {"v": 1, "phase": phase, "backup_path": backup_path,
-               "by": "mcs_recover", "at": time.time()}
-    if phase == "restored":
-        payload["restored_at"] = payload["at"]
-    if report_id is not None:
-        payload["report_id"] = report_id
-    _atomic_json(marker, payload, ".restore.", sort_keys=True)
-
-
-# Records the DB replace would silently erase — duplicated from
-# mcs_update so this script needs none of the repo's modules.
-_STORED_TABLES = ("messages", "attachments")
-# Kept equal to restore_evidence: this watchdog must run without the checkout.
-RESTORE_LOSS_NOTICE = (
-    "件数は対象表の行数差です。訂正、同数の追加と削除、配送状態の変更や対象外のデータは分かりません。"
-    "0件でも損失がないとは言えません。"
-    "復元で推論の使用履歴や費用の記録が失われる場合があります。復元への同意は外部推論の再開を意味しません。"
-)
-
-
-_EFFECT_TABLES = ("notification_cards", "notification_renders",
-                  "notification_delivery_attempts",
-                  "notification_render_parts", "notification_restore_holds",
-                  "notification_view_manifests", "notify_outbox")
-
-
-_INTAKE_EVIDENCE_ROWS = 4096
-_INTAKE_EVIDENCE_ROW_BYTES = 65536
-_INTAKE_EVIDENCE_SECONDS = 1.0
-
-
-def _intake_evidence(con, table, kind):
-    """Compare bounded raw records without exposing their contents."""
-    columns = con.execute(f"PRAGMA table_info({table})").fetchall()
-    if not columns:
-        return []
-    if not any(column[1] == 'kind' for column in columns):
-        raise sqlite3.DatabaseError('restore_intake_schema_unverified')
-    previous_limit = con.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
-    con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, min(previous_limit, _INTAKE_EVIDENCE_ROW_BYTES))
-    deadline = time.monotonic() + _INTAKE_EVIDENCE_SECONDS
-    steps = 0
-
-    def stop():
-        nonlocal steps
-        steps += 1
-        return steps > 200 or time.monotonic() >= deadline
-
-    con.set_progress_handler(stop, 1000)
-    try:
-        if con.execute(f"SELECT 1 FROM {table} WHERE kind=? LIMIT 1", (kind,)).fetchone() is None:
-            return []
-        key = 'artifact_id' if table == 'artifacts' else 'job_id'
-        pk = [column for column in columns if column[5]]
-        all_columns = con.execute(f"PRAGMA table_xinfo({table})").fetchall()
-        indexes = con.execute(f"PRAGMA index_list({table})").fetchall()
-        if (len(pk) != 1 or pk[0][1] != key or pk[0][2].upper() != 'INTEGER'
-                or any(column[1].lower() in ('rowid', '_rowid_', 'oid') for column in all_columns)
-                or any(index[3] == 'pk' for index in indexes)):
-            raise sqlite3.DatabaseError('restore_intake_identity_unverified')
-        identities = []
-        cursor = con.execute(
-            f"SELECT rowid,* FROM {table} WHERE kind=? ORDER BY rowid LIMIT ?",
-            (kind, _INTAKE_EVIDENCE_ROWS + 1))
-        for row in cursor:
-            if len(identities) >= _INTAKE_EVIDENCE_ROWS or time.monotonic() >= deadline:
-                raise sqlite3.DatabaseError('restore_intake_evidence_limit')
-            raw = json.dumps([all_columns, row], ensure_ascii=False, separators=(',', ':'),
-                             default=lambda value: {'blob': value.hex()}).encode('utf-8')
-            identities.append(hashlib.sha256(raw).hexdigest())
-        return identities
-    finally:
-        con.set_progress_handler(None, 0)
-        con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
-
-
-def _intake_comparison(live, back):
-    """Report live evidence not identically present in the backup."""
-    compared = {}
-    for label, table, kind in (
-            ('held_intents', 'artifacts', 'semantic_intake_hold_v1'),
-            ('released_intents', 'artifacts', 'semantic_intake_released_v1'),
-            ('release_receipts', 'artifacts', 'semantic_intake_release_receipt_v1'),
-            ('archived_intake', 'fetch_jobs', 'semantic_intake_archive_v1'),
-            ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1'),
-            ('unstored_epoch', 'fetch_jobs', 'semantic_intake_unstored_epoch_v1'),
-            ('unstored_roots', 'fetch_jobs', 'semantic_intake_unstored_root_v1')):
-        current = _intake_evidence(live, table, kind)
-        saved = _intake_evidence(back, table, kind)
-        if current or saved:
-            present = set(saved)
-            compared[label] = {
-                'live': len(current), 'backup': len(saved),
-                'live_not_identical_in_backup': sum(item not in present for item in current),
-                'live_sha256': hashlib.sha256(''.join(current).encode('ascii')).hexdigest(),
-            }
-    return compared
-
-
-def _table_count(con, table):
-    """Return zero only when the table is absent; propagate read failures."""
-    columns = con.execute(f"PRAGMA table_info({table})").fetchall()
-    if not columns:
-        return 0
-    return con.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
-
-
-def _watermark(con):
-    """An absent timestamp column is unknown; read failures must propagate."""
-    columns = con.execute("PRAGMA table_info(messages)").fetchall()
-    if not any(column[1] == "posted_at_ts" for column in columns):
-        return None
-    return con.execute("SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
-
-
-def _restore_content_digest(con):
-    """Bind consent to stored data, delivery and artifact history."""
-    digest = hashlib.sha256()
-    for table in (*_STORED_TABLES, *_EFFECT_TABLES, "artifacts"):
-        columns = con.execute(f"PRAGMA table_info({table})").fetchall()
-        digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
-        if not columns:
-            continue
-        if table == "artifacts":
-            digest.update(b"artifacts-schema\0")
-            for schema in con.execute(
-                    "SELECT type,name,tbl_name,sql FROM sqlite_master "
-                    "WHERE tbl_name='artifacts' AND type IN ('table','index','trigger') ORDER BY type,name"):
-                encoded = json.dumps(schema, ensure_ascii=False, separators=(",", ":")).encode()
-                digest.update(len(encoded).to_bytes(8, "big"))
-                digest.update(encoded)
-        for row in con.execute(f"SELECT * FROM {table} ORDER BY rowid"):
-            encoded = json.dumps(
-                row, ensure_ascii=False, separators=(",", ":"),
-                default=lambda value: {"blob": value.hex()}).encode()
-            digest.update(len(encoded).to_bytes(8, "big"))
-            digest.update(encoded)
-    return digest.hexdigest()
-
-
-def _file_sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _loss_report(backup_path):
-    """Same deterministic loss report as restore_evidence.create_loss_report
-    — a drift between report and live state invalidates every consent
-    receipt bound to the stale report_id."""
-    try:
-        live = sqlite3.connect(
-            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error:
-        return None
-    try:
-        back = sqlite3.connect(
-            Path(backup_path).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error:
-        live.close()
-        return None
-    try:
-        live.execute("BEGIN")
-        back.execute("BEGIN")
-        intake = _intake_comparison(live, back)
-        live_digest = _restore_content_digest(live)
-        watermark = _watermark(back)
-        stored = {t: _table_count(live, t) - _table_count(back, t)
-                  for t in _STORED_TABLES}
-        effects = {t: _table_count(live, t) - _table_count(back, t)
-                   for t in _EFFECT_TABLES}
-    finally:
-        live.close()
-        back.close()
-    metrics = {"v": 1,
-               "live_content_sha256": live_digest,
-               "backup_sha256": _file_sha256(backup_path),
-               "backup_schema": _db_version(backup_path),
-               "watermark_ts": watermark,
-               "stored_since_backup": stored,
-               "external_effects": effects,
-               "intervening_messages": sum(max(0, n)
-                                           for n in stored.values()),
-               "external_effect_rows": sum(max(0, n)
-                                           for n in effects.values())}
-    if intake:
-        metrics['semantic_intake_evidence'] = intake
-        metrics['semantic_intake_notice'] = (
-            '保留・未保存の記録について、同一の内容が復元先にない件数です。'
-            '保存できなかった投稿は復元されず、元の投稿を再取得できるかは分かりません。')
-    metrics["report_id"] = hashlib.sha256(
-        json.dumps(metrics, sort_keys=True, separators=(",", ":"),
-                   ensure_ascii=False).encode("utf-8")).hexdigest()
-    report = dict(metrics, computed_at=time.time())
-    with suppress(OSError):             # report file is best-effort
-        _atomic_json(os.path.join(DATA, "restore_report.json"), report,
-                     ".rreport.", ensure_ascii=False, sort_keys=True)
-    return report
-
-
-_MAX_RECEIPT_BYTES = 16384      # = mcs_requests.MAX_COMMAND_BYTES
-
-
-def _approval_receipt(raw, command_id):
-    """= mcs_requests.read_scheduled_receipt, self-contained (this tool must run
-    without the checkout): a scheduled receipt without ambiguous JSON
-    (duplicate keys, NaN/Infinity, oversized) or contradictory identity."""
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("duplicate_key")
-            result[key] = value
-        return result
-
-    def constant(_):
-        raise ValueError("invalid_number")
-
-    try:
-        if len(raw) > _MAX_RECEIPT_BYTES:
-            return None
-        receipt = json.loads(raw, object_pairs_hook=pairs,
-                             parse_constant=constant)
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if (not isinstance(command_id, str) or not command_id.strip()
-            or not isinstance(receipt, dict) or receipt.get("scheduled") is not True
-            or receipt.get("command_id", command_id) != command_id
-            or receipt.get("outcome", "applied") != "applied"
-            or receipt.get("error") is not None):
-        return None
-    return receipt
-
-
-def _consent_for(report):
-    """The newest ops.restore_approve receipt bound to this exact loss
-    report, or None — an earlier update/rollback approval never counts."""
-    try:
-        con = sqlite3.connect(
-            Path(LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error:
-        return None
-    found = None
-    try:
-        rows = con.execute(
-            "SELECT command_id, receipt_json FROM command_receipts"
-            " WHERE outcome='applied'"
-            " ORDER BY processed_at DESC, rowid DESC")
-        for cid, rj in rows:
-            if found is None and _bound_consent(rj, cid, report):
-                found = cid   # newest bound receipt; keep reading (unparsed)
-        # so an unreadable later row still fails closed, as fetchall() did
-    except sqlite3.Error:
-        return None
-    finally:
-        con.close()
-    return found
-
-
-def _bound_consent(raw, command_id, report):
-    """= restore_evidence.bound_restore_consent."""
-    rec = _approval_receipt(raw, command_id)
-    return (rec is not None and rec.get("cmd") == "ops.restore_approve"
-            and type(rec.get("backup_schema")) is int
-            and rec.get("report_id") == report["report_id"]
-            and rec.get("backup_sha256") == report["backup_sha256"]
-            and rec.get("backup_schema") == report["backup_schema"])
-
-
-# = mcs_update staging ownership, self-contained.
-# The staging copy's journal record: the exact file this restore created.
-# Only a file proven to be that one (same name, regular, single link, our
-# uid, same device/inode) is ever cleaned up — never by name or age alone.
-_STAGING_NAME = re.compile(r"\.restore\.[A-Za-z0-9_]{8}\.db")
-_STAGING_KEYS = ("dev", "ino", "uid")
-
-
-def _staging_record(state):
-    """(state, applying, record) of a usable journal — OSError otherwise."""
-    if state.get("_corrupt"):
-        raise OSError("restore_staging_journal_corrupt")
-    applying = state.get("applying")
-    if not isinstance(applying, dict):
-        raise OSError("restore_staging_unjournaled")
-    record = applying.get("restore_staging")
-    if record is not None and not (
-            isinstance(record, dict) and set(record) == {"name", *_STAGING_KEYS}
-            and isinstance(record["name"], str) and _STAGING_NAME.fullmatch(record["name"])
-            and all(type(record[key]) is int for key in _STAGING_KEYS)):
-        raise OSError("restore_staging_record_invalid")
-    return applying, record
-
-
-def _staging_matches(dfd, record):
-    """None when the recorded name is gone; whether it is provably ours."""
-    try:
-        st = os.stat(record["name"], dir_fd=dfd, follow_symlinks=False)
-    except FileNotFoundError:
-        return None
-    return (stat.S_ISREG(st.st_mode) and st.st_nlink == 1
-            and st.st_uid == os.getuid() == record["uid"]
-            and (st.st_dev, st.st_ino) == (record["dev"], record["ino"]))
-
-
-def _settle_staging(directory):
-    """Under both locks, before a new copy: remove the recorded copy of an
-    interrupted restore, or keep everything and refuse when it cannot be
-    proven to be that copy."""
-    state = _load_state()
-    applying, record = _staging_record(state)
-    if record is None:
-        return
-    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        matches = _staging_matches(dfd, record)
-        if matches is False:
-            raise OSError("restore_staging_identity_changed")
-        if matches:
-            os.unlink(record["name"], dir_fd=dfd)
-            os.fsync(dfd)
-    finally:
-        os.close(dfd)
-    applying.pop("restore_staging")
-    _save_state(state)
-
-
-def _release_staging(directory, record, journaled=True):
-    """After this attempt: remove our copy if it is still exactly ours and
-    drop its record; a mismatch keeps both for a human."""
-    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        matches = _staging_matches(dfd, record)
-        if matches is False:
-            return
-        if matches:
-            os.unlink(record["name"], dir_fd=dfd)
-            os.fsync(dfd)
-    finally:
-        os.close(dfd)
-    if not journaled:
-        return
-    state = _load_state()
-    applying, current = _staging_record(state)
-    if current == record:
-        applying.pop("restore_staging")
-        _save_state(state)
-
-
-def _replace_database(backup_path, expected_sha, before_replace):
-    """Stage and verify the backup before checkpointing and replacing the live DB.
-    The staging copy is journaled (applying.restore_staging) before any byte
-    of the backup is copied; there is no unjournaled fallback."""
-    directory = os.path.dirname(LEDGER)
-    _settle_staging(directory)
-    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".restore.", suffix=".db")
-    try:
-        created = os.fstat(fd)
-    except BaseException:
-        os.close(fd)
-        raise
-    own = {"name": os.path.basename(temporary), "dev": created.st_dev,
-           "ino": created.st_ino, "uid": created.st_uid}
-    journaled = False
-    try:
-        with _fdopen_owned(fd, "wb") as dst:
-            state = _load_state()
-            applying, _ = _staging_record(state)
-            applying["restore_staging"] = own
-            _save_state(state)
-            journaled = True
-            with open(backup_path, "rb") as src:
-                shutil.copyfileobj(src, dst)
-            dst.flush()
-            os.fsync(dst.fileno())
-        if _file_sha256(temporary) != expected_sha:
-            raise OSError("backup_changed_during_restore")
-        candidate = sqlite3.connect(
-            Path(temporary).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
-        try:
-            if candidate.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise OSError("backup_integrity_failed")
-        finally:
-            candidate.close()
-        # Preserve committed WAL contents even if the subsequent replace fails.
-        # SQLite owns journal removal; never unlink a live WAL by hand.
-        live = sqlite3.connect(Path(LEDGER).resolve().as_uri() + "?mode=rw",
-                               uri=True, timeout=5)
-        try:
-            if live.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] != 0:
-                raise OSError("live_checkpoint_busy")
-            if live.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
-                raise OSError("live_journal_busy")
-        finally:
-            live.close()
-        # = mcs_update._replace_database: same lexists sidecar rule, kept as an
-        # independent copy (recovery must run without the repo's modules)
-        if any(os.path.lexists(LEDGER + suffix)
-               for suffix in ("-wal", "-shm", "-journal")):
-            raise OSError("live_sidecars_remaining")
-        before_replace()
-        os.replace(temporary, LEDGER)
-        dfd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except sqlite3.Error as exc:
-        raise OSError("restore_database_unverifiable") from exc
-    finally:
-        with suppress(OSError):          # never mask the restore's own failure
-            _release_staging(directory, own, journaled)
-
-
-def _record_hold(state, report, backup_path):
-    """Journal the hold like mcs_update._consent_hold (same record) — a
-    later pass of either tool then sees state['restore_consent'] and
-    keeps the freeze on a git failure instead of escalating."""
-    state["restore_consent"] = {
-        "report_id": report["report_id"], "backup_path": backup_path,
-        "backup_sha256": report["backup_sha256"],
-        "backup_schema": report["backup_schema"],
-        "intervening_messages": report["intervening_messages"],
-        "external_effect_rows": report["external_effect_rows"],
-        "at": time.time()}
-    _save_state(state)
-
-
-def _restore_db(backup_path, on_hold=None):
-    """Restore only when the live schema differs, with a verified staged copy.
-    Checkpoint the live DB before replacement to preserve committed WAL data.
-    Returns an error string for the caller to escalate, or None on a
-    completed or verified-skipped restore — an unreadable backup during
-    rollback recovery is never a silent 'nothing to do' (the mcs_update
-    copy escalates backup_invalid in the same situation; a silent skip
-    here would leave OLD code running against a NEWER schema while the
-    report claims success)."""
-    _check_recovery_root()
-    marker = os.path.join(DATA, "restore_pending.json")
-    try:
-        current = _read_local_json(marker)
-    except FileNotFoundError:
-        if os.path.lexists(marker):
-            return "restore_marker_unreadable"
-        current = None
-    except (OSError, ValueError, RecursionError):
-        return "restore_marker_unreadable"
-    else:
-        if not isinstance(current, dict) or not (
-                current.get("phase") in ("restored", "awaiting_consent")
-                or ("phase" not in current and "restored_at" in current)):
-            return "restore_marker_unreadable"
-    live = _db_version(LEDGER)
-    back = _db_version(backup_path)
-    # SQLite opens a zero-byte file as an empty schema-0 DB; reject it like ledger.valid_mcs_db
-    if back is None or not os.path.isfile(backup_path) \
-            or os.path.getsize(backup_path) == 0:
-        return "backup_unreadable: " + str(backup_path)
-    if live is None:
-        return "live_db_unreadable"
-    if live == back:
-        # already at backup schema — but a crash between the marker's
-        # 'restored' rewrite and the swap can leave an awaiting_consent
-        # marker pinning every send; promote it so the runner-side
-        # reconcile releases the hold.
-        if isinstance(current, dict) \
-                and current.get("phase") == "awaiting_consent":
-            try:
-                _mark_restored(backup_path)
-            except OSError as e:
-                return f"restore_marker_failed: {e}"
-        if _unreconciled_restore() is not None and not _restored_writer_compatible():
-            return _restore_reconcile_pending()
-        return None
-    # Per-restore human consent (R2): an earlier update/rollback
-    # approval does not substitute. The sender hold lands before the
-    # loss report so no grant slips between measurement and decision.
-    try:
-        _mark_restored(backup_path, phase="awaiting_consent")
-    except OSError as e:
-        return f"restore_marker_failed: {e}"
-    try:
-        report = _loss_report(backup_path)
-    except (OSError, sqlite3.Error):
-        return "restore_report_failed: cannot measure loss"
-    if report is None:
-        return "restore_report_failed: cannot measure loss"
-    try:
-        # re-pin the hold with the report identity so operators can
-        # correlate marker <-> restore_report.json
-        _mark_restored(backup_path, phase="awaiting_consent",
-                       report_id=report["report_id"])
-    except OSError as e:
-        return f"restore_marker_failed: {e}"
-    if on_hold is not None:
-        # Persist the freeze even for an already approved restore: the swap
-        # can still fail after its 'restored' marker has been written.
-        on_hold(report)
-    if _consent_for(report) is None:
-        return "restore_consent_pending:" + report["report_id"]
-    try:
-        _replace_database(backup_path, report["backup_sha256"],
-                          lambda: _mark_restored(
-                              backup_path, report_id=report["report_id"]))
-    except OSError as e:
-        with suppress(OSError):
-            _mark_restored(backup_path, phase="awaiting_consent",
-                           report_id=report["report_id"])
-        return f"restore_failed: {e}"
-    if _db_version(LEDGER) != back:
-        return "restore_verify_failed"
-    # The compatible restored runner reconciles journals before delivery.
-    # Keep the marker; never open this DB with the watchdog's/newer writer.
-    return None if _restored_writer_compatible() else _restore_reconcile_pending()
+        mcs_recovery_services._notify(text)
 
 
 def _recovery_explanation(detail):
@@ -2019,7 +285,7 @@ def _recovery_explanation(detail):
         "live_db_unreadable": "現在のデータベースを読み取れません。復旧結果の記録とデータベースの状態を確認してください。",
         "restore_marker_failed:": "復元の保留記録を保存できません。保存先の権限と空き容量を確認してください。",
         "restore_report_failed:": "復元で失われるデータを確認できません。確認できるまで復元を進めないでください。",
-        "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + RESTORE_LOSS_NOTICE,
+        "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + mcs_recovery_database.RESTORE_LOSS_NOTICE,
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
     }
@@ -2032,35 +298,34 @@ def _recovery_explanation(detail):
 
 
 def recover(if_stale=False):
-    global _RECOVERY_ROOT
     root = None
-    previous = _RECOVERY_ROOT
+    previous = mcs_recovery_core._RECOVERY_ROOT
     try:
         try:
-            root = _RecoveryRoot(os.path.dirname(DATA))
+            root = mcs_recovery_core._RecoveryRoot(os.path.dirname(mcs_recovery_core.DATA))
         except FileNotFoundError:
-            if os.path.lexists(os.path.dirname(DATA)):
+            if os.path.lexists(os.path.dirname(mcs_recovery_core.DATA)):
                 return 2
-        _RECOVERY_ROOT = root
+        mcs_recovery_core._RECOVERY_ROOT = root
         # The root anchor precedes the gate and every recovery read.
         with ExitStack() as scope:
             try:
-                scope.enter_context(_release_scope(os.path.dirname(DATA)))
+                scope.enter_context(mcs_recovery_core._release_scope(os.path.dirname(mcs_recovery_core.DATA)))
             except BlockingIOError:
                 return 0
-            _check_recovery_root()
+            mcs_recovery_core._check_recovery_root()
             return _recover_legacy(if_stale=if_stale)
-    except (OSError, ValueError, _RecoveryRootChanged):
+    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged):
         return 2
     finally:
-        _RECOVERY_ROOT = previous
+        mcs_recovery_core._RECOVERY_ROOT = previous
         if root is not None:
             root.close()
 
 
 def _settings_migration_pending():
     """The independent watchdog must retain an uncertain settings receipt."""
-    root = os.path.dirname(os.path.abspath(DATA))
+    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
     try:
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     except FileNotFoundError:
@@ -2082,11 +347,11 @@ def _settings_migration_pending():
         if found or (again.st_dev, again.st_ino) != (info.st_dev, info.st_ino):
             return True
         try:
-            data_fd = os.open(DATA, os.O_RDONLY | os.O_DIRECTORY)
+            data_fd = os.open(mcs_recovery_core.DATA, os.O_RDONLY | os.O_DIRECTORY)
         except FileNotFoundError:
-            return os.path.lexists(DATA)
+            return os.path.lexists(mcs_recovery_core.DATA)
         try:
-            held, current = os.fstat(data_fd), os.stat(DATA)
+            held, current = os.fstat(data_fd), os.stat(mcs_recovery_core.DATA)
             if (held.st_uid != os.getuid() or held.st_mode & 0o022
                     or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
                 return True
@@ -2102,28 +367,28 @@ def _settings_migration_pending():
 
 def _provider_settings_unverified():
     """Hold recovery whenever split-provider state is present or unprovable."""
-    root = os.path.dirname(os.path.abspath(DATA))
+    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
-        _check_recovery_root()
-        root_fd = os.dup(_RECOVERY_ROOT.fd) if _RECOVERY_ROOT is not None else os.open(root, flags)
+        mcs_recovery_core._check_recovery_root()
+        root_fd = os.dup(mcs_recovery_core._RECOVERY_ROOT.fd) if mcs_recovery_core._RECOVERY_ROOT is not None else os.open(root, flags)
     except FileNotFoundError:
         return os.path.lexists(root)
     except OSError:
         return True
     try:
         root_info = os.fstat(root_fd)
-        root_path = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+        root_path = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
         if (root_info.st_uid != os.getuid() or root_info.st_mode & 0o022
                 or (root_info.st_dev, root_info.st_ino) != (root_path.st_dev, root_path.st_ino)):
             return True
         try:
-            data_fd = os.open(os.path.basename(DATA), flags, dir_fd=root_fd)
+            data_fd = os.open(os.path.basename(mcs_recovery_core.DATA), flags, dir_fd=root_fd)
         except FileNotFoundError:
-            return os.path.lexists(DATA)
+            return os.path.lexists(mcs_recovery_core.DATA)
         try:
             before = os.fstat(data_fd)
-            current = os.stat(DATA, follow_symlinks=False)
+            current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
             if (before.st_uid != os.getuid() or before.st_mode & 0o022
                     or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)):
                 return True
@@ -2139,13 +404,13 @@ def _provider_settings_unverified():
                             ('.provider-settings-backup-', '.provider-settings-stage-')):
                         return True
             after = os.fstat(data_fd)
-            current = os.stat(DATA, follow_symlinks=False)
+            current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
             def identity(value):
                 return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
                         value.st_mtime_ns, value.st_ctime_ns)
             root_after = os.fstat(root_fd)
-            _check_recovery_root()
-            root_current = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+            mcs_recovery_core._check_recovery_root()
+            root_current = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
             def root_identity(value):
                 return (value.st_dev, value.st_ino, value.st_mode, value.st_uid)
             return (identity(before) != identity(after) or identity(after) != identity(current)
@@ -2161,13 +426,13 @@ def _provider_settings_unverified():
 
 def _lock_provider_editor():
     """Borrow the config editor lock until all recovery effects have finished."""
-    root = os.path.dirname(os.path.abspath(DATA))
-    _check_recovery_root()
-    root_fd = (os.dup(_RECOVERY_ROOT.fd) if _RECOVERY_ROOT is not None else
+    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
+    mcs_recovery_core._check_recovery_root()
+    root_fd = (os.dup(mcs_recovery_core._RECOVERY_ROOT.fd) if mcs_recovery_core._RECOVERY_ROOT is not None else
                os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC))
     try:
         directory = os.fstat(root_fd)
-        current = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+        current = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
         if (directory.st_uid != os.getuid() or directory.st_mode & 0o022
                 or (directory.st_dev, directory.st_ino) != (current.st_dev, current.st_ino)):
             raise ValueError('provider_editor_lock_invalid')
@@ -2185,8 +450,8 @@ def _lock_provider_editor():
                 return None
             current = os.stat('config.json.edit.lock', dir_fd=root_fd, follow_symlinks=False)
             after = os.fstat(fd)
-            _check_recovery_root()
-            root_after = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+            mcs_recovery_core._check_recovery_root()
+            root_after = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
             def identity(value):
                 return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
                         value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
@@ -2203,31 +468,31 @@ def _lock_provider_editor():
 
 
 def _recover_legacy(if_stale=False):
-    _check_recovery_root()
+    mcs_recovery_core._check_recovery_root()
     if _settings_migration_pending():
         print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
         return 2
     if _provider_settings_unverified():
         print('提供元設定を確認できないため復旧を保留します。設定と保留記録を保持してください。')
         return 2
-    state = _load_state()
+    state = mcs_recovery_core._load_state()
     if state.get("_corrupt"):
-        _report("corrupt_state",
+        mcs_recovery_core._report("corrupt_state",
                 "update_state.json unreadable — escalate, do nothing")
         return 2
-    if _unreconciled_restore() is not None and not _restored_writer_compatible():
-        _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+        mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
         return 1
     applying = state.get("applying")
     stages = [s.get("stage") for s in state.get("stages", [])]
     if not applying and not stages \
-            and not os.path.exists(MARKER_PATH):
+            and not os.path.exists(mcs_recovery_core.MARKER_PATH):
         return 0
-    upd_fd = _try_lock(UPDATE_LOCK)
+    upd_fd = mcs_recovery_core._try_lock(mcs_recovery_core.UPDATE_LOCK)
     if upd_fd is None:
         return 0                            # an apply is alive
     try:
-        run_fd = _try_lock(RUN_LOCK)
+        run_fd = mcs_recovery_core._try_lock(mcs_recovery_core.RUN_LOCK)
     except BaseException:
         os.close(upd_fd)
         raise
@@ -2242,28 +507,28 @@ def _recover_legacy(if_stale=False):
             return 2
         if editor_fd is None or _provider_settings_unverified():
             return 2
-        _check_recovery_root()
-        state = _load_state()               # fresh view under the locks
+        mcs_recovery_core._check_recovery_root()
+        state = mcs_recovery_core._load_state()               # fresh view under the locks
         if _settings_migration_pending():
             return 2
         if state.get("_corrupt"):
-            _report("corrupt_state", "update_state.json unreadable under lock")
+            mcs_recovery_core._report("corrupt_state", "update_state.json unreadable under lock")
             return 2
-        if _unreconciled_restore() is not None and not _restored_writer_compatible():
-            _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+        if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+            mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
             return 1
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
 
         def provider_migration_hold():
             try:
-                _ensure_recovery_marker()
+                mcs_recovery_core._ensure_recovery_marker()
             except (OSError, ValueError):
-                _report("provider_migration_hold_unverified",
+                mcs_recovery_core._report("provider_migration_hold_unverified",
                         "provider migration hold marker could not be verified",
                         writers_stopped=False)
                 return 1
-            _report("provider_migration_pending",
+            mcs_recovery_core._report("provider_migration_pending",
                     "provider migration requires target updater recovery; writer status unverified",
                     writers_stopped=False)
             return 1
@@ -2276,7 +541,7 @@ def _recover_legacy(if_stale=False):
             hold = required is not True
             if not hold and applying.get("rollback") is not True:
                 target, prev = applying.get("sha"), applying.get("prev_sha")
-                head = _head()
+                head = mcs_recovery_core._head()
                 hold = (not isinstance(target, str) or not target
                         or not isinstance(prev, str) or not prev
                         or not head or head != prev or head == target)
@@ -2285,7 +550,7 @@ def _recover_legacy(if_stale=False):
         if if_stale and (applying or stages):
             last = max([s.get("at", 0) for s in state.get("stages", [])]
                        + [(applying or {}).get("at", 0)])
-            if last and time.time() - last < STALE_S:
+            if last and time.time() - last < mcs_recovery_core.STALE_S:
                 return 0                    # newest locked journal is still fresh
         if isinstance(applying, dict) and "runtime_migration" in applying:
             # Only the target updater may change an interrupted source+venv migration.
@@ -2301,29 +566,29 @@ def _recover_legacy(if_stale=False):
         if schema_rollback:
             try:
                 # This marker prevents new launches; it is not stop evidence.
-                _ensure_recovery_marker()
+                mcs_recovery_core._ensure_recovery_marker()
                 if applying.get("restore_incomplete") is not True:
                     applying["restore_incomplete"] = True
-                    _save_state(state)
-                    if _load_state() != state:
+                    mcs_recovery_core._save_state(state)
+                    if mcs_recovery_core._load_state() != state:
                         raise ValueError("restore_hold_unverified")
             except (OSError, ValueError, TypeError, RecursionError):
-                _report("restore_hold_unverified", "rollback hold could not be saved or verified")
+                mcs_recovery_core._report("restore_hold_unverified", "rollback hold could not be saved or verified")
                 return 1
             backup = applying.get("backup_path")
             if not isinstance(backup, str) or not backup.strip():
-                _report("restore_backup_unverified", "schema rollback backup path is missing or invalid")
+                mcs_recovery_core._report("restore_backup_unverified", "schema rollback backup path is missing or invalid")
                 return 1
         if not applying and not stages:
-            _remove_marker()                # orphan — writer is dead
+            mcs_recovery_core._remove_marker()                # orphan — writer is dead
             return 0
-        removed = _clean_stale_git_locks()
+        removed = mcs_recovery_core._clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
         rollback_shaped = bool(applying and applying.get("rollback")
                                and applying.get("backup_path"))
         if not state.get("restore_consent") and rollback_shaped:
-            marker = _awaiting_consent()
+            marker = mcs_recovery_core._awaiting_consent()
             if marker is not None:
                 # = mcs_update: a hold without its journal record
                 # (entered by an older watchdog, or a crash between the
@@ -2333,15 +598,15 @@ def _recover_legacy(if_stale=False):
                     "report_id": marker.get("report_id"),
                     "backup_path": applying["backup_path"],
                     "from_marker": True, "at": time.time()}
-                _save_state(state)
-        prior_drainers = _last_report().get("drainers_key")
+                mcs_recovery_core._save_state(state)
+        prior_drainers = mcs_recovery_core._last_report().get("drainers_key")
         head = None                         # measured below
         tree_reset = False
         restarted = False
 
         def held():
             return bool(state.get("restore_consent")) \
-                or _awaiting_consent() is not None
+                or mcs_recovery_core._awaiting_consent() is not None
 
         def drainers(dkey):
             # = mcs_update.recover_interrupted.drainers: bounce once per
@@ -2351,8 +616,8 @@ def _recover_legacy(if_stale=False):
             bounce = not restarted and (tree_reset
                                         or prior_drainers != dkey)
             restarted = True
-            return _restart_drainers() if bounce \
-                else _restart_drainers(bounce=False)
+            return mcs_recovery_services._restart_drainers() if bounce \
+                else mcs_recovery_services._restart_drainers(bounce=False)
 
         def escalate(detail):
             # Canonical policy: mcs_update.recover_interrupted's
@@ -2365,27 +630,27 @@ def _recover_legacy(if_stale=False):
             # a write voids the pending consent). Report only; next pass retries
             # without claiming writers stopped.
             if held():
-                _report("restore_consent_blocked",
+                mcs_recovery_core._report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
                 return 1
             if (applying or {}).get("restore_incomplete"):
                 # A hold is not evidence that writers have stopped.
                 # Keep the journal and marker without sending a notice.
-                _report("escalate", detail, alert_key=_alert_key(state, detail))
+                mcs_recovery_core._report("escalate", detail, alert_key=mcs_recovery_core._alert_key(state, detail))
                 return 1
             cid = (applying or {}).get("command_id")
             if cid:
                 state.setdefault("executed", {})[cid] = {
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
-                _save_state(state)
-            dkey = _drainers_key(state, head)
+                mcs_recovery_core._save_state(state)
+            dkey = mcs_recovery_core._drainers_key(state, head)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
                           f"（要手動対応）: {_recovery_explanation(detail)}",
                           drainers_key=dkey)
             drainers(dkey)
-            _remove_marker()
+            mcs_recovery_core._remove_marker()
             return 1
 
         def git_failed(what):
@@ -2401,7 +666,7 @@ def _recover_legacy(if_stale=False):
         if (applying or {}).get("restore_incomplete") and not rollback_shaped:
             return escalate("restore_incomplete without a rollback "
                             "journal — refusing to classify")
-        if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+        if os.path.exists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD")):
             if (applying or {}).get("restore_incomplete"):
                 return escalate("restore_incomplete with MERGE_HEAD — "
                                 "refusing to classify")
@@ -2412,12 +677,12 @@ def _recover_legacy(if_stale=False):
                                 "refusing to classify")
             if not prev:
                 return escalate("MERGE_HEAD without known prev_sha")
-            if _runtime_mode() == "standalone" and not _standalone_target_supported(prev):
+            if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(prev):
                 return escalate("standalone_runtime_missing_in_target")
-            r = _git(["merge", "--abort"])
-            if (not r or r.returncode != 0) or _head() != prev:
+            r = mcs_recovery_core._git(["merge", "--abort"])
+            if (not r or r.returncode != 0) or mcs_recovery_core._head() != prev:
                 return escalate("merge --abort failed or HEAD "
-                                f"{_head()[:12]} != prev {str(prev)[:12]}")
+                                f"{mcs_recovery_core._head()[:12]} != prev {str(prev)[:12]}")
             return _finish(state, "merge_aborted", removed)
         if "done" in stages and not applying:
             applied = state.get("applied") or []
@@ -2427,17 +692,17 @@ def _recover_legacy(if_stale=False):
                 state.setdefault("executed", {})[cid] = {
                     "result": "applied", "at": time.time()}
             state["stages"] = []
-            _save_state(state)
-            _remove_marker()
-            _report("resumed_done", "completed bookkeeping after crash")
-            _notify("[MCS] 中断された更新の後処理を完了しました")
-            return _restart_services("resumed_done", _runtime_mode() == "standalone" or bool(
+            mcs_recovery_core._save_state(state)
+            mcs_recovery_core._remove_marker()
+            mcs_recovery_core._report("resumed_done", "completed bookkeeping after crash")
+            mcs_recovery_services._notify("[MCS] 中断された更新の後処理を完了しました")
+            return mcs_recovery_services._restart_services("resumed_done", mcs_recovery_core._runtime_mode() == "standalone" or bool(
                 applied and applied[-1].get("plugin_changed")))
         if not applying:
             # pre-'applying' remnant: nothing was ever mutated
             return _finish(state, "interrupted_pre_merge", removed)
 
-        head = _head()
+        head = mcs_recovery_core._head()
         if ("provider_settings_migration_required" in applying
                 and applying.get("rollback") is not True
                 and (not head or head != prev or head == target)):
@@ -2449,26 +714,26 @@ def _recover_legacy(if_stale=False):
                             "target — refusing to classify")
         if not head:
             return git_failed("rev-parse HEAD")
-        clean = _clean()
+        clean = mcs_recovery_core._clean()
         if clean is None:
             return git_failed("status")
         if head == target:
             if not clean:
-                foreign = _local_changes_outside(prev, target)
+                foreign = mcs_recovery_core._local_changes_outside(prev, target)
                 if foreign is None:
                     return git_failed("diff")
                 if foreign:
                     return escalate("local changes outside update: "
                                     + ",".join(foreign)[:160])
-                if _runtime_mode() == "standalone" and not _standalone_target_supported(target):
+                if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(target):
                     return escalate("standalone_runtime_missing_in_target")
                 # only a reset that passed both gates counts: an escalated pass must
                 # not make every later pass of the same condition bounce the drainers
                 tree_reset = True
-                r = _git(["reset", "--hard", target])
+                r = mcs_recovery_core._git(["reset", "--hard", target])
                 if r is None or r.returncode != 0:
                     return git_failed("reset --hard")
-                clean = _clean()
+                clean = mcs_recovery_core._clean()
                 if clean is None:
                     return git_failed("status")
                 if not clean:
@@ -2480,11 +745,11 @@ def _recover_legacy(if_stale=False):
                 if applying.get("restore_incomplete") is not True:
                     applying["restore_incomplete"] = True
                     try:
-                        _save_state(state)
-                        if _load_state() != state:
+                        mcs_recovery_core._save_state(state)
+                        if mcs_recovery_core._load_state() != state:
                             raise ValueError("restore_hold_unverified")
                     except (OSError, ValueError, TypeError, RecursionError):
-                        _report("restore_hold_unverified",
+                        mcs_recovery_core._report("restore_hold_unverified",
                                 "rollback restore hold could not be saved or verified")
                         return 1
                 identity_keys = ("sha", "prev_sha", "backup_path", "rollback", "command_id",
@@ -2499,11 +764,11 @@ def _recover_legacy(if_stale=False):
                 try:
                     identity = restore_identity(applying)
                 except (TypeError, ValueError, RecursionError):
-                    _report("restore_journal_unverified", "rollback identity is unverified")
+                    mcs_recovery_core._report("restore_journal_unverified", "rollback identity is unverified")
                     return 1
 
                 def fresh_restore_state():
-                    current = _load_state()
+                    current = mcs_recovery_core._load_state()
                     record = current.get("applying")
                     if (current.get("_corrupt") or not isinstance(record, dict)
                             or record.get("restore_incomplete") is not True
@@ -2514,13 +779,13 @@ def _recover_legacy(if_stale=False):
                 def record_restore_hold(report):
                     nonlocal state, applying
                     state, applying = fresh_restore_state()
-                    _record_hold(state, report, applying["backup_path"])
+                    mcs_recovery_database._record_hold(state, report, applying["backup_path"])
 
                 try:
-                    err = _restore_db(applying["backup_path"],
+                    err = mcs_recovery_database._restore_db(applying["backup_path"],
                                       on_hold=record_restore_hold)
                 except Exception as error:
-                    _report("restore_incomplete",
+                    mcs_recovery_core._report("restore_incomplete",
                             "rollback database restore failed: " + type(error).__name__)
                     return 1
                 try:
@@ -2528,23 +793,23 @@ def _recover_legacy(if_stale=False):
                     # Never overwrite their changes with the pre-restore copy.
                     state, applying = fresh_restore_state()
                 except (OSError, ValueError, TypeError, RecursionError):
-                    _report("restore_journal_unverified", "rollback journal changed during restore")
+                    mcs_recovery_core._report("restore_journal_unverified", "rollback journal changed during restore")
                     return 1
                 if "restore_staging" in applying:
-                    _report("restore_journal_unverified", "rollback restore staging remains unverified")
+                    mcs_recovery_core._report("restore_journal_unverified", "rollback restore staging remains unverified")
                     return 1
                 if err is not None and (not isinstance(err, str) or not err):
-                    _report("restore_incomplete", "rollback database restore result unverified")
+                    mcs_recovery_core._report("restore_incomplete", "rollback database restore result unverified")
                     return 1
                 if err and err.startswith("restore_consent_pending:"):
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, 'applying' stays — each watchdog
                     # pass re-checks the consent receipt until a bound
                     # approval arrives.
-                    _report("restore_consent_pending", err + " — " + RESTORE_LOSS_NOTICE)
+                    mcs_recovery_core._report("restore_consent_pending", err + " — " + mcs_recovery_database.RESTORE_LOSS_NOTICE)
                     return 0
                 if err == "restore_reconcile_pending":
-                    _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+                    mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
                     return 1
                 if err:
                     return escalate("rollback db restore: " + err)
@@ -2552,16 +817,16 @@ def _recover_legacy(if_stale=False):
                 # reconciliation; restore_pending continues to deny delivery.
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
-                    _save_state(state)
+                    mcs_recovery_core._save_state(state)
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):
                 # install.sh is never re-run unattended; the operator
                 # finishes it and acknowledges (mcs_update reinstall-done)
                 return escalate("reinstall_incomplete")
-            problems = _reconcile_membership(
+            problems = mcs_recovery_services._reconcile_membership(
                 applying.get("manifest_snapshot")
                 or state.get("manifest_snapshot"))
-            problems += drainers(_drainers_key(state, head))
+            problems += drainers(mcs_recovery_core._drainers_key(state, head))
             if problems:
                 return escalate("resume incomplete: "
                                 + ",".join(problems))
@@ -2583,11 +848,11 @@ def _recover_legacy(if_stale=False):
             if cid:
                 state.setdefault("executed", {})[cid] = {
                     "result": result, "at": time.time()}
-            _save_state(state)
-            _remove_marker()
-            _report("resumed", "post-merge converged after crash")
-            _notify("[MCS] 中断された更新の、プログラム切り替え後の処理を完了しました")
-            return _restart_services("resumed", _runtime_mode() == "standalone"
+            mcs_recovery_core._save_state(state)
+            mcs_recovery_core._remove_marker()
+            mcs_recovery_core._report("resumed", "post-merge converged after crash")
+            mcs_recovery_services._notify("[MCS] 中断された更新の、プログラム切り替え後の処理を完了しました")
+            return mcs_recovery_services._restart_services("resumed", mcs_recovery_core._runtime_mode() == "standalone"
                                      or bool(applying.get("plugin_changed")))
         if prev and head == prev:
             if held():
@@ -2599,16 +864,16 @@ def _recover_legacy(if_stale=False):
             if not clean:
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach
-                foreign = _local_changes_outside(target, prev)
+                foreign = mcs_recovery_core._local_changes_outside(target, prev)
                 if foreign is None:
                     return git_failed("diff")
                 if foreign:
                     return escalate("local changes outside update: "
                                     + ",".join(foreign)[:160])
-                if _runtime_mode() == "standalone" and not _standalone_target_supported(prev):
+                if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(prev):
                     return escalate("standalone_runtime_missing_in_target")
-                _git_out(["reset", "--hard", prev])
-                if _head() != prev or _clean() is not True:
+                mcs_recovery_core._git_out(["reset", "--hard", prev])
+                if mcs_recovery_core._head() != prev or mcs_recovery_core._clean() is not True:
                     return escalate("prev tree could not be cleaned")
                 return _finish(state, "mixed_tree_reset", removed)
             return _finish(state, "interrupted_pre_merge", removed)
@@ -2622,16 +887,16 @@ def _recover_legacy(if_stale=False):
 
 
 def _finish(state, result, removed):
-    _check_recovery_root()
+    mcs_recovery_core._check_recovery_root()
     # Keep the interrupted journal until its stopped workers are verified live.
-    _remove_marker()
-    dkey = _drainers_key(state, _head())
-    if _last_report().get("drainers_key") == dkey:
-        problems = _restart_drainers(bounce=False)
+    mcs_recovery_core._remove_marker()
+    dkey = mcs_recovery_core._drainers_key(state, mcs_recovery_core._head())
+    if mcs_recovery_core._last_report().get("drainers_key") == dkey:
+        problems = mcs_recovery_services._restart_drainers(bounce=False)
     else:
-        problems = _restart_drainers()
+        problems = mcs_recovery_services._restart_drainers()
     if problems:
-        _report("recovery_incomplete", "restart:" + ",".join(problems),
+        mcs_recovery_core._report("recovery_incomplete", "restart:" + ",".join(problems),
                 drainers_key=dkey)
         return 1
     applying = state.get("applying") or {}
@@ -2647,25 +912,17 @@ def _finish(state, result, removed):
     state["applying"] = None
     state["stages"] = []
     state.pop("restore_consent", None)
-    _save_state(state)
-    _report(result, "removed locks: " + ",".join(removed))
+    mcs_recovery_core._save_state(state)
+    mcs_recovery_core._report(result, "removed locks: " + ",".join(removed))
     explanation = {
         "merge_aborted": "中断されたプログラムの統合を取り消し、更新前の状態に戻しました。",
         "mixed_tree_reset": "更新前後のファイルが混在していたため、更新前の状態に戻しました。",
         "interrupted_pre_merge": "プログラムの切り替え前に中断した更新を終了しました。",
     }.get(result, "中断された更新の復旧を完了しました。")
-    _notify("[MCS] " + explanation)
+    mcs_recovery_services._notify("[MCS] " + explanation)
     # = mcs_update._finish_recovery: the tree is back on prev, so the
     # adapter needs no refresh; only the standalone host is re-requested
-    return _restart_services(result, _runtime_mode() == "standalone", lineworks=False)
-
-
-def _remove_marker():
-    _check_recovery_root()
-    try:
-        os.unlink(MARKER_PATH)
-    except OSError:
-        pass
+    return mcs_recovery_services._restart_services(result, mcs_recovery_core._runtime_mode() == "standalone", lineworks=False)
 
 
 def interactive_recovery():
@@ -2678,18 +935,18 @@ def interactive_recovery():
     if _settings_migration_pending():
         print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
         return 2
-    state = _load_state()
+    state = mcs_recovery_core._load_state()
     if state.get("_corrupt"):
         print("更新記録を読み取れません。変更せず停止しました。担当者に確認を依頼してください。")
         return 2
-    if _unreconciled_restore() is not None and not _restored_writer_compatible():
+    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
         print(_recovery_explanation("restore_reconcile_pending"))
         return 1
-    held = bool(state.get("restore_consent") or _awaiting_consent())
+    held = bool(state.get("restore_consent") or mcs_recovery_core._awaiting_consent())
     if held:
         print("データを戻す前の確認で保留した記録があります。通知の対象・失われる可能性のあるデータを担当者と確認してください。")
         print("未承認の場合は、理由と承認記録を残す既存の承認手順を使ってください。以下の実行選択は復元の承認ではありません。既存の承認記録を再確認し、承認条件を満たす場合だけ復旧を進めます。")
-    pending = held or state.get("applying") or state.get("stages") or os.path.exists(MARKER_PATH)
+    pending = held or state.get("applying") or state.get("stages") or os.path.exists(mcs_recovery_core.MARKER_PATH)
     if not pending:
         print("中断した更新は見つかりませんでした。復旧処理は不要です。")
         print("通知などに問題がある場合は mcs doctor で確認してください。")
@@ -2717,17 +974,17 @@ def interactive_recovery():
     except (KeyboardInterrupt, OSError):
         print("\n復旧処理を完了できませんでした。途中まで変更された可能性があります。mcs recover で状態を再確認し、担当者に確認を依頼してください。")
         return 1
-    state = _load_state()
-    if _unreconciled_restore() is not None and not _restored_writer_compatible():
+    state = mcs_recovery_core._load_state()
+    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
         print(_recovery_explanation("restore_reconcile_pending"))
         return 1
-    if state.get("restore_consent") or _awaiting_consent():
+    if state.get("restore_consent") or mcs_recovery_core._awaiting_consent():
         print("データを戻す前の確認で保留しています。未承認なら既存の承認手順を使ってください。承認済みなら自動監視の再確認を待ち、進まなければ担当者に確認を依頼してください。")
         return 1
     if result or state.get("_corrupt"):
         print("復旧は完了していません。繰り返し実行せず、担当者に確認を依頼してください。")
         return result or 1
-    if state.get("applying") or state.get("stages") or os.path.exists(MARKER_PATH):
+    if state.get("applying") or state.get("stages") or os.path.exists(mcs_recovery_core.MARKER_PATH):
         print("まだ更新記録が残っています。他の処理が動作中の可能性があります。少し待って再確認してください。")
         return 1
     print("中断した更新の処理が終了しました。mcs doctor と通知先の応答で動作を確認してください。")
@@ -2749,9 +1006,9 @@ def main():
             return 2
         return interactive_recovery()
     if "--status" in args:
-        state = _load_state()
-        print(json.dumps({"state": state, "head": _head(),
-                          "clean": _clean(), "settings_migration_pending": _settings_migration_pending()},
+        state = mcs_recovery_core._load_state()
+        print(json.dumps({"state": state, "head": mcs_recovery_core._head(),
+                          "clean": mcs_recovery_core._clean(), "settings_migration_pending": _settings_migration_pending()},
                          ensure_ascii=False, indent=2, default=str))
         return 0
     return recover(if_stale="--if-stale" in sys.argv)

@@ -4,6 +4,18 @@ and leave a diagnosable run record (2026-10-09: run_lock_lost timeouts
 left jobs untouched and restarted the resident while nothing completed).
 
 Synthetic only: temp ledger, stub model, no services."""
+import extract_llm_admission
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import writer_lock
 import semantic_policy
 import semantic_runtime
@@ -118,16 +130,27 @@ def test_updater_during_an_expiring_wait_is_reported(held_lock, monkeypatch, con
 
 def _resident(monkeypatch, calls, background, argv_extra=()):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--semantic", "--stop-after", "600",
                          *argv_extra])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm.time, "sleep", lambda *a: None)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: calls.append(1) or
                         {"done": 1, "failed": 0, "left": 1, "selected": 1})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_background_semantic", background)
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', extract_llm._background_semantic)
 
 
 @pytest.mark.parametrize("lost,passes", [("timeout", 2), ("updated", 1), ("held", 1)])
@@ -164,6 +187,8 @@ def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, lane
     lock = str(tmp_path / "run.lock")
     monkeypatch.setattr(extract_llm, "acquire_run_lock",
                         lambda *a, **k: writer_lock.acquire_run_lock(lock))
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', extract_llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', extract_llm.acquire_run_lock)
 
     def run_due(*a, **k):
         seen.append(local_llm.request_slot())
@@ -185,7 +210,17 @@ def test_direct_background_pass_keeps_the_default_lane(monkeypatch, tmp_path):
     lock = str(tmp_path / "run.lock")
     monkeypatch.setattr(extract_llm, "acquire_run_lock",
                         lambda *a, **k: writer_lock.acquire_run_lock(lock))
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', extract_llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', extract_llm.acquire_run_lock)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.setattr(drain, "run_due", lambda *a, **k: seen.append(
@@ -454,10 +489,14 @@ def _admitted_per_pass(monkeypatch, passes, base=None):
     _resident(monkeypatch, [], background, ("--stop-after", "100000"))
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("L", (), {"db": DB(), "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "legacy_admissions",
                         lambda *a: None if base is None else set(base))
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: admitted.append(
         k.get("admitted_ids")) or {"done": 1, "failed": 0, "left": 1, "selected": 1})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
     return admitted
@@ -531,9 +570,13 @@ def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
                             clock.__setitem__(0, clock[0] + extract_llm.SEMANTIC_FIRST_S + 1))
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("L", (), {"db": DB(), "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "legacy_admissions",
                         lambda *a: None if base is None else set(base))
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(extract_llm, "run_pending", record)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
 
@@ -571,7 +614,10 @@ def test_semantic_fairness_starts_only_after_work_and_survives_waits(
     monkeypatch.setattr(extract_llm.time, "sleep", lambda _seconds:
                         clock.__setitem__(0, clock[0] + extract_llm.SEMANTIC_FIRST_S + 1))
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: {7, 9})
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(extract_llm, "run_pending", record)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
     assert len(runs) == 10
@@ -616,9 +662,11 @@ def test_a_semantic_pass_does_not_idle_on_an_empty_extraction(monkeypatch):
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("L", (), {
         "db": type("DB", (), {"execute": lambda self, *a: []})(),
         "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm.time, "sleep", sleeps.append)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: {
         "done": 0, "failed": 0, "left": 0, "selected": 0})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
     assert sleeps and max(sleeps) <= 1
@@ -674,6 +722,12 @@ def test_continuous_semantic_work_preserves_bounded_legacy_progress(
             (event_id,)).fetchone())
         monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True,
                             raising=False)
+        monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
         leased_row = dict(db.db.execute(
             "SELECT * FROM messages WHERE message_id=10").fetchone())
         lease = extract_llm._claim(db, leased_row, lease_s=3600)
@@ -726,8 +780,12 @@ def test_continuous_semantic_work_preserves_bounded_legacy_progress(
         _resident(monkeypatch, [], background, ("--stop-after", "100000"))
         monkeypatch.setattr(db, "close", lambda: None)
         monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+        monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
         monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: set(base))
+        monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+        monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
         monkeypatch.setattr(extract_llm, "run_pending", select_and_complete)
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
         with pytest.raises(KeyboardInterrupt):
             extract_llm.main()
 

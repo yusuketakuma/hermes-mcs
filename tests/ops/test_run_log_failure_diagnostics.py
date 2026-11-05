@@ -1,4 +1,15 @@
 """Only bounded reason codes from the verified helper survive deployment errors."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import pytest
 
 import mcs_update
@@ -31,12 +42,36 @@ def test_verified_helper_failure_codes_only(
         with pytest.raises(deploy.LogInstallError):
             deploy.prepare(root, checkout, recovery)
     monkeypatch.setattr(mcs_update, 'HOME', str(root))
+    monkeypatch.setattr(update_apply, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', mcs_update.HOME)
     monkeypatch.setattr(mcs_update, 'REPO', str(checkout))
+    monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
     monkeypatch.setattr(mcs_update, '_RUN_LOG_SOURCE', source.read_bytes())
+    monkeypatch.setattr(update_lifecycle_context, '_RUN_LOG_SOURCE', mcs_update._RUN_LOG_SOURCE)
     monkeypatch.setattr(mcs_update, '_RUN_LOG_SOURCE_ERROR', False)
+    monkeypatch.setattr(update_lifecycle_context, '_RUN_LOG_SOURCE_ERROR', mcs_update._RUN_LOG_SOURCE_ERROR)
     from types import SimpleNamespace
     monkeypatch.setattr(mcs_update, '_service_paths',
                         lambda: SimpleNamespace(recovery_dir=str(recovery)))
+    monkeypatch.setattr(update_execution, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_lifecycle_context, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_planning, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_preflight, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_recovery, '_service_paths', mcs_update._service_paths)
+    monkeypatch.setattr(update_restore, '_service_paths', mcs_update._service_paths)
     invoke = mcs_update._prepare_run_log if operation == 'prepare' else mcs_update._migrate_log_tail
     prefix = 'run_log_prepare_failed' if operation == 'prepare' else 'run_log_tail_unverified'
     with pytest.raises(mcs_update.UpdateError) as error:
@@ -57,6 +92,8 @@ def test_post_merge_keeps_traceback_terminal_cause(monkeypatch, stream):
 
     monkeypatch.setattr(mcs_update.subprocess, 'Popen', lambda *_a, **_k: Child())
     monkeypatch.setattr(mcs_update, '_migrate_log_tail', lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', mcs_update._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', mcs_update._migrate_log_tail)
     monkeypatch.setattr(mcs_update.journal_store, 'load_state',
                         lambda *_a: {'stages': [{'stage': 'post_merge'}], 'applying': {}})
     with pytest.raises(mcs_update.UpdateError) as error:

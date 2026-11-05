@@ -5,6 +5,16 @@ need neither Git history nor a live database. Service/Git boundaries in public
 rollback are stubbed; SQLite migration, backup, consent, replacement,
 reconciliation, locks and updater bookkeeping remain real.
 """
+import update_apply
+import update_cli
+import update_execution
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 
 import environment_diagnostics
 from ops_testkit import select_updater_service_python
@@ -258,10 +268,20 @@ def updater(tmp_path, monkeypatch):
     select_updater_service_python(monkeypatch, mcs_update, str(selected))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **kw: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', mcs_update._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', mcs_update._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', mcs_update._services_reconcile)
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
     monkeypatch.setattr(environment_diagnostics, "check_environment", lambda cfg, **facts: ([], []))
     monkeypatch.setattr(mcs_update, "_agent_pid", lambda label: 12345)
+    monkeypatch.setattr(update_execution, '_agent_pid', mcs_update._agent_pid)
+    monkeypatch.setattr(update_services, '_agent_pid', mcs_update._agent_pid)
     return mcs_update
 
 
@@ -318,12 +338,43 @@ def test_released_schema_update_rollback_requires_bound_consent(
         return subprocess.CompletedProcess(args, 0, out, "")
 
     monkeypatch.setattr(updater, "_git", git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(updater, "_git_out", git_out)
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     monkeypatch.setattr(updater, "_head_sha", lambda: head[0])
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater, "quiesce", lambda: updater._write_marker())
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents",
                         lambda bounce=True: restarts.append(bounce) or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     state = updater.journal_store.default_state()
     bump = origin["schema_version"] < ledger.SCHEMA_VERSION
     state["applied"] = [{
@@ -435,9 +486,24 @@ def test_same_schema_restored_witness_reconciles_then_resumes(
     assert report["backup_schema"] == ledger.SCHEMA_VERSION
     restarts = []
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater, "restart_agents",
                         lambda bounce=True: restarts.append(bounce) or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     state = updater.journal_store.default_state()
     entry = {"tag": origin["release"], "sha": "b" * 40, "prev_sha": "a" * 40,
              "schema_bump": False, "backup_path": str(backup), "at": 100}

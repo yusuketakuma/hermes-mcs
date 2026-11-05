@@ -1,4 +1,14 @@
 """Synthetic provenance boundaries for adopted extraction results."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 
 import pytest
@@ -14,6 +24,8 @@ from extract_testkit import _ledger, _message
 def _local(monkeypatch, outputs):
     answers = iter(outputs)
     monkeypatch.setattr(worker, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
     monkeypatch.setattr(worker.local_llm, "admission_enabled", lambda: False)
     def chat(*args, **kwargs):
         answer = next(answers)
@@ -111,6 +123,8 @@ def test_interrupted_multichunk_resumes_with_verified_leaf(tmp_path, monkeypatch
             return original(*args, **kwargs) if len(calls) == 1 else worker._DEFERRED
 
         monkeypatch.setattr(worker, "_llm_call", stop_after_first)
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
         with worker.pin_target(row["_target"]):
             first = worker.llm_extract(body, chunk_size=size,
                 on_chunk=lambda key, value: worker._persist_chunks(
@@ -121,6 +135,8 @@ def test_interrupted_multichunk_resumes_with_verified_leaf(tmp_path, monkeypatch
         _, saved = worker._saved_chunk_state(ledger.db, row, chunk_size=size)
         assert worker._leaf_evidence(saved[0]) == {"providers": ["local"], "complete": True}
         monkeypatch.setattr(worker, "_llm_call", original)
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
         _local(monkeypatch, [{"summary": "合成二"}])
         meta = {}
         with worker.pin_target(row["_target"]):
@@ -265,8 +281,11 @@ def test_final_receipt_is_bound_and_stale_source_cannot_write(tmp_path, monkeypa
         ledger.save_messages([_message(body="完全合成の記録です。")])
         monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', worker._WRITER_STATE)
+        monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', worker._WRITER_STATE)
         monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(worker, "_rerender_cards", lambda *a, **kw: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         row["_source_binding"] = inference_dependency_loss.source_binding(ledger.db, row["project_id"], 1)
         row["_provider_evidence"] = {"providers": ["local"], "complete": True}
@@ -295,8 +314,11 @@ def test_prefilter_does_not_claim_a_provider(tmp_path, monkeypatch):
         ledger.save_messages([_message(body="こんにちは。")])
         monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', worker._WRITER_STATE)
+        monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', worker._WRITER_STATE)
         monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(worker, "_rerender_cards", lambda *a, **kw: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         row["_source_binding"] = inference_dependency_loss.source_binding(ledger.db, row["project_id"], 1)
         assert worker._mark_prefiltered(ledger, row)
@@ -315,16 +337,34 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         ledger.save_messages([_message(body="完全合成の記録です。")])
         monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', worker._WRITER_STATE)
+        monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', worker._WRITER_STATE)
         monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(worker, "_rerender_cards", lambda *a, **kw: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
         cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
         monkeypatch.setattr(worker, "load_config", lambda: cfg)
+        monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(worker, "_cloud_reextract", lambda *a, **kw: True)
+        monkeypatch.setattr(extract_llm_prepare, '_cloud_reextract', worker._cloud_reextract)
         monkeypatch.setattr(worker, "_cloud_mode", lambda *a, **kw: "on")
+        monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
         monkeypatch.setattr(worker, "_prefilter_enabled", lambda: False)
+        monkeypatch.setattr(extract_llm_runner, '_prefilter_enabled', worker._prefilter_enabled)
         monkeypatch.setattr(worker, "circuit_open_s", lambda db: 0)
+        monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+        monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
         monkeypatch.setattr(worker, "disk_free_mb", lambda db: 100000)
+        monkeypatch.setattr(extract_llm_resident, 'disk_free_mb', worker.disk_free_mb)
+        monkeypatch.setattr(extract_llm_runner, 'disk_free_mb', worker.disk_free_mb)
         _local(monkeypatch, [{"summary": "合成"}])
 
         class FailedCloud:

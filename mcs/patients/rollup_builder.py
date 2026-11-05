@@ -1,0 +1,1108 @@
+"""Build a source-bound patient rollup from a single borrowed snapshot."""
+import contextlib
+from datetime import date, datetime, timedelta
+import hashlib
+import json
+import re
+import sqlite3
+import sys
+import time
+import clinical_scope
+from clinical_values import (VITAL_PATTERNS, fold_surface, lab_analyte, lab_candidate,
+                             patient_item_scope, patient_current_vitals, vital_match_values, written_day)
+import patient_context
+import patient_context_projection as context_state
+import inference_version as inference
+import inference_dependency_loss as dependency_loss
+import initial_import_state
+import history_walk
+from patient_context import context_items, extract_context, merged_context
+from mcs_queries import (decode_current_extractions, EXTRACTION_KINDS_SQL, JST, karte_summary_current, karte_summary_block,
+                         item_unverified, current_extract_pred, current_fact_pred, extraction_consumer_content)
+from mcs_util import html_to_text, locate_quote_span, loads_dict
+from self_identity import normalize_sender_id
+from drug_map import (KIND as REF_KIND, current_refs)
+
+
+KIND = "patient_rollup"
+
+
+STALE_DAYS = 21          # message unseen this long while siblings refresh
+
+
+PERIOD_CHECK_VERSION = 18
+
+
+_LEGACY_KEYS = {"current_med_period": "med_period_candidate",
+                "possibly_deleted": "unrefreshed_message_ids"}
+
+
+_REPLY_STAGE = {k: i for i, k in enumerate(
+    ("ack", "intent", "progress", "answer", "done", "cancel"))}
+
+
+PHARMACY_STATE_LIMIT = 100
+
+
+MEASUREMENT_REPORT_LIMIT = 100
+
+
+_MAX_EMPTY_HTML_CHARS = 80000
+
+
+@contextlib.contextmanager
+def _freshness_snapshot(db):
+    """Borrow a consistent read snapshot without committing a caller transaction."""
+    db.execute("SAVEPOINT rollup_freshness_read")
+    try:
+        yield
+    except BaseException:
+        try:
+            db.execute("RELEASE rollup_freshness_read")
+        except sqlite3.Error:
+            pass  # Preserve the original read error if SQLite closed the savepoint.
+        raise
+    else:
+        db.execute("RELEASE rollup_freshness_read")
+
+
+def _acquisition_state(db, project_id):
+    """Compute exactly the acquisition evidence used by measurement coverage."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(patients)")}
+    required = {"fetch_state", "fetch_reason", "history_floor", "initial_import"}
+    patient = (db.execute("SELECT fetch_state,fetch_reason,history_floor FROM patients WHERE project_id=?",
+                          (project_id,)).fetchone() if required <= columns else None)
+    status = (patient[0] if patient and patient[0] in
+              ("complete", "incomplete", "failed", "pending", "forbidden") else "unknown")
+    history = "unknown"
+    pending = None
+    complete = bool(patient and patient[0] == "complete" and patient[1] in (None, "")
+                    and patient[2] == -1)
+    if complete:
+        try:
+            capture = initial_import_state.progress(db, project_id)
+            complete = bool(capture is None or capture.get("capture_phase") == "complete"
+                            and history_walk.capture_proof(capture.get("capture_proof"), project_id,
+                                                           capture["cohort_id"]))
+            if complete:
+                history = "legacy_floor" if capture is None else "complete_cohort"
+                pending = db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE project_id=? "
+                                     "AND kind IN ('history','thread','reply') AND state IS NOT 'done'",
+                                     (project_id,)).fetchone()[0]
+                complete = pending == 0
+            elif capture and capture.get("capture_phase") in ("capturing", "held"):
+                history = capture["capture_phase"]
+        except sqlite3.OperationalError as error:
+            if dependency_loss.fatal_read_error(error):
+                raise
+            complete = False
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
+            complete = False
+    return complete, status, history, pending
+
+
+def _attachment_count(db, project_id):
+    """Return None when the attachment schema cannot establish coverage."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(attachments)")}
+    if "message_id" not in columns:
+        return None
+    return db.execute("SELECT COUNT(*) FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+                      "WHERE m.project_id=?", (project_id,)).fetchone()[0]
+
+
+def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, discard=False, deadline=None):
+    """Stream bounded empty-body HTML and retain only per-message proof results."""
+    proofs = {}
+    with contextlib.closing(_empty_body_proof_rows(
+            db, project_id, html_available=html_available, message_ids=message_ids, deadline=deadline)) as rows:
+        for mid, valid in rows:
+            if not discard:
+                proofs[mid] = valid
+    return proofs
+
+
+def _empty_body_proof_rows(db, project_id, *, html_available, message_ids=None, ordered=False, deadline=None):
+    """Yield bounded source proofs, optionally in the rollup message order."""
+    if not html_available:
+        return
+    scope = " AND message_id IN (SELECT value FROM json_each(?))" if message_ids is not None else ""
+    params = (_MAX_EMPTY_HTML_CHARS, project_id, json.dumps(message_ids)) if message_ids is not None else (
+        _MAX_EMPTY_HTML_CHARS, project_id)
+    cursor = db.execute("SELECT message_id,content_hash,CASE WHEN typeof(body_html)='text' "
+                        "AND length(body_html)<=? AND instr(body_html,char(0))=0 THEN body_html END "
+                        "FROM messages WHERE project_id=? AND body_state='full' AND body_text=''" + scope
+                        + (" ORDER BY posted_at_ts DESC,message_id DESC" if ordered else ""),
+                        params)
+    try:
+        for mid, content_hash, source_html in cursor:
+            _check_deadline(deadline)
+            valid = False
+            if isinstance(source_html, str) and isinstance(content_hash, str):
+                try:
+                    valid = (hashlib.sha256(source_html.encode()).hexdigest() == content_hash
+                             and html_to_text(source_html) == "")
+                except (UnicodeError, ValueError):
+                    pass
+            yield mid, valid
+    except BaseException:
+        try:
+            cursor.close()
+        except sqlite3.Error:
+            pass  # Preserve the original SQLite failure.
+        raise
+    else:
+        cursor.close()
+
+
+def _dicts(value) -> list[dict]:
+    return [item for item in value if isinstance(item, dict)] \
+        if isinstance(value, list) else []
+
+
+def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit):
+    """Append one message's v1/llm request rows to the rollup lists."""
+    for rq in _dicts(v1.get("requests")):
+        row = {"kind": rq.get("kind"), "ctx": rq.get("ctx"),
+               "at": m["posted_at"], "mid": m["message_id"]}
+        requests.append(row)
+        # Full patient views also check replies to rule-only requests;
+        # the ordinary saved rollup retains its historical LLM-only scan.
+        if request_limit is None:
+            req_thread.append((row, root, ts, sender_id))
+    # negated/speculative/ungrounded requests stay flagged for the
+    # readers; any flag other than a literal False fails closed
+    for rq in _dicts(lm.get("requests")):
+        row = {"kind": rq.get("to"), "ctx": rq.get("action"),
+               "at": m["posted_at"], "mid": m["message_id"],
+               "unverified": item_unverified(rq)}
+        # #20 request kind/condition/due_text under NEW keys — "kind"
+        # already means the addressee for mcs-read-model/1 readers
+        for src, dst in (("kind", "req_kind"), ("condition", "condition"),
+                         ("due_text", "due_text")):
+            if isinstance(rq.get(src), str) and rq[src]:
+                row[dst] = rq[src]
+        requests.append(row)
+        # Only returned requests need a reply scan. The ordinary rollup
+        # keeps its cap; an explicit full read checks every request.
+        if request_limit is None or len(requests) <= request_limit:
+            req_thread.append((row, root, ts, sender_id))
+
+
+def _stored_lab_ok(r) -> bool:
+    """A stored lab report whose fields have the types lab_candidate reads."""
+    value = r.get("value", "")
+    return (type(value) in (str, int, float)
+            and all(r.get(k) is None or isinstance(r.get(k), str) for k in ("unit", "evidence", "measured_on")))
+
+
+_DATED_MEASUREMENT = re.compile(
+    r"(?<!\d)(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?)(?!\d)\s*"
+    r"(?:に|の)?\s*(?:測定|検査|採血)(?:で|の結果|結果|時|に|は|：|:|\s)"
+)
+
+
+_VITAL_UNCERTAIN_TAIL = re.compile(
+    r"^\s*(?:(?:は|が|も)?(?:現在|本日)?\s*)?"
+    r"(?:(?:では|じゃ|で)?(?:ありません|ない|なかった|なく|なし)|"
+    r"(?:は|が)?(?:未確認|不明|未測定|未実施)|"
+    r"(?:かもしれ|の可能性|と推測|と思われ|と推定)|"
+    r"(?:です|でした)?(?:という|との)?(?:記載|数値|値)?(?:は|が)?(?:誤り|訂正|撤回)|"
+    r"(?:の)?測定(?:は|を)?(?:していない|していません|せず|しない|予定))"
+)
+
+
+_VITAL_UNCERTAIN_PREFIX = re.compile(r"(?:未測定|未確認|推定|推測)(?:の|された)?\s*$")
+
+
+_PULSE_LABEL = r"(?<![A-Za-z])P(?![A-Za-z])[:：は]?\s*(\d{2,3})(?![\d.．])"
+
+
+_no_artifact_fence = object()
+
+
+_unresolved_model = object()
+
+
+def _measurement_source_bound(db, m, kind, cfg, *, artifact_ref=_no_artifact_fence,
+                              expected_model=_unresolved_model):
+    """Require current model and complete extraction in the borrowed snapshot."""
+    if kind != "extract_llm" or not isinstance(cfg, dict):
+        return False  # No policy proof for canonical projections or absent config.
+    row = db.execute(
+        "SELECT a.artifact_id,a.meta,a.model FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+        "WHERE a.kind=? AND m.project_id=? AND m.message_id=? "
+        + (current_fact_pred("a", "m") if kind in ("semantic_facts_v4", "canonical_projection")
+           else current_extract_pred("a", "m"))
+        + " ORDER BY a.artifact_id DESC LIMIT 1", (kind, m["project_id"], m["message_id"])).fetchone()
+    if artifact_ref is not _no_artifact_fence and (row is None or row['artifact_id'] != artifact_ref):
+        return False
+    meta = loads_dict(row['meta']) if row else None
+    if not isinstance(meta, dict) or not isinstance(meta.get("source_binding"), str):
+        return False
+    try:
+        import extract_llm
+        if expected_model is _unresolved_model:
+            expected_model = extract_llm.resolved_model(cfg)
+        model = meta.get("actual_model")
+        source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                            (m["project_id"], m["message_id"])).fetchone()
+        return (isinstance(model, str) and bool(model) and model == row["model"]
+                and model == expected_model
+                and meta["source_binding"] == dependency_loss.source_binding(db, m["project_id"], m["message_id"])
+                and source is not None
+                and extract_llm.progress_for_message(db, source, model=model).get("state") == "complete")
+    except sqlite3.OperationalError as error:
+        if dependency_loss.fatal_read_error(error):
+            raise
+        return False
+
+
+def _measurement_sources_bound(db, messages, kinds, refs, cfg, *, expected_model=_unresolved_model):
+    """Check ordered source rows in bounded pages on the caller's snapshot."""
+    result = [False] * len(messages)
+    if not isinstance(cfg, dict):
+        return result
+    if expected_model is _unresolved_model:
+        import extract_llm
+        expected_model = extract_llm.resolved_model(cfg)
+    if type(expected_model) is not str or not expected_model:
+        return result
+    for offset in range(0, len(messages), 64):
+        page = messages[offset:offset + 64]
+        page_kinds = kinds[offset:offset + 64]
+        try:
+            page_result = _measurement_source_page(db, page, page_kinds, refs, expected_model)
+        except Exception as error:
+            if not dependency_loss.retryable_batch_read_error(error):
+                raise
+            # A batch error may belong to a later row. Replay the page in
+            # original order so an earlier single-row error is not hidden.
+            page_result = [_measurement_source_bound(db, row, kind, cfg,
+                                                    artifact_ref=refs.get((row['message_id'], 'extract_llm')),
+                                                    expected_model=expected_model)
+                           if row['body_state'] == 'full' and row['body_text'] else False
+                           for row, kind in zip(page, page_kinds)]
+        result[offset:offset + len(page)] = page_result
+    return result
+
+
+def _rollup_inputs(db, messages, arts, refs, cfg, *, expected_model=_unresolved_model):
+    """Decode one bounded page once and retain the same source ordering."""
+    if expected_model is _unresolved_model:
+        expected_model = None
+        if isinstance(cfg, dict):
+            import extract_llm
+            expected_model = extract_llm.resolved_model(cfg)
+    for offset in range(0, len(messages), 64):
+        page = messages[offset:offset + 64]
+        blobs = [arts.get(row['message_id'], {}) for row in page]
+        decoded = [decode_current_extractions(item) for item in blobs]
+        kinds = [next((kind for kind in ('semantic_facts_v4', 'canonical_projection', 'extract_llm')
+                       if kind in item), None) if value[3]
+                 else ('extract_v1' if 'extract_v1' in item else None)
+                 for item, value in zip(blobs, decoded)]
+        bound = _measurement_sources_bound(db, page, kinds, refs, cfg, expected_model=expected_model)
+        yield from zip(page, blobs, decoded, kinds, bound)
+
+
+def _current_extraction_page(db, project_id, message_ids):
+    """Read current extractions for a message page in the original artifact order."""
+    arts = {}
+    for row in db.execute(f"""
+        SELECT a.message_id,a.kind,a.content FROM artifacts a
+        JOIN messages m ON m.message_id=a.message_id
+        WHERE m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?))
+          AND a.kind IN ({EXTRACTION_KINDS_SQL}) {current_extract_pred()}
+          AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
+        ORDER BY a.artifact_id
+    """, (project_id, json.dumps(message_ids))):
+        arts.setdefault(row['message_id'], {})[row['kind']] = row['content']
+    return arts
+
+
+def _rollup_source_pages(db, project_id, cursor, first_page, cfg, *, html_available, deadline=None):
+    """Consume one source page at a time on the caller's existing snapshot."""
+    expected_model = None
+    if isinstance(cfg, dict):
+        import extract_llm
+        expected_model = extract_llm.resolved_model(cfg)
+    with contextlib.closing(_empty_body_proof_rows(
+            db, project_id, html_available=html_available, ordered=True, deadline=deadline)) as proof_rows:
+        page = first_page
+        while page:
+            _check_deadline(deadline)
+            ids = [row['message_id'] for row in page]
+            arts = _current_extraction_page(db, project_id, ids)
+            refs = _clinical_artifact_refs(db, project_id, arts, ids)
+            ref_mids = {row[0] for row in db.execute(
+                "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                "WHERE a.kind=? AND m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?))",
+                (REF_KIND, project_id, json.dumps(ids)))}
+            empty_proofs = {}
+            if html_available:
+                for row in page:
+                    if row['body_state'] == 'full' and row['body_text'] == '':
+                        proof = next(proof_rows, None)
+                        if proof is None or proof[0] != row['message_id']:
+                            raise sqlite3.OperationalError('rollup_empty_proof_order_changed')
+                        empty_proofs[proof[0]] = proof[1]
+            for item in _rollup_inputs(db, page, arts, refs, cfg, expected_model=expected_model):
+                yield (*item, refs, ref_mids, empty_proofs)
+            page = cursor.fetchmany(64)
+        if next(proof_rows, None) is not None:
+            raise sqlite3.OperationalError('rollup_empty_proof_order_changed')
+
+
+def _measurement_source_page(db, page, kinds, refs, expected_model):
+    import extract_llm
+    result = [False] * len(page)
+    selected = [(i, row, refs.get((row['message_id'], 'extract_llm')))
+                for i, (row, kind) in enumerate(zip(page, kinds))
+                if kind == 'extract_llm' and row['body_state'] == 'full' and row['body_text']]
+    ids = list(dict.fromkeys(artifact_id for _, _, artifact_id in selected if artifact_id is not None))
+    if not ids:
+        return result
+    params = ','.join('?' for _ in ids)
+    metadata = {row['artifact_id']: row for row in db.execute(
+        f'SELECT a.artifact_id,a.project_id,a.message_id,a.kind,a.meta,a.model '
+        f'FROM artifacts a JOIN messages m ON m.message_id=a.message_id '
+        f'WHERE a.artifact_id IN ({params}) AND a.kind=\'extract_llm\' '
+        + current_extract_pred('a', 'm')
+        + " AND a.artifact_id=(SELECT b.artifact_id FROM artifacts b WHERE b.kind='extract_llm' "
+        + "AND b.message_id=m.message_id " + current_extract_pred('b', 'm')
+        + ' ORDER BY b.artifact_id DESC LIMIT 1)', ids)}
+    candidates = []
+    for i, row, artifact_id in selected:
+        artifact = metadata.get(artifact_id)
+        if (artifact is None or artifact['kind'] != 'extract_llm'
+                or artifact['message_id'] != row['message_id']
+                or artifact['project_id'] not in (None, row['project_id'])):
+            continue
+        meta = loads_dict(artifact['meta'])
+        if (not isinstance(meta, dict) or not isinstance(meta.get('source_binding'), str)
+                or meta.get('actual_model') != expected_model or artifact['model'] != expected_model):
+            continue
+        candidates.append((i, row, meta['source_binding']))
+    bindings = dependency_loss.source_bindings(
+        db, [(row['project_id'], row['message_id']) for _, row, _ in candidates])
+    ready = [(i, row) for (i, row, expected), actual in zip(candidates, bindings)
+             if expected == actual]
+    if ready:
+        progress = extract_llm.progress_for_messages(db, [row for _, row in ready], model=expected_model)
+        for (i, _), state in zip(ready, progress):
+            result[i] = state.get('state') == 'complete'
+    return result
+
+
+def _posted_measurement_day(m, value):
+    if not isinstance(value, str) or type(m["posted_at_ts"]) not in (int, float):
+        return None
+    try:
+        measured = date.fromisoformat(value)
+        posted = datetime.fromtimestamp(m["posted_at_ts"], JST).date()
+        return value if measured <= posted else None
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _dated_vitals(m, values, patient_name):
+    """Return (source_bound, date) for a single panel; date may be unknown."""
+    from measurement_sources import _adjacent_measurement_retraction
+
+    body = m["body_text"]
+    if not isinstance(body, str) or not values:
+        return False, None
+    spans = []
+    for key, value in values.items():
+        pattern_key = "sbp" if key == "dbp" else key
+        pattern = VITAL_PATTERNS.get(pattern_key)
+        if pattern is None:
+            return False, None
+        patterns = (pattern, _PULSE_LABEL) if key == "hr" else (pattern,)
+        matches = [match for candidate in patterns for match in re.finditer(candidate, body, re.I)
+                   if vital_match_values(pattern_key, match).get(key) == value
+                   and clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
+                                                           measurement=True) == "patient"]
+        if len(matches) != 1:
+            return False, None
+        assertion = clinical_scope.source_assertion_span(body, matches[0].group())
+        if assertion is None:
+            return False, None
+        left, right = assertion
+        if (_VITAL_UNCERTAIN_PREFIX.search(body[left:matches[0].start()])
+                or _VITAL_UNCERTAIN_TAIL.search(body[matches[0].end():right])
+                or _adjacent_measurement_retraction(body, assertion, target=key)):
+            return False, None
+        spans.append(matches[0].span())
+    start = max((body.rfind(mark, 0, min(s for s, _ in spans)) for mark in "。！？!?;；\n"), default=-1) + 1
+    end_match = re.search(r"[。！？!?;；\n]", body[max(e for _, e in spans):])
+    end = max(e for _, e in spans) + end_match.start() if end_match else len(body)
+    clause = body[start:end]
+    if any(not start <= s < e <= end for s, e in spans):
+        return False, None
+    marker = list(_DATED_MEASUREMENT.finditer(clause))
+    day = written_day(clause)
+    if (len(marker) != 1 or day is None or day[0] != "ymd"
+            or clause[marker[0].end():min(s for s, _ in spans) - start].strip()
+            or written_day(marker[0].group(1)) != day
+            or context_state.paired_date_conflict(clause, m["posted_at_ts"])):
+        return True, None
+    # The date can carry a different owner from the measurement label:
+    # "家族の2026-09-19測定でP72" must not become the patient's pulse.
+    date_start = start + marker[0].start(1)
+    date_end = start + marker[0].end(1)
+    if clinical_scope.patient_source_scope(body, date_start, date_end,
+                                            patient_name=patient_name, measurement=True) != "patient":
+        return False, None
+    return True, _posted_measurement_day(m, day[1].isoformat())
+
+
+def _has_patient_vital(body, patient_name):
+    if not isinstance(body, str):
+        return False
+    return any(clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
+                                                    measurement=True) == "patient"
+               for pattern in (*VITAL_PATTERNS.values(), _PULSE_LABEL)
+               for match in re.finditer(pattern, body, re.I))
+
+
+def _noncurrent_vital_reference(body, values):
+    """Classify only unambiguous single-sentence owner, plan or past cues."""
+    if not isinstance(body, str) or not isinstance(values, dict) or set(values) != {"bt"}:
+        return None
+    text = body.strip()
+    if re.search(r"[。！？!?;；\n]\s*\S", text):
+        return None
+    matches = list(re.finditer(VITAL_PATTERNS["bt"], text, re.I))
+    if len(matches) != 1 or vital_match_values("bt", matches[0]).get("bt") != values["bt"]:
+        return None
+    # A second person or second measurement makes the sentence ambiguous.
+    if len([match for pattern in (*VITAL_PATTERNS.values(), _PULSE_LABEL)
+            for match in re.finditer(pattern, text, re.I)]) != 1:
+        return None
+    if re.match(r"^家族の\d{4}[-/年]", text) and not re.search(r"本人|患者|利用者", text):
+        return "other"
+    if not re.match(r"^本人(?:は|の)", text) or re.search(r"家族|他者|他人", text):
+        return None
+    if re.search(r"(?:以前|過去|既往)", text[:matches[0].start()]):
+        return "historical_unknown"
+    if ("測定" not in text[:matches[0].start()]
+            and re.fullmatch(r"\s*の測定を予定しています[。\s]*", text[matches[0].end():])):
+        return "planned"
+    return None
+
+
+def _match_request_replies(db, project_id, req_thread, requests, messages, now, *, cfg=None):
+    """Annotate only uniquely matched requests with current Loop relation evidence."""
+    from request_loops import effective_loop_states, latest_policy
+    from semantic_transport import llm_model
+    import semantic_jev as jev
+
+    kinds = {"acknowledges": "ack", "progress_report": "progress",
+             "answers_question": "answer", "completion_report": "done",
+             "cancellation_report": "cancel"}
+    counts = {}
+    for row in requests:
+        if not isinstance(row.get("ctx"), str):
+            continue
+        key = (row["mid"], row["ctx"])
+        counts[key] = counts.get(key, 0) + 1
+    wanted = {(row["mid"], row["ctx"]) for row, _root, _ts, sender in req_thread
+              if isinstance(row.get("ctx"), str) and sender is not None
+              and counts[(row["mid"], row["ctx"])] == 1}
+    if not wanted:
+        return
+    candidates = {}
+    policy = latest_policy(db)
+    sources = db.execute(
+        "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts a "
+        "WHERE kind='loop_candidate' AND project_id=? AND EXISTS ("
+        "SELECT 1 FROM json_each(?) requested WHERE "
+        "a.message_id=json_extract(requested.value,'$[0]') AND "
+        "CASE WHEN json_valid(a.content) THEN json_extract(a.content,'$.description') END="
+        "json_extract(requested.value,'$[1]'))", (project_id, json.dumps(sorted(wanted)))).fetchall()
+    source_mids = {source["artifact_id"]: source["message_id"] for source in sources}
+    for loop in effective_loop_states(db, sources, policy=policy,
+                                     relation_limit=None, eligible_only=True,
+                                     local_model=llm_model(cfg)):
+        key = (source_mids[loop["artifact_id"]], loop["description"])
+        candidates.setdefault(key, []).append(loop)
+    by_id = {m["message_id"]: m for m in messages}
+    for row, root, ts, sender in req_thread:
+        if not isinstance(row.get("ctx"), str):
+            continue
+        key = (row["mid"], row["ctx"])
+        matched = candidates.get(key, [])
+        if sender is None or counts[key] != 1 or len(matched) != 1:
+            continue
+        seen = []
+        reply_events = []
+        for event in matched[0]["relation_events"]:
+            relation = event.get("relation")
+            kind = kinds.get(relation) if isinstance(relation, str) else None
+            trigger = by_id.get(event.get("trigger_message_id"))
+            confidence = jev.finite_value(event.get("confidence"))
+            if (not kind or event.get("stale") or not trigger
+                    or type(event.get("loop_artifact_id")) is not int
+                    or event["loop_artifact_id"] != matched[0]["artifact_id"]
+                    or not isinstance(event.get("trigger_revision"), str)
+                    or not event["trigger_revision"]
+                    or confidence is None or not 0 <= confidence <= 1
+                    or not isinstance(event.get("reported_relation"), str)
+                    or event["reported_relation"] not in jev.LOOP_RELATION_OPTIONS
+                    or event["reported_relation"] != relation
+                    or trigger["body_state"] not in (None, "full")
+                    or (trigger["parent_id"] or trigger["message_id"]) != root):
+                continue
+            other = normalize_sender_id(trigger["sender_id"])
+            at = trigger["posted_at_ts"]
+            if other is not None and other != sender and at is not None and 0 < ts < at <= now:
+                seen.append((at, kind))
+                reply_events.append({"message_id": trigger["message_id"],
+                                     "revision": event["trigger_revision"],
+                                     "loop_artifact_id": event["loop_artifact_id"],
+                                     "posted_at": trigger["posted_at"],
+                                     "posted_at_ts": at, "relation": relation,
+                                     "reply_state": kind})
+        if seen:
+            reply_events.sort(key=lambda event: (event["posted_at_ts"], event["message_id"], event["relation"]))
+            times = {}
+            for event in reply_events:
+                times[event["posted_at_ts"]] = times.get(event["posted_at_ts"], 0) + 1
+            for event in reply_events:
+                event["same_time_unordered"] = times[event["posted_at_ts"]] > 1
+            row["reply_events"] = reply_events
+            row["reply_state"] = max((kind for _, kind in seen), key=_REPLY_STAGE.get)
+            if {kind for _, kind in seen} >= {"done", "cancel"}:
+                row["reply_conflict"] = True
+
+
+def _close_rollup_cursor(cursor):
+    """Close an owned cursor without masking an already active failure."""
+    active_error = sys.exc_info()[0] is not None
+    try:
+        cursor.close()
+    except sqlite3.Error:
+        if not active_error:
+            raise
+
+
+class RollupDeadlineExceeded(TimeoutError):
+    pass
+
+
+def _check_deadline(deadline):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise RollupDeadlineExceeded("rollup_deadline_exceeded")
+
+
+def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, deadline=None) -> dict:
+    # All source, artifact and progress checks must observe the same snapshot.
+    # Releasing a nested savepoint leaves the caller's transaction untouched.
+    _check_deadline(deadline)
+    db.execute('SAVEPOINT rollup_build_read')
+    try:
+        with contextlib.ExitStack() as resources:
+            result = _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg, resources=resources, deadline=deadline)
+            _check_deadline(deadline)
+    except BaseException as error:
+        try:
+            db.execute('RELEASE rollup_build_read')
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        if _invalid_sqlite_text(error):
+            raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
+        raise
+    else:
+        db.execute('RELEASE rollup_build_read')
+        return result
+
+
+def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, resources, deadline=None) -> dict:
+    patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
+    patient_name = patient[0] if patient else None
+    measurement_complete, fetch_status, history_status, pending_jobs = _acquisition_state(db, project_id)
+    attachments = _attachment_count(db, project_id)
+    measurement_complete = measurement_complete and attachments == 0
+    # Legacy read-only snapshots may lack observation time; NULL stays unknown.
+    message_columns = {r[1] for r in db.execute("PRAGMA table_info(messages)")}
+    refreshed = "updated_seen" if "updated_seen" in message_columns else "NULL"
+    # The original snapshot checked empty-body proofs before reading source
+    # rows and choosing generated_at. Repeat that order without retaining the
+    # patient-wide proof map; the later page read supplies per-message proofs.
+    _empty_body_proofs(db, project_id, html_available="body_html" in message_columns, discard=True, deadline=deadline)
+    message_sql = f"""
+      SELECT message_id, project_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
+             parent_id, {refreshed} AS updated_seen, body_state, content_hash
+      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
+    """
+    # Preserve the old as-of boundary: it was captured only after every
+    # source row had been fetched. The first pass is bounded in memory;
+    # the second consumes the same rows on this same borrowed snapshot.
+    msg_count = reply_count = 0
+    newest_at = newest_ts = None
+    with contextlib.ExitStack() as initial_read:
+        initial_cursor = db.execute(message_sql, (project_id,))
+        initial_read.callback(_close_rollup_cursor, initial_cursor)
+        while page := initial_cursor.fetchmany(64):
+            _check_deadline(deadline)
+            if not msg_count:
+                newest_at, newest_ts = page[0]['posted_at'], page[0]['posted_at_ts']
+            msg_count += len(page)
+            reply_count += sum(1 for row in page if row['parent_id'])
+    generated_at = time.time()
+    out: dict = {"project_id": project_id, "generated_at": generated_at,
+                 inference.VERSION_KEY: inference.CURRENT_VERSION,
+                 "msg_count": msg_count, "reply_count": reply_count}
+    cursor = db.execute(message_sql, (project_id,)) if msg_count else None
+    if cursor is not None:
+        resources.callback(_close_rollup_cursor, cursor)
+        first_page = cursor.fetchmany(64)
+        if not first_page:
+            raise RollupSourceChanged('rollup_source_page_unavailable')
+    else:
+        first_page = []
+    # 連携サマリー (#21): the newest karte_summary artifact, or None when
+    # never fetched — 空 (fetched, nothing registered) stays distinct.
+    ks = karte_summary_current(db, project_id)
+    out["karte_summary"] = None if ks is None else {
+        **karte_summary_block(ks), "fetched_at": ks.get("fetched_at")}
+    context = {}
+    if ks and isinstance(ks.get("comment"), str):
+        for item in context_items({"patient_context": extract_context(ks["comment"])}, ks["comment"]):
+            context.setdefault(item["category"], []).append({
+                **item, "source": "karte_summary", "updated_at": ks.get("updated_at"),
+                "fetched_at": ks.get("fetched_at")})
+    out["patient_context"] = {"memo": context, "chat": {}}
+    out["pharmacy_state"] = {"items": [], "total": 0, "truncated": False, "source": "chat"}
+    from registered_data import registered_data
+    registered = registered_data(db, "aggregate", project_id, None)
+    if registered is not None and registered["total"]:
+        out["registered_data"] = registered
+    if not first_page:
+        out["measurement_coverage"] = {"complete": False, "fetch_state": fetch_status,
+                                       "history_state": history_status, "pending_fetch_jobs": pending_jobs,
+                                       "incomplete_sources": 0, "unbound_sources": 0, "unparsed_sources": 0,
+                                       "attachment_count": attachments,
+                                       "undated_vital_panels": 0, "unverified_lab_reports": 0}
+        out["measurement_reports"] = {"items": [], "total": 0, "truncated": False}
+        return out
+    out["last_activity"] = newest_at
+    out["last_activity_ts"] = newest_ts
+
+    vital_panels = []
+    lab_reports = {}
+    measurement_reports = []
+    report_count = 0
+    incomplete_sources = 0
+    unbound_sources = 0
+    unparsed_sources = 0
+    med_period = None
+    as_of = datetime.fromtimestamp(out["generated_at"], JST).date()
+    next_period_check = None
+    med_state = {}
+    symptom_facts = {}
+    # fact_id -> carried canonical fact: newest generation wins per id
+    # (msgs iterate newest-first), evidence/statement/kind ride along so
+    # slot-less canonical categories stay enumerable in the read model.
+    canonical = {}
+    requests = []
+    # Request rows retain source/thread identity for grounded Loop matching.
+    req_thread = []
+    next_planned = None
+    senders = {}
+    summary = None
+    # Retain only fields needed later for reply matching and observation age;
+    # source bodies and extraction blobs remain in their current page.
+    msgs = []
+    pages = _rollup_source_pages(db, project_id, cursor, first_page, cfg,
+                                 html_available="body_html" in message_columns,
+                                 **({"deadline": deadline} if deadline is not None else {}))
+    with contextlib.closing(pages):
+        for m, blobs, decoded, selected_kind, bound_source, artifact_refs, ref_mids, empty_proofs in pages:
+            _check_deadline(deadline)
+            msgs.append({key: m[key] for key in ("message_id", "posted_at", "posted_at_ts", "sender_id",
+                                                 "parent_id", "body_state", "updated_seen")})
+            ts = m["posted_at_ts"] or 0
+            sender_id = normalize_sender_id(m["sender_id"])
+            senders[m["sender_name"] or "?"] = \
+                senders.get(m["sender_name"] or "?", 0) + 1
+            v1, lm, llm, has_fact_source = decoded
+            # Context is additive to canonical facts, never a diagnosis or a
+            # confirmed current state. Keep every item from the newest report
+            # per category; the detail read model retains all prior reports.
+            context_doc = {"patient_context": merged_context(llm, lm, m["body_text"] or "")}
+            message_context = {}
+            reported_context = (merged_context(v1, context_doc, m["body_text"] or "")
+                                if m["body_state"] in (None, "full") else [])
+            for item in reported_context:
+                message_context.setdefault(item["category"], []).append({
+                    **item, "message_id": m["message_id"], "posted_at": m["posted_at"],
+                    "content_hash": m["content_hash"], "source": "chat", "state": "reported"})
+            for category, items in message_context.items():
+                out["patient_context"]["chat"].setdefault(category, items)
+            state = out["pharmacy_state"]
+            for report in patient_context.pharmacy_state_items({"patient_context": reported_context}, m):
+                state["total"] += 1
+                if len(state["items"]) < PHARMACY_STATE_LIMIT:
+                    state["items"].append(report)
+            state["truncated"] = state["total"] > len(state["items"])
+            if summary is None and isinstance(lm.get("summary"), str) \
+                    and lm["summary"]:
+                summary = {"text": lm["summary"], "at": m["posted_at"]}
+            # A current artifact with an occurrence fence is required even when
+            # no value was found; an unparsed source cannot establish an absence.
+            if m["body_state"] != "full" or not isinstance(m["body_text"], str):
+                measurement_complete = False
+                incomplete_sources += 1
+            elif not m["body_text"] and not empty_proofs.get(m["message_id"], False):
+                measurement_complete = False
+                incomplete_sources += 1
+            elif m["body_text"]:
+                if not bound_source:
+                    measurement_complete = False
+                    unbound_sources += 1
+                elif selected_kind == "extract_v1":
+                    measurement_complete = False
+                    unparsed_sources += 1
+            raw_vit = lm.get("vitals") if has_fact_source else v1.get("vitals")
+            noncurrent = _noncurrent_vital_reference(m["body_text"], raw_vit)
+            vit = patient_current_vitals(raw_vit, m["body_text"], patient_name=patient_name)
+            if noncurrent == "historical_unknown":
+                # Do not promote an earlier stated observation over a later posting,
+                # nor discard the source if its event time cannot be bound to the value.
+                vital_panels.append((None, {}))
+                if bound_source:
+                    report_count += 1
+                    if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
+                        measurement_reports.append({"kind": "vitals", "message_id": m["message_id"],
+                            "content_hash": m["content_hash"], "posted_at": m["posted_at"],
+                            "measured_on": None, "state": "unconfirmed"})
+            elif noncurrent in ("other", "planned"):
+                pass  # Explicitly another person's measurement or an unperformed plan.
+            elif vit:
+                grounded, day = _dated_vitals(m, vit, patient_name)
+                vital_panels.append((day if grounded else None, {"at": m["posted_at"], **vit}))
+                if grounded and bound_source:
+                    report_count += 1
+                    if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
+                        measurement_reports.append({"kind": "vitals", "message_id": m["message_id"],
+                            "content_hash": m["content_hash"], "posted_at": m["posted_at"],
+                            "measured_on": day, "values": vit, "state": "reported"})
+            elif _has_patient_vital(m["body_text"], patient_name):
+                # An extracted omission is not proof that a written reading is absent.
+                vital_panels.append((None, {}))
+            for lb in _dicts(lm.get("labs")):
+                if not isinstance(lb.get("name"), str) or not lb["name"].strip():
+                    measurement_complete = False
+                    continue
+                key = lab_analyte(lb["name"]) or fold_surface(lb["name"])
+                scope = patient_item_scope(lb, m["body_text"], patient_name=patient_name,
+                                           surface=lb["name"])
+                if scope in ("family", "other") or noncurrent == "other":
+                    continue
+                if (lb.get("subject") in ("family", "other") or lb.get("status") in ("past", "planned")
+                        or scope in ("past", "planned")):
+                    # Without a source-bound event, other-person, planned or
+                    # historic model labels cannot establish which value is latest.
+                    lab_reports.setdefault(key, []).append(None)
+                    if bound_source:
+                        report_count += 1
+                        if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
+                            measurement_reports.append({"kind": "lab", "message_id": m["message_id"],
+                                "content_hash": m["content_hash"], "posted_at": m["posted_at"],
+                                "measured_on": None, "state": "unconfirmed"})
+                    continue
+                if (scope != "patient" or lb.get("condition")
+                        or lb.get("negated") is not None and lb.get("negated") is not False):
+                    lab_reports.setdefault(key, []).append(None)
+                    continue
+                report = None
+                if (_stored_lab_ok(lb) and not item_unverified(lb) and isinstance(m["body_text"], str)
+                        and isinstance(lb.get("evidence"), str)
+                        and locate_quote_span(m["body_text"], lb["evidence"]) is not None):
+                    import measurement_sources
+                    checked, invalid = measurement_sources._labs(dict(m), {"labs": [lb]}, 1,
+                                                                  patient_name, bound_source)
+                    span = locate_quote_span(m["body_text"], lb["evidence"])
+                    left = max((m["body_text"].rfind(mark, 0, span[0]) for mark in "。！？!?;；\n"), default=-1) + 1
+                    right = re.search(r"[。！？!?;；\n]", m["body_text"][span[1]:])
+                    sentence = m["body_text"][left:span[1] + right.start() if right else len(m["body_text"])]
+                    verified = (not invalid and len(checked) == 1
+                                and checked[0].get("verification") == "quote_supported"
+                                and not context_state.paired_date_conflict(sentence, m["posted_at_ts"]))
+                    candidate = lab_candidate(lb["name"], lb.get("value", ""), lb.get("unit"), lb["evidence"],
+                                              measured_on=lb.get("measured_on"), subject=lb.get("subject"),
+                                              status=lb.get("status"), patient_name=patient_name)
+                    day = _posted_measurement_day(m, candidate["measured_on"])
+                    if candidate["confirmation"] == "quote_supported" and verified:
+                        report_count += 1
+                        if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
+                            measurement_reports.append({"kind": "lab", "message_id": m["message_id"],
+                                "content_hash": m["content_hash"], "posted_at": m["posted_at"],
+                                "measured_on": day, "name": lb["name"], "value": candidate["value"],
+                                "unit": candidate["unit"], "state": "reported"})
+                    if candidate["confirmation"] == "quote_supported" and verified and day is not None:
+                        report = (day, (candidate["value"], candidate["unit"]), {"at": m["posted_at"], **lb})
+                lab_reports.setdefault(key, []).append(report)
+            per, chk = _period_candidates(m, v1, as_of, patient_name=patient_name)
+            if med_period is None:
+                med_period = per
+            if chk is not None \
+                    and (next_period_check is None or chk < next_period_check):
+                next_period_check = chk
+            # Annotate the exact source index without changing surface-name state.
+            for ref in (current_refs(db, m["message_id"])
+                        if m["message_id"] in ref_mids else ()):
+                container, key = ((v1, "medications") if ref["source_kind"] == "extract_v1"
+                                  else (lm, "meds"))
+                meds = container.get(key)
+                i = ref["i"]
+                if (isinstance(meds, list) and i < len(meds)
+                        and isinstance(meds[i], dict)
+                        and meds[i].get("name") == ref["name"]):
+                    meds[i] = {**meds[i], "ref": ref}
+            source_kind = next((kind for kind in ("semantic_facts_v4", "canonical_projection", "extract_llm")
+                                if kind in blobs), "extract_llm")
+            _med_states(m, v1, lm, med_state, patient_name=patient_name,
+                        source_kind=source_kind, artifact_refs=artifact_refs)
+            _symptom_ts(m, v1, lm, symptom_facts, patient_name=patient_name,
+                        source_kind=source_kind, artifact_refs=artifact_refs)
+            root = m["parent_id"] or m["message_id"]
+            _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit)
+            for f in _dicts(lm.get("canonical_facts")):
+                fid = f.get("fact_id")
+                if isinstance(fid, str) and fid and fid not in canonical:
+                    canonical[fid] = {
+                        "fact_id": fid, "kind": f.get("kind"),
+                        "statement": f.get("statement"),
+                        "subject": f.get("subject"),
+                        "importance": f.get("importance"),
+                        "evidence": f.get("evidence_quote"),
+                        "last": m["posted_at"], "mid": m["message_id"]}
+            if next_planned is None and isinstance(v1.get("next_planned"), str) \
+                    and v1["next_planned"]:
+                next_planned = v1["next_planned"]
+
+    clinical_facts = dependency_loss.bind_facts(db, [*med_state.values(), *symptom_facts.values()])
+    dependencies = dependency_loss.read(db, project_id)
+    clinical = context_state.project(clinical_facts, dependency_losses=dependencies["losses"])
+    out["clinical_state"] = {**clinical, "facts": [_clinical_reference(fact) for fact in clinical_facts],
+        "dependencies": {key: dependencies[key] for key in ("complete", "gaps", "signature", "coverage")}}
+    groups = {fid: group for group, ids in clinical["groups"].items() for fid in ids}
+    measurement_complete = measurement_complete and dependencies["complete"]
+    out["measurement_coverage"] = {"complete": bool(measurement_complete),
+                                   "fetch_state": fetch_status, "history_state": history_status,
+                                   "pending_fetch_jobs": pending_jobs,
+                                   "incomplete_sources": incomplete_sources, "unbound_sources": unbound_sources,
+                                   "unparsed_sources": unparsed_sources,
+                                   "attachment_count": attachments,
+                                   "undated_vital_panels": sum(day is None for day, _ in vital_panels),
+                                   "unverified_lab_reports": sum(report is None for reports in lab_reports.values()
+                                                                 for report in reports)}
+    out["measurement_reports"] = {"items": measurement_reports, "total": report_count,
+                                  "truncated": report_count > len(measurement_reports)}
+    if measurement_complete and vital_panels and all(day is not None for day, _ in vital_panels):
+        latest_day = max(day for day, _ in vital_panels)
+        latest = [panel for day, panel in vital_panels if day == latest_day]
+        values = [{key: value for key, value in panel.items() if key != "at"} for panel in latest]
+        if all(value == values[0] for value in values):
+            out["latest_vitals"] = latest[0]
+    latest_labs = []
+    if measurement_complete:
+        for reports in lab_reports.values():
+            if any(report is None for report in reports):
+                continue
+            latest_day = max(report[0] for report in reports)
+            latest = [report for report in reports if report[0] == latest_day]
+            if all(report[1] == latest[0][1] for report in latest):
+                latest_labs.append(latest[0][2])
+    if latest_labs:
+        out["recent_labs"] = latest_labs[:15]
+    if med_period:
+        out["med_period_candidate"] = med_period
+    if next_period_check is not None:
+        out["_next_med_period_check"] = next_period_check
+    for bucket, key, cap in (("current", "medications", 20),
+                             ("unverified", "unverified_medications", 20),
+                             ("planned", "planned_medications", 10)):
+        rows = [{"name": fact["reported"]["name"], "dose": fact["reported"].get("dose"),
+                 "last": fact["posted_at"],
+                 **{f: fact["reported"][f] for f in ("route", "freq", "prn", "ref") if f in fact["reported"]}}
+                for fact in med_state.values() if _med_bucket(fact, groups[fact["id"]]) == bucket][:cap]
+        if rows:
+            out[key] = rows
+    symptoms = [{"symptom": fact["reported"]["text"], "last": fact["posted_at"]}
+                for fact in symptom_facts.values() if groups[fact["id"]] == "current"
+                and not fact["temporal"].get("unknown")
+                and fact["temporal"].get("symptom_state") == "present"]
+    if symptoms:
+        out["recent_symptoms"] = symptoms[:20]
+    _match_request_replies(db, project_id, req_thread, requests, msgs, out["generated_at"], cfg=cfg)
+    if requests:
+        out["recent_requests"] = requests[:request_limit]
+    if canonical:
+        out["canonical_facts"] = list(canonical.values())
+    if next_planned:
+        out["next_planned"] = next_planned
+    if summary:
+        out["summary"] = summary
+    out["top_senders"] = sorted(senders.items(), key=lambda x: -x[1])[:8]
+
+    out["unrefreshed_message_ids"] = _unrefreshed_ids(
+        [(m["message_id"], m["updated_seen"]) for m in msgs], time.time())
+    return out
+
+
+def _unrefreshed_ids(rows, now) -> list:
+    """Newest-first (message_id, updated_seen) rows the server stopped refreshing while siblings were seen.
+
+    A staleness heuristic only: it is not evidence of deletion (tombstones are
+    body_state='deleted') and includes legacy rows whose updated_seen is NULL.
+    """
+    cutoff = ((rows[0][1] or now) if rows else now) - STALE_DAYS * 86400
+    return [mid for mid, seen in rows if (seen or 0) < cutoff][:20]
+
+
+def _period_candidates(m, v1: dict, as_of, *, patient_name=None):
+    """(med_period, next_boundary_ts) contributed by one message —
+    undated/invalid periods are evidence, not current use."""
+    best = None
+    earliest = None
+    for period in reversed(_dicts(v1.get("med_periods"))):
+        if patient_item_scope(period, m["body_text"], patient_name=patient_name,
+                              surface=period.get("raw")) != "patient":
+            continue
+        try:
+            start = date.fromisoformat(period["start"])
+            end = date.fromisoformat(period["end"])
+        except (KeyError, TypeError, ValueError):
+            continue  # undated or invalid is evidence, not current
+        raw = period.get("raw")
+        context = ""
+        if isinstance(raw, str) and m["body_text"]:
+            pos = m["body_text"].find(raw)
+            if pos >= 0:
+                context = m["body_text"][
+                    max(0, pos - 16):pos + len(raw) + 16]
+        if re.search(r"予定|検討", context):
+            continue  # a dated plan is not evidence of current use
+        if start > as_of:
+            boundary = start
+        elif start <= as_of <= end:
+            if best is None:
+                best = period
+            boundary = end + timedelta(days=1) if end < date.max else None
+        else:
+            boundary = None
+        if boundary is not None:
+            at = datetime.combine(boundary, datetime.min.time(), JST).timestamp()
+            if earliest is None or at < earliest:
+                earliest = at
+    return best, earliest
+
+
+def _med_states(m, v1: dict, lm: dict, med_state: dict, *, patient_name=None,
+                source_kind="extract_llm", artifact_refs=None):
+    """Collect every distinct medication report for the common source-time projection."""
+    for source, field, values in ((source_kind, "meds", lm.get("meds")), ("extract_v1", "medications", v1.get("medications"))):
+        for index, item in enumerate(values if isinstance(values, list) else []):
+            if not isinstance(item, dict):
+                continue
+            fact = context_state.clinical_state_fact(m, item, "medications", source)
+            if fact is not None:
+                fact["source_ref"] = {"kind": source, "field": field, "index": index,
+                    "artifact_id": (artifact_refs or {}).get((m["message_id"], source)) if "message_id" in m.keys() else None}
+                if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                    fact["temporal"]["unknown"] = True
+                med_state.setdefault(fact["id"], fact)
+
+
+def _symptom_ts(m, v1: dict, lm: dict, facts: dict, *, patient_name=None,
+                source_kind="extract_llm", artifact_refs=None):
+    """Collect symptom reports without turning posting order into resolution evidence."""
+    for index, s in enumerate(v1.get("symptoms") if isinstance(v1.get("symptoms"), list) else []):
+        if isinstance(s, str) and s:
+            fact = context_state.clinical_state_fact(m, {"text": s}, "symptoms", "extract_v1")
+            if fact is not None:
+                fact["source_ref"] = {"kind": "extract_v1", "field": "symptoms", "index": index,
+                    "artifact_id": (artifact_refs or {}).get((m["message_id"], "extract_v1")) if "message_id" in m.keys() else None}
+                if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                    fact["temporal"]["unknown"] = True
+                facts.setdefault(fact["id"], fact)
+    for index, item in enumerate(lm.get("symptoms") if isinstance(lm.get("symptoms"), list) else []):
+        if not isinstance(item, dict):
+            continue
+        fact = context_state.clinical_state_fact(m, item, "symptoms", source_kind)
+        if fact is not None:
+            fact["source_ref"] = {"kind": source_kind, "field": "symptoms", "index": index,
+                "artifact_id": (artifact_refs or {}).get((m["message_id"], source_kind)) if "message_id" in m.keys() else None}
+            if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                fact["temporal"]["unknown"] = True
+            facts.setdefault(fact["id"], fact)
+
+
+def _med_bucket(fact, group):
+    temporal = fact["temporal"]
+    if temporal.get("subject") in ("family", "other") or group == "history":
+        return "history"
+    if temporal.get("unknown") or group in ("unknown", "conflict"):
+        return "unverified"
+    if group == "plan":
+        return "planned"
+    if group == "current" and temporal.get("use_state") == "using":
+        return "current"
+    if group == "current" and temporal.get("use_state") in ("stopped", "held"):
+        return "suppressed"
+    return "unverified"
+
+
+def _clinical_axes(fact):
+    temporal = fact.get("temporal") or {}
+    return {**{key: fact.get(key) for key in ("id", "project_id", "message_id", "content_hash", "category", "source_ref", "dependency_origin")},
+        "details": [{"key": d["key"], "value": d["value"]} for d in fact.get("details", [])
+                    if isinstance(d, dict) and d.get("key") in ("drug_name", "symptom", "unit", "condition", "body_site", "actual_dose", "actual_frequency")
+                    and isinstance(d.get("value"), str)],
+        "temporal": {key: temporal.get(key) for key in
+                     ("subject", "period", "event_day", "as_of_day", "state_day", "posted_day", "posted_at_ts", "ongoing", "use_state", "symptom_state",
+                      "action", "negated", "resolution", "unknown", "current_cue")}}
+
+
+def _clinical_reference(fact):
+    """Persist compact source references and normalized values, not another copy of the quote."""
+    return {**_clinical_axes(fact), "posted_at": fact.get("posted_at"),
+            "attributes": {key: fact["reported"][key] for key in
+                ("name", "text", "dose", "freq", "route", "prn", "subject", "status", "action", "negated", "unverified", "onset", "duration")
+                if key in fact["reported"]}}
+
+
+def _clinical_artifact_refs(db, project_id, blobs, message_ids=None):
+    """Read current source identities once for the same borrowed snapshot as the DTO blobs."""
+    scope = " AND m.message_id IN (SELECT value FROM json_each(?))" if message_ids is not None else ""
+    params = (project_id, json.dumps(message_ids)) if message_ids is not None else (project_id,)
+    return {(row["message_id"], row["kind"]): row["artifact_id"] for row in db.execute(f"""
+        SELECT a.artifact_id,a.message_id,a.kind,a.content FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+        WHERE m.project_id=? AND a.kind IN ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
+        {current_extract_pred()}
+        AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
+        {scope} ORDER BY a.artifact_id""", params)
+    # raw bytes first — the consumer-form comparison only rescues a blob
+    # already stripped of internal proof keys; it must not re-decode.
+    if (row["content"] == blobs.get(row["message_id"], {}).get(row["kind"])
+            or extraction_consumer_content(row["content"]) == extraction_consumer_content(
+                blobs.get(row["message_id"], {}).get(row["kind"])))}
+
+
+class RollupSourceUnverified(ValueError):
+    """A source cannot be safely read for a rollup freshness witness."""
+
+
+def _invalid_sqlite_text(error):
+    """Recognize only CPython SQLite's invalid TEXT decoding failure."""
+    return (isinstance(error, sqlite3.OperationalError)
+            and getattr(error, 'sqlite_errorcode', None) is None
+            and str(error).startswith('Could not decode to UTF-8 column '))
+
+
+class RollupSourceChanged(sqlite3.OperationalError):
+    """A rollup was discarded because its source changed while it was built."""

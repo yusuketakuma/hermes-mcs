@@ -202,7 +202,7 @@ job_hygiene() {
     if [ -n "$bad" ]; then
       echo "::error::possible secret committed:"; echo "$bad"; exit 1
     fi
-    shellcheck install.sh scripts/*.sh scripts/development/*.sh scripts/evaluation/*.sh deployment/scripts/*.sh
+    shellcheck install.sh scripts/*.sh scripts/development/*.sh scripts/evaluation/*.sh deployment/scripts/*.sh deployment/install/*.sh
     grep -q "kind: standalone" hermes_plugin/plugin.yaml
     grep -q "register" hermes_plugin/__init__.py
 }

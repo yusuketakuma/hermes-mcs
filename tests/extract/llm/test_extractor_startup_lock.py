@@ -1,4 +1,16 @@
 """Resident extraction waits for the writer without crossing update fences."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import hashlib
 import os
@@ -31,7 +43,14 @@ def test_resident_waits_for_real_lock_then_opens_ledger(tmp_path, monkeypatch, c
 
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: opened.append(True) or ledger)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     result = []
     worker = threading.Thread(target=lambda: result.append(
         extract_llm._open_resident_ledger(time.monotonic() + 5)))
@@ -59,6 +78,7 @@ def test_wait_does_not_open_after_fence_or_deadline(monkeypatch, failure, capsys
         False, initial[1] + int(generation[0])))
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: attempts.append(True) or None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("ledger opened"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
 
     def advance(seconds):
         now[0] += seconds
@@ -66,6 +86,17 @@ def test_wait_does_not_open_after_fence_or_deadline(monkeypatch, failure, capsys
         generation[0] = failure == "generation"
 
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=advance))
+    monkeypatch.setattr(extract_llm_carry, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_context, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_engine, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_errors, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_prepare, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_provider, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_resident, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_runner, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_selection, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_source_contract, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     assert extract_llm._open_resident_ledger(1.0) is None
     assert attempts and now[0] <= 1.0
     events = [json.loads(line)["event"] for line in capsys.readouterr().err.splitlines()]
@@ -75,6 +106,7 @@ def test_wait_does_not_open_after_fence_or_deadline(monkeypatch, failure, capsys
 def test_nonresident_open_remains_nonblocking(monkeypatch):
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("ledger opened"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_current_ledger() is None
 
 
@@ -90,8 +122,26 @@ def test_lock_obtained_at_deadline_is_released_without_opening(tmp_path, monkeyp
 
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened after deadline"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(extract_llm_carry, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_context, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_engine, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_errors, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_prepare, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_provider, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_resident, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_runner, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_selection, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_source_contract, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     assert extract_llm._open_current_ledger(deadline=1.0) is None
     fd = real_acquire(lock)
     assert fd is not None
@@ -103,11 +153,18 @@ def test_lock_is_released_when_ledger_constructor_fails(tmp_path, monkeypatch):
     real_acquire = writer_lock.acquire_run_lock
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: real_acquire(lock))
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
 
     def fail(_):
         raise RuntimeError("synthetic constructor failure")
 
     monkeypatch.setattr(extract_llm, "Ledger", fail)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     with pytest.raises(RuntimeError, match="synthetic constructor failure"):
         extract_llm._open_current_ledger(deadline=time.monotonic() + 1)
     fd = real_acquire(lock)
@@ -131,6 +188,7 @@ def test_generation_change_during_lock_acquire_blocks_ledger(tmp_path, monkeypat
 
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened stale ledger"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
     fd = real_acquire(lock)
     assert fd is not None
@@ -148,7 +206,14 @@ def test_transient_fence_loss_after_lock_is_not_retried(tmp_path, monkeypatch):
         return len(observed) != 2
 
     monkeypatch.setattr(extract_llm, "_writer_current", current)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened after fence loss"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
     assert len(observed) == 2
     fd = real_acquire(lock)
@@ -178,10 +243,29 @@ def test_source_change_during_wait_is_detected_when_max_mtime_is_unchanged(tmp_p
         changed.write_text("changed synthetic source")
 
     monkeypatch.setattr(extract_llm, "_RESIDENT_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(extract_llm_resident, '_RESIDENT_SOURCE_ROOT', extract_llm._RESIDENT_SOURCE_ROOT)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened after source change"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=change))
+    monkeypatch.setattr(extract_llm_carry, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_context, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_engine, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_errors, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_prepare, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_provider, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_resident, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_runner, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_selection, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_source_contract, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     assert extract_llm._open_resident_ledger(2.0) is None
     assert len(attempts) == 2 and max(p.stat().st_mtime_ns for p in root.glob("*.py")) == old_max
     fd = real_acquire(lock)
@@ -194,8 +278,10 @@ def test_unreadable_source_state_fails_before_ledger(monkeypatch):
         raise OSError("synthetic source unavailable")
 
     monkeypatch.setattr(extract_llm, "_resident_source_state", unavailable)
+    monkeypatch.setattr(extract_llm_resident, '_resident_source_state', extract_llm._resident_source_state)
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: pytest.fail("unexpected lock"))
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("unexpected ledger"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
 
 
@@ -212,9 +298,21 @@ def test_loaded_source_digest_is_checked_under_lock(tmp_path, monkeypatch, damag
         path.unlink()
         (root / "other.py").write_text("synthetic")
     monkeypatch.setattr(extract_llm, "_RESIDENT_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(extract_llm_resident, '_RESIDENT_SOURCE_ROOT', extract_llm._RESIDENT_SOURCE_ROOT)
     monkeypatch.setattr(extract_llm, "_LOADED_SOURCE_PATHS", {"module": str(path)})
+    monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_PATHS', extract_llm._LOADED_SOURCE_PATHS)
+    monkeypatch.setattr(extract_llm_source_contract, '_LOADED_SOURCE_PATHS', extract_llm._LOADED_SOURCE_PATHS)
     monkeypatch.setattr(extract_llm, "_LOADED_SOURCE_DIGESTS", {"module": digest})
+    monkeypatch.setattr(extract_llm_context, '_LOADED_SOURCE_DIGESTS', extract_llm._LOADED_SOURCE_DIGESTS)
+    monkeypatch.setattr(extract_llm_qc, '_LOADED_SOURCE_DIGESTS', extract_llm._LOADED_SOURCE_DIGESTS)
+    monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_DIGESTS', extract_llm._LOADED_SOURCE_DIGESTS)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     lock = str(tmp_path / "digest.lock")
     real_acquire = writer_lock.acquire_run_lock
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: real_acquire(lock))
@@ -226,6 +324,7 @@ def test_loaded_source_digest_is_checked_under_lock(tmp_path, monkeypatch, damag
         return ledger
 
     monkeypatch.setattr(extract_llm, "Ledger", construct)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     result = extract_llm._open_resident_ledger(time.monotonic() + 2)
     assert result is (ledger if damage == "none" else None)
     assert opened == ([True] if damage == "none" else [])
@@ -238,11 +337,36 @@ def test_resident_stop_after_bounds_startup_wait(tmp_path, monkeypatch, capsys):
     now = [0.0]
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "2"])
     monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm, "_open_current_ledger", lambda **_: None)
+    monkeypatch.setattr(extract_llm_resident, '_open_current_ledger', extract_llm._open_current_ledger)
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(
         time=lambda: 1000.0,
         monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds)))
+    monkeypatch.setattr(extract_llm_carry, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_context, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_engine, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_errors, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_prepare, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_provider, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_resident, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_runner, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_selection, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_source_contract, 'time', extract_llm.time)
+    monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     assert extract_llm.main() == 1 and now[0] == 2.0
     assert json.loads(capsys.readouterr().out)["error"] == "writer_unavailable"
 
@@ -264,8 +388,15 @@ def test_waiter_continues_after_lock_owner_process_exits(tmp_path, monkeypatch):
             return fd
         monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
         monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+        monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+        monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
         ledger, result = object(), []
         monkeypatch.setattr(extract_llm, "Ledger", lambda _: ledger)
+        monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
         worker = threading.Thread(target=lambda: result.append(
             extract_llm._open_resident_ledger(time.monotonic() + 5)))
         worker.start()

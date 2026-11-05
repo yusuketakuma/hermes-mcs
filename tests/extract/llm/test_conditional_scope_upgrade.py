@@ -1,4 +1,16 @@
 """Synthetic version-nine upgrade boundaries for source interpretation changes."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import time
 
@@ -24,8 +36,11 @@ _PRIOR = {"summary": "合成の報告", "symptoms": [
 def source(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
     monkeypatch.setattr(llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(llm, "_rerender_cards", lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     ledger.save_messages([_message(body=_BODY)])
     row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = inference_dependency_loss.source_binding(ledger.db, 1, 1)
@@ -65,6 +80,16 @@ def test_version_nine_checkpoint_is_readable_only_by_the_old_contract(source, mo
     assert llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION
     with monkeypatch.context() as old:
         old.setattr(llm, "EXTRACT_VERSION", 9)
+        old.setattr(extract_llm_context, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_errors, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_prepare, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_progress, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_proofs, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_provider, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_qc, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_resident, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_selection, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_store, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
         assert llm._persist_chunks(ledger, row, {0: {"summary": "合成の途中経過"}})
         _splits, saved = llm._saved_chunk_state(ledger.db, row)
         assert saved[0]["summary"] == "合成の途中経過"
@@ -81,6 +106,16 @@ def test_held_prior_is_rechecked_under_new_target_without_losing_evidence(source
     weak = '{"summary":"合成の候補","symptoms":[]}'
     with monkeypatch.context() as old:
         old.setattr(llm, "EXTRACT_VERSION", 9)
+        old.setattr(extract_llm_context, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_errors, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_prepare, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_progress, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_proofs, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_provider, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_qc, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_resident, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_selection, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
+        old.setattr(extract_llm_store, 'EXTRACT_VERSION', llm.EXTRACT_VERSION)
         assert llm._replace_current(ledger, row, weak) is False
         first = json.loads(ledger.artifacts(llm.UPGRADE_KIND)[0]["content"])
         assert first["state"] == "held_prior" and first["target_version"] == 9

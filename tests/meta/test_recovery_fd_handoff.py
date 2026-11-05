@@ -27,7 +27,7 @@ def test_independent_recovery_closes_fd_before_stream_adoption(
     namespace = None
     if site == "frozen_json":
         namespace = {"__name__": "synthetic_frozen"}
-        exec(compile(rec._GATEWAY_RESTART_PROGRAM.rsplit("sys.exit(", 1)[0],
+        exec(compile(rec.mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM.rsplit("sys.exit(", 1)[0],
                      "<synthetic_frozen>", "exec"), namespace)
     target = tmp_path / "target.json"
     target.write_bytes(b'{"synthetic":"previous"}')
@@ -39,15 +39,15 @@ def test_independent_recovery_closes_fd_before_stream_adoption(
     blob = hashlib.sha1(b"blob 16\0fully synthetic\n", usedforsecurity=False).hexdigest()
     tree = "100644 blob " + blob + "\tsynthetic.txt\0"
     index = "H 100644 " + blob + " 0\tsynthetic.txt\0"
-    monkeypatch.setattr(rec, "REPO", str(repo))
-    monkeypatch.setattr(rec, "_git", lambda args: SimpleNamespace(
+    monkeypatch.setattr(rec.mcs_recovery_core, "REPO", str(repo))
+    monkeypatch.setattr(rec.mcs_recovery_core, "_git", lambda args: SimpleNamespace(
         returncode=0, stdout=tree if args[0] == "ls-tree" else
         index if args[0] == "ls-files" else ""))
-    monkeypatch.setattr(rec, "LEDGER", str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(rec, "_settle_staging", lambda directory: None)
+    monkeypatch.setattr(rec.mcs_recovery_core, "LEDGER", str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(rec.mcs_recovery_database, "_settle_staging", lambda directory: None)
     monkeypatch.setattr(rec.sqlite3, "connect", lambda *args, **kwargs: pytest.fail(
         "pre-adoption failure must not open any database"))
-    monkeypatch.setattr(rec, "_load_state", lambda: pytest.fail(
+    monkeypatch.setattr(rec.mcs_recovery_core, "_load_state", lambda: pytest.fail(
         "pre-adoption failure must not read the restore journal"))
     real_open, real_mkstemp = os.open, rec.tempfile.mkstemp
     attempted = []
@@ -84,16 +84,16 @@ def test_independent_recovery_closes_fd_before_stream_adoption(
         monkeypatch.setattr(rec.os, "fdopen", fail_adoption)
         monkeypatch.setattr(rec.os, "replace", lambda *args: replaced.append(args))
         if site == "tracked_read" and fault_type in (OSError, ValueError):
-            assert rec._local_changes_outside("synthetic-prev", "synthetic-target") is None
+            assert rec.mcs_recovery_core._local_changes_outside("synthetic-prev", "synthetic-target") is None
         else:
             with pytest.raises(fault_type) as caught:
                 if site == "tracked_read":
-                    rec._local_changes_outside("synthetic-prev", "synthetic-target")
+                    rec.mcs_recovery_core._local_changes_outside("synthetic-prev", "synthetic-target")
                 elif site == "restore":
-                    rec._replace_database(str(tmp_path / "unused.db"), "0" * 64,
+                    rec.mcs_recovery_database._replace_database(str(tmp_path / "unused.db"), "0" * 64,
                                           lambda: before_replace.append(True))
                 else:
-                    writer = namespace["_atomic_json"] if namespace else rec._atomic_json
+                    writer = namespace["_atomic_json"] if namespace else rec.mcs_recovery_gateway._atomic_json
                     writer(str(target), {"synthetic": "new"}, ".synthetic.")
             assert caught.value is fault
         assert len(created) == 1 and attempted == [(created[0],

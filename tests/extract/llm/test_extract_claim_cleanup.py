@@ -1,4 +1,6 @@
 """Synthetic interrupted preparation must not strand committed extraction claims."""
+import extract_llm_prepare
+import extract_llm_runner
 import pytest
 
 import extract_llm
@@ -19,7 +21,10 @@ def test_failed_preparation_releases_all_claims_without_discarding_rules(tmp_pat
         prepared.append(row["message_id"])
 
     monkeypatch.setattr(extract_llm, "_ensure_v1", prepare)
+    monkeypatch.setattr(extract_llm_prepare, '_ensure_v1', extract_llm._ensure_v1)
+    monkeypatch.setattr(extract_llm_runner, '_ensure_v1', extract_llm._ensure_v1)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kwargs: pytest.fail("no model call"))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     try:
         with pytest.raises(exception):
             extract_llm.run_pending(ledger, limit=3, admitted_ids={1, 2, 3})

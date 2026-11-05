@@ -1,6 +1,7 @@
 """Optional setup guidance: a release default that only unset choices follow, an
 explicit choice that survives a default change, and no CSDC registration, consent
 or sending implied by the choice (synthetic config only)."""
+import setup_config_snapshot
 import ast
 import json
 import os
@@ -105,6 +106,7 @@ def test_features_command_saves_only_after_confirmation(monkeypatch, tmp_path, c
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"mcs_login_id": "synthetic", "notify_target": "local", "keep": [1]}))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(path))
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup.mcs_util, "load_config", lambda: json.loads(path.read_text()))
     monkeypatch.setattr(mcs_setup.sys.stdin, "isatty", lambda: True)
@@ -140,6 +142,7 @@ def _features_env(monkeypatch, tmp_path, initial):
         path.write_text(json.dumps(initial))
         path.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(path))
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup.mcs_util, "load_config",
                         lambda: json.loads(path.read_text()) if path.exists() else {})

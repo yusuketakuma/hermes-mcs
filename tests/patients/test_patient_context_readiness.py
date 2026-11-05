@@ -1,4 +1,14 @@
 """Synthetic evidence and selection checks for context inference readiness."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+
+import patient_context_refresh_readiness
+import patient_context_refresh_sources
+import patient_context_refresh_state
 import json
 import time
 
@@ -23,7 +33,7 @@ def _proof(led, pid, mid, cfg):
 
 def _ready(runtime, cfg, **kw):
     led, clock, _ = runtime
-    return refresh._inference_ready(led, 1, cfg, deadline=clock.mono + 600, **kw)
+    return patient_context_refresh_readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600, **kw)
 
 
 def test_semantic_off_requires_complete_current_bound_extraction(runtime):
@@ -158,13 +168,19 @@ def test_latest_ready_active_before_archive(runtime, monkeypatch):
     led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=4")
     led.db.commit()
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     result = step(runtime)
     assert result["status"] == "progressed"
     # Skip the newest unready active patient, then choose the latest ready active patient.
-    assert not refresh._latest(led.db, refresh.PROGRESS, 1)[0]
-    assert refresh._latest(led.db, refresh.PROGRESS, 2)[0]
-    assert not refresh._latest(led.db, refresh.PROGRESS, 3)[0]
-    assert not refresh._latest(led.db, refresh.PROGRESS, 4)[0]
+    assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 1)[0]
+    assert patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 2)[0]
+    assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 3)[0]
+    assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 4)[0]
 
 
 def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatch):
@@ -182,7 +198,13 @@ def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatc
                            'source_artifact_id': raw['artifact_id']})
     assert _ready(runtime, cfg)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
-    select, recheck = refresh._select_patient, refresh._readiness_for_write
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
+    select, recheck = refresh._select_patient, patient_context_refresh_readiness._readiness_for_write
     selected, observed = {}, []
 
     def remove_proof(*args, **kwargs):
@@ -208,15 +230,15 @@ def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatc
         return value
 
     monkeypatch.setattr(refresh, '_select_patient', remove_proof)
-    monkeypatch.setattr(refresh, '_readiness_for_write', actual_recheck)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_readiness_for_write', actual_recheck)
     result = step(runtime, cfg=cfg)
     assert result['status'] == 'deferred' and result['reason'] == 'patient_context_readiness_unverified'
     assert observed == ['unknown']
     assert led.db.total_changes == selected['changes']
     for table, rows in selected['tables'].items():
         assert [tuple(row) for row in led.db.execute(f'SELECT * FROM "{table}"')] == rows
-    assert not refresh._latest(led.db, refresh.PROGRESS, 1)[0]
-    assert not refresh._latest(led.db, refresh.KIND, 1)[0]
+    assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 1)[0]
+    assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)[0]
     assert not calls
 
 
@@ -224,6 +246,12 @@ def test_new_post_during_inference_prevents_adoption(runtime, monkeypatch):
     led, _, calls = runtime
     seed(led)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     original = refresh.local_llm.admitted_chat
 
     def interrupted(*args, **kwargs):
@@ -234,7 +262,7 @@ def test_new_post_during_inference_prevents_adoption(runtime, monkeypatch):
     monkeypatch.setattr(refresh.local_llm, "admitted_chat", interrupted)
     assert step(runtime)["status"] == "source_changed"
     assert calls
-    assert refresh._latest(led.db, refresh.KIND, 1)[0] == {}
+    assert patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)[0] == {}
 
 
 def test_retained_karte_may_be_scanned_but_not_used_for_summary_before_audit(runtime):
@@ -245,13 +273,13 @@ def test_retained_karte_may_be_scanned_but_not_used_for_summary_before_audit(run
     led.karte_summary_store(1, 17, {'comment': '合成の旧資料。', 'updated_at': '2026-10-15T09:00:00+09:00'})
     led.karte_summary_store(1, 17, {'comment': '合成の新資料。', 'updated_at': '2026-10-16T09:00:00+09:00'})
     from test_patient_context_refresh import CFG
-    snapshot = refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
     assert snapshot['dependencies']['coverage']['reasons'].get('retained_karte_requires_audit')
     assert not _ready(runtime, CFG)
     assert _ready(runtime, CFG, allow_dependency_repair=True)
     result = step(runtime)
     assert result['status'] == 'progressed' and result['lane'] in ('B', 'C')
-    assert refresh._latest(led.db, refresh.KIND, 1)[0] == {}
+    assert patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)[0] == {}
 
 
 

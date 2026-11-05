@@ -1,4 +1,5 @@
 """Synthetic source history and preparation holds cannot starve healthy extraction."""
+import extract_llm_runner
 from dataclasses import replace
 import json
 
@@ -52,6 +53,7 @@ def test_limit_one_keeps_unknown_first_source_and_processes_healthy_local_next(r
         calls.append(body)
         return {}
     monkeypatch.setattr(worker, 'llm_extract', extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
     assert report['done'] == 1 and report['context_blocked'] == 1
     assert len(calls) == 1 and not cloud_calls
@@ -128,6 +130,7 @@ def test_all_held_sources_are_seen_once_then_expiry_only_rechecks_evidence(route
     aids = [dangling(ledger, mid) for mid in (1, 2)]
     before = [dict(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()) for aid in aids]
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: pytest.fail('unknown checkpoints cannot infer'))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert first['selected'] == first['context_blocked'] == 2 and first['done'] == first['failed'] == 0
     claims = [dict(row) for row in ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' ORDER BY message_id")]
@@ -156,7 +159,9 @@ def test_concurrent_owner_claim_is_untouched_while_refill_advances(routed, monke
             foreign.append(dict(ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2").fetchone()))
         return real_claim(ledger, row, lease_s)
     monkeypatch.setattr(worker, '_claim', competing)
+    monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert result['done'] == 1 and result['context_blocked'] == 1 and not calls
     assert dict(ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2").fetchone()) == foreign[0]
@@ -174,7 +179,9 @@ def test_deadline_after_refusal_never_claims_or_refills(routed, monkeypatch):
         return result
     monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(worker, '_prepare_jobs', prepare_then_expire)
+    monkeypatch.setattr(extract_llm_runner, '_prepare_jobs', worker._prepare_jobs)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: pytest.fail('deadline expired'))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert result['selected'] == result['context_blocked'] == 1 and result['done'] == 0
     assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone() and not calls
@@ -189,6 +196,7 @@ def test_refill_preserves_existing_admission_and_shard(routed, monkeypatch, boun
     old(ledger, mid=3, pid=2)
     options = {'admitted_ids': {good, bad}} if boundary == 'admission' else {'shard': (0, 2)}
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180, **options)
     assert result['done'] == 1 and result['context_blocked'] == 1 and not calls
     current = ledger.db.execute("SELECT message_id FROM artifacts WHERE kind='extract_llm' "
@@ -234,7 +242,9 @@ def test_many_refusals_keep_only_candidate_pages_and_healthy_jobs(routed, monkey
         retained.append(sum(ref() is not None for ref in references))
         return wrapped, fresh
     monkeypatch.setattr(worker, '_select_pending', observed)
+    monkeypatch.setattr(extract_llm_runner, '_select_pending', worker._select_pending)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180, prioritize_patients=True)
     assert result['done'] == 1 and result['selected'] == 11 and result['context_blocked'] == 10
     assert len(references) == 11 and max(retained) <= 3, retained

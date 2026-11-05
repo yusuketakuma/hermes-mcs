@@ -1,4 +1,6 @@
 """Synthetic preparation diagnostics remain fixed while source holds stay unchanged."""
+import extract_llm_prepare
+import extract_llm_runner
 import json
 
 import pytest
@@ -47,6 +49,7 @@ def reject_stage(monkeypatch, stage, error, *, only_mid=None):
         return prepare(*args, **kwargs)
 
     monkeypatch.setattr(worker, '_pending_context_frame', load)
+    monkeypatch.setattr(extract_llm_prepare, '_pending_context_frame', worker._pending_context_frame)
     monkeypatch.setattr(worker.extraction_medications, 'build', medication)
     monkeypatch.setattr(worker.extraction_context, 'prepare', frame)
     return reached
@@ -110,6 +113,7 @@ def test_new_fixed_reasons_keep_finite_hold_and_advance_to_healthy_local_source(
         'SELECT * FROM artifacts WHERE message_id=2 ORDER BY artifact_id')]
     reached = reject_stage(monkeypatch, stage, ValueError(code), only_mid=2)
     monkeypatch.setattr(worker, 'llm_extract', lambda *args, **kwargs: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert reached == [2]
     assert result['selected'] == 2 and result['done'] == 1 and result['failed'] == 0

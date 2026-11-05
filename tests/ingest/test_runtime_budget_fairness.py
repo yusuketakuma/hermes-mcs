@@ -1,4 +1,9 @@
 """Bounded stages leave time for clinical work and fresh operational evidence."""
+import extract_llm_admission
+import extract_llm_engine
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
 import json
 
 import pytest
@@ -24,8 +29,13 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
     monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda _: 0)
     monkeypatch.setattr(drug_map, "configured", lambda _: (None, None))
     monkeypatch.setattr(extract_llm, "_MIN_CALL_S", 1)
+    monkeypatch.setattr(extract_llm_engine, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
+    monkeypatch.setattr(extract_llm_runner, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
+    monkeypatch.setattr(extract_llm_selection, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
     monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda _: False)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
 
     def rules(ledger, *, deadline):
         assert clock[0] < deadline < 270
@@ -63,6 +73,7 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
     monkeypatch.setattr(extract, "run_pending", rules)
     monkeypatch.setattr(drug_map, "derive", medications)
     monkeypatch.setattr(extract_llm, "run_pending", llm)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(rollup, "scan_fair_dirty_projects", scan)
     monkeypatch.setattr(rollup, "rebuild_many", rebuild)
     monkeypatch.setattr(mcs_signals, "evaluate", signals)
@@ -137,6 +148,8 @@ def test_complete_realtime_call_keeps_clinical_tail(tmp_path, monkeypatch, remai
     monkeypatch.setattr(drug_map, "derive", lambda *a, **kw: {"done": 0, "pids": [], "status": "unavailable"})
     monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda _: False)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(rollup, "scan_fair_dirty_projects", lambda *a, **kw: rollup.RollupScan((), (), False))
     monkeypatch.setattr(rollup, "rebuild_many", lambda *a, **kw: 0)
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **kw: {})
@@ -146,6 +159,7 @@ def test_complete_realtime_call_keeps_clinical_tail(tmp_path, monkeypatch, remai
         assert kw["budget_s"] < remaining
         return {"done": 0, "pids": []}
     monkeypatch.setattr(extract_llm, "run_pending", infer)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     ledger = _ledger(tmp_path)
     try:
         run_check.stage_derive(ledger, {"errors": [], "realtime_ids": [1]}, remaining + 30, {})

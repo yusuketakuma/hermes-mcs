@@ -1,4 +1,9 @@
 """Synthetic rejected saves retain only a finite owner-bound selection wait."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_runner
+import extract_llm_store
 import json
 
 import pytest
@@ -29,6 +34,7 @@ def test_rejected_save_yields_next_pass_to_healthy_source(routed, monkeypatch, t
             rejected.append(row)
         return atomic(db, row, *args, **kwargs)
     monkeypatch.setattr(worker, '_commit_extraction_atomic', reject_head)
+    monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
     lock = _lock_stub(monkeypatch, tmp_path,
                       blocked_after_call=None if path == 'carry' else 60 if path == 'tail' else 0)
     options = {'per_write_lock': True} if path != 'normal' else {}
@@ -94,6 +100,11 @@ def test_release_hold_never_fences_a_foreign_or_changed_occurrence(tmp_path, mon
                 return current
             monkeypatch.setattr(worker.time, 'time', lambda: now[0])
             monkeypatch.setattr(worker, '_owns_current_source', expires_after_check)
+            monkeypatch.setattr(extract_llm_carry, '_owns_current_source', worker._owns_current_source)
+            monkeypatch.setattr(extract_llm_context, '_owns_current_source', worker._owns_current_source)
+            monkeypatch.setattr(extract_llm_errors, '_owns_current_source', worker._owns_current_source)
+            monkeypatch.setattr(extract_llm_runner, '_owns_current_source', worker._owns_current_source)
+            monkeypatch.setattr(extract_llm_store, '_owns_current_source', worker._owns_current_source)
         elif boundary == 'missing_binding':
             row.pop('_source_binding')
         before = claim_rows(ledger)
@@ -110,6 +121,7 @@ def test_nonrejected_commit_does_not_keep_a_stale_hold_intent(routed, monkeypatc
     ledger, _cfg, _calls, _reserves, _results = routed
     old(ledger, pid=2)
     monkeypatch.setattr(worker, 'llm_extract', lambda *args, **kwargs: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     def completed(_ledger, row, *args, **kwargs):
         assert '_commit_hold' not in row
         return outcome
@@ -120,6 +132,8 @@ def test_nonrejected_commit_does_not_keep_a_stale_hold_intent(routed, monkeypatc
             row['_commit_hold'] = True
         return jobs, skipped, blocked
     monkeypatch.setattr(worker, '_prepare_jobs', stale_intent)
+    monkeypatch.setattr(extract_llm_runner, '_prepare_jobs', worker._prepare_jobs)
     monkeypatch.setattr(worker, '_commit_extraction_atomic', completed)
+    monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
     result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert result['deferred'] == 0 and claim_rows(ledger) == []

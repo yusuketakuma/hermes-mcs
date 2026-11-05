@@ -1,4 +1,14 @@
 """Invented prose and source-distinct record preservation, without model or network calls."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import copy
 import json
 import sqlite3
@@ -110,8 +120,21 @@ def writer(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     ledger.save_messages([_message(body=BODY)])
     monkeypatch.setattr(llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(llm, "_resolved_llm", lambda: ("synthetic", "synthetic"))
+    monkeypatch.setattr(extract_llm_engine, '_resolved_llm', llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_errors, '_resolved_llm', llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_provider, '_resolved_llm', llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_resident, '_resolved_llm', llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_runner, '_resolved_llm', llm._resolved_llm)
     row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = dependency_loss.source_binding(ledger.db, row["project_id"], row["message_id"])
     try:
@@ -127,6 +150,8 @@ def test_failed_scalar_repair_keeps_facts_but_never_reports_complete(writer, mon
         calls.append(kwargs.get("kind", "first"))
         return {"symptoms": [], "vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else None
     monkeypatch.setattr(llm, "_llm_call", response)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     meta = {}
     out = llm.llm_extract(BODY, meta_out=meta)
     assert calls == ["first", "repair"] and out["vitals"] == VITALS
@@ -144,6 +169,8 @@ def test_repaired_complete_prose_can_finish_without_losing_facts(writer, monkeyp
         return {"symptoms": [], "vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else {
             "symptoms": [], "vitals": VITALS, "summary": "本人の血圧120/80を記録"}
     monkeypatch.setattr(llm, "_llm_call", response)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     meta = {}
     out = llm.llm_extract(BODY, meta_out=meta)
     assert len(calls) == 2 and out["vitals"] == VITALS
@@ -157,6 +184,8 @@ def test_repaired_complete_prose_can_finish_without_losing_facts(writer, monkeyp
 @pytest.mark.parametrize("record", [None, {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}])
 def test_cache_cannot_erase_a_previous_scalar_drop_by_revalidating_filtered_fields(writer, monkeypatch, record):
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k: pytest.fail("unexpected cached dispatch"))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     cached = {"vitals": VITALS, "_items_dropped": 1}
     if record is not None:
         cached["_quality_result"] = record
@@ -182,6 +211,14 @@ def test_replay_only_refresh_never_adopts_completed_history_deliveries(writer, m
     calls = []
     monkeypatch.setattr(llm.extraction_refresh, "refresh_extraction_cards", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(llm, "load_config", lambda: pytest.fail("replay refresh read config"))
+    monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: pytest.fail("replay refresh read config"))
     llm._rerender_cards(ledger, 1, 2 if reply else row["message_id"])
     assert calls == [] and before == [tuple(r) for r in ledger.db.execute("SELECT * FROM fetch_jobs")]

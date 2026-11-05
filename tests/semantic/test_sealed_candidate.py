@@ -1,4 +1,11 @@
 """Synthetic adversarial cases for candidate-bound sealed evaluation."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_runner
+import extract_llm_store
+import semantic_due_selection
 import semantic_transport
 import copy
 import json
@@ -36,6 +43,11 @@ def test_plan_and_prompt_change_invalidates_candidate(monkeypatch):
     import extract_llm
     cfg = approved_config({'semantic': {'fact_source': 'canonical'}})
     monkeypatch.setattr(extract_llm, 'PLAN_VERSION', extract_llm.PLAN_VERSION + 1)
+    monkeypatch.setattr(extract_llm_context, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_errors, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_progress, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_proofs, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_store, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
     assert semantic_config(cfg)[0]['fact_source'] == 'legacy'
 
 
@@ -144,6 +156,7 @@ def test_local_snapshot_runs_real_helpers_with_stubbed_models_and_keeps_missing_
     source = {'records': [record], 'manifest': manifest, 'data_origin': 'synthetic'}
     calls = []
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **k: {'urgency': 'high'})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     def extract(fn, member, deadline, **kwargs):
         calls.append(member)
         assert kwargs['jev_client'] is None
@@ -280,6 +293,7 @@ def test_generated_priority_is_scored_from_guarded_output(monkeypatch, body, exp
     monkeypatch.setattr(local_llm, 'chat', forbidden_chat)
     monkeypatch.setattr(extract_llm, 'llm_extract',
                         lambda *args, **kwargs: {'urgency': 'high', 'urgency_evidence': [body]})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(semantic_extraction, 'extract_facts_v2',
                         lambda *args, **kwargs: {'doc': {'facts': []}, 'extraction_complete': False})
     monkeypatch.setattr(snapshot, 'candidate_fingerprint',
@@ -339,6 +353,7 @@ def test_snapshot_origin_mismatch_rejected_before_any_model(monkeypatch, origin,
         pytest.fail('model called before origin validation')
     monkeypatch.setattr(local_llm, 'chat', forbidden)
     monkeypatch.setattr(extract_llm, 'llm_extract', forbidden)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', forbidden)
     record = _record()
     record.pop('candidate')
@@ -496,6 +511,7 @@ def test_runtime_counters_do_not_change_candidate_sources(monkeypatch):
     monkeypatch.setattr(semantic_transport, '_FMT_TS', 1234.5)
     monkeypatch.setattr(semantic_transport, '_LLM_FAILURE', 'synthetic-failure')
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': 'synthetic'})
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     assert candidate._sources() == original
 
 

@@ -1,4 +1,6 @@
 """Ordered empty-source proofs retain snapshot and resource boundaries."""
+
+import rollup_builder
 from contextlib import closing
 from datetime import datetime
 import json
@@ -26,7 +28,7 @@ def test_ordered_empty_proofs_are_bounded_and_patient_scoped(tmp_path, count):
             ledger.db.execute('UPDATE messages SET posted_at_ts=NULL WHERE message_id=1')
             ledger.db.execute("UPDATE messages SET body_html='合成の不一致' WHERE message_id=2")
             ledger.db.commit()
-        expected = rollup._empty_body_proofs(ledger.db, 1, html_available=True)
+        expected = rollup_builder._empty_body_proofs(ledger.db, 1, html_available=True)
         assert len(expected) == count
         if count >= 2:
             assert expected[1] is True and expected[2] is False
@@ -49,7 +51,7 @@ def test_ordered_empty_proof_failure_closes_and_preserves_borrowed_tx(tmp_path, 
         ledger.ensure_patient(1)
         ledger.save_messages([_message(mid=i, body='') for i in range(1, 4)])
         ledger.db.execute('BEGIN')
-        real = rollup._empty_body_proof_rows
+        real = rollup_builder._empty_body_proof_rows
         closed = []
 
         def fail(db, project_id, **kwargs):
@@ -64,7 +66,7 @@ def test_ordered_empty_proof_failure_closes_and_preserves_borrowed_tx(tmp_path, 
             finally:
                 closed.append(True)
 
-        monkeypatch.setattr(rollup, '_empty_body_proof_rows', fail)
+        monkeypatch.setattr(rollup_builder, '_empty_body_proof_rows', fail)
         with pytest.raises(sqlite3.OperationalError, match='rollup_empty_proof_order_changed' if bad_order else 'synthetic interruption'):
             rollup.build_rollup(ledger.db, 1)
         assert closed == [True] and ledger.db.in_transaction
@@ -77,7 +79,7 @@ def test_ordered_empty_proofs_use_same_snapshot_as_first_pass(tmp_path, monkeypa
         ledger.save_messages([_message(mid=i, body='') for i in range(1, 67)])
         baseline = rollup.build_rollup(ledger.db, 1)
         path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
-        original = rollup._current_extraction_page
+        original = rollup_builder._current_extraction_page
         calls = []
 
         def concurrent_change(db, project_id, mids):
@@ -88,7 +90,7 @@ def test_ordered_empty_proofs_use_same_snapshot_as_first_pass(tmp_path, monkeypa
             calls.append(len(mids))
             return original(db, project_id, mids)
 
-        monkeypatch.setattr(rollup, '_current_extraction_page', concurrent_change)
+        monkeypatch.setattr(rollup_builder, '_current_extraction_page', concurrent_change)
         current = rollup.build_rollup(ledger.db, 1)
         baseline.pop('generated_at')
         current.pop('generated_at')
@@ -109,13 +111,13 @@ def test_ordered_proofs_match_old_pages_for_mixed_sources_and_ties(tmp_path, mon
             ledger.db.execute("UPDATE messages SET body_state='deleted' WHERE project_id=1 AND message_id % 17=0")
             ledger.db.execute('UPDATE messages SET body_text=NULL WHERE project_id=1 AND message_id % 19=0')
             ledger.db.execute("UPDATE messages SET body_html='不一致' WHERE project_id=1 AND message_id % 23=0")
-        reference = rollup._empty_body_proofs(ledger.db, 1, html_available=True)
-        with closing(rollup._empty_body_proof_rows(ledger.db, 1, html_available=True, ordered=True)) as proofs:
+        reference = rollup_builder._empty_body_proofs(ledger.db, 1, html_available=True)
+        with closing(rollup_builder._empty_body_proof_rows(ledger.db, 1, html_available=True, ordered=True)) as proofs:
             assert dict(proofs) == reference
-        monkeypatch.setattr(rollup, 'time', SimpleNamespace(
+        monkeypatch.setattr(rollup_builder, 'time', SimpleNamespace(
             time=lambda: datetime.fromisoformat('2026-10-03T00:00:00+09:00').timestamp(),
             monotonic=time.monotonic))
-        current_pages = rollup._rollup_source_pages
+        current_pages = rollup_builder._rollup_source_pages
 
         def old_pages(db, project_id, cursor, first_page, cfg, *, html_available):
             expected_model = None
@@ -125,20 +127,20 @@ def test_ordered_proofs_match_old_pages_for_mixed_sources_and_ties(tmp_path, mon
             page = first_page
             while page:
                 ids = [row['message_id'] for row in page]
-                arts = rollup._current_extraction_page(db, project_id, ids)
-                refs = rollup._clinical_artifact_refs(db, project_id, arts, ids)
+                arts = rollup_builder._current_extraction_page(db, project_id, ids)
+                refs = rollup_builder._clinical_artifact_refs(db, project_id, arts, ids)
                 ref_mids = {row[0] for row in db.execute(
                     'SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id '
                     'WHERE a.kind=? AND m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?))',
                     (rollup.REF_KIND, project_id, json.dumps(ids)))}
-                proofs = rollup._empty_body_proofs(db, project_id, html_available=html_available, message_ids=ids)
-                for item in rollup._rollup_inputs(db, page, arts, refs, cfg, expected_model=expected_model):
+                proofs = rollup_builder._empty_body_proofs(db, project_id, html_available=html_available, message_ids=ids)
+                for item in rollup_builder._rollup_inputs(db, page, arts, refs, cfg, expected_model=expected_model):
                     yield (*item, refs, ref_mids, proofs)
                 page = cursor.fetchmany(64)
 
-        monkeypatch.setattr(rollup, '_rollup_source_pages', old_pages)
+        monkeypatch.setattr(rollup_builder, '_rollup_source_pages', old_pages)
         baseline = rollup.build_rollup(ledger.db, 1, request_limit=None)
-        monkeypatch.setattr(rollup, '_rollup_source_pages', current_pages)
+        monkeypatch.setattr(rollup_builder, '_rollup_source_pages', current_pages)
         actual = rollup.build_rollup(ledger.db, 1, request_limit=None)
         assert actual == baseline
         assert actual['msg_count'] == 135
@@ -150,7 +152,7 @@ def test_missing_or_extra_proof_never_returns_partial_rollup(tmp_path, monkeypat
     with closing(make_ledger(tmp_path)) as ledger:
         ledger.ensure_patient(1)
         ledger.save_messages([_message(mid=i, body='') for i in range(1, 67)])
-        real = rollup._empty_body_proof_rows
+        real = rollup_builder._empty_body_proof_rows
         closed = []
 
         def corrupt(db, project_id, **kwargs):
@@ -167,7 +169,7 @@ def test_missing_or_extra_proof_never_returns_partial_rollup(tmp_path, monkeypat
                 finally:
                     closed.append(True)
 
-        monkeypatch.setattr(rollup, '_empty_body_proof_rows', corrupt)
+        monkeypatch.setattr(rollup_builder, '_empty_body_proof_rows', corrupt)
         ledger.db.execute('BEGIN')
         with pytest.raises(sqlite3.OperationalError, match='rollup_empty_proof_order_changed'):
             rollup.build_rollup(ledger.db, 1)

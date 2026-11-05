@@ -1,4 +1,13 @@
 """Medication references are frozen, source-scoped, and never exported with cloud prompts."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 from copy import deepcopy
 from dataclasses import replace
 import json
@@ -92,6 +101,8 @@ def test_single_local_and_cloud_prompts_keep_the_same_source_rules(store, tmp_pa
         return {"symptoms": [], "meds": [{"name": "キラナ", "dose": None, "action": "none",
             "subject": "patient", "status": "current", "negated": False, "evidence": "キラナを服用"}]}
     monkeypatch.setattr(extract_llm, "_llm_call", answer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     for provider in (None, object()):
         result = extract_llm.llm_extract(body, hints={}, medication_hints=value,
                                         medication_guard=lambda: True, provider=provider)
@@ -104,6 +115,8 @@ def test_reference_change_stops_before_the_first_model_call(store, tmp_path, mon
     body = "キラナを服用。"
     _, value = snapshot(store, tmp_path, body)
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: pytest.fail("dispatched stale hints"))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.llm_extract(body, hints={}, medication_hints=value,
                                   medication_guard=lambda: False) is extract_llm._DEFERRED
 
@@ -234,6 +247,14 @@ def test_omitting_one_ambiguous_candidate_cannot_be_presented_as_a_single_match(
 
 def test_expired_run_does_not_prepare_a_new_dictionary_frame(store, monkeypatch):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(references, "build", lambda *a, **k: pytest.fail("prepared after deadline"))
     jobs, skipped, blocked = extract_llm._prepare_jobs(store, [{}, {}], ("", "model"), False,
                                                        deadline=time.monotonic() - 1)
@@ -242,6 +263,8 @@ def test_expired_run_does_not_prepare_a_new_dictionary_frame(store, monkeypatch)
 
 def test_transport_reference_change_does_not_poison_endpoint_health(monkeypatch):
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **_: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm._CALL_NOTES, "medication_source_changed", False, raising=False)
     def changed(*args, **kwargs):

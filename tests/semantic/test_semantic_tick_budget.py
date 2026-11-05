@@ -1,4 +1,5 @@
 """AT054: the real tick preserves ordinary work when semantic budget waits."""
+import extract_llm_runner
 import collection_stages
 import semantic_jev
 import json
@@ -93,7 +94,9 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
     # must not trip the separate code-change stop and skip derive/semantic.
     monkeypatch.setattr(run_check, "_code_changed", lambda result: False)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: False)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     monkeypatch.setattr(semantic_jev, "JevClient", _BudgetJev)
     def flush(ledger, *args, **kwargs):
         _BudgetJev.events.append("notify")

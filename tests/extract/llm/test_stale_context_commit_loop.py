@@ -1,4 +1,14 @@
 """Wholly synthetic reproduction of a frozen reference/checkpoint retry loop."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 
 import pytest
@@ -14,7 +24,14 @@ from test_extraction_context import seed, target
 def checkpointed(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, "_writer_current", lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, "_rerender_cards", lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         antecedent = seed(ledger)
         row = target(ledger)
@@ -94,6 +111,10 @@ def test_commit_rejection_retains_only_fixed_diagnostic_and_preserves_rows(check
             ledger.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (antecedent,))
     elif boundary == "medication":
         monkeypatch.setattr(worker, "_medication_reference_current", lambda *a, **k: False)
+        monkeypatch.setattr(extract_llm_context, '_medication_reference_current', worker._medication_reference_current)
+        monkeypatch.setattr(extract_llm_prepare, '_medication_reference_current', worker._medication_reference_current)
+        monkeypatch.setattr(extract_llm_progress, '_medication_reference_current', worker._medication_reference_current)
+        monkeypatch.setattr(extract_llm_store, '_medication_reference_current', worker._medication_reference_current)
     before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
     assert worker._commit_extraction_atomic(ledger, row, json.dumps(value), frame["text"],
         integrity, None, None, (0,), check_current=True, expected_prior=prior) == "rejected"

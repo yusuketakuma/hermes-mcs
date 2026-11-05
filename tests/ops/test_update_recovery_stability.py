@@ -1,4 +1,15 @@
 """Recovery retains interrupted state until workers actually restart."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import restore_evidence
 import mcs_util
 import service_management
@@ -21,6 +32,15 @@ def test_check_ignore_failure_is_reported_by_preflight(updater, tmp_path, monkey
     from ops_testkit import _make_repo
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     real = updater.subprocess.run
 
     def fail_check(argv, **kwargs):
@@ -46,9 +66,26 @@ def test_corrupt_live_db_recovery_retains_restore_hold_without_empty_consent(
     state["stages"] = [{"stage": "rollback", "at": 1}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(updater, "_head_sha", lambda: before)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.recover_interrupted() == 1
     held = updater.journal_store.load_state(updater.STATE_PATH)
     report = json.loads(Path(updater.REPORT_PATH).read_text())
@@ -100,6 +137,12 @@ def test_failed_restart_remains_retryable(updater, monkeypatch):
     state["stages"] = [{"stage": "merge", "at": 1}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(updater, "_head_sha", lambda: "b" * 40)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     calls, notices = [], []
 
     def restart(bounce=True):
@@ -107,7 +150,15 @@ def test_failed_restart_remains_retryable(updater, monkeypatch):
         return ["synthetic-worker"] if len(calls) == 1 else []
 
     monkeypatch.setattr(updater, "restart_agents", restart)
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text))
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater._finish_recovery(state, "interrupted_pre_merge", []) == 1
     held = updater.journal_store.load_state(updater.STATE_PATH)
     assert held["applying"] and held["stages"] and not held["executed"]
@@ -130,6 +181,7 @@ def test_approved_swap_failure_keeps_restore_hold(updater, tmp_path, monkeypatch
         raise OSError("synthetic replace failure")
 
     monkeypatch.setattr(updater, "_replace_database", fail_swap)
+    monkeypatch.setattr(update_restore, '_replace_database', updater._replace_database)
     assert updater.rollback("synthetic") != 0
     assert restarts == [] and Path(updater.MARKER_PATH).exists()
     marker = json.loads(Path(updater.DATA, "restore_pending.json").read_text())
@@ -138,6 +190,7 @@ def test_approved_swap_failure_keeps_restore_hold(updater, tmp_path, monkeypatch
     assert state["restore_consent"] and state["applying"]["rollback"]
     assert "synthetic" not in state["executed"]
     monkeypatch.setattr(updater, "_replace_database", replace)
+    monkeypatch.setattr(update_restore, '_replace_database', updater._replace_database)
     assert updater.recover_interrupted() == 1
     _assert_old_schema_restore_held(updater, live, back, restarts, "synthetic")
 
@@ -159,6 +212,7 @@ def test_manual_rollback_restore_failure_keeps_mixed_tree_and_db_frozen(
         return result
 
     monkeypatch.setattr(updater, "_rollback_backup_error", checked_backup)
+    monkeypatch.setattr(update_apply, '_rollback_backup_error', updater._rollback_backup_error)
     failures = []
 
     def fail_restore(*args, **kwargs):
@@ -173,6 +227,8 @@ def test_manual_rollback_restore_failure_keeps_mixed_tree_and_db_frozen(
         monkeypatch.setattr(notify_spool, "mark_restored", fail_restore)
     else:
         monkeypatch.setattr(updater, "_restore_db", fail_restore)
+        monkeypatch.setattr(update_recovery, '_restore_db', updater._restore_db)
+        monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
 
     assert updater.rollback("synthetic-manual-rollback") != 0
     assert backup_checks == [None] and failures == [failure]
@@ -205,7 +261,11 @@ def test_manual_rollback_quiesce_failure_before_tree_change_does_not_freeze(
         pytest.fail("rollback tree must not run after quiesce fails")
 
     monkeypatch.setattr(updater, "quiesce", fail_quiesce)
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_rollback_tree", no_tree_change)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     assert updater.rollback("synthetic-stop-failure") != 0
     assert updater._head_sha() == after
     assert Path(live).read_bytes() == live_bytes
@@ -233,12 +293,20 @@ def test_manual_schema_rollback_persists_hold_before_tree_change(
         seen.append(True)
         # Simulate process death: Python finally cleanup does not run on a crash.
         monkeypatch.setattr(updater, "_remove_marker", lambda: None)
+        monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+        monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+        monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
         raise SystemExit("synthetic crash")
 
     monkeypatch.setattr(updater, "_rollback_tree", crash_before_tree)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     with pytest.raises(SystemExit, match="synthetic crash"):
         updater.rollback("synthetic-manual-crash")
     monkeypatch.setattr(updater, "_remove_marker", remove_marker)
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     assert seen == [True] and restarts == []
     assert updater.recover_interrupted() == 1
     assert updater._head_sha() == after and Path(live).read_bytes() == live_bytes
@@ -260,12 +328,21 @@ def test_apply_bail_persists_schema_hold_before_tree_change(
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(service_management, "runtime_gate_errors", lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda t, **kw: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
+    monkeypatch.setattr(update_preflight, '_needs_migration', updater._needs_migration)
+    monkeypatch.setattr(update_runtime_migration, '_needs_migration', updater._needs_migration)
     monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: True)
+    monkeypatch.setattr(update_preflight, '_standalone_target_supported', updater._standalone_target_supported)
+    monkeypatch.setattr(update_restore, '_standalone_target_supported', updater._standalone_target_supported)
     remove_marker = updater._remove_marker
     live_bytes = Path(live).read_bytes()
     seen = []
@@ -283,13 +360,22 @@ def test_apply_bail_persists_schema_hold_before_tree_change(
         assert applying["backup_path"] == back and state["stages"]
         seen.append(True)
         monkeypatch.setattr(updater, "_remove_marker", lambda: None)
+        monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+        monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+        monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
         raise SystemExit("synthetic crash")
 
     monkeypatch.setattr(updater, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     monkeypatch.setattr(updater, "_rollback_tree", crash_before_tree)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     with pytest.raises(SystemExit, match="synthetic crash"):
         updater.apply("v1.1.0", after, "synthetic-apply-crash")
     monkeypatch.setattr(updater, "_remove_marker", remove_marker)
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     assert seen == [True] and restarts == []
     assert updater.recover_interrupted() == 1
     assert updater._head_sha() == after and Path(live).read_bytes() == live_bytes
@@ -312,12 +398,21 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(service_management, 'runtime_gate_errors', lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
+    monkeypatch.setattr(update_preflight, '_needs_migration', updater._needs_migration)
+    monkeypatch.setattr(update_runtime_migration, '_needs_migration', updater._needs_migration)
     monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: True)
+    monkeypatch.setattr(update_preflight, '_standalone_target_supported', updater._standalone_target_supported)
+    monkeypatch.setattr(update_restore, '_standalone_target_supported', updater._standalone_target_supported)
     backup_broken = []
     real_valid = ledger.valid_mcs_db
     monkeypatch.setattr(ledger, "valid_mcs_db", lambda path, *a, **k: not (
@@ -330,6 +425,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
         raise updater.UpdateError("post_merge_failed: synthetic")
 
     monkeypatch.setattr(updater, "_run_post_merge", child_restarted_then_failed)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     damaged = Path(live).read_bytes()
     assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
     assert updater._head_sha() == before and restarts == ["child"]
@@ -339,6 +435,11 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     notices = []
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, *a, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     prior_execution = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["synthetic-apply"]
     assert updater.recover_interrupted() == 1
     assert restarts == [] and Path(updater.MARKER_PATH).exists()
@@ -381,7 +482,14 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         git_dir.mkdir(parents=True)
         (git_dir / "MERGE_HEAD").write_text("c" * 40)
     monkeypatch.setattr(updater, "_head_sha", lambda: "c" * 40 if shape == "unknown_head" else "b" * 40)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: [])
+    monkeypatch.setattr(update_recovery, '_clean_stale_git_locks', updater._clean_stale_git_locks)
 
     def forbidden(*args, **kwargs):
         pytest.fail("incomplete restore must not reset, finish, restore an unbound DB, or restart writers")
@@ -419,12 +527,21 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(service_management, 'runtime_gate_errors', lambda *a, **k: [])
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: after)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
+    monkeypatch.setattr(update_preflight, '_needs_migration', updater._needs_migration)
+    monkeypatch.setattr(update_runtime_migration, '_needs_migration', updater._needs_migration)
     monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: True)
+    monkeypatch.setattr(update_preflight, '_standalone_target_supported', updater._standalone_target_supported)
+    monkeypatch.setattr(update_restore, '_standalone_target_supported', updater._standalone_target_supported)
 
     def runtime_failure(*args):
         raise updater.UpdateError("synthetic runtime restore failure")
@@ -434,13 +551,20 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
         if failure_stage == "layout_floor":
             monkeypatch.setattr(updater, "_rollback_layout_error",
                                 lambda entry: "rollback_blocked_layout_floor: synthetic")
+            monkeypatch.setattr(update_apply, '_rollback_layout_error', updater._rollback_layout_error)
+            monkeypatch.setattr(update_restore, '_rollback_layout_error', updater._rollback_layout_error)
         elif failure_stage == "standalone_target":
             monkeypatch.setattr(updater, "_standalone_target_supported", lambda ref: False)
+            monkeypatch.setattr(update_preflight, '_standalone_target_supported', updater._standalone_target_supported)
+            monkeypatch.setattr(update_restore, '_standalone_target_supported', updater._standalone_target_supported)
         else:
             monkeypatch.setattr(updater, "_restore_runtime", runtime_failure)
+            monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+            monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
         raise updater.UpdateError("post_merge_failed: synthetic")
 
     monkeypatch.setattr(updater, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     original_db = Path(live).read_bytes()
     assert updater.apply("v1.1.0", after, "synthetic-apply") == 1
     assert updater._head_sha() == after
@@ -489,6 +613,8 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
     if legacy_journal:
         applying["runtime_migration"].pop("checkout_target")
         monkeypatch.setattr(updater, "HERMES_PIN", new_head)
+        monkeypatch.setattr(update_preflight, 'HERMES_PIN', updater.HERMES_PIN)
+        monkeypatch.setattr(update_runtime_migration, 'HERMES_PIN', updater.HERMES_PIN)
     applying.update(schema_bump=consent_pending,
                     backup_path=str(tmp_path / "synthetic-schema-backup.db"))
     updater.journal_store.save_state(updater.STATE_PATH, state)
@@ -500,8 +626,13 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
             raise updater.RestoreConsentPending({"report_id": "synthetic-pin-refresh"})
 
         monkeypatch.setattr(updater, "_restore_db", needs_consent)
+        monkeypatch.setattr(update_recovery, '_restore_db', updater._restore_db)
+        monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
         monkeypatch.setattr(updater, "_consent_hold",
                             lambda *args: held.append(True) or "synthetic-pin-refresh")
+        monkeypatch.setattr(update_apply, '_consent_hold', updater._consent_hold)
+        monkeypatch.setattr(update_recovery, '_consent_hold', updater._consent_hold)
+        monkeypatch.setattr(update_restore, '_consent_hold', updater._consent_hold)
     assert updater.recover_interrupted() == 0
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == prev
     assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == old_head
@@ -554,6 +685,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         monkeypatch.setattr(updater, "HERMES_PREVIOUS_PINS",
                             frozenset({old_head, other} if change == "other_known_pin"
                                       else {old_head}))
+        monkeypatch.setattr(update_preflight, 'HERMES_PREVIOUS_PINS', updater.HERMES_PREVIOUS_PINS)
     elif change == "branch":
         _git(checkout, "checkout", "-q", "-b", "local/org-build")
     else:
@@ -688,6 +820,8 @@ def test_existing_standalone_migration_is_verified_without_replanning(updater, t
         pytest.fail("a valid existing migration must be kept without re-planning")
 
     monkeypatch.setattr(updater, "_runtime_venv", forbidden)
+    monkeypatch.setattr(update_preflight, '_runtime_venv', updater._runtime_venv)
+    monkeypatch.setattr(update_runtime_migration, '_runtime_venv', updater._runtime_venv)
     updater._plan_runtime_migration(state, held_fd=5)
     assert state["applying"]["runtime_migration"] == migration
     assert Path(updater.STATE_PATH).read_bytes() == journal
@@ -709,6 +843,8 @@ def _synthetic_flagless_rollback(updater, tmp_path, monkeypatch, engine):
     Path(updater.MARKER_PATH).chmod(0o600)
     if engine == "updater":
         monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+        monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+        monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
         return updater, updater.recover_interrupted, repo, live, back, before, restarts
     recovery = _load()
     for name in ("DATA", "REPO", "LEDGER", "STATE_PATH", "UPDATE_LOCK", "RUN_LOCK",
@@ -779,7 +915,12 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
     monkeypatch.setattr(tool, "_restore_db", restore)
     if engine == "updater":
         monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
+        monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
         monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
+        monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
     else:
         monkeypatch.setattr(tool, "_runtime_mode", lambda: "hermes")
         monkeypatch.setattr(tool, "_reconcile_membership", lambda snapshot: [])
@@ -850,6 +991,12 @@ def test_schema_rollback_rejects_missing_or_invalid_backup_before_reset(
         pytest.fail("invalid backup must not restore or restart")
 
     monkeypatch.setattr(updater, "_git_out", git_out)
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     for name in ("_restore_db", "restart_agents", "restart_services"):
         monkeypatch.setattr(updater, name, forbidden)
     if entry_point == "manual":
@@ -1005,6 +1152,8 @@ def test_manual_rollback_preserves_changed_restore_journal(
         pytest.fail("changed restore journal must not cancel notices, alter services, restart or clear marker")
 
     monkeypatch.setattr(updater, "_restore_db", mutate_journal)
+    monkeypatch.setattr(update_recovery, '_restore_db', updater._restore_db)
+    monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
     for name in ("_cancel_unsent_notices", "_services_reconcile", "restart_agents", "restart_services",
                  "_enqueue_notice", "_remove_marker"):
         monkeypatch.setattr(updater, name, forbidden)
@@ -1072,7 +1221,15 @@ def test_manual_rollback_checks_frozen_journal_before_reset(updater, tmp_path, m
         pytest.fail("changed frozen journal must not restore, notify, restart or clear marker")
 
     monkeypatch.setattr(updater, "_freeze_schema_rollback", mutate_after_freeze)
+    monkeypatch.setattr(update_apply, '_freeze_schema_rollback', updater._freeze_schema_rollback)
+    monkeypatch.setattr(update_recovery, '_freeze_schema_rollback', updater._freeze_schema_rollback)
     monkeypatch.setattr(updater, "_git_out", forbid_reset)
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     for name in ("_restore_db", "_cancel_unsent_notices", "_services_reconcile", "restart_agents",
                  "restart_services", "_enqueue_notice", "_remove_marker"):
         monkeypatch.setattr(updater, name, forbidden)

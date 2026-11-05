@@ -1,4 +1,19 @@
 """Synthetic acceptance of idle-night work, source validity, and resumable coverage."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_selection
+import extract_llm_store
+
+import patient_context_quality_controller
+import patient_context_refresh_readiness
+import patient_context_refresh_sources
+import patient_context_refresh_state
 import patient_context_plan as context_plan
 import mcs_queries
 from datetime import datetime
@@ -26,9 +41,9 @@ def stamp(value):
 def runtime(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     clock = SimpleNamespace(wall=stamp('2026-10-17T23:00:00'), mono=1000)
-    monkeypatch.setattr(context_refresh, 'time', SimpleNamespace(
+    monkeypatch.setattr(patient_context_refresh_state, 'time', SimpleNamespace(
         time=lambda: clock.wall, monotonic=lambda: clock.mono))
-    monkeypatch.setattr(context_refresh, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
     monkeypatch.setattr(context_refresh.local_llm, 'resolve', lambda cfg: ('http://invalid.test', 'synthetic'))
     monkeypatch.setattr(context_refresh.local_llm, 'admission_enabled', lambda: True)
     monkeypatch.setattr(context_refresh.local_llm, 'chat', lambda *a, **k: pytest.fail('unstubbed chat'))
@@ -178,7 +193,7 @@ def finish(runtime, limit=60, *, cfg=CFG, waiting=False):
     pytest.fail('finite synthetic workload did not finish')
 
 
-def document(led, kind=context_refresh.KIND, pid=1):
+def document(led, kind=patient_context_refresh_state.KIND, pid=1):
     row = led.db.execute('SELECT content FROM artifacts WHERE kind=? AND project_id=? '
                          'ORDER BY artifact_id DESC LIMIT 1', (kind, pid)).fetchone()
     return json.loads(row[0]) if row else None
@@ -200,7 +215,7 @@ def test_worker_rotates_ready_patients_despite_clock_and_new_arrivals(runtime, o
         assert outcome['status'] == 'progressed', outcome
         selected.append(led.db.execute(
             "SELECT project_id FROM artifacts WHERE kind=? AND project_id>0 "
-            "ORDER BY artifact_id DESC LIMIT 1", (context_refresh.PROGRESS,)).fetchone()[0])
+            "ORDER BY artifact_id DESC LIMIT 1", (patient_context_refresh_state.PROGRESS,)).fetchone()[0])
     assert selected == [1, 2, 3]
 
 
@@ -213,12 +228,12 @@ def test_worker_ignores_invalid_attempt_order_and_skips_unready_patient(runtime,
     seed(led, mid=2, pid=2)
     seed(led, mid=3, pid=3)
     meta = {VERSION_KEY: CURRENT_VERSION}
-    led.artifact_add(context_refresh.PROGRESS, content, project_id=2, meta=meta)
-    led.artifact_add(context_refresh.PROGRESS, '{"last_attempt_unit":1}', project_id=3, meta=meta)
+    led.artifact_add(patient_context_refresh_state.PROGRESS, content, project_id=2, meta=meta)
+    led.artifact_add(patient_context_refresh_state.PROGRESS, '{"last_attempt_unit":1}', project_id=3, meta=meta)
     result = step(runtime)
     assert result['status'] == 'progressed', result
-    assert document(led, context_refresh.PROGRESS, pid=2)['last_attempt_unit'] == 1
-    assert document(led, context_refresh.PROGRESS, pid=1) is None
+    assert document(led, patient_context_refresh_state.PROGRESS, pid=2)['last_attempt_unit'] == 1
+    assert document(led, patient_context_refresh_state.PROGRESS, pid=1) is None
 
 
 @pytest.mark.parametrize('at,day', [
@@ -229,7 +244,7 @@ def test_worker_ignores_invalid_attempt_order_and_skips_unready_patient(runtime,
 def test_workday_window(at, day):
     """The workday follows the JST calendar, including 00:00 and the old boundary."""
     end = stamp('2026-10-18T00:00:00' if day == '2026-10-17' else '2026-10-19T00:00:00')
-    assert context_refresh.workday_window(stamp(at)) == (day, end)
+    assert patient_context_refresh_state.workday_window(stamp(at)) == (day, end)
 
 
 @pytest.mark.parametrize('cfg', [None, {'extract': {'patient_context_nightly': {'enabled': False}}},
@@ -246,9 +261,9 @@ def test_default_enables_generation_and_private_reading(runtime):
     led, _, _ = runtime
     seed(led)
     assert step(runtime, cfg={})['status'] == 'progressed'
-    assert context_refresh.context_view_input(led.db, 1, cfg={}) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg={}) is None
     finish(runtime, cfg={})
-    assert context_refresh.context_view_input(led.db, 1, cfg={}) is not None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg={}) is not None
 
 
 @pytest.mark.parametrize('at,seconds', [('2026-10-17T23:59:30', 64),
@@ -277,7 +292,7 @@ def test_completed_work_does_not_repeat_llm_next_night(runtime):
     clock.wall = stamp('2026-10-18T23:00:00')
     assert step(runtime)['status'] == 'complete'
     assert len(calls) == count and document(led)['generated_at'] == generated
-    assert context_refresh.status(led.db, CFG)['complete'] == 1
+    assert patient_context_refresh_readiness.status(led.db, CFG)['complete'] == 1
 
 
 def test_chunk_checkpoint_survives_next_night_without_repeating_prefix(runtime):
@@ -288,16 +303,16 @@ def test_chunk_checkpoint_survives_next_night_without_repeating_prefix(runtime):
     assert len(context_refresh.context_plan.plan_chunks(body)) > 1
     assert step(runtime)['lane'] == 'A'
     assert step(runtime)['lane'] == 'B'
-    saved = document(led, context_refresh.SCAN)
+    saved = document(led, patient_context_refresh_state.SCAN)
     assert saved['cursor'] == 1 and not saved['complete']
     assert document(led)['facts'] == [], 'partial scan must not be published'
     first_source = calls[-1]['source']
     clock.wall = stamp('2026-10-18T00:00:00')
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.SCAN)['cursor'] == 2
+    assert document(led, patient_context_refresh_state.SCAN)['cursor'] == 2
     assert calls[-1]['source'] != first_source
     finish(runtime)
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)['facts']
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)['facts']
 
 
 def test_legacy_0330_day_id_does_not_reset_an_existing_chunk_checkpoint(runtime):
@@ -307,18 +322,18 @@ def test_legacy_0330_day_id_does_not_reset_an_existing_chunk_checkpoint(runtime)
     clock.wall = stamp('2026-10-18T00:30:00')
     assert step(runtime)['lane'] == 'A'
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.SCAN)['cursor'] == 1
+    assert document(led, patient_context_refresh_state.SCAN)['cursor'] == 1
     first_source = calls[-1]['source']
-    chunk_ids = [row[0] for row in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?', (context_refresh.CHUNK,))]
+    chunk_ids = [row[0] for row in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?', (patient_context_refresh_state.CHUNK,))]
     assert chunk_ids
     with led.db:
         for row in led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind IN (?,?,?)',
-                                  (context_refresh.KIND, context_refresh.SCAN, context_refresh.CHUNK)).fetchall():
+                                  (patient_context_refresh_state.KIND, patient_context_refresh_state.SCAN, patient_context_refresh_state.CHUNK)).fetchall():
             meta = json.loads(row['meta'])
             meta['night_id'] = '2026-10-17'
             led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.SCAN)['cursor'] == 2
+    assert document(led, patient_context_refresh_state.SCAN)['cursor'] == 2
     assert calls[-1]['source'] != first_source
     assert all(led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()
                for artifact_id in chunk_ids)
@@ -333,7 +348,7 @@ def test_legacy_workday_progress_preserves_retry_and_hold_across_midnight(runtim
         'status': 200, 'finish_reason': 'length', 'text': '{}'})
     assert step(runtime)['status'] == 'failed'
     row = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=1',
-                         (context_refresh.PROGRESS,)).fetchone()
+                         (patient_context_refresh_state.PROGRESS,)).fetchone()
     progress, meta = json.loads(row['content']), json.loads(row['meta'])
     progress.update(night_id='2026-10-17', held=held)
     meta['night_id'] = '2026-10-17'
@@ -341,10 +356,10 @@ def test_legacy_workday_progress_preserves_retry_and_hold_across_midnight(runtim
         led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
                        (json.dumps(progress), json.dumps(meta), row['artifact_id']))
     clock.wall = stamp('2026-10-18T00:00:00')
-    _, saved, pending = context_refresh._pending(led.db, 1, CFG, now=clock.wall)
+    _, saved, pending = patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)
     assert not pending['A'] and saved['held'] is held
     assert saved['attempts'] == progress['attempts'] and saved['next_try'] == progress['next_try']
-    _, _, later = context_refresh._pending(led.db, 1, CFG, now=progress['next_try'] + 1)
+    _, _, later = patient_context_refresh_readiness._pending(led.db, 1, CFG, now=progress['next_try'] + 1)
     assert later['A'] is (not held)
 
 
@@ -387,10 +402,10 @@ def test_changed_deleted_or_remapped_sources_hide_previous_summary(runtime, muta
     led, _, _ = runtime
     seed(led)
     finish(runtime)
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     led.db.execute(mutation)
     led.db.commit()
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 def test_publication_off_keeps_generated_artifact_private(runtime):
@@ -399,8 +414,8 @@ def test_publication_off_keeps_generated_artifact_private(runtime):
     shadow = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
     assert step(runtime, cfg=shadow)['status'] == 'progressed'
     assert document(led)
-    assert context_refresh.context_view_input(led.db, 1, cfg=shadow) is None
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=shadow) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 def test_old_distinct_background_items_survive_newer_same_category(runtime):
@@ -426,7 +441,7 @@ def test_full_source_quote_retains_family_negation_plan_and_date(runtime, monkey
              'evidence': '酸素を使用', 'subject': 'patient', 'details': []}]})}
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', partial_quote)
     finish(runtime)
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert view['facts'][0]['quote'] == body
     assert view['summary'][0]['text'] == body
     assert view['facts'][0]['subject'] == 'unspecified'
@@ -440,8 +455,8 @@ def test_incomplete_patient_waits_while_ready_patient_proceeds(runtime):
     assert step(runtime)['lane'] == 'A'
     assert document(led, pid=1) is None and document(led, pid=2)
     finish(runtime, waiting=True)
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
-    proof = context_refresh.inference_coverage(led.db, 1, CFG)
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
+    proof = patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)
     assert not proof['complete'] and proof['sources']['incomplete'] == 1
 
 
@@ -468,10 +483,10 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
     result = step(runtime)
     # the fixed check code is kept (and logged), not just the exception type
     assert result['status'] == 'failed' and result['reason'] == 'nightly_length_stop'
-    progress = document(led, context_refresh.PROGRESS)
+    progress = document(led, patient_context_refresh_state.PROGRESS)
     assert progress['next_try'] > clock.wall and progress['attempts'] == 1
     assert progress['failure'] == 'nightly_length_stop'
-    assert context_refresh.status(led.db, CFG)['failed'] == 1
+    assert patient_context_refresh_readiness.status(led.db, CFG)['failed'] == 1
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     for _ in range(6):
         assert step(runtime)['status'] == 'progressed'
@@ -494,7 +509,7 @@ def test_crossing_midnight_during_inference_commits_once_under_start_day(runtime
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', cross_end)
     assert step(runtime)['status'] == 'progressed'
     assert document(led)
-    meta = led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.KIND,)).fetchone()
+    meta = led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1', (patient_context_refresh_state.KIND,)).fetchone()
     assert json.loads(meta[0])['night_id'] == '2026-10-17'
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     finish(runtime)
@@ -544,8 +559,8 @@ def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypa
         clock.wall += seconds
         clock.mono += seconds
 
-    monkeypatch.setattr(context_refresh, 'acquire_run_lock', acquire)
-    monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(patient_context_refresh_state.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
     assert len(tries) == 2 and len(calls) == 1 and document(led)
 
@@ -559,7 +574,7 @@ def test_ordinary_refetch_timestamp_does_not_regenerate(runtime):
     led.db.commit()
     assert step(runtime)['status'] == 'complete'
     assert len(calls) == count
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
 
 
 def test_old_unlabelled_report_is_discovered_without_new_message(runtime):
@@ -570,7 +585,7 @@ def test_old_unlabelled_report_is_discovered_without_new_message(runtime):
     assert document(led)['facts'] == []
     before_count = led.db.execute('SELECT count(*) FROM messages').fetchone()[0]
     finish(runtime)
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert any(f['quote'] == body and f['discovery'] == 'backfill_found' for f in view['facts'])
     assert led.db.execute('SELECT count(*) FROM messages').fetchone()[0] == before_count
 
@@ -583,9 +598,9 @@ def test_new_addition_is_unreflected_not_silently_part_of_old_summary(runtime):
     seed(led, mid=2, body='生活環境: 合成の新着報告。')
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (clock.wall,))
     led.db.commit()
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert view is None
-    assert context_refresh.inference_coverage(led.db, 1, CFG)['sources']['pending'] == 1
+    assert patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['sources']['pending'] == 1
     assert document(led) == stored  # Previous generation remains stored, never passed off as current.
 
 
@@ -601,7 +616,7 @@ def test_model_timeout_is_checkpointed_so_other_patients_can_advance(runtime, mo
         return original(*args, **kwargs)
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', timeout)
     step(runtime)
-    progress = document(led, context_refresh.PROGRESS)
+    progress = document(led, patient_context_refresh_state.PROGRESS)
     assert progress is not None and progress['next_try'] > 0
     for _ in range(6):
         step(runtime)
@@ -619,28 +634,28 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     for attempt in range(5):
         clock.wall = stamp('2026-10-17T23:00:00') + attempt * 86400
         assert step(runtime)['status'] == 'failed'
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 5
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
     clock.wall += 86400
     step(runtime)
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 5
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
     # Changed semantic checks create a fresh source/contract generation; unchanged checks stay exhausted.
-    monkeypatch.setattr(context_refresh, '_CHECKS', 'synthetic-changed-checks')
+    monkeypatch.setattr(patient_context_refresh_state, '_CHECKS', 'synthetic-changed-checks')
     clock.wall += 86400
     # Stored scans reopen before lane A gets its first attempt under the new checks.
     results = [step(runtime) for _ in range(3)]
     assert [r['status'] for r in results if r.get('lane') == 'A'] == ['failed']
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 1
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 1
     clock.wall += 86400
     results = [step(runtime) for _ in range(3)]
     assert [r['status'] for r in results if r.get('lane') == 'A'] == ['failed']
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 2
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 2
     seed(led, body='生活環境: 更新された合成の背景。')
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 0
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 0
     finish(runtime)
     assert document(led)
-    assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    assert patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 
 def test_revoked_source_is_not_generated_or_displayed(runtime):
@@ -649,7 +664,7 @@ def test_revoked_source_is_not_generated_or_displayed(runtime):
     step(runtime)
     led.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
     led.db.commit()
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
     count = len(calls)
     step(runtime)
     assert len(calls) == count
@@ -662,7 +677,7 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     for mid in range(2, 12):
         seed(led, mid=mid, body=f'合成の未分類記録その{mid}。')
     assert step(runtime)['status'] == 'progressed'
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
     finish(runtime)
     before = len(calls)
     monkeypatch.setattr(mcs_queries, 'source_patient_context',
@@ -672,7 +687,7 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     queries = []
     led.db.set_trace_callback(queries.append)
     try:
-        view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+        view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     finally:
         led.db.set_trace_callback(None)
     assert view is not None and {f['message_id'] for f in view['facts']} == set(range(1, 12))
@@ -690,14 +705,14 @@ def test_shadow_can_be_published_without_repeating_inference(runtime):
     shadow = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
     finish(runtime, cfg=shadow)
     generated = document(led)
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
     before = len(calls)
     assert step(runtime)['lane'] == 'A'
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert view and view['summary'] == generated['summary']
     assert view['generated_at'] == generated['generated_at']
     assert len(calls) == before
-    assert context_refresh.context_view_input(led.db, 1, cfg=shadow) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=shadow) is None
 
 
 @pytest.mark.parametrize('summary', [None, 'invalid', {}, [None], ['invalid'],
@@ -710,9 +725,9 @@ def test_corrupt_summary_shape_is_hidden_without_exception(runtime, summary):
     value = document(led)
     value['summary'] = summary
     led.db.execute('UPDATE artifacts SET content=? WHERE kind=? AND project_id=1',
-                   (json.dumps(value), context_refresh.KIND))
+                   (json.dumps(value), patient_context_refresh_state.KIND))
     led.db.commit()
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 def test_quote_keeps_preceding_family_plan_and_negation_paragraph(runtime, monkeypatch):
@@ -732,7 +747,7 @@ def test_quote_keeps_preceding_family_plan_and_negation_paragraph(runtime, monke
                 'evidence': '合成サービスを利用。', 'subject': 'patient', 'details': []}]})}
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', excerpt)
     finish(runtime)
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert view['summary'][0]['text'] == paragraph
     assert view['facts'][0]['quote'] == paragraph
 
@@ -756,7 +771,7 @@ def test_incomplete_body_states_are_not_counted_as_analyzed(runtime, state):
         led.db.execute('UPDATE messages SET body_state=? WHERE message_id=1', (state,))
     finish(runtime, waiting=True)
     assert document(led) is None and not calls
-    proof = context_refresh.inference_coverage(led.db, 1, CFG)
+    proof = patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)
     assert not proof['complete'] and proof['sources']['incomplete'] == 1
 
 
@@ -772,7 +787,7 @@ def test_summary_unknown_output_flag_prevents_publication(runtime, monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', unknown_flag)
     assert step(runtime)['status'] == 'failed'
     assert document(led) is None
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 @pytest.mark.parametrize('malformation', ['extra_response_key', 'extra_item_key', 'unsupported_detail'])
@@ -796,7 +811,7 @@ def test_scan_invalid_output_never_publishes_partial_findings(runtime, monkeypat
         return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(answer)}
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', invalid)
     assert step(runtime)['status'] == 'failed'
-    failed = document(led, context_refresh.SCAN)
+    failed = document(led, patient_context_refresh_state.SCAN)
     assert failed['attempts'] == 1 and not failed.get('complete') and not failed.get('facts')
     assert document(led) == before and before['facts'] == []
 
@@ -817,10 +832,10 @@ def test_failed_source_does_not_block_other_history_in_same_patient(runtime, mon
     for _ in range(5):
         step(runtime)
     assert any(f['message_id'] == 2 for f in document(led)['facts'])
-    counts = context_refresh.status(led.db, CFG)
+    counts = patient_context_refresh_readiness.status(led.db, CFG)
     assert counts['failed'] == counts['history_pending'] == 1 and counts['complete'] == 0
     row = led.db.execute('SELECT content FROM artifacts WHERE kind=? AND message_id=1',
-                         (context_refresh.SCAN,)).fetchone()
+                         (patient_context_refresh_state.SCAN,)).fetchone()
     assert json.loads(row[0])['next_try'] > clock.wall
 
 
@@ -833,7 +848,7 @@ def test_family_medication_detail_survives_source_revalidation(runtime):
     items = [{'category': 'medication_management', 'subject': 'family',
               'text': body, 'evidence': body,
               'details': [{'key': 'residual_quantity', 'value': '3錠', 'evidence': body}]}]
-    facts = context_plan.source_facts(source, items, night_id='2026-10-17', discovery='backfill_found', found_at=context_refresh.time.time())
+    facts = context_plan.source_facts(source, items, night_id='2026-10-17', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
     assert facts[0]['details'] == items[0]['details']
     assert facts[0]['subject'] == 'unspecified' and facts[0]['reported_subject'] == 'family'
     assert context_plan.validated_source_facts(source, facts) == facts
@@ -858,9 +873,9 @@ def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
         return original(owner, text, **kwargs)
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', known_assertion)
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 5  # The identical known assertion adds no input.
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5  # The identical known assertion adds no input.
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 0  # genuinely new input
+    assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 0  # genuinely new input
     finish(runtime)
     assert {f['message_id'] for f in document(led)['facts']} == {1, 2}
 
@@ -875,21 +890,21 @@ def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, mon
     selected = {f['message_id'] for f in stored['facts']}
     assert len(stored['facts']) == 2 and 1 <= len(selected) <= 2 and len(stored['summary']) <= 2
     assert len({fact['id'] for fact in stored['facts']}) == 2  # The cap counts atomic assertions, not posts.
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert {f['message_id'] for f in view['facts']} == {1, 2, 3, 4}
     assert view['summary'] == stored['summary']
     omitted = min({1, 2, 3, 4} - selected)
     row = led.db.execute('SELECT artifact_id,content,meta FROM artifacts '
-                         'WHERE kind=? AND message_id=?', (context_refresh.SCAN, omitted)).fetchone()
+                         'WHERE kind=? AND message_id=?', (patient_context_refresh_state.SCAN, omitted)).fetchone()
     content, meta = json.loads(row['content']), json.loads(row['meta'])
     for invalid_content, invalid_meta in [({**content, 'complete': False}, meta),
                                          (content, {**meta, 'source_sig': 'old-revision'})]:
         led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
                        (json.dumps(invalid_content), json.dumps(invalid_meta), row['artifact_id']))
         led.db.commit()
-        current = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+        current = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
         assert current is None
-        assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+        assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
         assert document(led)['summary'] == stored['summary']
 
 
@@ -904,13 +919,13 @@ def test_linked_summary_checkpoint_has_no_fake_message_reference(runtime):
         "updated_at": "2026-10-16T10:00:00+09:00"})
     finish(runtime)
     row = led.db.execute("SELECT message_id,content FROM artifacts WHERE kind=? "
-                         "AND project_id=1 AND message_id IS NULL", (context_refresh.SCAN,)).fetchone()
+                         "AND project_id=1 AND message_id IS NULL", (patient_context_refresh_state.SCAN,)).fetchone()
     assert row is not None
     assert json.loads(row[1])["complete"] and json.loads(row[1])["audited"]
     assert led.db.execute("SELECT SUM(shadow_count) FROM ledger_relation_guards").fetchone()[0] == 0
-    view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     assert any(f["source"] == "karte_summary" for f in view["facts"])
-    assert context_refresh.context_view_input(led.db, 2, cfg=CFG)
+    assert patient_context_refresh_readiness.context_view_input(led.db, 2, cfg=CFG)
     count = len(calls)
     finish(runtime)
     assert len(calls) == count
@@ -946,7 +961,7 @@ def test_other_connection_commit_is_rechecked_without_repeating_inference(runtim
     led, _, calls = runtime
     seed(led)
     other = sqlite3.connect(led.db.execute("PRAGMA database_list").fetchone()[2])
-    original = context_refresh._snapshot
+    original = patient_context_refresh_sources._snapshot
     raced = False
     def snapshot(*args, **kwargs):
         nonlocal raced
@@ -959,7 +974,7 @@ def test_other_connection_commit_is_rechecked_without_repeating_inference(runtim
                 other.execute("UPDATE patients SET patient_name='synthetic-renamed' WHERE project_id=1")
             other.commit()
         return result
-    monkeypatch.setattr(context_refresh, "_snapshot", snapshot)
+    monkeypatch.setattr(patient_context_refresh_sources, "_snapshot", snapshot)
     try:
         result = step(runtime)
         assert result["status"] == ("source_changed" if source_changed else "progressed")
@@ -973,12 +988,12 @@ def test_source_checkpoint_reads_are_batched(runtime):
     led, _, _ = runtime
     for mid in range(1, 25):
         seed(led, mid=mid)
-    snapshot = context_refresh._snapshot(led.db, 1, CFG)
+    snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     statements = []
     led.db.set_trace_callback(statements.append)
     try:
-        facts, total = context_refresh._all_facts(led.db, 1, snapshot, "2026-10-17")
-        coverage = context_refresh._coverage(led.db, 1, snapshot["sources"], snapshot["contract"], facts)
+        facts, total = patient_context_refresh_sources._all_facts(led.db, 1, snapshot, "2026-10-17")
+        coverage = patient_context_refresh_sources._coverage(led.db, 1, snapshot["sources"], snapshot["contract"], facts)
     finally:
         led.db.set_trace_callback(None)
     assert total == 24 and coverage["fetched"] == 24
@@ -996,10 +1011,10 @@ def test_whitespace_ingestion_does_not_leave_a_permanent_scan_candidate(runtime,
     # attachment. It must finish without starting an empty source scan.
     finish(runtime)
     assert led.db.execute("SELECT body_text FROM messages WHERE message_id=1").fetchone()[0] == ""
-    assert context_refresh.status(led.db, CFG)["history_pending"] == 0
-    assert context_refresh._inference_ready(led, 1, CFG, deadline=clock.mono + 60)
-    assert not any(context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2].values())
-    assert context_refresh.context_view_input(led.db, 2, cfg=CFG)
+    assert patient_context_refresh_readiness.status(led.db, CFG)["history_pending"] == 0
+    assert patient_context_refresh_readiness._inference_ready(led, 1, CFG, deadline=clock.mono + 60)
+    assert not any(patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2].values())
+    assert patient_context_refresh_readiness.context_view_input(led.db, 2, cfg=CFG)
 
 
 def test_history_scan_hydrates_only_the_selected_post(runtime, monkeypatch):
@@ -1027,7 +1042,7 @@ def test_unbrokered_context_refresh_request_sends_pinned_slot(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with context_refresh.local_llm.pinned_slot(2):
-        assert context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True) == {}
+        assert patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True) == {}
     assert len(sent) == 1
     assert sent[0]["id_slot"] == 2
 
@@ -1042,15 +1057,15 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     led.db.execute('UPDATE patients SET fetch_reason=? WHERE project_id=2', (reason,))
     led.db.execute("UPDATE patients SET fetch_reason='timeout' WHERE project_id=3")
     led.db.commit()
-    assert context_refresh.status(led.db, CFG)['initial_pending'] == 2
+    assert patient_context_refresh_readiness.status(led.db, CFG)['initial_pending'] == 2
     finish(runtime, waiting=True)
     assert calls
     assert {r[0] for r in led.db.execute('SELECT DISTINCT project_id FROM artifacts WHERE kind=?',
-                                       (context_refresh.SCAN,))} == {1}
+                                       (patient_context_refresh_state.SCAN,))} == {1}
     assert document(led, pid=2) is None and document(led, pid=3) is None
-    counts = context_refresh.status(led.db, CFG)
+    counts = patient_context_refresh_readiness.status(led.db, CFG)
     assert counts['initial_pending'] == 1 and counts['complete'] == 1
-    assert not context_refresh.inference_coverage(led.db, 3, CFG)['complete']
+    assert not patient_context_refresh_readiness.inference_coverage(led.db, 3, CFG)['complete']
 
 
 def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
@@ -1061,8 +1076,8 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "chat", busy)
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
-    with pytest.raises(context_refresh.Deferred, match="nightly_turn_busy"):
-        context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True)
+    with pytest.raises(patient_context_refresh_state.Deferred, match="nightly_turn_busy"):
+        patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
 
 
 def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch):
@@ -1075,13 +1090,13 @@ def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch)
     def sleep(seconds):
         clock.mono += seconds
         clock.wall += seconds
-    monkeypatch.setattr(context_refresh, 'acquire_run_lock', contended)
-    monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', contended)
+    monkeypatch.setattr(patient_context_refresh_state.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
     assert len(calls) == 1 and len(tries) == 4 and document(led)
     # a holder that never yields costs at most the short cap, not the unit deadline
     seed(led, mid=2, pid=2)
-    monkeypatch.setattr(context_refresh, 'acquire_run_lock', lambda: None)
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
     before = clock.mono
     assert step(runtime)['status'] == 'deferred'
     assert clock.mono - before <= 61 and document(led, pid=2) is None
@@ -1116,7 +1131,7 @@ def test_a_length_stopped_scan_is_replanned_finer_instead_of_retried_unchanged(r
     scans = _scan_chat(monkeypatch, lambda p: _quote(p['source']) if len(p['source']) <= 1500
                        else {'status': 200, 'finish_reason': 'length', 'text': '{'})
     finish(runtime)                                  # every unit progresses; nothing is charged
-    scan = document(led, context_refresh.SCAN)
+    scan = document(led, patient_context_refresh_state.SCAN)
     assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
     assert len(scans[0]['source']) > 1500 and all(len(p['source']) <= 1500 for p in scans[1:])
     assert ''.join(p['source'] for p in scans[1:]) == PROSE   # the finer plan covers every char
@@ -1131,10 +1146,10 @@ def test_the_finest_plan_still_stopping_is_an_ordinary_failure(runtime, monkeypa
         if result['status'] == 'failed':
             break
     assert result['reason'] == 'nightly_length_stop'
-    scan = document(led, context_refresh.SCAN)
+    scan = document(led, patient_context_refresh_state.SCAN)
     assert scan['attempts'] == 1 and 1 <= scan.get('split', 0) <= context_refresh.context_plan.MAX_SCAN_SPLIT
     assert not scan.get('complete')
-    lanes = context_refresh.status(led.db, CFG)['lanes']
+    lanes = patient_context_refresh_readiness.status(led.db, CFG)['lanes']
     assert lanes['B'] == {'length_stop': 1, 'unsupported': 0, 'other_failure': 0, 'split': 1, 'repair': 0}
     assert lanes['A'] == lanes['C'] == dict.fromkeys(lanes['B'], 0)
 
@@ -1151,9 +1166,9 @@ def test_unsupported_items_get_one_repair_with_reasons_but_no_text(runtime, monk
     scans = _scan_chat(monkeypatch, reply)
     finish(runtime)
     assert [p.get('rejected') for p in scans] == [None, [{'index': 0, 'reason': 'not_verbatim_or_invalid'}]]
-    assert document(led, context_refresh.SCAN)['complete']
-    assert document(led, context_refresh.SCAN)['repairs'] == 1
-    assert context_refresh.lane_metrics(led.db)['lanes']['B']['repair'] == 1
+    assert document(led, patient_context_refresh_state.SCAN)['complete']
+    assert document(led, patient_context_refresh_state.SCAN)['repairs'] == 1
+    assert patient_context_refresh_readiness.lane_metrics(led.db)['lanes']['B']['repair'] == 1
 
 
 def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
@@ -1168,7 +1183,7 @@ def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
             break
     assert result['reason'] == 'nightly_unsupported_items'
     assert len(scans) == 2                           # one answer, one bounded repair
-    lanes = context_refresh.lane_metrics(led.db)['lanes']
+    lanes = patient_context_refresh_readiness.lane_metrics(led.db)['lanes']
     assert lanes['B']['unsupported'] == 1 and lanes['B']['repair'] == 0
 
 
@@ -1185,7 +1200,7 @@ def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch
              'subject': 'unspecified', 'details': []}]})}
     scans = _scan_chat(monkeypatch, reply)
     finish(runtime)
-    scan = document(led, context_refresh.SCAN)
+    scan = document(led, patient_context_refresh_state.SCAN)
     assert scan['complete'] and scan['split'] == 1 and scan.get('attempts', 0) == 0
     assert 'rejected' in scans[1] and len(scans[2]['source']) <= 1500
 
@@ -1206,7 +1221,7 @@ def test_a_repair_must_keep_what_the_first_answer_grounded(runtime, monkeypatch,
     _scan_chat(monkeypatch, reply)
     results = [step(runtime) for _ in range(6)]
     reasons = [r.get('reason') for r in results if r['status'] == 'failed']
-    scan = document(led, context_refresh.SCAN)
+    scan = document(led, patient_context_refresh_state.SCAN)
     if failed:   # the chunk is not completed by dropping what was grounded
         assert reasons[:1] == ['nightly_unsupported_items'] and not scan.get('complete')
     else:
@@ -1240,8 +1255,28 @@ def test_health_counts_context_progress_without_patients(runtime, monkeypatch):
     # a new extraction generation recounts instead of reusing the old counts
     version = extract_llm.EXTRACT_VERSION
     monkeypatch.setattr(extract_llm, 'EXTRACT_VERSION', version + 1)
+    monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_prepare, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_progress, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_proofs, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_provider, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_qc, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
     assert health_report.patient_context_health(led.db, CFG, 20.0, 'synthetic-source')['published'] == 2
     monkeypatch.setattr(extract_llm, 'EXTRACT_VERSION', version)
+    monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_prepare, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_progress, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_proofs, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_provider, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_qc, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+    monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
     monkeypatch.setattr(health_report, 'prev_health', lambda: {})
     monkeypatch.setattr(health_report, 'PATIENT_CONTEXT_S', 0)
     assert health_report.patient_context_health(led.db, None, 30.0, 'synthetic-source') == {
@@ -1258,5 +1293,5 @@ def test_initial_context_unit_can_start_at_any_hour(runtime, at):
     result = step(runtime)
     assert result['status'] == 'progressed' and result['lane'] == 'A'
     assert len(calls) == 1 and document(led) is not None
-    progress = document(led, context_refresh.PROGRESS)
+    progress = document(led, patient_context_refresh_state.PROGRESS)
     assert progress['night_id'] == '2026-10-17'

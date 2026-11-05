@@ -3,6 +3,8 @@
 Patient context waits for a patient's last pending post, so the few
 patients with the fewest pending posts re-extract before the rest, after
 new arrivals. Synthetic temp DB only."""
+import extract_llm_prepare
+import extract_llm_selection
 import json
 import time
 
@@ -39,6 +41,7 @@ def _order(db, limit=10):
 
 def test_the_patient_nearest_completion_reextracts_first_after_arrivals(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     db.save_messages([_message(mid=5, body="体温は38度です。経過観察 5",
                                posted_at="2026-09-09T00:00:00+09:00")])
@@ -56,6 +59,8 @@ def test_the_ranking_is_cached_and_rows_are_never_duplicated(tmp_path, monkeypat
     assert first == second == [1, 4, 3, 2]        # both patients focused, each row once
     assert extract_llm._FOCUS[key] is ranked      # no grouped scan per selection
     monkeypatch.setattr(extract_llm, "_LEFT_ESTIMATE_S", 0)
+    monkeypatch.setattr(extract_llm_prepare, '_LEFT_ESTIMATE_S', extract_llm._LEFT_ESTIMATE_S)
+    monkeypatch.setattr(extract_llm_selection, '_LEFT_ESTIMATE_S', extract_llm._LEFT_ESTIMATE_S)
     _order(db)
     assert extract_llm._FOCUS[key] is not ranked  # refreshed once the period passes
 
@@ -68,6 +73,7 @@ def test_oldest_first_keeps_its_chronological_walk(tmp_path):
 
 def test_arrivals_still_take_the_whole_limit_first(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     db.save_messages([_message(mid=mid, body=f"体温は38度です。経過観察 {mid}",
                                posted_at="2026-09-09T00:00:00+09:00") for mid in (5, 6)])
@@ -77,6 +83,7 @@ def test_arrivals_still_take_the_whole_limit_first(tmp_path, monkeypatch):
 
 def test_each_shard_keeps_the_focus_order(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     rows, _ = extract_llm._select_pending(db, 10, None, (1, 2), False)   # odd ids
     assert [r["message_id"] for r in rows] == [1, 3]
@@ -84,6 +91,7 @@ def test_each_shard_keeps_the_focus_order(tmp_path, monkeypatch):
 
 def test_a_patient_archived_while_cached_moves_behind_active_ones(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     assert _order(db)[0][0] == 1                   # patient 2 is focused and cached
     db.db.execute("INSERT OR REPLACE INTO patients(project_id, patient_name, is_archived)"
@@ -94,6 +102,7 @@ def test_a_patient_archived_while_cached_moves_behind_active_ones(tmp_path, monk
 
 def test_an_admission_set_turns_focus_off(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     rows, _ = extract_llm._select_pending(db, 10, {1, 2, 3, 4}, None, False)
     assert [r["message_id"] for r in rows] == [4, 3, 2, 1]
@@ -101,6 +110,7 @@ def test_an_admission_set_turns_focus_off(tmp_path, monkeypatch):
 
 def test_a_patient_whose_rest_is_in_backoff_is_not_focused(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     db.artifact_add(KIND, json.dumps({}), project_id=2, message_id=1, meta={
         "error": True, "attempts": 1, "next_try": time.time() + 900,
@@ -112,6 +122,7 @@ def test_a_patient_whose_rest_is_in_backoff_is_not_focused(tmp_path, monkeypatch
 
 def test_a_patient_with_only_new_arrivals_holds_no_focus_place(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     db.save_messages([_message(mid=9, project_id=3, body="体温は36度です。経過観察 9",
                                posted_at="2026-09-09T00:00:00+09:00")])
@@ -120,6 +131,7 @@ def test_a_patient_with_only_new_arrivals_holds_no_focus_place(tmp_path, monkeyp
 
 def test_progress_counts_match_completion_and_focus_without_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FOCUS_PATIENTS", 1)
+    monkeypatch.setattr(extract_llm_selection, '_FOCUS_PATIENTS', extract_llm._FOCUS_PATIENTS)
     db = _corpus(tmp_path)
     for pid in (1, 2, 3):                 # patient 3 has no stored post left to extract
         db.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)",

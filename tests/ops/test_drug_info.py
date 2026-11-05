@@ -1,4 +1,9 @@
 """Public drug-information contracts over fictional rows and a stubbed local gateway; no network."""
+import update_apply
+import update_cli
+import update_recovery
+import update_runtime_migration
+import update_services
 import json
 import os
 
@@ -193,6 +198,11 @@ def test_daily_notices_are_owed_once_and_marked_only_after_enqueue(gateway, tmp_
 def test_update_check_hook_is_best_effort_and_opt_out(monkeypatch):
     sent, marked = [], []
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda text, use_run_lock=False: sent.append(text) or len(sent) == 1)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(drug_info, "daily_notices", lambda local, root=None: [("a", 1, "one"), ("b", 2, "two")])
     monkeypatch.setattr(drug_info, "mark_notified", lambda k, v, root=None: marked.append(k))
     import import_drug_master

@@ -1,4 +1,8 @@
 """Patient context stays verbatim, source-bound and preserved through local extraction."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prompts
+import extract_llm_runner
 import extract_quality
 import extract_schema
 import extract_validation
@@ -80,6 +84,8 @@ def test_patient_context_llm_single_and_chunks_remain_source_bound(monkeypatch):
     first, second = item(), item("cognition", "会話は明瞭です")
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
                         {"symptoms": [], "patient_context": [first]})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.llm_extract("独居です。")["patient_context"] == [first]
     body = "独居です。" + "あ" * 3100 + "会話は明瞭です。"
     def infer(prompt, **kwargs):
@@ -87,9 +93,13 @@ def test_patient_context_llm_single_and_chunks_remain_source_bound(monkeypatch):
         items = [item for item in (first, second) if item["evidence"] in core]
         return {"symptoms": [], **({"patient_context": items} if items else {})}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.llm_extract(body)["patient_context"] == [first, second]
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
                         {"symptoms": [], "patient_context": [first]})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     lifted = extract_llm.llm_extract("本文は別の記載です。", context="独居です。")
     assert lifted is None
 
@@ -130,6 +140,9 @@ def test_patient_context_prompt_change_invalidates_saved_chunk(db, monkeypatch):
     assert extract_llm._persist_chunks(db, row, {0: {"patient_context": [item()]}})
     assert extract_llm._saved_chunk_state(db.db, row)[1]
     monkeypatch.setattr(extract_llm, "_PROMPT_HEAD", extract_llm._PROMPT_HEAD + "契約変更")
+    monkeypatch.setattr(extract_llm_context, '_PROMPT_HEAD', extract_llm._PROMPT_HEAD)
+    monkeypatch.setattr(extract_llm_prompts, '_PROMPT_HEAD', extract_llm._PROMPT_HEAD)
+    monkeypatch.setattr(extract_llm_runner, '_PROMPT_HEAD', extract_llm._PROMPT_HEAD)
     assert not extract_llm._saved_chunk_state(db.db, row)[1]
 
 

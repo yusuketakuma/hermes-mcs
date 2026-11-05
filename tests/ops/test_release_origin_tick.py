@@ -1,4 +1,5 @@
 """Released DDL/runtime classes reach the real tick and snapshot view offline."""
+import extract_llm_runner
 import collection_stages
 from contextlib import closing
 import json
@@ -105,7 +106,9 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
                         drain(db, result, str(data / "cmd")))
     monkeypatch.setattr(run_check, "MCSAdapter", Adapter)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kwargs: False)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     monkeypatch.setattr(notify_flush, "flush", lambda *args, **kwargs:
                         pytest.fail("external notification forbidden"))
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "0")

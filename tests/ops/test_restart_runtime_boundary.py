@@ -1,4 +1,12 @@
 """Unreadable runtime selection cannot start or stop either service family."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_restore
+import update_services
 import service_contract
 import json
 import os
@@ -14,6 +22,13 @@ def runtime(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     monkeypatch.setattr(updater, "DATA", str(data))
+    monkeypatch.setattr(update_apply, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', updater.DATA)
+    monkeypatch.setattr(update_services, 'DATA', updater.DATA)
     for name in ("_run", "_bootstrap_agent", "_agent_pid", "_remove_marker",
                  "_standalone_drainer_problems"):
         monkeypatch.setattr(updater, name, lambda *a, **k: pytest.fail("runtime mutation or probe"))
@@ -67,14 +82,19 @@ def test_valid_and_absent_config_preserve_runtime_contract(
     if cfg is not None:
         runtime.write_text(json.dumps(cfg))
     recovery = _load()
-    monkeypatch.setattr(recovery, "DATA", updater.DATA)
-    assert updater._restart_runtime_mode() == recovery._runtime_mode() == expected
+    monkeypatch.setattr(recovery.mcs_recovery_core, "DATA", updater.DATA)
+    assert updater._restart_runtime_mode() == recovery.mcs_recovery_core._runtime_mode() == expected
     removed = []
     monkeypatch.setattr(updater, "_remove_marker", lambda: removed.append(True))
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     monkeypatch.setattr(service_contract, 'LEGACY_LABELS', ())
     monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     if expected == "standalone":
         monkeypatch.setattr(updater, "_standalone_drainer_problems", lambda: [])
+        monkeypatch.setattr(update_execution, '_standalone_drainer_problems', updater._standalone_drainer_problems)
+        monkeypatch.setattr(update_services, '_standalone_drainer_problems', updater._standalone_drainer_problems)
     assert updater.restart_agents() == []
     assert removed == [True]

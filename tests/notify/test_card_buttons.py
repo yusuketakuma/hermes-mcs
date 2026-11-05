@@ -1,6 +1,9 @@
 """Card buttons as state toggles, member names, tasks, summary, ⚠
 report and ⏰ reminders — runner side. Synthetic temp ledger only."""
 from __future__ import annotations
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import self_identity
 
@@ -13,6 +16,7 @@ import pytest
 import extract_llm
 import ledger as _ledger
 import notify_cards
+import notify_card_renders
 import notify_spool
 import notify_action_context
 import notify_action_tokens
@@ -264,7 +268,7 @@ def test_patient_actions_fit_worst_case_without_global_shortcuts(
     context = {"source_message_id": 100, "source_hash": f"{100:064x}",
                "extract_ref": {"artifact_id": 1}, "signals": {"synthetic-key": {}}}
     monkeypatch.setattr(notify_action_context, 'meds_message', lambda *a: 100)
-    monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", lambda db: True)
     post_count = worker_spec.MAX_POST_ACTIONS if (
         kind == "thread" and ((transport == "slack" and in_thread_body)
                               or (transport == "discord" and not in_thread_body))) else 0
@@ -522,7 +526,10 @@ def test_summary_with_rollup_and_coverage(led, monkeypatch):
     led.db.execute("UPDATE messages SET reply_count=1 WHERE message_id=100")
     led.db.commit()
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
                  "completeness_chunks": 1,
                  "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}

@@ -24,9 +24,9 @@ def test_zero_byte_backup_is_unreadable_not_consent(tmp_path, monkeypatch):
     back.write_bytes(b"")                       # truncated backup
     for name, value in (("DATA", data), ("LEDGER", live),
                         ("STATE_PATH", data / "update_state.json")):
-        monkeypatch.setattr(rec, name, str(value))
+        monkeypatch.setattr(rec.mcs_recovery_core, name, str(value))
     before = live.read_bytes()
-    err = rec._restore_db(str(back))
+    err = rec.mcs_recovery_database._restore_db(str(back))
     assert live.read_bytes() == before
     # mcs_update._restore_db raises backup_invalid for the same file
     # (ledger.valid_mcs_db rejects size 0); the watchdog must not ask a
@@ -45,13 +45,13 @@ def test_zero_byte_backup_never_replaces_live_ledger(tmp_path, monkeypatch):
     back.write_bytes(b"")
     for name, value in (("DATA", data), ("LEDGER", live),
                         ("STATE_PATH", data / "update_state.json")):
-        monkeypatch.setattr(rec, name, str(value))
-    state = rec._load_state()
+        monkeypatch.setattr(rec.mcs_recovery_core, name, str(value))
+    state = rec.mcs_recovery_core._load_state()
     state["applying"] = {"tag": "rollback:v9.9.9", "sha": "b" * 40,
                          "prev_sha": "a" * 40, "rollback": True,
                          "backup_path": str(back), "at": time.time()}
-    rec._save_state(state)
-    report = rec._loss_report(str(back))
+    rec.mcs_recovery_core._save_state(state)
+    report = rec.mcs_recovery_database._loss_report(str(back))
     con = sqlite3.connect(str(live))
     con.execute("CREATE TABLE command_receipts(command_id TEXT PRIMARY KEY,"
                 " payload_hash TEXT, project_id INTEGER, request_id INTEGER,"
@@ -64,6 +64,6 @@ def test_zero_byte_backup_never_replaces_live_ledger(tmp_path, monkeypatch):
                     "backup_schema": report["backup_schema"]}), time.time()))
     con.commit()
     con.close()
-    rec._restore_db(str(back))
+    rec.mcs_recovery_database._restore_db(str(back))
     # an invalid (empty) backup must never become the live ledger
     assert live.stat().st_size > 0

@@ -1,4 +1,6 @@
 """Generation progress distinguishes queued, retained, failed and genuinely completed rows."""
+import extract_llm_resident
+import extract_llm_runner
 import json
 import sqlite3
 import sys
@@ -58,6 +60,7 @@ def test_new_generation_settles_once_and_projection_is_a_disjoint_population(tmp
         return result
 
     monkeypatch.setattr(llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     try:
         db.save_messages([_message(mid=1, body="合成の報告です。"), _message(mid=2, body="投影側の合成報告です。")])
         for mid in (1, 2):
@@ -85,6 +88,7 @@ def test_new_generation_settles_once_and_projection_is_a_disjoint_population(tmp
 def test_malformed_or_positive_validation_counts_never_look_clean(tmp_path, monkeypatch, validation):
     db = _ledger(tmp_path)
     monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: {"summary": "合成の結果"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     try:
         db.save_messages([_message(body="合成の報告です。")])
         assert llm.run_pending(db, limit=3, budget_s=10)["done"] == 1
@@ -106,8 +110,11 @@ def test_status_cli_is_read_only_and_never_starts_the_extractor(tmp_path, monkey
         path = db.db.execute("PRAGMA database_list").fetchone()[2]
         before = db.db.total_changes
         monkeypatch.setattr(llm, "DB", path)
+        monkeypatch.setattr(extract_llm_resident, 'DB', llm.DB)
         monkeypatch.setattr(llm, "Ledger", lambda *a, **k: pytest.fail("write connection"))
+        monkeypatch.setattr(extract_llm_resident, 'Ledger', llm.Ledger)
         monkeypatch.setattr(llm, "run_pending", lambda *a, **k: pytest.fail("model execution"))
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', llm.run_pending)
         monkeypatch.setattr(sys, "argv", ["extract_llm.py", "--upgrade-status"])
         assert llm._main() == 0
         output = capsys.readouterr().out
@@ -127,6 +134,7 @@ def test_positive_drops_are_not_complete_or_clean_quality_in_v1(tmp_path, monkey
         return result
 
     monkeypatch.setattr(llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     try:
         db.save_messages([_message(body="合成の報告です。")])
         assert llm.run_pending(db, limit=3, budget_s=10)["done"] == 1

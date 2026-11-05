@@ -1,8 +1,7 @@
 """Validate cloud scope and reserve bounded provider costs on the ledger owner thread."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from contextlib import closing, contextmanager
+from contextlib import closing
 from decimal import Decimal, InvalidOperation
 import hashlib
 from itertools import chain
@@ -13,282 +12,88 @@ import time
 from collections.abc import Mapping
 from types import MappingProxyType
 import uuid
-from functools import lru_cache
 
 import anthropic_client
 import bounded_http
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
+
+from cloud_usage_accounting import (
+    PRICE_VERSION as PRICE_VERSION,
+    PRICE_CHECKED_ON as PRICE_CHECKED_ON,
+    PRICE_VALID_UNTIL as PRICE_VALID_UNTIL,
+    PRICE_SOURCES as PRICE_SOURCES,
+    INPUT_RESERVATION_BOUND as INPUT_RESERVATION_BOUND,
+    INPUT_RESERVATION_MARGIN as INPUT_RESERVATION_MARGIN,
+    PRICES as PRICES,
+    LONG_INPUT_THRESHOLD as LONG_INPUT_THRESHOLD,
+    JST as JST,
+    KINDS as KINDS,
+    ROUTES as ROUTES,
+    OPENAI_PRICE_VERSION as OPENAI_PRICE_VERSION,
+    OPENAI_PRICE_CHECKED_ON as OPENAI_PRICE_CHECKED_ON,
+    OPENAI_PRICE_VALID_UNTIL as OPENAI_PRICE_VALID_UNTIL,
+    OPENAI_PRICE_SOURCES as OPENAI_PRICE_SOURCES,
+    PROVIDERS as PROVIDERS,
+    PRICE_DEFINITIONS as PRICE_DEFINITIONS,
+    _CURRENT_PRICE as _CURRENT_PRICE,
+    _price_definition as _price_definition,
+    _BINDING_KEYS as _BINDING_KEYS,
+    _decimal as _decimal,
+    pricing_valid as pricing_valid,
+    price_info as price_info,
+    _texts as _texts,
+    input_bound as input_bound,
+    _reservation_cost as _reservation_cost,
+    max_cost as max_cost,
+    usage_cost as usage_cost,
+    _unbilled as _unbilled,
+    _periods as _periods,
+    _loads as _loads,
+    _accounting_meta as _accounting_meta,
+    _accounting_snapshot as _accounting_snapshot,
+    _validate_accounting_timestamps as _validate_accounting_timestamps,
+    _binding as _binding,
+    _receipt_binding as _receipt_binding,
+    _reserve_valid as _reserve_valid,
+    _stored_reservation as _stored_reservation,
+    _matching_rows_many as _matching_rows_many,
+    _matching_rows as _matching_rows,
+    _matching_bound_rows as _matching_bound_rows,
+    reservation_evidence as reservation_evidence,
+    _receipt_meta as _receipt_meta,
+    _reservation_evidence as _reservation_evidence,
+    reservation_evidence_batch as reservation_evidence_batch,
+    _reservation_evidence_batch_snapshot as _reservation_evidence_batch_snapshot,
+    _is_openai_model as _is_openai_model,
+    _confirmed_openai_quota as _confirmed_openai_quota,
+    _confirmed_openai_rate_diagnostic as _confirmed_openai_rate_diagnostic,
+    _settled as _settled,
+)
+from cloud_history_scope import (
+    capture_history_tx as capture_history_tx,
+    _history_sources as _history_sources,
+    _history_document as _history_document,
+    _history_scope as _history_scope,
+    history_target_ready as history_target_ready,
+    history_thread_allowed as history_thread_allowed,
+    _history_thread_allowed as _history_thread_allowed,
+    history_thread_snapshot as history_thread_snapshot,
+    history_scope_target_sql as history_scope_target_sql,
+    history_selection_check as history_selection_check,
+)
 from llm_retry import http_error
 from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch, valid_hash
 
 # Compatibility aliases: immutable versioned definitions live with providers.
-PRICE_VERSION = anthropic_client.PRICE_VERSION
-PRICE_CHECKED_ON = anthropic_client.PRICE_CHECKED_ON
-PRICE_VALID_UNTIL = anthropic_client.PRICE_VALID_UNTIL
-PRICE_SOURCES = anthropic_client.PRICE_SOURCES
 # Conservative bound covering decimal/binary interpretations of the public 1M label.
 # This is a reservation bound, not an advertised accepted input capacity.
-INPUT_RESERVATION_BOUND = 1048576
 # A byte-pair token never covers less than one UTF-8 byte, so a request's text
 # bytes plus the framing tokens bound its billable input; a reservation at the
 # 1M ceiling would hold ~$0.53 per attempt against a daily/monthly cap.
-INPUT_RESERVATION_MARGIN = 256
-PRICES = anthropic_client.PRICES
-LONG_INPUT_THRESHOLD = anthropic_client.LONG_INPUT_THRESHOLD
-JST = timezone(timedelta(hours=9))
-KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
-ROUTES = ("patient_context", "reextract", "semantic_backlog")
 DEFAULT_DAILY_COST_LIMIT_USD = 25
 DEFAULT_MONTHLY_COST_LIMIT_USD = 75
-OPENAI_PRICE_VERSION = openai_client.PRICE_VERSION
-OPENAI_PRICE_CHECKED_ON = openai_client.PRICE_CHECKED_ON
-OPENAI_PRICE_VALID_UNTIL = openai_client.PRICE_VALID_UNTIL
-OPENAI_PRICE_SOURCES = openai_client.PRICE_SOURCES
-PROVIDERS = {"anthropic": MODEL, "openai": openai_client.MODEL}
-if ({model for model, _ in anthropic_client.PRICE_SNAPSHOTS}
-        & {model for model, _ in openai_client.PRICE_SNAPSHOTS}):
-    # Stored receipts predate an explicit provider field; ambiguous models fail closed.
-    raise RuntimeError("duplicate_cloud_price_definition")
-PRICE_DEFINITIONS = MappingProxyType({**anthropic_client.PRICE_SNAPSHOTS,
-                                      **openai_client.PRICE_SNAPSHOTS})
-_CURRENT_PRICE = object()
-
-
-def _price_definition(model, price_version=_CURRENT_PRICE):
-    if not isinstance(model, str):
-        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    if price_version is _CURRENT_PRICE:
-        if model == PROVIDERS["anthropic"]:
-            price_version = anthropic_client.PRICE_VERSION
-        elif model in openai_client.CURRENT_PRICE_VERSIONS:
-            price_version = openai_client.CURRENT_PRICE_VERSIONS[model]
-        else:
-            raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    if not isinstance(price_version, str):
-        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    definition = PRICE_DEFINITIONS.get((model, price_version))
-    if (definition is None or definition.get("provider") not in ("anthropic", "openai")
-            or definition.get("model") != model or definition.get("price_version") != price_version):
-        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    return definition
-
-
-_BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
-                 "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp",
-                 "effort", "profile", "input_binding")
-
-
-def capture_history_tx(db, command_id, now, *, continuous=False):
-    """Record the history scope within the human resume receipt transaction."""
-    from inference_dependency_loss import source_binding
-    if not db.in_transaction:
-        raise RuntimeError("cloud_history_transaction_required")
-    if continuous:
-        if not isinstance(command_id, str) or not command_id or len(command_id) > 256:
-            raise ValueError("cloud_history_command_invalid")
-        db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-            ("cloud_history_scope", json.dumps({"version": 2, "command_id": command_id}), MODEL,
-             json.dumps({"command_id": command_id}), now))
-        return
-    sources = {}
-    cutoff = now - 600
-    for count, row in enumerate(db.execute("SELECT project_id,message_id FROM messages m "
-            "WHERE m.first_seen IS NOT NULL AND m.first_seen<=? "
-            "AND (m.notified_at IS NULL OR m.notified_at<=?) "
-            "AND NOT EXISTS (SELECT 1 FROM message_revisions r "
-            "WHERE r.message_id=m.message_id AND r.observed_at>?) LIMIT 100001",
-            (cutoff, cutoff, cutoff)), 1):
-        if count > 100000:
-            raise ValueError("cloud_history_scope_too_large")
-        binding = source_binding(db, row[0], row[1])
-        if binding is not None:
-            sources[f"{row[0]}:{row[1]}"] = binding
-    db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-        ("cloud_history_scope", json.dumps({"version": 1, "sources": sources}), MODEL,
-         json.dumps({"command_id": command_id, "targets": len(sources)}), now))
-
-
-@lru_cache(maxsize=2)
-def _history_sources(raw):
-    if not isinstance(raw, str) or len(raw) > 16 * 1024 * 1024:
-        return {}
-    try:
-        doc = strict_json(raw)
-        sources = doc.get("sources")
-        if type(doc.get("version")) is not int or doc.get("version") != 1 or not isinstance(sources, dict):
-            return {}
-        if any(not isinstance(k, str) or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", k) is None
-               or not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{64}", v) is None
-               for k, v in sources.items()):
-            return {}
-        return sources
-    except (ValueError, TypeError, AttributeError, RecursionError):
-        return {}
-
-
-@lru_cache(maxsize=2)
-def _history_document(raw):
-    try:
-        value = strict_json(raw)
-        return value if isinstance(value, dict) else None
-    except (ValueError, TypeError, AttributeError, RecursionError):
-        return None
-
-
-def _history_scope(db, scope):
-    """Resolve a fixed scope or a continuous scope tied to its resume receipt."""
-    if scope is None:
-        return {}
-    raw, meta = scope
-    if not isinstance(raw, str) or len(raw) > 16 * 1024 * 1024:
-        return {}
-    try:
-        doc = _history_document(raw)
-        if isinstance(doc, dict) and type(doc.get("version")) is int and doc["version"] == 2:
-            if not isinstance(meta, str) or len(meta) > 32768:
-                return {}
-            details = strict_json(meta)
-            command_id = doc.get("command_id")
-            if (set(doc) != {"version", "command_id"} or not isinstance(command_id, str)
-                    or not command_id or len(command_id) > 256 or not isinstance(details, dict)
-                    or details.get("command_id") != command_id):
-                return {}
-            control = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_control' "
-                "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.command_id') END=? "
-                "ORDER BY artifact_id DESC LIMIT 1", (command_id,)).fetchone()
-            if control is None or control[0] != "running":
-                return {}
-            control_meta = strict_json(control[1])
-            if (not isinstance(control_meta, dict) or control_meta.get("command_id") != command_id
-                    or not isinstance(control_meta.get('actor'), str) or not control_meta['actor'].strip()
-                    or not isinstance(control_meta.get('reason'), str) or not control_meta['reason'].strip()):
-                return {}
-            receipt = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
-                                 (command_id,)).fetchone()
-            if receipt is None or receipt[0] != 'applied':
-                return {}
-            recorded = strict_json(receipt[1])
-            if (not isinstance(recorded, dict) or recorded.get('command_id') != command_id
-                    or recorded.get('outcome') != 'applied' or recorded.get('control') != 'running'
-                    or recorded.get('actor') != control_meta.get('actor')
-                    or recorded.get('reason') != control_meta.get('reason')):
-                return {}
-            return None  # continuous scope, bounded by route and live source checks
-    except (ValueError, TypeError, AttributeError, RecursionError):
-        return {}
-    return _history_sources(raw)
-
-
-def history_target_ready(db, project_id, message_id):
-    """Keep a newly arrived or edited processing target in the realtime lane."""
-    cutoff = time.time() - 600
-    return db.execute("SELECT 1 FROM messages m WHERE m.project_id=? AND m.message_id=? "
-        "AND m.first_seen IS NOT NULL AND m.first_seen<=? "
-        "AND (m.notified_at IS NULL OR m.notified_at<=?) AND NOT EXISTS "
-        "(SELECT 1 FROM message_revisions r WHERE r.message_id=m.message_id AND r.observed_at>?)",
-        (project_id, message_id, cutoff, cutoff, cutoff)).fetchone() is not None
-
-
-def history_thread_allowed(db, project_id, message_id):
-    """Require every prompt member to match the receipted history snapshot occurrence."""
-    scope = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_history_scope' "
-                       "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    return _history_thread_allowed(db, project_id, message_id, _history_scope(db, scope))
-
-
-def _history_thread_allowed(db, project_id, message_id, sources, bindings=None):
-    from inference_dependency_loss import source_binding
-    target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
-                        "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
-    if target is None:
-        return False
-    members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
-                         "AND (message_id=? OR parent_id=?)", (project_id, target[0], target[0])).fetchall()
-    for row in members:
-        binding = source_binding(db, project_id, row[0])
-        if binding is None or sources is not None and sources.get(f"{project_id}:{row[0]}") != binding:
-            return False
-        if bindings is not None:
-            bindings.append((row[0], binding))
-    return bool(members)
-
-
-def history_thread_snapshot(db, project_id, message_id):
-    """Bind the active scope and every current thread occurrence to one read snapshot."""
-    anchor = db.execute("SELECT artifact_id,content,meta FROM (SELECT artifact_id,content,meta FROM artifacts "
-                        "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
-                        "UNION ALL SELECT NULL,NULL,NULL UNION ALL SELECT NULL,NULL,NULL")
-    try:
-        scope = anchor.fetchone()
-        if scope is None or scope[0] is None:
-            return None
-        sources = _history_scope(db, (scope[1], scope[2]))
-        bindings = []
-        if not _history_thread_allowed(db, project_id, message_id, sources, bindings):
-            return None
-        bindings.sort()
-        return payload_hash({'scope_id': scope[0], 'project_id': project_id,
-                             'target_id': message_id, 'members': bindings})
-    finally:
-        anchor.close()
-
-
-def history_scope_target_sql(column):
-    """Pre-filter candidates; the receipt and occurrence check remains authoritative."""
-    if column not in ('m.message_id', 'j.message_id'):
-        raise ValueError('cloud_history_column_invalid')
-    scope = ("SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
-             "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1")
-    return (f"(json_extract(({scope}),'$.version')=2 OR {column} IN "
-            f"(SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
-            f"FROM json_each(({scope}), '$.sources') s))")
-
-
-@contextmanager
-def history_selection_check(db):
-    """Bind one validated receipt and selection to the same SQLite read snapshot."""
-    # Keep a statement open to retain the read snapshot without creating a
-    # savepoint that an active cancellation handler could prevent releasing.
-    anchor = db.execute("SELECT content,meta FROM (SELECT content,meta FROM artifacts "
-                        "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
-                        "UNION ALL SELECT NULL,NULL UNION ALL SELECT NULL,NULL")
-    active = [True]
-    try:
-        scope = anchor.fetchone()
-        resolved = _history_scope(db, scope)
-        sources = None if resolved is None else MappingProxyType(dict(resolved))
-        thread_results = {}
-
-        def check(pid, mid):
-            if not active[0]:
-                return 0
-            target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
-                                "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-            if target is None:
-                return 0
-            key = (pid, target[0])
-            if key not in thread_results:
-                thread_results[key] = _history_thread_allowed(db, pid, mid, sources)
-            return int(thread_results[key])
-
-        yield check
-    finally:
-        active[0] = False
-        anchor.close()
-
-
-def _decimal(value):
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
-        raise ValueError("cost_invalid")
-    try:
-        result = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        raise ValueError("cost_invalid") from None
-    if not result.is_finite() or result < 0 or result > Decimal("1e15"):
-        raise ValueError("cost_invalid")
-    return result
 
 
 def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
@@ -567,39 +372,6 @@ def eligible(cfg, route, project_id):
             and project_id not in c["exclude_project_ids"])
 
 
-def pricing_valid(now=None, *, model=MODEL):
-    try:
-        definition = _price_definition(model)
-    except AnthropicError:
-        return False
-    day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
-    return definition["price_checked_on"] <= day <= definition["price_valid_until"]
-
-
-def price_info(model):
-    definition = _price_definition(model)
-    return {"price_version": definition["price_version"],
-            "price_checked_on": definition["price_checked_on"],
-            "price_valid_until": definition["price_valid_until"],
-            "price_valid": pricing_valid(model=model)}
-
-
-def _texts(body):
-    """The request's text parts: the system prompt and each message's string or text blocks."""
-    yield str(body.get("system", ""))
-    yield str(body.get("instructions", ""))
-    if isinstance(body.get("input"), str):
-        yield body["input"]
-    for message in body.get("messages", []) if isinstance(body.get("messages"), list) else []:
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            yield content
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and isinstance(block.get("text"), str):
-                    yield block["text"]
-
-
 def _logical_request_fp(body):
     """Identify the same prompt across the two supported provider envelopes."""
     system = body.get('system', body.get('instructions'))
@@ -619,403 +391,6 @@ def _logical_request_fp(body):
     if not isinstance(system, str) or not isinstance(prompt, str):
         return None
     return payload_hash({'system': system, 'prompt': prompt})
-
-
-def input_bound(body):
-    """Input tokens to reserve for one request (never above the 1M ceiling)."""
-    return min(INPUT_RESERVATION_BOUND,
-               sum(len(text.encode("utf-8")) for text in _texts(body)) + INPUT_RESERVATION_MARGIN)
-
-
-def _reservation_cost(input_bound, max_tokens, *, legacy=False, model=MODEL, price_version=_CURRENT_PRICE):
-    definition = _price_definition(model, price_version)
-    prices = definition["prices"]
-    if definition["provider"] == "openai":
-        if legacy:
-            raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
-        return (Decimal(input_bound) * Decimal(prices["reservation_input"])
-                + Decimal(max_tokens) * Decimal(prices["reservation_output"])) / Decimal(1000000)
-    rate = Decimal(prices["long_input"]) * (1 if legacy else max(
-        Decimal(1), Decimal(prices["cache_write_5m_multiplier"]), Decimal(prices["cache_write_1h_multiplier"])))
-    return (Decimal(input_bound) * rate + Decimal(max_tokens) * Decimal(prices["long_output"])) / Decimal(1000000)
-
-
-def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None, model=MODEL):
-    definition = _price_definition(model)
-    if (not pricing_valid(now, model=model) or type(max_tokens) is not int or not 1 <= max_tokens <= definition["max_tokens"]
-            or type(input_bound) is not int or not 1 <= input_bound <= INPUT_RESERVATION_BOUND):
-        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    return _reservation_cost(input_bound, max_tokens, model=model)
-
-
-def usage_cost(usage, *, model=MODEL, price_version=_CURRENT_PRICE):
-    definition = _price_definition(model, price_version)
-    prices = definition["prices"]
-    u = definition["validate_usage"](usage)
-    if definition["provider"] == "openai":
-        if u["input_tokens"] > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
-            raise AnthropicError("pricing_unverified", "usage_bounds")
-        cached, written = (u["input_tokens_details"][k] for k in ("cached_tokens", "cache_write_tokens"))
-        long = u["input_tokens"] > definition["long_input_threshold"]
-        value = (Decimal(u["input_tokens"] - cached - written) * Decimal(prices["input"])
-                 + Decimal(cached) * Decimal(prices["cached_input"]) + Decimal(written) * Decimal(prices["cache_write_30m"]))
-        if long:
-            value *= Decimal(prices["long_input_multiplier"])
-        return (value + Decimal(u["output_tokens"]) * Decimal(prices["long_output"] if long else prices["output"])) / Decimal(1000000)
-    total_input = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
-    if total_input > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
-        raise AnthropicError("pricing_unverified", "usage_bounds")
-    long = total_input > definition["long_input_threshold"]
-    input_price, output_price = (Decimal(prices["long_input"]), Decimal(prices["long_output"])) if long else (Decimal(prices["input"]), Decimal(prices["output"]))
-    cache = u.get("cache_creation", {})
-    cost = (u["input_tokens"] * input_price + u["output_tokens"] * output_price
-            + cache.get("ephemeral_5m_input_tokens", 0) * input_price * Decimal(prices["cache_write_5m_multiplier"])
-            + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(prices["cache_write_1h_multiplier"])
-            + u["cache_read_input_tokens"] * input_price * Decimal(prices["cache_read_multiplier"]))
-    return cost / Decimal(1000000)
-
-
-def _unbilled(http_class):
-    """Only an attempt proven never sent settles at zero. Every HTTP outcome keeps
-    the reserved maximum: the published error list does not state which statuses
-    are unbilled."""
-    return http_class == "not_sent"
-
-
-def _periods(now):
-    try:
-        if type(now) not in (int, float) or not math.isfinite(now):
-            raise ValueError
-        date = datetime.fromtimestamp(now, JST)
-        day = date.replace(hour=0, minute=0, second=0, microsecond=0)
-        return day.timestamp(), day.replace(day=1).timestamp()
-    except (TypeError, ValueError, OverflowError, OSError):
-        raise AnthropicError("pricing_unverified", "usage_timestamp_invalid") from None
-
-
-def _loads(value):
-    try:
-        result = json.loads(value)
-        if not isinstance(result, dict):
-            raise ValueError
-        return result
-    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
-        raise AnthropicError("pricing_unverified", "usage_invalid") from None
-
-
-def _accounting_meta(value):
-    try:
-        result = strict_json(value)
-        if not isinstance(result, dict):
-            raise ValueError
-        return result
-    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
-        raise AnthropicError("pricing_unverified", "usage_invalid") from None
-
-
-@contextmanager
-def _accounting_snapshot(db):
-    # A pending result keeps the SQLite read snapshot without committing a caller's transaction.
-    anchor = db.execute("SELECT artifact_id FROM (SELECT artifact_id FROM artifacts "
-        "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') LIMIT 1) "
-        "UNION ALL SELECT NULL UNION ALL SELECT NULL")
-    try:
-        anchor.fetchone()
-        yield
-    finally:
-        anchor.close()
-
-
-def _validate_accounting_timestamps(db):
-    # Values outside this conservative interior are checked precisely; no
-    # otherwise valid historical timestamp is excluded by these scan bounds.
-    candidates = db.execute("SELECT created_at FROM artifacts WHERE kind IN (?,?) AND CASE "
-        "WHEN typeof(created_at) NOT IN ('integer','real') THEN 1 "
-        "ELSE created_at < ? OR created_at > ? END", (KINDS[0], KINDS[1], -62135500000, 253402000000))
-    for row in candidates:
-        _periods(row[0])
-
-
-def _binding(meta):
-    return tuple(meta.get(k) for k in _BINDING_KEYS)
-
-
-def _receipt_binding(reservation):
-    return {key: reservation.get(key) for key in _BINDING_KEYS
-            if key not in ("effort", "profile", "input_binding") or key in reservation}
-
-
-def _reserve_valid(meta, row):
-    model = meta.get("model")
-    price_version = meta.get("price_version")
-    if not isinstance(price_version, str):
-        raise AnthropicError("pricing_unverified", "reservation_invalid")
-    definition = _price_definition(model, price_version)
-    if ("effort" in meta) != ("profile" in meta):
-        raise AnthropicError("pricing_unverified", "reservation_invalid")
-    if "effort" in meta:
-        effort, profile = meta["effort"], meta["profile"]
-        if definition["provider"] == "openai":
-            if (not isinstance(effort, str) or profile is not None and not isinstance(profile, str)
-                    or (model, effort) not in openai_client.VALID_MODEL_EFFORTS
-                    or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
-                        or meta.get("max_tokens") not in (8192, 16384, 32768))
-                    or profile is None and (model != openai_client.MODEL or effort != "low")):
-                raise AnthropicError("pricing_unverified", "reservation_invalid")
-        elif effort is not None or profile is not None:
-            raise AnthropicError("pricing_unverified", "reservation_invalid")
-    if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
-            or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
-            or 'input_binding' in meta and (not isinstance(meta['input_binding'], str)
-                or re.fullmatch(r'[0-9a-f]{64}', meta['input_binding']) is None)
-            or meta.get('logical_request_fp') is not None and (not isinstance(meta['logical_request_fp'], str)
-                or re.fullmatch(r'[0-9a-f]{64}', meta['logical_request_fp']) is None)
-            or meta.get('logical_unit_fp') is not None and (not isinstance(meta['logical_unit_fp'], str)
-                or re.fullmatch(r'[0-9a-f]{64}', meta['logical_unit_fp']) is None)
-            or meta.get('logical_target_id') is not None and (type(meta['logical_target_id']) is not int
-                or meta['logical_target_id'] <= 0 or meta['logical_target_id'] != row['message_id'])
-            or row["model"] != model
-            or meta.get("route") not in ROUTES
-            or not definition["legacy_reservation"] and "input_bound" not in meta
-            or type(meta.get("project_id")) is not int or meta["project_id"] <= 0
-            or meta["project_id"] != row["project_id"]
-            or meta.get("message_id") != row["message_id"]
-            or not isinstance(meta.get("unit_key"), str) or not meta["unit_key"]):
-        raise AnthropicError("pricing_unverified", "reservation_invalid")
-    tokens = meta.get("max_tokens")
-    bound = meta.get("input_bound", INPUT_RESERVATION_BOUND)   # rows before the request-sized bound
-    maximum = _decimal(meta.get("max_cost_usd"))
-    if (type(tokens) is not int or not 1 <= tokens <= definition["max_tokens"]
-            or type(bound) is not int or not 1 <= bound <= INPUT_RESERVATION_BOUND
-            or maximum != _reservation_cost(bound, tokens, legacy="input_bound" not in meta,
-                                            model=model, price_version=price_version)):
-        raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
-    return maximum
-
-
-def _stored_reservation(ledger, reservation, *, bound_only=False):
-    """The one retained reservation row matching ``reservation``, validated."""
-    rid = reservation.get("reservation_id")
-    rows = (_matching_bound_rows(ledger, KINDS[0], rid) if bound_only
-            else _matching_rows(ledger, KINDS[0], rid))
-    if len(rows) != 1:
-        raise AnthropicError("pricing_unverified", "reservation_missing")
-    if bound_only and rows[0]["created_at"] < time.time() - 62 * 86400:
-        raise AnthropicError("pricing_unverified", "reservation_missing")
-    stored = _accounting_meta(rows[0]["meta"])
-    _reserve_valid(stored, rows[0])
-    if stored != reservation:
-        raise AnthropicError("pricing_unverified", "reservation_mismatch")
-    return stored
-
-
-def _matching_rows_many(ledger, kind, reservation_ids, *, now=None, _timestamps_checked=False):
-    """Select retained reservation identities in SQL, preserving every duplicate match."""
-    if not _timestamps_checked:
-        with _accounting_snapshot(ledger.db):
-            _validate_accounting_timestamps(ledger.db)
-            return _matching_rows_many(ledger, kind, reservation_ids, now=now, _timestamps_checked=True)
-    ids = list(dict.fromkeys(reservation_ids))
-    cutoff = (time.time() if now is None else now) - 62 * 86400
-    rows = []
-    if ids and ledger.db.execute(
-            "SELECT 1 FROM artifacts WHERE kind=? AND created_at>=? AND "
-            "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-            "WHEN json_type(meta)!='object' THEN 1 "
-            "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
-            "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
-            "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' "
-            "AND abs(value)>1.7976931348623157e308) THEN 1 ELSE 0 END LIMIT 1",
-            (kind, cutoff)).fetchone():
-        raise AnthropicError("pricing_unverified", "usage_invalid")
-    for offset in range(0, len(ids), 900):
-        group = ids[offset:offset + 900]
-        rows.extend(ledger.db.execute(
-            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
-            "WHERE kind=? AND created_at>=? AND CASE WHEN json_valid(meta) "
-            "THEN json_extract(meta,'$.reservation_id') END IN ("
-            + ','.join('?' for _ in group) + ') ORDER BY artifact_id',
-            (kind, cutoff, *group)))
-    return rows
-
-
-def _matching_rows(ledger, kind, reservation_id):
-    return _matching_rows_many(ledger, kind, [reservation_id])
-
-
-def _matching_bound_rows(ledger, kind, reservation_id):
-    """Inspect all retained rows naming this reservation, without unrelated accounting rows."""
-    if not isinstance(reservation_id, str) or len(reservation_id) != 32:
-        raise AnthropicError("pricing_unverified", "reservation_invalid")
-    rows = ledger.db.execute(
-        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
-        "WHERE kind=? AND CASE WHEN json_valid(meta) THEN EXISTS "
-        "(SELECT 1 FROM json_each(meta) WHERE key='reservation_id' AND type='text' AND value=?) "
-        "WHEN typeof(meta)='text' THEN instr(meta,?)>0 "
-        "WHEN typeof(meta)='blob' THEN instr(meta,CAST(? AS BLOB))>0 ELSE 0 END ORDER BY artifact_id",
-        (kind, reservation_id, reservation_id, reservation_id)).fetchall()
-    for row in rows:
-        if not isinstance(row["meta"], str) or len(row["meta"]) > 32768:
-            raise AnthropicError("pricing_unverified", "usage_invalid")
-        _accounting_meta(row["meta"])
-        _periods(row["created_at"])
-    return rows
-
-
-def reservation_evidence(db, artifact_id):
-    """Validate a retained reservation's original successful result by exact reference."""
-    try:
-        return _reservation_evidence(db, artifact_id)
-    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-        raise ValueError("cloud_receipt_invalid") from None
-
-
-def _receipt_meta(raw):
-    if not isinstance(raw, str) or len(raw) > 32768:
-        raise ValueError('cloud_receipt_invalid')
-    try:
-        value = strict_json(raw)
-    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
-        raise ValueError('cloud_receipt_invalid') from None
-    if not isinstance(value, dict):
-        raise ValueError('cloud_receipt_invalid')
-    return value
-
-
-def _reservation_evidence(db, artifact_id):
-    return reservation_evidence_batch(db, [artifact_id])[artifact_id]
-
-
-def reservation_evidence_batch(db, artifact_ids):
-    # All financial rows are checked in one borrowed snapshot. No proof is
-    # cached outside this call, so later changes must be checked again.
-    try:
-        ids = list(artifact_ids)
-        if any(type(item) is not int or not 0 < item < 2**63 for item in ids):
-            raise ValueError("cloud_receipt_invalid")
-        ids = list(dict.fromkeys(ids))
-        if not ids:
-            return {}
-        with closing(db.execute('SELECT artifact_id FROM (SELECT artifact_id FROM artifacts LIMIT 1) '
-                                'UNION ALL SELECT NULL UNION ALL SELECT NULL')) as anchor:
-            anchor.fetchone()
-            return _reservation_evidence_batch_snapshot(db, ids)
-    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-        raise ValueError("cloud_receipt_invalid") from None
-
-
-def _reservation_evidence_batch_snapshot(db, ids):
-    before = (db.execute('PRAGMA data_version').fetchone()[0], db.total_changes)
-    fields = ('artifact_id', 'kind', 'project_id', 'message_id', 'model', 'meta', 'created_at', 'content')
-    originals = {}
-    for row in db.execute(
-            "SELECT artifact_id,kind,project_id,message_id,model,"
-            "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END,created_at,content "
-            "FROM artifacts WHERE kind='cloud_usage_reserve' "
-            "AND artifact_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)):
-        original = dict(zip(fields, row))
-        meta = _receipt_meta(original['meta'])
-        originals[original['artifact_id']] = (meta, _reserve_valid(meta, original))
-    if len(originals) != len(ids):
-        raise ValueError("cloud_receipt_missing")
-    kinds = (KINDS[0], KINDS[1], 'cloud_usage_disposition')
-    # A corrupt row may also have lost its patient/UUID.  It cannot be proved
-    # unrelated to this source's disposition, so new adoption evidence holds.
-    bad = db.execute("SELECT CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END "
-                  "FROM artifacts WHERE kind IN (?,?,?) AND CASE "
-                  "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-                  "WHEN json_type(meta)!='object' THEN 1 "
-                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
-                  "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
-                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
-                  "ELSE 0 END LIMIT 1", kinds).fetchone()
-    if bad is not None:
-        _receipt_meta(bad[0])
-        raise ValueError("cloud_receipt_invalid")
-    wanted = {meta['reservation_id'] for meta, _ in originals.values()}
-    rows_by_reservation = {rid: [] for rid in wanted}
-    rows = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
-        "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content FROM artifacts "
-        "WHERE kind IN (?,?,?) AND CASE WHEN json_valid(meta) THEN EXISTS "
-        "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' "
-        "AND m.value IN (SELECT value FROM json_each(?))) END ORDER BY artifact_id",
-        (*kinds, json.dumps(sorted(wanted))))
-    for row in rows:
-        meta = _receipt_meta(row['meta'])
-        rows_by_reservation[meta['reservation_id']].append((row, meta))
-    result = {}
-    for artifact_id in ids:
-        meta, maximum = originals[artifact_id]
-        matched = rows_by_reservation[meta['reservation_id']]
-        reservations = [row for row, _ in matched if row['kind'] == KINDS[0]]
-        results = [(row, value) for row, value in matched if row['kind'] == KINDS[1]]
-        if (len(reservations) != 1 or reservations[0]['artifact_id'] != artifact_id or len(results) != 1
-                or any(row['kind'] == 'cloud_usage_disposition' for row, _ in matched)):
-            raise ValueError("cloud_receipt_unresolved")
-        result_row, result_meta = results[0]
-        _, settled = _settled(meta, maximum, [(result_meta, result_row)])
-        if not settled or result_meta.get('http_class') != 'http_200' or result_meta.get('error_kind') or result_meta.get('disposition'):
-            raise ValueError("cloud_receipt_unresolved")
-        if "answer_text_sha256_v1" in result_meta:
-            answer_hash = result_meta["answer_text_sha256_v1"]
-            if not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None:
-                raise ValueError("cloud_answer_hash_invalid")
-        if ("answer_finish_reason_v1" in result_meta
-                and result_meta["answer_finish_reason_v1"] not in ("stop", "length")):
-            raise ValueError("cloud_answer_finish_reason_invalid")
-        result[artifact_id] = {'reservation': meta, 'result': result_meta,
-                               'witness': payload_hash([tuple(row) for row, _ in matched])}
-    if (db.execute('PRAGMA data_version').fetchone()[0], db.total_changes) != before:
-        raise ValueError("cloud_receipt_changed")
-    return result
-
-
-def _is_openai_model(model):
-    return (isinstance(model, str)
-            and any(key[0] == model and definition["provider"] == "openai"
-                    for key, definition in PRICE_DEFINITIONS.items()))
-
-
-def _confirmed_openai_quota(result, model):
-    code = result.get("openai_error_code")
-    return (isinstance(code, str) and code in openai_client.QUOTA_ERROR_CODES
-            and _is_openai_model(model) and "openai_429_diagnostic" not in result
-            and result.get("http_class") == "http_429"
-            and result.get("error_kind") == "payment_required"
-            and "usage" in result and result["usage"] is None)
-
-
-def _confirmed_openai_rate_diagnostic(result, model):
-    diagnostic = result.get("openai_429_diagnostic")
-    return (isinstance(diagnostic, str) and diagnostic in openai_client.RATE_LIMIT_DIAGNOSTICS
-            and _is_openai_model(model) and "openai_error_code" not in result
-            and result.get("http_class") == "http_429"
-            and result.get("error_kind") == "rate_limited"
-            and "usage" in result and result["usage"] is None)
-
-
-def _settled(m, maximum, matching):
-    """(cost, settled?) of one reservation's single bound result; raises when
-    the result is duplicated, unbound or its usage/cost disagrees."""
-    if len(matching) != 1:
-        raise ValueError
-    r, row = matching[0]
-    if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
-            or row["message_id"] != m["message_id"] or row["model"] != m["model"]):
-        raise ValueError
-    if "openai_error_code" in r and not _confirmed_openai_quota(r, m["model"]):
-        raise ValueError
-    if "openai_429_diagnostic" in r and not _confirmed_openai_rate_diagnostic(r, m["model"]):
-        raise ValueError
-    reported = _decimal(r.get("cost_usd"))
-    if r.get("usage") is None:
-        if reported != (Decimal(0) if _unbilled(r.get("http_class")) else maximum):
-            raise ValueError
-        return reported, _unbilled(r.get("http_class"))
-    if (reported != usage_cost(r["usage"], model=m["model"], price_version=m["price_version"]) or reported > maximum
-            or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
-        raise ValueError
-    return reported, True
 
 
 def _semantic_financial_target(meta):

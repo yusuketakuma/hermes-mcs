@@ -34,7 +34,8 @@ def stage(tmp_path, *, broken=False, no_services=False):
     setup = checkout / 'setup.py'
     setup.write_text('import os\nfrom pathlib import Path\n'
                      'Path(os.environ["TRACE"]).write_text("services")\n')
-    script = (REPO / 'install.sh').read_text()
+    script = ((REPO / 'install.sh').read_text()
+              + (REPO / 'deployment/install/runtime.sh').read_text())
     start = script.index('# Install the independent helper before either llama')
     end = script.index('# --------------------------------- 6. update recovery', start)
     guard_start = script.index('    _root_alias=""')
@@ -93,7 +94,8 @@ def test_installer_template_prefix_uses_verified_private_helper(tmp_path, kind):
     target = checkout / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes((REPO / relative).read_bytes())
-    text = (REPO / 'install.sh').read_text()
+    text = ((REPO / 'install.sh').read_text()
+              + (REPO / 'deployment/install/runtime.sh').read_text())
     if kind == 'llama':
         start = text.index('        sed -e "s|__LLAMA_BIN__|')
         end = text.index('        _changed=0', start)

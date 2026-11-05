@@ -1,4 +1,6 @@
 """A borrowed snapshot never promotes an older inference rollup to current."""
+
+import rollup_builder
 from contextlib import closing
 import hashlib
 import json
@@ -226,27 +228,27 @@ def test_paged_rollup_matches_whole_snapshot_oracle_across_pages(tmp_path, monke
         reference_blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
         assert reference_blobs[65]['extract_v1'] == '{"requests":[]}'
         for ids in (list(range(1, 65)), list(range(65, 129)), [129, 130, 131, 900]):
-            page_blobs = rollup._current_extraction_page(ledger.db, 1, ids)
+            page_blobs = rollup_builder._current_extraction_page(ledger.db, 1, ids)
             assert page_blobs == {mid: blobs for mid, blobs in reference_blobs.items() if mid in ids}
-            page_refs = rollup._clinical_artifact_refs(ledger.db, 1, page_blobs, ids)
-            reference_refs = rollup._clinical_artifact_refs(ledger.db, 1, reference_blobs)
+            page_refs = rollup_builder._clinical_artifact_refs(ledger.db, 1, page_blobs, ids)
+            reference_refs = rollup_builder._clinical_artifact_refs(ledger.db, 1, reference_blobs)
             assert page_refs == {key: value for key, value in reference_refs.items() if key[0] in ids}
-        real_pages = rollup._rollup_source_pages
+        real_pages = rollup_builder._rollup_source_pages
 
         def whole_snapshot(db, project_id, cursor, first_page, cfg, *, html_available):
             messages = first_page + cursor.fetchall()
             arts = mcs_queries.current_extraction_blobs(db, project_id)
-            refs = rollup._clinical_artifact_refs(db, project_id, arts)
+            refs = rollup_builder._clinical_artifact_refs(db, project_id, arts)
             ref_mids = {r[0] for r in db.execute(
                 'SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id '
                 'WHERE a.kind=? AND m.project_id=?', (rollup.REF_KIND, project_id))}
-            proofs = rollup._empty_body_proofs(db, project_id, html_available=html_available)
-            for item in rollup._rollup_inputs(db, messages, arts, refs, cfg):
+            proofs = rollup_builder._empty_body_proofs(db, project_id, html_available=html_available)
+            for item in rollup_builder._rollup_inputs(db, messages, arts, refs, cfg):
                 yield (*item, refs, ref_mids, proofs)
 
-        monkeypatch.setattr(rollup, '_rollup_source_pages', whole_snapshot)
+        monkeypatch.setattr(rollup_builder, '_rollup_source_pages', whole_snapshot)
         before = rollup.build_rollup(ledger.db, 1, request_limit=request_limit)
-        monkeypatch.setattr(rollup, '_rollup_source_pages', real_pages)
+        monkeypatch.setattr(rollup_builder, '_rollup_source_pages', real_pages)
         after = rollup.build_rollup(ledger.db, 1, request_limit=request_limit)
         before.pop('generated_at')
         after.pop('generated_at')
@@ -260,7 +262,7 @@ def test_paged_rollup_interruption_closes_cursor_and_preserves_borrowed_tx(tmp_p
     with closing(_seed(tmp_path)) as ledger:
         ledger.save_messages([_message(mid=i, body=f'完全合成の投稿 {i}') for i in range(2, 68)])
         ledger.db.execute('BEGIN')
-        real_page = rollup._current_extraction_page
+        real_page = rollup_builder._current_extraction_page
         calls, closed = [], []
 
         def interrupt_second(db, project_id, mids):
@@ -290,7 +292,7 @@ def test_paged_rollup_interruption_closes_cursor_and_preserves_borrowed_tx(tmp_p
                     return Cursor(result)
                 return result
 
-        monkeypatch.setattr(rollup, '_current_extraction_page', interrupt_second)
+        monkeypatch.setattr(rollup_builder, '_current_extraction_page', interrupt_second)
         with pytest.raises(sqlite3.OperationalError, match='synthetic interruption'):
             rollup.build_rollup(Reader(), 1)
         assert calls == [64, 3] and closed == [True, True] and ledger.db.in_transaction
@@ -331,8 +333,8 @@ def test_paged_rollup_keeps_as_of_after_source_read_crosses_jst_midnight(tmp_pat
                     return Cursor(result, state['main_cursors'] == 1)
                 return result
 
-        monkeypatch.setattr(rollup, 'time', SimpleNamespace(time=lambda: state['now'], monotonic=time.monotonic))
-        monkeypatch.setattr(rollup, '_period_candidates',
+        monkeypatch.setattr(rollup_builder, 'time', SimpleNamespace(time=lambda: state['now'], monotonic=time.monotonic))
+        monkeypatch.setattr(rollup_builder, '_period_candidates',
                             lambda _m, _v1, day, **_kwargs: (days.append(day) or None, None))
         result = rollup.build_rollup(Reader(), 1)
         assert result['generated_at'] == after
@@ -345,7 +347,7 @@ def test_paged_rollup_keeps_as_of_after_empty_body_check_crosses_jst_midnight(tm
         before = datetime.fromisoformat('2026-10-01T23:59:59+09:00').timestamp()
         after = datetime.fromisoformat('2026-10-02T00:00:01+09:00').timestamp()
         state = {'now': before, 'initial_check': False}
-        real_proofs = rollup._empty_body_proofs
+        real_proofs = rollup_builder._empty_body_proofs
         days = []
 
         def timed_proofs(db, project_id, **kwargs):
@@ -355,9 +357,9 @@ def test_paged_rollup_keeps_as_of_after_empty_body_check_crosses_jst_midnight(tm
                 state['now'] = after
             return result
 
-        monkeypatch.setattr(rollup, 'time', SimpleNamespace(time=lambda: state['now'], monotonic=time.monotonic))
-        monkeypatch.setattr(rollup, '_empty_body_proofs', timed_proofs)
-        monkeypatch.setattr(rollup, '_period_candidates',
+        monkeypatch.setattr(rollup_builder, 'time', SimpleNamespace(time=lambda: state['now'], monotonic=time.monotonic))
+        monkeypatch.setattr(rollup_builder, '_empty_body_proofs', timed_proofs)
+        monkeypatch.setattr(rollup_builder, '_period_candidates',
                             lambda _m, _v1, day, **_kwargs: (days.append(day) or None, None))
         result = rollup.build_rollup(ledger.db, 1)
         assert state['initial_check'] and result['generated_at'] == after
@@ -368,7 +370,7 @@ def test_paged_rollup_keeps_one_snapshot_when_another_connection_changes_source(
     with closing(_seed(tmp_path)) as ledger:
         ledger.save_messages([_message(mid=i, body=f'完全合成の投稿 {i}') for i in range(2, 68)])
         baseline = rollup.build_rollup(ledger.db, 1, request_limit=None)
-        real_page = rollup._current_extraction_page
+        real_page = rollup_builder._current_extraction_page
         calls = []
 
         def changed_during_page(db, project_id, mids):
@@ -379,7 +381,7 @@ def test_paged_rollup_keeps_one_snapshot_when_another_connection_changes_source(
             calls.append(len(mids))
             return real_page(db, project_id, mids)
 
-        monkeypatch.setattr(rollup, '_current_extraction_page', changed_during_page)
+        monkeypatch.setattr(rollup_builder, '_current_extraction_page', changed_during_page)
         result = rollup.build_rollup(ledger.db, 1, request_limit=None)
         baseline.pop('generated_at')
         result.pop('generated_at')

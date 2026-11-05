@@ -1,4 +1,5 @@
 """Resident semantic routing preserves paid/unknown inputs across a later cap."""
+import semantic_job_processor
 import json
 import time
 
@@ -37,6 +38,7 @@ def test_semantic_resident_next_pass_checks_old_input(cloud, monkeypatch, prior,
         outputs.append(llm('synthetic historical input', timeout=30))
         return 'done'
     monkeypatch.setattr(semantic_drain, '_process_job_inner', stages)
+    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
     def local_call(prompt, timeout=None):
         local.append(prompt)
         return '{"facts":[]}'
@@ -82,6 +84,7 @@ def test_cloud_only_fresh_denial_is_wait_without_paid_failure(cloud, monkeypatch
         llm('synthetic unsent input', timeout=30)
         pytest.fail('a refused new request must not finish a generation')
     monkeypatch.setattr(semantic_drain, '_process_job_inner', stages)
+    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
     status = semantic_drain._process_job(ledger, semantic_drain.runtime_config(cfg)[0], job, None,
         lambda *a, **k: pytest.fail('cloud-only denial cannot call local'), time.monotonic() + 180,
         lane='backlog', diagnostics=diagnostics, cloud_transport=direct, cloud_only=True)

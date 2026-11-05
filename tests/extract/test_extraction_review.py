@@ -1,4 +1,8 @@
 """Synthetic regressions for extraction review: state, leases and recovery."""
+import extract_llm_engine
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_runner
 import extract_schema
 import extract_validation
 import json
@@ -120,6 +124,7 @@ def test_claimed_head_does_not_starve_other_pending_messages(db, monkeypatch):
     row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     extract_llm._claim(db, row)
     monkeypatch.setattr(extract_llm, "llm_extract", lambda *a, **kw: {"summary": "合成"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, limit=1)
     assert result["done"] == 1
     assert db.artifacts("extract_llm")[0]["message_id"] == 2
@@ -134,6 +139,7 @@ def test_changed_source_is_not_overwritten_by_inflight_extraction(db, monkeypatc
         return {"summary": "古い結果"}
 
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db)
     assert result["done"] == 0
     assert [json.loads(a["content"])["summary"]
@@ -145,6 +151,8 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
     db.save_messages([_message(1, body="あ" * 2500 + "\n" + "い" * 1200),
                       _message(2, body="あ" * 2500 + "\n" + "い" * 1200)])
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
 
     def infer(prompt, **kwargs):
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
@@ -153,7 +161,10 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
         return {"symptoms": [], "summary": "完了チャンク"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     if workers == 1:
         with pytest.raises(RuntimeError, match="synthetic interruption"):
             extract_llm.run_pending(db, workers=workers)
@@ -174,6 +185,7 @@ def test_lease_covers_whole_batch_budget(db, monkeypatch):
         return {"summary": "合成"}
 
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_llm.run_pending(db, budget_s=3600)["done"] == 1
 
 
@@ -228,8 +240,10 @@ def test_resident_idle_wait_honors_stop_and_reports_loaded_generation(monkeypatc
     monkeypatch.setattr(extract_llm.time, "sleep", clock.sleep)
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--stop-after", "2"])
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
         "done": 0, "failed": 0, "left": 0, "selected": 0})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     assert extract_llm.main() == 0
     assert clock.now == 2
     records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
@@ -508,9 +522,12 @@ def test_ambiguous_batch_index_retries_only_its_message(db, monkeypatch, workers
                   {'symptoms': [], 'i': 1, 'summary': '一意の候補'},
                   {'symptoms': [], 'i': 0, 'summary': '矛盾する候補'},
                   {'symptoms': [], 'i': 0, 'summary': '三つ目の候補'}]})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     calls = []
     monkeypatch.setattr(extract_llm, 'llm_extract',
                         lambda body, **kw: calls.append(body) or {'symptoms': [], 'summary': '再抽出'})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, budget_s=30, batch_k=2, workers=workers)
     assert result['done'] == 2 and result['failed'] == 0
     assert calls == ['合成本文B']

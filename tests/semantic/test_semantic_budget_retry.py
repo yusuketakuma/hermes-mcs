@@ -1,4 +1,5 @@
 """Executed work that exceeds its deadline must consume the retry budget."""
+import semantic_summary_stages
 import semantic_audit
 import semantic_drain
 import semantic_runtime
@@ -422,6 +423,7 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         return real_summarize(*args, **kwargs)
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_audit, 'audit_claims',
                         lambda *a, **k: ([{"code": "claim_not_supported", "claim": "synthetic"}], True))
     try:

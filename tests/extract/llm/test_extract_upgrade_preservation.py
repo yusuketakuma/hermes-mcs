@@ -1,4 +1,12 @@
 """Automatic replacements retain source-grounded negation and nonpatient assertions."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import json
 
 import pytest
@@ -66,8 +74,17 @@ def test_dryrun_saves_selected_provider_model_after_job_preparation(
     try:
         cfg = {"cloud_llm": {"mode": "dry_run", "provider": provider, "project_ids": [1]}}
         monkeypatch.setattr(llm, "load_config", lambda: cfg)
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
         monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
         pending, _ = llm._select_pending(db, 1, None, None, False)
         jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
@@ -209,6 +226,7 @@ def test_human_confirmed_feedback_can_correct_an_old_wrong_flag(tmp_path, monkey
         assert mcs_requests.apply_command(db, request)["outcome"] == "applied"
         calls = []
         monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: calls.append(1) or {"summary": "人の確認に基づく合成訂正"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
         assert llm.run_pending(db, limit=1, budget_s=10)["done"] == 1
         assert calls == [1]
         result = db.artifacts("extract_llm", message_id=1)
@@ -239,6 +257,7 @@ def test_lost_protection_settles_as_held_not_success_or_infinite_retry(tmp_path,
     db, aid, _ = seed(tmp_path)
     calls = []
     monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: calls.append(1) or {"summary": "合成の弱い候補"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     try:
         result = llm.run_pending(db, limit=1, budget_s=10)
         assert (result["done"], result["held_prior"], result["deferred"], result["left"]) == (0, 1, 0, None)
@@ -256,6 +275,7 @@ def test_actual_quality_retry_routes_reject_lost_protected_facts(tmp_path, monke
     db, aid, _ = seed(tmp_path, version=llm.EXTRACT_VERSION, body=body)
     calls = []
     monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: calls.append(1) or {"summary": "合成の弱い候補"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     try:
         if route == "thin":
             with db.db:
@@ -302,7 +322,9 @@ def test_failed_human_feedback_never_relabels_old_content_as_the_new_generation(
     import mcs_requests
     db, aid, _ = seed(tmp_path)
     monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     monkeypatch.setattr(llm, "_llm_up", lambda **k: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', llm._llm_up)
     try:
         request = envelopes.extract_feedback("synthetic-operator", {"project_id": 1, "extract_ref": {
             "message_id": 1, "artifact_id": aid}}, "symptoms", "合成の確認結果")
@@ -384,6 +406,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
         assert len(llm._LOADED_SOURCE_DIGESTS[source_label]) == 64
         monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {
             **llm._LOADED_SOURCE_DIGESTS, source_label: "synthetic-changed-loaded-source"})
+        monkeypatch.setattr(extract_llm_context, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+        monkeypatch.setattr(extract_llm_qc, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+        monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
         assert llm._upgrade_contract() != contract
         assert semantic_candidate.candidate_fingerprint({}) != fingerprint
         assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()

@@ -1,4 +1,6 @@
 """Fixed error metadata never exposes messages or changes carry settlement control."""
+import extract_llm_resident
+import extract_llm_runner
 import json
 import sqlite3
 
@@ -121,7 +123,10 @@ def test_all_worker_exception_events_share_fixed_diagnostics_without_changing_ca
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)

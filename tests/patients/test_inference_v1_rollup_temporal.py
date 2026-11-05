@@ -1,4 +1,6 @@
 """Synthetic source-time rollup cases, with independent expected clinical states."""
+
+import rollup_builder
 from contextlib import closing
 import json
 
@@ -233,7 +235,7 @@ def test_plan_deadline_passing_never_establishes_that_a_dose_was_taken(tmp_path,
         current = "本人は現在合成薬A5mgを服用中です。"
         plan = "本人は来週合成薬A10mgを服用する予定です。"
         _save(ledger, 1, current + plan, {"meds": [_med(current), _med(plan, dose="10mg", status="planned")]})
-        monkeypatch.setattr(rollup.time, "time", lambda: 1_800_000_000.0)
+        monkeypatch.setattr(rollup_builder.time, "time", lambda: 1_800_000_000.0)
         view = rollup.build_rollup(ledger.db, 1)
         assert _doses(view, "medications") == {"5mg"}
         assert _doses(view, "planned_medications") == {"10mg"}
@@ -243,7 +245,7 @@ def test_unbound_artifact_reference_is_explicit_unknown_not_current(tmp_path, mo
     with closing(_ledger(tmp_path)) as ledger:
         body = "本人は現在合成薬A5mgを服用中です。"
         _save(ledger, 1, body, {"meds": [_med(body)]})
-        monkeypatch.setattr(rollup, "_clinical_artifact_refs", lambda *a: {})
+        monkeypatch.setattr(rollup_builder, "_clinical_artifact_refs", lambda *a: {})
         view = rollup.build_rollup(ledger.db, 1)
         assert not view.get("medications")
         assert _doses(view, "unverified_medications") == {"5mg"}

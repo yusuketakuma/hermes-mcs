@@ -1,5 +1,16 @@
 """Synthetic regressions: Discord guild scope, LINE WORKS callback order,
 updater recovery keeps unrelated manual edits."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import service_contract
 import asyncio
@@ -95,13 +106,38 @@ def test_lineworks_callback_is_handled_before_a_slow_delivery_tick(monkeypatch, 
 def test_updater_recovery_resets_only_update_paths(updater, tmp_path, monkeypatch, dirty, at):
     repo, bare = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(mcs_update, "restart_agents", lambda **k: [])
+    monkeypatch.setattr(update_apply, 'restart_agents', mcs_update.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', mcs_update.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', mcs_update.restart_agents)
     monkeypatch.setattr(mcs_update, "restart_services", lambda *a, **k: None)
+    monkeypatch.setattr(update_apply, 'restart_services', mcs_update.restart_services)
+    monkeypatch.setattr(update_recovery, 'restart_services', mcs_update.restart_services)
+    monkeypatch.setattr(update_services, 'restart_services', mcs_update.restart_services)
     monkeypatch.setattr(mcs_update, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', mcs_update._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', mcs_update._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', mcs_update._services_reconcile)
     monkeypatch.setattr(mcs_update, "_postcheck", lambda *a: [])
+    monkeypatch.setattr(update_recovery, '_postcheck', mcs_update._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', mcs_update._postcheck)
     work = tmp_path / "remote-work"
     (work / "g.txt").write_text("operator")
     _git(work, "add", ".")
@@ -273,9 +309,22 @@ def test_rollback_preserves_third_content_before_restoring_runtime(updater, tmp_
     _git(repo, "checkout", "-q", "--detach", target)
     (repo / "f.txt").write_text("MANUAL THIRD CONTENT")
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "hermes"})
     monkeypatch.setattr(updater, "_rollback_layout_error", lambda entry: None)
+    monkeypatch.setattr(update_apply, '_rollback_layout_error', updater._rollback_layout_error)
+    monkeypatch.setattr(update_restore, '_rollback_layout_error', updater._rollback_layout_error)
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("runtime restore before refusal"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     git = updater._git
 
     def no_reset(args, *positional, **kwargs):
@@ -283,6 +332,14 @@ def test_rollback_preserves_third_content_before_restoring_runtime(updater, tmp_
         return git(args, *positional, **kwargs)
 
     monkeypatch.setattr(updater, "_git", no_reset)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     before = _provenance_snapshot(repo)
     with pytest.raises(updater.UpdateError) as stopped:
         updater._rollback_tree({"prev_sha": prev, "sha": target})
@@ -389,13 +446,37 @@ def test_rollback_untracked_collision_refuses_before_journal_and_recovery_is_noo
     repo, prev, target = _provenance_repo(tmp_path)
     (repo / "deleted.txt").write_text("UNTRACKED OPERATOR CONTENT")
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "hermes"})
     events, notices = [], []
     monkeypatch.setattr(updater, "quiesce", lambda: events.append("quiesce") or [])
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents", lambda **k: events.append("restart") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_services", lambda *a, **k: events.append("services"))
+    monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: events.append("runtime"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     entry = {"tag": "v1.0.26", "sha": target, "prev_sha": prev, "at": time.time() - 4000}
     state = updater.journal_store.default_state()
     state["applied"] = [entry]

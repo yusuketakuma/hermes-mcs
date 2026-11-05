@@ -1,4 +1,5 @@
 """Archived work follows active work without acquiring notification eligibility."""
+import semantic_due_selection
 import semantic_policy
 from contextlib import contextmanager
 import json
@@ -143,6 +144,7 @@ def test_semantic_archived_work_remains_runnable_after_active_work_finishes(led,
 
 def test_backlog_retains_overscan_for_each_active_kind(led, monkeypatch):
     monkeypatch.setattr(semantic_drain, "_BACKLOG_TURN", {"kind": semantic_drain.JOB_KIND})
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     max_jobs = 1
     for mid in range(100, 100 + max_jobs + 8):
         led.job_add(semantic_drain.QC_JOB_KIND, 2, message_id=mid,

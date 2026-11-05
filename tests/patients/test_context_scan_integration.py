@@ -1,4 +1,8 @@
 """Exercise durable scan progress through the real context scheduler entry."""
+
+import patient_context_refresh_readiness
+import patient_context_refresh_sources
+import patient_context_refresh_state
 import sqlite3
 
 import pytest
@@ -9,14 +13,14 @@ from test_patient_context_refresh import CFG, document, runtime as runtime, seed
 
 
 def global_state(led):
-    return refresh._latest(led.db, refresh.PROGRESS, 0)[0]
+    return patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 0)[0]
 
 
 def test_slow_first_patient_does_not_restart_the_prefix(runtime, monkeypatch):
     led, clock, _ = runtime
     for pid in (1, 2):
         seed(led, mid=pid, pid=pid)
-    original = refresh._pending
+    original = patient_context_refresh_readiness._pending
     checked = []
 
     def pending(db, pid, cfg, **kwargs):
@@ -25,14 +29,14 @@ def test_slow_first_patient_does_not_restart_the_prefix(runtime, monkeypatch):
             clock.mono += 50
         return original(db, pid, cfg, **kwargs)
 
-    monkeypatch.setattr(refresh, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     first = step(runtime, seconds=20)
     assert first['status'] == 'deferred' and first['reason'] == 'patient_context_scan_incomplete'
     assert global_state(led)['patient_scan']['activity_after'][2] == 1
-    assert document(led, refresh.PROGRESS, pid=1) is None
+    assert document(led, patient_context_refresh_state.PROGRESS, pid=1) is None
     second = step(runtime, seconds=600)
     assert second['status'] == 'progressed' and checked[:2] == [1, 2]
-    assert document(led, refresh.PROGRESS, pid=2)['last_attempt_unit'] == 1
+    assert document(led, patient_context_refresh_state.PROGRESS, pid=2)['last_attempt_unit'] == 1
 
 
 def test_interrupted_activity_sql_still_reaches_fair_turn(runtime, monkeypatch):
@@ -60,15 +64,15 @@ def test_interrupted_activity_sql_still_reaches_fair_turn(runtime, monkeypatch):
 def test_bookmark_preserves_lane_rotation_metadata_and_does_not_grow_artifacts(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, mid=1, pid=1, proof=False)
-    refresh._replace(led, refresh.PROGRESS, 0, {'cursor': 6, 'units': 12, 'other': 'synthetic'}, {'extra': 'retained'})
+    patient_context_refresh_state._replace(led, patient_context_refresh_state.PROGRESS, 0, {'cursor': 6, 'units': 12, 'other': 'synthetic'}, {'extra': 'retained'})
     led.db.commit()
     timeout = led.db.execute('PRAGMA busy_timeout').fetchone()[0]
     for _ in range(3):
         assert step(runtime)['status'] == 'deferred'
         assert led.db.execute('PRAGMA busy_timeout').fetchone()[0] == timeout
-    content, meta = refresh._latest(led.db, refresh.PROGRESS, 0)
+    content, meta = patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 0)
     assert (content['cursor'], content['units'], content['other'], meta['extra']) == (6, 12, 'synthetic', 'retained')
-    assert led.db.execute('SELECT COUNT(*) FROM artifacts WHERE kind=? AND project_id=0', (refresh.PROGRESS,)).fetchone()[0] == 1
+    assert led.db.execute('SELECT COUNT(*) FROM artifacts WHERE kind=? AND project_id=0', (patient_context_refresh_state.PROGRESS,)).fetchone()[0] == 1
     assert not led.db.in_transaction
 
 
@@ -76,7 +80,7 @@ def test_malformed_bookmark_is_held_without_reset(runtime):
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
     saved = {'cursor': 8, 'units': 14, 'patient_scan': {'version': False}}
-    refresh._replace(led, refresh.PROGRESS, 0, saved, {})
+    patient_context_refresh_state._replace(led, patient_context_refresh_state.PROGRESS, 0, saved, {})
     led.db.commit()
     assert step(runtime)['status'] == 'deferred'
     assert global_state(led) == saved
@@ -87,7 +91,7 @@ def test_partial_pass_never_reports_complete(runtime, monkeypatch):
     for pid in range(1, 14):
         seed(led, mid=pid, pid=pid)
     checked = []
-    original = refresh._pending
+    original = patient_context_refresh_readiness._pending
 
     def pending(db, pid, cfg, **kwargs):
         snapshot, progress, _ = original(db, pid, cfg, **kwargs)
@@ -95,7 +99,7 @@ def test_partial_pass_never_reports_complete(runtime, monkeypatch):
         checked.append(pid)
         return snapshot, progress, {'A': False, 'B': False, 'C': False}
 
-    monkeypatch.setattr(refresh, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     result = step(runtime)
     assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
     assert 0 < result['scanned'] <= 8 and len(checked) < 13
@@ -108,7 +112,7 @@ def test_candidate_reader_keeps_borrowed_transaction_and_cancellation_handler(ru
     led.db.set_progress_handler(lambda: calls.append(True) or 0, 1)
     led.db.execute('BEGIN')
     try:
-        with refresh._candidate_reader(led, clock.mono + 600) as reader:
+        with patient_context_refresh_sources._candidate_reader(led, clock.mono + 600) as reader:
             assert reader.db is not led.db and reader.db.in_transaction
             assert reader.db.execute('SELECT project_id FROM patients').fetchone()[0] == 1
             with pytest.raises(sqlite3.OperationalError):
@@ -125,9 +129,9 @@ def test_candidate_reader_keeps_borrowed_transaction_and_cancellation_handler(ru
 
 def test_saved_global_cas_detects_competing_owner(runtime):
     led, clock, _ = runtime
-    expected = refresh._latest(led.db, refresh.PROGRESS, 0)
+    expected = patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 0)
     other = {'cursor': 7, 'units': 3}
-    refresh._replace(led, refresh.PROGRESS, 0, other, {})
+    patient_context_refresh_state._replace(led, patient_context_refresh_state.PROGRESS, 0, other, {})
     led.db.commit()
     assert refresh._advance_patient_scan(led, expected, schedule.advance_turn(None), clock.mono+600, lambda: True) is None
     assert global_state(led) == other
@@ -136,10 +140,10 @@ def test_saved_global_cas_detects_competing_owner(runtime):
 def test_reader_cancels_rows_and_keeps_complete_callback(runtime):
     led, clock, _ = runtime
     seed(led, mid=1, pid=1)
-    with refresh._candidate_reader(led, clock.mono+600) as reader:
+    with patient_context_refresh_sources._candidate_reader(led, clock.mono+600) as reader:
         cursor = reader.db.execute('SELECT project_id FROM patients')
         reader.db.scan_until = clock.mono
-        with pytest.raises(refresh._ScanInterrupted):
+        with pytest.raises(patient_context_refresh_sources._ScanInterrupted):
             cursor.fetchone()
     callbacks = []
     assert step(runtime, complete=lambda pid: callbacks.append(pid) or False)['status'] == 'deferred'
@@ -149,7 +153,7 @@ def test_reader_cancels_rows_and_keeps_complete_callback(runtime):
 def test_source_edit_after_candidate_read_is_rejected_before_inference(runtime, monkeypatch):
     led, _, calls = runtime
     seed(led, mid=1, pid=1)
-    original = refresh._pending
+    original = patient_context_refresh_readiness._pending
     edited = []
 
     def pending(db, pid, cfg, **kwargs):
@@ -160,9 +164,9 @@ def test_source_edit_after_candidate_read_is_rejected_before_inference(runtime, 
             edited.append(True)
         return outcome
 
-    monkeypatch.setattr(refresh, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     assert step(runtime)['status'] == 'source_changed'
-    assert calls == [] and document(led, refresh.PROGRESS, pid=1) is None
+    assert calls == [] and document(led, patient_context_refresh_state.PROGRESS, pid=1) is None
     assert not led.db.in_transaction
 
 
@@ -170,7 +174,7 @@ def test_coverage_probe_is_small_and_requires_every_snapshot_patient(runtime):
     led, clock, _ = runtime
     for pid in (1, 2, 3):
         seed(led, mid=pid, pid=pid)
-    with refresh._candidate_reader(led, clock.mono+600) as reader:
+    with patient_context_refresh_sources._candidate_reader(led, clock.mono+600) as reader:
         queries = []
         reader.db.set_trace_callback(queries.append)
         assert not refresh._scan_covered(reader.db, {1, 2})

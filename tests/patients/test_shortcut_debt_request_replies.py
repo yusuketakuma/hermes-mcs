@@ -1,4 +1,7 @@
 """Request replies require current, request-specific relation evidence."""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import sqlite3
 import time
@@ -222,7 +225,10 @@ def test_legacy_reply_kind_cannot_answer_multiple_requests_without_relations(tmp
         db.db.commit()  # _replace_current owns its writer transaction.
         monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+        monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
         monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
         for mid, document in ((1, {"requests": [
                 {"action": "架空依頼A", "evidence": "架空依頼A"},
                 {"action": "架空依頼B", "evidence": "架空依頼B"}]}),

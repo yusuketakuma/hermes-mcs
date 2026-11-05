@@ -1,4 +1,13 @@
 """Synthetic fixed-tree rollback witnesses retain the ordinary source guards."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_preflight
+import update_recovery
+import update_repository
+import update_runtime_migration
+import update_services
 import hashlib
 import json
 import os
@@ -19,8 +28,18 @@ def _witness(tree):
 def reviewed_source(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, previous = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     monkeypatch.setattr(updater, "_PROVIDER_ROLLBACK_SOURCE_WITNESSES",
                         frozenset({_witness(updater._split_source_tree(previous))}))
+    monkeypatch.setattr(update_repository, '_PROVIDER_ROLLBACK_SOURCE_WITNESSES', updater._PROVIDER_ROLLBACK_SOURCE_WITNESSES)
     path = repo / "mcs/ingest/consumer.py"
     path.write_text("# synthetic newer reader\n")
     _git(repo, "add", ".")

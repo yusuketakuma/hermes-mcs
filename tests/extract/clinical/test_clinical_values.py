@@ -1,4 +1,8 @@
 """Fully synthetic clinical normalization regressions through real extraction."""
+import extract_llm_engine
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import extract_quality
 import extract_validation
 
@@ -71,6 +75,8 @@ def test_medication_surface_when_width_or_kana_varies(name, monkeypatch):
            "evidence": body}
     monkeypatch.setattr(extract_llm, "_llm_call",
                         lambda *a, **kw: {"symptoms": [], "meds": [raw]})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     # When: the production single-message extraction validates the response.
     med = extract_llm.llm_extract(body)["meds"][0]
     # Then: raw values survive, with surface-only, unresolved identity.
@@ -210,7 +216,10 @@ def test_lab_display_when_old_artifact_has_unsupported_values(tmp_path, monkeypa
 
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(mid=1, body=body), _message(mid=2, body=body)])
@@ -255,6 +264,8 @@ def test_lab_repair_when_evidence_becomes_supported(monkeypatch):
                     {"symptoms": [], "labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL",
                                "evidence": body}]}])
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **kw: next(replies))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     # When: the production bounded repair pass runs.
     lab = extract_llm.llm_extract(body)["labs"][0]
     # Then: derived metadata does not block acceptance of the grounding repair.

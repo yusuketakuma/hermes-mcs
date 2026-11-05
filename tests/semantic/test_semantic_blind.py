@@ -1,3 +1,4 @@
+import extract_llm_runner
 import semantic_drain
 import semantic_store
 import copy
@@ -109,6 +110,7 @@ def test_snapshot_cli_uses_explicit_artifacts_without_database_writes(tmp_path, 
             calls.append(body)
             return {"summary": "synthetic baseline"}
         monkeypatch.setattr(extract_llm, "llm_extract", baseline)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         source = tmp_path / "selections.jsonl"
         source.write_text(json.dumps(selection) + "\n")
         args = ["--input", str(source), "--output-dir", str(tmp_path / "packet"),

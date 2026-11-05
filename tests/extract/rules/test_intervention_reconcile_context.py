@@ -1,4 +1,6 @@
 """An intervention-only repair must invalidate source-bound context scans."""
+import extract_llm_runner
+import extract_llm_source_contract
 import json
 
 import extract
@@ -16,6 +18,8 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     monkeypatch.setattr(extract.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract, "_RECONCILE_IDLE_SECONDS", 0)
     monkeypatch.setattr(extract, "_RECONCILE_SECONDS", 60)
     # Approval storage is synthetic and does not access the real MCS root.

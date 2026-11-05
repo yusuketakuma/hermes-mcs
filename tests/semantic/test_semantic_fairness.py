@@ -9,6 +9,9 @@ All synthetic: stub LLM/Jev, temp SQLite. Covers:
   - observe() exposes queue ages / cohort split / scheduler / rates,
     with None (unknown) instead of fake zeros where unmeasured
 """
+import semantic_due_selection
+import semantic_job_processor
+import semantic_scheduler_state
 import writer_lock
 import cloud_inference
 import json
@@ -167,6 +170,8 @@ def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch)
     monkeypatch.setattr(semantic_drain.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
+    monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '1'])
     def no_lock():
@@ -188,6 +193,8 @@ def test_drain_cli_output_lines_carry_ts_and_pid(tmp_path, monkeypatch, capsys):
     import ledger
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
+    monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '60'])
     monkeypatch.setattr(writer_lock, 'acquire_run_lock',
@@ -258,6 +265,8 @@ def test_sched_persist_failure_holds_semantic_work(tmp_path, monkeypatch):
     _job(db, 10, eligible=True)
     monkeypatch.setattr(semantic_drain, "_sched_write",
                         lambda *a, **k: 1 / 0)
+    monkeypatch.setattr(semantic_due_selection, '_sched_write', semantic_drain._sched_write)
+    monkeypatch.setattr(semantic_scheduler_state, '_sched_write', semantic_drain._sched_write)
     errors = {"errors": []}
     out = semantic_drain.run_due(db, _cfg("shadow"), errors,
                            time.monotonic() + 300,

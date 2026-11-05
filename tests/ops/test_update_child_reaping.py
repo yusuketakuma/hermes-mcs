@@ -1,4 +1,7 @@
 """Timed-out update children are reaped before journal outcome is resolved."""
+import update_apply
+import update_lifecycle_context
+import update_runtime_migration
 import mcs_util
 import os
 import subprocess
@@ -10,6 +13,8 @@ import pytest
 @pytest.fixture
 def held_update_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "UPDATE_LOCK", str(tmp_path / "update.lock"))
+    monkeypatch.setattr(update_lifecycle_context, 'UPDATE_LOCK', mcs_update.UPDATE_LOCK)
+    monkeypatch.setattr(update_runtime_migration, 'UPDATE_LOCK', mcs_update.UPDATE_LOCK)
     fd = mcs_update.acquire_update_lock()
     assert fd is not None
     try:
@@ -97,6 +102,8 @@ def test_interrupted_update_reaps_before_propagating_original_failure(
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", start)
     monkeypatch.setattr(mcs_update, "_install_options_snapshot", lambda: ("empty", None))
+    monkeypatch.setattr(update_apply, '_install_options_snapshot', mcs_update._install_options_snapshot)
+    monkeypatch.setattr(update_runtime_migration, '_install_options_snapshot', mcs_update._install_options_snapshot)
     monkeypatch.setattr(mcs_update.os, "killpg", stop)
     monkeypatch.setattr(mcs_update.journal_store, "load_state", lambda path: {"applying": {}})
     applying = {"reinstall": True, "install_options_base": "empty"}
@@ -128,6 +135,8 @@ def test_reinstall_timeout_cleanup_errors_do_not_replace_timeout(monkeypatch, he
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda *a, **kw: Child())
     monkeypatch.setattr(mcs_update, "_install_options_snapshot", lambda: ("empty", None))
+    monkeypatch.setattr(update_apply, '_install_options_snapshot', mcs_update._install_options_snapshot)
+    monkeypatch.setattr(update_runtime_migration, '_install_options_snapshot', mcs_update._install_options_snapshot)
     monkeypatch.setattr(mcs_update.os, "killpg", lambda *a: (_ for _ in ()).throw(OSError("synthetic failure")))
     with pytest.raises(mcs_update.UpdateError, match="install_failed: timeout"):
         mcs_update._reinstall({"reinstall": True, "install_options_base": "empty"})

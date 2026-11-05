@@ -1,4 +1,13 @@
 """Synthetic checks for optional OCR installation and update registration."""
+import update_apply
+import update_cli
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import release_apply_checks
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -103,11 +112,22 @@ def test_setup_preserves_foreign_or_incomplete_environment(monkeypatch, tmp_path
 def test_updater_reinstall_only_for_opted_in_ocr(monkeypatch, opted_in):
     monkeypatch.setattr(mcs_update, 'recorded_install_args',
                         lambda: ['--with-yomitoku'] if opted_in else [])
+    monkeypatch.setattr(update_planning, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_preflight, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', mcs_update.recorded_install_args)
     calls = []
     def diff(args, **kwargs):
         calls.append(args)
         return subprocess.CompletedProcess(args, int('deployment/requirements-ocr.txt' in args), '', '')
     monkeypatch.setattr(mcs_update, '_git', diff)
+    monkeypatch.setattr(update_apply, '_git', mcs_update._git)
+    monkeypatch.setattr(update_cli, '_git', mcs_update._git)
+    monkeypatch.setattr(update_planning, '_git', mcs_update._git)
+    monkeypatch.setattr(update_preflight, '_git', mcs_update._git)
+    monkeypatch.setattr(update_recovery, '_git', mcs_update._git)
+    monkeypatch.setattr(update_repository, '_git', mcs_update._git)
+    monkeypatch.setattr(update_restore, '_git', mcs_update._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', mcs_update._git)
     errors = mcs_update._precheck_target_runtime_files('synthetic', False)
     assert errors == (['ocr_requirements_changed'] if opted_in else [])
     assert 'ocr_requirements_changed' in update_policy.REINSTALL_ERRORS
@@ -143,8 +163,14 @@ def test_reinstall_keeps_recorded_yomitoku_selection(monkeypatch):
         return Child()
 
     monkeypatch.setattr(mcs_update, '_verify_install_options_base', lambda _a: 'synthetic-base')
+    monkeypatch.setattr(update_apply, '_verify_install_options_base', mcs_update._verify_install_options_base)
+    monkeypatch.setattr(update_runtime_migration, '_verify_install_options_base', mcs_update._verify_install_options_base)
     monkeypatch.setattr(mcs_update, 'recorded_install_args', lambda: ['--with-yomitoku'])
+    monkeypatch.setattr(update_planning, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_preflight, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', mcs_update.recorded_install_args)
     monkeypatch.setattr(release_apply_owner, '_verify_inherited_lock', lambda *_a: None)
+    monkeypatch.setattr(release_apply_checks, '_verify_inherited_lock', release_apply_owner._verify_inherited_lock)
     monkeypatch.setattr(mcs_update.owned_process, '_inherited_fds', inherited)
     monkeypatch.setattr(mcs_update.subprocess, 'Popen', popen)
     monkeypatch.setenv(mcs_update.UPDATE_LOCK_FD_ENV, '7')

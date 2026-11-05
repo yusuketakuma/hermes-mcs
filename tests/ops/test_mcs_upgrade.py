@@ -1,6 +1,17 @@
 """Upgrade path — scripts/mcs_upgrade.py launcher + mcs_update plan /
 reinstall. Fully synthetic: temp git repos, stubbed launchctl/install.sh.
 """
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import service_contract
 import service_management
@@ -207,6 +218,7 @@ def test_launcher_extracts_the_exact_local_candidate_without_fetch(tmp_path, mon
             " 'files': sorted(str(p.relative_to(root)) for p in root.rglob('*') if p.is_file())}))\n"),
         "mcs/core/synthetic.py": "# synthetic candidate contract\n",
         "deployment/recovery/mcs_recover.py": "# synthetic independent recovery\n",
+        "deployment/recovery/mcs_recovery_core.py": "# synthetic companion\n",
         "adapters/synthetic.py": "# must not be staged\n",
     }
     for name, content in files.items():
@@ -473,7 +485,11 @@ def _plan_env(updater, monkeypatch, tmp_path, tag_errors, *, legacy=False,
     _git(repo, "fetch", "-q", "--tags")
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg or {})
     monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(updater, "precheck_tag", lambda t: list(tag_errors))
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     return repo
 
 
@@ -557,6 +573,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
                         in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     return repo, sha
 
 
@@ -603,6 +620,9 @@ def test_reinstall_runs_install_before_services(updater, prepared_run_log, monke
     calls = _fake_install(monkeypatch)
     monkeypatch.setattr(updater, "_services_reconcile",
                         lambda: calls.append("services"))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     rc = updater.apply("v1.2.0", None, None, reinstall=True,
                        install_args=("--no-llm",))
     assert rc == 0, updater.journal_store.load_state(updater.STATE_PATH)["attempts"]
@@ -619,6 +639,7 @@ def test_update_runs_same_root_settings_migration_before_merge_once(updater, pre
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
                         in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     _fake_install(monkeypatch)
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')
@@ -640,6 +661,9 @@ def test_update_runs_same_root_settings_migration_before_merge_once(updater, pre
             stages.append(stage)
         return journal(state, stage)
     monkeypatch.setattr(updater, 'journal', track)
+    monkeypatch.setattr(update_apply, 'journal', updater.journal)
+    monkeypatch.setattr(update_recovery, 'journal', updater.journal)
+    monkeypatch.setattr(update_runtime_migration, 'journal', updater.journal)
     assert updater.apply('v1.2.0', sha, None, reinstall=reinstall,
                          install_args=('--no-llm',) if reinstall else ()) == 0
     assert stages == ['settings_migration']
@@ -658,6 +682,7 @@ def test_apply_same_head_recopies_legacy_settings_after_prior_loss(updater, monk
     legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
     before = legacy.read_bytes()
     monkeypatch.setattr(updater, '_run_post_merge', lambda *_a, **_k: pytest.fail('same head cannot merge'))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     assert updater.apply('v1.1.0', sha, None) == 0
     assert json.loads(config.read_text()) == {'unknown': {'keep': True}, 'install_args': ['--no-llm']}
     assert legacy.read_bytes() == before
@@ -677,7 +702,10 @@ def test_postmerge_lost_settings_do_not_record_update_success(updater, monkeypat
         config.write_text('{"unknown": {"keep": true}}')
 
     monkeypatch.setattr(updater, '_run_post_merge', old_writer_after_migration)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     monkeypatch.setattr(updater, '_rollback_tree', lambda *_a, **_k: None)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     assert updater.apply('v1.2.0', sha, None) == 1
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert not state.get('applied')
@@ -803,6 +831,7 @@ def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, prep
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
                         in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda *_a, **_k: [])
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')
@@ -823,6 +852,8 @@ def test_failed_reinstall_rolls_the_tree_back(updater, monkeypatch, tmp_path):
     _fake_install(monkeypatch, rc=1)
     rolled = []
     monkeypatch.setattr(updater, "_rollback_tree", lambda e, on_hold=None: rolled.append(e))
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     assert updater.apply("v1.2.0", None, None, reinstall=True) == 1
     assert rolled and rolled[0]["prev_sha"] == before
     assert "install_failed" in updater.journal_store.load_state(updater.STATE_PATH)["attempts"]["v1.2.0"]["detail"]
@@ -843,10 +874,15 @@ def test_quiesce_stops_legacy_drainer_only_when_installed(updater, monkeypatch,
     agents = tmp_path / "agents"
     agents.mkdir()
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(agents))
+    monkeypatch.setattr(update_lifecycle_context, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
+    monkeypatch.setattr(update_preflight, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
+    monkeypatch.setattr(update_services, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
     monkeypatch.setattr(mcs_update, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(update_services, '_stray_drainer_pids', mcs_update._stray_drainer_pids)
     ran = []
     monkeypatch.setattr(mcs_update, "_run", lambda argv, **k: ran.append(argv))
+    monkeypatch.setattr(update_services, '_run', mcs_update._run)
     mcs_update.quiesce()
     assert ran == []
     (agents / "ai.mcs.extract-drainer-rt.plist").write_text("")
@@ -896,6 +932,12 @@ def test_reinstall_done_clears_a_promoted_unfinished_reinstall(
     operator finished install.sh by hand."""
     _plan_env(updater, monkeypatch, tmp_path, [])
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": "b" * 40, "reinstall": True}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
@@ -909,6 +951,12 @@ def test_reinstall_done_clears_a_promoted_unfinished_reinstall(
 
 def test_reinstall_done_lets_recover_finish_the_journal(updater, monkeypatch):
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     calls = []
 
     def recover(*, _resume_provider_migration):
@@ -917,6 +965,9 @@ def test_reinstall_done_lets_recover_finish_the_journal(updater, monkeypatch):
         return 0
 
     monkeypatch.setattr(updater, "recover_interrupted", recover)
+    monkeypatch.setattr(update_apply, 'recover_interrupted', updater.recover_interrupted)
+    monkeypatch.setattr(update_cli, 'recover_interrupted', updater.recover_interrupted)
+    monkeypatch.setattr(update_recovery, 'recover_interrupted', updater.recover_interrupted)
     state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40, "reinstall": True}
     updater.journal_store.save_state(updater.STATE_PATH, state)
@@ -930,6 +981,8 @@ def test_plan_reports_gate_crash_as_blocker(updater, monkeypatch, tmp_path):
     def boom(tag):
         raise updater.UpdateError("cat-file failed")
     monkeypatch.setattr(updater, "precheck_tag", boom)
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     p = updater.plan("v1.2.0")
     assert p["route"] == "blocked" and p["blockers"][0].startswith("plan_failed")
 
@@ -975,11 +1028,12 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
     files = {str(p.relative_to(ROOT)): p.read_bytes()
              for p in (ROOT / "mcs").rglob("*.py")}
     helper = "deployment/recovery/mcs_recover.py"
-    files[helper] = (ROOT / helper).read_bytes()
+    files.update({str(path.relative_to(ROOT)): path.read_bytes()
+                  for path in (ROOT / 'deployment/recovery').glob('*.py')})
 
     def git(repo, *args, binary=False):
         if args[0] == "ls-tree":
-            assert args[4:] == ("mcs", helper)
+            assert args[4:] == ("mcs", "deployment/recovery")
             return "".join(f"100644 blob {name}\t{name}\0" for name in files)
         assert args[:2] == ("cat-file", "blob") and binary
         return files[args[2]]
@@ -1002,11 +1056,12 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     files = {str(p.relative_to(ROOT)): p.read_bytes()
              for p in (ROOT / 'mcs').rglob('*.py')}
     helper = 'deployment/recovery/mcs_recover.py'
-    files[helper] = (ROOT / helper).read_bytes()
+    files.update({str(path.relative_to(ROOT)): path.read_bytes()
+                  for path in (ROOT / 'deployment/recovery').glob('*.py')})
 
     def git(_repo, *args, binary=False):
         if args[0] == 'ls-tree':
-            assert args[4:] == ('mcs', helper)
+            assert args[4:] == ('mcs', 'deployment/recovery')
             return ''.join(f'100644 blob {name}\t{name}\0' for name in files)
         assert args[:2] == ('cat-file', 'blob') and binary
         return files[args[2]]
@@ -1018,9 +1073,17 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     spec.loader.exec_module(candidate)
     assert candidate._request_gateway_restart is not None
     frozen = candidate._request_gateway_restart.__globals__['_GATEWAY_RESTART_PROGRAM']
-    assert candidate._request_gateway_restart.__globals__['__file__'] == str(staged / helper)
+    captured = candidate._request_gateway_restart.__globals__
+    source_path = Path(captured['__file__'])
+    assert source_path.name == 'mcs_recovery_gateway.py'
+    assert source_path.parent.parent == staged / 'deployment/recovery'
+    assert source_path.parent.name.startswith('runtime-')
+    assert captured['__loader__'].raw == files['deployment/recovery/mcs_recovery_gateway.py']
 
     (staged / 'install.sh').write_bytes((ROOT / 'install.sh').read_bytes())
+    install_dir = staged / 'deployment/install'
+    install_dir.mkdir(parents=True)
+    (install_dir / 'runtime.sh').write_bytes((ROOT / 'deployment/install/runtime.sh').read_bytes())
     template = staged / 'deployment/launchagents/org.mcs.recovery.plist'
     template.parent.mkdir(parents=True)
     template.write_bytes((ROOT / 'deployment/launchagents/org.mcs.recovery.plist').read_bytes())

@@ -21,10 +21,10 @@ def _module(name, rel):
 def test_failed_report_publication_preserves_previous_file_and_removes_temporary(
         tmp_path, monkeypatch, writer, failure):
     module = _module("synthetic_recovery_cleanup", "deployment/recovery/mcs_recover.py")
-    monkeypatch.setattr(module, "DATA", str(tmp_path))
+    monkeypatch.setattr(module.mcs_recovery_core, "DATA", str(tmp_path))
     report = tmp_path / f"{writer}.json"
     report.write_text('{"synthetic":"prior"}')
-    monkeypatch.setattr(module, "REPORT_PATH", str(report))
+    monkeypatch.setattr(module.mcs_recovery_core, "REPORT_PATH", str(report))
     live, backup = tmp_path / "live.db", tmp_path / "backup.db"
     for path in (live, backup):
         db = sqlite3.connect(path)
@@ -33,7 +33,7 @@ def test_failed_report_publication_preserves_previous_file_and_removes_temporary
                              "INSERT INTO messages VALUES(1,1);")
         finally:
             db.close()
-    monkeypatch.setattr(module, "LEDGER", str(live))
+    monkeypatch.setattr(module.mcs_recovery_core, "LEDGER", str(live))
 
     def failed_replace(*args):
         raise failure("synthetic publish failure")
@@ -42,8 +42,8 @@ def test_failed_report_publication_preserves_previous_file_and_removes_temporary
 
     def publish():
         if writer == "recovery_report":
-            return module._report("synthetic", "synthetic")
-        return module._loss_report(str(backup))
+            return module.mcs_recovery_core._report("synthetic", "synthetic")
+        return module.mcs_recovery_database._loss_report(str(backup))
 
     if failure is KeyboardInterrupt:
         with pytest.raises(KeyboardInterrupt):

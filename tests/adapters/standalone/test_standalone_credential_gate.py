@@ -1,4 +1,5 @@
 """A synthetic gate coordinates readers without enabling credential changes."""
+import setup_integration
 import asyncio
 import fcntl
 import os
@@ -213,8 +214,10 @@ def _setup_root(tmp_path, monkeypatch):
     from standalone_testkit import write_root
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
 
 

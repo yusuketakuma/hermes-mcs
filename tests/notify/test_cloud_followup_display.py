@@ -1,4 +1,7 @@
 """Display required cloud completion independently of the adopted local result."""
+import extract_llm_errors
+import extract_llm_selection
+import extract_llm_store
 import pytest
 
 import cloud_inference
@@ -23,6 +26,9 @@ def test_selected_cloud_has_no_invented_transport_status(led, monkeypatch, compl
     calls = []
     monkeypatch.setattr(extract_llm, "cloud_completion", lambda db, row, selected: calls.append(
         (row["project_id"], row["message_id"], selected)) or completion)
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", expected)
     assert calls == [(1, 100, contract)]
 
@@ -42,6 +48,9 @@ def test_unverified_history_permission_does_not_hide_required_cloud(led, monkeyp
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: False)
     monkeypatch.setattr(extract_llm, "cloud_completion", lambda *args: pytest.fail("unapproved source read"))
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
 
 

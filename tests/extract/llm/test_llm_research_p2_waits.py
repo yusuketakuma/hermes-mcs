@@ -1,5 +1,15 @@
 """Resident idle waits follow the earliest future due job (synthetic ledger,
 fake clock, every LLM POST path fail-stubbed)."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import writer_lock
 import json
 import sqlite3
@@ -49,23 +59,41 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm.time, "time", lambda: WALL0 + mono[0])
     monkeypatch.setattr(extract_llm.time, "sleep", sleep)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "_background_semantic",
                         lambda *a, **k: {"errors": [], "done": 0})
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', extract_llm._background_semantic)
     monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a, **k: {"status": "complete", "done": 0})
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', extract_llm._background_context_refresh)
     base = result or {"done": 0, "failed": 0, "selected": 0, "left": 0}
     monkeypatch.setattr(extract_llm, "run_pending",
                         lambda *a, **k: {**base, "carry": list(carry or [])})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle or (lambda *a, **k: None))
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(extract_llm.local_llm, "chat",
                         lambda *a, **k: pytest.fail("LLM POST during idle"))
     monkeypatch.setattr(extract_llm, "_opener_request",
                         lambda *a, **k: pytest.fail("LLM POST during idle"))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", *flags, "--stop-after", "400"])
     assert extract_llm.main() == 0

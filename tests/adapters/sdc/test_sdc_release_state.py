@@ -1,4 +1,5 @@
 """明示した合成基線と公開署名fixtureで、H/bindingの保存を検証する。"""
+import release_apply_checks
 import copy
 import fcntl
 import json
@@ -244,6 +245,7 @@ def native_child(store, tmp_path, monkeypatch):
     path = data / 'update_state.json'
     update_journal.save_state(path, journal)
     monkeypatch.setattr(release_apply_owner, '_control_root', lambda _home: store.root)
+    monkeypatch.setattr(release_apply_checks, '_control_root', release_apply_owner._control_root)
     update = os.open(data / 'update.lock', os.O_CREAT | os.O_RDWR, 0o600)
     run = os.open(data / 'run.lock', os.O_CREAT | os.O_RDWR, 0o600)
     reader, writer = os.pipe()
@@ -268,6 +270,7 @@ def test_native_child_adopts_once_without_shared_gate_or_owner_state_changes(nat
     before = state.status(store)
     monkeypatch.setattr(release_apply_owner, '_open_release_gate',
                         lambda *_: pytest.fail('exclusive child tried legacy shared G'))
+    monkeypatch.setattr(release_apply_checks, '_open_release_gate', release_apply_owner._open_release_gate)
     result = release_apply_owner._adopt_post_merge(child['home'], child['repo'], **child['parameters'])
     assert result['applying']['release_child']['phase'] == 'consumed'
     assert update_journal.load_state(child['path']) == result

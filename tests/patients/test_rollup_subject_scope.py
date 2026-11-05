@@ -1,4 +1,11 @@
 """旧抽出と混在原文の主体を完全合成データで集約時に検証する。"""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import clinical_scope
 import json
 import re
@@ -18,7 +25,14 @@ import rollup
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     ledger = make_ledger(tmp_path)
     ledger.ensure_patient(1)
     ledger.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "

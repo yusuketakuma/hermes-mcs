@@ -1,4 +1,5 @@
 """v4 (extract_llm) vitals guard and thin-check regressions (synthetic)."""
+import extract_llm_runner
 import clinical_values
 import extract_quality
 import extract_validation
@@ -89,7 +90,9 @@ def test_reply_counts_as_fact_in_sql_thin_check(tmp_path, monkeypatch):
         calls = []
         monkeypatch.setattr(extract_llm, 'llm_extract',
                             lambda *a, **kw: calls.append(1))
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         extract_llm.run_pending(db, limit=10, budget_s=30)
         assert calls == []
         assert json.loads(db.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()[0]) == content

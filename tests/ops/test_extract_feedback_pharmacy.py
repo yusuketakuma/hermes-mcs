@@ -1,4 +1,5 @@
 """Synthetic pharmacy feedback preserves human confirmation, source pins and one retry."""
+import extract_llm_runner
 import json
 import uuid
 
@@ -51,6 +52,7 @@ def test_new_feedback_field_end_to_end_reextracts_once(tmp_path, monkeypatch, fi
         calls = []
         monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **kwargs:
                             calls.append(body) or {"summary": "服薬管理の報告"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         assert extract_llm.run_pending(db, limit=5, budget_s=30)["done"] == 1
         assert calls == [BODY]
         result = db.artifacts("extract_llm", message_id=1)

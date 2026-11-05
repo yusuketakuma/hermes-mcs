@@ -3,6 +3,8 @@ result can wait out a tick's hold on the run lock and still be written.
 
 A long-output call must leave enough time to reacquire the run lock
 and preserve its completed work before the job deadline."""
+import semantic_job_processor
+import semantic_summary_stages
 import writer_lock
 import semantic_audit
 import semantic_policy
@@ -271,6 +273,7 @@ def test_a_jev_cutoff_in_the_re_audit_keeps_the_repaired_summary(
         return [], True
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_audit, 'audit_claims', audit_claims)
     db = _seeded(tmp_path)
     with db.db:
@@ -317,6 +320,7 @@ def test_a_jev_cutoff_in_the_relation_pass_commits_results_and_resumes(
         return real_update(ledger, pid, bundle, facts, jev_client, *a, **k)
 
     monkeypatch.setattr(semantic_drain, "update_loops", update_loops)
+    monkeypatch.setattr(semantic_job_processor, 'update_loops', semantic_drain.update_loops)
     db = _seeded_two(tmp_path)
     try:
         out = _rerun(db, _cfg("shadow"), lane="backlog", max_jobs=1)
@@ -349,6 +353,7 @@ def test_a_budget_stop_after_a_repair_dispatch_keeps_the_earlier_target(
         return [], True
 
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     monkeypatch.setattr(semantic_audit, 'audit_claims', audit_claims)
     db = _seeded(tmp_path)
     try:

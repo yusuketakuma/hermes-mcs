@@ -1,4 +1,15 @@
 """Synthetic pre-transfer failures reclaim only the seven owned ops descriptors."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import errno
 import hashlib
 import os
@@ -58,12 +69,36 @@ def test_ops_owned_stream_failure_closes_descriptor(tmp_path, monkeypatch, opera
                     output = ""
                 return subprocess.CompletedProcess(args, 0, output, "")
             monkeypatch.setattr(mcs_update, "REPO", str(tmp_path))
+            monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+            monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
             monkeypatch.setattr(mcs_update, "_git", git)
+            monkeypatch.setattr(update_apply, '_git', mcs_update._git)
+            monkeypatch.setattr(update_cli, '_git', mcs_update._git)
+            monkeypatch.setattr(update_planning, '_git', mcs_update._git)
+            monkeypatch.setattr(update_preflight, '_git', mcs_update._git)
+            monkeypatch.setattr(update_recovery, '_git', mcs_update._git)
+            monkeypatch.setattr(update_repository, '_git', mcs_update._git)
+            monkeypatch.setattr(update_restore, '_git', mcs_update._git)
+            monkeypatch.setattr(update_runtime_migration, '_git', mcs_update._git)
             def invoke():
                 mcs_update._local_changes_outside("synthetic-before", "synthetic-after")
         else:
             monkeypatch.setattr(mcs_update, "LEDGER", str(tmp_path / "ledger.db"))
+            monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+            monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+            monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+            monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+            monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+            monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
             monkeypatch.setattr(mcs_update, "_settle_staging", lambda _directory: None)
+            monkeypatch.setattr(update_restore, '_settle_staging', mcs_update._settle_staging)
             def release(root, record, journaled):
                 settle.append((record, journaled))
                 path = Path(root) / record["name"]
@@ -71,6 +106,7 @@ def test_ops_owned_stream_failure_closes_descriptor(tmp_path, monkeypatch, opera
                 assert path.stat().st_ino == record["ino"]
                 path.unlink()
             monkeypatch.setattr(mcs_update, "_release_staging", release)
+            monkeypatch.setattr(update_restore, '_release_staging', mcs_update._release_staging)
             monkeypatch.setattr(mcs_update.journal_store, "save_state",
                                 lambda *_a, **_kw: pytest.fail("no journal write before transfer"))
             monkeypatch.setattr(mcs_update.sqlite3, "connect",

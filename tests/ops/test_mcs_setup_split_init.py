@@ -1,4 +1,5 @@
 """Synthetic setup edits preserve and revalidate split provider settings."""
+import setup_config_snapshot
 import hashlib
 import json
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ def split(tmp_path, monkeypatch):
     _put(data / '.provider-settings-authority.json', {'version': 2, 'state': 'committed', 'files': hashes,
          'common_policy_sha256': provider_settings.common_policy_digest(common)})
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(tmp_path / 'config.json'))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(tmp_path / 'config.json'))
     monkeypatch.setattr(mcs_setup, 'HOME', str(tmp_path))
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda name, root=None: None)
     owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
@@ -298,6 +300,7 @@ def test_split_init_rejects_replaced_root_link_to_same_target(split, monkeypatch
     alias = root.parent / (root.name + '-synthetic-link')
     alias.symlink_to(root, target_is_directory=True)
     monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(alias / 'config.json'))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(alias / 'config.json'))
     monkeypatch.setattr(mcs_setup, 'HOME', str(alias))
     cfg, initial = mcs_setup._init_config_snapshot()
     cfg['self_posts'] = True

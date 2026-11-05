@@ -1,4 +1,15 @@
 """Unpublished fixed commits use the normal synthetic update and recovery pipeline."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 from pathlib import Path
 
 import pytest
@@ -32,7 +43,10 @@ def _candidate_env(updater, monkeypatch, *, errors=()):
     monkeypatch.setattr(update_discovery, "remote_tag_sha",
                         lambda *a, **k: pytest.fail("candidate must not contact origin"))
     monkeypatch.setattr(updater, "_plan_runtime_migration", lambda *a, **k: None)
+    monkeypatch.setattr(update_apply, '_plan_runtime_migration', updater._plan_runtime_migration)
+    monkeypatch.setattr(update_runtime_migration, '_plan_runtime_migration', updater._plan_runtime_migration)
     monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     return repo, base, target
 
 
@@ -68,6 +82,15 @@ def test_candidate_rejects_invalid_or_nonhuman_arguments_before_state(
 def test_candidate_requires_a_local_commit_object(updater, tmp_path, monkeypatch, kind):
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     base = _git(repo, "rev-parse", "HEAD").stdout.strip()
     target = {"missing": "0" * 40, "blob": "HEAD:f.txt",
               "tree": "HEAD^{tree}", "tag": "refs/tags/v1.1.0"}[kind]
@@ -101,6 +124,8 @@ def test_candidate_plan_keeps_recovery_guidance_without_parsing_sha_as_a_version
     _git(repo, "tag", "v1.2.0", target)
     blockers = ["recovery_runtime: synthetic unavailable runtime"]
     monkeypatch.setattr(updater, "precheck_local", lambda cfg: list(blockers))
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(service_management, "recovery_repair_pending", lambda *a, **k: True)
     parsed_versions = []
     release_notes = [{"version": "1.2.0", "notes": "synthetic release guidance"}]
@@ -110,6 +135,7 @@ def test_candidate_plan_keeps_recovery_guidance_without_parsing_sha_as_a_version
         return release_notes
 
     monkeypatch.setattr(updater, "upgrade_notes", version_notes)
+    monkeypatch.setattr(update_planning, 'upgrade_notes', updater.upgrade_notes)
     recovery_notes = updater._recovery_notes({}, blockers, ["install_sh_changed"])
     assert len(recovery_notes) == 2
     candidate = updater.plan(candidate_sha=target, base_sha=base)
@@ -170,12 +196,30 @@ def test_candidate_applies_under_locks_and_records_human_reason_without_fetch(
         return git(argv, *args, **kwargs)
 
     monkeypatch.setattr(updater, "_git", checked_git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(maintenance, "preupdate_backup",
                         lambda *a: trace.append("backup") or "synthetic-backup")
     monkeypatch.setattr(updater, "quiesce", lambda: trace.append("quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: trace.append("services"))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "restart_agents", lambda: trace.append("restart") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_postcheck", lambda *a: trace.append("postcheck") or [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     assert _apply(updater, target, base) == 0
     assert trace == ["backup", "quiesce", "merge", "services", "restart", "postcheck"]
     saved = updater.journal_store.load_state(updater.STATE_PATH)
@@ -199,7 +243,11 @@ def test_candidate_rechecks_the_reviewed_base_after_acquiring_run_lock(updater, 
         return descriptor
 
     monkeypatch.setattr(updater, "_acquire_run_lock_wait", changed_base)
+    monkeypatch.setattr(update_apply, '_acquire_run_lock_wait', updater._acquire_run_lock_wait)
+    monkeypatch.setattr(update_recovery, '_acquire_run_lock_wait', updater._acquire_run_lock_wait)
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("changed base must not quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     assert _apply(updater, target, base) == 1
     saved = updater.journal_store.load_state(updater.STATE_PATH)
     assert "base_sha_mismatch" in saved["attempts"]["candidate:" + target]["detail"]
@@ -213,6 +261,8 @@ def test_candidate_rejects_non_fast_forward_before_backup(updater, monkeypatch):
     diverged = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _mk_schema(updater.LEDGER, 9)
     monkeypatch.setattr(updater, "precheck_tag", _REAL_PRECHECK_TAG)
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(maintenance, "preupdate_backup",
                         lambda *a: pytest.fail("non-ff target must not reach backup"))
     assert _apply(updater, target, diverged) == 1
@@ -224,7 +274,11 @@ def test_candidate_rejects_non_fast_forward_before_backup(updater, monkeypatch):
 def test_candidate_postmerge_failure_uses_the_existing_rollback(updater, monkeypatch):
     repo, base, target = _candidate_env(updater, monkeypatch)
     monkeypatch.setattr(updater, "_postcheck", lambda *a: ["synthetic_failure"])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     monkeypatch.setattr(updater, "_rollback_layout_error", lambda *a: None)
+    monkeypatch.setattr(update_apply, '_rollback_layout_error', updater._rollback_layout_error)
+    monkeypatch.setattr(update_restore, '_rollback_layout_error', updater._rollback_layout_error)
     monkeypatch.setattr(service_management, "retire_to_snapshot", lambda *a, **k: [])
     assert _apply(updater, target, base) == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
@@ -243,10 +297,13 @@ def test_candidate_journal_remains_readable_by_the_independent_recovery(updater,
     state["stages"] = [{"stage": "merge", "at": 1}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     recovery = _load()
-    assert recovery._valid_state(state)
-    monkeypatch.setattr(recovery, "STATE_PATH", updater.STATE_PATH)
-    assert recovery._load_state()["applying"] == record
+    assert recovery.mcs_recovery_core._valid_state(state)
+    monkeypatch.setattr(recovery.mcs_recovery_core, "STATE_PATH", updater.STATE_PATH)
+    assert recovery.mcs_recovery_core._load_state()["applying"] == record
     monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     assert updater.recover_interrupted() == 0
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None

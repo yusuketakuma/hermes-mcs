@@ -1,4 +1,5 @@
 """A/B uses the real formatter and scores a reference on the same grounded unit."""
+import extract_llm_runner
 import extract_validation
 import json
 from pathlib import Path
@@ -84,6 +85,7 @@ def test_on_off_cli_path_passes_effective_context_and_records_its_digest(tmp_pat
         return output(source, refs=bool(kwargs.get("references")))
 
     monkeypatch.setattr(llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     reports = []
     for mode in ("off", "on"):
         out = tmp_path / (mode + ".json")
@@ -109,6 +111,7 @@ def test_off_mode_can_call_a_baseline_engine_without_the_reference_parameter(tmp
         return {}
 
     monkeypatch.setattr(llm, "llm_extract", old_signature)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     assert bench.cmd_run(SimpleNamespace(cases=str(path), mock_ok=False, out=str(tmp_path / "out.json"),
                                           tag="baseline", patient_state="off")) == 0
     assert calls == [(case["body"], None, case["posted_at"])]
@@ -126,6 +129,7 @@ def test_a_case_without_history_has_the_same_effective_input_and_digest_in_both_
         return {}
 
     monkeypatch.setattr(llm, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
     digests = []
     for mode in ("off", "on"):
         out = tmp_path / (mode + ".json")

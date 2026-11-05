@@ -1,4 +1,17 @@
 """Synthetic checkpoint replay must preserve newest-source and paid-dispatch boundaries."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 
 import pytest
@@ -13,9 +26,14 @@ def source(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     ledger.save_messages([_message(body="本人は合成の記録を共有しました。" * 10)])
     monkeypatch.setattr(llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
     monkeypatch.setattr(llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(llm, "_rerender_cards", lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     monkeypatch.setattr(llm, "_probe_format", lambda **kwargs: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', llm._probe_format)
     row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = dependency_loss.source_binding(ledger.db, 1, 1)
     yield ledger, row
@@ -43,6 +61,7 @@ def test_identical_success_replay_keeps_checkpoint_and_rerenders(source, monkeyp
     ledger, row = source
     renders = []
     monkeypatch.setattr(llm, "_rerender_cards", lambda *args: renders.append(args[1:]))
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     for _ in range(12):
         assert llm._persist_chunks(ledger, row, {0: _completed()})
     records = _rows(ledger)
@@ -58,6 +77,8 @@ def test_deferred_later_piece_reuses_completed_piece_without_new_rows(source, mo
     assert llm._persist_chunks(ledger, row, {0: _completed()}, chunk_size=size)
     calls = []
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: calls.append(1) or llm._DEFERRED)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     for tick in range(5):
         splits, saved = llm._saved_chunk_state(ledger.db, row, chunk_size=size)
         meta = {}
@@ -82,6 +103,8 @@ def test_deferred_later_piece_does_not_duplicate_replayed_unconfirmed_checkpoint
     assert lease is not None
     calls = []
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: calls.append(1) or llm._DEFERRED)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     for tick in range(5):
         splits, saved = llm._saved_chunk_state(ledger.db, row, chunk_size=size)
         assert saved[0]["_quality_result"] == checkpoint["_quality_result"]
@@ -106,6 +129,8 @@ def test_ordinary_callback_still_receives_unsaved_caller_chunk(source, monkeypat
     assert not _rows(ledger)
     received = []
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: llm._DEFERRED)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     result = llm.llm_extract(row["body_text"], chunk_size=size, chunks_in={0: checkpoint},
                              on_chunk=lambda key, value: received.append((key, value)))
     assert result is llm._DEFERRED and received == [(0, checkpoint)]
@@ -178,6 +203,10 @@ def test_replay_write_failure_rolls_back_only_its_savepoint(source, monkeypatch)
         raise RuntimeError("synthetic replay failure")
 
     monkeypatch.setattr(llm, "_saved_chunk_state", fail_during_read)
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     with pytest.raises(RuntimeError, match="synthetic replay failure"):
         llm._persist_chunks(ledger, row, {0: checkpoint}, replay=True, lease=lease)
     assert ledger.db.in_transaction and [tuple(record) for record in _rows(ledger)] == before
@@ -230,9 +259,22 @@ def test_run_pending_reuses_unconfirmed_checkpoint_without_writing_it_again(sour
     first = _source_with_unresolved_hint(ledger)
     ledger.save_messages([_message(mid=2, body=first["body_text"])])
     monkeypatch.setattr(llm, "_CHUNK_SIZE", 50)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', llm._CHUNK_SIZE)
     monkeypatch.setattr(llm, "load_config", lambda: {
         "extract": {"patient_state_context": False, "prefilter": False},
         "local_llm": {"model": "synthetic-model"}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, 2, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
     assert len(jobs) == 2 and not skipped and not blocked
@@ -243,6 +285,8 @@ def test_run_pending_reuses_unconfirmed_checkpoint_without_writing_it_again(sour
     before = [tuple(record) for record in _rows(ledger)]
     calls = []
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: calls.append(1) or llm._DEFERRED)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     for attempt in range(2):
         result = llm.run_pending(ledger, limit=2, budget_s=200, workers=workers)
         assert result["deferred"] == 2 and len(calls) == 2 * (attempt + 1)
@@ -253,6 +297,14 @@ def test_claim_refreshes_a_checkpoint_advanced_after_preparation(source, monkeyp
     ledger, _ = source
     monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"prefilter": False},
                                                     "local_llm": {"model": "synthetic-model"}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, 1, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
     assert len(jobs) == 1 and not skipped and not blocked
@@ -271,7 +323,10 @@ def test_claim_refreshes_a_checkpoint_advanced_after_preparation(source, monkeyp
         return original_claim(current_ledger, current_row, *args, **kwargs)
 
     monkeypatch.setattr(llm, "_claim", claim_after_other_owner)
+    monkeypatch.setattr(extract_llm_runner, '_claim', llm._claim)
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: pytest.fail("cached source was resent"))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     result = llm.run_pending(ledger, limit=1, budget_s=200)
     assert advanced == [True] and result["done"] == 1
     [final] = ledger.db.execute("SELECT content FROM artifacts WHERE kind='extract_llm' AND message_id=1").fetchall()
@@ -285,6 +340,14 @@ def test_newer_checkpoint_during_replay_defers_before_final_commit(source, monke
         ledger.save_messages([_message(mid=2, body=first["body_text"])])
     monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"prefilter": False},
                                                     "local_llm": {"model": "synthetic-model"}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, workers, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
     assert len(jobs) == workers and not skipped and not blocked
@@ -306,7 +369,10 @@ def test_newer_checkpoint_during_replay_defers_before_final_commit(source, monke
         return result
 
     monkeypatch.setattr(llm, "_persist_chunks", advance_before_replay)
+    monkeypatch.setattr(extract_llm_runner, '_persist_chunks', llm._persist_chunks)
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: pytest.fail("cached source was resent"))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     result = llm.run_pending(ledger, limit=workers, budget_s=200, workers=workers)
     assert observed == ["advanced", "deferred"] and result["deferred"] >= 1
     assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm' AND message_id=1").fetchone()
@@ -326,6 +392,8 @@ def test_repeated_real_dispatch_with_unresolved_result_retains_both_attempts(sou
         {"text": "咳", "status": "ongoing", "subject": "patient", "evidence": "咳"}]}
     calls = []
     monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: calls.append(1) or model_result)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     hints = llm._rule_hints({"body_text": body, "posted_at": row["posted_at"]})
     for attempt in range(2):
         meta = {}
@@ -382,6 +450,11 @@ def test_newer_legacy_scope_and_plan_change_do_not_reuse_old_rows(source, monkey
                         message_id=1, model=latest["model"], meta=json.loads(latest["meta"]))
     assert llm._persist_chunks(ledger, row, {0: _completed()})
     monkeypatch.setattr(llm, "PLAN_VERSION", llm.PLAN_VERSION + 1)
+    monkeypatch.setattr(extract_llm_context, 'PLAN_VERSION', llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_errors, 'PLAN_VERSION', llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_progress, 'PLAN_VERSION', llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_proofs, 'PLAN_VERSION', llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_store, 'PLAN_VERSION', llm.PLAN_VERSION)
     assert llm._persist_chunks(ledger, row, {0: _completed()})
     assert len(_rows(ledger)) == 4
 

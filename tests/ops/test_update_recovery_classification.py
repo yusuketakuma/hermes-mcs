@@ -1,4 +1,15 @@
 """Synthetic recovery route tables and ordered observations across live hold rereads."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 from itertools import product
 
 import pytest
@@ -110,34 +121,104 @@ def _trace_world(updater, monkeypatch, *, applying=None, markers=(None,),
         pytest.fail("unexpected machine operation in synthetic recovery trace")
 
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: trace.append("runtime_gate"))
+    monkeypatch.setattr(update_apply, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_recovery, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_runtime_migration, '_check_runtime_restore', updater._check_runtime_restore)
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: trace.append("cleanup") or [])
+    monkeypatch.setattr(update_recovery, '_clean_stale_git_locks', updater._clean_stale_git_locks)
     monkeypatch.setattr(updater, "_journal_consent_from_marker", lambda *a: trace.append("adopt_marker"))
+    monkeypatch.setattr(update_recovery, '_journal_consent_from_marker', updater._journal_consent_from_marker)
     monkeypatch.setattr(updater, "_last_report", lambda: {})
+    monkeypatch.setattr(update_lifecycle_context, '_last_report', updater._last_report)
+    monkeypatch.setattr(update_recovery, '_last_report', updater._last_report)
     # Recovery now reads the shared writer gate, which includes unfinished
     # restore journals as well as narrow awaiting-consent marker phases.
     monkeypatch.setattr(updater, "_restore_writer_hold_marker", marker)
+    monkeypatch.setattr(update_lifecycle_context, '_restore_writer_hold_marker', updater._restore_writer_hold_marker)
+    monkeypatch.setattr(update_recovery, '_restore_writer_hold_marker', updater._restore_writer_hold_marker)
     monkeypatch.setattr(updater, "_head_sha", head)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_tree_clean", tree_clean)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater, "_local_changes_outside", changes)
+    monkeypatch.setattr(update_apply, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_recovery, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_restore, '_local_changes_outside', updater._local_changes_outside)
     monkeypatch.setattr(updater, "_git", forbidden)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(updater, "_git_out", lambda args: trace.append(tuple(args)))
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     monkeypatch.setattr(updater, "_report", report)
+    monkeypatch.setattr(update_apply, '_report', updater._report)
+    monkeypatch.setattr(update_recovery, '_report', updater._report)
+    monkeypatch.setattr(update_restore, '_report', updater._report)
     monkeypatch.setattr(updater, "_alert_due", lambda *a: (False, None))
+    monkeypatch.setattr(update_recovery, '_alert_due', updater._alert_due)
     monkeypatch.setattr(updater, "restart_agents", lambda **kw: trace.append("drainers") or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_remove_marker", lambda: trace.append("remove_marker"))
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     monkeypatch.setattr(updater, "_enqueue_notice", forbidden)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(updater, "_finish_recovery", lambda state, result, removed: trace.append(("finish", result)) or 0)
+    monkeypatch.setattr(update_recovery, '_finish_recovery', updater._finish_recovery)
     monkeypatch.setattr(updater, "_complete_done_bookkeeping", lambda state: trace.append("done") or 0)
+    monkeypatch.setattr(update_recovery, '_complete_done_bookkeeping', updater._complete_done_bookkeeping)
     monkeypatch.setattr(updater, "_undo_interrupted_migration", lambda *a: trace.append("undo_migration") or 0)
+    monkeypatch.setattr(update_recovery, '_undo_interrupted_migration', updater._undo_interrupted_migration)
     monkeypatch.setattr(updater, "_restore_db", forbidden)
+    monkeypatch.setattr(update_recovery, '_restore_db', updater._restore_db)
+    monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
     monkeypatch.setattr(updater, "quiesce", lambda: trace.append("quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: trace.append("restore_runtime"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     monkeypatch.setattr(service_management, "retire_to_snapshot",
                         lambda snapshot, *, cfg, paths: trace.append("membership") or [])
     monkeypatch.setattr(updater, "_use_migrated_runtime", lambda migration: trace.append("use_runtime"))
+    monkeypatch.setattr(update_recovery, '_use_migrated_runtime', updater._use_migrated_runtime)
+    monkeypatch.setattr(update_runtime_migration, '_use_migrated_runtime', updater._use_migrated_runtime)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: trace.append("services"))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "_postcheck", lambda *a: trace.append("postcheck") or [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     monkeypatch.setattr(updater, "_finish_resumed", lambda *a: trace.append("finish_resumed") or 0)
+    monkeypatch.setattr(update_recovery, '_finish_resumed', updater._finish_resumed)
     return trace, reports
 
 
@@ -199,6 +280,8 @@ def test_schema_rollback_freezes_before_classifying_previous_head(updater, monke
         ensure()
 
     monkeypatch.setattr(updater, "_ensure_recovery_marker", freeze)
+    monkeypatch.setattr(update_apply, '_ensure_recovery_marker', updater._ensure_recovery_marker)
+    monkeypatch.setattr(update_recovery, '_ensure_recovery_marker', updater._ensure_recovery_marker)
     assert updater.recover_interrupted() == 1
     assert trace == ["ensure", "runtime_gate", "cleanup", "adopt_marker", "marker", "head",
                      "marker", ("report", "restore_consent_blocked")]
@@ -273,8 +356,15 @@ def test_target_database_hold_only_clears_after_successful_restore(updater, monk
         trace.append("restore_runtime")
 
     monkeypatch.setattr(updater, "_restore_db", restore)
+    monkeypatch.setattr(update_recovery, '_restore_db', updater._restore_db)
+    monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
     monkeypatch.setattr(updater, "_restore_runtime", runtime)
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     monkeypatch.setattr(updater, "_consent_hold", lambda *a: trace.append("hold"))
+    monkeypatch.setattr(update_apply, '_consent_hold', updater._consent_hold)
+    monkeypatch.setattr(update_recovery, '_consent_hold', updater._consent_hold)
+    monkeypatch.setattr(update_restore, '_consent_hold', updater._consent_hold)
     assert updater.recover_interrupted() == 0
     prefix = ["runtime_gate", "cleanup", "head", "clean", "restore_db"]
     if pending:

@@ -1,4 +1,10 @@
 """Synthetic investigation of caller-connection state after claim write failures."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
 import sqlite3
 
 import pytest
@@ -47,6 +53,7 @@ def test_claim_cleanup_failure_rolls_back_and_allows_retry(tmp_path, monkeypatch
     proxy = FailingConnection(real, boundary)
     ledger.db = proxy
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **kw: pytest.fail('no model call'))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     try:
         with pytest.raises(sqlite3.OperationalError):
             (worker._release if operation == 'release' else worker._renew)(ledger, row, lease)
@@ -59,6 +66,12 @@ def test_claim_cleanup_failure_rolls_back_and_allows_retry(tmp_path, monkeypatch
         assert (result is None) if operation == 'release' else result is not None
         assert real.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == (0 if operation == 'release' else 1)
         monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: False)
+        monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
         resumed = worker.run_pending(ledger, limit=1)
         assert resumed.get('updated') and not resumed.get('transaction_active')
     finally:

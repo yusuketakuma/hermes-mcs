@@ -1,4 +1,5 @@
 """Credential choices use synthetic roots and never contact a transport."""
+import setup_integration
 import json
 import warnings
 from types import SimpleNamespace
@@ -76,7 +77,7 @@ def test_interrupted_existing_choice_cancels_without_writing(tmp_path, monkeypat
 
 def test_setup_does_not_continue_other_connectors_after_cancel(monkeypatch):
     calls = []
-    monkeypatch.setattr(mcs_setup, "transport_enabled", lambda cfg, name: name in {"slack", "discord"})
+    monkeypatch.setattr(setup_integration, "transport_enabled", lambda cfg, name: name in {"slack", "discord"})
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda argv, **kwargs:
                         calls.append(argv) or SimpleNamespace(returncode=1))
     assert not mcs_setup._init_standalone_connectors({}, SimpleNamespace(yes=False), True)
@@ -142,7 +143,9 @@ def test_setup_defers_legacy_slack_bot_only_to_native_initializer(tmp_path, monk
     env = "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\n"
     write_root(tmp_path, env=env)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: pytest.fail("must not ask for a secret"))
     assert mcs_setup._apply_standalone_credentials(
         SimpleNamespace(yes=False), {"slack"}, [("SLACK_APP_TOKEN", "app")])
@@ -182,8 +185,10 @@ def test_legacy_slack_completion_keeps_original_when_unsafe(tmp_path, monkeypatc
 def test_setup_does_not_save_partially_entered_credentials(tmp_path, monkeypatch):
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
     monkeypatch.delenv("SLACK_APP_TOKEN", raising=False)
     answers = iter(["xox" + "b-synthetic-bot", ""])
@@ -197,8 +202,10 @@ def test_setup_does_not_save_partially_entered_credentials(tmp_path, monkeypatch
 def test_setup_detects_env_change_during_entry(tmp_path, monkeypatch):
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     def answer(_):
         (tmp_path / ".env").write_text("DISCORD_BOT_TOKEN=other-synthetic-token\n")
@@ -225,8 +232,10 @@ def test_init_fsync_failure_reports_unknown_even_if_file_was_published(tmp_path,
 def test_setup_env_write_failure_reports_unknown(tmp_path, monkeypatch, capsys):
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: "synthetic-discord-token")
     def fail_write(*_):
@@ -243,8 +252,10 @@ def test_setup_env_write_failure_reports_unknown(tmp_path, monkeypatch, capsys):
 def test_setup_does_not_save_invalid_entered_token(tmp_path, monkeypatch):
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: "short")
     assert not mcs_setup._apply_standalone_credentials(
@@ -267,8 +278,10 @@ def test_native_init_refuses_echo_fallback_before_input(tmp_path, monkeypatch):
 def test_setup_refuses_echo_fallback_before_input(tmp_path, monkeypatch):
     write_root(tmp_path, env="")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
-    monkeypatch.setattr(mcs_setup, "env_value", lambda *a, **kw: None)
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "env_value", lambda *a, **kw: None)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     def echo_fallback(_):
         warnings.warn("synthetic echo fallback", cli.getpass.GetPassWarning)
@@ -287,7 +300,9 @@ def test_setup_uses_existing_json_without_reading_irrelevant_env(tmp_path, monke
     path.write_text('{"bot_token":"synthetic-discord-token"}')
     path.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: pytest.fail("must not prompt"))
     assert mcs_setup._apply_standalone_credentials(
         SimpleNamespace(yes=False), {"discord"}, [("DISCORD_BOT_TOKEN", "bot")])

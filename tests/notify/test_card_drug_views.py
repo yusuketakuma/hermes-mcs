@@ -1,6 +1,8 @@
 """💊 薬剤を確認 / 薬剤を検索 — runner side card views over a synthetic
 ledger and a fictional private dictionary. No live DB, network or LLM."""
 from __future__ import annotations
+import extract_llm_engine
+import extract_llm_runner
 
 import hashlib
 import json
@@ -368,6 +370,8 @@ def test_llm_extraction_to_source_bound_reference_view(led, tmp_path, monkeypatc
                 "negated": False, "evidence": body}]}
 
     monkeypatch.setattr(extract_llm, "_llm_call", stub)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     extracted = extract_llm.llm_extract(body)
     assert prompts and extracted["meds"][0]["name"] == "キラ"
     assert extracted["meds"][0]["evidence"] == body

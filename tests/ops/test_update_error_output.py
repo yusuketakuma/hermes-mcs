@@ -1,4 +1,12 @@
 """External Git diagnostics must not enter user-facing updater errors."""
+import update_apply
+import update_cli
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
 import owned_process
 import update_discovery
 import subprocess
@@ -12,6 +20,14 @@ def test_git_failure_does_not_echo_untrusted_stderr(monkeypatch):
     canary = 'SYNTHETIC_PRIVATE_GIT_DIAGNOSTIC'
     monkeypatch.setattr(mcs_update, '_git', lambda args, timeout: subprocess.CompletedProcess(
         args, 128, '', canary))
+    monkeypatch.setattr(update_apply, '_git', mcs_update._git)
+    monkeypatch.setattr(update_cli, '_git', mcs_update._git)
+    monkeypatch.setattr(update_planning, '_git', mcs_update._git)
+    monkeypatch.setattr(update_preflight, '_git', mcs_update._git)
+    monkeypatch.setattr(update_recovery, '_git', mcs_update._git)
+    monkeypatch.setattr(update_repository, '_git', mcs_update._git)
+    monkeypatch.setattr(update_restore, '_git', mcs_update._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', mcs_update._git)
     with pytest.raises(mcs_update.UpdateError) as error:
         mcs_update._git_out(['fetch', 'origin'])
     assert 'git_failed' in str(error.value)

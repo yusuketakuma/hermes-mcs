@@ -1,4 +1,7 @@
 """Synthetic source-to-measurement coverage and source identity checks."""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 from contextlib import closing
 from dataclasses import replace
 import json
@@ -23,7 +26,10 @@ def _setup(tmp_path, monkeypatch):
         ledger.db.execute("UPDATE patients SET fetch_state='complete', history_floor=-1 WHERE project_id=1")
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     return ledger
 
 

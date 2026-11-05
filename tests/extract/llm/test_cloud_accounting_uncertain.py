@@ -1,4 +1,6 @@
 """Completely synthetic owner/transport accounting boundaries."""
+import extract_llm_resident
+import extract_llm_runner
 import json
 import time
 
@@ -148,12 +150,15 @@ def test_reserve_refusal_defers_without_send_or_local_fallback(routed, monkeypat
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
 
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('a refused unit fell back to local')
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1 and not sent
     assert not [row for row in led.artifacts('cloud_usage_reserve')]
@@ -183,11 +188,14 @@ def test_post_reservation_guard_refusal_never_sends_or_burns_retry(routed, monke
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert report['done'] == 0 and report['deferred'] == 1 and not sent
     results = [json.loads(row['meta']) for row in led.artifacts('cloud_usage_result')]
@@ -210,11 +218,14 @@ def test_post_result_failure_records_backoff_if_owner_is_available(routed, monke
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert sent == [True] and report['deferred'] == 1
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
@@ -248,6 +259,8 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60 if accounting_fails else 0)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             answer = kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
@@ -256,6 +269,7 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
         local.append(True)
         return {}
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert sent == [True] and not returned_cloud
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
@@ -294,11 +308,14 @@ def test_unknown_attempt_then_retry_scope_denial_still_records_backoff(routed, m
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=2))
     monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1 and sent == [True]
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
@@ -328,11 +345,14 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
                         lambda key: AnthropicClient(key, post_fn=post, max_attempts=2))
     monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     def infer(body, **kwargs):
         if kwargs.get('provider') is not None:
             kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1
     assert sent == [True]

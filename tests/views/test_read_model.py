@@ -1,6 +1,7 @@
 """T15 — the versioned machine read model: provenance, validity states,
 scopes, coverage and attachment manifest over one snapshot generation.
 All fixtures synthetic; no live DB, no network."""
+import extract_llm_selection
 import json
 import sqlite3
 import time
@@ -65,6 +66,7 @@ def test_machine_model_rejects_unverified_latest_marked_extract(tmp_path, monkey
             return {'state': 'attention'}
 
         monkeypatch.setattr(extract_llm, 'progress_for_message', progress)
+        monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
         db.db.execute('PRAGMA query_only=ON')
         before, transaction = db.db.total_changes, db.db.in_transaction
         model = read_model.read_model(db.db, scope='detail')

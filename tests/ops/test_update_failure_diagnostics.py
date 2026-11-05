@@ -1,4 +1,14 @@
 """Apply errors survive recovery holds without exposing child output or restarting."""
+import update_apply
+import update_cli
+import update_execution
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import copy
 import json
 from contextlib import nullcontext
@@ -25,23 +35,57 @@ def test_post_merge_failure_survives_early_recovery_hold(
         monkeypatch.setattr(updater, name, forbidden)
     monkeypatch.setattr(updater.mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
     monkeypatch.setattr(updater, "_apply_validate_args", lambda *_a, **_k: None)
+    monkeypatch.setattr(update_apply, '_apply_validate_args', updater._apply_validate_args)
     monkeypatch.setattr(updater, "_candidate_commit", lambda *_a: None)
+    monkeypatch.setattr(update_apply, '_candidate_commit', updater._candidate_commit)
+    monkeypatch.setattr(update_planning, '_candidate_commit', updater._candidate_commit)
     monkeypatch.setattr(updater, "_apply_runtime_gate_errors", lambda *_a: [])
+    monkeypatch.setattr(update_apply, '_apply_runtime_gate_errors', updater._apply_runtime_gate_errors)
     monkeypatch.setattr(updater, "_install_options_snapshot", lambda: (None, None))
+    monkeypatch.setattr(update_apply, '_install_options_snapshot', updater._install_options_snapshot)
+    monkeypatch.setattr(update_runtime_migration, '_install_options_snapshot', updater._install_options_snapshot)
     monkeypatch.setattr(updater, "_release_legacy_hold", lambda *_a: False)
+    monkeypatch.setattr(update_apply, '_release_legacy_hold', updater._release_legacy_hold)
+    monkeypatch.setattr(update_cli, '_release_legacy_hold', updater._release_legacy_hold)
+    monkeypatch.setattr(update_recovery, '_release_legacy_hold', updater._release_legacy_hold)
     monkeypatch.setattr(updater, "precheck_local", lambda *_a, **_k: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
     monkeypatch.setattr(updater, "_head_sha", lambda **_k: target if merged else previous)
+    monkeypatch.setattr(update_apply, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_execution, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_recovery, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_repository, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_restore, '_head_sha', updater._head_sha)
+    monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_apply_tag_gate", lambda *_a: (None, []))
+    monkeypatch.setattr(update_apply, '_apply_tag_gate', updater._apply_tag_gate)
     import maintenance
     monkeypatch.setattr(maintenance, "preupdate_backup", lambda *_a, **_k: None)
     monkeypatch.setattr(updater, "_read_manifest_snapshot", lambda **_k: {})
+    monkeypatch.setattr(update_apply, '_read_manifest_snapshot', updater._read_manifest_snapshot)
     monkeypatch.setattr(updater, "_baseline_check", lambda *_a, **_k: {})
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_tree_clean", lambda **_k: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater.update_migrations, "apply", lambda *_a: False)
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: hold == "provider_migration")
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(updater, "_plugin_changed", lambda *_a, **_k: False)
+    monkeypatch.setattr(update_apply, '_plugin_changed', updater._plugin_changed)
+    monkeypatch.setattr(update_planning, '_plugin_changed', updater._plugin_changed)
     monkeypatch.setattr(updater, "quiesce", lambda: None)
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_plan_runtime_migration", lambda *_a: None)
+    monkeypatch.setattr(update_apply, '_plan_runtime_migration', updater._plan_runtime_migration)
+    monkeypatch.setattr(update_runtime_migration, '_plan_runtime_migration', updater._plan_runtime_migration)
 
     def merge(*_args, **_kwargs):
         nonlocal merged
@@ -66,17 +110,40 @@ def test_post_merge_failure_survives_early_recovery_hold(
             raise OSError("SYNTHETIC_PRIVATE_STOP_DIAGNOSTIC")
 
     monkeypatch.setattr(updater, "_git", merge)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(updater, "_run_post_merge", post_merge)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     monkeypatch.setattr(updater, "_provider_rollback_preflight", deny_restore)
+    monkeypatch.setattr(update_apply, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_recovery, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_restore, '_provider_rollback_preflight', updater._provider_rollback_preflight)
     monkeypatch.setattr(updater, "_ensure_recovery_marker", lambda: "synthetic-marker")
+    monkeypatch.setattr(update_apply, '_ensure_recovery_marker', updater._ensure_recovery_marker)
+    monkeypatch.setattr(update_recovery, '_ensure_recovery_marker', updater._ensure_recovery_marker)
     monkeypatch.setattr(updater, "_pin_recovery_marker", lambda *_a: nullcontext())
+    monkeypatch.setattr(update_apply, '_pin_recovery_marker', updater._pin_recovery_marker)
+    monkeypatch.setattr(update_recovery, '_pin_recovery_marker', updater._pin_recovery_marker)
+    monkeypatch.setattr(update_runtime_migration, '_pin_recovery_marker', updater._pin_recovery_marker)
     monkeypatch.setattr(updater, "_quiesce_for_mode", stop)
+    monkeypatch.setattr(update_apply, '_quiesce_for_mode', updater._quiesce_for_mode)
+    monkeypatch.setattr(update_recovery, '_quiesce_for_mode', updater._quiesce_for_mode)
+    monkeypatch.setattr(update_runtime_migration, '_quiesce_for_mode', updater._quiesce_for_mode)
+    monkeypatch.setattr(update_services, '_quiesce_for_mode', updater._quiesce_for_mode)
     # Exercise the provider hold's report without probing any real configuration.
     def provider_hold(**_kwargs):
         updater._report("provider_migration_recovery_blocked", "provider migration is not verified",
                         writers_stopped=True)
         return 1
     monkeypatch.setattr(updater, "_provider_migration_recovery_hold", provider_hold)
+    monkeypatch.setattr(update_apply, '_provider_migration_recovery_hold', updater._provider_migration_recovery_hold)
+    monkeypatch.setattr(update_recovery, '_provider_migration_recovery_hold', updater._provider_migration_recovery_hold)
     if hold == "journal_unwritable":
         save = updater.journal_store.save_state
 

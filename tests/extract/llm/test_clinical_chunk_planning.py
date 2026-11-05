@@ -1,4 +1,16 @@
 """Source-only planning and current-bound private progress; synthetic inputs only."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import extract_schema
 import extract_validation
 import json
@@ -79,6 +91,11 @@ def test_low_density_inference_stays_single_and_reference_cannot_supply_evidence
     calls = []
     source = "前の文は家族の薬でした。\n本人の記載は独居です。"
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 22)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     def infer(prompt, **kwargs):
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         calls.append(core)
@@ -87,12 +104,21 @@ def test_low_density_inference_stays_single_and_reference_cannot_supply_evidence
                     "text": "家族の薬", "evidence": "前の文は家族の薬でした。"}]}
         return {"symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     out = extract_llm.llm_extract(source)
     assert out is None or not out.get("patient_context")
     assert len(calls) > 1
     calls.clear()
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 3000)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     monkeypatch.setattr(extract_llm, "_llm_call", lambda prompt, **kwargs: calls.append("独居です。") or {"symptoms": []})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.llm_extract("独居です。") == {"symptoms": []}
     assert calls == ["独居です。"]
 
@@ -102,6 +128,14 @@ def test_actual_model_is_pinned_through_calls_and_final_stamp(db, monkeypatch):
     db.save_messages([_message(body=body)])
     current = ["synthetic-model-a"]
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"local_llm": {"model": current[0]}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"local_llm": {"model": current[0]}})
     calls = []
     def infer(prompt, **kwargs):
@@ -109,6 +143,8 @@ def test_actual_model_is_pinned_through_calls_and_final_stamp(db, monkeypatch):
         current[0] = "synthetic-model-b"
         return {"symptoms": [], "patient_context": [{"category": "living", "text": "独居です", "evidence": "独居です", "subject": "patient"}]}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     assert extract_llm.run_pending(db, limit=1, budget_s=30)["done"] == 1
     final = db.db.execute("SELECT model,meta FROM artifacts WHERE kind='extract_llm'").fetchone()
     assert final["model"] == "synthetic-model-a"
@@ -127,6 +163,11 @@ def test_progress_reads_only_bound_empty_checkpoints_and_final_binding(db, monke
     row["_context"] = extract_llm._thread_context(db.db, row)
     parts = clinical_chunking.plan_chunks(body, 100)
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 100)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     assert extract_llm._persist_chunks(db, row, {0: {}}, row["_context"], chunk_size=100)
     db.db.execute("PRAGMA query_only=ON")
     before = db.db.total_changes
@@ -136,6 +177,11 @@ def test_progress_reads_only_bound_empty_checkpoints_and_final_binding(db, monke
     assert extract_llm.progress_for_message(db.db, row, model=None)["state"] == "attention"
     assert extract_llm.progress_for_message(db.db, row, model="other")["completed"] == 0
     monkeypatch.setattr(extract_llm, "PLAN_VERSION", 999)
+    monkeypatch.setattr(extract_llm_context, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_errors, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_progress, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_proofs, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+    monkeypatch.setattr(extract_llm_store, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
     assert extract_llm.progress_for_message(db.db, row, model="synthetic")["completed"] == 0
 
 
@@ -161,10 +207,26 @@ def test_every_real_adapter_call_uses_pinned_model_during_config_edit(monkeypatc
     current = ["synthetic-a"]
     models = []
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 90)
+    monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
+    monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', extract_llm._CHUNK_SIZE)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"local_llm": {"model": current[0]}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"local_llm": {"model": current[0]}})
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kwargs: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     def chat(prompt, **kwargs):
         models.append(kwargs["model"])
@@ -189,6 +251,8 @@ def test_dense_planning_bypasses_batch_even_when_source_is_short(db, monkeypatch
         repairs.append("未収載" in prompt)
         return {"symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     pieces = clinical_chunking.plan_chunks(source)
     first = extract_llm.run_pending(db, limit=3, budget_s=200, batch_k=2)
     # Optional quality work may wait, but every mandatory first candidate
@@ -239,6 +303,11 @@ def test_previous_plan_checkpoints_are_retained_but_not_reused(db, monkeypatch):
     row["_target"] = ("", "synthetic")
     with monkeypatch.context() as old:
         old.setattr(extract_llm, "PLAN_VERSION", 1)
+        old.setattr(extract_llm_context, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+        old.setattr(extract_llm_errors, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+        old.setattr(extract_llm_progress, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+        old.setattr(extract_llm_proofs, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
+        old.setattr(extract_llm_store, 'PLAN_VERSION', extract_llm.PLAN_VERSION)
         assert extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
         assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
     assert extract_llm.PLAN_VERSION == clinical_chunking.PLAN_VERSION == 2

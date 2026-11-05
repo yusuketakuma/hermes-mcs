@@ -1,4 +1,6 @@
 """Synthetic regressions for extraction snapshots, evidence and input budgets."""
+import extract_llm_resident
+import extract_llm_runner
 import extract_validation
 
 import json
@@ -184,6 +186,7 @@ def test_invalid_budget_is_rejected_before_any_database_or_inference(budget):
 def test_nonfinite_cli_budget_cannot_open_a_database_or_start_a_resident(monkeypatch, capsys, args):
     monkeypatch.setattr(sys, "argv", ["extract_llm.py", *args])
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: pytest.fail("opened database"))
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     assert extract_llm.main() == 2
     assert json.loads(capsys.readouterr().out)["error"] == "bad_budget"
 
@@ -199,6 +202,7 @@ def test_bench_cannot_send_unapproved_case_content_to_a_model(tmp_path, monkeypa
     path.write_text(json.dumps({"source": "fully_synthetic", "cases": [case]}))
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **kw: calls.append(body) or {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_bench.cmd_run(SimpleNamespace(
         cases=str(path), out=str(report), tag="synthetic", mock_ok=False)) == 2
     assert calls == [] and not report.exists()
@@ -212,6 +216,7 @@ def test_bench_known_synthetic_case_copies_keep_the_report_contract(tmp_path, mo
     path.write_text(json.dumps({"cases": [approved]}, ensure_ascii=False, indent=2))
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **kw: calls.append(body) or {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_bench.cmd_run(SimpleNamespace(
         cases=str(path), out=str(report), tag="synthetic", mock_ok=False)) == 0
     assert calls == [approved["body"]]

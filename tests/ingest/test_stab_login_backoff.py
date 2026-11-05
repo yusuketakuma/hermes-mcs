@@ -1,5 +1,6 @@
 """H5: a submitted login that never validates is not re-sent with the
 same credential every tick. Stubs only — no Chrome, Keychain or MCS."""
+import mcs_authentication
 import collection_stages
 import mcs_contract
 import json
@@ -119,7 +120,7 @@ def test_backoff_detail_still_raises_the_manual_login_alert(tmp_path, monkeypatc
 def test_env_credential_revision_follows_the_dotenv_file(adapter, tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setattr(mcs_adapter, "HOME", str(home))
+    monkeypatch.setattr(mcs_authentication, "HOME", str(home))
     monkeypatch.delenv("MCS_PASSWORD", raising=False)
     before = adapter._credential_fp("synthetic-id", "env")
     (home / ".env").write_text("MCS_PASSWORD=synthetic\n")
@@ -129,10 +130,10 @@ def test_env_credential_revision_follows_the_dotenv_file(adapter, tmp_path, monk
 
 
 def test_env_only_password_revision_follows_the_supervisor(adapter, tmp_path, monkeypatch):
-    monkeypatch.setattr(mcs_adapter, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(mcs_authentication, "HOME", str(tmp_path / "home"))
     monkeypatch.setenv("MCS_PASSWORD", "synthetic-env-only")
     files = {"value": None}
-    monkeypatch.setattr(mcs_adapter, "env_value",
+    monkeypatch.setattr(mcs_authentication, "env_value",
                         lambda key, check_env=True: files["value"])
     ppid = [4100]
     monkeypatch.setattr(mcs_adapter.os, "getppid", lambda: ppid[0])

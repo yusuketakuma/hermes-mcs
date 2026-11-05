@@ -1,4 +1,7 @@
 """Synthetic error and transaction ownership checks for rollup readers."""
+import extract_llm_provider
+
+import rollup_builder
 import sqlite3
 
 import pytest
@@ -114,10 +117,11 @@ def test_resource_failure_never_replays_per_message(db, monkeypatch, code):
         raise error
 
     monkeypatch.setattr(extract_llm, "resolved_model", lambda _cfg: "synthetic-model")
-    monkeypatch.setattr(rollup, "_measurement_source_page", fail)
-    monkeypatch.setattr(rollup, "_measurement_source_bound", lambda *_args, **_kwargs: replay.append(True))
+    monkeypatch.setattr(extract_llm_provider, 'resolved_model', extract_llm.resolved_model)
+    monkeypatch.setattr(rollup_builder, "_measurement_source_page", fail)
+    monkeypatch.setattr(rollup_builder, "_measurement_source_bound", lambda *_args, **_kwargs: replay.append(True))
     with pytest.raises(sqlite3.DatabaseError) as caught:
-        rollup._measurement_sources_bound(db, [{"message_id": 1}], ["extract_llm"], {}, {})
+        rollup_builder._measurement_sources_bound(db, [{"message_id": 1}], ["extract_llm"], {}, {})
     assert caught.value is error and not replay
 
 
@@ -131,10 +135,10 @@ def test_unexpected_measurement_batch_error_does_not_become_current(db, monkeypa
     errors['unknown_sql'].sqlite_errorcode = sqlite3.SQLITE_ERROR
     error = errors[kind]
     db.execute('INSERT INTO marker VALUES (7)')
-    monkeypatch.setattr(rollup, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
-    monkeypatch.setattr(rollup, '_measurement_source_bound', lambda *_args, **_kwargs: pytest.fail('unexpected single replay'))
+    monkeypatch.setattr(rollup_builder, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(rollup_builder, '_measurement_source_bound', lambda *_args, **_kwargs: pytest.fail('unexpected single replay'))
     with pytest.raises(type(error)) as caught:
-        rollup._measurement_sources_bound(db, [{'message_id': 1}], ['extract_llm'], {}, {}, expected_model='synthetic-model')
+        rollup_builder._measurement_sources_bound(db, [{'message_id': 1}], ['extract_llm'], {}, {}, expected_model='synthetic-model')
     assert caught.value is error and db.in_transaction
     assert db.execute('SELECT value FROM marker').fetchall() == [(7,)]
     db.rollback()
@@ -149,15 +153,15 @@ def test_known_measurement_batch_sqlite_error_replays_single(db, monkeypatch, me
     error.sqlite_errorcode = sqlite3.SQLITE_ERROR
     visited = []
     db.execute('INSERT INTO marker VALUES (7)')
-    monkeypatch.setattr(rollup, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(rollup_builder, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
 
     def single(_db, row, _kind, _cfg, **kwargs):
         visited.append((row['message_id'], kwargs['artifact_ref'], kwargs['expected_model']))
         return True
 
-    monkeypatch.setattr(rollup, '_measurement_source_bound', single)
+    monkeypatch.setattr(rollup_builder, '_measurement_source_bound', single)
     rows = [{'message_id': 1, 'body_state': 'full', 'body_text': '合成本文'}]
-    result = rollup._measurement_sources_bound(db, rows, ['extract_llm'], {(1, 'extract_llm'): 9}, {},
+    result = rollup_builder._measurement_sources_bound(db, rows, ['extract_llm'], {(1, 'extract_llm'): 9}, {},
                                                 expected_model='synthetic-model')
     assert result == [True] and visited == [(1, 9, 'synthetic-model')]
     assert db.in_transaction and db.execute('SELECT value FROM marker').fetchall() == [(7,)]

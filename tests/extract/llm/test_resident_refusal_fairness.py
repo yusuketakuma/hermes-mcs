@@ -1,4 +1,6 @@
 """A resident refusal yields its selection slot without changing send evidence."""
+import extract_llm_engine
+import extract_llm_runner
 from contextlib import nullcontext
 import time
 
@@ -28,11 +30,15 @@ def test_resident_refusal_allows_the_next_source_to_progress(cloud_candidates, m
         raise cloud_client.CloudNotSent('budget_exceeded', reason)
 
     monkeypatch.setattr(extract_llm, '_llm_call', refuse)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     report = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
     assert report['deferred'] == 1 and report['done'] == 0
     assert calls == reservations == results == []
 
     monkeypatch.setattr(extract_llm, '_llm_call', original)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     following = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
     assert following['done'] == 1
     completed = [row['message_id'] for row in _current_artifacts(ledger)]
@@ -70,6 +76,7 @@ def test_unresolved_paid_source_yields_without_rewriting_its_evidence(routed, mo
         return provider('synthetic unresolved input', deadline=kwargs['deadline'], max_tokens=100)
 
     monkeypatch.setattr(extract_llm, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)['deferred'] == 1
     before = [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition')")]

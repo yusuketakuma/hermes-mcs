@@ -3,6 +3,9 @@
 These tests specify cache safety independently of the unfinished measurement
 rollup changes. They use one temporary ledger and no live services or data.
 """
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import sqlite3
 import time
@@ -33,7 +36,10 @@ CFG_B = {"local_llm": {"model": "synthetic-model-b"}}
 def ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     db = make_ledger(tmp_path)
     db.ensure_patient(1)
     with db.db:

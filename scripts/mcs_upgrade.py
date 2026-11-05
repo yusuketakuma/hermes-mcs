@@ -131,7 +131,7 @@ def extract(repo: str, tag: str, dest: str, *, local_candidate: bool = False) ->
     """Exact updater/runtime blobs, including its independent recovery helper."""
     ref = tag if local_candidate else "refs/tags/" + tag
     for rec in _git(repo, "ls-tree", "-rz", ref, "--", "mcs",
-                    "deployment/recovery/mcs_recover.py").split("\0"):
+                    "deployment/recovery").split("\0"):
         if not rec:
             continue
         meta, _, path = rec.partition("\t")

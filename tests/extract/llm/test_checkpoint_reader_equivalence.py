@@ -1,4 +1,12 @@
 """Synthetic writer/reader equivalence at the exact completeness-pending boundary."""
+import extract_llm_carry
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import time
 
@@ -15,7 +23,14 @@ def test_reply_only_checkpoint_is_readable_with_its_exact_context(tmp_path, monk
     ledger = _ledger(tmp_path)
     body = '承知しました。'
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         ledger.save_messages([_message(body=body)])
         row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
@@ -32,6 +47,8 @@ def test_reply_only_checkpoint_is_readable_with_its_exact_context(tmp_path, monk
             worker._CALL_NOTES.provider_response = 'local'
             return {'symptoms': [], 'reply': {'kind': 'ack', 'evidence': body}}
         monkeypatch.setattr(worker, '_llm_call', model)
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
         meta, chunks = {}, {}
         def checkpoint(key, value):
             saved = worker._persist_chunks(ledger, row, {key: value}, frame['text'],
@@ -61,7 +78,14 @@ def test_sealed_unverified_candidate_remains_readable_without_becoming_verified(
         tmp_path, monkeypatch, kind, body, term, status):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         ledger.save_messages([_message(body=body)])
         row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())

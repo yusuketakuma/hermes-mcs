@@ -1,6 +1,15 @@
 """A git command that outlives its timeout is stopped as an owned session:
 SIGTERM first so git removes its own index.lock, then SIGKILL, always
 reaped. Temporary repositories only; nothing outside them is touched."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_preflight
+import update_recovery
+import update_repository
+import update_runtime_migration
+import update_services
 import owned_process
 import os
 import signal
@@ -113,6 +122,15 @@ def test_normal_return_is_the_same_completed_process(tmp_path, monkeypatch, whic
 def test_update_failure_stays_redacted_through_the_owned_runner(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
     result = mcs_update._git(["rev-parse", "SYNTHETIC_MISSING_REF"])
     assert result.returncode != 0 and result.stderr == f"exit={result.returncode}"
 

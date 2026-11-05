@@ -1,4 +1,9 @@
 """Zero-result tampering and owner-read failures remain unsent reference changes."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_runner
+import extract_llm_store
 from copy import deepcopy
 import json
 import sqlite3
@@ -49,6 +54,11 @@ def test_owner_database_failure_is_false_before_any_transport(monkeypatch):
     def broken(*args):
         raise sqlite3.OperationalError("synthetic owner read failure")
     monkeypatch.setattr(extract_llm, "_owns_current_source", broken)
+    monkeypatch.setattr(extract_llm_carry, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_context, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_errors, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_runner, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_store, '_owns_current_source', extract_llm._owns_current_source)
     assert not extract_llm._extraction_dispatch_current(SimpleNamespace(db=object()), {}, 1,
                                                         time.monotonic() + 5)
 
@@ -57,6 +67,11 @@ def test_owner_database_failure_at_http_boundary_is_proven_unsent(monkeypatch):
     def broken(*args):
         raise sqlite3.OperationalError("synthetic owner read failure")
     monkeypatch.setattr(extract_llm, "_owns_current_source", broken)
+    monkeypatch.setattr(extract_llm_carry, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_context, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_errors, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_runner, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_store, '_owns_current_source', extract_llm._owns_current_source)
     monkeypatch.setattr(extract_llm._CALL_NOTES, "medication_source_changed", False, raising=False)
     monkeypatch.setattr(extract_llm._CALL_NOTES, "medication_guard", lambda:
         extract_llm._extraction_dispatch_current(SimpleNamespace(db=object()), {}, 1,
@@ -79,6 +94,11 @@ def test_lost_owner_at_http_boundary_does_not_enter_the_http_worker(monkeypatch)
 
 def test_expired_dispatch_does_not_read_the_source_database(monkeypatch):
     monkeypatch.setattr(extract_llm, "_owns_current_source", lambda *a: pytest.fail("read after dispatch deadline"))
+    monkeypatch.setattr(extract_llm_carry, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_context, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_errors, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_runner, '_owns_current_source', extract_llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_store, '_owns_current_source', extract_llm._owns_current_source)
     assert not extract_llm._extraction_dispatch_current(SimpleNamespace(db=object()), {}, 1,
                                                         time.monotonic() - 1)
 

@@ -1,4 +1,5 @@
 """Loop-only readiness is proven by the synthetic worker, not a done job."""
+import semantic_job_processor
 import json
 import time
 
@@ -259,6 +260,7 @@ def test_partial_relation_pass_never_publishes_completion(runtime, monkeypatch):
     led = _seed(runtime)
     cfg = _config()
     monkeypatch.setattr(drain, "_promote_loops", lambda *args, **kw: (False, False, False, True, False))
+    monkeypatch.setattr(semantic_job_processor, '_promote_loops', drain._promote_loops)
     assert _run(led, cfg, client=_FakeJev())["done"] == 0
     assert not _receipts(led)
     assert _state(led, cfg) not in ("current", "current_skipped")
@@ -400,6 +402,7 @@ def test_bad_relation_present_before_worker_commit_cannot_get_receipt(runtime, m
         return result
 
     monkeypatch.setattr(drain, "_promote_loops", poison_before_commit)
+    monkeypatch.setattr(semantic_job_processor, '_promote_loops', drain._promote_loops)
     _run(led, cfg, llm=_request_llm, client=_FakeJev())
     assert observed
     assert not _receipts(led)
@@ -567,6 +570,7 @@ def test_current_scope_unresolved_rejection_cannot_get_completion(runtime, monke
     # Even a falsely completed loop call cannot turn this unresolved receipt
     # into a completion proof; the real manifest must inspect the history.
     monkeypatch.setattr(drain, "_promote_loops", lambda *args, **kwargs: (True, False, False, False, False))
+    monkeypatch.setattr(semantic_job_processor, '_promote_loops', drain._promote_loops)
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
     _run(led, cfg, llm=_request_llm, client=_FakeJev())

@@ -1,4 +1,15 @@
 """Synthetic lane-3 patient-context tests: no real LLM, host probes or production DB."""
+import extract_llm_call_context
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import writer_lock
 import os
 import sys
@@ -20,12 +31,26 @@ def capacity(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     cfg = {"extract": {"patient_context_nightly": {"enabled": True}}}
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[3])
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(worker, "circuit_open_s", lambda led: 0)
+    monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+    monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(worker, "disk_free_mb", lambda led: 100000)
+    monkeypatch.setattr(extract_llm_resident, 'disk_free_mb', worker.disk_free_mb)
+    monkeypatch.setattr(extract_llm_runner, 'disk_free_mb', worker.disk_free_mb)
     monkeypatch.setattr(worker, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', worker._context_memory_available)
     calls = []
 
     def run_due(led, config, *, deadline, admit, complete):
@@ -48,6 +73,7 @@ def run(capacity, stop=None, state=(False, 123)):
 @pytest.mark.parametrize("slot", [LANES[1], LANES[2], None])
 def test_other_lanes_never_enter_engine(capacity, monkeypatch, slot):
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", slot)
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
     assert run(capacity)["status"] == "off"
     assert not capacity[2]
 
@@ -67,10 +93,15 @@ def test_capacity_gates(capacity, monkeypatch, gate):
         stop = worker.time.monotonic() - 1
     elif gate == "memory":
         monkeypatch.setattr(worker, "_context_memory_available", lambda: False)
+        monkeypatch.setattr(extract_llm_resident, '_context_memory_available', worker._context_memory_available)
     elif gate in ("disk", "unknown_disk"):
         monkeypatch.setattr(worker, "disk_free_mb", lambda led: 0 if gate == "disk" else None)
+        monkeypatch.setattr(extract_llm_resident, 'disk_free_mb', worker.disk_free_mb)
+        monkeypatch.setattr(extract_llm_runner, 'disk_free_mb', worker.disk_free_mb)
     elif gate == "circuit":
         monkeypatch.setattr(worker, "circuit_open_s", lambda led: 60)
+        monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
+        monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
     elif gate == "update":
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (True, 124))
     elif gate == "mid_update":
@@ -101,6 +132,14 @@ def test_context_result_survives_budget_window_edit_only(
         cfg["semantic"] = {"mode": "assist", "until": None}
     current = [cfg]
     monkeypatch.setattr(worker, "load_config", lambda: current[0])
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: current[0])
 
     def run_due(ledger, config, *, admit, **kwargs):
@@ -190,8 +229,18 @@ def resident_generation(tmp_path, monkeypatch):
     monkeypatch.setattr(writer_lock, "RUN_LOCK", str(data / "run.lock"))
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: state[1])
     monkeypatch.setattr(worker, "HOME", str(root))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(worker, "DB", str(data / "ledger.db"))
+    monkeypatch.setattr(extract_llm_resident, 'DB', worker.DB)
     monkeypatch.setattr(worker, "_WRITER_STATE", state)
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', worker._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', worker._WRITER_STATE)
     opened = []
 
     def construct(path):
@@ -201,6 +250,7 @@ def resident_generation(tmp_path, monkeypatch):
         return SimpleNamespace(close=lambda: None)
 
     monkeypatch.setattr(worker, "Ledger", construct)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', worker.Ledger)
     assert worker._writer_current(full=True)
     return opened
 
@@ -215,6 +265,14 @@ def test_resident_integration(monkeypatch, resident_generation, idle, lane, cont
     monkeypatch.setattr(worker.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", lane, "--stop-after", "1"])
 
@@ -224,6 +282,7 @@ def test_resident_integration(monkeypatch, resident_generation, idle, lane, cont
         return {"done": 0 if idle else 1, "failed": 0, "left": 0 if idle else 1,
                 "selected": 0 if idle else 1, "carried": 0, "carry": []}
     monkeypatch.setattr(worker, "run_pending", pending)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
 
     def context_refresh(led, state, stop):
         events.append("context_refresh")
@@ -232,6 +291,7 @@ def test_resident_integration(monkeypatch, resident_generation, idle, lane, cont
         assert os.environ[worker.local_llm.TURN_LOCK_ENV].endswith("data/llm_turn.lock")
         return {"status": "deferred", "done": 0}
     monkeypatch.setattr(worker, "_background_context_refresh", context_refresh)
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', worker._background_context_refresh)
     assert worker.main() == 0
     assert len(resident_generation) == 1
     assert events[0] == ("context_refresh" if context_refresh_first else "run_pending")
@@ -245,11 +305,21 @@ def test_resident_exits_when_context_refresh_sees_update(monkeypatch, resident_g
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(worker.local_llm.TURN_LOCK_ENV, raising=False)
     monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "1"])
     monkeypatch.setattr(worker, "run_pending", lambda *a, **k: pytest.fail("extraction after update"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
     monkeypatch.setattr(worker, "_background_context_refresh", lambda *a: {
         "status": "deferred", "done": 0, "run_lock_lost": "updated"})
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', worker._background_context_refresh)
     assert worker.main() == 0
     assert len(resident_generation) == 1
     assert "MCS_LLM_SLOT" not in os.environ
@@ -258,6 +328,14 @@ def test_resident_exits_when_context_refresh_sees_update(monkeypatch, resident_g
 
 def test_config_failure_isolated(capacity, monkeypatch):
     monkeypatch.setattr(worker, "load_config", lambda: (_ for _ in ()).throw(ValueError("private")))
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: (_ for _ in ()).throw(ValueError("private")))
     assert run(capacity) == {"status": "error", "done": 0, "error": "ValueError"}
 
@@ -283,6 +361,14 @@ def test_configuration_change_cancels_publication(capacity, monkeypatch):
     assert run(capacity)["done"] == 1
     monkeypatch.setattr(worker, "load_config", lambda: {
         "extract": {"patient_context_nightly": {"enabled": False}}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     assert not capacity[2][0][0]()
 
 

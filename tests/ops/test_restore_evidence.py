@@ -1,4 +1,12 @@
 """Restore report resource order and exact receipt selection on synthetic inputs."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_restore
+import update_services
 from contextlib import closing
 import io
 import json
@@ -323,8 +331,22 @@ def test_restore_entry_holds_on_report_read_error_with_existing_consent(
     _mk_schema(live, 8, messages=2)
     _mk_schema(backup, 7, messages=1)
     monkeypatch.setattr(mcs_update, 'DATA', str(data))
+    monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_services, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(mcs_update, 'LEDGER', str(live))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     monkeypatch.setattr(mcs_update, 'RESTORE_REPORT_PATH', str(data / 'restore_report.json'))
+    monkeypatch.setattr(update_restore, 'RESTORE_REPORT_PATH', mcs_update.RESTORE_REPORT_PATH)
     report = _seed_consent(str(live), str(backup))
     watchdog = _load()
     monkeypatch.setattr(watchdog, 'DATA', str(data))

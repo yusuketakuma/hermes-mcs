@@ -1,4 +1,7 @@
 """Known pre-fix contracts preserve synthetic immutable inputs and paid accounting."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_runner
 from contextlib import nullcontext
 from dataclasses import replace
 import json
@@ -87,6 +90,8 @@ def test_pre_fix_frame_keeps_paid_recovery_or_unknown_hold_at_next_cap(routed, m
     original_contract = worker._context_contract
     monkeypatch.setattr(worker, '_context_contract', lambda source_digest=None:
                         original_contract(source_digest=source_digest or PRE_FIX_SOURCE))
+    monkeypatch.setattr(extract_llm_context, '_context_contract', worker._context_contract)
+    monkeypatch.setattr(extract_llm_prepare, '_context_contract', worker._context_contract)
     first_pass = [True]
     def extract(body, **kwargs):
         provider = kwargs.get('provider')
@@ -98,11 +103,14 @@ def test_pre_fix_frame_keeps_paid_recovery_or_unknown_hold_at_next_cap(routed, m
             replay.append(bool(answer.get('reused_response')))
         return worker._DEFERRED
     monkeypatch.setattr(worker, 'llm_extract', extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
     before = [dict(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
         "('extract_llm_context_v1','cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
     first_pass[0] = False
     monkeypatch.setattr(worker, '_context_contract', original_contract)
+    monkeypatch.setattr(extract_llm_context, '_context_contract', worker._context_contract)
+    monkeypatch.setattr(extract_llm_prepare, '_context_contract', worker._context_contract)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
     assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
     assert len(posts) == int(outcome == 'paid')

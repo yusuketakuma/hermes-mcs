@@ -1,5 +1,10 @@
 """Per-row and per-pass LLM call breakdown (first/repair/resplit/probe/
 downgrade/checkpoint reuse) with codes only; synthetic bodies, stubbed backend."""
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_runner
 import extract_quality
 import extract_validation
 import json
@@ -17,9 +22,13 @@ VALID = {"status": 200, "text": '{"symptoms":[],"summary":"合成の部分結果
 
 def _fake_backend(monkeypatch, reply):
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     calls = []
 
     def chat(prompt, **kwargs):
@@ -78,6 +87,8 @@ def test_dropped_carry_reuses_checkpoint_without_a_second_call(tmp_path, monkeyp
     def acquire():
         return None if state["blocked"] else os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR)
     monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', extract_llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', extract_llm.acquire_run_lock)
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: None)
     calls = _fake_backend(monkeypatch, lambda piece, prompt: {
         "status": 200, "text": '{"symptoms":[],"summary":"clean"}', "finish_reason": "stop"})
@@ -100,7 +111,9 @@ def test_dropped_carry_reuses_checkpoint_without_a_second_call(tmp_path, monkeyp
 
 def test_format_downgrade_is_counted_on_the_answered_call(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     answers = [{"status": 400, "text": None, "finish_reason": None, "usage": None},
                {"status": 200, "text": '{"symptoms":[],"summary":"合成"}', "finish_reason": "stop"}]
@@ -108,14 +121,18 @@ def test_format_downgrade_is_counted_on_the_answered_call(monkeypatch):
     meta = {}
     assert extract_llm.llm_extract("合成の本文", meta_out=meta) is not None
     assert (meta["calls"], meta["format_downgrades"], meta["first_calls"]) == (1, 1, 1)
-    assert extract_llm._FMT_MODE == "object"
+    assert extract_llm_provider._FMT_MODE == "object"
 
 
 def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm.local_llm, "probe_format", lambda *a, **kw: "object")
     monkeypatch.setattr(extract_llm.local_llm, "chat", lambda prompt, **kw: {
@@ -125,6 +142,7 @@ def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
     extract_llm.llm_extract("合成の本文", meta_out=second)
     assert first["probe_runs"] == 1 and second["probe_runs"] == 0
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=1, body="合成の本文一"), _message(mid=2, body="合成の本文二")])
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
@@ -134,9 +152,17 @@ def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
 
 def test_probe_run_counts_one_ladder_with_two_requests(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda: 1)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm, "_resolved_llm", lambda: (extract_llm.local_llm.ENDPOINT, "synthetic"))
+    monkeypatch.setattr(extract_llm_engine, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_errors, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_provider, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_resident, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_runner, '_resolved_llm', extract_llm._resolved_llm)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm._CALL_NOTES, "items", [], raising=False)
     replies = [
@@ -164,8 +190,16 @@ def test_sent_timeout_keeps_one_call_and_slot_wait_note(monkeypatch, deadline_ex
     now = [100.0]
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm, "_resolved_llm", lambda: (extract_llm.local_llm.ENDPOINT, "synthetic"))
+    monkeypatch.setattr(extract_llm_engine, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_errors, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_provider, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_resident, '_resolved_llm', extract_llm._resolved_llm)
+    monkeypatch.setattr(extract_llm_runner, '_resolved_llm', extract_llm._resolved_llm)
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda: 1)
+    monkeypatch.setattr(extract_llm_provider, '_choose_slot', extract_llm._choose_slot)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm._CALL_NOTES, "items", [], raising=False)
 

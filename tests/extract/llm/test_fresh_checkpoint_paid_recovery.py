@@ -1,4 +1,5 @@
 """A refused fresh checkpoint never loses or resends the already paid answer."""
+import extract_llm_runner
 from contextlib import nullcontext
 import json
 
@@ -15,6 +16,7 @@ def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(rou
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     posts = []
     monkeypatch.setattr(worker, '_llm_up', lambda **kwargs: False)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
     def request(self, method, body, timeout, **kwargs):
         posts.append(body)
         return 200, {}, json.dumps({'model': worker.anthropic_client.MODEL, 'stop_reason': 'end_turn',
@@ -29,6 +31,7 @@ def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(rou
             return False
         return persist(*args, **kwargs)
     monkeypatch.setattr(worker, '_persist_chunks', once)
+    monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
     first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert len(refused) == len(posts) == 1
     assert first['done'] == first['failed'] == 0 and first['deferred'] == 1

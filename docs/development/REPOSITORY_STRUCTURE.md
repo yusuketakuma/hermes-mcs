@@ -2,29 +2,29 @@
 
 この文書はhermes-mcs開発候補の内部構造を説明します。調査した範囲と各候補の検証結果は、その候補の作業記録で確認してください。版の公開、本番適用、モジュール単体での独立配布を示すものではありません。
 
-利用手順は[文書索引](../README.md)、モジュール・CLIの生成表と検証入口は[開発リファレンス](DEVELOPMENT.md)が正本です。この文書は依存方向、共有状態、副作用の所有者を説明します。
+利用手順は[文書索引](../README.md)、モジュール・CLIの生成表と検証入口は[開発リファレンス](DEVELOPMENT.md)が正本です。この文書は依存方向、共有状態、副作用の所有者を説明します。2026-11-05の補助モジュール配置と移動後の互換条件は[責務分離の詳細](RESPONSIBILITY_SPLIT.md)を参照してください。
 
 ## 実行コードの所有先
 
 | 所有先 | 責務・主要入口 | 状態と副作用 |
 |---|---|---|
-| `mcs/core/` | `ledger`の台帳writer、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
+| `mcs/core/` | `ledger`の台帳writerと`ledger_capture`・`ledger_semantic_sources`の2つのMixin、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
 | `mcs/core/mcs_queries.py`・`message_observations` | 原文・artifactの現行性、表示装飾前の患者文脈、`patient_context_sources`の原典集合、保存済み観測の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
 | `mcs/core/patient_context_artifacts.py` | 患者文脈の原CHUNK・採用済み修復候補の選択、参照・範囲・part・元費用証拠の共通検証 | 表示と依存喪失の記録が同じ保存集合を読む。呼出元のconnectionとtransactionを借用し、Jev判定・認可・公開・通信を行わない |
 | `mcs/core/writer_lock.py`・`safe_io` | writerの取得・コード/更新世代の照合、安全なファイル公開とFD所有権移管 | 取得したFDは呼出元が保持・解放する。借用接続をclose/commitせず、ファイル公開は既存の同期・置換順序を守る |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
 | `mcs/core/worker_process.py` | 通信workerの終了後のpipe排出・FD閉鎖・wait | workerを生成・停止する呼出元から終了対象を受け取る。プロセスグループのTERM/KILL・停止判断は移さない |
-| `mcs/ingest/` | `mcs_adapter`の認証/取得、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側。`collection_stages`が取得・再ログイン・walk cursorのstageを実行し、`run_check`が順序・全体締切・run lockを所有 |
+| `mcs/ingest/` | `mcs_adapter`の取得統括と`mcs_authentication`の認証Mixin、`mcs_worker`の子process統括、`mcs_cdp`のWebSocket、`mcs_download`の添付stream、`mcs_payload`の応答正規化 | session/retry/全体deadline/最終ファイル置換はadapter。wireとpartialは子process側。`collection_stages`が取得・再ログイン・walk cursorのstageを実行し、`run_check`が順序・全体締切・run lockを所有 |
 | `mcs/ingest/health_report.py` | healthの観測・集計・coverage | 借用connectionと過去health記録を読み、書込み失敗のincidentは`run_check`が記録 |
-| `mcs/llm/` | `cloud_inference`の共通実行、`cloud_policy`のscope/予算、`cloud_backlog`の背景worker | 通信状態の読書きは明示された保存先/借用接続上で行う。抽出結果・claim・carryのDB保存と解放は担当workerが所有 |
+| `mcs/llm/` | `cloud_inference`の共通実行、`cloud_policy`のscope/予算、`cloud_usage_accounting`の費用計算、`cloud_history_scope`の承認済み原文範囲、`cloud_backlog`の背景worker | 通信状態の読書きは明示された保存先/借用接続上で行う。抽出結果・claim・carryのDB保存と解放は担当workerが所有 |
 | `mcs/llm/providers/` | `anthropic_client`・`openai_client`のprovider固有の通信 | provider別のendpoint・要求/応答・usage契約を維持し、設定やモデルを混ぜない |
 | `mcs/llm/transport/` | `cloud_client`の共通試行処理、`llm_retry`の再試行分類、`local_llm`のローカル通信・turn lock | 既存の期限と送信状態を扱い、呼出元の保存・公開条件を引き受けない |
 | `mcs/llm/admission/` | `llm_admission`の共有枠、`llm_availability`の接続・回路状態 | permit・接続状態の保存を所有し、未知の送信結果を成功や未送信に置き換えない |
 | `mcs/extract/rules/` | 投稿のルール抽出と実行統括 | 純粋な投稿判定と、run lockを伴う保存入口を区別 |
 | `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値・原文根拠・バイタル適格性、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
 | `mcs/extract/clinical/clinical_urgency.py` | 本人の根拠に基づく緊急度・QCの共通判断 | `mcs_queries`の現行原文/artifact読取を使い、通知・統計・rulesが表示moduleを経由せず利用。借用connectionを開閉・commitしない |
-| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括と、`extraction_context`の抽出試行ごとの固定参照情報 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
+| `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の互換入口と`extract_llm_resident`・`extract_llm_runner`などの推論/再抽出/保存統括と、`extraction_context`の抽出試行ごとの固定参照情報 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
 | `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、`patient_context_projection`の原文に基づく時系列の投影、一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画・原文fact構築と厳格検証 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。factの発見時刻は呼出元が明示する。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | claim/QC/公開、`semantic_publication`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
@@ -81,7 +81,7 @@ SDKチェックは`scripts/development/`、オフライン評価の実行コー�
 - セマンティックの本文・分割・要約表示は`semantic_render`、各送信直前の現行性/権限/停止判定は`semantic_send_gate`が所有します。配送側は各境界で現在の設定を渡し、表示用wrapperを認可の代わりにしません。
 - Jevへのguard・予算予約・通信期限は呼出し単位で渡し、同じclientの可変hookを付け替えません。jobの診断とpassの集計、再入時の状態を混同しません。
 - 患者コンテキスト作成の選択/予算は純粋な計画へ分け、原文と時刻の観測、再試行と公開はworkerが所有します。終日処理し、作業日はJST 00:00に切り替わります。
-- 原典QAの質問識別子は`semantic_audit`、元予約・回答・判定方針・PASSの読取検証は`semantic_runtime`が正本です。クラウド原典の依存記録は全選択範囲の証拠を照合し、現在の設定・権限・公開許可は呼出元で別に確認します。
+- 原典QAの質問識別子は`semantic_audit`、実行guard・予算予約は`semantic_runtime`、元予約・回答・判定方針・PASSの読取検証は`semantic_usage_receipts`が正本です。クラウド原典の依存記録は全選択範囲の証拠を照合し、現在の設定・権限・公開許可は呼出元で別に確認します。
 - 集計と抽出監査は`stats_contract`の同じ期間/患者範囲/上限を使います。表示上限と全体件数を分け、監査の定義識別子は実際の計算契約に結び付けます。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
 - スタンプは読取り・表示・操作を`stamps/`へ集約します。一般のメタデータ検証は`core/message_observations`に置き、収集や送信が表示moduleを経由しない構成にします。操作の設定・本人照合・復元時の停止条件は[スタンプ管理契約](../specs/stamp-management.md)が正本です。
@@ -91,7 +91,7 @@ SDKチェックは`scripts/development/`、オフライン評価の実行コー�
 - 独立Slack/Discordのネイティブcommandは`common.commands.run_native`が同期処理の実終了まで待ち、呼出元のlistenerを途中で解放しません。接続先が現在の設定・停止状態を検証し、`mcs_requests.enqueue`がqueue lock取得後と公開直前にその検証を実行します。公開後の保存結果不明とreceiptは既存queueが所有し、応答の取消を未送信扱いにはしません。
 - 薬局の参照項目は`patient_context`、保存済み履歴のSQLは`mcs_queries`が正本です。抽出・semantic・表示から集約writerを経由せずに利用し、解釈に影響する両moduleをsource digestとcandidate定義の変更検知に含めます。
 - 表示用のバイタルは`clinical_display`、登録情報のprojectionは`registered_data`が正本です。表示limitでcoverageや全体件数を変えません。
-- 更新の遠隔版探索はreceiptの書込transactionに入る前に行い、ローカルのwrapper/設定はreceipt確定の境界で再確認します。更新journal・復元同意・rollbackはupdater、切り離し起動はcommit後の呼出元が所有します。独立復旧ツールはcheckout破損時にも起動できる自己完結のprocess処理を保持します。
+- 更新の遠隔版探索はreceiptの書込transactionに入る前に行い、ローカルのwrapper/設定はreceipt確定の境界で再確認します。更新journal・復元同意・rollbackはupdater、切り離し起動はcommit後の呼出元が所有します。独立復旧ツールは入口と補助4ファイルの検証済み世代をcheckout外に保持し、checkout破損時にも起動できます。入口だけを単独で差し替えません。
 
 ## 統括に残す状態と互換入口
 

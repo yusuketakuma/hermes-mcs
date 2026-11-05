@@ -1,5 +1,7 @@
 """Audit repro: the vital threshold family-marker exclusion matches 夫 inside
 common words (大丈夫/工夫), silencing the patient's own current reading."""
+import extract_llm_engine
+import extract_llm_runner
 import extract_validation
 import clinical_values
 import extract_llm
@@ -27,6 +29,8 @@ def test_high_policy_raises_urgency_despite_daijoubu(monkeypatch):
                             "negated": False, "subject": "patient", "evidence": "呼吸が苦しそうです"}],
                                          "vitals": {"spo2": 88},
                                          "urgency": "routine"})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     high = extract_validation.vital_threshold_policy({"vital_urgency": {"mode": "high"}})
     out = extract_llm.llm_extract(body, vital_policy=high)
     assert out["urgency"] == "high", out

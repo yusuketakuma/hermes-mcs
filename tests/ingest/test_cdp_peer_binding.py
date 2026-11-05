@@ -1,4 +1,5 @@
 """Synthetic regressions: auto_login fills credentials only into this profile's own CDP listener."""
+import mcs_authentication
 import os
 import subprocess
 from types import SimpleNamespace
@@ -100,11 +101,11 @@ def test_another_login_account_stops_auto_login_before_chrome(monkeypatch):
     a = mcs_adapter.MCSAdapter()
     started = []
     monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: started.append(1))
-    monkeypatch.setattr(mcs_adapter, "_login_accounts",
+    monkeypatch.setattr(mcs_authentication, "_login_accounts",
                         lambda: [_account(os.getuid()), _account(4294967294, "/usr/bin/false"),
                                  _account(65534, "/usr/sbin/nologin")])
     assert mcs_adapter._other_login_accounts() == 0       # nobody-style service accounts
-    monkeypatch.setattr(mcs_adapter, "_login_accounts",
+    monkeypatch.setattr(mcs_authentication, "_login_accounts",
                         lambda: [_account(os.getuid()), _account(4999, "/usr/bin/false"),
                                  _account(5000), _account(1_000_000_007)])
     assert mcs_adapter._other_login_accounts() == 2       # directory uids count too

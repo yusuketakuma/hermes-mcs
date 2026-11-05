@@ -1,4 +1,5 @@
 """Synthetic paid results distinguish a missing proof from scope withdrawal."""
+import extract_llm_runner
 from contextlib import nullcontext
 import json
 import time
@@ -64,6 +65,7 @@ def test_paid_result_commit_guard_fences_defer_and_scope_loss(routed, monkeypatc
         return {'symptoms': []}
 
     monkeypatch.setattr(worker, 'llm_extract', infer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert not fail_once[0] and len(posts) == 1
     assert result['done'] == 0 and result['deferred'] == 1

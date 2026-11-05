@@ -1,4 +1,7 @@
 """Synthetic intake evidence and guards against publishing through active holds."""
+import semantic_fact_stages
+import semantic_job_processor
+import semantic_summary_stages
 import json
 
 import pytest
@@ -543,8 +546,10 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
                 semantic_drain._sched_write(db, {
                     'long_defers': {str(token.job_id): {'g': token.generation, 'n': previous}}}, commit=False)
         monkeypatch.setattr(semantic_drain, '_assess_target', lambda *a, **kw: ({}, None))
+        monkeypatch.setattr(semantic_job_processor, '_assess_target', semantic_drain._assess_target)
         monkeypatch.setattr(semantic_drain, '_fact_stage', lambda *a, **kw: {
             'outcome': None, 'facts': [], 'v2_doc': None})
+        monkeypatch.setattr(semantic_job_processor, '_fact_stage', semantic_drain._fact_stage)
         monkeypatch.setattr(semantic_assessment, 'evaluate_medication_events', lambda *a, **kw: {
             'findings': [], 'complete': True, 'failure_reason': None})
         monkeypatch.setattr(semantic_audit, 'evaluate_source_fact_coverage', lambda *a, **kw: {
@@ -558,6 +563,9 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
                 return {'content': {'status': 'PASS', 'findings': []}, 'meta': {'audit_status': 'PASS'}}
             return original_artifact(ledger, kind, mid, *args)
         monkeypatch.setattr(semantic_drain, 'current_artifact', artifact)
+        monkeypatch.setattr(semantic_fact_stages, 'current_artifact', semantic_drain.current_artifact)
+        monkeypatch.setattr(semantic_job_processor, 'current_artifact', semantic_drain.current_artifact)
+        monkeypatch.setattr(semantic_summary_stages, 'current_artifact', semantic_drain.current_artifact)
         def reject_after_hold(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                               facts, verdicts, existing, deadline, *, diagnostics):
             assert mid == 2
@@ -566,6 +574,7 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
                              source_generation=ledger._semantic_source_generation(1, 1))
             return None, 'budget', {}, runtime.LLMNotSent('long_output_needs_budget')
         monkeypatch.setattr(semantic_drain, '_obtain_summary', reject_after_hold)
+        monkeypatch.setattr(semantic_job_processor, '_obtain_summary', semantic_drain._obtain_summary)
         result = {'errors': []}
         semantic_drain.run_due(db, _cfg('shadow', loop_mode='off'), result, time.monotonic() + 300,
                                jev_client=_FakeJev(), llm_fn=None, max_jobs=1)

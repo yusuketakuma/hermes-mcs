@@ -3,6 +3,7 @@
 The v1 reference retains invalid old metadata without blocking re-extraction.
 
 Synthetic fixtures + temp DB only."""
+import extract_llm_runner
 import json
 import time
 
@@ -186,6 +187,7 @@ def test_run_pending_serves_never_extracted_before_reextraction(tmp_path, monkey
         seen = []
         monkeypatch.setattr(extract_llm, "llm_extract",
                             lambda body, **_: seen.append(body) or {"summary": "ok"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         res = extract_llm.run_pending(db, limit=1, budget_s=30)
         assert res["done"] == 1 and res["fresh_selected"] == 1
         assert seen == ["体温37度"]
@@ -203,6 +205,7 @@ def test_full_selection_reports_left_estimate(tmp_path, monkeypatch):
         db.save_messages([_message(mid=m, body=f"体温3{m}度") for m in range(1, 6)])
         monkeypatch.setattr(extract_llm, "llm_extract",
                             lambda body, **_: {"summary": "ok"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         extract_llm._LEFT_ESTIMATE.clear()
         res = extract_llm.run_pending(db, limit=1, budget_s=30)
         # counted after this call settled one row

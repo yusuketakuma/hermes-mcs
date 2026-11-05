@@ -1,4 +1,10 @@
 """Update failures release owned descriptors without changing recovery decisions."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_restore
 from contextlib import suppress
 import errno
 import os
@@ -34,7 +40,14 @@ def test_unreapable_child_closes_its_parent_side_pipes(monkeypatch):
 
 def test_restore_staging_metadata_failure_closes_descriptor_before_any_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "LEDGER", str(tmp_path / "synthetic-ledger.db"))
+    monkeypatch.setattr(update_apply, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_execution, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_planning, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_preflight, 'LEDGER', mcs_update.LEDGER)
+    monkeypatch.setattr(update_restore, 'LEDGER', mcs_update.LEDGER)
     monkeypatch.setattr(mcs_update, "_settle_staging", lambda _directory: None)
+    monkeypatch.setattr(update_restore, '_settle_staging', mcs_update._settle_staging)
     created = []
     real_mkstemp, real_fstat = mcs_update.tempfile.mkstemp, os.fstat
 

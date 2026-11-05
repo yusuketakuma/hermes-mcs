@@ -1,10 +1,19 @@
 """Synthetic negative quality evidence must invalidate accepted replay completion."""
+import semantic_drain_accounting
+import semantic_due_selection
+import semantic_fact_stages
+import semantic_job_processor
+import semantic_reprocess
+import semantic_scheduler_state
+
+import patient_context_refresh_readiness
+import patient_context_refresh_state
+import rollup_builder
 import json
 import time
 
 import pytest
 
-import patient_context_refresh as refresh
 import rollup
 import semantic_drain as drain
 import semantic_store
@@ -26,13 +35,19 @@ def _bookmark(ledger, cfg):
 def test_negative_quality_reopens_completed_bookmark(runtime, cloud, monkeypatch):
     ledger, clock, _ = runtime
     clock.wall = time.time()
-    monkeypatch.setattr(drain, "time", refresh.time)
-    monkeypatch.setattr(rollup, "time", refresh.time)
+    monkeypatch.setattr(drain, "time", patient_context_refresh_state.time)
+    monkeypatch.setattr(semantic_drain_accounting, 'time', drain.time)
+    monkeypatch.setattr(semantic_due_selection, 'time', drain.time)
+    monkeypatch.setattr(semantic_fact_stages, 'time', drain.time)
+    monkeypatch.setattr(semantic_job_processor, 'time', drain.time)
+    monkeypatch.setattr(semantic_reprocess, 'time', drain.time)
+    monkeypatch.setattr(semantic_scheduler_state, 'time', drain.time)
+    monkeypatch.setattr(rollup_builder, "time", patient_context_refresh_state.time)
     monkeypatch.setitem(CFG["semantic"], "summary_mode", "assist")
     monkeypatch.setitem(CFG["semantic"], "daily_request_budget", 0)
     seed(ledger, body="完全合成の居住記録です。")
     finish_cloud(runtime)
-    assert refresh.inference_coverage(ledger.db, 1, CFG)["complete"]
+    assert patient_context_refresh_readiness.inference_coverage(ledger.db, 1, CFG)["complete"]
     assert ledger.artifacts("patient_context_source_quality_skipped_v1")
     rollup.rebuild(ledger, 1, cfg=CFG)
     # Post-level interpretation is independent of this patient-quality epoch.
@@ -65,7 +80,7 @@ def test_negative_quality_reopens_completed_bookmark(runtime, cloud, monkeypatch
             break
     else:
         pytest.fail("synthetic quality recheck did not retain its negative answer")
-    assert not refresh.inference_coverage(ledger.db, 1, CFG)["complete"]
+    assert not patient_context_refresh_readiness.inference_coverage(ledger.db, 1, CFG)["complete"]
     after = _bookmark(ledger, CFG)
     assert not after["complete"]
     assert after["analysis_epoch"] > before["analysis_epoch"]

@@ -1,5 +1,8 @@
 """Slot routing: local_llm.request_slot env override (wire ids,
 lane - 1) and the extractor's fixed backlog lanes."""
+import extract_llm_call_context
+import extract_llm_errors
+import extract_llm_provider
 import json
 
 import extract_llm
@@ -26,6 +29,7 @@ def test_request_slot_env_invalid(monkeypatch):
 
 def _set_state(monkeypatch, slot=None):
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", slot)
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', extract_llm._SLOT_OVERRIDE)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
 
 
@@ -107,10 +111,15 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
     """extract_llm's probe resolves its slot through _choose_slot — the
     same single point as the extraction calls it precedes."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", local_llm.LANES[3])
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', extract_llm._SLOT_OVERRIDE)
     bodies, send = _capture_bodies()
     monkeypatch.setattr(extract_llm, "_opener_request", send)
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm._probe_format() == "schema"
     assert bodies and all(b.get("id_slot") == local_llm.LANES[3]
                           for b in bodies)
@@ -120,16 +129,19 @@ def test_extract_busy_probe_keeps_cached_mode(monkeypatch):
     """A probe that lost the GPU turn (None) must not erase the cached
     mode: the next row waits its turn instead of re-probing and deferring."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "object")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
     monkeypatch.setattr(local_llm, "admitted_probe_format", lambda *a, **k: None)
     assert extract_llm._probe_format() == "object"
-    assert extract_llm._FMT_MODE == "object" and extract_llm._FMT_TS == 0.0
+    assert extract_llm_provider._FMT_MODE == "object" and extract_llm_provider._FMT_TS == 0.0
 
 
 def test_slot_override_out_of_range_falls_back(monkeypatch):
     """A _SLOT_OVERRIDE past the deployed count must not go unpinned."""
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE",
                         local_llm.SLOT_COUNT)
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', extract_llm._SLOT_OVERRIDE)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT

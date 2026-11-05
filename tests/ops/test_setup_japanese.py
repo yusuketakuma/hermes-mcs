@@ -1,4 +1,5 @@
 """Japanese guided setup preserves stored values and validates every answer."""
+import setup_integration
 import setup_wizard
 import pytest
 
@@ -101,9 +102,11 @@ def test_hermes_token_reuse_respects_japanese_consent(monkeypatch, tmp_path, cap
 
     env = tmp_path / ".env"
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(setup_integration, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(env))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(env))
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
-    monkeypatch.setattr(mcs_setup, "env_value", lambda key, *, paths, check_env:
+    monkeypatch.setattr(setup_integration, "env_value", lambda key, *, paths, check_env:
                         "synthetic-reuse-token" if paths != [str(env)] else None)
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: "")
     prompts = []

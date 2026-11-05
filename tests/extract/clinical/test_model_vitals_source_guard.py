@@ -1,4 +1,6 @@
 """A model's flat vitals keep only the patient's current reading, on wholly synthetic bodies."""
+import extract_llm_engine
+import extract_llm_runner
 import clinical_display
 import extract_quality
 import extract_validation
@@ -89,6 +91,8 @@ def test_vital_prose_uses_at_most_one_repair_and_never_saves_the_rejected_value(
         return valid if repair_correctly and len(calls) == 2 else invalid
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(SUPERSEDED, meta_out=meta)
     assert len(calls) == 2 and meta["repairs"] == 1

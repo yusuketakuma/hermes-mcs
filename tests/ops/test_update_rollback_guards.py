@@ -1,5 +1,16 @@
 """Updater rollback/restart guards (synthetic repo, temp DB, stubbed
 launchctl and network)."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import sqlite3
 
@@ -21,6 +32,15 @@ def test_rollback_with_unusable_schema_backup_never_resets(
     newer schema."""
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _head(repo)
     state = updater.journal_store.default_state()
@@ -31,8 +51,15 @@ def test_rollback_with_unusable_schema_backup_never_resets(
     notices = []
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.rollback("rb-1") == 1
     assert _head(repo) == after
     st = updater.journal_store.load_state(updater.STATE_PATH)
@@ -127,6 +154,7 @@ def test_restart_services_without_plugin_change_still_refreshes_lineworks(monkey
 def test_standalone_restart_leaves_lineworks_to_the_host(monkeypatch):
     requested = []
     monkeypatch.setattr(mcs_update, "restart_gateway", requested.append)
+    monkeypatch.setattr(update_services, 'restart_gateway', mcs_update.restart_gateway)
     monkeypatch.setattr(mcs_update.subprocess, "Popen",
                         lambda *a, **k: pytest.fail("no launchctl in standalone"))
     cfg = {"runtime_mode": "standalone", "notify": {"interactive": "lineworks"}}
@@ -138,6 +166,11 @@ def test_known_lineworks_kickstart_failure_is_announced(monkeypatch):
     notices = []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
 
     def missing(argv, **k):
         raise OSError("synthetic launchctl missing")
@@ -151,6 +184,11 @@ def test_issued_lineworks_kickstart_raises_no_notice(monkeypatch):
     notices, started = [], []
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(mcs_update.subprocess, "Popen",
                         lambda argv, **k: started.append((argv, k)))
     mcs_update.restart_lineworks({"notify": {"interactive": "lineworks"}})
@@ -166,6 +204,11 @@ def test_issued_lineworks_kickstart_raises_no_notice(monkeypatch):
 def test_lineworks_refresh_is_a_quiet_noop_outside_its_config(monkeypatch, cfg):
     monkeypatch.setattr(mcs_update, "_enqueue_notice",
                         lambda *a, **k: pytest.fail("no notice"))
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(mcs_update.subprocess, "Popen",
                         lambda *a, **k: pytest.fail("no launchctl"))
     assert mcs_update.restart_lineworks(cfg) is None
@@ -181,6 +224,12 @@ def test_release_notes_fetch_refuses_redirects(monkeypatch):
 
     monkeypatch.setattr(mcs_update, "_git_out",
                         lambda argv, **k: "https://github.com/o/r.git")
+    monkeypatch.setattr(update_apply, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', mcs_update._git_out)
     monkeypatch.setattr(mcs_util, "no_proxy_opener",
                         lambda *h: seen.append(h) or Opener())
     assert mcs_update.fetch_notes("v1.0.0") is None
@@ -214,6 +263,15 @@ def _source_repo(tmp_path):
 def test_split_target_requires_matching_committed_real_source(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, compatible = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     assert updater._split_target_source_matches(compatible)
     path = repo / "mcs/ingest/consumer.py"
     original = path.read_text()
@@ -233,6 +291,15 @@ def test_split_target_requires_matching_committed_real_source(updater, tmp_path,
 def test_split_target_rejects_staged_or_hidden_worktree_change(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, compatible = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     path = repo / "mcs/core/mcs_util.py"
     path.write_text("# synthetic changed loader\n")
     _git(repo, "update-index", "--assume-unchanged", "mcs/core/mcs_util.py")
@@ -242,17 +309,28 @@ def test_split_target_rejects_staged_or_hidden_worktree_change(updater, tmp_path
 def test_provider_preflight_refuses_pending_missing_evidence_and_snapshot_change(monkeypatch, tmp_path):
     import provider_settings
     monkeypatch.setattr(mcs_update, "HOME", str(tmp_path))
+    monkeypatch.setattr(update_apply, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', mcs_update.HOME)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "pending"})
     with pytest.raises(mcs_update.UpdateError, match="settings_unverified"):
         mcs_update._provider_rollback_preflight("a" * 40)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "requires_checked_read"})
     monkeypatch.setattr(provider_settings, "read", lambda *a, **k: {"mode": "split", "snapshot": {"v": 1}})
     monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: False)
+    monkeypatch.setattr(update_preflight, '_split_target_source_matches', mcs_update._split_target_source_matches)
+    monkeypatch.setattr(update_runtime_migration, '_split_target_source_matches', mcs_update._split_target_source_matches)
     with pytest.raises(mcs_update.UpdateError, match="target_unverified"):
         mcs_update._provider_rollback_preflight("a" * 40)
     states = iter([{"mode": "split", "snapshot": {"v": 1}}, {"mode": "split", "snapshot": {"v": 2}}])
     monkeypatch.setattr(provider_settings, "read", lambda *a, **k: next(states))
     monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: True)
+    monkeypatch.setattr(update_preflight, '_split_target_source_matches', mcs_update._split_target_source_matches)
+    monkeypatch.setattr(update_runtime_migration, '_split_target_source_matches', mcs_update._split_target_source_matches)
     with pytest.raises(mcs_update.UpdateError, match="settings_changed"):
         mcs_update._provider_rollback_preflight("a" * 40)
 
@@ -261,14 +339,32 @@ def test_provider_preflight_refuses_pending_missing_evidence_and_snapshot_change
 def test_provider_preflight_preserves_legacy_behavior(monkeypatch, tmp_path, state):
     import provider_settings
     monkeypatch.setattr(mcs_update, "HOME", str(tmp_path))
+    monkeypatch.setattr(update_apply, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', mcs_update.HOME)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": state})
     monkeypatch.setattr(mcs_update, "_split_target_source_matches", lambda target, **kwargs: pytest.fail("legacy target check"))
+    monkeypatch.setattr(update_preflight, '_split_target_source_matches', mcs_update._split_target_source_matches)
+    monkeypatch.setattr(update_runtime_migration, '_split_target_source_matches', mcs_update._split_target_source_matches)
     assert mcs_update._provider_rollback_preflight("synthetic-legacy-target") is None
 
 
 def test_rollback_provider_hold_precedes_quiesce_and_tree_change(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before, after = _git(repo, "rev-parse", "v1.0.0").stdout.strip(), _head(repo)
     state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": False}]
@@ -276,9 +372,22 @@ def test_rollback_provider_hold_precedes_quiesce_and_tree_change(updater, tmp_pa
     def deny(_target):
         raise updater.UpdateError("provider_rollback_target_unverified")
     monkeypatch.setattr(updater, "_provider_rollback_preflight", deny)
+    monkeypatch.setattr(update_apply, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_recovery, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_restore, '_provider_rollback_preflight', updater._provider_rollback_preflight)
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.rollback("synthetic-rollback") == 1
     assert _head(repo) == after
     current = updater.journal_store.load_state(updater.STATE_PATH)
@@ -288,6 +397,15 @@ def test_rollback_provider_hold_precedes_quiesce_and_tree_change(updater, tmp_pa
 def test_recovery_provider_hold_never_resets_or_restarts(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     head = _head(repo)
     state = updater.journal_store.default_state()
     state["applying"] = {"sha": head, "prev_sha": "a" * 40, "tag": "synthetic", "rollback": True}
@@ -296,8 +414,20 @@ def test_recovery_provider_hold_never_resets_or_restarts(updater, tmp_path, monk
     def deny(_target):
         raise updater.UpdateError("provider_rollback_target_unverified")
     monkeypatch.setattr(updater, "_provider_rollback_preflight", deny)
+    monkeypatch.setattr(update_apply, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_recovery, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_restore, '_provider_rollback_preflight', updater._provider_rollback_preflight)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_git_out", lambda *a, **k: pytest.fail("no reset"))
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     assert updater.recover_interrupted() == 1
     assert _head(repo) == head
     saved = updater.journal_store.load_state(updater.STATE_PATH)
@@ -308,6 +438,15 @@ def test_provider_preflight_allows_only_matching_target_and_stable_snapshot(upda
     import provider_settings
     repo, compatible = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "requires_checked_read"})
     reads = []
     def read(*args, **kwargs):
@@ -328,6 +467,15 @@ def test_rollback_pending_after_quiesce_keeps_marker_and_journal(updater, tmp_pa
 
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before, after = _git(repo, "rev-parse", "v1.0.0").stdout.strip(), _head(repo)
     state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": False}]
@@ -359,13 +507,36 @@ def test_rollback_pending_after_quiesce_keeps_marker_and_journal(updater, tmp_pa
         private_json(pending, {"synthetic": True})
 
     monkeypatch.setattr(updater, "_split_target_source_matches", lambda target, **kwargs: True)
+    monkeypatch.setattr(update_preflight, '_split_target_source_matches', updater._split_target_source_matches)
+    monkeypatch.setattr(update_runtime_migration, '_split_target_source_matches', updater._split_target_source_matches)
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: None)
+    monkeypatch.setattr(update_apply, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_recovery, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_runtime_migration, '_check_runtime_restore', updater._check_runtime_restore)
     monkeypatch.setattr(updater, "_local_changes_outside", lambda *a: [])
+    monkeypatch.setattr(update_apply, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_recovery, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_restore, '_local_changes_outside', updater._local_changes_outside)
     monkeypatch.setattr(updater, "quiesce", quiesce_then_pending)
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_services", lambda *a, **k: pytest.fail("no service restart"))
+    monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
     monkeypatch.setattr(updater, "_restore_runtime", lambda *a, **k: pytest.fail("no runtime change"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: pytest.fail("no enqueue"))
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.rollback("synthetic-pending") == 2
     assert marker.read_text() == "synthetic hold" and pending.is_file()
     assert _head(repo) == after
@@ -381,6 +552,15 @@ def test_migration_undo_pending_after_quiesce_keeps_hold(updater, tmp_path, monk
 
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before, after = _git(repo, "rev-parse", "v1.0.0").stdout.strip(), _head(repo)
     applying = {"tag": "synthetic", "sha": before, "prev_sha": after,
                 "rollback": True, "schema_bump": False}
@@ -390,7 +570,11 @@ def test_migration_undo_pending_after_quiesce_keeps_hold(updater, tmp_path, monk
     marker = tmp_path / "data" / "marker"
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "pending"})
     monkeypatch.setattr(updater, "quiesce", lambda: marker.write_text("synthetic hold"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_restore_runtime", lambda *a, **k: pytest.fail("no runtime change"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     def forbidden(*args, **kwargs):
         pytest.fail("no restart or escalation")
     assert updater._undo_interrupted_migration(state, applying, forbidden, forbidden) == 1
@@ -402,6 +586,15 @@ def test_split_target_rejects_sourceless_bytecode_without_rejecting_pycache(
         updater, tmp_path, monkeypatch):  # noqa: F811
     repo, compatible = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     cache = repo / "mcs" / "__pycache__"
     cache.mkdir()
     (cache / "synthetic.cpython-314.pyc").write_bytes(b"synthetic")
@@ -419,7 +612,13 @@ def test_recovery_empty_journal_pending_keeps_marker(updater, tmp_path, monkeypa
     marker.write_text("synthetic hold")
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "pending"})
     monkeypatch.setattr(updater, "_remove_marker", lambda: pytest.fail("keep marker"))
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     assert updater.recover_interrupted() == 1
     assert marker.read_text() == "synthetic hold"
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
@@ -429,17 +628,33 @@ def test_recovery_stage_only_uses_current_split_target(updater, tmp_path, monkey
     import provider_settings
     repo, _ = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     state = updater.journal_store.default_state()
     state["stages"] = [{"stage": "fetch"}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "requires_checked_read"})
     monkeypatch.setattr(provider_settings, "read", lambda *a, **k: {"mode": "split", "snapshot": {"v": 1}})
     monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: None)
+    monkeypatch.setattr(update_apply, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_recovery, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_runtime_migration, '_check_runtime_restore', updater._check_runtime_restore)
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: [])
+    monkeypatch.setattr(update_recovery, '_clean_stale_git_locks', updater._clean_stale_git_locks)
     finished = []
     monkeypatch.setattr(updater, "_finish_recovery",
                         lambda state, result, removed: finished.append(result) or 0)
+    monkeypatch.setattr(update_recovery, '_finish_recovery', updater._finish_recovery)
     assert updater.recover_interrupted() == 0
     assert finished == ["interrupted_pre_merge"]
 
@@ -456,6 +671,15 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
     _git(repo, "commit", "-qm", "synthetic updated source")
     target = _head(repo)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     assert not updater._split_target_source_matches(previous)
     assert updater._split_target_source_matches(target)
 
@@ -484,15 +708,37 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
     state["stages"] = [{"stage": "post_merge"}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: None)
+    monkeypatch.setattr(update_apply, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_recovery, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_runtime_migration, '_check_runtime_restore', updater._check_runtime_restore)
     monkeypatch.setattr(updater, "_clean_stale_git_locks", lambda: [])
+    monkeypatch.setattr(update_recovery, '_clean_stale_git_locks', updater._clean_stale_git_locks)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
+    monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+    monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(mcs_util, "load_config", lambda: common)
     postchecks = []
     monkeypatch.setattr(updater, "_postcheck", lambda state, sha: postchecks.append(sha) or [])
+    monkeypatch.setattr(update_recovery, '_postcheck', updater._postcheck)
+    monkeypatch.setattr(update_runtime_migration, '_postcheck', updater._postcheck)
     assert updater.recover_interrupted() == 0
     assert postchecks == [target] and _head(repo) == target
     saved = updater.journal_store.load_state(updater.STATE_PATH)
@@ -509,6 +755,15 @@ def test_split_forward_recovery_uses_target_without_requiring_previous_source(up
 def test_split_target_rejects_changed_runtime_consumer(updater, tmp_path, monkeypatch, name):  # noqa: F811
     repo, compatible = _source_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     path = repo / name
     path.write_text("# synthetic changed runtime consumer\n")
     _git(repo, "add", name)
@@ -519,6 +774,15 @@ def test_split_target_rejects_changed_runtime_consumer(updater, tmp_path, monkey
 def test_rollback_error_with_new_pending_keeps_hold(updater, tmp_path, monkeypatch):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before, after = _git(repo, "rev-parse", "v1.0.0").stdout.strip(), _head(repo)
     state = updater.journal_store.default_state()
     state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": False}]
@@ -535,12 +799,33 @@ def test_rollback_error_with_new_pending_keeps_hold(updater, tmp_path, monkeypat
         raise RuntimeError("synthetic interrupted load")
 
     monkeypatch.setattr(updater, "_provider_rollback_preflight", preflight)
+    monkeypatch.setattr(update_apply, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_recovery, '_provider_rollback_preflight', updater._provider_rollback_preflight)
+    monkeypatch.setattr(update_restore, '_provider_rollback_preflight', updater._provider_rollback_preflight)
     monkeypatch.setattr(updater, "_check_runtime_restore", lambda entry: None)
+    monkeypatch.setattr(update_apply, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_recovery, '_check_runtime_restore', updater._check_runtime_restore)
+    monkeypatch.setattr(update_runtime_migration, '_check_runtime_restore', updater._check_runtime_restore)
     monkeypatch.setattr(updater, "_local_changes_outside", lambda *a: [])
+    monkeypatch.setattr(update_apply, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_recovery, '_local_changes_outside', updater._local_changes_outside)
+    monkeypatch.setattr(update_restore, '_local_changes_outside', updater._local_changes_outside)
     monkeypatch.setattr(updater, "quiesce", lambda: marker.write_text("synthetic hold"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_rollback_tree", failed_tree)
+    monkeypatch.setattr(update_apply, '_rollback_tree', updater._rollback_tree)
+    monkeypatch.setattr(update_recovery, '_rollback_tree', updater._rollback_tree)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "_enqueue_notice", lambda *a, **k: pytest.fail("no enqueue"))
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.rollback("synthetic-pending-error") == 2
     assert marker.read_text() == "synthetic hold" and _head(repo) == after
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["rollback"] is True
@@ -552,6 +837,12 @@ def test_recovery_finish_rechecks_pending_before_marker_and_restart(updater, tmp
     marker.write_text("synthetic hold")
     monkeypatch.setattr(provider_settings, "probe", lambda root: {"state": "pending"})
     monkeypatch.setattr(updater, "_remove_marker", lambda: pytest.fail("keep marker"))
+    monkeypatch.setattr(update_apply, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_recovery, '_remove_marker', updater._remove_marker)
+    monkeypatch.setattr(update_services, '_remove_marker', updater._remove_marker)
     monkeypatch.setattr(updater, "restart_agents", lambda *a, **k: pytest.fail("no restart"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     assert updater._finish_recovery(updater.journal_store.default_state(), "synthetic", []) == 1
     assert marker.read_text() == "synthetic hold"

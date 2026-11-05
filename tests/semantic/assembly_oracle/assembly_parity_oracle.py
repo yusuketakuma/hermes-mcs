@@ -1,4 +1,6 @@
 """Compare fixed synthetic meaning after independent assertions, never bless a new owner."""
+import extract_llm_errors
+import extract_llm_store
 import llm_availability
 import copy
 import hashlib
@@ -111,6 +113,8 @@ def test_fixed_synthetic_assembly_meaning(request, tmp_path, monkeypatch, pytest
                       "output": {"content": receipt, "meta": meta}})
         return result
     monkeypatch.setattr(extract_llm, "_record_hold_tx", capture_hold)
+    monkeypatch.setattr(extract_llm_errors, '_record_hold_tx', extract_llm._record_hold_tx)
+    monkeypatch.setattr(extract_llm_store, '_record_hold_tx', extract_llm._record_hold_tx)
 
     def run(name, function, *args):
         current_case[0] = name

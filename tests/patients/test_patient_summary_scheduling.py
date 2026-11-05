@@ -1,4 +1,20 @@
 """Synthetic regression cases for patient-context scheduling and source completeness."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
+
+import patient_context_quality_controller
+import patient_context_quality_receipts
+import patient_context_refresh_sources
+import patient_context_refresh_state
 import json
 import time
 
@@ -7,7 +23,6 @@ import pytest
 import extract_llm as worker
 import cloud_inference
 import initial_import_state
-import patient_context_refresh as refresh
 from test_patient_context_refresh import CFG, document, finish, runtime, seed, step
 
 __all__ = ['runtime']
@@ -18,6 +33,7 @@ def cloud_schedule(runtime, monkeypatch):
     led, _, _ = runtime
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1, 2], 'routes': ['patient_context']}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on')
+    monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
             assert ledger is led
@@ -51,8 +67,22 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     cfg = {**cfg, 'semantic': {**CFG['semantic'], 'project_ids': [1, 2], 'daily_request_budget': 3000}}
     clock.mono = time.monotonic()
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     real_client = semantic_jev.JevClient
@@ -74,16 +104,16 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=1")
     led.db.commit()
     quality_inputs = []
-    original_quality = refresh._quality_step
+    original_quality = patient_context_quality_controller._quality_step
     def quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs):
         if kwargs.get('source') is not None:
             return original_quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs)
-        snapshot = refresh._snapshot(led.db, pid, cfg)
-        scans = refresh._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        snapshot = patient_context_refresh_sources._snapshot(led.db, pid, cfg)
+        scans = patient_context_refresh_sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
         quality_inputs.append({mid: (scans.get(mid, {}).get('complete'), scans.get(mid, {}).get('audited'))
                                for mid in (1, 2)})
         return 'pending', None
-    monkeypatch.setattr(refresh, '_quality_step', quality)
+    monkeypatch.setattr(patient_context_quality_controller, '_quality_step', quality)
     lanes = []
     for _ in range(40):
         result = step(rt, cfg=cfg)
@@ -97,14 +127,14 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     assert [request['state']['target']['id'] for request in requests].count('source_facts') == 2
     assert [request['state']['target']['id'] for request in requests].count('source_coverage') == 2
     assert len(requests) == 4
-    scan_docs = [json.loads(row['content']) for row in led.artifacts(refresh.SCAN, project_id=1)]
+    scan_docs = [json.loads(row['content']) for row in led.artifacts(patient_context_refresh_state.SCAN, project_id=1)]
     audit_keys = {scan['source_quality_audit_key'] for scan in scan_docs}
     assert len(audit_keys) == 2 and all(scan['audited'] for scan in scan_docs)
     usage = [json.loads(row['meta']) for row in led.artifacts('semantic_usage', project_id=1)]
     assert len(usage) == 4 and all(meta['operation'] == 'patient_source_quality' for meta in usage)
     assert {meta['quality_request']['audit_key'] for meta in usage} == audit_keys
     assert all(semantic_runtime.patient_summary_usage_resolved(led.db, 1, meta) for meta in usage)
-    assert not led.artifacts(refresh.QUALITY_PASS, project_id=1)
+    assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS, project_id=1)
 
 
 @pytest.mark.parametrize('fact_source,canonical,allowed', [
@@ -118,11 +148,11 @@ def test_quality_scope_tracks_actual_fact_provenance_without_notification_enforc
     policy = {'mode': 'assist', 'project_ids': [1], 'fact_source': fact_source}
     source = {'source': 'chat', 'body_state': 'full', 'body_text': 'synthetic',
               'canonical_context': canonical}
-    assert refresh._quality_scope_allowed(led.db, 1, policy, [source]) is allowed
-    assert not refresh._quality_scope_allowed(led.db, 2, policy, [source])
+    assert patient_context_quality_receipts._quality_scope_allowed(led.db, 1, policy, [source]) is allowed
+    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 2, policy, [source])
     with led.db:
         led.artifact_add_tx('semantic_control', 'paused', project_id=1)
-    assert not refresh._quality_scope_allowed(led.db, 1, policy, [source])
+    assert not patient_context_quality_receipts._quality_scope_allowed(led.db, 1, policy, [source])
 
 
 def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkeypatch):
@@ -134,7 +164,7 @@ def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkey
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     monkeypatch.setattr(semantic_jev, 'JevClient', lambda **_: pytest.fail('unapproved source made a request'))
-    assert refresh._quality_step(led, 1, cfg, '2026-10-17', {}, clock.mono + 600,
+    assert patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', {}, clock.mono + 600,
                                  lambda: True) == ('deferred', None)
     assert not led.artifacts('semantic_usage')
 
@@ -142,15 +172,15 @@ def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkey
 def test_tick_run_lock_does_not_block_fenced_scheduling_or_mark_a_result_published(runtime, monkeypatch):
     led, clock, calls = runtime
     seed(led)
-    monkeypatch.setattr(refresh, 'acquire_run_lock', lambda: None)
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
     def sleep(seconds):
         clock.mono += seconds
         clock.wall += seconds
-    monkeypatch.setattr(refresh.time, 'sleep', sleep, raising=False)
+    monkeypatch.setattr(patient_context_refresh_state.time, 'sleep', sleep, raising=False)
     result = step(runtime)
     assert result['status'] == 'deferred' and result['reason'] == 'run_lock'
-    assert document(led, refresh.PROGRESS)['last_attempt_unit'] == 1
-    assert document(led, refresh.PROGRESS, pid=0)['units'] == 1
+    assert document(led, patient_context_refresh_state.PROGRESS)['last_attempt_unit'] == 1
+    assert document(led, patient_context_refresh_state.PROGRESS, pid=0)['units'] == 1
     assert calls and document(led) is None
 
 
@@ -164,7 +194,7 @@ def test_quality_budget_wait_does_not_prevent_other_patient_progress(cloud_sched
     def wait(_ledger, pid, *_args, **_kwargs):
         waits.append(pid)
         return 'deferred', None
-    monkeypatch.setattr(refresh, '_quality_step', wait)
+    monkeypatch.setattr(patient_context_quality_controller, '_quality_step', wait)
     for _ in range(30):
         step(rt, cfg=cfg)
         if waits:
@@ -173,13 +203,13 @@ def test_quality_budget_wait_does_not_prevent_other_patient_progress(cloud_sched
     seed(led, mid=2, pid=2)
     led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1")
     led.db.commit()
-    assert not led.artifacts(refresh.SCAN, project_id=2)
+    assert not led.artifacts(patient_context_refresh_state.SCAN, project_id=2)
     for _ in range(30):
         step(rt, cfg=cfg)
-        if led.artifacts(refresh.SCAN, project_id=2):
+        if led.artifacts(patient_context_refresh_state.SCAN, project_id=2):
             break
-    assert led.artifacts(refresh.SCAN, project_id=2), 'other source work must progress after the wait'
-    assert not led.artifacts(refresh.QUALITY_PASS, project_id=1)
+    assert led.artifacts(patient_context_refresh_state.SCAN, project_id=2), 'other source work must progress after the wait'
+    assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS, project_id=1)
 
 
 @pytest.mark.parametrize('invalid', ['fetch_pending', 'fetch_unknown', 'capture_pending',
@@ -208,8 +238,8 @@ def test_incomplete_acquisition_cannot_be_accepted_as_whole_history(runtime, inv
     led.db.execute('BEGIN')
     try:
         with pytest.raises(ValueError):
-            refresh._quality_capture(led.db, 1, CFG, '2026-10-17', doc['summary'],
+            patient_context_refresh_sources._quality_capture(led.db, 1, CFG, '2026-10-17', doc['summary'],
                                      {'model': 'synthetic'}, doc['temporal_view'])
     finally:
         led.db.rollback()
-    assert not led.artifacts(refresh.QUALITY_PASS, project_id=1)
+    assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS, project_id=1)

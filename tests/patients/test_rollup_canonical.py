@@ -4,6 +4,11 @@ The rollup prefers canonical_projection over extract_llm via
 current_fact_pred; every verified fact must remain enumerable with
 fact_id/evidence — newest generation wins per fact_id.
 """
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
+
+import rollup_builder
 import json
 
 import pytest
@@ -25,7 +30,10 @@ db = ledger_fixture(name="db", patients=(1,))
 def _complete_history(db, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     cohort = "a" * 32
     capture = {"version": 1, "cohort_id": cohort, "boundary_ts": 1,
                "boundary_source": "server", "started_at": 1, "updated_at": 1,
@@ -483,7 +491,7 @@ def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
             calls.append(key)
             return super().get(key, default)
 
-    monkeypatch.setattr(rollup, "_REPLY_STAGE", Stages(rollup._REPLY_STAGE))
+    monkeypatch.setattr(rollup_builder, "_REPLY_STAGE", Stages(rollup_builder._REPLY_STAGE))
     rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert [row["ctx"] for row in rows] == (
         [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i:03d}" for i in range(11)])
@@ -811,8 +819,8 @@ def test_rollup_decodes_in_bounded_pages_and_preserves_source_order(monkeypatch)
         return [row['message_id'] % 2 == 0 for row in rows]
 
     monkeypatch.setattr(rollup, 'decode_current_extractions', decode)
-    monkeypatch.setattr(rollup, '_measurement_sources_bound', bound)
-    inputs = rollup._rollup_inputs(None, messages, arts, {}, None)
+    monkeypatch.setattr(rollup_builder, '_measurement_sources_bound', bound)
+    inputs = rollup_builder._rollup_inputs(None, messages, arts, {}, None)
     first = next(inputs)
     assert first[0]['message_id'] == 0 and first[-1] is True
     assert decoded == list(range(64))

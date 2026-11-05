@@ -1,4 +1,17 @@
 """Retain one completed pass and resume saving before any new inference."""
+import extract_llm_admission
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import gc
 import json
 import os
@@ -62,6 +75,8 @@ def test_zero_budget_carry_is_untouched_and_zero_limit_still_rejected(tmp_path, 
         forbid_new_work(monkeypatch)
         monkeypatch.setattr(worker, '_settle_carry',
             lambda *a, **k: pytest.fail('zero budget cannot begin settlement'))
+        monkeypatch.setattr(extract_llm_resident, '_settle_carry', worker._settle_carry)
+        monkeypatch.setattr(extract_llm_runner, '_settle_carry', worker._settle_carry)
         before = led.db.total_changes
         result = worker.run_pending(led, limit=1, budget_s=0, carry=carry)
         assert result['carry'] is carry and carry == original and result['carry_waiting']
@@ -76,6 +91,13 @@ def test_paid_save_wait_keeps_receipt_and_never_posts_again(routed, monkeypatch,
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     cfg['cloud_llm']['daily_request_budget'] = 5
     old(led)
     posts, blocked = [], [False]
@@ -87,12 +109,15 @@ def test_paid_save_wait_keeps_receipt_and_never_posts_again(routed, monkeypatch,
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request', request)
     monkeypatch.setattr(worker, 'acquire_run_lock', lambda: None if blocked[0] else
                         os.open(tmp_path / 'writer', os.O_CREAT | os.O_RDWR, 0o600))
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', worker.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', worker.acquire_run_lock)
     original = worker.llm_extract
     def extract(*args, **kwargs):
         result = original(*args, **kwargs)
         blocked[0] = True
         return result
     monkeypatch.setattr(worker, 'llm_extract', extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, 'sleep', lambda seconds: None)
     first = worker.run_pending(led, limit=1, budget_s=180, per_write_lock=True,
                                write_wait_s=1, carry=[])
@@ -134,14 +159,38 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
         def close(self):
             pass
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(worker, '_open_current_ledger', lambda **_: Ledger())
+    monkeypatch.setattr(extract_llm_resident, '_open_current_ledger', worker._open_current_ledger)
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker, 'load_config', lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings',
                         lambda cfg: {'mode': 'off', 'max_concurrency': 1})
     monkeypatch.setattr(worker.cloud_backlog, 'CloudBacklogPool', Pool)
     monkeypatch.setattr(worker, 'legacy_admissions', lambda *args: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', worker.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', worker.legacy_admissions)
     monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(worker.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     monkeypatch.setattr(worker.sys, 'argv', ['extract_llm', '--all', '--lane', str(lane),
@@ -163,10 +212,15 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
         context_calls.append(True)
         return {'status': 'off', 'done': 0}
     monkeypatch.setattr(worker, 'run_pending', run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
     monkeypatch.setattr(worker, '_settle_carry', settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', worker._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', worker._settle_carry)
     monkeypatch.setattr(worker, '_background_context_refresh', context)
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', worker._background_context_refresh)
     monkeypatch.setattr(worker, '_background_semantic',
                         lambda *args: pytest.fail('save wait must not admit semantic inference'))
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', worker._background_semantic)
     assert worker.main() == 0
     assert calls[0] is False and all(calls[1:]) and closed == [True]
     assert len(context_calls) == int(lane == 3)

@@ -1,4 +1,8 @@
 """Synthetic patient rollups distinguish measurement dates from posting dates."""
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import sqlite3
 
@@ -19,7 +23,10 @@ from extract_testkit import _hash, _message
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     ledger = make_ledger(tmp_path)
     ledger.ensure_patient(1)
     cohort = "a" * 32
@@ -529,6 +536,7 @@ def test_source_batch_does_not_retry_interrupted_sql(store, monkeypatch, code):
 
     monkeypatch.setattr(extract_llm, 'progress_for_messages', interrupted)
     monkeypatch.setattr(extract_llm, 'progress_for_message', lambda *a, **k: pytest.fail('unexpected retry'))
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     with pytest.raises(sqlite3.OperationalError) as raised:
         rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, {})
     assert raised.value is error
@@ -558,6 +566,7 @@ def test_single_fallback_stops_on_interruption_after_noninterrupt_batch_failure(
 
     monkeypatch.setattr(extract_llm, 'progress_for_messages', fail_batch)
     monkeypatch.setattr(extract_llm, 'progress_for_message', fail_first)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     with pytest.raises(sqlite3.OperationalError) as raised:
         rollup._measurement_sources_bound(store.db, rows, ['extract_llm'] * 2, refs, {})
     assert raised.value is interrupted
@@ -589,6 +598,7 @@ def test_single_fallback_keeps_other_operational_errors_unverified(store, monkey
 
     monkeypatch.setattr(extract_llm, 'progress_for_messages', fail_batch)
     monkeypatch.setattr(extract_llm, 'progress_for_message', progress)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     assert rollup._measurement_sources_bound(store.db, rows, ['extract_llm'] * 2, refs, {}) == [False, True]
     assert visited == [1, 2]
 
@@ -647,6 +657,7 @@ def test_source_batch_replays_in_order_if_later_source_check_raises(store, monke
 
     monkeypatch.setattr(extract_llm, 'progress_for_messages', fail_batch)
     monkeypatch.setattr(extract_llm, 'progress_for_message', earlier_progress)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     with pytest.raises(RuntimeError, match='earlier progress'):
         rollup._measurement_sources_bound(store.db, rows, ['extract_llm'] * 2, refs, {})
 

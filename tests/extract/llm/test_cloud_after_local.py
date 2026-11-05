@@ -1,4 +1,12 @@
 """Synthetic local-first completion must leave a source eligible for paid cloud extraction."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 from contextlib import nullcontext
 import json
 import time
@@ -34,7 +42,10 @@ def local_then_cloud(routed, monkeypatch):
         local_calls.append(prompt)
         return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(answers['local'], ensure_ascii=False)}
     monkeypatch.setattr(worker, '_probe_format', lambda **kwargs: 'plain')
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
     monkeypatch.setattr(worker, '_llm_up', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
     monkeypatch.setattr(worker.local_llm, 'chat', local_chat)
     monkeypatch.setattr(worker.local_llm, 'admitted_chat', lambda _client, prompt, **kwargs: local_chat(prompt, **kwargs))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
@@ -276,6 +287,7 @@ def test_source_edit_between_selection_and_claim_cannot_send_old_input(local_the
             changed.append(row['message_id'])
         return original(db, row, *args, **kwargs)
     monkeypatch.setattr(worker, '_claim', edit_before_claim)
+    monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     assert _cloud_pass(ledger)['done'] == 0
     assert changed == [1] and not cloud_calls and not _financial_rows(ledger)
 
@@ -473,6 +485,14 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     cfg = approved_config(cfg)
     assert not semantic_policy.semantic_config(cfg, key_present=True)[1]
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     # The generic legacy admission set is closed under canonical — that
     # closure used to leave the required cloud pass with zero targets. A
@@ -503,6 +523,14 @@ def test_semantic_gate_failures_never_smuggle_sealed_source_into_worker(local_th
     cfg = {**cfg, 'semantic': semantic}
     cfg['cloud_llm']['mode'] = 'on'
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     admitted = worker.cloud_backlog_admissions(ledger, cfg)
     if semantic == {"fact_source": "legacy"}:
@@ -534,6 +562,7 @@ def test_hold_still_vetoes_cloud_pass_on_a_sealed_source(local_then_cloud):
 def test_low_signal_greeting_is_not_prefilter_settled_in_cloud_only(local_then_cloud, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     monkeypatch.setattr(worker, '_prefilter_enabled', lambda: True)
+    monkeypatch.setattr(extract_llm_runner, '_prefilter_enabled', worker._prefilter_enabled)
     ledger.save_messages([_message(2, body='こんにちは。', posted_at='2026-09-19T00:00:00+09:00')])
     with ledger.db:
         ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
@@ -566,6 +595,7 @@ def test_hold_created_after_selection_prevents_cloud_claim(local_then_cloud, mon
             reached.append(row['message_id'])
         return original(db, row, *args, **kwargs)
     monkeypatch.setattr(worker, '_claim', concurrent_hold)
+    monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     result = _cloud_pass(ledger)
     assert reached == [1] and result['done'] == 0
     assert not cloud_calls and _financial_rows(ledger) == before

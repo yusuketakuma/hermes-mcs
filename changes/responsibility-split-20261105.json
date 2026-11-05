@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "推論・保存・更新処理を責務別に整理",
+  "summary": "ローカル・クラウド推論、患者コンテキスト、通知、更新・復旧を責務別に整理し、変更箇所と共有状態の所有先を明確にしました。既存の公開入口、原文と送信結果の照合、人承認の条件を維持します。",
+  "upgrade": "導入・更新にはdeployment/install/runtime.shを含む完全な配布版を使ってください。復旧機能を使用する環境では、既存のopt-outと安全な復旧Pythonを維持して正規の再導入経路で同期し、入口hashに加えて補助4ファイルを含む--helpの正常終了とwatchdogの読込状態を確認します。.prevと対応するruntime世代を一体で保持し、入口だけをコピー・巻戻ししないでください。モデル、予算、DB schema、人承認、成否不明の送信を自動再送しない条件は変更しません。この変更記録は本番適用を示しません。",
+  "details": [
+    "抽出17、意味解析7、患者コンテキスト6、クラウド会計・履歴2、Jev証拠1の計33補助モジュールをコードdigestと候補IDの変更検知へ含め、実行時の状態だけを所有先と借用先ごとに明示して除外します。固定の閾値・形式降格表とloaded_extractの束縛を維持します。",
+    "共有fixtureをtestkitへ分け、移動した関数とparameter付きの旧新node IDを照合します。実際の呼出元に合わせてprivateな差替え先を更新し、同じobjectの値を共有します。",
+    "完全合成の同じ一時SQLiteでPASS receipt末端のmeta検証だけを測定したところ、decode回数は4回から1回、各3000回・7標本の中央値は0.04433秒から0.02591秒、局所で約1.71倍でした。実OCR・LLM・患者全体や本番の速度を示す値ではありません。"
+  ],
+  "refs": [
+    "docs/development/RESPONSIBILITY_SPLIT.md",
+    "mcs/extract/llm/extract_llm_source_contract.py",
+    "mcs/semantic/semantic_usage_receipts.py",
+    "deployment/install/runtime.sh",
+    "deployment/recovery/prepare_recovery.py"
+  ]
+}

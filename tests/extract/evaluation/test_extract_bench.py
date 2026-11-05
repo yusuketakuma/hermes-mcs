@@ -1,4 +1,5 @@
 """extract_bench scoring contract tests — pure function, no LLM."""
+import extract_llm_runner
 import hashlib
 import json
 import sys
@@ -300,6 +301,7 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
                     posted_at=kwargs.get('posted_at'))
         return {}
     monkeypatch.setattr(extract_llm, 'llm_extract', fake)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     outputs = []
     for tag in ('before', 'after'):
         out = tmp_path / (tag + '.json')

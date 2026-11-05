@@ -1,4 +1,13 @@
 """Synthetic ownership oracles for setup-compatible environment diagnostics."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_preflight
+import update_recovery
+import update_repository
+import update_runtime_migration
+import update_services
 import os
 
 import pytest
@@ -43,7 +52,23 @@ def test_setup_compatibility_entry_passes_finite_paths_at_call_time(monkeypatch,
 def test_updater_baseline_uses_diagnostic_owner_without_setup_entry(monkeypatch, tmp_path, unavailable):
     root, checkout = str(tmp_path / "root"), str(tmp_path / "checkout")
     monkeypatch.setattr(mcs_update, "HOME", root)
+    monkeypatch.setattr(update_apply, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', mcs_update.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', mcs_update.HOME)
     monkeypatch.setattr(mcs_update, "REPO", checkout)
+    monkeypatch.setattr(update_apply, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', mcs_update.REPO)
+    monkeypatch.setattr(update_services, 'REPO', mcs_update.REPO)
     calls = []
     cfg, errors = {}, ["synthetic environment finding"]
 

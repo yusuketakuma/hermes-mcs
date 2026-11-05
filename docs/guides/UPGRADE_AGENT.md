@@ -294,12 +294,16 @@ release owner を使わない通常更新で、提供元別設定に未移行の
 
 1. 橋渡し版 B を通常の更新経路で適用し、HEAD・更新記録・稼働状態を読み直して B の適用を確認します。続く候補 C の `plan` と事前検査のエラーは解消し、無視して進めません。
 2. C を適用する前に、既存の `org.mcs.recovery` の所有先と状態を確認し、実行中でないことを確かめた上で、この監視だけを計画的に停止します。対象の停止には `launchctl bootout "gui/$(id -u)/org.mcs.recovery"` を使います。失敗した場合や停止を確認できない場合は更新を始めません。
-3. C は通常の `reinstall` 経路で適用し、復旧機能を `--no-recovery` で省略しません。再導入が新しい復旧ツールを原子的に配置して監視を起動・再起動します。適用後に `"$REPO/deployment/recovery/mcs_recover.py"` と `"$HOME/.mcs-recovery/mcs_recover.py"` のhashが一致すること、`org.mcs.recovery` が読み込まれていることを確認します。どちらも確認できなければ正常完了と扱いません。
+3. C は通常の `reinstall` 経路で適用し、復旧機能を `--no-recovery` で省略しません。再導入が補助4ファイルの検証済み世代を先に配置し、同じ入口のbytesを原子的に公開して監視を起動・再起動します。適用後は入口hashの一致、補助4ファイルを含む全世代の読込み、`org.mcs.recovery`の読込状態をそれぞれ確認します。入口hashの一致だけでは正常完了と扱いません。
 
 ```bash
 shasum -a 256 "$REPO/deployment/recovery/mcs_recover.py" "$HOME/.mcs-recovery/mcs_recover.py"
+RECOVERY_PYTHON='<記録済みrecovery_pythonの絶対パス>'
+"$RECOVERY_PYTHON" -I -B "$HOME/.mcs-recovery/mcs_recover.py" --help
 launchctl print "gui/$(id -u)/org.mcs.recovery"
 ```
+
+`--help`も入口のtop-levelで補助4ファイルのhashを照合して読み込んだ後に実行されます。正常終了を確認してください。この確認で復旧処理は実行しません。`.prev`を保持する場合は、その入口が指す`runtime-<世代hash>`も保持します。入口だけのコピーや補助ファイルの混在で修復せず、正規の再導入経路を使います。
 
 C の適用がコード切替前に失敗した場合は、HEAD が B で、未完了の更新記録がなく、状態を確認できる場合だけ旧い監視を再開できます。コード切替後または切替状態が不明な場合は旧い監視を再開せず、移行先版の正規 `recover` または検証済みの新しい復旧ツールで §7 の保留・復旧手順に従ってください。この順序の実機適用は未確認です。
 

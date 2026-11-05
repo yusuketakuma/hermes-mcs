@@ -1,4 +1,6 @@
 """Realtime claims include fragmented batch and single-fallback budget floors."""
+import extract_llm_admission
+import extract_llm_resident
 import time
 from contextlib import closing
 
@@ -15,11 +17,15 @@ from ingest_testkit import _ledger
 ])
 def test_realtime_limit_includes_batch_fallback(tmp_path, monkeypatch, batch_k, budget, expected):
     monkeypatch.setattr(extract_llm, "_BATCH_K", batch_k)
+    monkeypatch.setattr(extract_llm_resident, '_BATCH_K', extract_llm._BATCH_K)
     monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda deadline: False)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda ledger, cfg: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     seen = []
     monkeypatch.setattr(extract_llm, "run_pending", lambda ledger, **kw: (
         seen.append(kw) or {"done": 0, "failed": 0, "pids": []}))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     with closing(_ledger(tmp_path)) as ledger:
         result = {"errors": [], "realtime_ids": [1]}
         # The tick reserves half its remaining time for downstream clinical work.

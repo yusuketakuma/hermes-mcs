@@ -1,4 +1,5 @@
 """Known paid answers with removed uncertainty keys survive fresh replay and strict reading."""
+import extract_llm_runner
 from contextlib import nullcontext
 import json
 
@@ -17,6 +18,7 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(worker, '_llm_up', lambda **kwargs: False)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
     answer = {'symptoms': [], 'meds': [{'name': '合成薬A', 'dose': None, 'status': 'current',
         'subject': 'patient', 'action': 'stop', 'negated': False, 'evidence': body}]}
     posts = []
@@ -33,6 +35,7 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
         # Seed the old rejected-save state, keeping all paid answers/checkpoints.
         return worker._commit_rejected(row, 'completeness_pending')
     monkeypatch.setattr(worker, '_commit_extraction_atomic', formerly_rejected)
+    monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
     first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert reached == [True] and first['done'] == first['failed'] == 0 and first['deferred'] == 1
     assert first['defer_reasons'] == {'commit_completeness_pending': 1}
@@ -42,6 +45,7 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
     assert len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == len(posts)
     assert not ledger.artifacts('cloud_usage_disposition')
     monkeypatch.setattr(worker, '_commit_extraction_atomic', atomic)
+    monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
     capture = worker._capture_checkpoint_state
     fresh_replays = []
     def without_cached_leaf(db, row, context):
@@ -54,6 +58,7 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
         # the newly persisted candidate again at the actual atomic commit.
         return {}
     monkeypatch.setattr(worker, '_capture_checkpoint_state', without_cached_leaf)
+    monkeypatch.setattr(extract_llm_runner, '_capture_checkpoint_state', worker._capture_checkpoint_state)
     now = worker.time.time()
     monkeypatch.setattr(worker.time, 'time', lambda: now + worker._PREPARE_HOLD_S + 1)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0

@@ -1,4 +1,6 @@
 """Wholly invented model answers cannot borrow family evidence or omit pharmacy details."""
+import extract_llm_engine
+import extract_llm_runner
 import extract_quality
 import extract_validation
 import mcs_queries
@@ -140,6 +142,8 @@ def test_unnamed_medication_hints_do_not_force_an_impossible_repair(monkeypatch,
         {"category": "medication_management", "subject": "patient", "text": body, "evidence": body}]}
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(candidate))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, hints=rule, meta_out=meta)
     assert out["patient_context"] and not out.get("meds")
@@ -165,6 +169,8 @@ def test_nonuse_and_unspecified_names_use_only_one_existing_repair(monkeypatch, 
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k:
                         calls.append(a) or copy.deepcopy(initial if len(calls) == 1 else repaired))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, meta_out=meta)
     assert len(calls) == 2 and meta["repairs"] == 1
@@ -179,6 +185,8 @@ def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
     wrong = {"symptoms": [], "summary": "合成要約", "meds": [medication("解熱剤", body)]}
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(wrong))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, meta_out=meta)
     med, = out['meds']
@@ -244,6 +252,8 @@ def test_concrete_medication_feedback_recovers_family_quote_in_one_repair(monkey
         return copy.deepcopy(invalid)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, meta_out=meta)
     assert out["meds"][0]["subject"] == "family"
@@ -290,6 +300,8 @@ def test_missing_pharmacy_details_use_one_existing_repair(monkeypatch, body, key
         return copy.deepcopy(initial if len(calls) == 1 else complete)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, hints=hints(body) if use_hints else None, meta_out=meta)
     assert len(calls) == 2
@@ -342,6 +354,8 @@ def test_pharmacy_issues_do_not_fabricate_facts_or_loop(monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k:
                         calls.append(a) or {"symptoms": [], "summary": "合成要約"})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
     assert len(calls) == 2 and not out.get("patient_context") and not out.get("events")
@@ -359,6 +373,8 @@ def test_failed_inference_retains_counts_and_only_enum_diagnostics(monkeypatch, 
         return copy.deepcopy(invalid)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     assert extract_llm.llm_extract("完全合成の失敗診断用本文です。", meta_out=meta) is None
     assert meta["calls"] == calls
@@ -458,6 +474,8 @@ def test_optional_negative_or_planned_details_retain_the_raw_qualification(monke
         calls.append(args)
         return {"symptoms": [], "patient_context": [context(body, key, value)]}
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     out = extract_llm.llm_extract(body)
     assert len(calls) == 1
     assert out["patient_context"][0]["details"][0]["value"] == value
@@ -492,6 +510,8 @@ def test_one_repair_recovers_only_source_valid_shape_owner_and_raw_detail(monkey
         return copy.deepcopy(first if len(calls) == 1 else repaired)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     meta = {}
     out = extract_llm.llm_extract(body, meta_out=meta)
     assert len(calls) == 2 and meta["repairs"] == 1

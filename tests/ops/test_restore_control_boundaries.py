@@ -1,4 +1,11 @@
 """Shared restore/control readers keep independent and cold-start entry points closed."""
+import update_apply
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_restore
+import update_services
 import builtins
 import json
 import os
@@ -66,6 +73,13 @@ def test_plist_reader_preserves_binary_plists_and_parent_alias(tmp_path):
 @pytest.mark.parametrize("witness", ["restore.json", "backup_restore_blocked.json", "journal"])
 def test_updater_shared_hold_does_not_need_the_restore_marker(tmp_path, monkeypatch, witness):
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_services, 'DATA', mcs_update.DATA)
     if witness == "journal":
         state = update_journal.default_state()
         state["restore_consent"] = {"report_id": "synthetic"}

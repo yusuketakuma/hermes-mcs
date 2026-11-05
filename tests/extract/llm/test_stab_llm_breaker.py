@@ -3,6 +3,8 @@ breaker and the health marker without charging attempts, and a server
 that answers /v1/models but times out every call stops charging
 attempts once the breaker has tripped. Synthetic fixtures, temp DB and
 transport stubs only — no LLM is contacted."""
+import extract_llm_provider
+import extract_llm_runner
 import llm_availability
 import json
 import time
@@ -18,6 +20,8 @@ from extract_testkit import _ledger, _message
 def _plain(monkeypatch):
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)
 
 
 def _transport(monkeypatch, kind=None, status=None):
@@ -49,6 +53,7 @@ def test_sent_timeout_at_deadline_charges_attempts_without_outage(
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: pytest.fail(
         "an expired caller budget must not probe endpoint health"))
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     def timeout(prompt, error_out, deadline, **kw):
         calls.append(prompt)
@@ -115,6 +120,7 @@ def test_slow_endpoint_stops_charging_attempts_after_trip(tmp_path, monkeypatch)
     try:
         db.save_messages([_message(mid=1, body="体温38度")])
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         _transport(monkeypatch, "transport")
 
         def attempts():
@@ -157,6 +163,7 @@ def test_answered_call_resets_breaker_and_marks_success(tmp_path, monkeypatch):
         assert llm_availability.llm_down_since(db.db) is not None
         monkeypatch.setattr(extract_llm, "llm_extract",
                             lambda body, **_: {"summary": "ok"})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         res = extract_llm.run_pending(db, limit=10, budget_s=900)
         assert res["done"] == 1
         assert not llm_availability.circuit_state_path(db.db).exists()
@@ -176,6 +183,7 @@ def test_answered_unparseable_call_clears_outage(tmp_path, monkeypatch):
         llm_availability.circuit_failure(db.db)
         assert llm_availability.llm_down_since(db.db) is not None
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: {
             "text": "not-json", "finish_reason": "stop", "usage": None,
             "status": 200})
@@ -196,6 +204,7 @@ def test_answer_after_same_run_outage_clears_marker(tmp_path, monkeypatch):
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         replies = iter([{"text": None, "finish_reason": None, "usage": None,
                          "status": 503},
                         {"text": "not-json", "finish_reason": "stop",
@@ -219,6 +228,7 @@ def test_outage_after_same_run_recovery_is_recorded(tmp_path, monkeypatch):
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2, 3)])
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         down = {"text": None, "finish_reason": None, "usage": None, "status": 503}
         replies = iter([down, {"text": "not-json", "finish_reason": "stop",
                                "usage": None, "status": 200}, down])
@@ -238,6 +248,7 @@ def test_unusable_200_body_clears_outage(tmp_path, monkeypatch):
         db.save_messages([_message(mid=1, body="体温38度")])
         llm_availability.circuit_failure(db.db)
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         _transport(monkeypatch, "protocol")
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["failed"] == 1
@@ -258,6 +269,7 @@ def test_answer_then_deferral_still_clears_outage(tmp_path, monkeypatch):
             extract_llm._CALL_NOTES.transport = "answered"
             return extract_llm._DEFERRED
         monkeypatch.setattr(extract_llm, "llm_extract", answered_then_deferred)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["deferred"] == 1 and _attempt_rows(db) == 0
         assert llm_availability.llm_down_since(db.db) is None
@@ -281,6 +293,7 @@ def test_older_answer_does_not_clear_a_newer_outage(tmp_path, monkeypatch):
     try:
         db.save_messages([_message(mid=i, body=f"体温3{i}度") for i in (1, 2)])
         monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
         calls = iter([("unavailable", 2.0, extract_llm._DEFERRED),
                       ("answered", 1.0, None)])
 
@@ -288,6 +301,7 @@ def test_older_answer_does_not_clear_a_newer_outage(tmp_path, monkeypatch):
             kind, at, result = next(calls)
             return _noted(kind, at, result)(body)
         monkeypatch.setattr(extract_llm, "llm_extract", call)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         extract_llm.run_pending(db, limit=2, budget_s=900, workers=1)
         assert llm_availability.llm_down_since(db.db) is not None
     finally:
@@ -307,8 +321,10 @@ def test_answered_batch_then_deferred_residue_clears_outage(tmp_path, monkeypatc
             extract_llm._CALL_NOTES.transport_at = time.monotonic()
             return "failed", {}, {"batch": len(tups)}
         monkeypatch.setattr(extract_llm, "_run_batch_call", batch)
+        monkeypatch.setattr(extract_llm_runner, '_run_batch_call', extract_llm._run_batch_call)
         monkeypatch.setattr(extract_llm, "llm_extract",
                             _noted(None, None, extract_llm._DEFERRED))
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         res = extract_llm.run_pending(db, limit=2, budget_s=900, batch_k=2)
         assert res["deferred"] == 2
         assert llm_availability.llm_down_since(db.db) is None
@@ -324,6 +340,7 @@ def test_failed_repair_keeps_the_outage(tmp_path, monkeypatch):
         db.save_messages([_message(mid=1, body="体温38度")])
         monkeypatch.setattr(extract_llm, "llm_extract",
                             _noted("unavailable", time.monotonic(), {"summary": "ok"}))
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
         res = extract_llm.run_pending(db, limit=1, budget_s=900)
         assert res["done"] == 1
         assert llm_availability.llm_down_since(db.db) is not None

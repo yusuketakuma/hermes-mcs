@@ -1,4 +1,5 @@
 """Nested jobs and later passes own independent diagnostics and shadow accounting."""
+import semantic_due_selection
 import llm_availability
 import json
 import time
@@ -95,6 +96,7 @@ def test_exception_first_cause_is_job_local_and_qc_gets_empty_diagnostics(tmp_pa
     # queue selection/fairness remain covered by their existing independent tests.
     monkeypatch.setattr(drain, "_select_due", lambda *args: (
         [semantic, qc], [qc], [semantic], [], {"turn": None}))
+    monkeypatch.setattr(semantic_due_selection, '_select_due', drain._select_due)
     monkeypatch.setattr(drain.semantic_qc, "_qc_seed", lambda *args: None)
 
     def broken(*args, diagnostics, **kwargs):

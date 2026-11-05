@@ -5,6 +5,11 @@ stage receipts S1–S8, the PASS-only read model boundary, generation
 fencing, diagnostic (non-PASS) separation, pre-reserved repair, and
 the finite retirement manifest.
 """
+import extract_llm_engine
+import extract_llm_runner
+import semantic_fact_stages
+import semantic_job_processor
+import semantic_summary_stages
 import semantic_drain
 import semantic_store
 import json
@@ -268,6 +273,9 @@ def test_repaired_document_does_not_revive_spent_repair_for_a_new_profile(
     document = {'synthetic': True}
     previous = {'content': document, 'meta': {'repaired': True}}
     monkeypatch.setattr(semantic_drain, 'current_artifact', lambda *_: previous)
+    monkeypatch.setattr(semantic_fact_stages, 'current_artifact', semantic_drain.current_artifact)
+    monkeypatch.setattr(semantic_job_processor, 'current_artifact', semantic_drain.current_artifact)
+    monkeypatch.setattr(semantic_summary_stages, 'current_artifact', semantic_drain.current_artifact)
     monkeypatch.setattr(semantic_facts, 'cached_facts_plan', lambda *_: (previous, True, False))
     monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: 'current')
     proof = None if previous_contract is None else {'base': [{'contract': previous_contract}]}
@@ -368,6 +376,8 @@ def test_extract_admission_defaults_to_zero_under_v4(tmp_path, monkeypatch):
         monkeypatch.setattr(extract_llm, "_llm_call",
                             lambda *a, **k: (_ for _ in ()).throw(
                                 AssertionError("llm called")))
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
         res = extract_llm.run_pending(db, limit=5, budget_s=5,
                                       admitted_ids=set())
         assert res["done"] == 0 and res["failed"] == 0

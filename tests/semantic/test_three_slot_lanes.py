@@ -1,4 +1,5 @@
 """Fixed lanes let ingestion run during inference without duplicate jobs."""
+import semantic_due_selection
 from json import dumps
 
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -64,6 +65,7 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
     # an explicit lane selects its own rows; the lane=None fairness
     # computation would be discarded, so it must not run at all
     monkeypatch.setattr(semantic_drain, '_due_lanes', no_fairness)
+    monkeypatch.setattr(semantic_due_selection, '_due_lanes', semantic_drain._due_lanes)
     try:
         semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,
                          jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1,
@@ -141,6 +143,7 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
     db.db.commit()
     seen = []
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a, **k: 0)
     # 'stale' leaves both rows pending, as a QC re-pend does
     monkeypatch.setattr(semantic_drain, '_process_job',
@@ -173,6 +176,7 @@ def test_reseeded_old_qc_cannot_overtake_a_waiting_qc(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(semantic_drain.time, 'time', lambda: clock[0])
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
 
     def reseed(ledger, now):
         # Same generation timing as _qc_seed's ON CONFLICT update.

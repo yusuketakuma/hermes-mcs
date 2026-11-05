@@ -1,4 +1,12 @@
 """Synthetic reference validation, frozen checkpoints and worker progress."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import extract_validation
 import copy
 import json
@@ -125,6 +133,14 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
         row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
         row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": True}})
         seen = []
 
@@ -137,6 +153,7 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
             return extract_validation.validate(document(), body, references=kwargs["references"])
 
         monkeypatch.setattr(llm, "llm_extract", infer)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
         result = llm.run_pending(led, admitted_ids={999}, limit=1, budget_s=10)
         assert result["done"] == 1 and len(seen) == 1
         final = led.artifacts(llm.KIND, message_id=999)[0]
@@ -145,6 +162,14 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
         assert llm.progress_for_message(led.db, row, model=llm.MODEL)["state"] == "complete"
         seed(led, 2, body="本人の合成薬Aの残薬は8錠。", value="8錠", date="2026-10-02T10:00:00+09:00")
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": False}})
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": False}})
         assert llm.progress_for_message(led.db, row, model=llm.MODEL)["state"] == "complete"
     finally:
@@ -157,6 +182,14 @@ def test_malformed_saved_context_defers_without_any_model_call(tmp_path, monkeyp
         target(led)
         calls = []
         monkeypatch.setattr(llm, "load_config", lambda: {})
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
         rows, _ = llm._select_pending(led, 1, {999}, None, False)
         jobs, _, _ = llm._prepare_jobs(led, rows, ("", llm.MODEL), False)
@@ -164,6 +197,7 @@ def test_malformed_saved_context_defers_without_any_model_call(tmp_path, monkeyp
         with led.db:
             led.db.execute("UPDATE artifacts SET content='not json' WHERE kind=?", (state.KIND,))
         monkeypatch.setattr(llm, "llm_extract", lambda *a, **k: calls.append(1))
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
         result = llm.run_pending(led, admitted_ids={999}, limit=1, budget_s=10)
         assert result["done"] == 0 and result["deferred"] == result["context_blocked"] == 1
         assert calls == []
@@ -179,6 +213,14 @@ def test_interrupted_worker_resumes_the_first_snapshot_after_history_changes(tmp
         row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         led.save_messages([_message(mid=999, body=BODY, posted_at=row["posted_at"])])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": True}})
         calls = []
 
@@ -188,6 +230,7 @@ def test_interrupted_worker_resumes_the_first_snapshot_after_history_changes(tmp
                 document(), body, references=kwargs["references"])
 
         monkeypatch.setattr(llm, "llm_extract", infer)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', llm.llm_extract)
         assert llm.run_pending(led, admitted_ids={999}, limit=1, budget_s=10)["deferred"] == 1
         seed(led, 2, body="本人の合成薬Aの残薬は8錠。", value="8錠", date="2026-10-02T10:00:00+09:00")
         assert llm.run_pending(led, admitted_ids={999}, limit=1, budget_s=10)["done"] == 1
@@ -254,6 +297,14 @@ def test_a_full_thread_never_blocks_preparation(tmp_path, monkeypatch, enabled):
                           + [_message(mid=mid, body=body, parent_id=1,
                                       posted_at=f"2026-09-19T00:0{mid}:00+09:00") for mid in range(2, 6)])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": enabled}})
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": enabled}})
         rows, _ = llm._select_pending(led, 10, {5}, None, False)
         jobs, _, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), False)

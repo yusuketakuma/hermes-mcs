@@ -1,4 +1,12 @@
 """Selected runtime metadata and SQLite checks using only synthetic resources."""
+import update_apply
+import update_execution
+import update_lifecycle_context
+import update_preflight
+import update_recovery
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import service_contract
 import service_management
@@ -289,6 +297,12 @@ def test_updater_precheck_probes_actual_runtimes_not_parent(
         updater, monkeypatch, tmp_path, mode, role, facts, blocked):
     cfg = {"runtime_mode": mode, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
@@ -584,6 +598,9 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")  # launchd watchdog scenario
     path, old = _owned_recovery(monkeypatch, tmp_path)
     monkeypatch.setattr(updater, "AGENTS_DIR", str(path.parent))
+    monkeypatch.setattr(update_lifecycle_context, 'AGENTS_DIR', updater.AGENTS_DIR)
+    monkeypatch.setattr(update_preflight, 'AGENTS_DIR', updater.AGENTS_DIR)
+    monkeypatch.setattr(update_services, 'AGENTS_DIR', updater.AGENTS_DIR)
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
@@ -629,6 +646,12 @@ def test_updater_retains_valid_explicit_deployed_selection(updater, monkeypatch,
     recovery = _deployed_recovery(monkeypatch, tmp_path, owner=updater)
     cfg = {"recovery_python": recovery, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: True)
     probes = []
@@ -646,6 +669,12 @@ def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg)
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     errors = updater.precheck_local(cfg)
     assert any(e.startswith("config: ") and e.endswith("_config_invalid") for e in errors)
     errors, _ = service_management.script_drift(paths=mcs_setup._service_paths())

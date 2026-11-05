@@ -1,4 +1,11 @@
 """Synthetic persistence oracles for lost clinical dependencies, never model accuracy."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 from contextlib import nullcontext
 from dataclasses import replace
 import json
@@ -60,7 +67,14 @@ def test_deleted_stop_survives_pruning_restart_and_old_source_reanalysis(store, 
     assert proof['complete'] and proof['losses']
     assert state.project([original], dependency_losses=proof['losses'])['groups']['unknown'] == [original['id']]
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', llm._writer_current)
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
+    monkeypatch.setattr(extract_llm_selection, '_stale_gc_at', llm._stale_gc_at)
     llm._gc_stale_artifacts(store, lambda enabled, **kwargs: nullcontext(True), False)
     assert not store.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (old_id,)).fetchone()
     path = store.db.execute('PRAGMA database_list').fetchone()[2]
@@ -146,6 +160,12 @@ def test_same_dependency_capture_is_deduplicated_and_both_epoch_calls_survive(st
 def test_claim_occurrence_fence_rejects_aba_with_same_content_hash(store, monkeypatch):
     import extract_llm as llm
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', llm._writer_current)
     message = save(store, 1, '本人は本日、合成薬Aを服用しています。')
     import semantic_store
     selected = row(store, 1)
@@ -165,7 +185,14 @@ def test_claim_occurrence_fence_rejects_aba_with_same_content_hash(store, monkey
 def test_failed_replacement_insert_and_held_prior_do_not_create_witness(store, monkeypatch):
     import extract_llm as llm
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', llm._writer_current)
     monkeypatch.setattr(llm, '_rerender_cards', lambda *a, **kw: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     save(store, 1, '本人は本日、合成薬Aを服用していません。')
     selected = row(store, 1)
     prior = {'meds': [{'name': '合成薬A', 'subject': 'patient', 'status': 'current',
@@ -499,7 +526,14 @@ def test_worker_rule_hint_carries_prepared_binding_across_revisions_without_fals
     import extract
     import extract_llm as llm
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', llm._writer_current)
     monkeypatch.setattr(llm, '_rerender_cards', lambda *a, **kw: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     original = save(store, 1, '本人は本日、合成薬Aを服用しています。合成の連絡です。')
     publish(store, 1)
     revised = replace(original, body_html='<p>本人は本日、合成薬Aを服用しています。合成の連絡内容です。</p>')

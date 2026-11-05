@@ -1,4 +1,15 @@
 """Synthetic midnight accounting through the real context cloud owner and client."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 from types import SimpleNamespace
 
@@ -33,8 +44,22 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     cfg = {**CFG, 'cloud_llm': settings,
            'semantic': {**CFG['semantic'], 'project_ids': [1], 'daily_request_budget': 3000}}
     monkeypatch.setattr(worker, '_writer_current', _REAL_WRITER_CURRENT)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: worker._WRITER_STATE)
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)
     seed(led, body='見出しのない完全合成の居住記録。')
@@ -64,6 +89,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
         monkeypatch.setattr(cloud_inference, 'time', module.time)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_args: 'on')
+    monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *_args: 'synthetic-key')
     # Fixed calendar boundaries exercise accounting, not the live price-table date.
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)

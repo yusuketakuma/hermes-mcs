@@ -1,4 +1,12 @@
 """Isolated reproduction of a stale terminal claim; no production cause is inferred."""
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import time
 
 import pytest
@@ -14,7 +22,14 @@ from test_anthropic_runtime import routed as routed
 def test_inconsistent_terminal_is_preserved_without_replay_or_dispatch(tmp_path, monkeypatch, state):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, "_writer_current", lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, "_rerender_cards", lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         ledger.save_messages([_message(body="確認お願いします。")])
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
@@ -70,7 +85,10 @@ def test_quality_hold_uses_finite_claim_wait_and_next_pass_advances(routed, monk
     def cached_or_healthy(*args, **kwargs):
         return real_extract(*args, **kwargs) if kwargs.get('chunks_in') else {}
     monkeypatch.setattr(worker, 'llm_extract', cached_or_healthy)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker, '_probe_format', lambda **kwargs: None)
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
     capture = worker._capture_checkpoint_state
     seen = []
     def terminal_checkpoint(db, row, context):
@@ -83,6 +101,7 @@ def test_quality_hold_uses_finite_claim_wait_and_next_pass_advances(routed, monk
                 worker._provider_evidence(["local"], True))}
         return saved
     monkeypatch.setattr(worker, '_capture_checkpoint_state', terminal_checkpoint)
+    monkeypatch.setattr(extract_llm_runner, '_capture_checkpoint_state', worker._capture_checkpoint_state)
     first = worker.run_pending(ledger, limit=1 if workers == 1 else 2, budget_s=180, workers=workers)
     assert first['done'] == (0 if workers == 1 else 1)
     assert first['failed'] == 0 and first['deferred'] == 1

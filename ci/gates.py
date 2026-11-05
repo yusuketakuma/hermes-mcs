@@ -212,7 +212,7 @@ def gate_no_direct_platform_api() -> list[str]:
         # standalone .env; it does not own a platform transport. Keep token names
         # limited to those exact definitions, while still checking every platform URL.
         provisioning = set()
-        if path == MCS / "ops" / "mcs_setup.py":
+        if path in {MCS / "ops" / "mcs_setup.py", MCS / "ops/setup/setup_integration.py"}:
             for node in tree.body:
                 if isinstance(node, ast.FunctionDef) and node.name in {
                         "_apply_plugin_integration", "_hermes_config_set",
@@ -350,6 +350,26 @@ def gate_plugin_sandbox() -> list[str]:
 _SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}
 
 
+# The former entrypoints retained these exact writer responsibilities after splitting.
+_SPLIT_LEDGER_WRITERS = {
+    "extract/llm/extract_llm_resident.py": {"_open_current_ledger", "_main"},
+    "ops/update_execution.py": {"_postcheck"},
+    "ops/update_lifecycle_context.py": {"_enqueue_notice", "_NOTICE_CHILD"},
+    "ops/update_restore.py": {"_reconcile_restored"},
+}
+_SPLIT_SQLITE_WRITERS = {
+    "ops/update_restore.py": {"_cancel_unsent_notices", "_replace_database"},
+}
+
+
+def _writer_scope_nodes(path, tree, permitted):
+    names = permitted.get(path.relative_to(MCS).as_posix(), ()) if path.is_relative_to(MCS) else ()
+    return [node for node in tree.body
+            if (isinstance(node, ast.FunctionDef) and node.name in names)
+            or (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names)]
+
+
 def gate_snapshot_readonly() -> list[str]:
     """Only whitelisted modules may construct a write-mode Ledger(); any
     sqlite3.connect elsewhere must carry mode=ro/immutable (snapshot
@@ -369,6 +389,8 @@ def gate_snapshot_readonly() -> list[str]:
             for node in ast.walk(fn)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "Ledger"}
+        ledger_write_lines.update(line for node in _writer_scope_nodes(path, tree, _SPLIT_LEDGER_WRITERS)
+                                  for line in range(node.lineno, node.end_lineno + 1))
         for m in re.finditer(r"\bLedger\s*\(", text):
             line = text.count("\n", 0, m.start()) + 1
             if line not in ledger_write_lines:
@@ -382,6 +404,8 @@ def gate_snapshot_readonly() -> list[str]:
                                (path == MCS / "ops/notification_cancel.py" and fn.name == "apply")
                                or (path == MCS / "core/snapshots.py" and fn.name == "_prepare_snapshot"))
                            for node in ast.walk(fn)}
+        operator_writes.update(child for owner in _writer_scope_nodes(path, tree, _SPLIT_SQLITE_WRITERS)
+                               for child in ast.walk(owner))
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
@@ -419,70 +443,120 @@ def gate_snapshot_readonly() -> list[str]:
 
 
 def gate_writer_lock() -> list[str]:
-    """FIX-R00-01: every module that opens a write-mode Ledger must hold
-    acquire_run_lock along its call path — manual CLIs previously wrote
-    the DB unflocked."""
-    bad = []
-    for path in _py_files(MCS):
-        if path.name == "ledger.py":
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        functions = {node.name: node for node in tree.body
-                     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
-        parents = {child: parent for parent in ast.walk(tree)
-                   for child in ast.iter_child_nodes(parent)}
-        calls = {name: set() for name in functions}
-        ledger_sites = []
+    """Require a lock on every statically resolved caller path, including explicit module aliases."""
+    trees = {path: ast.parse(path.read_text(encoding="utf-8"))
+             for path in _py_files(MCS) if path.name != "ledger.py"}
+    modules = {}
+    for path in trees:
+        modules.setdefault(path.stem, []).append(path)
+    modules = {name: paths[0] for name, paths in modules.items() if len(paths) == 1}
+    functions, bindings, calls, locks, sites = {}, {}, {}, set(), []
+
+    def imports(node, table):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                table[alias.asname or alias.name.split('.')[0]] = ('module', alias.name)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            for alias in node.names:
+                table[alias.asname or alias.name] = ('member', node.module, alias.name)
+
+    for path, tree in trees.items():
+        table = {}
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                identity = (path, node.name)
+                functions[identity], calls[identity] = node, set()
+                table[node.name] = ('function', identity)
+            elif isinstance(node, ast.Assign | ast.AnnAssign):
+                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                    for name in ast.walk(target):
+                        if isinstance(name, ast.Name):
+                            table[name.id] = None
+            else:
+                imports(node, table)
+        bindings[path] = table
+
+    def member(module, name, seen):
+        path = modules.get(module)
+        if path is None:
+            return ('lock',) if module == 'writer_lock' and name == 'acquire_run_lock' else None
+        if (path, name) in seen:
+            return None
+        target = resolve(bindings[path].get(name), seen | {(path, name)})
+        return ('lock',) if module == 'writer_lock' and name == 'acquire_run_lock' and target else target
+
+    def resolve(binding, seen=frozenset()):
+        if binding is None:
+            return None
+        if binding[0] == 'member':
+            return member(binding[1], binding[2], seen)
+        return binding
+
+    for path, tree in trees.items():
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        local = {}
+        for identity, fn in functions.items():
+            if identity[0] != path:
+                continue
+            table = dict(bindings[path])
+            for arg in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs,
+                        *([fn.args.vararg] if fn.args.vararg else []),
+                        *([fn.args.kwarg] if fn.args.kwarg else [])):
+                table[arg.arg] = None
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    table[node.id] = None
+            for node in ast.walk(fn):
+                imports(node, table)
+            local[identity] = table
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             owner = parents.get(node)
-            while owner is not None and not isinstance(
-                    owner, ast.FunctionDef | ast.AsyncFunctionDef):
+            while owner is not None and not isinstance(owner, ast.FunctionDef | ast.AsyncFunctionDef):
                 owner = parents.get(owner)
-            name = owner.name if owner is not None \
-                and functions.get(owner.name) is owner else None
-            if isinstance(node.func, ast.Name):
-                callee = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                callee = node.func.attr
-            else:
+            identity = (path, owner.name) if owner is not None and functions.get((path, owner.name)) is owner else None
+            callee = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else None
+            if callee == 'Ledger' or (path == MCS / 'ops/notification_cancel.py'
+                    and identity == (path, 'apply') and callee == 'connect'
+                    and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == 'sqlite3'):
+                sites.append((path, identity, node.lineno))
+            if identity is None:
                 continue
-            if callee == "Ledger":
-                ledger_sites.append((name, node.lineno))
-            if (path == MCS / "ops/notification_cancel.py" and name == "apply" and callee == "connect"
-                    and isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "sqlite3"):
-                ledger_sites.append((name, node.lineno))
-            if name is not None and isinstance(node.func, ast.Name):
-                calls[name].add(callee)
+            table = local[identity]
+            target = None
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+                target = resolve(table.get(name))
+                # Preserve the legacy synthetic/unimported lock surface, never a shadowed binding.
+                if name == 'acquire_run_lock' and name not in table:
+                    target = ('lock',)
+            elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                module = resolve(table.get(node.func.value.id))
+                if module is not None and module[0] == 'module':
+                    target = member(module[1], node.func.attr, set())
+            if target is not None and target[0] == 'lock':
+                locks.add(identity)
+            elif target is not None and target[0] == 'function':
+                calls[identity].add(target[1])
+    callers = {identity: set() for identity in functions}
+    for caller, callees in calls.items():
+        for callee in callees:
+            callers[callee].add(caller)
 
-        callers = {name: set() for name in functions}
-        for name, callees in calls.items():
-            for callee in callees & functions.keys():
-                callers[callee].add(name)
+    def reaches_lock(identity, seen):
+        return identity not in seen and (identity in locks or any(
+            reaches_lock(callee, seen | {identity}) for callee in calls[identity]))
 
-        def reaches_lock(name, seen, calls=calls, functions=functions):
-            if name in seen:
-                return False
-            return "acquire_run_lock" in calls[name] or any(
-                reaches_lock(callee, seen | {name})
-                for callee in calls[name] & functions.keys())
+    def protected(identity, seen):
+        if identity in seen:
+            return False
+        return reaches_lock(identity, set()) or bool(callers[identity]) and all(
+            protected(caller, seen | {identity}) for caller in callers[identity])
 
-        def protected(name, seen, callers=callers):
-            if name in seen:
-                return False
-            if reaches_lock(name, set()):
-                return True
-            return bool(callers[name]) and all(
-                protected(caller, seen | {name}) for caller in callers[name])
-
-        for name, line in ledger_sites:
-            if name is None or not protected(name, set()):
-                bad.append(f"{path.name}:{line} write-mode Ledger without "
-                           "acquire_run_lock on every caller path")
-    return bad
+    return [f"{path.name}:{line} write-mode Ledger without acquire_run_lock on every caller path"
+            for path, identity, line in sites if identity is None or not protected(identity, set())]
 
 
 _CHANNEL_LITERAL = re.compile(r"discord:\d{10,}|\b\d{17,20}\b")

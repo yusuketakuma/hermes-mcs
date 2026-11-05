@@ -460,3 +460,68 @@ def test_snapshot_write_exemption_is_only_preparation(monkeypatch, tmp_path):
     monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
     errors = gates.gate_snapshot_readonly()
     assert len(errors) == 1 and ":4 " in errors[0]
+
+
+@pytest.mark.parametrize('style', ['from_alias', 'module_alias', 'reexport'])
+@pytest.mark.parametrize('unlocked', [False, True])
+def test_writer_gate_resolves_split_aliases_without_hiding_unlocked_callers(monkeypatch, tmp_path, style, unlocked):
+    gates = _load('ci_split_writer', 'ci/gates.py')
+    writer = tmp_path / 'writer.py'
+    writer.write_text('def write():\n return Ledger("synthetic.db")\n')
+    caller = tmp_path / 'caller.py'
+    files = [writer, caller]
+    if style == 'module_alias':
+        source = 'import writer as target\ndef main():\n acquire_run_lock()\n target.write()\n'
+    elif style == 'reexport':
+        facade = tmp_path / 'facade.py'
+        facade.write_text('from writer import write as write\n')
+        files.append(facade)
+        source = 'from facade import write as save\ndef main():\n acquire_run_lock()\n save()\n'
+    else:
+        source = 'from writer import write as save\ndef main():\n acquire_run_lock()\n save()\n'
+    caller.write_text(source)
+    if unlocked:
+        other = tmp_path / 'other.py'
+        other.write_text('from writer import write as save\ndef unlocked():\n save()\n')
+        files.append(other)
+    monkeypatch.setattr(gates, '_py_files', lambda *args: files)
+    assert bool(gates.gate_writer_lock()) is unlocked
+
+
+@pytest.mark.parametrize('shadow', [
+    'def acquire_run_lock():\n pass\n',
+    'from unrelated import pretend as acquire_run_lock\n',
+])
+def test_writer_gate_does_not_treat_an_unrelated_lock_name_as_authority(monkeypatch, tmp_path, shadow):
+    gates = _load('ci_shadow_lock', 'ci/gates.py')
+    path = tmp_path / 'writer.py'
+    path.write_text(shadow + 'def write():\n acquire_run_lock()\n return Ledger("synthetic.db")\n')
+    monkeypatch.setattr(gates, '_py_files', lambda *args: [path])
+    assert gates.gate_writer_lock()
+
+
+def test_split_snapshot_writer_permission_stays_inside_the_moved_owner(monkeypatch, tmp_path):
+    gates = _load('ci_split_snapshot', 'ci/gates.py')
+    path = tmp_path / 'ops/update_restore.py'
+    path.parent.mkdir(parents=True)
+    path.write_text('def _reconcile_restored():\n return Ledger("synthetic.db")\n'
+                    'def _cancel_unsent_notices():\n return sqlite3.connect("synthetic.db")\n')
+    monkeypatch.setattr(gates, 'MCS', tmp_path)
+    monkeypatch.setattr(gates, '_py_files', lambda *args: [path])
+    assert gates.gate_snapshot_readonly() == []
+    with path.open('a') as out:
+        out.write('def unrelated():\n Ledger("synthetic.db")\n sqlite3.connect("synthetic.db")\n')
+    assert len(gates.gate_snapshot_readonly()) == 2
+
+
+def test_split_provisioning_permission_stays_inside_three_moved_functions(monkeypatch, tmp_path):
+    gates = _load('ci_split_platform', 'ci/gates.py')
+    path = tmp_path / 'ops/setup/setup_integration.py'
+    path.parent.mkdir(parents=True)
+    path.write_text('def _apply_standalone_credentials():\n return "SLACK_BOT_TOKEN"\n')
+    monkeypatch.setattr(gates, 'MCS', tmp_path)
+    monkeypatch.setattr(gates, '_py_files', lambda *args: [path])
+    assert gates.gate_no_direct_platform_api() == []
+    with path.open('a') as out:
+        out.write('def unrelated():\n return "SLACK_BOT_TOKEN"\n')
+    assert gates.gate_no_direct_platform_api()

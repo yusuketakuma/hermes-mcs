@@ -1,4 +1,5 @@
 """An unverifiable resident cloud source must yield to later local work."""
+import extract_llm_runner
 from contextlib import nullcontext
 import time
 
@@ -40,6 +41,7 @@ def test_cloud_guard_resident_refusal_does_not_starve_following_local_source(rou
         return {'symptoms': []}
 
     monkeypatch.setattr(extract_llm, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     first = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180,
                                     allow_cloud=True, background=True)
     assert first['defer_reasons'] == {'cloud_guard': 1} and first['done'] == 0

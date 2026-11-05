@@ -1,4 +1,12 @@
 """Regressions for the v4 extractor and drug_map (synthetic only)."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import time
 import json
 import sqlite3
@@ -17,6 +25,7 @@ _TRUNCATED = ('{"summary":"x","meds":[{"name":"A","dose":"1","evidence":"A"},'
 def test_length_stop_is_a_failed_call_not_an_empty_extraction(monkeypatch):
     """A truncated reply salvaged to an inner object must not become {}."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(
         extract_llm.local_llm, "chat",
         lambda *a, **kw: {"status": 200, "text": _TRUNCATED,
@@ -36,6 +45,7 @@ def test_one_worker_crash_keeps_other_results(tmp_path, monkeypatch):
             raise RuntimeError("synthetic worker crash")
         return {"summary": "s"}
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=5, budget_s=200, workers=2)
     assert res["done"] == 1 and res["deferred"] == 1 and res["failed"] == 0
     assert db.artifacts("extract_llm", message_id=2)
@@ -49,6 +59,7 @@ def test_left_is_counted_only_for_a_short_selection(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1), _message(mid=2)])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "s"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     full = extract_llm.run_pending(db, limit=1, budget_s=200)
     assert full["selected"] == 1 and full["left"] is None
     short = extract_llm.run_pending(db, limit=5, budget_s=200)
@@ -61,6 +72,14 @@ def test_resident_loop_survives_a_transient_error(monkeypatch, capsys, kind):
     now = [0.0]
     calls = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
@@ -69,6 +88,7 @@ def test_resident_loop_survives_a_transient_error(monkeypatch, capsys, kind):
                         ["extract_llm", "--all", "--stop-after", "40"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
 
     def run(*args, **kwargs):
         calls.append(1)
@@ -82,6 +102,7 @@ def test_resident_loop_survives_a_transient_error(monkeypatch, capsys, kind):
                                else "synthetic-private-error-detail")
         return {"done": 1, "failed": 0, "left": 1, "selected": 1}
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     assert extract_llm.main() == 0
     assert len(calls) >= 2 and now[0] >= 30
     output = capsys.readouterr().err
@@ -113,15 +134,26 @@ def test_unusable_dictionary_scans_only_existing_refs(tmp_path):
 def test_resident_exits_when_semantic_lost_the_run_lock(monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--semantic", "--stop-after", "600"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: calls.append(1) or
                         {"done": 1, "failed": 0, "left": 1, "selected": 1})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_background_semantic",
                         lambda *a: {"run_lock_lost": "held", "errors": []})
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', extract_llm._background_semantic)
     # an updater changed the code: respawn on it instead of re-locking
     assert extract_llm.main() == 0
     assert calls == [1]
@@ -131,6 +163,14 @@ def _resident(monkeypatch, result):
     """Run the --all loop on a stubbed pass; return the pauses it took."""
     now, sleeps = [0.0], []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
 
@@ -142,8 +182,12 @@ def _resident(monkeypatch, result):
                         ["extract_llm", "--all", "--stop-after", "400"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: dict(result))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_next_retry", lambda led, **kw: None)
+    monkeypatch.setattr(extract_llm_resident, '_next_retry', extract_llm._next_retry)
+    monkeypatch.setattr(extract_llm_selection, '_next_retry', extract_llm._next_retry)
     assert extract_llm.main() == 0
     return sleeps
 

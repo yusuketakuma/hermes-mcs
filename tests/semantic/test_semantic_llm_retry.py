@@ -1,4 +1,5 @@
 """Bounded retry contracts for unsuccessful local semantic-model calls."""
+import semantic_job_processor
 import llm_availability
 import semantic_drain
 import semantic_llm
@@ -300,6 +301,7 @@ def test_not_sent_llm_defers_only_when_no_jev_was_spent(
         raise semantic_runtime.LLMNotSent(stage)
 
     monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
+    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
     policy = semantic_drain.runtime_config(_cfg("shadow"))[0]
     assert semantic_drain._process_job(
         None, policy, None, client, lambda *a, **k: None, None, diagnostics=semantic_drain._job_diagnostics()) == expected

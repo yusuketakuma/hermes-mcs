@@ -1,4 +1,6 @@
 """Repeated source chunks cannot yield a globally unique evidence quote."""
+import extract_llm_engine
+import extract_llm_runner
 import extract_quality
 import extract_validation
 import copy
@@ -24,6 +26,8 @@ def run_chunks(monkeypatch, document, pieces=None, **kwargs):
     assert extract_llm.plan_chunks(body, kwargs["chunk_size"]) == pieces
     monkeypatch.setattr(extract_llm, "_llm_call",
                         lambda *a, **k: calls.append(a[0]) or copy.deepcopy(document))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     out = extract_llm.llm_extract(body, **kwargs)
     return out, calls
 
@@ -72,6 +76,8 @@ def test_a_unique_chunk_can_repair_with_a_longer_quote(monkeypatch):
         return {"summary": "経過の連絡", "symptoms": [symptom(quote)]}
 
     monkeypatch.setattr(extract_llm, "_llm_call", answer)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     out = extract_llm.llm_extract("".join(pieces), chunk_size=len(pieces[0]))
     assert len(calls) == 4
     symptoms = out["symptoms"]

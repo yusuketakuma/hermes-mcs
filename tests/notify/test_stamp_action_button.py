@@ -1,5 +1,6 @@
 """The MCS stamp button follows only the shared write gate. Synthetic temp ledger only."""
 from __future__ import annotations
+import notify_card_renders
 
 import hashlib
 import sys
@@ -53,12 +54,11 @@ def test_worst_case_real_thread_card_with_stamp_passes_the_worker_budget(
         led, monkeypatch, transport, card_thread):
     """A paged thread card with tasks, drug buttons, per-post meds and the
     stamp button: the persisted spec must still pass the worker validator."""
-    import notify_cards
     import structured_view
     from adapters.common import spec as worker_spec
     from notify_testkit import _add_request
     monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
-    monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", lambda db: True)
     monkeypatch.setattr(structured_view, "medication_entries",
                         lambda db, mid, **kwargs: ([{"name": "合成薬"}], []))
     mids = tuple(range(100, 120))                 # several PAGE_THREAD pages
@@ -242,12 +242,11 @@ def test_stamp_row_is_left_out_rather_than_break_the_row_budget(led, monkeypatch
     """Paged thread card without a companion thread, with tasks, report, meds
     and drug search: every other row is planned first, the optional stamp row
     goes in only when rows and components still fit."""
-    import notify_cards
     import structured_view
     from adapters.common import spec as worker_spec
     from notify_testkit import _add_request
     monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
-    monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", lambda db: True)
     monkeypatch.setattr(structured_view, "medication_entries",
                         lambda db, mid, **kwargs: ([{"name": "合成薬"}], []))
     from notify_testkit import _llm_extract

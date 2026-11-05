@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import cloud_usage_accounting
 import cloud_policy as c
 from anthropic_client import AnthropicClient, AnthropicError, MODEL
 from ledger import Ledger
@@ -337,6 +338,7 @@ def test_unrelated_write_and_append_preserve_incremental_tally(tmp_path, monkeyp
             return original_loads(raw)
 
         monkeypatch.setattr(c, '_accounting_meta', loads)
+        monkeypatch.setattr(cloud_usage_accounting, '_accounting_meta', loads)
         ledger.artifact_add('synthetic_observation', '{}')
         assert _read(ledger, period, now) is original
         assert original.last_id == last_id and original.total == total

@@ -10,6 +10,7 @@ import maintenance
 import semantic_audit
 import semantic_jev
 import semantic_runtime as runtime
+import semantic_usage_receipts
 from mcs_util import payload_hash
 from semantic_testkit import _ledger
 from test_patient_summary_audit import sample
@@ -583,11 +584,11 @@ def test_source_request_lookup_decodes_only_relevant_questions_and_handles_scala
             db.artifact_add_tx('semantic_usage', '{}', project_id=1, meta=meta)
         db.db.commit()
         parsed = []
-        original = runtime._quality_json
+        original = semantic_usage_receipts._quality_json
         def decode(value):
             parsed.append(value)
             return original(value)
-        monkeypatch.setattr(runtime, '_quality_json', decode)
+        monkeypatch.setattr(semantic_usage_receipts, '_quality_json', decode)
         assert runtime.patient_source_question_evidence(db.db, 1, identity, [FACT0])["problems"] == {FACT0: "unknown"}
         assert len(parsed) == 1  # Unrelated source requests remain SQL-filtered, not Python-decoded.
         meta = json.loads(raw)

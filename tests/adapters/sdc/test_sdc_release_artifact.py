@@ -1,4 +1,5 @@
 """完全合成packで、到達不能objectとdeltaをGit起動前に有界に検査する。"""
+import release_apply_checks
 import copy
 import hashlib
 import io
@@ -360,6 +361,7 @@ def test_owner_strict_git_rejects_malformed_commit_after_bounded_tree_scan(bundl
         return strict(*args)
 
     monkeypatch.setattr(owner, '_git_validation', required)
+    monkeypatch.setattr(release_apply_checks, '_git_validation', owner._git_validation)
     with pytest.raises(artifact.ArtifactError, match='GIT_VALIDATION_FAILED'):
         with inspect((target, core, selected)):
             pytest.fail('owner yielded a malformed commit without Git strict')

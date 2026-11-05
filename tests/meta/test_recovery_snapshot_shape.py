@@ -19,14 +19,14 @@ def test_invalid_service_snapshot_returns_failure_before_external_actions(monkey
         "synthetic_recovery_shape", ROOT / "deployment/recovery/mcs_recover.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "_runtime_mode", lambda: "hermes")
-    monkeypatch.setattr(module, "_runtime_config", lambda: {})
+    monkeypatch.setattr(module.mcs_recovery_core, "_runtime_mode", lambda: "hermes")
+    monkeypatch.setattr(module.mcs_recovery_core, "_runtime_config", lambda: {})
     monkeypatch.setattr(module.os.path, "isfile", lambda path: False)
 
     def forbidden(*args, **kwargs):
         pytest.fail("invalid snapshot reached an external operation")
 
-    monkeypatch.setattr(module, "_launchctl", forbidden)
+    monkeypatch.setattr(module.mcs_recovery_services, "_launchctl", forbidden)
     monkeypatch.setattr(module.subprocess, "run", forbidden)
     monkeypatch.setattr(module.glob, "glob", forbidden)
-    assert module._reconcile_membership(snapshot) == ["service_snapshot_invalid"]
+    assert module.mcs_recovery_services._reconcile_membership(snapshot) == ["service_snapshot_invalid"]

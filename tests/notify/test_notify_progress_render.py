@@ -1,4 +1,5 @@
 """共有通知の処理中表示は本文を公開せず表示世代のみを更新する。"""
+import extract_llm_selection
 import json
 
 import pytest
@@ -63,6 +64,7 @@ def test_single_message_progress_strips_payload_and_uses_explicit_model(led, mon
                 "body": "CHECKPOINT-CANARY", "facts": ["FACT-CANARY"]}
 
     monkeypatch.setattr(extract_llm, "progress_for_message", read)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     row = led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone()
     led.db.execute("PRAGMA query_only=ON")
     result = extraction_progress.message_progress(led.db, row, cfg={"local_llm": {"model": "synthetic-model"}})

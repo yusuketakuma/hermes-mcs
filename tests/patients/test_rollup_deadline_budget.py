@@ -1,4 +1,6 @@
 """Synthetic deadline deferral preserves source fences and transaction ownership."""
+
+import rollup_builder
 from contextlib import closing
 import sqlite3
 
@@ -16,7 +18,7 @@ def _stored(ledger):
 def test_expired_scan_keeps_every_unvisited_patient_unknown(tmp_path, monkeypatch):
     with closing(_seed(tmp_path)) as ledger:
         ledger.ensure_patient(2)
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: 10)
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: 10)
         monkeypatch.setattr(rollup, "_dirty_project_snapshot", lambda *a, **k: pytest.fail("expired scan"))
         scan = rollup.scan_dirty_projects(ledger, deadline=10)
         assert scan.dirty == () and scan.unknown == (1, 2) and scan.incomplete
@@ -28,7 +30,7 @@ def test_scan_that_crosses_deadline_does_not_mark_partial_check_clean(tmp_path, 
     with closing(_seed(tmp_path)) as ledger:
         ledger.ensure_patient(2)
         clock = [0]
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: clock[0])
         def slow(*args, **kwargs):
             clock[0] = 10
             return False
@@ -44,7 +46,7 @@ def test_recheck_deadline_keeps_unconfirmed_clean_patients_unknown(tmp_path, mon
         ledger.db.execute("CREATE TABLE synthetic_marker(value INTEGER)")
         ledger.db.commit()
         clock, calls = [0], []
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: clock[0])
         def probe(*args, **kwargs):
             calls.append(True)
             if len(calls) == 1:
@@ -67,7 +69,7 @@ def test_rebuild_after_build_deadline_writes_nothing_and_keeps_remaining_work(tm
         before = _stored(ledger)
         real = rollup.build_rollup
         clock = [0]
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: clock[0])
         def slow(*args, **kwargs):
             result = real(*args, **kwargs)
             clock[0] = 10
@@ -84,7 +86,7 @@ def test_rebuild_after_build_deadline_writes_nothing_and_keeps_remaining_work(tm
 def test_rebuild_mixed_unverified_and_deadline_preserves_legacy_unknown_list(tmp_path, monkeypatch):
     with closing(_seed(tmp_path)) as ledger:
         clock = [0]
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: clock[0])
 
         def unverified(*args, **kwargs):
             clock[0] = 10
@@ -104,7 +106,7 @@ def test_deadline_after_epoch_write_rolls_back_entire_rollup(tmp_path, monkeypat
     with closing(_seed(tmp_path)) as ledger:
         clock = [0]
         real = ledger.bump_inference_analysis_epoch_tx
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: clock[0])
         def expire(*args, **kwargs):
             real(*args, **kwargs)
             clock[0] = 10
@@ -129,7 +131,7 @@ def test_external_commit_rejects_only_changed_patient_inputs(tmp_path, monkeypat
                     other.execute("INSERT INTO synthetic_marker VALUES(1)")
             return result
         monkeypatch.setattr(rollup, "build_rollup", change)
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: 0)
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: 0)
         if target_changes:
             with pytest.raises(rollup.RollupSourceChanged):
                 rollup.rebuild(ledger, 1, deadline=5)
@@ -142,7 +144,7 @@ def test_external_commit_rejects_only_changed_patient_inputs(tmp_path, monkeypat
 
 def test_normal_rebuild_completes_within_budget(tmp_path, monkeypatch):
     with closing(_seed(tmp_path)) as ledger:
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: 0)
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: 0)
         unknown = []
         assert rollup.rebuild_many(ledger, [1], deadline=5, source_unknown=unknown) == 1
         assert len(_stored(ledger)) == 1 and unknown == [] and not ledger.db.in_transaction
@@ -153,7 +155,7 @@ def test_deadline_does_not_end_borrowed_transaction_or_replace_progress_handler(
         ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-pending' WHERE project_id=1")
         calls = []
         ledger.db.set_progress_handler(lambda: calls.append(True) or 0, 1)
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: 10)
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: 10)
         with pytest.raises(rollup.RollupDeadlineExceeded):
             rollup.build_rollup(ledger.db, 1, deadline=5)
         assert ledger.db.in_transaction
@@ -170,7 +172,7 @@ def test_streamed_source_signature_checks_deadline(tmp_path, monkeypatch, kind):
     with closing(_seed(tmp_path)) as ledger:
         if kind == "extraction":
             ledger.artifact_add("extract_llm", "x" * 70000, project_id=1, message_id=1)
-        monkeypatch.setattr(rollup.time, "monotonic", lambda: 10)
+        monkeypatch.setattr(rollup_builder.time, "monotonic", lambda: 10)
         with pytest.raises(rollup.RollupDeadlineExceeded):
             if kind == "body":
                 rollup._body_source_fingerprint(ledger.db, 1, "text", deadline=5)
@@ -181,11 +183,11 @@ def test_streamed_source_signature_checks_deadline(tmp_path, monkeypatch, kind):
 
 def test_default_build_preserves_legacy_page_reader_call_contract(tmp_path, monkeypatch):
     with closing(_seed(tmp_path)) as ledger:
-        original = rollup._rollup_source_pages
+        original = rollup_builder._rollup_source_pages
         calls = []
         def legacy(db, pid, cursor, first_page, cfg, *, html_available):
             calls.append(True)
             yield from original(db, pid, cursor, first_page, cfg, html_available=html_available)
-        monkeypatch.setattr(rollup, "_rollup_source_pages", legacy)
+        monkeypatch.setattr(rollup_builder, "_rollup_source_pages", legacy)
         assert rollup.build_rollup(ledger.db, 1)["msg_count"] == 1
         assert calls == [True] and not ledger.db.in_transaction

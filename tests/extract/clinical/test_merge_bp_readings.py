@@ -1,4 +1,6 @@
 """Synthetic chunk merges keep a BP reading intact, including a known single side."""
+import extract_llm_engine
+import extract_llm_runner
 import extract_validation
 import pytest
 
@@ -24,6 +26,8 @@ def test_real_chunk_extraction_preserves_latest_single_bp_side(monkeypatch, side
         return next(responses)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     result = extract_llm.llm_extract(body, chunk_size=len(first))
     assert len(calls) == 2
     assert result["vitals"] == {side: float(value)}

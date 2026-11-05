@@ -1,4 +1,6 @@
 """Synthetic multi-tick fairness for the rollup dirty scan."""
+
+import rollup_builder
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -14,9 +16,9 @@ ledger = ledger_fixture(name="ledger", patients=(1, 2, 3, 4))
 @pytest.fixture
 def scan_clock(monkeypatch):
     clock = SimpleNamespace(mono=0.0, calls=[], slow=True)
-    fake_time = SimpleNamespace(**vars(rollup.time))
+    fake_time = SimpleNamespace(**vars(rollup_builder.time))
     fake_time.monotonic = lambda: clock.mono
-    monkeypatch.setattr(rollup, "time", fake_time)
+    monkeypatch.setattr(rollup_builder, "time", fake_time)
 
     def dirty(_db, project_id, _now, *, deadline=None):
         clock.calls.append(project_id)

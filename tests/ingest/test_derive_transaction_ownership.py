@@ -1,4 +1,5 @@
 """Derivation must stop before a later stage commits an open transaction."""
+import extract_llm_resident
 
 import sqlite3
 import sys
@@ -64,6 +65,7 @@ def test_derive_stops_after_a_failed_stage_leaves_a_transaction_open(tmp_path, m
 
         monkeypatch.setattr(extract, "run_pending", failed_stage)
         monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **k: calls.append("llm"))
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
         result = {"errors": [], "realtime_ids": [1]}
         with pytest.raises(run_check.TickTransactionOpen):
             run_check.stage_derive(store, result, time.monotonic() + 600, {})

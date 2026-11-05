@@ -1,4 +1,18 @@
 """Synthetic races between accepted checkpoints and final extraction writes."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 
 import json
 import sqlite3
@@ -20,13 +34,26 @@ def test_checkpoint_changed_after_replay_ack_is_not_committed(tmp_path, monkeypa
             for mid in range(1, workers + 1)
         ])
         monkeypatch.setattr(llm, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+        monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
         monkeypatch.setattr(llm.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(llm, "_rerender_cards", lambda *args: None)
+        monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
         monkeypatch.setattr(llm, "_probe_format", lambda **kwargs: "plain")
+        monkeypatch.setattr(extract_llm_provider, '_probe_format', llm._probe_format)
+        monkeypatch.setattr(extract_llm_runner, '_probe_format', llm._probe_format)
         monkeypatch.setattr(llm, "load_config", lambda: {
             "extract": {"patient_state_context": False, "prefilter": False},
             "local_llm": {"model": "synthetic-model"},
         })
+        monkeypatch.setattr(extract_llm_context, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         pending, _ = llm._select_pending(ledger, workers, None, None, False)
         jobs, skipped, blocked = llm._prepare_jobs(
             ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
@@ -56,7 +83,10 @@ def test_checkpoint_changed_after_replay_ack_is_not_committed(tmp_path, monkeypa
             return accepted
 
         monkeypatch.setattr(llm, "_persist_chunks", after_ack)
+        monkeypatch.setattr(extract_llm_runner, '_persist_chunks', llm._persist_chunks)
         monkeypatch.setattr(llm, "_llm_call", lambda *args, **kwargs: pytest.fail("unexpected dispatch"))
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
         result = llm.run_pending(ledger, limit=workers, budget_s=200, workers=workers)
 
         assert len(inserted) == 1
@@ -79,8 +109,11 @@ def prepared(tmp_path, monkeypatch):
     ledger.save_messages([_message(body="本人に息切れはありません。家族には軽い発熱があります。")])
     ledger.db.commit()
     monkeypatch.setattr(llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
     monkeypatch.setattr(llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(llm, "_rerender_cards", lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = dependency_loss.source_binding(ledger.db, 1, 1)
     value = {"summary": "合成A", "_quality_result": {
@@ -108,8 +141,16 @@ def test_claim_rolls_back_owned_transaction_on_source_failure(tmp_path, monkeypa
 
         if failure_point == "writable":
             monkeypatch.setattr(llm, "_source_writable", fail)
+            monkeypatch.setattr(extract_llm_errors, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_prepare, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_proofs, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_store, '_source_writable', llm._source_writable)
         else:
             monkeypatch.setattr(llm, "_source_writable", lambda *_args: True)
+            monkeypatch.setattr(extract_llm_errors, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_prepare, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_proofs, '_source_writable', llm._source_writable)
+            monkeypatch.setattr(extract_llm_store, '_source_writable', llm._source_writable)
             monkeypatch.setattr(dependency_loss, "source_binding", fail)
         with pytest.raises(sqlite3.OperationalError) as caught:
             llm._claim(ledger, row)
@@ -129,6 +170,10 @@ def test_claim_does_not_touch_borrowed_transaction(tmp_path, monkeypatch):
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         ledger.db.execute("UPDATE patients SET fetch_reason='synthetic' WHERE project_id=1")
         monkeypatch.setattr(llm, "_source_writable", lambda *_args: pytest.fail("borrowed transaction read"))
+        monkeypatch.setattr(extract_llm_errors, '_source_writable', llm._source_writable)
+        monkeypatch.setattr(extract_llm_prepare, '_source_writable', llm._source_writable)
+        monkeypatch.setattr(extract_llm_proofs, '_source_writable', llm._source_writable)
+        monkeypatch.setattr(extract_llm_store, '_source_writable', llm._source_writable)
         assert llm._claim(ledger, row) is None
         assert ledger.db.in_transaction
         assert ledger.db.execute("SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()[0] == "synthetic"
@@ -150,6 +195,7 @@ def test_final_and_cleanup_commit_together(prepared, monkeypatch):
     renders = []
     monkeypatch.setattr(llm, "_rerender_cards",
                         lambda *args: renders.append(ledger.db.in_transaction))
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     assert _final(ledger, row, {"summary": value["summary"]}) == "written"
     assert ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm'").fetchone()
     assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()
@@ -161,6 +207,8 @@ def test_cleanup_failure_rolls_back_final_and_retains_checkpoint(prepared, monke
     def fail(*args):
         raise RuntimeError("synthetic cleanup failure")
     monkeypatch.setattr(llm, "_delete_checkpoint_keys_tx", fail)
+    monkeypatch.setattr(extract_llm_errors, '_delete_checkpoint_keys_tx', llm._delete_checkpoint_keys_tx)
+    monkeypatch.setattr(extract_llm_store, '_delete_checkpoint_keys_tx', llm._delete_checkpoint_keys_tx)
     with pytest.raises(RuntimeError, match="synthetic cleanup failure"):
         _final(ledger, row, {"summary": value["summary"]})
     assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm'").fetchone()
@@ -173,6 +221,7 @@ def test_borrowed_transaction_is_not_committed_or_rendered(prepared, monkeypatch
     ledger.db.execute("UPDATE patients SET fetch_reason='synthetic' WHERE project_id=1")
     renders = []
     monkeypatch.setattr(llm, "_rerender_cards", lambda *args: renders.append(True))
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     assert _final(ledger, row, {"summary": value["summary"]}) == "rejected"
     assert not llm._replace_current(ledger, row, '{"summary":"合成"}')
     assert ledger.db.in_transaction and not renders
@@ -195,7 +244,12 @@ def test_borrowed_replay_auto_rollback_preserves_error_identity(prepared, monkey
         raise error
 
     monkeypatch.setattr(llm, "_source_writable", fail)
+    monkeypatch.setattr(extract_llm_errors, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_prepare, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_proofs, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_store, '_source_writable', llm._source_writable)
     monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: renders.append(True))
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     with pytest.raises(sqlite3.OperationalError) as caught:
         llm._persist_chunks(ledger, row, {0: value}, chunk_size=row["_chunk_size"],
                             splits=row["_splits"], replay=True, lease=row["_current_lease"],
@@ -221,6 +275,9 @@ def test_capture_auto_rollback_preserves_error_and_previous_state(prepared, monk
         raise error
 
     monkeypatch.setattr(llm, "_saved_chunk_size", fail)
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_size', llm._saved_chunk_size)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_size', llm._saved_chunk_size)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_size', llm._saved_chunk_size)
     with pytest.raises(sqlite3.DatabaseError) as caught:
         llm._capture_checkpoint_state(ledger.db, row, None)
     assert caught.value is error and caught.value.sqlite_errorcode == code
@@ -380,6 +437,7 @@ def test_pending_reuse_still_rerenders_after_the_owned_transaction(prepared, mon
     before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     renders = []
     monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: renders.append(ledger.db.in_transaction))
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     assert llm._persist_chunks(ledger, row, {0: pending}, **common)
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
     assert renders == [False]
@@ -393,8 +451,18 @@ def test_pending_reuse_select_failure_is_not_suppressed(prepared, monkeypatch):
     assert llm._persist_chunks(ledger, row, {0: pending}, **common)
     before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     monkeypatch.setattr(llm, "_source_writable", lambda *_args: True)
+    monkeypatch.setattr(extract_llm_errors, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_prepare, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_proofs, '_source_writable', llm._source_writable)
+    monkeypatch.setattr(extract_llm_store, '_source_writable', llm._source_writable)
     monkeypatch.setattr(llm, "_owns_current_source", lambda *_args: True)
+    monkeypatch.setattr(extract_llm_carry, '_owns_current_source', llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_context, '_owns_current_source', llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_errors, '_owns_current_source', llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_runner, '_owns_current_source', llm._owns_current_source)
+    monkeypatch.setattr(extract_llm_store, '_owns_current_source', llm._owns_current_source)
     monkeypatch.setattr(llm, "_checkpoint_matches", lambda *_args: True)
+    monkeypatch.setattr(extract_llm_store, '_checkpoint_matches', llm._checkpoint_matches)
     ledger.db.set_authorizer(lambda action, table, *_args: sqlite3.SQLITE_DENY
                              if action == sqlite3.SQLITE_READ and table == "artifacts" else sqlite3.SQLITE_OK)
     try:
@@ -561,6 +629,10 @@ def test_guarded_unchanged_replay_uses_captured_validation(prepared, monkeypatch
         return original(*args, **kwargs)
 
     monkeypatch.setattr(llm, "_saved_chunk_state", identity_only)
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     assert llm._persist_chunks(ledger, row, {0: value}, chunk_size=row["_chunk_size"],
                                splits=row["_splits"], replay=True, lease=row["_current_lease"],
                                guard=row["_checkpoint_guard"])
@@ -589,6 +661,10 @@ def test_unproved_replay_uses_full_reader(prepared, monkeypatch, real_guard):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(llm, "_saved_chunk_state", observed)
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     if real_guard:
         row["_checkpoint_replay_snapshot"]["saved"][0] = {"summary": "合成の別候補"}
     guard = row["_checkpoint_guard"] if real_guard else object()
@@ -650,6 +726,9 @@ def test_final_reads_checkpoint_identity_once_inside_its_transaction(prepared, m
         return original(db, *args, **kwargs)
 
     monkeypatch.setattr(llm, "_checkpoint_identity", read)
+    monkeypatch.setattr(extract_llm_errors, '_checkpoint_identity', llm._checkpoint_identity)
+    monkeypatch.setattr(extract_llm_proofs, '_checkpoint_identity', llm._checkpoint_identity)
+    monkeypatch.setattr(extract_llm_store, '_checkpoint_identity', llm._checkpoint_identity)
     assert _final(ledger, row, {"summary": value["summary"]}) == "written"
     assert reads == [True]
     assert not ledger.db.in_transaction
@@ -660,6 +739,9 @@ def test_final_without_captured_identity_rejects_before_checkpoint_read(prepared
     row.pop("_checkpoint_identity")
     monkeypatch.setattr(llm, "_checkpoint_identity", lambda *args, **kwargs:
                         pytest.fail("missing checkpoint witness must reject before reading"))
+    monkeypatch.setattr(extract_llm_errors, '_checkpoint_identity', llm._checkpoint_identity)
+    monkeypatch.setattr(extract_llm_proofs, '_checkpoint_identity', llm._checkpoint_identity)
+    monkeypatch.setattr(extract_llm_store, '_checkpoint_identity', llm._checkpoint_identity)
     assert _final(ledger, row, {"summary": value["summary"]}) == "rejected"
     assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm'").fetchone()
     assert ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()

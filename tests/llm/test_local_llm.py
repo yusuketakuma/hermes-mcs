@@ -4,6 +4,8 @@ Fake loopback only — no real service is touched.  Canonical acceptance
 rejects truncation/empty/malformed output; legacy callers keep their
 existing ``{}`` result while recording bounded integrity metadata.
 """
+import extract_llm_errors
+import extract_llm_provider
 import semantic_transport
 import extract_schema
 import fcntl
@@ -106,10 +108,13 @@ def test_semantic_llm_chat_uses_shared_adapter(monkeypatch):
 def test_extract_llm_keeps_empty_object_contract_and_records_integrity(
         monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
 
     monkeypatch.setattr(extract_llm, "_opener_request", _fake_request(_response(
         "{}", usage={"prompt_tokens": 3, "completion_tokens": 1,
                      "total_tokens": 4})))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     extract_llm._note_list().clear()
     assert extract_llm._llm_call("prompt") == {}
     notes = extract_llm._note_list()
@@ -119,14 +124,18 @@ def test_extract_llm_keeps_empty_object_contract_and_records_integrity(
 def test_extract_llm_valid_empty_object_still_empty(monkeypatch):
     """Required empty response fields remain visible in the validated extraction."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
 
     monkeypatch.setattr(extract_llm, "_opener_request",
                         _fake_request(_response('{"symptoms":[]}')))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm.llm_extract("なにも記載なし") == {"symptoms": []}
 
 
 def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     calls = []
 
     def reject(endpoint, method, body, timeout, deadline=None):
@@ -134,22 +143,27 @@ def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
         return 422, {}, b""
 
     monkeypatch.setattr(extract_llm, "_opener_request", reject)
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm._llm_call("prompt") is None
     assert calls == [{"type": "json_schema",
                       "json_schema": extract_schema.SCHEMA},
                      {"type": "json_object"}, None]
-    assert extract_llm._FMT_MODE == "plain"
+    assert extract_llm_provider._FMT_MODE == "plain"
 
 
 def test_llm_extract_attaches_bounded_integrity_to_nonempty_output(
         monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     payload = {"symptoms": [], "meds": [{"name": "薬A", "status": "current",
                          "subject": "patient", "negated": False}]}
 
     monkeypatch.setattr(extract_llm, "_opener_request", _fake_request(_response(
         json.dumps(payload), usage={"prompt_tokens": 9, "completion_tokens": 4,
                                    "total_tokens": 13})))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     meta = {}
     out = extract_llm.llm_extract("薬Aを服用中", meta_out=meta)
     assert "_integrity" not in out       # visible dict unchanged
@@ -178,12 +192,15 @@ def test_chat_returns_llama_timings_sanitized():
 
 def test_llm_extract_integrity_aggregates_timings(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     payload = _response('{"summary": "s", "symptoms": []}')
     payload["timings"] = {"prompt_n": 100, "prompt_ms": 500,
                           "predicted_n": 10, "predicted_ms": 200,
                           "cache_n": 60}
     monkeypatch.setattr(extract_llm, "_opener_request",
                         _fake_request(payload))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     meta = {}
     extract_llm.llm_extract("本文", meta_out=meta)
     assert meta["timings"]["cache_n"] == 60
@@ -293,6 +310,7 @@ def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     seen = {}
 
     def fake_chat(prompt, **kw):

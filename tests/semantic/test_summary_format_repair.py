@@ -1,4 +1,5 @@
 """Malformed summaries get one durable format repair, with clinical checks intact."""
+import semantic_summary_stages
 import semantic_audit
 import semantic_transport
 import json
@@ -98,6 +99,7 @@ def test_format_reservation_is_refunded_only_before_dispatch(tmp_path, monkeypat
         return None, 'model'
 
     monkeypatch.setattr(semantic_drain, 'summarize', summary)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         first = _run(db, _llm)
         assert first['deferred'] == 1

@@ -19,11 +19,45 @@ _MODULES = ('inference_version', 'inference_dependency_loss', 'patient_context_a
             'semantic_relations', 'semantic_render', 'semantic_notice', 'semantic_send_gate', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_drain', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
-            'extract_schema', 'extract_validation', 'extract_quality',
+            'extract_schema', 'extract_validation', 'extract_quality', 'semantic_usage_receipts',
+            'cloud_usage_accounting', 'cloud_history_scope',
             'attachment_ocr', 'attachment_inference', 'attachment_paid_results', 'original_source_keys',
             'attachment_extraction', 'attachment_cloud_identity', 'patient_read_scope', 'attachment_feedback', 'attachment_observation_seeds', 'attachment_inference_checkpoints', 'attachment_inference_contract', 'extraction_provenance',
             'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'extraction_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_publication', 'semantic_conversion', 'patient_context_plan', 'patient_context_scan', 'patient_context_schedule', 'patient_readiness_witness', 'patient_priority', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
+
+_MODULES += (
+    'extract_llm_admission',
+    'extract_llm_call_context',
+    'extract_llm_carry',
+    'extract_llm_context',
+    'extract_llm_engine',
+    'extract_llm_errors',
+    'extract_llm_prepare',
+    'extract_llm_progress',
+    'extract_llm_prompts',
+    'extract_llm_proofs',
+    'extract_llm_provider',
+    'extract_llm_qc',
+    'extract_llm_resident',
+    'extract_llm_runner',
+    'extract_llm_selection',
+    'extract_llm_source_contract',
+    'extract_llm_store',
+    'semantic_summary_stages',
+    'semantic_fact_stages',
+    'semantic_job_processor',
+    'semantic_reprocess',
+    'semantic_scheduler_state',
+    'semantic_due_selection',
+    'semantic_drain_accounting',
+    'patient_context_refresh_state',
+    'patient_context_quality_receipts',
+    'patient_context_refresh_sources',
+    'patient_context_refresh_readiness',
+    'patient_context_quality_controller',
+    'rollup_builder',
+)
 
 # Runtime paths and callable registries are bound by loaded source, not runtime values.
 _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
@@ -31,11 +65,29 @@ _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LON
                   'semantic_drain': frozenset({'_BACKLOG_TURN'}),
                   'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'}),
                   'cloud_policy': frozenset({'HOME', '_CURRENT_PRICE'}),
+                  'cloud_usage_accounting': frozenset({'_CURRENT_PRICE'}),
                   'mcs_config': frozenset({'REPO', 'CONFIG_RULES'}),
                   'attachment_inference_contract': frozenset({'_PATH'}),
                   'rollup': frozenset({'HOME', 'DB'}),
                   'mcs_util': frozenset({'HOME', 'REPO', 'CONF_PATH', 'DB', 'ATTACH_DIR',
                                          'CACHE', 'CHROME_PROFILE'})}
+
+
+# Borrowers share runtime objects and process snapshots with their defining owner.
+_RUNTIME_STATE.update({
+    'extract_llm_call_context': frozenset({'_CALL_NOTES', '_SLOT_OVERRIDE'}),
+    'extract_llm_context': frozenset({'_LOADED_SOURCE_DIGESTS'}),
+    'extract_llm_engine': frozenset({'HOME', '_CALL_NOTES', '_DEFERRED'}),
+    'extract_llm_prepare': frozenset({'HOME', '_LEFT_ESTIMATE'}),
+    'extract_llm_provider': frozenset({'HOME', '_CALL_NOTES', '_DEFERRED', '_FMT_MODE', '_FMT_TS'}),
+    'extract_llm_qc': frozenset({'_LOADED_SOURCE_DIGESTS'}),
+    'extract_llm_resident': frozenset({'CONF_PATH', 'DB', 'HOME', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_RESIDENT_FENCE_LOST', '_RESIDENT_SOURCE_ROOT'}),
+    'extract_llm_runner': frozenset({'_CALL_NOTES', '_DEFERRED', '_WRITER_STATE'}),
+    'extract_llm_selection': frozenset({'HOME', '_FOCUS', '_LEFT_ESTIMATE'}),
+    'extract_llm_source_contract': frozenset({'DB', 'HOME', '_DEFERRED', '_INFERENCE_SOURCE_STAT', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_WRITER_STATE'}),
+    'extract_llm_store': frozenset({'HOME'}),
+    'semantic_due_selection': frozenset({'_BACKLOG_TURN'}),
+})
 
 
 def _constant(value):

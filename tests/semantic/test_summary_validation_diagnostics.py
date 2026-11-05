@@ -1,4 +1,5 @@
 """Summary failures disclose fixed codes, never generated text."""
+import semantic_due_selection
 import semantic_llm
 import semantic_qc
 import semantic_store
@@ -62,6 +63,7 @@ def test_worker_records_validation_code_without_leaking_it_to_the_next_job(tmp_p
         (json.dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', semantic_drain._BACKLOG_TURN)
     monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a: 0)
     monkeypatch.setattr(semantic_qc, '_process_qc_job', lambda *a, **k: 'retry')
 

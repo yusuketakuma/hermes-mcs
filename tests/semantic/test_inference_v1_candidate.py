@@ -1,4 +1,11 @@
 """Synthetic candidate and hold bindings; fabricated approval evidence is never release evidence."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import hashlib
 import importlib
 import json
@@ -123,11 +130,16 @@ def test_source_drift_refuses_old_worker_lock_even_while_its_candidate_identity_
     monkeypatch.setattr(writer_lock, "_MCS_ROOT", str(tree))
     state = writer_lock.updater_state()
     monkeypatch.setattr(llm, "_WRITER_STATE", state)
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
     if owner == "inference_version":
         monkeypatch.setattr(inference, "__file__", str(source))
         monkeypatch.setattr(llm, "_INFERENCE_SOURCE_STAT", source.stat().st_mtime_ns)
+        monkeypatch.setattr(extract_llm_source_contract, '_INFERENCE_SOURCE_STAT', llm._INFERENCE_SOURCE_STAT)
     acquire = writer_lock.acquire_run_lock
     monkeypatch.setattr(llm, "acquire_run_lock", lambda: acquire(str(home / "data" / "run.lock")))
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', llm.acquire_run_lock)
     before = candidate.candidate_fingerprint(approved[0])
     with llm._write_lock(True, wait_s=1) as held:
         assert held
@@ -152,6 +164,7 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
     body = "本人に息切れはありません。"
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     try:
         ledger.save_messages([_message(body=body)])
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
@@ -172,6 +185,9 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
         source_label = "patient_state_context" if owner == "extraction_context" else owner
         assert digest != llm._LOADED_SOURCE_DIGESTS[source_label]
         monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {**llm._LOADED_SOURCE_DIGESTS, source_label: digest})
+        monkeypatch.setattr(extract_llm_context, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+        monkeypatch.setattr(extract_llm_qc, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+        monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
         assert llm._upgrade_contract() != before
         # A changed rule contract releases only the old hold's suppression, not the source protection.
         assert ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(ledger.db)).fetchone()

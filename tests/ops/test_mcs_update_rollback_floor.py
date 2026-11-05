@@ -1,5 +1,16 @@
 """Rollback layout floor: old code must never run against cards of a
 newer layout (synthetic repo, temp ledger, no services)."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import sqlite3
 import subprocess
@@ -34,13 +45,29 @@ def test_rollback_refuses_before_journal_when_target_lacks_the_layout(
         updater, tmp_path, monkeypatch):  # noqa: F811
     repo, _ = _make_repo(tmp_path)          # v1.0.0 has no notify_cards.py
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     _, after = _state(updater, repo)
     _cards(updater.LEDGER, 1, 3)
     notices = []
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "quiesce", lambda: pytest.fail("no quiesce"))
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "_enqueue_notice",
                         lambda text, **k: notices.append(text) or True)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', updater._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
     assert updater.rollback("rb-1") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
     st = updater.journal_store.load_state(updater.STATE_PATH)
@@ -56,6 +83,15 @@ def test_rollback_layout_floor_passes_when_nothing_can_be_misread(
         updater, tmp_path, monkeypatch, ledger):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     before, _ = _state(updater, repo)
     if ledger == "no_table":
         sqlite3.connect(updater.LEDGER).close()
@@ -75,6 +111,15 @@ def test_rollback_layout_floor_treats_an_unreadable_ledger_as_unverified(
     """A DB that cannot answer MAX(layout) is not evidence of safety."""
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     _state(updater, repo)
     with open(updater.LEDGER, "wb") as f:
         f.write(b"not a sqlite file" * 64)
@@ -88,6 +133,15 @@ def test_rollback_layout_floor_defers_an_unreadable_backup_to_the_restore(
     journal as a pending restore; _restore_db then fails closed."""
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     backup = tmp_path / "pre.db"
     backup.write_bytes(b"garbage" * 64)
     _state(updater, repo, schema_bump=True, backup_path=str(backup))
@@ -100,6 +154,15 @@ def test_rollback_layout_floor_reads_the_backup_a_schema_bump_restores(
         updater, tmp_path, monkeypatch):  # noqa: F811
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     backup = tmp_path / "preupdate.db"
     _cards(str(backup), 1)                  # taken before any layout-3 card
     _state(updater, repo, schema_bump=True, backup_path=str(backup))
@@ -117,6 +180,14 @@ def test_target_card_layout_parses_the_constant(updater, monkeypatch):  # noqa: 
             argv, 0, "X = 1\nCARD_LAYOUT = 2\nCARD_LAYOUT_OLD = 9\n", "")
 
     monkeypatch.setattr(updater, "_git", git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     assert updater._target_card_layout("abc") == 2
     assert seen == [["show", "abc:mcs/notify/notify_cards.py"]]
 
@@ -128,8 +199,18 @@ def test_rollback_tree_refuses_before_any_reset(updater, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     monkeypatch.setattr(updater, "_git", lambda argv, timeout=None: calls.append(argv)
                         or subprocess.CompletedProcess(argv, 1, "", ""))
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     with pytest.raises(updater.UpdateError, match="rollback_layout_unverified"):
         updater._rollback_tree({"prev_sha": "0" * 40})
     assert not any("reset" in call for call in calls)
@@ -143,6 +224,14 @@ def test_target_layout_accepts_only_proven_absent_path_as_legacy(updater, monkey
         return subprocess.CompletedProcess(argv, 128 if argv[0] == "show" else 0, "", "")
 
     monkeypatch.setattr(updater, "_git", git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     assert updater._target_card_layout("synthetic-ref") == 1
     assert calls == [["show", "synthetic-ref:mcs/notify/notify_cards.py"],
                      ["ls-tree", "-z", "synthetic-ref", "--", "mcs/notify/notify_cards.py"]]
@@ -164,8 +253,18 @@ def test_git_read_failure_is_unverified_even_for_layout_one(
             argv, 0, "100644 blob " + "a" * 40 + "\tmcs/notify/notify_cards.py\0", "")
 
     monkeypatch.setattr(updater, "_git", git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, "_restore_runtime", lambda entry: pytest.fail("no restore"))
+    monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+    monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
     entry = {"prev_sha": "b" * 40}
     assert updater._rollback_layout_error(entry).startswith("rollback_layout_unverified:")
     with pytest.raises(updater.UpdateError, match="rollback_layout_unverified"):
@@ -178,6 +277,15 @@ def test_rollback_keeps_layout_floor_for_retained_cards(updater, tmp_path, monke
     """A terminal-looking card can still owe remote cleanup or re-rendering."""
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
+    monkeypatch.setattr(update_apply, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_cli, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_execution, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_preflight, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_recovery, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_repository, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_runtime_migration, 'REPO', updater.REPO)
+    monkeypatch.setattr(update_services, 'REPO', updater.REPO)
     _state(updater, repo)
     _cards(updater.LEDGER, 3)
     with sqlite3.connect(updater.LEDGER) as db:

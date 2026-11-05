@@ -6,6 +6,9 @@ callers"). No network, no real llama, no patient data. The invariant
 under test: O_BACKLOG * O_RT = 0 at every observable instant,
 counting pre-send reservations through confirmed terminal retirement.
 """
+import extract_llm_call_context
+import extract_llm_errors
+import extract_llm_provider
 import json
 import sqlite3
 from contextlib import suppress
@@ -664,7 +667,9 @@ def test_llm_call_defers_on_admission_verdict(admitted_env, monkeypatch):
     rt = b.acquire("gbrain.query", "RT")   # hold the RT class
     assert rt["admitted"]
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", time.monotonic())
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     d = extract_llm._llm_call("synthetic prompt")
     assert d is extract_llm._DEFERRED    # parked, never a silent miss
     b.terminal(rt["permit_id"], "done")
@@ -681,8 +686,12 @@ def test_llm_call_carries_token_when_admitted(admitted_env, monkeypatch):
                          "finish_reason": "stop"}]}).encode()
 
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", time.monotonic())
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm, "_opener_request", fake)
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     out = extract_llm._llm_call("synthetic prompt")
     assert out == {"meds": []}
     assert captured[0].get("admission_token")
@@ -693,6 +702,7 @@ def test_choose_slot_never_borrows_rt_under_admission(
     import extract_llm
     import local_llm
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', extract_llm._SLOT_OVERRIDE)
     monkeypatch.setenv("MCS_LLM_SLOT", str(local_llm.BACKGROUND_SLOT))
     assert extract_llm._choose_slot() == local_llm.BACKGROUND_SLOT
 
@@ -923,17 +933,23 @@ def test_extract_probe_denial_defers_and_reprobes_after_capacity(
     rt = broker.acquire("gbrain.query", "RT")
     assert broker.sent(rt["permit_id"])["sent"]
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     calls = []
     monkeypatch.setattr(extract_llm, "_opener_request",
                         lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm._probe_format() is None
-    assert extract_llm._FMT_MODE is None   # no unobserved plain verdict
+    assert extract_llm_provider._FMT_MODE is None   # no unobserved plain verdict
     assert calls == []                     # nothing left the process
     # the deferred message call also takes the free hold path
     assert extract_llm._llm_call("synthetic") is extract_llm._DEFERRED
     broker.terminal(rt["permit_id"], "done")
     monkeypatch.setattr(extract_llm, "_opener_request", _format_probe_reply)
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm._probe_format() == "schema"
 
 

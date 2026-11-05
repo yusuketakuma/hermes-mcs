@@ -1,3 +1,13 @@
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 import extract_quality
 import json
 
@@ -29,7 +39,9 @@ def _seed_thin(db, mid=2, *, current=False):
 
 def _fail_extraction(monkeypatch):
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **kw: None)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
 
 def test_failed_thin_preserves_same_patient_content(db, monkeypatch):
@@ -68,7 +80,10 @@ def test_thin_retry_does_not_erase_prior_valid_clinical_fact(db, monkeypatch):
               'source_binding': inference_dependency_loss.source_binding(db.db, 1, 1)})
     calls = []
     monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: calls.append(a) or {})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     result = extract_llm.run_pending(db, limit=10, budget_s=300)
     assert result['selected'] == 1 and calls, result
     retained = [row for row in db.artifacts('extract_llm', message_id=1)
@@ -92,6 +107,7 @@ def test_thin_repend_does_not_prefilter_away_existing_fact(db, monkeypatch):
                    meta={'hash': _hash(db), 'extract_version': extract_llm.EXTRACT_VERSION})
     monkeypatch.setenv('MCS_EXTRACT_PREFILTER', 'on')
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **kw: prior)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, limit=10, budget_s=300)
     out = json.loads(db.artifacts('extract_llm', message_id=1)[0]['content'])
     assert out.get('symptoms') == prior['symptoms'], (out, result)
@@ -112,6 +128,7 @@ def test_pending_count_includes_thin_quality_work(db, monkeypatch):
     _seed_thin(db)
     monkeypatch.setattr(extract_llm, 'llm_extract',
                         lambda *a, **kw: extract_llm._DEFERRED)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, budget_s=300)
     assert result['left'] == 1 and result['deferred'] == 1
 
@@ -120,6 +137,7 @@ def test_single_call_fits_tick_budget_after_preparation(monkeypatch):
     import time
     calls = []
     monkeypatch.setattr(extract_llm, '_FMT_MODE', 'schema')
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm.local_llm, 'chat',
                         lambda *a, **kw: calls.append(1) or {
                             'text': '{"summary":"合成"}', 'status': 200,
@@ -142,7 +160,9 @@ def test_thin_retry_preserves_legacy_source_without_project(
     db.db.commit()
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda *args, **kwargs: result)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     extract_llm.run_pending(db, budget_s=300)
     rows = db.artifacts("extract_llm", message_id=2)
@@ -172,8 +192,18 @@ def test_configured_local_llm_is_used_for_every_extract_probe(monkeypatch):
     endpoint = "http://127.0.0.1:8089/v1/chat/completions"
     monkeypatch.setattr(extract_llm, "load_config", lambda: {
         "local_llm": {"url": endpoint, "model": "synthetic-model"}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     calls = []
 
@@ -187,6 +217,8 @@ def test_configured_local_llm_is_used_for_every_extract_probe(monkeypatch):
             "content": '{"probe":"schema"}'}, "finish_reason": "stop"}]}).encode()
 
     monkeypatch.setattr(extract_llm, "_opener_request", send)
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
     assert extract_llm._probe_format() == "schema"
     assert extract_llm._llm_up()
     assert extract_llm._slots_busy(None) == {0: False}
@@ -199,6 +231,7 @@ def test_large_admission_set_filters_before_selection_limit(db, monkeypatch):
         _message(mid=1, body="合成の許可投稿です", posted_at="2026-09-18T00:00:00+09:00"),
         _message(mid=2, body="合成の対象外投稿です", posted_at="2026-09-19T00:00:00+09:00")])
     monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kw: {"summary": "合成"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     admitted = {1, *range(10000, 40000)}
     result = extract_llm.run_pending(db, limit=1, admitted_ids=admitted)
     assert result["selected"] == result["done"] == 1
@@ -209,4 +242,12 @@ def test_large_admission_set_filters_before_selection_limit(db, monkeypatch):
 def test_disallowed_local_llm_endpoint_is_unavailable_without_a_request(monkeypatch):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {
         "local_llm": {"url": "https://example.invalid/v1/chat/completions"}})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     assert extract_llm._llm_up() is False

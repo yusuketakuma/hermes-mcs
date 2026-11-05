@@ -1,4 +1,15 @@
 """Versioned update contracts with synthetic Git objects, no Git history/process."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import lifecycle_io
 import service_contract
@@ -157,8 +168,23 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
                        path.get("target", MANIFEST["target"]["version"]),
                        ledger.SCHEMA_VERSION if schema is None else schema)
     monkeypatch.setattr(updater, "HOME", str(root))
+    monkeypatch.setattr(update_apply, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_cli, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_execution, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_lifecycle_context, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_preflight, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_recovery, 'HOME', updater.HOME)
+    monkeypatch.setattr(update_runtime_migration, 'HOME', updater.HOME)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(updater, "_git", objects.run)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(update_discovery, "git", objects.run)
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: objects.after)
     monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
@@ -166,13 +192,26 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda *a: True)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(updater, "_standalone_drainer_problems", lambda: [])
+    monkeypatch.setattr(update_execution, '_standalone_drainer_problems', updater._standalone_drainer_problems)
+    monkeypatch.setattr(update_services, '_standalone_drainer_problems', updater._standalone_drainer_problems)
     monkeypatch.setattr(updater, "_baseline_check", lambda cfg: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     calls = []
     monkeypatch.setattr(updater, "quiesce", lambda: updater._write_marker() or [])
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: None)
+    monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: calls.append("services"))
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 
@@ -281,7 +320,11 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
     source_hash = _sha(source)
     restarts = []
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: restarts.append(("agents", bounce)) or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: restarts.append(("gateway", None)))
+    monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
     assert updater.apply(objects.target, objects.after, None, reinstall=install,
                          install_args=("--no-llm",) if install else ()) == 0
     applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
@@ -397,6 +440,14 @@ def test_update_and_rollback_preserve_settings_and_follow_release_defaults(
         return real_git(args, *extra, **kwargs)
 
     monkeypatch.setattr(updater, "_git", guarded_git)
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
 
     def assert_settings(code, expected):
         current = objects.root / relative
@@ -437,6 +488,8 @@ def test_failed_reinstall_rolls_back_before_schema_migration(
         tmp_path, monkeypatch, updater, path):
     # Isolate reinstall rollback from the separately tested provider migration hold.
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
     objects, source, config, calls, installer = _world(tmp_path, monkeypatch, updater, path, install=True)
     before = (_sha(source), _records(Path(updater.LEDGER)), config.read_bytes())
     installer.returncode = 1
@@ -456,7 +509,11 @@ def test_legacy_manual_reinstall_migration_and_restore(
     source_hash = _sha(source)
     restarts = []
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: restarts.append(("agents", bounce)) or [])
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: restarts.append(("gateway", None)))
+    monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
     backup = maintenance.preupdate_backup(updater.LEDGER)
     backup_hash = _sha(Path(backup))
     # The documented operator route has no automatic apply/rollback promise.
@@ -582,6 +639,12 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
     service_paths = replace(updater._service_paths(), recovery_dir=str(recovery),
                             checkout=str(mcs_setup.REPO_ROOT))
     monkeypatch.setattr(updater, "_service_paths", lambda: service_paths)
+    monkeypatch.setattr(update_execution, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_lifecycle_context, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_planning, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_preflight, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_recovery, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_restore, '_service_paths', updater._service_paths)
     assert service_management.recovery_owned(paths=updater._service_paths())
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == old else _facts())
@@ -599,6 +662,9 @@ def test_v1012_plist_with_unsafe_python_blocks_before_merge_and_owner_repair_app
             raise updater.UpdateError("services_failed: " + notes[-1])
 
     monkeypatch.setattr(updater, "_services_reconcile", services)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
 
     def merged():
         return [c for c in objects.calls if c[0] == "merge"]

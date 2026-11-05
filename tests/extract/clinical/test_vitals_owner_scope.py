@@ -1,4 +1,7 @@
 """Synthetic: another person's vital and an oxygen flow never pass as the patient's current reading."""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import pytest
 
 import clinical_values
@@ -67,7 +70,10 @@ def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path, m
 
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     store = _ledger(tmp_path)
     store.ensure_patient(1)
     try:

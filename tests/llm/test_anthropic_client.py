@@ -1,4 +1,11 @@
 """Synthetic Messages wire contract, attempt hooks and safe failure metadata."""
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_resident
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import hashlib
 import json
 import time
@@ -531,6 +538,13 @@ def test_semantic_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_pa
     led, cfg, job, _ = cloud
     cfg["cloud_llm"]["provider"] = provider
     monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+    monkeypatch.setattr(extract_llm_engine, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(cloud_inference, "HOME", str(tmp_path))
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *args: "synthetic-key")
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)

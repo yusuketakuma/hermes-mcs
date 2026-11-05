@@ -1,4 +1,12 @@
 """Synthetic patient-quality skip receipts and ownership checks."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
 from test_patient_summary_quality import quality_owner as quality_owner
 from test_patient_context_refresh import runtime as runtime
 from test_anthropic_context_refresh import cloud as cloud
@@ -115,6 +123,14 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
     ledger.semantic_seed(1, [1], {'source': 'history_import', 'notification_free': True})
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: None)
     monkeypatch.setattr(extract_llm, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda *args: cfg)
     import json
     def llm(prompt):

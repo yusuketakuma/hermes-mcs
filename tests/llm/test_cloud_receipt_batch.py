@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 import cloud_policy
+import cloud_usage_accounting
 from ledger import Ledger
 from test_cloud_policy import _reserve, _result, now
 
@@ -98,7 +99,7 @@ def test_batch_keeps_original_sqlite_error_when_caller_rolls_back(tmp_path, monk
         def interrupted(connection, _ids):
             connection.rollback()
             raise sqlite3.OperationalError('synthetic interruption')
-        monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
+        monkeypatch.setattr(cloud_usage_accounting, '_reservation_evidence_batch_snapshot', interrupted)
         with pytest.raises(sqlite3.OperationalError, match='synthetic interruption'):
             cloud_policy.reservation_evidence_batch(db.db, [1])
 
@@ -113,7 +114,7 @@ def test_batch_persistent_cancel_preserves_caller_transaction_and_handler(tmp_pa
         def interrupted(connection, _ids):
             connection.set_progress_handler(lambda: 1, 1)
             return connection.execute('SELECT value FROM synthetic_marker').fetchall()
-        monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
+        monkeypatch.setattr(cloud_usage_accounting, '_reservation_evidence_batch_snapshot', interrupted)
         try:
             with pytest.raises(sqlite3.OperationalError) as caught:
                 cloud_policy.reservation_evidence_batch(db, [1])

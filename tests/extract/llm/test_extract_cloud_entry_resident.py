@@ -1,4 +1,5 @@
 """Resident extraction resumes the same paid input before deciding local fallback."""
+import extract_llm_runner
 from contextlib import nullcontext
 import json
 import time
@@ -54,6 +55,7 @@ def test_resident_next_pass_reaches_input_recovery(routed, monkeypatch, prior, b
         # Simulate suspension after accounting, before extraction persistence.
         return worker._DEFERRED
     monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     if prior != 'fresh':
         first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
         assert first['deferred'] == 1
@@ -92,6 +94,7 @@ def test_send_cap_does_not_reset_partial_cloud_chunks(routed, monkeypatch):
         kwargs['chunks_out'][0] = {'summary': 'synthetic validated earlier chunk'}
         return kwargs['provider']('synthetic unsent remainder', deadline=kwargs['deadline'], max_tokens=100)
     monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
     assert report['deferred'] == 1 and report['done'] == 0 and len(seen) == 1
     assert not ledger.artifacts('cloud_usage_reserve')

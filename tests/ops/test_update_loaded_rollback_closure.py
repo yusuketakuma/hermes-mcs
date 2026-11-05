@@ -1,4 +1,14 @@
 """Cold updater retains its finite rollback closure after a synthetic old-tree cut."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_restore
+import update_runtime_migration
+import update_services
 from pathlib import Path
 import os
 import shutil
@@ -315,6 +325,13 @@ def test_writer_hold_distinguishes_updater_restore_from_backup_adoption(
     import notify_spool
 
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_services, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(mcs_restore, "writers_resumed", lambda path: adopted)
     marker = {"v": 1, "by": owner, "phase": phase,
               "restored_at": 1, "report_id": "synthetic-report"}
@@ -368,20 +385,56 @@ def test_empty_journal_retry_keeps_updater_restore_witness(tmp_path, monkeypatch
             str(state_path), mcs_update.journal_store.default_state())
     before = state_path.read_bytes() if state_path.exists() else None
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_services, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(mcs_update, "STATE_PATH", str(state_path))
+    monkeypatch.setattr(update_apply, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_cli, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_execution, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_lifecycle_context, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_planning, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_preflight, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_recovery, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_restore, 'STATE_PATH', mcs_update.STATE_PATH)
+    monkeypatch.setattr(update_runtime_migration, 'STATE_PATH', mcs_update.STATE_PATH)
     monkeypatch.setattr(mcs_update, "MARKER_PATH", str(update_marker))
+    monkeypatch.setattr(update_lifecycle_context, 'MARKER_PATH', mcs_update.MARKER_PATH)
+    monkeypatch.setattr(update_runtime_migration, 'MARKER_PATH', mcs_update.MARKER_PATH)
+    monkeypatch.setattr(update_services, 'MARKER_PATH', mcs_update.MARKER_PATH)
     monkeypatch.setattr(mcs_update, "acquire_update_lock", lambda: os.open(
         tmp_path / "update-lock", os.O_CREAT | os.O_RDWR, 0o600))
+    monkeypatch.setattr(update_apply, 'acquire_update_lock', mcs_update.acquire_update_lock)
+    monkeypatch.setattr(update_cli, 'acquire_update_lock', mcs_update.acquire_update_lock)
+    monkeypatch.setattr(update_recovery, 'acquire_update_lock', mcs_update.acquire_update_lock)
     monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait", lambda **kw: os.open(
         tmp_path / "run-lock", os.O_CREAT | os.O_RDWR, 0o600))
+    monkeypatch.setattr(update_apply, '_acquire_run_lock_wait', mcs_update._acquire_run_lock_wait)
+    monkeypatch.setattr(update_recovery, '_acquire_run_lock_wait', mcs_update._acquire_run_lock_wait)
     reports = []
     monkeypatch.setattr(mcs_update, "_report",
                         lambda *args, **kwargs: reports.append((args, kwargs)))
+    monkeypatch.setattr(update_apply, '_report', mcs_update._report)
+    monkeypatch.setattr(update_recovery, '_report', mcs_update._report)
+    monkeypatch.setattr(update_restore, '_report', mcs_update._report)
     def forbidden(*args, **kwargs):
         pytest.fail("unfinished restore must not restart or inspect the checkout")
     monkeypatch.setattr(mcs_update, "restart_agents", forbidden)
+    monkeypatch.setattr(update_apply, 'restart_agents', mcs_update.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', mcs_update.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', mcs_update.restart_agents)
     monkeypatch.setattr(mcs_update, "_clean_stale_git_locks", forbidden)
+    monkeypatch.setattr(update_recovery, '_clean_stale_git_locks', mcs_update._clean_stale_git_locks)
     monkeypatch.setattr(mcs_update, "_enqueue_notice", forbidden)
+    monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_runtime_migration, '_enqueue_notice', mcs_update._enqueue_notice)
+    monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     assert mcs_update.recover_interrupted() == 1
     assert update_marker.read_text() == "synthetic update witness"
     assert json.loads(restore_marker.read_text()) == marker

@@ -1,4 +1,5 @@
 """Doctor is local by default and shares only bounded diagnostic facts."""
+import setup_config_snapshot
 
 import environment_diagnostics
 import lifecycle_io
@@ -49,6 +50,7 @@ def test_doctor_holds_invalid_provider_without_running_probes(tmp_path, monkeypa
     witness.chmod(0o600)
     before = (config.read_bytes(), witness.read_bytes())
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(config))
     monkeypatch.setattr(cloud_cli, "diagnostics", lambda *a, **k: pytest.fail("provider probe"))
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda *a, **k: pytest.fail("runtime probe"))
     monkeypatch.setattr(lifecycle_io, "run_bounded", lambda *a, **k: pytest.fail("service probe"))
@@ -75,6 +77,7 @@ def test_check_holds_provider_without_running_services(tmp_path, monkeypatch, ca
     pending.write_text('{}')
     pending.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(config))
     monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
     assert mcs_setup.cmd_check(None) == 1
     assert "提供元設定" in capsys.readouterr().out
@@ -379,6 +382,7 @@ def test_diagnostic_split_snapshot_race_blocks_all_probes(tmp_path, monkeypatch,
 
     monkeypatch.setattr(provider_settings, "_read_file", race)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(config))
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: pytest.fail("second config read"))
     monkeypatch.setattr(cloud_cli, "diagnostics", lambda *a, **k: pytest.fail("provider probe"))
     monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
@@ -400,6 +404,7 @@ def test_unreadable_legacy_config_blocks_before_probes(tmp_path, monkeypatch, ca
     config = tmp_path / "config.json"
     config.write_text(raw)
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(config))
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: pytest.fail("second config read"))
     monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda *a, **k: pytest.fail("runtime probe"))
@@ -417,6 +422,7 @@ def test_unreadable_legacy_config_blocks_before_probes(tmp_path, monkeypatch, ca
 
 def test_diagnostic_missing_legacy_config_is_unconfigured(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(tmp_path / "config.json"))
     assert mcs_setup._diagnostic_config() == {}
 
 

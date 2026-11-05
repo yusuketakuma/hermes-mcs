@@ -1,5 +1,16 @@
 """Update and recovery in runtime_mode=standalone: restart the connector
 agent instead of the Hermes gateway and never require Hermes."""
+import update_apply
+import update_cli
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
+import update_services
 import mcs_util
 import service_contract
 import update_launch
@@ -19,13 +30,24 @@ def _popen_log(monkeypatch, module):
 def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
     started = _popen_log(monkeypatch, mcs_update)
     monkeypatch.setattr(mcs_update, "AGENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(update_lifecycle_context, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
+    monkeypatch.setattr(update_preflight, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
+    monkeypatch.setattr(update_services, 'AGENTS_DIR', mcs_update.AGENTS_DIR)
     monkeypatch.setattr(mcs_update, "_uid", lambda: 501)
+    monkeypatch.setattr(update_services, '_uid', mcs_update._uid)
     mcs_update.restart_gateway({})
     assert started[-1][1:3] == ["-I", "-c"] and started[-1][-1] == "501"
     from mcs_standalone import service
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path / "data"))
+    monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)
+    monkeypatch.setattr(update_services, 'DATA', mcs_update.DATA)
     mcs_update.restart_gateway({"runtime_mode": "standalone"})
     assert requests == [str(tmp_path)]
     assert len(started) == 1  # no forced host kill, so an active updater can finish
@@ -34,6 +56,12 @@ def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
 def test_update_precheck_needs_no_hermes_in_standalone(monkeypatch):
     import mcs_setup
     monkeypatch.setattr(mcs_update, "_tree_clean", lambda: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', mcs_update._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', mcs_update._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', mcs_update._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', mcs_update._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', mcs_update._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', mcs_update._tree_clean)
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: False)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
     monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
@@ -87,6 +115,12 @@ def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
 
 def test_connector_changes_restart_only_in_standalone(monkeypatch):
     monkeypatch.setattr(mcs_update, "_git_out", lambda args: "M\tmcs_standalone/__main__.py\n")
+    monkeypatch.setattr(update_apply, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', mcs_update._git_out)
     monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {})
     assert not any("通知接続（gateway）の再起動" in n for n in mcs_update.impact_summary("a", "v1"))
     monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {"runtime_mode": "standalone"})
@@ -98,8 +132,22 @@ def test_rollback_to_a_pre_standalone_tree_is_refused(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(mcs_util, 'load_config', lambda *a: {"runtime_mode": "standalone"})
     monkeypatch.setattr(mcs_update, "_git", lambda args: SimpleNamespace(returncode=128))
+    monkeypatch.setattr(update_apply, '_git', mcs_update._git)
+    monkeypatch.setattr(update_cli, '_git', mcs_update._git)
+    monkeypatch.setattr(update_planning, '_git', mcs_update._git)
+    monkeypatch.setattr(update_preflight, '_git', mcs_update._git)
+    monkeypatch.setattr(update_recovery, '_git', mcs_update._git)
+    monkeypatch.setattr(update_repository, '_git', mcs_update._git)
+    monkeypatch.setattr(update_restore, '_git', mcs_update._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', mcs_update._git)
     resets = []
     monkeypatch.setattr(mcs_update, "_git_out", lambda args: resets.append(args) or "")
+    monkeypatch.setattr(update_apply, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', mcs_update._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', mcs_update._git_out)
     with pytest.raises(mcs_update.UpdateError, match="standalone_runtime_missing_in_target"):
         mcs_update._rollback_tree({"prev_sha": "0" * 40})
     assert resets == []

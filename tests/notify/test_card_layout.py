@@ -9,6 +9,7 @@ import pytest
 
 import extract_llm
 import notify_cards
+import notify_card_renders
 import notify_render
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from notify_testkit import (
@@ -226,13 +227,13 @@ def test_lineworks_reuses_provider_visibility_during_one_render(led, monkeypatch
     monkeypatch.setattr(processing_route, "visible_providers",
                         lambda: observations.append("checked") or ("openai", "jev", "local"))
     calls = []
-    original = notify_cards.card_content
+    original = notify_card_renders.card_content
 
     def record_content(*args, **kwargs):
         calls.append(kwargs.get("visible_providers"))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(notify_cards, "card_content", record_content)
+    monkeypatch.setattr(notify_card_renders, "card_content", record_content)
     _dispatch(led, _intent(led), LINEWORKS)
     assert observations == ["checked"]
     assert calls == [("openai", "jev", "local"), ("openai", "jev", "local")]
@@ -266,7 +267,7 @@ def test_lineworks_stamp_change_revises_only_changed_post(led, off_page, changed
     _dispatch(led, _intent(led), LINEWORKS)
     render = _latest_render(led)
     if off_page:
-        assert 100 not in notify_cards.card_content(led.db, _card(led), cfg=LINEWORKS)["shown"]
+        assert 100 not in notify_card_renders.card_content(led.db, _card(led), cfg=LINEWORKS)["shown"]
     _lw_deliver(led, render)
     observed = {"reactions": {"value": [{"type": "viewed", "count": 2,
                                          "self_reacted": False}], "observed_at": NOW}}

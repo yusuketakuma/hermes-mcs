@@ -1,4 +1,5 @@
 """Unevaluated claims keep fixed, non-sensitive reasons and never pass."""
+import semantic_summary_stages
 import json
 import time
 
@@ -48,6 +49,7 @@ def test_invalid_saved_claims_fail_once_without_fabricating_pass(tmp_path, monke
         return result
 
     monkeypatch.setattr(semantic_drain, 'summarize', empty_summary)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
     try:
         cfg = _cfg('shadow', loop_mode='off')
         out = semantic_drain.run_due(db, cfg, {'errors': []},

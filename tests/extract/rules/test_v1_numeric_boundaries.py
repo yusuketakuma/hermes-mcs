@@ -1,4 +1,7 @@
 """Synthetic v1 vitals must not fabricate a prefix of a longer number."""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import clinical_values
 import pytest
 
@@ -56,7 +59,10 @@ def test_old_rollup_prefix_is_rechecked_readonly_without_erasing_profile(tmp_pat
 
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     store = _ledger(tmp_path)
     try:
         store.ensure_patient(1)

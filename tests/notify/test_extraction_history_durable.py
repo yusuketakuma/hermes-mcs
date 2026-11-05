@@ -1,4 +1,13 @@
 """Synthetic extraction commits preserve history refresh across failures."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import sqlite3
 from types import SimpleNamespace
@@ -33,6 +42,8 @@ def _completed_card(led, monkeypatch):
 def _claimed(led, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(extract_llm, '_WRITER_STATE', (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extraction_refresh, 'load_config', lambda: CFG)
     row = dict(led.db.execute('SELECT * FROM messages WHERE project_id=1 AND message_id=1').fetchone())
     assert extract_llm._claim(led, row) is not None
@@ -113,6 +124,14 @@ def test_postcommit_renderer_failure_does_not_hide_commit(monkeypatch, capsys, e
     db = sqlite3.connect(':memory:')
     monkeypatch.setattr(extract_llm.semantic_store, 'refresh_cards_allowed', lambda *a: True)
     monkeypatch.setattr(extract_llm, 'load_config', lambda: CFG)
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: CFG)
     def broken(*args, **kwargs):
         raise error

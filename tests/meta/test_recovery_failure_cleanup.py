@@ -13,8 +13,8 @@ __all__ = ["rec"]
 
 
 def test_restore_metadata_failure_closes_descriptor_before_copy(rec, tmp_path, monkeypatch):
-    monkeypatch.setattr(rec, "LEDGER", str(tmp_path / "synthetic-ledger.db"))
-    monkeypatch.setattr(rec, "_settle_staging", lambda _directory: None)
+    monkeypatch.setattr(rec.mcs_recovery_core, "LEDGER", str(tmp_path / "synthetic-ledger.db"))
+    monkeypatch.setattr(rec.mcs_recovery_database, "_settle_staging", lambda _directory: None)
     created = []
     real_mkstemp, real_fstat = rec.tempfile.mkstemp, os.fstat
 
@@ -33,12 +33,12 @@ def test_restore_metadata_failure_closes_descriptor_before_copy(rec, tmp_path, m
             patch.setattr(rec.tempfile, "mkstemp", tracked_mkstemp)
             patch.setattr(rec.os, "fstat", fail)
             with pytest.raises(OSError, match="synthetic metadata failure"):
-                rec._replace_database("unused-synthetic-backup", "a" * 64,
+                rec.mcs_recovery_database._replace_database("unused-synthetic-backup", "a" * 64,
                                       lambda: pytest.fail("no database replacement"))
         with pytest.raises(OSError) as error:
             os.fstat(created[0][0])
         assert error.value.errno == errno.EBADF
-        assert not Path(rec.LEDGER).exists()
+        assert not Path(rec.mcs_recovery_core.LEDGER).exists()
         # Without metadata proof, neither the empty path nor another file is deleted.
         assert os.path.getsize(created[0][1]) == 0
     finally:
@@ -50,16 +50,16 @@ def test_restore_metadata_failure_closes_descriptor_before_copy(rec, tmp_path, m
 
 @pytest.mark.parametrize("status", [None, 0, 1, 124, 127, 113])
 def test_retirement_requires_verified_service_absence(rec, tmp_path, monkeypatch, status):
-    agents = Path(rec.AGENTS_DIR)
+    agents = Path(rec.mcs_recovery_core.AGENTS_DIR)
     agents.mkdir()
     label = "ai.mcs.extract-retired"
     obsolete = agents / (label + ".plist")
     obsolete.write_text("synthetic owned service")
     foreign = agents / "unrelated.service.plist"
     foreign.write_text("synthetic foreign service")
-    monkeypatch.setattr(rec, "_runtime_mode", lambda: "standalone")
-    monkeypatch.setattr(rec, "_runtime_config", lambda: {"backup": {"enabled": False}})
-    monkeypatch.setattr(rec, "_setup_python", lambda: None)
+    monkeypatch.setattr(rec.mcs_recovery_core, "_runtime_mode", lambda: "standalone")
+    monkeypatch.setattr(rec.mcs_recovery_core, "_runtime_config", lambda: {"backup": {"enabled": False}})
+    monkeypatch.setattr(rec.mcs_recovery_services, "_setup_python", lambda: None)
     calls = []
 
     def run(args):
@@ -69,8 +69,8 @@ def test_retirement_requires_verified_service_absence(rec, tmp_path, monkeypatch
         assert args[0] == "print"
         return None if status is None else subprocess.CompletedProcess(args, status)
 
-    monkeypatch.setattr(rec, "_launchctl", run)
-    problems = rec._reconcile_membership({"agents": [], "cron": []})
+    monkeypatch.setattr(rec.mcs_recovery_services, "_launchctl", run)
+    problems = rec.mcs_recovery_services._reconcile_membership({"agents": [], "cron": []})
     assert [call[0] for call in calls] == ["bootout", "print"]
     assert obsolete.exists() is (status != 113)
     assert foreign.read_text() == "synthetic foreign service"

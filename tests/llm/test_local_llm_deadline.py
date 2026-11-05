@@ -1,4 +1,6 @@
 """No-network regressions for the local model's absolute HTTP deadline."""
+import extract_llm_call_context
+import extract_llm_provider
 import io
 import json
 from pathlib import Path
@@ -44,7 +46,9 @@ def test_every_local_request_uses_deadline_and_reaps_worker(monkeypatch, entry):
     monkeypatch.setattr(bounded_http.time, "monotonic", lambda: 100.0)
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-secret")
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_SLOT_OVERRIDE", None)
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', extract_llm._SLOT_OVERRIDE)
     deadline = 100.25
     if entry == "chat":
         assert local_llm.chat("synthetic", deadline=deadline) is None
@@ -101,6 +105,7 @@ def test_worker_preserves_connection_refused_as_unreachable(monkeypatch, wrapped
     assert local_llm.chat("synthetic", error_out=err) is None
     assert err == {"kind": "unreachable"}
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "schema")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     assert extract_llm._llm_call("synthetic") is extract_llm._DEFERRED
 
 

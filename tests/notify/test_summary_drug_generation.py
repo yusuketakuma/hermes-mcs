@@ -1,4 +1,7 @@
 """Cached summaries retain raw medication/vitals while dictionary candidates expire."""
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 from copy import deepcopy
 import json
 
@@ -17,7 +20,10 @@ from medications_testkit import DOCUMENT, _dictionary, store as store
 def _summary_cache(store, tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', extract_llm._rerender_cards)
     with store.db:
         store.db.execute("UPDATE patients SET fetch_state='complete', history_floor=-1 WHERE project_id=1")
     med = "本人はキラナを開始し服用しています。"

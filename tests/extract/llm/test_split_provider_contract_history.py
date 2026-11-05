@@ -1,4 +1,5 @@
 """Synthetic split history recognizes its exact prior provider without adopting old results."""
+import extract_llm_store
 import hashlib
 import json
 
@@ -129,6 +130,7 @@ def test_invalid_or_ambiguous_history_never_falls_back_to_another_contract(tmp_p
 def test_new_split_seals_original_provider_and_frame_but_keeps_current_reader_separate(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         row, frame, attempt, _aid = history(ledger)
         row['_provider_contract'] = contracts()[0]
@@ -202,6 +204,7 @@ def test_supported_contract_enumeration_is_finite_exact_and_returns_owned_values
 def proof_history(ledger, monkeypatch):
     row, frame, attempt, _aid = history(ledger)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     row['_provider_contract'] = contracts()[0]
     lease = worker._claim(ledger, row)
     assert lease is not None

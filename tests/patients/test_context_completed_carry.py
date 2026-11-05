@@ -1,4 +1,17 @@
 """Completed patient cloud units resume saving without another paid request."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
+
+import patient_context_refresh_state
 from contextlib import contextmanager
 import copy
 import hashlib
@@ -31,6 +44,14 @@ def _completed(runtime, cloud, monkeypatch, lane):
     assert not errors
     cfg = {**CFG, "cloud_llm": settings}
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, "load_config", lambda: cfg)
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _cfg: settings)
     monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", _SOURCE_REPAIR_PROVIDER)
@@ -86,7 +107,7 @@ def _completed(runtime, cloud, monkeypatch, lane):
             resources["wire"] -= 1
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
-    monkeypatch.setattr(refresh, "acquire_run_lock", lambda: (
+    monkeypatch.setattr(patient_context_refresh_state, "acquire_run_lock", lambda: (
         None if blocked[0] else os.open(os.devnull, os.O_RDONLY)))
     for _ in range(15):
         outcome = step(runtime, cfg=cfg, local_admit=lambda: False)
@@ -98,7 +119,7 @@ def _completed(runtime, cloud, monkeypatch, lane):
     unit = led.__dict__["_patient_context_completed"]
     assert not led.db.in_transaction and resources == {"slots": 0, "wire": 0}
     assert not any(isinstance(v, sqlite3.Cursor) for v in unit.gi_frame.f_locals.values())
-    assert document(led, refresh.KIND if lane == "A" else refresh.SCAN) is None
+    assert document(led, patient_context_refresh_state.KIND if lane == "A" else patient_context_refresh_state.SCAN) is None
     reserves = led.artifacts("cloud_usage_reserve", project_id=1)
     results = led.artifacts("cloud_usage_result", project_id=1)
     assert len(reserves) == len(results) == len(posts)
@@ -131,7 +152,7 @@ def test_completed_cloud_unit_resumes_only_save_after_sixty_second_lock_wait(
     assert "_patient_context_completed" not in pending["led"].__dict__
     assert pending["unit"].gi_frame is None
     assert _receipts(pending["led"]) == pending["receipts"]
-    doc = document(pending["led"], refresh.KIND if lane == "A" else refresh.SCAN)
+    doc = document(pending["led"], patient_context_refresh_state.KIND if lane == "A" else patient_context_refresh_state.SCAN)
     assert doc and (doc["summary"] if lane == "A" else doc["complete"])
     assert pending["resources"] == {"slots": 0, "wire": 0}
 
@@ -153,18 +174,24 @@ def test_completed_cloud_unit_rechecks_save_fences_without_resending(
         cfg["extract"]["patient_context_nightly"]["publication"] = False
     elif changed == "owner":
         monkeypatch.setattr(worker, "_writer_current", lambda **_: False)
+        monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+        monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     elif changed == "restore":
         notify_spool.mark_restored(notify_spool.data_root(led),
                                   by="mcs_update", phase="awaiting_consent")
     elif changed == "restore_after_lock":
-        acquire = refresh.acquire_run_lock
+        acquire = patient_context_refresh_state.acquire_run_lock
         def restore_after_lock():
             fd = acquire()
             if fd is not None:
                 notify_spool.mark_restored(notify_spool.data_root(led),
                                           by="mcs_update", phase="awaiting_consent")
             return fd
-        monkeypatch.setattr(refresh, "acquire_run_lock", restore_after_lock)
+        monkeypatch.setattr(patient_context_refresh_state, "acquire_run_lock", restore_after_lock)
     elif changed == "receipt":
         with led.db:
             led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.answer_text_sha256_v1',?) "
@@ -181,7 +208,7 @@ def test_completed_cloud_unit_rechecks_save_fences_without_resending(
     pending["blocked"][0] = False
     result = step(runtime, cfg=cfg, admit=admit, local_admit=lambda: False)
     assert result["status"] in ("source_changed", "deferred") and result["done"] == 0
-    assert document(led, refresh.SCAN) is None and not led.artifacts(refresh.CHUNK, project_id=1)
+    assert document(led, patient_context_refresh_state.SCAN) is None and not led.artifacts(patient_context_refresh_state.CHUNK, project_id=1)
     assert len(pending["posts"]) == count and _receipts(led) == before
     if changed.startswith("restore"):
         assert led.db.total_changes == changes

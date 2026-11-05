@@ -1,4 +1,15 @@
 """Synthetic persistence checks retain exact reasons without weakening completeness."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_proofs
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import copy
 import json
 import time
@@ -39,6 +50,10 @@ def test_completeness_boundary_is_fixed_and_success_clears_old_reason(monkeypatc
         def unavailable(*args):
             raise ValueError('synthetic-private-detail')
         monkeypatch.setattr(worker, '_rule_hints', unavailable)
+        monkeypatch.setattr(extract_llm_engine, '_rule_hints', worker._rule_hints)
+        monkeypatch.setattr(extract_llm_prepare, '_rule_hints', worker._rule_hints)
+        monkeypatch.setattr(extract_llm_proofs, '_rule_hints', worker._rule_hints)
+        monkeypatch.setattr(extract_llm_runner, '_rule_hints', worker._rule_hints)
     accepted = worker._verify_completeness_claim(None, row, None, {}, integrity, used,
         saved_state=(splits, saved))
     assert accepted is (boundary == 'valid')
@@ -70,7 +85,14 @@ def test_completeness_boundary_is_fixed_and_success_clears_old_reason(monkeypatc
 def test_fresh_candidate_persists_then_revalidates_before_atomic_save(tmp_path, monkeypatch, body, answer, chunk_size):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', worker._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', worker._writer_current)
     monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
     try:
         ledger.save_messages([_message(body=body)])
         row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
@@ -84,11 +106,18 @@ def test_fresh_candidate_persists_then_revalidates_before_atomic_save(tmp_path, 
         assert lease is not None
         if chunk_size is not None:
             monkeypatch.setattr(worker, '_CHUNK_SIZE', chunk_size)
+            monkeypatch.setattr(extract_llm_context, '_CHUNK_SIZE', worker._CHUNK_SIZE)
+            monkeypatch.setattr(extract_llm_engine, '_CHUNK_SIZE', worker._CHUNK_SIZE)
+            monkeypatch.setattr(extract_llm_prepare, '_CHUNK_SIZE', worker._CHUNK_SIZE)
+            monkeypatch.setattr(extract_llm_proofs, '_CHUNK_SIZE', worker._CHUNK_SIZE)
+            monkeypatch.setattr(extract_llm_store, '_CHUNK_SIZE', worker._CHUNK_SIZE)
         worker._capture_checkpoint_state(ledger.db, row, frame['text'])
         def model(*args, **kwargs):
             worker._CALL_NOTES.provider_response = 'local'
             return {**json.loads(worker._PREFILTER_CONTENT), **copy.deepcopy(answer)}
         monkeypatch.setattr(worker, '_llm_call', model)
+        monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+        monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
         meta, chunks = {}, {}
         def checkpoint(key, value):
             accepted = worker._persist_chunks(ledger, row, {key: value}, frame['text'],
@@ -110,6 +139,8 @@ def test_fresh_candidate_persists_then_revalidates_before_atomic_save(tmp_path, 
 def test_fresh_checkpoint_refusal_never_becomes_a_completed_inference(monkeypatch, accepted):
     body = '完全合成の記録です。'
     monkeypatch.setattr(worker, '_llm_call', lambda *args, **kwargs: json.loads(worker._PREFILTER_CONTENT))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', worker._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', worker._llm_call)
     meta, chunks = {}, {}
     result = worker.llm_extract(body, hints=worker._rule_hints({'body_text': body, 'posted_at': None}),
         meta_out=meta, chunks_out=chunks, on_chunk=lambda *args: accepted,

@@ -1,4 +1,6 @@
 """Current raw responses require schema fields; normalized checkpoints stay compatible."""
+import extract_llm_engine
+import extract_llm_runner
 import json
 
 import pytest
@@ -19,6 +21,8 @@ def test_missing_required_first_response_uses_the_existing_repair(monkeypatch, f
         return first if len(calls) == 1 else {"symptoms": []}
 
     monkeypatch.setattr(llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     meta = {}
     assert llm.llm_extract("本人に発熱はありません。", meta_out=meta) == {"symptoms": []}
     assert calls == ["first", "repair"]
@@ -28,6 +32,8 @@ def test_missing_required_first_response_uses_the_existing_repair(monkeypatch, f
 def test_missing_required_repair_response_does_not_become_a_success(monkeypatch):
     responses = iter(({"symptoms": None}, {"summary": "合成の修復結果"}))
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k: next(responses))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     meta = {}
     assert llm.llm_extract("本人に発熱はありません。", meta_out=meta) is None
     assert meta["failure_reason"] == "validation"
@@ -36,6 +42,8 @@ def test_missing_required_repair_response_does_not_become_a_success(monkeypatch)
 def test_missing_required_repair_cannot_replace_a_valid_first_candidate(monkeypatch):
     responses = iter(({"symptoms": []}, {"vitals": {"hr": 80}}))
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k: next(responses))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     body = "本人の脈拍は80です。" + "合成の経過です。" * 50
     assert llm.llm_extract(body) == {"symptoms": []}
 
@@ -44,6 +52,8 @@ def test_explicit_empty_required_section_remains_valid(monkeypatch):
     calls = []
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k:
                         calls.append(1) or {"symptoms": []})
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     assert llm.llm_extract("合成の報告です。") == {"symptoms": []}
     assert calls == [1]
 
@@ -54,6 +64,8 @@ def test_required_fields_follow_the_current_schema(monkeypatch):
     monkeypatch.setattr(extract_schema, "SCHEMA", schema)
     responses = iter(({"symptoms": []}, {"symptoms": [], "summary": "合成の報告"}))
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k: next(responses))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     assert llm.llm_extract("合成の報告です。") == {"symptoms": [], "summary": "合成の報告"}
 
 
@@ -63,6 +75,8 @@ def test_normalized_checkpoint_does_not_require_raw_response_fields(monkeypatch,
     if status:
         cached["_quality_status"] = status
     monkeypatch.setattr(llm, "_llm_call", lambda *a, **k: pytest.fail("paid first call repeated"))
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     assert llm.llm_extract("合成の報告です。", chunks_in={0: cached}) == {
         "summary": "合成の保存済み要約"}
     assert extract_validation.validate({}) == {}
@@ -81,6 +95,8 @@ def test_missing_required_batch_item_retries_only_that_message(tmp_path, monkeyp
         return {"symptoms": []}
 
     monkeypatch.setattr(llm, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', llm._llm_call)
     try:
         ledger.save_messages([_message(mid=mid, body=f"合成の報告{mid}です。") for mid in (1, 2)])
         result = llm.run_pending(ledger, budget_s=300, batch_k=2)

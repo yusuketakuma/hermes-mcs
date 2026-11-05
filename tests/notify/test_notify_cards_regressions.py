@@ -19,6 +19,7 @@ import pytest
 
 import mcs_util
 import notify_cards
+import notify_card_renders
 import notify_digest
 from adapters.lineworks import cards as lwcards
 from mcs_queries import JST
@@ -94,13 +95,13 @@ def test_still_archived_unit_suppresses_new_intent(led, monkeypatch):
 
 def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
-    original = notify_cards.card_content
+    original = notify_card_renders.card_content
 
     def long_display(*a, **k):
         c = original(*a, **k)
         c["containers"] = [{"type": "text", "text": "合成内容" * 400}]
         return c
-    monkeypatch.setattr(notify_cards, "card_content", long_display)
+    monkeypatch.setattr(notify_card_renders, "card_content", long_display)
     claim = _claim(_render(led))
     lwcards.validate(claim["spec"])
     assert _apply(led, envelopes.transport_begin(claim))["granted"]
@@ -113,7 +114,7 @@ def test_lineworks_failed_thread_keeps_display_overflow(led, monkeypatch):
     db = notify_cards.connection(led)
     card = notify_scope.card_row(db, 1)
     assert card["thread_state"] == "failed"
-    content = notify_cards.card_content(db, card)
+    content = notify_card_renders.card_content(db, card)
     card = {**card, **notify_cards._generation_drift(card, content)}
     before_card, before_content = dict(card), dict(content)
     spec, budget_hold = notify_cards._build_spec(

@@ -1,4 +1,14 @@
 """Synthetic cross-process capacity and owned cloud-worker lifecycle checks."""
+import extract_llm_admission
+import extract_llm_carry
+import extract_llm_errors
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import semantic_due_selection
+import semantic_job_processor
+import semantic_reprocess
 import os
 import json
 import sqlite3
@@ -193,6 +203,7 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     parents = iter([parent] * (5 + retries) + [1])
     monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(ledger, "Ledger", lambda *a: SimpleNamespace(close=lambda: None))
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
@@ -200,7 +211,12 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
+    monkeypatch.setattr(semantic_due_selection, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_job_processor, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_reprocess, 'runtime_config', semantic_drain.runtime_config)
     waits = []
     monkeypatch.setattr(backlog.time, "sleep", waits.append)
     acquisitions = []
@@ -226,6 +242,7 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
                 "pids": [1], "private_extra": "synthetic-private-extra"}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
@@ -271,6 +288,7 @@ def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch
     parents = iter([parent] * 6 + ([1] if changed == "parent" else [parent]) + [parent])
     monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     generations = iter([(False, 1)] * 7 + [(False, 2)] * 4)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: next(generations))
     closed_ledger = []
@@ -281,7 +299,12 @@ def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
+    monkeypatch.setattr(semantic_due_selection, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_job_processor, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_reprocess, 'runtime_config', semantic_drain.runtime_config)
     waits = []
     monkeypatch.setattr(backlog.time, "sleep", waits.append)
     acquisitions, fds = [], []
@@ -297,6 +320,7 @@ def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch
     seen = []
     monkeypatch.setattr(extract_llm, "run_pending",
                         lambda *a, **kw: (seen.append("extract"), {"done": 1})[1])
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(semantic_drain, "run_due",
                         lambda *a, **kw: (seen.append("semantic"), {"done": 1})[1])
     monkeypatch.setattr(backlog, "_parent", None)
@@ -313,6 +337,7 @@ def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):
     import extract_llm
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     import ledger
     import writer_lock
     parents = iter([991, 1])
@@ -337,7 +362,9 @@ def test_low_memory_worker_exits_and_closes_its_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "Ledger", lambda *a: SimpleNamespace(close=lambda: closed.append(True)))
     memory = iter([True, False])
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: next(memory))
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("low-memory work started"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991)
     assert closed == [True]
 
@@ -361,7 +388,14 @@ def carry_worker(tmp_path, monkeypatch):
     fake_ledger = SimpleNamespace(close=lambda: setattr(state, "closed", True))
     monkeypatch.setattr(ledger, "Ledger", lambda *a: fake_ledger)
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: state.memory)
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
     monkeypatch.setattr(mcs_util, "load_config", lambda: (
         {"cloud_llm": {"mode": "off"}} if state.block == "mode" else cfg))
@@ -370,9 +404,17 @@ def carry_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason",
                         lambda *a, **kw: state.block if state.block == "budget" else None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
+    monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(extract_llm, "_write_lock", lambda *a, **kw: nullcontext(True))
+    monkeypatch.setattr(extract_llm_carry, '_write_lock', extract_llm._write_lock)
+    monkeypatch.setattr(extract_llm_resident, '_write_lock', extract_llm._write_lock)
+    monkeypatch.setattr(extract_llm_runner, '_write_lock', extract_llm._write_lock)
     monkeypatch.setattr(semantic_drain, "runtime_config",
                         lambda *a: ({"job_budget_seconds": 1200}, []))
+    monkeypatch.setattr(semantic_due_selection, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_job_processor, 'runtime_config', semantic_drain.runtime_config)
+    monkeypatch.setattr(semantic_reprocess, 'runtime_config', semantic_drain.runtime_config)
     monkeypatch.setattr(semantic_drain, "run_due",
                         lambda *a, **kw: state.events.append("semantic") or {"done": 1})
     monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
@@ -408,6 +450,7 @@ def test_semantic_lock_contention_yields_and_revisits(carry_worker, tmp_path, mo
 
     monkeypatch.setattr(writer_lock, 'acquire_run_lock', acquire)
     monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(semantic_drain, 'run_due', semantic)
     monkeypatch.setattr(backlog.time, 'sleep', waits.append)
     backlog.worker(991)
@@ -444,6 +487,7 @@ def test_semantic_lock_yield_rechecks_fence_before_extract(carry_worker, tmp_pat
     monkeypatch.setattr(writer_lock, 'acquire_run_lock', acquire)
     monkeypatch.setattr(extract_llm, 'run_pending',
                         lambda *a, **kw: state.events.append('extract') or {'done': 1})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(semantic_drain, 'run_due', lambda *a, **kw: pytest.fail('stale semantic work'))
     monkeypatch.setattr(backlog.time, 'sleep', sleep)
     backlog.worker(991)
@@ -477,6 +521,7 @@ def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, c
                 'pids': ['synthetic-private-detail']}
 
     monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991)
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     passes = [item for item in records if item['event'] == 'cloud_backlog_pass']
@@ -514,6 +559,7 @@ def test_worker_waits_and_reloads_unreadable_config(carry_worker, monkeypatch, c
 
     monkeypatch.setattr(mcs_util, 'load_config', load)
     monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(backlog.time, 'sleep', sleep)
     backlog.worker(991)
     assert len(reads) == 2
@@ -544,6 +590,7 @@ def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkey
 
     monkeypatch.setattr(mcs_util, 'load_config', load)
     monkeypatch.setattr(extract_llm, 'run_pending', lambda *a, **kw: pytest.fail('unreadable config admitted'))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(backlog.time, 'sleep', sleep)
     backlog.worker(991)
     assert len(reads) == 2 and waits == [10, 10]
@@ -593,6 +640,7 @@ def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypat
 
     monkeypatch.setattr(backlog.time, 'sleep', sleep)
     monkeypatch.setattr(extract_llm, 'run_pending', lambda *a, **kw: pytest.fail('blocked work ran'))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991)
     assert waits == [10, 10] and state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
@@ -628,7 +676,10 @@ def test_worker_settles_paid_carry_before_no_new_send_gate(carry_worker, monkeyp
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)
     assert state.events == ["extract", "settle", "blocked"]
@@ -660,7 +711,10 @@ def test_worker_keeps_paid_carry_when_extract_return_omits_carry(carry_worker, m
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)
     assert len(seen) == 1 and seen[0] is state.carry
@@ -688,7 +742,10 @@ def test_worker_does_not_settle_old_carry_after_update_fence(
                 "updated": True, "private": "synthetic-private-detail"}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", lambda *a, **kw: state.events.append("settle"))
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     backlog.worker(991)
     assert state.events == [] and state.carry == [item] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
@@ -718,7 +775,10 @@ def test_worker_attempts_paid_carry_before_low_memory_exit(carry_worker, monkeyp
         return {"done": 1, "held_prior": 0, "deferred": 0}, 1, set()
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     backlog.worker(991)
     assert state.events == ["settle"] and state.carry == [] and state.closed
 
@@ -746,7 +806,10 @@ def test_worker_retries_retained_paid_carry_before_starting_more_work(carry_work
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)
     assert state.events == ["extract", "settle", "settle", "settle"]
@@ -779,7 +842,10 @@ def test_worker_retries_same_paid_carry_after_temporary_sqlite_lock(carry_worker
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)
     assert state.events == ["extract", "settle", "settle"]
@@ -796,6 +862,7 @@ def test_startup_wait_exits_on_memory_loss_without_opening_ledger(monkeypatch):
     monkeypatch.setattr(backlog.os, "getppid", lambda: 991)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: next(memory))
+    monkeypatch.setattr(extract_llm_resident, '_context_memory_available', extract_llm._context_memory_available)
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: locks.append(True))
     monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
     monkeypatch.setattr(ledger, "Ledger", lambda *a: pytest.fail("low memory opened ledger"))
@@ -824,7 +891,10 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
         carry.clear()
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     backlog.worker(991, index=2)
     assert state.events == ["extract", "settle"] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
@@ -838,6 +908,7 @@ def test_low_memory_target_retires_idle_worker_without_work(carry_worker, monkey
     state, _ = carry_worker
     monkeypatch.setattr(backlog, "memory_workers", lambda limit: capacity)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("retired worker started work"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991, index=index)
     assert state.closed and state.events == []
 
@@ -853,6 +924,7 @@ def test_memory_target_tolerates_one_resident_worker(carry_worker, monkeypatch):
         return {"done": 1}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991, index=1)
     assert state.closed and state.events == ["extract"]
 
@@ -879,7 +951,10 @@ def test_repeated_carry_failure_backs_off_without_sending_again(carry_worker, mo
             state.alive = False
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
     backlog.worker(991)
     assert delays == [2, 4, 8, 16, 32, 60, 60]
@@ -967,6 +1042,7 @@ def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker,
     measured = dict(zip(backlog._TRANSPORT_SECONDS, (12.125, 7.5, 4, 0)))
     detail = {"kind": "jev", "transport_s": 3.25, "reacquire_s": 5, "window_s": 6}
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {"done": 1})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     def semantic(*args, **kwargs):
         state.alive = False
         return {"done": 0, "transport": {**measured, "private": "synthetic-private-detail"},
@@ -1012,6 +1088,7 @@ def test_ocr_failure_yields_the_next_extract_turn_to_chat(carry_worker, monkeypa
 
     monkeypatch.setattr(attachment_inference, 'run_pending', ocr)
     monkeypatch.setattr(extract_llm, 'run_pending', chat)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     backlog.worker(991)
     assert state.events == ['ocr', 'semantic', 'extract']
     assert state.closed

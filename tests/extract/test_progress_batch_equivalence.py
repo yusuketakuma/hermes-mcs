@@ -1,4 +1,10 @@
 """Synthetic, same-snapshot equivalence for single and batched progress."""
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_runner
+import extract_llm_source_contract
+import extract_llm_store
 import json
 import sqlite3
 
@@ -22,7 +28,10 @@ QUALITY = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
 def ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', llm._WRITER_STATE)
     monkeypatch.setattr(llm, "_rerender_cards", lambda *a, **k: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', llm._rerender_cards)
     db = make_ledger(tmp_path)
     db.ensure_patient(1)
     db.ensure_patient(2)
@@ -146,6 +155,10 @@ def test_iterative_progress_counts_normal_split_tree_and_quality_pending(ledger,
     splits = {0: 4, '0:0': 2}
     saved = {'0:0:0': {}, '0:0:1': {'_quality_status': 'pending'}, '0:1': {}}
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: (splits, saved))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     result = compare(ledger.db, [row, row])
     assert all((r['completed'], r['total']) == (2, 3) for r in result)
 
@@ -154,11 +167,22 @@ def test_multiple_roots_hold_only_above_exact_node_limit(ledger, monkeypatch):
     row = source(ledger, 1, body='ABCDEFGH')
     # Two four-character roots: root 0 and its two children, then root 1.
     monkeypatch.setattr(llm, '_saved_chunk_size', lambda *a, **k: 4)
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_size', llm._saved_chunk_size)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_size', llm._saved_chunk_size)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_size', llm._saved_chunk_size)
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 2}, {}))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 4)
+    monkeypatch.setattr(extract_llm_progress, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
+    monkeypatch.setattr(extract_llm_proofs, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
     within = compare(ledger.db, [row, row])
     assert all((r['completed'], r['total']) == (0, 3) for r in within)
     monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 3)
+    monkeypatch.setattr(extract_llm_progress, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
+    monkeypatch.setattr(extract_llm_proofs, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
     held = compare(ledger.db, [row, row])
     assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in held)
 
@@ -167,7 +191,13 @@ def test_multiple_roots_hold_only_above_exact_node_limit(ledger, monkeypatch):
 def test_saved_parent_takes_precedence_over_split_for_progress(ledger, monkeypatch, saved, expected_completed):
     row = source(ledger, 1, body='ABCDEFGH')
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 4}, {0: saved}))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 1)
+    monkeypatch.setattr(extract_llm_progress, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
+    monkeypatch.setattr(extract_llm_proofs, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
     result = compare(ledger.db, [row, row])
     assert all((r['completed'], r['total']) == (expected_completed, 1) for r in result)
 
@@ -175,6 +205,10 @@ def test_saved_parent_takes_precedence_over_split_for_progress(ledger, monkeypat
 def test_empty_body_does_not_create_a_completed_empty_root(ledger, monkeypatch):
     row = source(ledger, 1, body='')
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: pytest.fail('empty source loaded chunks'))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     result = compare(ledger.db, [row, row])
     assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in result)
 
@@ -192,6 +226,10 @@ def test_deep_valid_split_path_counts_without_python_recursion(ledger, monkeypat
     # untrusted path bypasses the existing checkpoint loader in production.
     assert llm._chunk_piece(body, llm._CHUNK_SIZE, key, splits) == 'A'
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: (splits, {}))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     results = compare(ledger.db, [row, row])
     assert all((r['completed'], r['total']) == (0, len(body)) for r in results)
     assert all(r['state'] != 'complete' for r in results)
@@ -201,12 +239,20 @@ def test_progress_node_limit_holds_even_a_valid_final_and_keeps_caller_transacti
     row = source(ledger, 1, body='ABCDEFGH')
     final(ledger, row)
     monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 4}, {}))
+    monkeypatch.setattr(extract_llm_prepare, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_progress, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_proofs, '_saved_chunk_state', llm._saved_chunk_state)
+    monkeypatch.setattr(extract_llm_store, '_saved_chunk_state', llm._saved_chunk_state)
     ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-change' WHERE project_id=1")
     try:
         monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 3)
+        monkeypatch.setattr(extract_llm_progress, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
+        monkeypatch.setattr(extract_llm_proofs, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
         within = compare(ledger.db, [row, row])
         assert all(r['state'] == 'complete' and r['total'] == 2 for r in within)
         monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 2)
+        monkeypatch.setattr(extract_llm_progress, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
+        monkeypatch.setattr(extract_llm_proofs, '_PROGRESS_MAX_NODES', llm._PROGRESS_MAX_NODES)
         held = compare(ledger.db, [row, row])
         assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in held)
         assert ledger.db.in_transaction
@@ -336,6 +382,7 @@ def test_materialized_shared_rows_are_copied_before_batch_probes(ledger, monkeyp
         return probe(db, probes)
 
     monkeypatch.setattr(llm, "_batch_progress_probes", mutate_after_entry)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     assert llm.progress_for_messages(ledger.db, [shared] * 64, model=MODEL) == [expected] * 64
     assert called and shared["body_state"] == "deleted"
 
@@ -419,7 +466,9 @@ def test_failed_batch_preserves_earlier_single_decision_error(ledger, monkeypatc
         raise RuntimeError("synthetic-later-row-error")
 
     monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     monkeypatch.setattr(llm, "_progress_probe", original_order)
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', llm._progress_probe)
     with pytest.raises(ValueError, match="synthetic-earlier-held-error"):
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
 
@@ -431,6 +480,7 @@ def test_batch_only_error_is_not_hidden_when_single_replay_succeeds(ledger, monk
         raise RuntimeError("synthetic-batch-only-error")
 
     monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     with pytest.raises(RuntimeError, match="synthetic-batch-only-error"):
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
 
@@ -439,6 +489,7 @@ def test_progress_cleanup_keeps_borrowed_transaction_on_success_and_failure(ledg
     row = source(ledger, 1)
     ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-pending' WHERE project_id=1")
     monkeypatch.setattr(llm, "_progress_page", lambda *_: [{"state": "attention"}])
+    monkeypatch.setattr(extract_llm_progress, '_progress_page', llm._progress_page)
     assert llm.progress_for_messages(ledger.db, [row], model=MODEL) == [{"state": "attention"}]
     error = ValueError("synthetic progress failure")
 
@@ -446,6 +497,7 @@ def test_progress_cleanup_keeps_borrowed_transaction_on_success_and_failure(ledg
         raise error
 
     monkeypatch.setattr(llm, "_progress_page", fail)
+    monkeypatch.setattr(extract_llm_progress, '_progress_page', llm._progress_page)
     with pytest.raises(ValueError) as caught:
         llm.progress_for_messages(ledger.db, [row], model=MODEL)
     assert caught.value is error and ledger.db.in_transaction
@@ -457,6 +509,7 @@ def test_progress_cleanup_keeps_borrowed_transaction_on_success_and_failure(ledg
 def test_progress_success_does_not_hide_release_failure(ledger, monkeypatch):
     row = source(ledger, 1)
     monkeypatch.setattr(llm, "_progress_page", lambda *_: [{"state": "attention"}])
+    monkeypatch.setattr(extract_llm_progress, '_progress_page', llm._progress_page)
     ledger.db.set_authorizer(lambda action, arg1, arg2, *_: sqlite3.SQLITE_DENY
                              if action == sqlite3.SQLITE_SAVEPOINT and arg1 == "RELEASE"
                              and arg2 == "extract_progress_batch" else sqlite3.SQLITE_OK)
@@ -484,7 +537,9 @@ def test_progress_auto_rollback_preserves_error_and_does_not_replay(ledger, monk
         raise error
 
     monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     monkeypatch.setattr(llm, "_progress_probe", lambda *_: replay.append(True))
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', llm._progress_probe)
     with pytest.raises(error_type) as caught:
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
     assert caught.value is error and getattr(caught.value, "sqlite_errorcode", None) == code
@@ -513,8 +568,11 @@ def test_classified_sql_error_keeps_original_ordered_single_fallback(ledger, mon
         return "synthetic binding"
 
     monkeypatch.setattr(llm, "_progress_steps", steps)
+    monkeypatch.setattr(extract_llm_progress, '_progress_steps', llm._progress_steps)
     monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     monkeypatch.setattr(llm, "_progress_probe", probe)
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', llm._progress_probe)
     with pytest.raises(ValueError) as caught:
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
     assert caught.value is earlier and visited == [1, 2]
@@ -532,7 +590,9 @@ def test_interrupted_batch_is_not_replayed(ledger, monkeypatch, code):
         raise error
 
     monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     monkeypatch.setattr(llm, "_progress_probe", lambda *args: replay.append(True))
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', llm._progress_probe)
     with pytest.raises(sqlite3.OperationalError, match="synthetic-interrupted"):
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
     assert not replay
@@ -556,8 +616,11 @@ def test_interrupted_decision_stage_does_not_finish_earlier_rows(ledger, monkeyp
         return {"state": "attention"}
 
     monkeypatch.setattr(llm, "_progress_steps", steps)
+    monkeypatch.setattr(extract_llm_progress, '_progress_steps', llm._progress_steps)
     monkeypatch.setattr(llm, "_batch_progress_probes", lambda _db, probes: [False] * len(probes))
+    monkeypatch.setattr(extract_llm_progress, '_batch_progress_probes', llm._batch_progress_probes)
     monkeypatch.setattr(llm, "_progress_probe", lambda *_args: replay.append(True))
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', llm._progress_probe)
     with pytest.raises(sqlite3.OperationalError, match="synthetic-interrupted-decision") as caught:
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
     assert caught.value is error and not replay

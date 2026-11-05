@@ -394,7 +394,8 @@ def test_confirmed_own_checkout_is_kept_and_venv_rebuilt(tmp_path, case):
 
 def test_installer_judges_with_the_shared_script():
     from pathlib import Path
-    text = (Path(__file__).resolve().parents[2] / "install.sh").read_text()
+    text = ((Path(__file__).resolve().parents[2] / "install.sh").read_text()
+            + (Path(__file__).resolve().parents[2] / "deployment/install/runtime.sh").read_text())
     assert '"$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"' in text
 
 

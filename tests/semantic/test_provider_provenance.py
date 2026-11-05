@@ -1,4 +1,16 @@
 """Synthetic checks for stage-scoped provider observations."""
+import extract_llm_context
+import extract_llm_engine
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
+import semantic_due_selection
+import semantic_job_processor
 
 import pytest
 import cloud_inference
@@ -401,9 +413,26 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
         cfg = _cfg("assist", fact_source="shadow", summary_mode="shadow", loop_mode="shadow")
         cfg["cloud_llm"] = {"mode": "on", "project_ids": [1]}
         monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+        monkeypatch.setattr(extract_llm_engine, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
+        monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
+        monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+        monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
         monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
+        monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
+        monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
         monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(cloud_backlog, "request_slot", lambda *_: nullcontext(True))
@@ -456,6 +485,7 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
             pytest.fail("the second chunk must be deferred before dispatch")
 
         monkeypatch.setattr(semantic_drain, "_process_job_inner", stages)
+        monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
         status = semantic_drain._process_job(
             ledger, semantic_drain.runtime_config(cfg)[0], job, None,
             lambda *_a, **_kw: pytest.fail("local inference must not run"), deadline,

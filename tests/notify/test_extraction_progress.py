@@ -1,4 +1,5 @@
 """Private extraction status contains current bound counts, never source or chunk text."""
+import extract_llm_selection
 import pytest
 
 import extraction_progress
@@ -24,6 +25,7 @@ def test_private_summary_uses_only_validated_counts_and_no_checkpoint_text(led, 
         return {**states[row["message_id"]], "content": "CHUNK_CANARY", "body": "SOURCE_CANARY"}
 
     monkeypatch.setattr(extract_llm, "progress_for_message", read, raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     led.db.execute("PRAGMA query_only=ON")
     progress = extraction_progress.patient_progress(led.db, 1, cfg={})
     assert progress == {"processing": 1, "complete": 1, "attention": 1, "unknown": 0,
@@ -47,6 +49,7 @@ def test_canonical_active_never_falls_back_to_completed_legacy(led, monkeypatch)
     _msg(led, 1)
     calls = []
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: pytest.fail("legacy fallback"), raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
 
     def semantic_reader(db, row, **kwargs):
         calls.append(kwargs)
@@ -69,6 +72,7 @@ def test_unknown_configuration_is_attention_not_complete(led, monkeypatch, cfg):
     _patient(led)
     _msg(led, 1)
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: pytest.fail("unbound reader"), raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
     assert progress["unknown"] == 1 and progress["attention"] == progress["complete"] == 0
 
@@ -84,6 +88,7 @@ def test_unfetched_or_partial_source_cannot_be_complete(led, monkeypatch, fault)
             led.db.execute("UPDATE messages SET body_state=? WHERE message_id=1",
                            (None if fault == "null" else "snippet",))
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: pytest.fail("partial source"), raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     progress = extraction_progress.patient_progress(led.db, 1, cfg={})
     assert progress["unknown"] == 1 and progress["attention"] == progress["complete"] == 0
     # an unfetched post is shown as unknown, never as a finding (要確認)
@@ -96,6 +101,7 @@ def test_malformed_backend_result_does_not_claim_completion(led, monkeypatch, re
     _patient(led)
     _msg(led, 1)
     monkeypatch.setattr(extract_llm, "progress_for_message", lambda *a, **k: reply, raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     progress = extraction_progress.patient_progress(led.db, 1, cfg={})
     assert progress["unknown"] == 1 and progress["complete"] == 0
 
@@ -115,6 +121,7 @@ def test_newest_twenty_scope_is_explicit_and_other_patient_deleted_posts_exclude
         return {"state": "complete", "completed": 1, "total": 1}
 
     monkeypatch.setattr(extract_llm, "progress_for_message", read, raising=False)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     lines = extraction_progress.summary_lines(led.db, 1, cfg={})
     assert seen == list(range(22, 2, -1))
     assert "最新20投稿" in lines[0] and "完了20" in lines[0]

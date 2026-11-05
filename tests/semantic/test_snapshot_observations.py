@@ -1,4 +1,5 @@
 """Synthetic imported receipts are bound before predictions are sealed."""
+import extract_llm_runner
 import semantic_facts
 import semantic_transport
 import copy
@@ -107,6 +108,7 @@ def test_generated_chain_seals_imported_receipts_and_rejects_later_change(tmp_pa
     import semantic_extraction
     record, documents, cfg = fixture(tmp_path)
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **kw: {'urgency': 'high'})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     def extract(chat, member, deadline, **kw):
         assert kw['jev_client'] is None
         assert kw['source_fingerprint'] == record['sealed_observations']['bundle']['source_fingerprint']
@@ -176,6 +178,7 @@ def test_complete_synthetic_generation_can_measure_every_required_metric(tmp_pat
     from pathlib import Path
     record, documents, cfg = fixture(tmp_path, full=True)
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **kw: {'urgency': 'high'})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(local_llm, 'chat', lambda *a, **kw: {
         'text': '{}', 'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15}})
     def extract(chat, *args, **kwargs):
@@ -260,6 +263,7 @@ def test_real_origin_needs_separate_bound_authorization(tmp_path, monkeypatch):
                'authorized_at': '2026-10-17'}
     source['authorization_receipt_sha256'] = payload_hash(receipt)
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', lambda *a, **k: copy.deepcopy(docs[0]))
     with pytest.raises(EvaluationError, match='authorization_receipt_mismatch'):
         snapshot.generate(source, cfg)
@@ -354,6 +358,7 @@ def test_multi_member_runtime_target_receipts_do_not_require_context_finals(tmp_
         return {'urgency': 'high'}
     monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', extract)
     monkeypatch.setattr(extract_llm, 'llm_extract', ab)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     source = {'records': [record], 'data_origin': 'synthetic', 'manifest': {
         **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}
     run = snapshot.generate(source, cfg)
@@ -411,6 +416,7 @@ def test_generated_envelope_tampering_is_rejected_before_scoring(tmp_path, monke
     import semantic_extraction
     record, docs, cfg = fixture(tmp_path)
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *a, **k: {})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(semantic_extraction, 'extract_facts_v2', lambda *a, **k: copy.deepcopy(docs[0]))
     source = {'records': [record], 'data_origin': 'synthetic', 'manifest': {
         **MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout_payload([record]))}}

@@ -1,4 +1,5 @@
 """Structured display preserves typed exclusions and source attribution."""
+import extract_llm_selection
 import json
 
 import pytest
@@ -55,6 +56,7 @@ def test_marked_current_extract_requires_exact_proof_without_resurrecting_older(
         return {'state': 'complete'}
 
     monkeypatch.setattr(extract_llm, 'progress_for_message', progress)
+    monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
     db.db.execute('PRAGMA query_only=ON')
     before, transaction = db.db.total_changes, db.db.in_transaction
     try:
@@ -66,6 +68,7 @@ def test_marked_current_extract_requires_exact_proof_without_resurrecting_older(
             assert structured_view.fact_generations(db.db, [1])[1]['extract_llm'] == selected
             assert 'SYNTHETIC_PRIVATE_PROOF' not in json.dumps(mcs_queries.current_extraction_blobs(db.db, 1))
             monkeypatch.setattr(extract_llm, 'progress_for_message', lambda *_a, **_k: {'state': 'attention'})
+            monkeypatch.setattr(extract_llm_selection, 'progress_for_message', extract_llm.progress_for_message)
         else:
             assert result is None and not calls
         assert mcs_queries.current_message_extract(db.db, 'extract_llm', 1) is None

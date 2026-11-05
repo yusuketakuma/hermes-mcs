@@ -4,6 +4,7 @@ from collections import Counter
 import pytest
 
 import notify_cards
+import notify_card_renders
 import notify_render
 from notify_testkit import (
     CFG, NOW, _begin, _card, _dispatch, _intent, _latest_render,
@@ -80,8 +81,8 @@ def test_build_spec_shares_read_choices_but_mints_fresh_tokens(led, monkeypatch,
     def search(*_args):
         calls["search"] += 1
         return available
-    monkeypatch.setattr(notify_cards.action_context, "meds_message", meds)
-    monkeypatch.setattr(notify_cards, "drug_search_available", search)
+    monkeypatch.setattr(notify_card_renders.action_context, "meds_message", meds)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", search)
     tokens = []
     for rev in (2, 3):
         with led.db:

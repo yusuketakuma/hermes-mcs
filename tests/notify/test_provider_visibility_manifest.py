@@ -1,5 +1,6 @@
 """Provider visibility stays bound to each synthetic notification manifest."""
 import json
+import notify_card_renders
 from types import SimpleNamespace
 
 import pytest
@@ -123,7 +124,7 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
     registered = {"MCS_ANTHROPIC_API_KEY"}
     monkeypatch.setattr(processing_route.mcs_util, "private_env_problem",
                         lambda key, root=None: None if key in registered else "missing")
-    original_content = notify_cards.card_content
+    original_content = notify_card_renders.card_content
 
     if legacy:
         def legacy_content(*args, **kwargs):
@@ -135,7 +136,7 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
                 item.pop("provider_sequence", None)
             return content
 
-        monkeypatch.setattr(notify_cards, "card_content", legacy_content)
+        monkeypatch.setattr(notify_card_renders, "card_content", legacy_content)
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
     first = _latest_render(led)
@@ -144,7 +145,7 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
     assert validate(original) is original
     _deliver(led, first)
 
-    monkeypatch.setattr(notify_cards, "card_content", original_content)
+    monkeypatch.setattr(notify_card_renders, "card_content", original_content)
     registered.clear()
     registered.add("MCS_OPENAI_API_KEY")
     with led.db:

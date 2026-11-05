@@ -1,4 +1,16 @@
 """Local-only cloud estimates and receipt-based global controls with synthetic data."""
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_selection
+import extract_llm_store
+import setup_config_snapshot
+import setup_integration
 import patient_context_plan as context_plan
 from contextlib import closing
 from datetime import datetime
@@ -405,6 +417,7 @@ def test_control_cli_holds_lock_for_receipt_and_releases_after_exception(world, 
 def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, monkeypatch, capsys):
     root, _, _ = world
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(root / ".env"))
+    monkeypatch.setattr(setup_integration, "ENV_PATH", str(root / ".env"))
     monkeypatch.setenv("MCS_ANTHROPIC_API_KEY", "synthetic-incoming-key")
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), "synthetic") is None
@@ -537,8 +550,20 @@ def test_current_context_targets_follow_runtime_signatures_without_message_times
     if change == "rule_version":
         # a code release alone keeps cloud contexts current; a rule version rebuilds them
         monkeypatch.setattr(extract_llm, "_upgrade_contract", lambda: "f" * 64)
+        monkeypatch.setattr(extract_llm_qc, '_upgrade_contract', extract_llm._upgrade_contract)
+        monkeypatch.setattr(extract_llm_store, '_upgrade_contract', extract_llm._upgrade_contract)
         assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
         monkeypatch.setattr(extract_llm, "EXTRACT_VERSION", extract_llm.EXTRACT_VERSION + 1)
+        monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_prepare, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_progress, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_proofs, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_provider, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_qc, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
+        monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
     else:
         with closing(Ledger(str(path))) as db:
             if change == "extraction":
@@ -1039,6 +1064,7 @@ def test_api_menu_accepts_only_its_own_verified_config_save(tmp_path, monkeypatc
     config_path.chmod(0o600)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config_path))
+    monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(config_path))
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_util, "CONF_PATH", str(config_path))
 

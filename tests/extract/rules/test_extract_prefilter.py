@@ -5,6 +5,7 @@ is settled with a durable meta.prefilter='no_signal' marker instead of
 an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
 """
+import extract_llm_runner
 import llm_availability
 import extract_validation
 import json
@@ -48,6 +49,7 @@ def test_no_signal_message_marked_without_llm(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extract_llm, "llm_extract",
         lambda body, **_: calls.append(body) or {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
 
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
 
@@ -69,6 +71,7 @@ def test_prefilter_marker_leaves_pending(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "unreachable"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
 
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["skipped"] == 1
@@ -82,6 +85,7 @@ def test_body_edit_reenters_queue(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     extract_llm.run_pending(db, limit=10, budget_s=30)
     assert db.db.execute(
         "SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'"
@@ -101,6 +105,7 @@ def test_manifest_admitted_rows_bypass_prefilter(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
 
     res = extract_llm.run_pending(db, limit=10, budget_s=30,
                                   admitted_ids={1})
@@ -114,6 +119,7 @@ def test_env_off_disables_prefilter(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 1 and res["skipped"] == 0
     db.close()
@@ -126,6 +132,7 @@ def test_v1_artifact_written_for_filtered_body(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。")])
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     extract_llm.run_pending(db, limit=10, budget_s=30)
     rows = db.db.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_v1'"
@@ -139,7 +146,9 @@ def test_v1_artifact_written_for_filtered_body(tmp_path, monkeypatch):
 def _endpoint_dead(monkeypatch):
     """LLM calls return nothing and the endpoint probe reports dead."""
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **_: False)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
 
 def test_circuit_trips_after_repeated_endpoint_down(tmp_path, monkeypatch):
@@ -154,6 +163,7 @@ def test_circuit_trips_after_repeated_endpoint_down(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: calls.append(body))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert calls == []                       # lane closed — no claims
     assert res["circuit_open_s"] is not None and res["done"] == 0
@@ -177,6 +187,7 @@ def test_circuit_resets_on_answered_call(tmp_path, monkeypatch):
     llm_availability.circuit_state_path(db.db).unlink()
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 1
     assert not llm_availability.circuit_state_path(db.db).exists()
@@ -190,6 +201,7 @@ def test_disk_guard_defers_llm_lane(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: calls.append(body))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
 
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert calls == [] and res["done"] == 0
@@ -208,6 +220,7 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: calls.append(body))
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["skipped"] == 1 and calls == []
     meta = json.loads(_artifacts(db, 1)[0]["meta"])
@@ -250,6 +263,7 @@ def test_eol_body_reaches_llm_not_prefilter(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extract_llm, "llm_extract",
         lambda body, **_: calls.append(body) or {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["skipped"] == 0 and calls == ["昨日亡くなりました。"]
     db.close()
@@ -269,6 +283,7 @@ def test_replies_and_keyword_free_details_reach_inference(tmp_path, monkeypatch,
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract", lambda text, **kw:
                         calls.append(text) or {"summary": "完全合成の抽出結果"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     result = extract_llm.run_pending(db, limit=1, budget_s=30)
     assert result["done"] == 1 and result["skipped"] == 0 and calls == [body]
     db.close()

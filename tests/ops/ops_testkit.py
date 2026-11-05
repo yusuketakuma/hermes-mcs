@@ -4,6 +4,12 @@ message/extract_v1 row writers, the updater's temp git repos, schema
 DBs and restore-consent receipts, and the path loader for the
 repo-external recovery tool.  Not a test module (no ``test_`` prefix);
 sibling files import it via the tests/ sys.path bootstrap."""
+import update_execution
+import update_lifecycle_context
+import update_planning
+import update_preflight
+import update_recovery
+import update_restore
 import restore_evidence
 import hashlib
 import importlib.util
@@ -214,6 +220,12 @@ def select_updater_service_python(monkeypatch, updater, python):
     factory = updater._service_paths
     monkeypatch.setattr(updater, "_service_paths",
                         lambda: replace(factory(), hermes_python=python))
+    monkeypatch.setattr(update_execution, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_lifecycle_context, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_planning, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_preflight, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_recovery, '_service_paths', updater._service_paths)
+    monkeypatch.setattr(update_restore, '_service_paths', updater._service_paths)
 
 
 class _FakeLaunchd:

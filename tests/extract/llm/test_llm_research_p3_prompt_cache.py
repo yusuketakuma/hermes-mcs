@@ -1,12 +1,16 @@
 """Prompt layouts keep their fixed head first so llama.cpp's per-slot
 prefix cache is reusable; cache_hit_ratio aggregates Σcache_n/(Σcache_n+Σprompt_n)."""
+import extract_llm_engine
+import extract_llm_runner
+
+import patient_context_quality_controller
+import patient_context_refresh_state
 import semantic_assembly as assembly
 import json
 import os
 import sys
 
 import extract_llm
-import patient_context_refresh
 import semantic_extraction as extraction
 import semantic_llm
 from test_semantic_facts_v2 import FP
@@ -21,6 +25,8 @@ def test_single_batch_repair_share_fixed_leading_bytes(monkeypatch):
         prompts.append(prompt)
         return {"symptoms": [], "summary": "合成"}
     monkeypatch.setattr(extract_llm, "_llm_call", call)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     body = "合成の短い本文です。"
     extract_llm.llm_extract(body, context="文脈A", posted_at=POSTED)
     extract_llm.llm_extract(body, context="文脈B", hints={"meds": []}, posted_at=POSTED)
@@ -46,6 +52,8 @@ def test_split_piece_repair_puts_fixed_head_before_reference(monkeypatch):
             return {"summary": "合成"}
         return {"meds": [{"name": "薬剤A", "evidence": "ない引用", "subject": "patient"}]}
     monkeypatch.setattr(extract_llm, "_llm_call", call)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
+    monkeypatch.setattr(extract_llm_runner, '_llm_call', extract_llm._llm_call)
     extract_llm.llm_extract(body, posted_at=POSTED, chunk_size=100)
     repair = next(p for p in prompts if "前回出力" in p)
     assert repair.startswith(extract_llm._REPAIR_HEAD)
@@ -75,16 +83,16 @@ def test_context_refresh_prompts_lead_with_the_fixed_instruction(monkeypatch):
 
     def ask(cfg, payload, deadline, admit):
         payloads.append(payload)
-        raise patient_context_refresh.Deferred("captured")
-    monkeypatch.setattr(patient_context_refresh, "_ask", ask)
+        raise patient_context_refresh_state.Deferred("captured")
+    monkeypatch.setattr(patient_context_quality_controller, "_ask", ask)
     fact = {"id": "f1", "source": "s", "project_id": 1, "message_id": 1, "category": "living",
             "text": "合成の背景", "posted_at": POSTED, "subject": "patient"}
-    for fn, args in ((patient_context_refresh._summary, ({}, [fact], None, lambda: True)),
-                     (patient_context_refresh._scan, ({}, {"body_text": "合成の本文", "items": []},
+    for fn, args in ((patient_context_quality_controller._summary, ({}, [fact], None, lambda: True)),
+                     (patient_context_quality_controller._scan, ({}, {"body_text": "合成の本文", "items": []},
                                               {}, "n1", None, lambda: True))):
         try:
             fn(*args)
-        except patient_context_refresh.Deferred:
+        except patient_context_refresh_state.Deferred:
             pass
     assert list(payloads[0]) == ["instruction", "reports"]
     assert list(payloads[1])[:2] == ["instruction", "categories"]

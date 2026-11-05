@@ -1,6 +1,17 @@
 """Extraction retries a result whose per-write lock wait timed out,
 carries it across resident run_pending calls, and the --lane CLI maps
 lanes to wire slots."""
+import extract_llm_carry
+import extract_llm_context
+import extract_llm_errors
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_source_contract
+import extract_llm_store
 import writer_lock
 import json
 import os
@@ -36,7 +47,10 @@ def _lock_stub(monkeypatch, tmp_path, blocked_after_call):
                 "symptoms": [{"text": "咳"}]}
 
     monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', extract_llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', extract_llm.acquire_run_lock)
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: None)
     return state
 
@@ -87,8 +101,15 @@ def test_writer_generation_change_is_not_misreported_as_lock_contention(tmp_path
         return result
 
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda *, full=False:
                         not (full and updated[0]) and original_current(full=full))
+    monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_resident, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_runner, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_selection, '_writer_current', extract_llm._writer_current)
+    monkeypatch.setattr(extract_llm_source_contract, '_writer_current', extract_llm._writer_current)
     try:
         res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True)
         assert res["deferred"] == 1 and res["defer_reasons"] == {"write_unavailable": 1}
@@ -142,6 +163,8 @@ def test_carried_result_near_lease_expiry_is_dropped(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     state, carry = _carry_one(db, monkeypatch, tmp_path)
     monkeypatch.setattr(extract_llm, "_CARRY_MARGIN_S", 10 ** 6)
+    monkeypatch.setattr(extract_llm_carry, '_CARRY_MARGIN_S', extract_llm._CARRY_MARGIN_S)
+    monkeypatch.setattr(extract_llm_runner, '_CARRY_MARGIN_S', extract_llm._CARRY_MARGIN_S)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                   write_wait_s=1, carry=carry)
     assert res["deferred"] == 1 and res["carried"] == 0 and res["carry"] == []
@@ -270,6 +293,8 @@ def test_transient_error_after_a_renewal_keeps_the_renewed_lease(tmp_path, monke
         return original(ledger, row, lease)
 
     monkeypatch.setattr(extract_llm, "_renew", interrupted_renew)
+    monkeypatch.setattr(extract_llm_carry, '_renew', extract_llm._renew)
+    monkeypatch.setattr(extract_llm_runner, '_renew', extract_llm._renew)
     with pytest.raises(sqlite3.OperationalError):
         if settle:
             extract_llm._settle_carry(db, carry, final=False)
@@ -277,6 +302,8 @@ def test_transient_error_after_a_renewal_keeps_the_renewed_lease(tmp_path, monke
             extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                     write_wait_s=1, carry=carry)
     monkeypatch.setattr(extract_llm, "_renew", original)
+    monkeypatch.setattr(extract_llm_carry, '_renew', extract_llm._renew)
+    monkeypatch.setattr(extract_llm_runner, '_renew', extract_llm._renew)
     assert sorted(_claims(db)) == sorted(lease for _r, lease, _c in carry)
     state["blocked"] = 0
     extract_llm._settle_carry(db, carry, final=False)
@@ -337,11 +364,20 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "2", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(extract_llm.local_llm.TURN_LOCK_ENV, raising=False)
     seen, settled = [], []
@@ -355,8 +391,11 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
                 "carry": [("row", 0.0, "commit%d" % len(seen))]}
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry",
                         lambda led, carry, **kw: settled.append(list(carry)))
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     assert extract_llm.main() == 0
     turn_lock = os.path.join(extract_llm.HOME, "data", "llm_turn.lock")
     wire = str(extract_llm.local_llm.LANES[2])
@@ -372,6 +411,14 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
 @pytest.mark.parametrize("lane", ["1", "4"])
 def test_unknown_lane_is_rejected(monkeypatch, capsys, lane):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--lane", lane])
@@ -396,9 +443,18 @@ def test_real_carry_is_not_serialized_or_crashes_resident(monkeypatch):
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--stop-after", "10"])
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(extract_llm.local_llm.TURN_LOCK_ENV, raising=False)
     settled = []
@@ -408,8 +464,11 @@ def test_real_carry_is_not_serialized_or_crashes_resident(monkeypatch):
         return {"done": 0, "failed": 0, "left": 1, "selected": 1,
                 "carry": [({"body_text": "完全合成の投稿"}, 123.0, lambda: None)]}
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_settle_carry",
                         lambda led, carry, **kw: settled.append(len(carry)))
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     assert extract_llm.main() == 0
     assert settled == [1]
 
@@ -451,10 +510,21 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
     state["blocked"] = 0
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic", "--stop-after", "10"])
     reached = []
 
@@ -465,10 +535,12 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
 
     def updated(*args):
         pytest.fail("a completed result waiting for its save must not start semantic work")
     monkeypatch.setattr(extract_llm, "_background_semantic", updated)
+    monkeypatch.setattr(extract_llm_resident, '_background_semantic', extract_llm._background_semantic)
     assert extract_llm.main() == 0
     assert reached == ["run_pending", "updated"]
     assert db.artifacts("extract_llm", message_id=1) == []
@@ -485,10 +557,21 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
     state["blocked"] = 0
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
 
     reached = []
@@ -498,8 +581,10 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a: {"status": "deferred", "done": 0})
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', extract_llm._background_context_refresh)
     assert extract_llm.main() == 0
     assert reached == ["run_pending"]
     assert db.artifacts("extract_llm", message_id=1) == []
@@ -515,11 +600,22 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
     _state, carry = _carry_one(db, monkeypatch, tmp_path)
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *args: db)
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     generation = [123]
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, generation[0]))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
     armed = [False]
@@ -536,17 +632,21 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
         lock_attempts.append("acquired_after_update")
         return os.open(tmp_path / "settle.lock", os.O_CREAT | os.O_RDWR)
     monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', extract_llm.acquire_run_lock)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', extract_llm.acquire_run_lock)
 
     def run(*args, **kwargs):
         armed[0] = True
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
 
     def context_refresh(ledger, initial, stop):
         return {"status": "off", "done": 0, **(
             {"run_lock_lost": "updated"}
             if writer_lock.updater_state() != initial else {})}
     monkeypatch.setattr(extract_llm, "_background_context_refresh", context_refresh)
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', extract_llm._background_context_refresh)
     try:
         assert extract_llm.main() == 0
         assert lock_attempts[:2] == [
@@ -565,11 +665,13 @@ def test_failure_write_waits_for_lock_instead_of_skipping(tmp_path, monkeypatch)
     db.save_messages([_message(body="合成の本文です。" * 20)])
     state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     def extract(body, **_kw):
         state["blocked"] = 10   # longer than the resident wait, shorter than 60
         return None
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                   write_wait_s=extract_llm._RESIDENT_WRITE_WAIT_S,
                                   carry=[])
@@ -589,15 +691,27 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
+    monkeypatch.setattr(extract_llm_runner, '_WRITER_STATE', extract_llm._WRITER_STATE)
+    monkeypatch.setattr(extract_llm_source_contract, '_WRITER_STATE', extract_llm._WRITER_STATE)
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, 'Ledger', extract_llm.Ledger)
     monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a: {"status": "off", "done": 0})
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh', extract_llm._background_context_refresh)
     settles = []
 
     def settle(led, carry, **kw):
@@ -605,8 +719,11 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
         if len(settles) == 1:
             raise sqlite3.OperationalError("database is locked")
     monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
         "done": 1, "failed": 0, "left": 1, "selected": 1, "carry": []})
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
     assert extract_llm.main() == 0
     assert "extract_loop_error" in capsys.readouterr().err
     assert len(settles) >= 3   # raised, retried, exit settle

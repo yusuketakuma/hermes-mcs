@@ -1,4 +1,13 @@
 """Synthetic update-plan and backup disk-capacity boundaries."""
+import update_apply
+import update_cli
+import update_execution
+import update_planning
+import update_preflight
+import update_recovery
+import update_repository
+import update_restore
+import update_runtime_migration
 import os
 from types import SimpleNamespace
 
@@ -36,24 +45,58 @@ def capacity(updater, tmp_path, monkeypatch):
     # unrelated config, git, service, and installed-database lookup.
     monkeypatch.setattr(updater.mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(updater, "_current_version", lambda: ("v1.0.0", "a" * 40))
+    monkeypatch.setattr(update_cli, '_current_version', updater._current_version)
+    monkeypatch.setattr(update_planning, '_current_version', updater._current_version)
     monkeypatch.setattr(updater.journal_store, "load_state", lambda path: {})
     monkeypatch.setattr(updater.restore_evidence, "database_version", lambda path: 1)
     monkeypatch.setattr(updater, "_git_out", lambda *a, **k: "b" * 40)
+    monkeypatch.setattr(update_apply, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_planning, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_preflight, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_recovery, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
+    monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     monkeypatch.setattr(updater, "_git", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(update_apply, '_git', updater._git)
+    monkeypatch.setattr(update_cli, '_git', updater._git)
+    monkeypatch.setattr(update_planning, '_git', updater._git)
+    monkeypatch.setattr(update_preflight, '_git', updater._git)
+    monkeypatch.setattr(update_recovery, '_git', updater._git)
+    monkeypatch.setattr(update_repository, '_git', updater._git)
+    monkeypatch.setattr(update_restore, '_git', updater._git)
+    monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(updater, "precheck_tag", lambda tag: [])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(updater, "_tree_clean", lambda **kwargs: True)
+    monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_preflight, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
+    monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(updater.mcs_config, "validate_config", lambda cfg: ([], {}))
     monkeypatch.setattr(updater.service_management, "runtime_gate_errors", lambda *a, **k: [])
     monkeypatch.setattr(updater.mcs_util, "hermes_exe", lambda cfg: "synthetic-hermes")
     monkeypatch.setattr(updater.runtime_inspection, "executable_available", lambda exe: True)
     monkeypatch.setattr(updater, "_migration_checkout_problem", lambda *a, **k: None)
+    monkeypatch.setattr(update_preflight, '_migration_checkout_problem', updater._migration_checkout_problem)
     monkeypatch.setattr(updater, "_awaiting_consent_marker", lambda: None)
+    monkeypatch.setattr(update_planning, '_awaiting_consent_marker', updater._awaiting_consent_marker)
+    monkeypatch.setattr(update_recovery, '_awaiting_consent_marker', updater._awaiting_consent_marker)
     monkeypatch.setattr(updater.settings_migration_receipt, "pending", lambda data: False)
     monkeypatch.setattr(updater.update_migrations, "plan", lambda *a: (False, None, None))
     monkeypatch.setattr(updater, "_plugin_changed", lambda *a: False)
+    monkeypatch.setattr(update_apply, '_plugin_changed', updater._plugin_changed)
+    monkeypatch.setattr(update_planning, '_plugin_changed', updater._plugin_changed)
     monkeypatch.setattr(updater, "recorded_install_args", lambda: [])
+    monkeypatch.setattr(update_planning, 'recorded_install_args', updater.recorded_install_args)
+    monkeypatch.setattr(update_preflight, 'recorded_install_args', updater.recorded_install_args)
+    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', updater.recorded_install_args)
     monkeypatch.setattr(updater, "upgrade_notes", lambda *a: [])
+    monkeypatch.setattr(update_planning, 'upgrade_notes', updater.upgrade_notes)
     monkeypatch.setattr(updater, "_recovery_notes", lambda *a: [])
+    monkeypatch.setattr(update_planning, '_recovery_notes', updater._recovery_notes)
 
     state.size = source.stat().st_size
     state.updater = updater
