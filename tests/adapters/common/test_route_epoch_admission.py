@@ -7,6 +7,7 @@ from pathlib import Path
 import notify_cards
 import notify_scope
 import notify_spool
+import present_lineworks
 import present_slack
 import notify_cmds
 import pytest
@@ -106,6 +107,7 @@ def _setup(led, tmp_path, monkeypatch, transport):
     monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
     # the scenarios need a pending thread body part on every transport
     monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
+    monkeypatch.setattr(present_lineworks, "CHAT_BODY_ON_FACE", False)
     root = str(tmp_path / "data")
     cfg = _config(transport)
     notify_spool.ensure_dirs(root)

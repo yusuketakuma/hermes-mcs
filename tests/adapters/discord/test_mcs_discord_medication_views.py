@@ -181,12 +181,20 @@ def test_private_medication_navigation_pages_posts_and_rejects_other_origin(worl
     fresh_next = next(button.custom_id for button in back.followup.sent[0]["view"].items
                       if button.label == "次の5件")
     sibling = click(fresh_next, thread_id=thread.id + 1)
-    for denied in (outsider, sibling):
-        assert denied.followup.sent
-        assert all("合成薬6" not in message["content"] for message in denied.followup.sent)
+    # The view is pinned to its clicker: another user gets the private
+    # first-response denial — no command is published, so no receipt or
+    # followup is ever enqueued for them.
+    assert outsider.response.message and outsider.response.message["ephemeral"]
+    assert "合成薬6" not in outsider.response.message["content"]
+    assert not outsider.followup.sent
+    # The same clicker on a foreign thread reaches the runner, which
+    # rejects origin_mismatch; the deferred interaction still gets its
+    # denial text and never the medication list.
+    assert sibling.followup.sent
+    assert all("合成薬6" not in message["content"] for message in sibling.followup.sent)
     errors = {json.loads(row[0]).get("error") for row in world.led.db.execute(
         "SELECT receipt_json FROM command_receipts WHERE outcome='rejected'")}
-    assert "actor_mismatch" in errors and "origin_mismatch" in errors
+    assert "origin_mismatch" in errors and "actor_mismatch" not in errors
     assert all(message["ephemeral"] for interaction in (initial, page, back, older)
                for message in interaction.followup.sent)
     assert thread.sent == shared_body and len(bot.channels[42].sent) == 1

@@ -9,6 +9,7 @@ import pytest
 import notify_cards as cards
 import notify_scope
 import notify_render
+import present_lineworks
 from adapters.common import spec as spec_module
 from adapters.lineworks.delivery import Sender
 from adapters.lineworks import cards as lw_cards
@@ -72,6 +73,25 @@ def test_lw_reuses_card_and_tokens_on_stamp_only_update(led):
     import pytest
     with pytest.raises(ValueError, match="prior_remote"):
         lw_cards.validate(invalid)
+
+
+def test_lw_version_flip_does_not_reuse_legacy_card(led, monkeypatch):
+    """A delivered legacy card never showed the originals a v1 face carries;
+    reusing its remote id would hide them, so the update posts a fresh card."""
+    _seed_thread(led, mids=(100,))
+    monkeypatch.setattr(present_lineworks, "CHAT_BODY_ON_FACE", False)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    first = deliver_lw(led, _latest_render(led))
+    assert "chat_format_version" not in first["parts"]
+    with led.db:
+        led.db.execute("UPDATE message_metadata SET last_error='synthetic_failure' WHERE message_id=100")
+    monkeypatch.setattr(present_lineworks, "CHAT_BODY_ON_FACE", True)
+    with led.db:
+        specs = []
+        cards.issue_render(led.db, 1, LINEWORKS, NOW + 1, specs, force=True)
+    latest = specs[0]
+    assert latest["parts"].get("chat_format_version") == 1
+    assert "prior_remote_id" not in latest["parts"]["manifest"][0]
 
 
 def test_lw_first_summary_wait_expires(led):

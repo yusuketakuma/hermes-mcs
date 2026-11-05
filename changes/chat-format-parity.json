@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "Discord・LINE WORKSの通知カードに投稿原文を表示",
+  "summary": "DiscordとLINE WORKSのスレッドカードで、各投稿の原文をカード面に表示できるようになりました。これまで原文はスレッド内の別投稿に分かれていましたが、投稿ごとの要約・原文・スタンプがカード上でまとまって見えます。",
+  "upgrade": "更新後、Discord/LINE WORKSの通知処理を新しいコードへ切り替えると適用されます。LINE WORKSは独立アダプターの再起動、Hermes plugin経由の場合はgatewayの再起動が必要です。旧形式で配信済みのカードは新版の面と互換がないため再利用せず、新しいカードとして投稿します。表示形式の変更のみで、送信条件・承認条件・結果不明時の再送禁止は変わりません。",
+  "details": [
+    "通知仕様に chat_format_version=1 を追加し、DiscordはComponents V2、LINE WORKSはFlexカードで投稿ごとの原文とスタンプ行を描画します。",
+    "原文が面に収まらない投稿は従来どおりスレッド本文パーツに残り、原文が表示から欠けることはありません。",
+    "LINE WORKSでは chat_format_version=1 のとき、各投稿の添付ファイルをその投稿の本文・原文の直後へ個別ジャーナルのまま並べ替えます。元投稿に対応づかない添付は末尾に保持します。",
+    "旧形式の配信済みカードを新版仕様が再利用すると原文がどこにも表示されないため、chat_format_version と face_posts が一致する場合だけカードを再利用します。",
+    "既存の仕様（chat_format_version なし）は従来どおりの描画・配送を維持し、未知の結果を成功扱いしない・重複送信しない条件は変更していません。"
+  ],
+  "refs": ["adapters/common/spec.py", "adapters/discord/cards.py", "adapters/discord/delivery.py", "adapters/lineworks/cards.py", "adapters/lineworks/client.py", "mcs/notify/notify_card_renders.py", "mcs/notify/notify_parts.py", "mcs/notify/presentation/present_discord.py", "mcs/notify/presentation/present_lineworks.py", "mcs/notify/presentation/present_slack.py", "adapters/common/provider_assets.py"]
+}

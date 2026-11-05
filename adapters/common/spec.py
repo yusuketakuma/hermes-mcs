@@ -84,13 +84,17 @@ PARTS_KEYS = frozenset({
     # them with allowed_mentions=none; Slack replaces them with names
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
     "provider_states_version", "processing_display_version", "slack_thread_policy", "section_divider_version",
+    # chat_format_version=1 opts a Discord/LINE WORKS thread create/update
+    # into the shared chat face (originals on the card); absent keeps the
+    # legacy per-transport behaviour and old workers reject the key
+    "chat_format_version",
     # per-transport presentation (mcs/notify/present_<t>.py); only the
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
 # what each transport namespace may hold
 TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
-                       "lineworks": frozenset()}
+                       "lineworks": frozenset({"face_posts"})}
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
@@ -281,8 +285,11 @@ MAX_FACE_POSTS = 8             # one thread-card page (notify_render.PAGE_THREAD
 def _validate_face_posts(spec, parts, posts, transport) -> None:
     """Thread-card posts on the card face, under the post line at ``at``:
     Slack shows its stamp rows and its folded original (plain text);
-    Discord only its (non-empty) stamp rows — no collapsible block."""
-    keys = ({"at", "stamps", "original"} if transport == "slack"
+    Discord only its (non-empty) stamp rows — no collapsible block.
+    chat_format_version=1 gives Discord/LINE WORKS the same
+    stamp-rows-plus-original entries Slack already uses."""
+    versioned = parts.get("chat_format_version") == 1
+    keys = ({"at", "stamps", "original"} if transport == "slack" or versioned
             else {"at", "stamps"})
     rules = {i for i, c in enumerate(parts["containers"])
              if c.get("rule") and c.get("type") == "text"}
@@ -295,9 +302,10 @@ def _validate_face_posts(spec, parts, posts, transport) -> None:
                 or type(post["at"]) is not int or post["at"] not in rules \
                 or post["at"] in seen or not isinstance(post["stamps"], list) \
                 or len(post["stamps"]) > 4 \
-                or not (post["stamps"] or transport == "slack") \
+                or not (post["stamps"] or transport == "slack" or versioned) \
                 or not all(_text(x, MAX_TEXT) for x in post["stamps"]) \
-                or (transport == "slack" and not _text(post["original"], FACE_ORIGINAL_MAX)):
+                or ((transport == "slack" or versioned)
+                    and not _text(post["original"], FACE_ORIGINAL_MAX)):
             _err("bad_face_post")
         seen.add(post["at"])
 
@@ -318,6 +326,8 @@ def _transport_parts_cost(spec, parts) -> int:
         if "accent" in own and own["accent"] != "urgent":
             _err("bad_accent")
         if "face_posts" in own:
+            if name == "lineworks" and parts.get("chat_format_version") != 1:
+                _err("bad_face_posts")
             _validate_face_posts(spec, parts, own["face_posts"], name)
         if 'file_group' in own:
             if (name != 'slack' or spec.get('kind') != 'thread'
@@ -369,6 +379,14 @@ def validate(spec) -> dict:
     _known_keys(parts, PARTS_KEYS, "parts")
     if parts.get("mentions", "silent") != "silent":
         _err("bad_mentions")
+    if "chat_format_version" in parts and (
+            type(parts["chat_format_version"]) is not int
+            or parts["chat_format_version"] != 1
+            or spec["delivery"].get("transport", "discord")
+            not in ("discord", "lineworks")
+            or spec.get("kind") != "thread"
+            or spec.get("op") not in ("create", "update")):
+        _err("bad_chat_format_version")
     if parts.get("context") is not None and not isinstance(parts["context"], dict):
         _err("bad_context")
     if "post_source_id" in parts and (
@@ -527,12 +545,16 @@ def validate(spec) -> dict:
     slots, text = _footer_cost(parts.get("footer") or [])
     budget -= slots
     text_budget -= text
-    # Discord draws face stamp rows as "-# " subtext lines on the card
+    # Discord draws face stamp rows as "-# " subtext lines and chat-format
+    # originals as a marker plus "> "-quoted lines on the card
     own = parts.get("discord")
     if isinstance(own, dict) and isinstance(own.get("face_posts"), list):
         text_budget -= sum(len(ln) + 4 for p in own["face_posts"] if isinstance(p, dict)
                            and isinstance(p.get("stamps"), list)
                            for ln in p["stamps"] if isinstance(ln, str))
+        text_budget -= sum(9 + len(p["original"]) + 3 * p["original"].count("\n")
+                           for p in own["face_posts"] if isinstance(p, dict)
+                           and isinstance(p.get("original"), str))
     if text_budget < 0:
         _err("text_budget")
     budget -= _action_rows_cost(parts.get("action_rows") or [])

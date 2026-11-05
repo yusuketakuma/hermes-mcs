@@ -71,6 +71,10 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
     own = spec["parts"].get("discord") or {}
     actions = {a["at"]: a["button"] for a in own.get("post_actions") or []}
     stamps = {p["at"]: p["stamps"] for p in own.get("face_posts") or []} if face else {}
+    # chat-format originals are the post's body, not decoration: every
+    # fallback level keeps them (only stamp rows are droppable).
+    originals = {p["at"]: p["original"] for p in own.get("face_posts") or []
+                 if p.get("original")}
     for index, c in enumerate(spec["parts"]["containers"]):
         t = c["type"]
         if t == "meta":
@@ -84,6 +88,10 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
         if c.get("rule"):
             rows = [f"-# {esc(ln)}" for row in stamps.get(index, ())
                     for ln in row.splitlines()]
+            original = originals.get(index)
+            if original:
+                rows.append("-# 原文")
+                rows.extend(f"> {esc(ln)}" for ln in original.splitlines())
         if index in actions:
             # (subtext line, button): a Section with the post's 💊 accessory
             cur.append(("-# " + esc(c["text"]).replace("\n", " "), actions[index]))
@@ -177,9 +185,11 @@ def thread_drug_view(spec, *, private=False):
 
 
 def message_payload(spec, *, components_v2=False):
-    """New cards carry preview content; existing V2 messages retain their valid format."""
+    """New cards carry preview content; existing V2 messages retain their valid format.
+    A chat-format spec always renders Components V2 — its face originals
+    have no legacy-embed representation."""
     import discord
-    if components_v2:
+    if components_v2 or spec["parts"].get("chat_format_version") == 1:
         view = build_view(spec)
         # MCS dispatches via the bot-wide on_interaction listener, not
         # native View callbacks. Keep the wire components but prevent

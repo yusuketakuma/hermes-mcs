@@ -63,21 +63,34 @@ def owner_label(owner: str, member_names) -> str:
 POST_ACTIONS = True           # 💊 button beside each medication post
 ACCENT_URGENT = True          # red container edge on an urgent card
 
-# Thread cards show each shown post's stamp row under its summary on the
-# card face; the original stays in the thread (Components V2 has no
-# collapsible block). adapters/discord/cards.py drops the rows when the
-# face would exceed its component/text budget; the thread keeps them.
+# Thread cards show each shown post's stamp row and, under
+# chat_format_version=1, its whole original on the card face; posts that
+# do not fit keep their thread post (Components V2 has no collapsible
+# block). adapters/discord/cards.py drops stamp rows when the face would
+# exceed its component/text budget; originals are never dropped there.
 BODY_ON_FACE = False
 FACE_STAMPS = True
 # Rows that do not fit the face remain on their post in the companion thread.
 STAMP_DETAILS = True
 FACE_TEXT_MAX = 4000          # adapters/common/spec.py MAX_TOTAL_TEXT
+CHAT_BODY_ON_FACE = True
+FACE_ORIGINAL_MAX = 3990      # one TextDisplay minus the "> " quote prefix
+BLOCK_MAX = 36                # conservative under spec MAX_COMPONENTS=40
+
+
+def _original_cost(original: str) -> int:
+    """Rendered cost of one face original: the ``-# 原文`` marker line
+    plus each ``> ``-quoted line — twin of adapters/common/spec.py's
+    face_posts text accounting and face_text_cost below (tests pin the
+    three equal)."""
+    return 9 + len(original) + 3 * original.count("\n")
 
 
 def face_text_cost(parts, face_posts=()) -> int:
     """The text adapters/common/spec.validate charges for this face:
-    the same per-item costs, plus each face stamp line (twin of its
-    _containers_cost/_footer_cost text half; tests pin the two equal)."""
+    the same per-item costs, plus each face stamp line and original
+    (twin of its _containers_cost/_footer_cost text half; tests pin the
+    two equal)."""
     n = sum(len(ln) + 4 for c in parts.get("footer") or [] if c["type"] == "text"
             for ln in c["text"].splitlines())
     for c in parts["containers"]:
@@ -89,4 +102,24 @@ def face_text_cost(parts, face_posts=()) -> int:
             n += len(c["name"]) + len(c["value"]) + 6
     if parts.get("section_divider_version") == 1:
         n += 14 * sum(bool(c.get("rule")) and c.get("type") != "meta" for c in parts["containers"])
-    return n + sum(len(ln) + 4 for p in face_posts for ln in p["stamps"])
+    return (n + sum(len(ln) + 4 for p in face_posts for ln in p["stamps"])
+            + sum(_original_cost(p["original"]) for p in face_posts
+                  if p.get("original")))
+
+
+def face_block_count(parts, face_posts=(), *, slots=0) -> int:
+    """Upper bound on the components adapters/discord/cards.build_view
+    emits for this face: the Container, one TextDisplay per zone (zone
+    text stays within MAX_TEXT under FACE_TEXT_MAX), the Separators, each
+    post-action Section as build_view's too_big counts it (``slots`` × 3),
+    footer displays and every action-row item."""
+    zones = 1 + sum(1 for c in parts["containers"]
+                    if c.get("rule") and c.get("type") != "meta")
+    foot = sum(len(ln) + 4 for c in parts.get("footer") or []
+               if c["type"] == "text" for ln in c["text"].splitlines())
+    buttons = sum(len(row) for row in parts.get("action_rows") or [])
+    return (1 + zones                  # Container + >=1 TextDisplay per zone
+            + zones + 1                # Separators: zones-1 + footer + rows
+            + (foot + FACE_TEXT_MAX - 1) // FACE_TEXT_MAX
+            + 3 * slots                # post-action Sections
+            + 3 + buttons + 2)         # <=3 ActionRows + select/picker + items

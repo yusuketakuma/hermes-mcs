@@ -9,7 +9,8 @@ from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
                                            plan_controls, stamp_label)
 from adapters.common.text import notification_preview
 from notify_render import display_text
-from present_lineworks import card_split
+from present_lineworks import card_split, face_block_count
+from adapters.common.provider_assets import PROVIDER_ASSETS
 from notify_parts import split_body_chunks
 
 SCHEMA = "mcs-card-render/v3"
@@ -135,5 +136,119 @@ def action_buttons(spec):
 def render(spec):
     validate(spec)
     # The runner seals the remaining display into durable display#k parts.
-    return buttons(card_split(display_text(spec["parts"]))[0],
-                   action_buttons(spec)[:10], preview=notification_preview(spec["parts"], 400))
+    parts = spec["parts"]
+    result = buttons(card_split(display_text(parts))[0], action_buttons(spec)[:10],
+                     preview=notification_preview(parts, 400))
+    if parts.get("chat_format_version") == 1:
+        posts = (parts.get("lineworks") or {}).get("face_posts") or []
+        if posts and face_block_count(parts, posts) > 1000:
+            raise ValueError("lineworks_face_budget")
+        nodes = _face_nodes(parts, posts)
+        if result["type"] == "text":
+            # New structured faces need no invented action/footer.
+            alt = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ",
+                                   notification_preview(parts, 400)).split()) or "MCS"
+            result = {"type": "flex", "altText": alt[:400], "contents": {
+                "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": nodes}}}
+        else:
+            result["contents"]["body"]["contents"] = nodes
+        import json
+        if len(json.dumps(result["contents"], ensure_ascii=False).encode("utf-8")) > 15000:
+            raise ValueError("lineworks_flex_budget")
+    return result
+
+
+def _text_node(value):
+    return {"type": "text", "text": value or "MCS", "wrap": True}
+
+
+def _provider_box(item):
+    """Known public logo icons and shared state marks; no clinical inference."""
+    import processing_route
+    states = item["provider_states"]
+    visible = item.get("visible_providers") or list(processing_route.PROVIDERS)
+    sequence = item.get("provider_sequence") or []
+    ordered = sequence + [key for key in visible if key not in sequence]
+    assets = {key: url for key, _name, url in PROVIDER_ASSETS}
+    children = []
+    for key in ordered:
+        if states[key] not in processing_route.COMPACT_MARKS:
+            continue
+        if key in assets:
+            children.append({"type": "icon", "url": assets[key], "size": "sm"})
+            label = processing_route.COMPACT_MARKS[states[key]]
+        else:
+            label = "💻 " + processing_route.COMPACT_MARKS[states[key]]
+        children.append(_text_node(label))
+    return {"type": "box", "layout": "baseline", "spacing": "sm", "contents": children} if children else None
+
+
+def _face_nodes(parts, posts):
+    """Keep the sealed display prefix and insert only budgeted originals."""
+    import notify_render
+    import processing_route
+    text = card_split(display_text(parts))[0]
+    # Splitting the exact sealed prefix keeps the overflow boundary unchanged.
+    # Header logos replace only the provider-name suffix; the status stays text.
+    headers = {processing_route.compact_header(item): item
+               for item in parts["containers"]
+               if item.get("provider_scope") == "header"
+               and parts.get("processing_display_version") in (1, 2)}
+    if not posts:
+        out, plain = [], []
+        def flush():
+            if plain:
+                value = "\n".join(plain)
+                if value:
+                    out.append(_text_node(value))
+                plain.clear()
+        for line in text.split("\n"):
+            item = headers.get(line)
+            if item is None:
+                plain.append(line)
+                continue
+            flush()
+            fallback = processing_route.compact_header(item)
+            box = _provider_box(item)
+            prefix = fallback.rsplit(" · ", 1)[0] if box and " · " in fallback else fallback
+            if prefix:
+                out.append(_text_node(prefix))
+            if box:
+                out.append(box)
+        flush()
+        return out or [_text_node("MCS")]
+    by_at = {post["at"]: post for post in posts}
+    out = []
+    pending = None
+    for at, item in enumerate(parts["containers"]):
+        if item.get("rule") and pending is not None:
+            out.extend(_original_nodes(pending))
+            pending = None
+        if item["type"] == "meta":
+            continue
+        value = notify_render.render_text({**parts, "containers": [item], "footer": []}, head="{}")
+        if item.get("rule") and out:
+            out.append(_text_node(notify_render.SECTION_RULE))
+        if item.get("provider_scope") == "header" and parts.get("processing_display_version") in (1, 2):
+            box = _provider_box(item)
+            prefix = value.rsplit(" · ", 1)[0] if box and " · " in value else value
+            if prefix:
+                out.append(_text_node(prefix))
+            if box:
+                out.append(box)
+        elif value:
+            out.append(_text_node(value))
+        if at in by_at:
+            pending = by_at[at]
+    if pending is not None:
+        out.extend(_original_nodes(pending))
+    for item in parts.get("footer") or []:
+        if item["type"] == "text" and item["text"]:
+            out.append(_text_node(notify_render.MENTION_TOKEN_PATTERN.sub("メンバー", item["text"])))
+    return out or [_text_node("MCS")]
+
+
+def _original_nodes(post):
+    import notify_render
+    return [_text_node(notify_render.MENTION_TOKEN_PATTERN.sub("メンバー", value))
+            for value in [*post["stamps"], "📄 原文", post["original"]] if value]

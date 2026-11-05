@@ -239,14 +239,20 @@ class DeliveryWorker(worker.DeliveryWorker):
                     or getattr(thread, "locked", False)):
                 return {"result": "not_sent", "error_code": "thread_scope_mismatch"}
             channel = thread
+        chat_v1 = spec["parts"].get("chat_format_version") == 1
         if op == "update":
             mid = delivery.get("message_id")
             if not mid:
                 return {"result": "not_sent", "error_code": "no_target"}
             msg = await _read(channel.fetch_message(int(mid)))
             legacy_v2 = getattr(getattr(msg, "flags", None), "is_components_v2", False)
-            await msg.edit(**cards.message_payload(spec, components_v2=legacy_v2),
-                           allowed_mentions=cards.no_pings())
+            payload = cards.message_payload(spec, components_v2=legacy_v2 or chat_v1)
+            if chat_v1 and not legacy_v2:
+                # IS_COMPONENTS_V2 can only be set, never unset: converting
+                # a legacy embed message requires explicitly clearing
+                # content and embeds (discord.py edit contract).
+                payload.update(content=None, embed=None)
+            await msg.edit(**payload, allowed_mentions=cards.no_pings())
             return {"result": "delivered", "message_id": mid}
         sent = await single_post(           # create / notice
             self._bot, partial(channel.send, **cards.message_payload(spec),

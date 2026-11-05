@@ -103,3 +103,20 @@ def mark_reposted(containers) -> list:
     at = next((i for i, c in enumerate(out) if c.get("rule")), len(out))
     out.insert(at, {"type": "text", "text": "🔄 更新版"})
     return out
+
+
+# A face carries an original only when all visible text still fits the
+# conservative existing card ceiling. Overflow stays in durable body parts.
+CHAT_BODY_ON_FACE = True
+CHAT_STAMP_DETAILS = True
+FACE_ORIGINAL_MAX = CARD_LIMIT
+BLOCK_MAX = CARD_LIMIT
+
+
+def face_block_count(parts, face_posts=(), *, slots=0) -> int:
+    """Bound LINE WORKS face text including originals and stamp rows."""
+    import notify_render
+    return (len(notify_render.display_text(parts))
+            + sum(len(post["original"]) + len("\n📄 原文\n")
+                  + sum(len(row) + 1 for row in post["stamps"])
+                  for post in face_posts))

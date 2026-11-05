@@ -452,13 +452,26 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # thread carries the untruncated shown-set text (T7). Where the
     # transport shows bodies on the card, the posts the face holds whole
     # leave the thread (attachments and the rest stay there).
+    # chat_format_version=1 opts Discord/LINE WORKS thread faces into the
+    # shared chat layout — only while the transport's presenter declares
+    # CHAT_BODY_ON_FACE, so a renderer that cannot show originals yet
+    # keeps producing legacy specs.
+    chat_v1 = (card["transport"] in ("discord", "lineworks")
+               and card["kind"] == "thread" and op in ("create", "update")
+               and getattr(present, "CHAT_BODY_ON_FACE", False))
+    if chat_v1:
+        spec["parts"]["chat_format_version"] = 1
     face_posts, face_mids = [], frozenset()
     if (in_thread_body and op != "revoke" and card["kind"] == "thread"
             and card["layout"] >= 3 and (getattr(present, "BODY_ON_FACE", False)
-                                         or getattr(present, "FACE_STAMPS", False))):
-        face_posts, face_mids = notify_parts.face_posts(db, card, spec["parts"], content, present)
+                                         or getattr(present, "FACE_STAMPS", False)
+                                         or chat_v1)):
+        face_posts, face_mids = notify_parts.face_posts(
+            db, card, spec["parts"], content, present,
+            post_action_slots=len(post_mids))
     spec["parts"], budget_hold = notify_parts.build_manifest(
-        db, card, spec, content, in_thread_body, cfg=cfg, face_mids=face_mids, waiting=waiting)
+        db, card, spec, content, in_thread_body, cfg=cfg, face_mids=face_mids,
+        face_posts=face_posts, waiting=waiting)
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") != 4:
         spec["parts"].pop("processing_display_version", None)

@@ -54,7 +54,7 @@ def test_meds_view_lists_the_posts_medication_without_dictionary(led):
                               "text": "・キラナ 5mg[開始]"}]
     assert "参考情報" not in "".join(view["notes"])
     # ⚠ pins this same post, so the report hint is offered
-    assert "抽出の誤りは「誤りを報告」→「薬」から報告できます。" in view["notes"]
+    assert "投稿本文の抽出の誤りは「誤りを報告」→「薬」から報告できます。" in view["notes"]
     # the view reaches the clicker live — the receipt never stores it
     stored = led.db.execute("SELECT receipt_json FROM command_receipts "
                             "ORDER BY rowid DESC LIMIT 1").fetchone()[0]

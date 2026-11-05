@@ -58,6 +58,43 @@ def _valid_action(action):
     return False
 
 
+def _valid_face_body(nodes):
+    """Accept only MCS text and catalog-icon baseline rows, never arbitrary Flex."""
+    from adapters.common.provider_assets import PROVIDER_ASSETS
+    urls = {url for _key, _name, url in PROVIDER_ASSETS}
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= 1000:
+        return False
+    cost = 0
+    for node in nodes:
+        if not isinstance(node, dict):
+            return False
+        if node.get("type") == "text":
+            children = [node]
+        elif (set(node) == {"type", "layout", "spacing", "contents"}
+              and node.get("type") == "box" and node.get("layout") == "baseline"
+              and node.get("spacing") == "sm" and isinstance(node.get("contents"), list)
+              and 1 <= len(node["contents"]) <= 8):
+            children = node["contents"]
+        else:
+            return False
+        for child in children:
+            if not isinstance(child, dict):
+                return False
+            if (child.get("type") == "icon" and node.get("type") == "box"
+                    and set(child) == {"type", "url", "size"}
+                    and isinstance(child.get("url"), str) and child["url"] in urls
+                    and child.get("size") == "sm"):
+                continue
+            if (set(child) != {"type", "text", "wrap"} or child.get("type") != "text"
+                    or not isinstance(child.get("text"), str)
+                    or not 0 < len(child["text"]) <= 1000 or child.get("wrap") is not True):
+                return False
+            cost += len(child["text"])
+            if cost > 1000:
+                return False
+    return True
+
+
 def _validate_content(content):
     if not isinstance(content, dict):
         raise ClientError("validation_invalid")
@@ -80,26 +117,26 @@ def _validate_content(content):
         texts = body.get("contents") if isinstance(body, dict) else None
         actions = footer.get("contents") if isinstance(footer, dict) else None
         valid = (valid_protocol_text(content.get("altText"), 400)
-                 and isinstance(bubble, dict) and bubble.get("type") == "bubble"
-                 and isinstance(body, dict) and body.get("type") == "box"
-                 and body.get("layout") == "vertical" and isinstance(texts, list) and len(texts) == 1
-                 and isinstance(texts[0], dict) and texts[0].get("type") == "text"
-                 and isinstance(texts[0].get("text"), str) and 0 < len(texts[0]["text"]) <= 1000
-                 and texts[0].get("wrap") is True
-                 and isinstance(footer, dict) and footer.get("type") == "box"
-                 and footer.get("layout") == "vertical" and isinstance(actions, list)
-                 and 1 <= len(actions) <= 10)
-        boxes = ([i for i, child in enumerate(actions)
-                  if isinstance(child, dict) and child.get("type") == "box"] if valid else [])
-        if valid and boxes:
-            # the one MCS stamp row: a single horizontal box of 1-5 buttons
-            row = actions[boxes[0]].get("contents")
-            valid = (len(boxes) == 1 and actions[boxes[0]].get("layout") == "horizontal"
-                     and isinstance(row, list) and 1 <= len(row) <= 5)
-            actions = actions[:boxes[0]] + (row if valid else []) + actions[boxes[0] + 1:]
-        valid = valid and 1 <= len(actions) <= 10 and all(
-            isinstance(button, dict) and button.get("type") == "button"
-            and _valid_action(button.get("action")) for button in actions)
+                 and isinstance(bubble, dict) and set(bubble) <= {"type", "body", "footer"}
+                 and bubble.get("type") == "bubble"
+                 and isinstance(body, dict) and set(body) == {"type", "layout", "contents"}
+                 and body.get("type") == "box" and body.get("layout") == "vertical"
+                 and _valid_face_body(texts))
+        if isinstance(bubble, dict) and "footer" in bubble:
+            valid = (valid and isinstance(footer, dict)
+                     and set(footer) == {"type", "layout", "contents"}
+                     and footer.get("type") == "box" and footer.get("layout") == "vertical"
+                     and isinstance(actions, list) and 1 <= len(actions) <= 10)
+            boxes = ([i for i, child in enumerate(actions)
+                      if isinstance(child, dict) and child.get("type") == "box"] if valid else [])
+            if valid and boxes:
+                row = actions[boxes[0]].get("contents")
+                valid = (len(boxes) == 1 and actions[boxes[0]].get("layout") == "horizontal"
+                         and isinstance(row, list) and 1 <= len(row) <= 5)
+                actions = actions[:boxes[0]] + (row if valid else []) + actions[boxes[0] + 1:]
+            valid = valid and 1 <= len(actions) <= 10 and all(
+                isinstance(button, dict) and button.get("type") == "button"
+                and _valid_action(button.get("action")) for button in actions)
         if valid:
             try:
                 valid = len(json.dumps(bubble, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= 15000

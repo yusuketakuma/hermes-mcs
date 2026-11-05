@@ -71,7 +71,7 @@ def _count(text, size) -> int:
     return max(1, -(-len(text) // size))
 
 
-def face_block_count(parts, face_posts=()) -> int:
+def face_block_count(parts, face_posts=(), *, slots=0) -> int:
     """An upper bound on the Block Kit blocks adapters/slack/cards.render
     builds for this card face plus ``face_posts`` (each: its stamp rows
     as contexts and one folded original with its child sections). Count

@@ -113,7 +113,7 @@ def test_command_intake_and_operator_receipt_scope(led, monkeypatch):
     import mcs_util
     import mcs_view
     req = prepare(led)
-    monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
+    monkeypatch.setattr(mcs_util, "load_config", lambda *a, **kw: CFG)
     command_dir = Path(notify_spool.data_root(led)) / "cmd"
     command_dir.mkdir()
     command = command_dir / "synthetic-resolution.json"
@@ -194,7 +194,7 @@ def test_settlement_rejection_rolls_back_partial_changes_and_consumes_command(le
         return {"applied": False, "error": "part_conflict"}
 
     monkeypatch.setattr(transport, "settle_part_receipt", reject)
-    monkeypatch.setattr(mcs_util, "load_config", lambda path: CFG)
+    monkeypatch.setattr(mcs_util, "load_config", lambda *a, **kw: CFG)
     command_dir = Path(notify_spool.data_root(led)) / "cmd"
     command_dir.mkdir()
     command = command_dir / "synthetic-resolution.json"

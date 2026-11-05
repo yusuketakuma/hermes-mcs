@@ -55,14 +55,15 @@ def test_lineworks_render_full_body_and_durable_scope_without_thread_api(led, tm
 
 
 def test_lineworks_visible_text_overflow_is_lossless_durable_content(led, monkeypatch):
-    original = cards.card_content
+    import notify_card_renders
+    original = notify_card_renders.card_content
 
     def long_display(*args, **kwargs):
         content = original(*args, **kwargs)
         content["containers"] = [{"type": "text", "text": "合成内容" * 400}]
         return content
 
-    monkeypatch.setattr(cards, "card_content", long_display)
+    monkeypatch.setattr(notify_card_renders, "card_content", long_display)
     spec = json.loads(_render(led)["spec_json"])
     text = display_text(spec["parts"])
     display = [(p, c) for p, c in zip(

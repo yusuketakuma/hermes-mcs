@@ -6,6 +6,7 @@ from html import escape
 
 from adapters.common.announce import has_header_part, is_header_part  # noqa: F401 - re-exported for Slack callers
 from adapters.common.context_view import context_entries, safe_url  # noqa: F401 - safe_url re-exported for cards
+from adapters.common.provider_assets import PROVIDER_ASSETS as _PROVIDERS
 
 SECTION_MAX = 3000
 HEADER_MAX = 150
@@ -18,9 +19,6 @@ _STAMP_LINE = "スタンプ "
 _DIVIDER = {"type": "divider"}
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
 MEMBER_LABEL = "メンバー"
-_PROVIDERS = (("anthropic", "Anthropic", "https://www.anthropic.com/images/icons/apple-touch-icon.png"),
-              ("openai", "OpenAI", "https://avatars.githubusercontent.com/u/14957082?v=4"),
-              ("jev", "Jev", "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png"))
 _PROVIDER_NAMES = tuple((key, name) for key, name, _ in _PROVIDERS) + (("local", "💻"),)
 _STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                  "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり",

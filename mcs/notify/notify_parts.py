@@ -849,7 +849,8 @@ def _lineworks_update_budget(db, card, keyed):
     return out
 
 
-def face_posts(db, card, parts, content, present) -> tuple:
+def face_posts(db, card, parts, content, present, *,
+               post_action_slots=0) -> tuple:
     """([face post], message ids the card face carries whole) for a
     thread card whose transport shows bodies on the card: each shown
     post's stamp rows (the same row its thread post had) and its
@@ -860,7 +861,9 @@ def face_posts(db, card, parts, content, present) -> tuple:
     post's non-empty stamp rows and no message ids, while the face stays
     within its text budget: its thread keeps every body and stamp row."""
     import notify_render
-    whole = getattr(present, "BODY_ON_FACE", False)
+    whole = (getattr(present, "BODY_ON_FACE", False)
+             or (parts.get("chat_format_version") == 1
+                 and getattr(present, "CHAT_BODY_ON_FACE", False)))
     rules = [i for i, c in enumerate(parts["containers"])
              if c.get("rule") and c.get("type") == "text"]
     posts, mids = [], set()
@@ -887,12 +890,75 @@ def face_posts(db, card, parts, content, present) -> tuple:
         stamp = notify_render.thread_stamp_row(db, mid, m["sender_id"])
         post = {"at": at, "stamps": [ln for ln in stamp.split("\n") if ln],
                 "original": original}
+        cost = getattr(present, "face_text_cost", None)
         if len(original) > present.FACE_ORIGINAL_MAX \
-                or present.face_block_count(parts, [*posts, post]) > present.BLOCK_MAX:
+                or present.face_block_count(parts, [*posts, post],
+                                            slots=post_action_slots) > present.BLOCK_MAX \
+                or (cost is not None and present.FACE_TEXT_MAX is not None
+                    and cost(parts, [*posts, post]) > present.FACE_TEXT_MAX):
             break
         posts.append(post)
         mids.add(mid)
     return posts, frozenset(mids)
+
+
+def _post_group_of(name, groups):
+    """Body-part chunk name -> its post group key (``m:100#2`` and
+    ``m:100:header#1`` belong to ``m:100``; ``m:1000`` never matches)."""
+    for key, _mids in groups:
+        if name == key or name.startswith(key + "#") or name.startswith(key + ":"):
+            return key
+    return None
+
+
+def _order_chat_attachment_parts(db, manifest, att_entries, groups, face_mids,
+                                 cleanup_keys):
+    """LINE WORKS chat-format order, sealed by the planner: each post's
+    files are the journaled messages right after that post's own thread
+    content; a post carried whole on the card face leads with its files
+    in post order. Files whose source maps to no group keep the tail."""
+    ids = [e["attachment_id"] for e in att_entries]
+    ph = ",".join("?" * len(ids))
+    mid_of = {r["attachment_id"]: r["message_id"] for r in db.execute(
+        f"SELECT attachment_id,message_id FROM attachments "
+        f"WHERE attachment_id IN ({ph})", ids)}
+    mid_group = {mid: key for key, mids in groups for mid in mids}
+    group_face = {key: bool(mids) and set(mids) <= face_mids
+                  for key, mids in groups}
+    last_real = {}
+    for i, e in enumerate(manifest):
+        if e.get("kind") != "body_part" or e.get("name") in cleanup_keys:
+            continue
+        g = _post_group_of(e.get("name"), groups)
+        if g is not None:
+            last_real[g] = i
+    lead, after, tail = {}, {}, []
+    for e in att_entries:
+        g = mid_group.get(mid_of.get(e.get("attachment_id")))
+        if g is None or (g not in last_real and not group_face.get(g)):
+            tail.append(e)
+        elif g in last_real:
+            after.setdefault(g, []).append(e)
+        else:
+            lead.setdefault(g, []).append(e)
+    out, led = [], False
+    for i, e in enumerate(manifest):
+        out.append(e)
+        if not led and e.get("kind") == "thread":
+            led = True
+            for key, _mids in groups:
+                out.extend(lead.get(key, ()))
+        g = (_post_group_of(e.get("name"), groups)
+             if e.get("kind") == "body_part" else None)
+        if g is not None and last_real.get(g) == i:
+            out.extend(after.get(g, ()))
+    if not led:
+        for key, _mids in groups:
+            out.extend(lead.get(key, ()))
+    out.extend(tail)
+    for i, e in enumerate(out):
+        e["index"] = i
+    return out
 
 
 def _provider_visibility(parts):
@@ -909,7 +975,8 @@ def _provider_visibility(parts):
 
 
 def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
-                         face_mids=frozenset(), waiting=frozenset()) -> tuple[dict, str | None]:
+                         face_mids=frozenset(), face_posts=(),
+                         waiting=frozenset()) -> tuple[dict, str | None]:
     """Return new parts and an optional hold reason using borrowed read-only DB access.
 
     Inputs are unchanged. The caller owns render/part persistence and its transaction.
@@ -946,12 +1013,20 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                          for b in row] for row in rows]
             prior_view = db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
                                     (previous["parts"]["manifest_id"],)).fetchone()
+            # A versioned chat face carries originals the legacy card never
+            # showed; reusing the old remote card would hide them.
+            same_chat_face = (
+                previous["parts"].get("chat_format_version")
+                == parts.get("chat_format_version")
+                and (previous["parts"].get(card["transport"]) or {}).get("face_posts")
+                == (face_posts or None))
             if (prior_view and json.loads(prior_view[0]) == content["shown"]
                     and previous["source_generation"] == spec["source_generation"]
                     and previous["ui_revision"] == spec["ui_revision"]
                     and scope_matches(previous["delivery"], stored_scope(card))
                     and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
                     and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
+                    and same_chat_face
                     and same_v4_header
                     and prior_visible == visible_providers
                     and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
@@ -1019,7 +1094,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                  if update and announce_thread else set())
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, split_chunks))
-    for key, mids in _body_groups(db, card, planned, posts):
+    groups = _body_groups(db, card, planned, posts)
+    for key, mids in groups:
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
         body = card_body_text(db, card, man, max_chars=None, cfg=cfg,
                               visible_providers=visible_providers)[1]
@@ -1135,6 +1211,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         _, own_verified, own_identities = _same_thread_delivered_parts(db, card)
         own_history = (*_prior_remote_ids(db, card), own_verified, own_identities)
     captions = _attachment_captions(db, card, attachments)
+    att_entries = []
     for a in attachments:
         inherited_part = inherited_attachments and (
             a["attachment_id"] in parent_attachment_ids
@@ -1230,11 +1307,23 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
             if (update and not inherited_part and proven and proven[0] == rid and proven[1] == sha
                     and entry.get("caption") and entry["caption"] != proven[2]):
                 entry["edit_only"] = True
-        manifest.append(entry)
-        idx += 1
+        att_entries.append(entry)
+    if (card["transport"] == "lineworks" and att_entries
+            and parts.get("chat_format_version") == 1):
+        # Chat-format order is sealed here: each post's files are the
+        # journaled messages right after that post's own thread content;
+        # a post carried whole on the card face leads with its files.
+        manifest = _order_chat_attachment_parts(
+            db, manifest, att_entries, groups, face_mids, cleanup_keys)
+        idx = len(manifest)
+    else:
+        for entry in att_entries:
+            entry["index"] = idx
+            manifest.append(entry)
+            idx += 1
     if (card["transport"] == "slack" and card["kind"] == "thread"
             and any(e["kind"] == "attachment_part" and not e.get("unavailable")
-                    for e in manifest)):
+                    for e in att_entries)):
         from adapters.common.spec import file_group_sha256
         parts["manifest"] = manifest
         manifest.append({"part_id": "file_group", "kind": "file_group", "index": idx,

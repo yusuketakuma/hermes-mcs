@@ -306,3 +306,16 @@ def _collecting_cards_unless_requested():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(notify_cards, "REPLY_CARDS_DEFAULT", False)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _legacy_chat_format():
+    """Suites written before chat_format_version keep the legacy Discord/
+    LINE WORKS face (body as durable parts); chat-format tests opt back
+    in per test."""
+    import present_discord
+    import present_lineworks
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(present_discord, "CHAT_BODY_ON_FACE", False)
+        patch.setattr(present_lineworks, "CHAT_BODY_ON_FACE", False)
+        yield
