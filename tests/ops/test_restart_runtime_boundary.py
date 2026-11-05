@@ -1,4 +1,5 @@
 """Unreadable runtime selection cannot start or stop either service family."""
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_execution
 import update_lifecycle_context
@@ -31,7 +32,7 @@ def runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(update_services, 'DATA', updater.DATA)
     for name in ("_run", "_bootstrap_agent", "_agent_pid", "_remove_marker",
                  "_standalone_drainer_problems"):
-        monkeypatch.setattr(updater, name, lambda *a, **k: pytest.fail("runtime mutation or probe"))
+        patch_lifecycle_lookup(monkeypatch, updater, name, lambda *a, **k: pytest.fail("runtime mutation or probe"))
     return tmp_path / "config.json"
 
 

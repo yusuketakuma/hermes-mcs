@@ -1,4 +1,5 @@
 """Updater state readers refuse links and nonregular local control files."""
+from ops_testkit import patch_lifecycle_lookup
 import json
 import os
 
@@ -19,9 +20,9 @@ READERS = (
 def reader_path(tmp_path, monkeypatch, setting):
     path = tmp_path / "control.json"
     if setting == "DATA":
-        monkeypatch.setattr(updater, setting, str(tmp_path))
+        patch_lifecycle_lookup(monkeypatch, updater, setting, str(tmp_path))
         return tmp_path / "restore_pending.json"
-    monkeypatch.setattr(updater, setting, str(path))
+    patch_lifecycle_lookup(monkeypatch, updater, setting, str(path))
     return path
 
 
@@ -40,7 +41,9 @@ def test_nonregular_control_files_are_unreadable(
         result = bounded_python(tmp_path, """
 import json
 import mcs_update as updater
-setattr(updater, sys.argv[1], sys.argv[2])
+from ops_testkit import lifecycle_lookup_owners
+for owner in lifecycle_lookup_owners(updater, sys.argv[1]):
+    setattr(owner, sys.argv[1], sys.argv[2])
 print(json.dumps((updater.journal_store.load_state(updater.STATE_PATH) if sys.argv[3] == "load_state" else getattr(updater, sys.argv[3])())))
 """, setting, getattr(updater, setting), reader)
         assert json.loads(result.stdout) == refused

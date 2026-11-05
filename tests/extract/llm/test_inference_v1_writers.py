@@ -489,7 +489,7 @@ def test_positive_writers_refuse_unprepared_occurrences_without_rebinding_them(s
 
 @pytest.mark.parametrize('change', ['aba','same_html_new_text'])
 def test_effective_source_change_never_revives_an_old_result_or_checkpoint(source,monkeypatch,change):
-    import ledger as ledger_module
+    import ledger_capture
     led, row = source
     assert llm._replace_current(led,row,'{"summary":"合成の旧結果"}')
     assert llm._persist_chunks(led,row,{0:{'summary':'合成の旧区間'}})
@@ -499,7 +499,7 @@ def test_effective_source_change_never_revives_an_old_result_or_checkpoint(sourc
         led.save_messages([_message(body='本人の別の合成記録です。')])
         led.save_messages([_message(body=row['body_html'])])
     else:
-        monkeypatch.setattr(ledger_module,'html_to_text',lambda html: '同じHTMLの別解釈による合成原文。')
+        monkeypatch.setattr(ledger_capture,'html_to_text',lambda html: '同じHTMLの別解釈による合成原文。')
         led.save_messages([_message(body=row['body_html'])])
     fresh = dict(led.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
     fresh['_source_binding'] = dependency_loss.source_binding(led.db,1,1)

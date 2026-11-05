@@ -1,4 +1,5 @@
 """Synthetic legacy post-merge migration through inherited process locks."""
+from ops_testkit import patch_lifecycle_lookup
 import fcntl
 import hashlib
 import json
@@ -714,7 +715,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         'RESTORE_REPORT_PATH': data / 'restore_report.json', 'LEDGER': data / 'synthetic.db',
         'BACKUP_DIR': data / 'backups', 'MANIFEST_PATH': data / 'service_manifest.json',
     }.items():
-        monkeypatch.setattr(updater, name, str(value))
+        patch_lifecycle_lookup(monkeypatch, updater, name, str(value))
     monkeypatch.setenv('HOME', str(runtime))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: json.loads((runtime / 'config.json').read_text()))
     monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])

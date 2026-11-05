@@ -1,4 +1,5 @@
 """Selected runtime metadata and SQLite checks using only synthetic resources."""
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_execution
 import update_lifecycle_context
@@ -344,7 +345,7 @@ def test_apply_runtime_gate_precedes_lock_journal_and_interrupted_recovery(
         updater.journal_store.save_state(updater.STATE_PATH, state)
     for name in ("acquire_update_lock", "journal", "_git",
                  "_enqueue_notice", "quiesce", "recover_interrupted"):
-        monkeypatch.setattr(updater, name,
+        patch_lifecycle_lookup(monkeypatch, updater, name,
                             lambda *a, **k: pytest.fail("runtime gate allowed mutation"))
     monkeypatch.setattr(updater.journal_store, "save_state",
                         lambda *a, **k: pytest.fail("runtime gate allowed journal write"))

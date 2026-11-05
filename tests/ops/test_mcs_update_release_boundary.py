@@ -1,4 +1,5 @@
 """Synthetic mcs update release boundary contracts; shared helpers preserve isolated runtime state."""
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_cli
 import update_execution
@@ -32,7 +33,7 @@ def test_private_release_capability_refusal_precedes_all_legacy_effects(updater,
         pytest.fail('release refusal reached legacy state, locks or cleanup')
     for name in ('acquire_update_lock', '_acquire_run_lock_wait', 'recover_interrupted',
                  '_remove_marker', '_enqueue_notice', '_report', '_apply_runtime_gate_errors'):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     monkeypatch.setattr(updater.journal_store, 'load_state', forbidden)
     monkeypatch.setattr(updater.mcs_util, 'load_config', forbidden)
     with pytest.raises(release_apply_owner.ReleaseApplyError, match='EFFECT_HOLD'):
