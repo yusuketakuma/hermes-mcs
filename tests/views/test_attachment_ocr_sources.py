@@ -1,5 +1,6 @@
 """Synthetic OCR read surfaces keep attachment text separate from chat and aggregate output."""
 import hashlib
+import json
 import sqlite3
 import sys
 from types import SimpleNamespace
@@ -56,25 +57,42 @@ def ocr_reader(monkeypatch):
     return pages, calls
 
 
-def test_sources_are_distinct_scoped_and_read_only(source_db, ocr_reader):
-    pages, calls = ocr_reader
-    before = source_db.total_changes
-    records = list(mcs_queries.attachment_ocr_sources(source_db, 1, mid=10))
-    assert [row["message_id"] for row in records] == ["attachment_ocr:7:1", "attachment_ocr:7:2"]
-    for row, page in zip(records, pages):
-        assert row["source"] == row["source_kind"] == "attachment_ocr"
-        assert row["parent_message_id"] == 10
-        assert row["attachment_id"] == 11 and row["artifact_id"] == 7
-        assert row["body_text"] == page["text"]
-        assert row["content_hash"] == row["text_hash"] == page["text_hash"]
-        assert not any(key.startswith("sender") for key in row)
-    assert calls == [(11, 1), (12, 1)]
-    lean = list(mcs_queries.attachment_ocr_sources(source_db, 1, hydrate=False))
-    assert all("body_text" not in row for row in lean)
-    assert [row["body_length"] for row in lean] == [len(page["text"]) for page in pages]
-    assert list(mcs_queries.attachment_ocr_sources(source_db, 1, mid=20)) == []
-    assert source_db.execute("SELECT body_text FROM messages WHERE message_id=10").fetchone()[0] == "synthetic chat body"
-    assert source_db.total_changes == before
+def test_sources_are_distinct_scoped_and_read_only(tmp_path):
+    import attachment_ocr
+    from test_ocr_original_sources import seeded
+    ledger, first_key = seeded(tmp_path)
+    db = ledger.db
+    cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
+    try:
+        artifact_id = int(first_key.split(':')[1])
+        document = json.loads(db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()[0])
+        pages = [{'page': n, 'text': text, 'engine': 'pdf_text', 'text_hash': attachment_ocr._hash(text)}
+                 for n, text in enumerate(('synthetic OCR page one', 'synthetic OCR page two'), 1)]
+        document.update(pages=pages, text_hash=attachment_ocr._hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)))
+        with db:
+            db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(document), artifact_id))
+        original = db.execute('SELECT body_text FROM messages WHERE message_id=10').fetchone()[0]
+        db.execute('PRAGMA query_only=ON')
+        before = db.total_changes
+        records = list(mcs_queries.attachment_ocr_sources(db, 1, mid=10, cfg=cfg))
+        assert [row['source_key'] for row in records] == [first_key, f'attachment_ocr:{artifact_id}:2']
+        for row, page in zip(records, pages):
+            assert row['message_id'] == 0
+            assert row['source'] == row['source_kind'] == 'attachment_ocr'
+            assert row['parent_message_id'] == 10 and row['attachment_id'] == 1
+            assert row['artifact_id'] == artifact_id and row['body_text'] == page['text']
+            assert row['content_hash'] == row['text_hash'] == page['text_hash']
+            assert row['sender_id'] is row['sender_name'] is row['posted_at_ts'] is None
+            assert row['extraction_ready'] is False
+        lean = list(mcs_queries.attachment_ocr_sources(db, 1, hydrate=False, cfg=cfg))
+        assert all('body_text' not in row for row in lean)
+        assert [row['body_length'] for row in lean] == [len(page['text']) for page in pages]
+        assert list(mcs_queries.attachment_ocr_sources(db, 1, mid=20, cfg=cfg)) == []
+        assert list(mcs_queries.attachment_ocr_sources(db, 2, cfg=cfg)) == []
+        assert db.execute('SELECT body_text FROM messages WHERE message_id=10').fetchone()[0] == original
+        assert db.total_changes == before
+    finally:
+        ledger.close()
 
 
 def test_manifest_hides_ocr_text_in_aggregate(source_db, ocr_reader):
