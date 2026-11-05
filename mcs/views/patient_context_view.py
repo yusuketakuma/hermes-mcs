@@ -605,7 +605,7 @@ def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cu
             "as_of": ev["as_of"], "coverage": ev["coverage"]}
 
 
-def timeline(ev, categories=None) -> dict:
+def timeline(ev, categories=None, *, documents=None) -> dict:
     """経過タイムライン: oldest first; the written event date stays apart from the posting time
     and adjacent entries carry no causal link."""
     rows = []
@@ -626,8 +626,27 @@ def timeline(ev, categories=None) -> dict:
         if item["category"] in _TIMELINE_CONTEXT and not item.get("view_bucket"):
             row["view_bucket"] = "unknown"
         rows.append(row)
-    return {"view": "timeline", "items": rows, "order_basis": "posting_time",
-            "coverage": ev.get("coverage")}
+    result = {"view": "timeline", "items": rows, "order_basis": "posting_time",
+              "coverage": ev.get("coverage")}
+    if documents is not None:
+        events = []
+        for item in documents["events"]:
+            at = item.get("time") or {}
+            dated = (item.get("time_state") == "dated" and at.get("valid") is True
+                     and at.get("role") == "event" and at.get("precision") in ("day", "month", "year")
+                     and bool(at.get("value")))
+            value = at["value"] if dated else None
+            label = None
+            if dated:
+                parts = value.split("-")
+                label = "".join(part + unit for part, unit in zip(parts, ("年", "月", "日")))
+            events.append({**item, "event_date_text": label,
+                           "event_date_kind": "referral_event", "document_time_known": dated})
+        events.sort(key=lambda item: (not item["document_time_known"],
+                                     (item["time"]["value"] if item["document_time_known"] else "")))
+        result.update(document_events=events, referral_documents=documents["documents"],
+                      document_coverage=documents["coverage"])
+    return result
 
 
 def care_events(db, project_id, *, cfg=None) -> dict:

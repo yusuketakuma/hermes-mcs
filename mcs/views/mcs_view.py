@@ -636,12 +636,14 @@ class View:
         cfg = load_config()
         ev = pcv.evidence(self.db, pid, cfg=cfg)
         now = self.meta["generated_at"]
+        if view == "timeline":
+            import referral_reader
+            return pcv.timeline(ev, documents=referral_reader.read(self.db, pid, cfg=cfg))
         return {
             "background": lambda: pcv.role_order(pcv.background(ev), role),
             "participants": lambda: pcv.participants(self.db, pid),
             "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
             "previsit": lambda: pcv.previsit(self.db, ev, now),
-            "timeline": lambda: pcv.timeline(ev),
             "observations": lambda: pcv.observations(self.db, ev, cfg=cfg),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
             "handoff": lambda: pcv.handoff(self.db, ev),

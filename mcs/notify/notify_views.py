@@ -1088,11 +1088,13 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
             label = {"measured_on": "測定日の記載", "observed_on": "観察日の記載",
-                     "onset": "発症日の記載", "last_confirmed_on": "最終確認日の記載"}.get(
+                     "onset": "発症日の記載", "last_confirmed_on": "最終確認日の記載",
+                     "referral_event": "出来事の記載"}.get(
                          item.get("event_date_kind"), "時点の記載")
             rest += f" · {label}: {item['event_date_text']}"
         if ocr:
-            return "文書日時未確認", rest, room if ocr_current else None
+            date = item.get("event_date_text") if item.get("event_date_kind") == "referral_event" else None
+            return date or "文書日時未確認", rest, room if ocr_current else None
         dated = posted_at(item) is not None
         date = "更新日時未確認" if karte and not dated else when(item)
         return date, rest, (room if dated and not karte else None)
@@ -1311,6 +1313,15 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             if group["no_record"]:
                 head.append(f"{day}の前後14日で記載なし: "
                             + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
+    elif section == "timeline":
+        import referral_reader
+        from referral_document import HEADER_FIELDS
+        view = views.timeline(ev, documents=referral_reader.read(db, project_id, cfg=cfg))
+        add(view["items"], "")
+        for item in view.get("document_events", []):
+            add([item], "紹介状の記載（日付順）" if item["document_time_known"] else "紹介状の記載（時点不明）")
+        for document in view.get("referral_documents", []):
+            add([item for item in document["fields"] if item["field"] in HEADER_FIELDS], "紹介状の基本情報")
     else:
         view = views.replies(db, project_id) if section == "replies" else views.timeline(ev)
         # one group whose heading would only repeat the view title
@@ -1323,6 +1334,19 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                        if row["quotes"] else tail)
     context_coverage = ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
+    document_coverage = view.get("document_coverage")
+    if document_coverage is not None:
+        state = document_coverage.get("state")
+        if state == "disabled":
+            status.append("紹介状: OCR無効・内容未点検")
+        elif state != "observed":
+            status.append("紹介状: 解析状況不明")
+        else:
+            status.append(f"紹介状: 確認対象の添付 {document_coverage.get('attachments_examined', 0)}件 / "
+                          f"紹介状 {document_coverage.get('documents', 0)}件 / "
+                          f"未解析 {document_coverage.get('pending', 0)}件"
+                          + ("（表示上限あり）" if document_coverage.get("limited") else "")
+                          + ("・点検未完了" if not document_coverage.get("complete") else ""))
     if ev.get("as_of"):
         status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     if section != "care_events":
