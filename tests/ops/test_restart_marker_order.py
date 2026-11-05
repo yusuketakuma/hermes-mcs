@@ -1,4 +1,5 @@
 """Synthetic launchd workers capture the update hold at import time."""
+from ops_testkit import patch_lifecycle_lookup
 import json
 import subprocess
 from pathlib import Path
@@ -16,9 +17,9 @@ def runtime(request, tmp_path, monkeypatch):
     data.mkdir()
     (tmp_path / 'config.json').write_text(json.dumps({'runtime_mode': 'hermes'}))
     marker = data / 'marker'
-    monkeypatch.setattr(tool, 'DATA', str(data))
-    monkeypatch.setattr(tool, 'MARKER_PATH', str(marker))
-    monkeypatch.setattr(tool, 'AGENTS_DIR', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, tool, 'DATA', str(data))
+    patch_lifecycle_lookup(monkeypatch, tool, 'MARKER_PATH', str(marker))
+    patch_lifecycle_lookup(monkeypatch, tool, 'AGENTS_DIR', str(tmp_path))
     labels = ('ai.mcs.first', 'ai.mcs.second')
     if request.param == 'updater':
         monkeypatch.setattr(tool.service_contract, 'RESIDENT_LABELS', labels)
@@ -26,9 +27,9 @@ def runtime(request, tmp_path, monkeypatch):
         monkeypatch.setattr(tool.service_contract, 'WATCHER_LABELS', ())
         restart = tool.restart_agents
     else:
-        monkeypatch.setattr(tool, 'RESIDENT_LABELS', labels)
-        monkeypatch.setattr(tool, '_check_recovery_root', lambda: None)
-        monkeypatch.setattr(tool, '_runtime_mode', lambda: 'hermes')
+        patch_lifecycle_lookup(monkeypatch, tool, 'RESIDENT_LABELS', labels)
+        patch_lifecycle_lookup(monkeypatch, tool, '_check_recovery_root', lambda: None)
+        patch_lifecycle_lookup(monkeypatch, tool, '_runtime_mode', lambda: 'hermes')
         restart = tool._restart_drainers
     running = set(labels)
     calls = []
@@ -47,11 +48,11 @@ def runtime(request, tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, rc if verb == 'print' else 0, out, '')
     for label in labels:
         (tmp_path / (label + '.plist')).write_text('synthetic')
-    monkeypatch.setattr(tool, '_run' if request.param == 'updater' else '_launchctl',
+    patch_lifecycle_lookup(monkeypatch, tool, '_run' if request.param == 'updater' else '_launchctl',
                         launch if request.param == 'updater' else lambda args, **kw: launch(['launchctl', *args], **kw))
-    monkeypatch.setattr(tool, '_bootstrap_agent', lambda label, plist: launch(['launchctl', 'bootstrap', plist]).returncode == 0)
+    patch_lifecycle_lookup(monkeypatch, tool, '_bootstrap_agent', lambda label, plist: launch(['launchctl', 'bootstrap', plist]).returncode == 0)
     clock = iter(i / 10 for i in range(10000))
-    monkeypatch.setattr(tool, 'time', SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None))
+    patch_lifecycle_lookup(monkeypatch, tool, 'time', SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None))
     return tool, restart, marker, labels, running, calls, fail_stop
 
 
@@ -83,7 +84,7 @@ def test_unverified_stop_keeps_hold_and_never_launches(runtime):
 def test_failed_hold_removal_never_launches(runtime, monkeypatch):
     tool, restart, marker, _, _, calls, _ = runtime
     marker.write_text('update')
-    monkeypatch.setattr(tool, '_remove_marker', lambda: None)
+    patch_lifecycle_lookup(monkeypatch, tool, '_remove_marker', lambda: None)
     assert restart() == ['update_marker_unverifiable']
     assert marker.exists()
     assert not any(verb in ('bootstrap', 'kickstart') for verb, _ in calls)

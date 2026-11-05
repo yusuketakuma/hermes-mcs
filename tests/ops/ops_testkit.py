@@ -4,6 +4,11 @@ message/extract_v1 row writers, the updater's temp git repos, schema
 DBs and restore-consent receipts, and the path loader for the
 repo-external recovery tool.  Not a test module (no ``test_`` prefix);
 sibling files import it via the tests/ sys.path bootstrap."""
+import update_apply
+import update_cli
+import update_repository
+import update_runtime_migration
+import update_services
 import update_execution
 import update_lifecycle_context
 import update_planning
@@ -20,6 +25,7 @@ import subprocess
 import sys
 import time
 import uuid
+from types import ModuleType
 from contextlib import suppress
 from pathlib import Path
 
@@ -218,14 +224,47 @@ def select_updater_service_python(monkeypatch, updater, python):
     """Select one synthetic interpreter without masking caller-owned path facts."""
     from dataclasses import replace
     factory = updater._service_paths
-    monkeypatch.setattr(updater, "_service_paths",
-                        lambda: replace(factory(), hermes_python=python))
+    patch_lifecycle_lookup(monkeypatch, updater, "_service_paths",
+                           lambda: replace(factory(), hermes_python=python))
     monkeypatch.setattr(update_execution, '_service_paths', updater._service_paths)
     monkeypatch.setattr(update_lifecycle_context, '_service_paths', updater._service_paths)
     monkeypatch.setattr(update_planning, '_service_paths', updater._service_paths)
     monkeypatch.setattr(update_preflight, '_service_paths', updater._service_paths)
     monkeypatch.setattr(update_recovery, '_service_paths', updater._service_paths)
     monkeypatch.setattr(update_restore, '_service_paths', updater._service_paths)
+
+
+def lifecycle_lookup_owners(tool, name):
+    """Keep one synthetic replacement in its facade and actual, generation-bound lookup owners."""
+    yield tool
+    if not isinstance(tool, ModuleType):
+        return
+    if vars(tool).get("UpdateError") is update_lifecycle_context.UpdateError:
+        namespaces = (update_lifecycle_context, update_repository, update_preflight,
+                      update_planning, update_services, update_runtime_migration,
+                      update_execution, update_apply, update_restore, update_recovery, update_cli)
+    else:
+        # Recovery imports use unique packages: never patch a different loaded generation.
+        support = vars(tool).get("_support")
+        names = {"mcs_recovery_gateway", "mcs_recovery_core",
+                 "mcs_recovery_services", "mcs_recovery_database"}
+        if (not isinstance(support, dict) or set(support) != names
+                or any(not isinstance(value, ModuleType) for value in support.values())):
+            return
+        packages = {value.__package__ for value in support.values()}
+        package = next(iter(packages), None)
+        if len(packages) != 1 or not isinstance(package, str) or not package.startswith("_mcs_recovery_"):
+            return
+        namespaces = tuple(support.values())
+    for owner in namespaces:
+        if owner is not tool and name in vars(owner):
+            yield owner
+
+
+def patch_lifecycle_lookup(monkeypatch, tool, name, value):
+    """Patch one original test boundary without changing its value, stub or target generation."""
+    for owner in lifecycle_lookup_owners(tool, name):
+        monkeypatch.setattr(owner, name, value)
 
 
 class _FakeLaunchd:

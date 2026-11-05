@@ -5,6 +5,7 @@ need neither Git history nor a live database. Service/Git boundaries in public
 rollback are stubbed; SQLite migration, backup, consent, replacement,
 reconciliation, locks and updater bookkeeping remain real.
 """
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_cli
 import update_execution
@@ -264,7 +265,7 @@ def updater(tmp_path, monkeypatch):
         "MANIFEST_PATH": data / "service_manifest.json", "BACKUP_DIR": data / "backups",
     }
     for name, path in paths.items():
-        monkeypatch.setattr(mcs_update, name, str(path))
+        patch_lifecycle_lookup(monkeypatch, mcs_update, name, str(path))
     select_updater_service_python(monkeypatch, mcs_update, str(selected))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda *a, **kw: True)

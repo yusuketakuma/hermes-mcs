@@ -418,13 +418,13 @@ def test_old_minimal_snapshot_reports_unknown_schema_without_writes():
 
 
 def test_same_html_changed_parser_text_is_a_real_bound_source_change(store, monkeypatch):
-    import ledger as ledger_module
+    import ledger_capture
     message = save(store, 1, '本人は本日、合成薬Aを中止しました。')
     old_id, _ = publish(store, 1)
     old_binding = loss.source_binding(store.db, 1, 1)
     source_hash = row(store, 1)['content_hash']
-    original_parser = ledger_module.html_to_text
-    monkeypatch.setattr(ledger_module, 'html_to_text', lambda body: original_parser(body).replace('合成薬A', '合成薬B'))
+    original_parser = ledger_capture.html_to_text
+    monkeypatch.setattr(ledger_capture, 'html_to_text', lambda body: original_parser(body).replace('合成薬A', '合成薬B'))
     store.save_messages([message], project_id=1)
     assert row(store, 1)['content_hash'] == source_hash
     assert loss.source_binding(store.db, 1, 1) != old_binding

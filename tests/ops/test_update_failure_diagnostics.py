@@ -1,4 +1,5 @@
 """Apply errors survive recovery holds without exposing child output or restarting."""
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_cli
 import update_execution
@@ -32,7 +33,7 @@ def test_post_merge_failure_survives_early_recovery_hold(
 
     for name in ("_rollback_tree", "restart_agents", "restart_services", "_enqueue_notice",
                  "_remove_marker"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     monkeypatch.setattr(updater.mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
     monkeypatch.setattr(updater, "_apply_validate_args", lambda *_a, **_k: None)
     monkeypatch.setattr(update_apply, '_apply_validate_args', updater._apply_validate_args)

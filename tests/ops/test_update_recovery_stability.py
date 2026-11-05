@@ -1,4 +1,5 @@
 """Recovery retains interrupted state until workers actually restart."""
+from ops_testkit import patch_lifecycle_lookup
 import update_apply
 import update_cli
 import update_execution
@@ -496,7 +497,7 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
 
     for name in ("_git", "_git_out", "_restore_db", "restart_agents", "_enqueue_notice",
                  "_finish_recovery", "_undo_interrupted_migration", "_tree_clean"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     for _ in range(2):
         assert updater.recover_interrupted() == 1
         after = updater.journal_store.load_state(updater.STATE_PATH)
@@ -713,7 +714,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
 
     for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
                  "_enqueue_notice", "quiesce", "_reinstall"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
@@ -791,7 +792,7 @@ def test_invalid_runtime_migration_is_preserved_before_any_action(
 
     for name in ("_runtime_venv", "_clean_stale_git_locks", "journal", "quiesce",
                  "restart_agents", "_enqueue_notice", "_reinstall"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     if operation == "recover":
         assert updater.recover_interrupted() == 1
     else:
@@ -880,10 +881,10 @@ def test_flagless_rollback_restore_failure_retains_durable_hold(
     def forbidden(*args, **kwargs):
         pytest.fail("failed restore must not restart, clear the marker or write a DB notice")
 
-    monkeypatch.setattr(tool, "_restore_db", fail_restore)
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", fail_restore)
     for name in (("restart_agents", "restart_services", "_remove_marker", "_enqueue_notice")
                  if engine == "updater" else ("_restart_drainers", "_restart_services", "_remove_marker")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1 and calls == [True]
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
     assert Path(updater.MARKER_PATH).read_text() == "synthetic writer hold"
@@ -912,7 +913,7 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
             return "restore_consent_pending:" + report["report_id"]
         return None
 
-    monkeypatch.setattr(tool, "_restore_db", restore)
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", restore)
     if engine == "updater":
         monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
         monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
@@ -922,10 +923,10 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
         monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
         monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
     else:
-        monkeypatch.setattr(tool, "_runtime_mode", lambda: "hermes")
-        monkeypatch.setattr(tool, "_reconcile_membership", lambda snapshot: [])
-        monkeypatch.setattr(tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
-        monkeypatch.setattr(tool, "_restart_services", lambda *a, **k: 0)
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_reconcile_membership", lambda snapshot: [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
     assert recover() == 0 and called == [True]
     state = updater.journal_store.load_state(updater.STATE_PATH)
     if outcome == "consent":
@@ -955,10 +956,10 @@ def test_flagless_rollback_does_not_overwrite_changed_journal(
     def forbidden(*args, **kwargs):
         pytest.fail("changed rollback identity must not resume or clear hold")
 
-    monkeypatch.setattr(tool, "_restore_db", restore)
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", restore)
     for name in (("restart_agents", "restart_services", "_remove_marker", "_enqueue_notice")
                  if engine == "updater" else ("_restart_drainers", "_restart_services", "_remove_marker")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1 and len(changed) == 1
     assert Path(updater.STATE_PATH).read_bytes() == changed[0]
     assert Path(updater.MARKER_PATH).exists() and restarts == []
@@ -998,7 +999,7 @@ def test_schema_rollback_rejects_missing_or_invalid_backup_before_reset(
     monkeypatch.setattr(update_repository, '_git_out', updater._git_out)
     monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     for name in ("_restore_db", "restart_agents", "restart_services"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     if entry_point == "manual":
         assert updater.rollback() != 0
     else:
@@ -1042,12 +1043,12 @@ def test_legacy_rollback_creates_hold_before_head_classification(
     def forbidden(*args, **kwargs):
         pytest.fail("unverified rollback must not restart, notify, reset, or clear its marker")
 
-    monkeypatch.setattr(tool, "_head_sha" if engine == "updater" else "_head", measured_head)
-    monkeypatch.setattr(tool, "_restore_db", fail_restore)
+    patch_lifecycle_lookup(monkeypatch, tool, "_head_sha" if engine == "updater" else "_head", measured_head)
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", fail_restore)
     for name in (("restart_agents", "restart_services", "_remove_marker", "_enqueue_notice")
                  if engine == "updater" else
                  ("_restart_drainers", "_restart_services", "_remove_marker", "_notify")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1
     assert observed and restores == ([True] if head_position == "target" else [])
     assert marker.is_file() and not marker.is_symlink()
@@ -1082,7 +1083,7 @@ def test_legacy_schema_rollback_invalid_backup_preserves_source(
     for name in (("_head_sha", "_restore_db", "restart_agents", "restart_services", "_enqueue_notice")
                  if engine == "updater" else
                  ("_head", "_restore_db", "_restart_drainers", "_restart_services", "_notify")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1
     assert Path(live).read_bytes() == db_bytes and restarts == []
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
@@ -1112,7 +1113,7 @@ def test_legacy_rollback_refuses_symlink_marker_without_following_it(
     for name in (("_head_sha", "_restore_db", "restart_agents", "restart_services", "_enqueue_notice", "_remove_marker")
                  if engine == "updater" else
                  ("_head", "_restore_db", "_restart_drainers", "_restart_services", "_notify", "_remove_marker")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1
     assert marker.is_symlink() and target.read_text() == "unchanged synthetic target"
     assert Path(updater.STATE_PATH).read_bytes() == journal
@@ -1156,7 +1157,7 @@ def test_manual_rollback_preserves_changed_restore_journal(
     monkeypatch.setattr(update_restore, '_restore_db', updater._restore_db)
     for name in ("_cancel_unsent_notices", "_services_reconcile", "restart_agents", "restart_services",
                  "_enqueue_notice", "_remove_marker"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     monkeypatch.setattr(service_management, "retire_to_snapshot", forbidden)
     assert updater.rollback("synthetic-original-command") != 0
     assert len(saved) == 1 and Path(updater.STATE_PATH).read_bytes() == saved[0]
@@ -1184,7 +1185,7 @@ def test_legacy_rollback_refuses_fifo_marker_without_blocking(
     for name in (("_restore_db", "restart_agents", "_remove_marker")
                  if engine == "updater" else
                  ("_restore_db", "_restart_drainers", "_remove_marker")):
-        monkeypatch.setattr(tool, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, tool, name, forbidden)
     assert recover() == 1
     assert marker.exists() and Path(updater.STATE_PATH).read_bytes() == journal
     assert Path(live).read_bytes() == db_bytes and restarts == []
@@ -1232,7 +1233,7 @@ def test_manual_rollback_checks_frozen_journal_before_reset(updater, tmp_path, m
     monkeypatch.setattr(update_restore, '_git_out', updater._git_out)
     for name in ("_restore_db", "_cancel_unsent_notices", "_services_reconcile", "restart_agents",
                  "restart_services", "_enqueue_notice", "_remove_marker"):
-        monkeypatch.setattr(updater, name, forbidden)
+        patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     monkeypatch.setattr(service_management, "retire_to_snapshot", forbidden)
     assert updater.rollback("synthetic-original-command") != 0
     assert len(saved) == 1 and Path(updater.STATE_PATH).read_bytes() == saved[0]
