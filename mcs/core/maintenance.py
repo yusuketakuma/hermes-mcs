@@ -1016,10 +1016,10 @@ def _source_repair_cloud_pins(con, rows):
                                (slot_kind, pid, meta['repair_input_key'])).fetchone():
                 held.add(pid)
             continue
+        import original_source_keys
         source_key, artifact_id = meta.get('source_key'), meta.get('reservation_artifact_id')
         if (not ((type(source_key) is int and source_key > 0)
-                 or (isinstance(source_key, str) and re.fullmatch(r'karte:[1-9][0-9]{0,18}', source_key)
-                     and int(source_key[6:]) < 2**63))
+                 or original_source_keys.valid(source_key))
                 or not valid_hash(meta.get('unit_key')) or type(artifact_id) is not int
                 or not 0 < artifact_id < 2**63 or not uuid_ok(meta.get('reservation_id'))
                 or not valid_hash(meta.get('request_fp'))):
@@ -1062,6 +1062,63 @@ def _source_repair_cloud_pins(con, rows):
     return held, reserve_ids
 
 
+def _attachment_cloud_pins(con, rows):
+    """Keep adopted OCR receipts and unfinished OCR owners without granting adoption."""
+    from mcs_util import strict_json
+
+    def parsed(raw):
+        try:
+            value = strict_json(raw)
+        except (TypeError, ValueError, RecursionError, OverflowError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    receipt_kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition')
+    batch = [(row, parsed(row[3])) for row in rows if row[1] in receipt_kinds]
+    uuids = {meta['reservation_id'] for _, meta in batch if meta is not None
+             and isinstance(meta.get('reservation_id'), str)}
+    held, references, protected = set(), set(), set()
+    has_ocr = con.execute("SELECT 1 FROM artifacts WHERE kind='attachment_extract_v1' OR "
+        "kind='cloud_usage_reserve' AND CASE WHEN json_valid(meta) THEN "
+        "json_extract(meta,'$.owner.source_type')='attachment_ocr' END LIMIT 1").fetchone() is not None
+    for pid, raw in con.execute("SELECT project_id,CASE WHEN typeof(content)='text' AND length(content)<=4194304 "
+            "THEN content END FROM artifacts WHERE kind='attachment_extract_v1'"):
+        if type(pid) is not int or pid <= 0:
+            raise MaintenanceError('attachment_inference_retention_scope_invalid')
+        doc = parsed(raw)
+        if doc is None:
+            held.add(pid)
+            continue
+        if doc.get('stage') == 'local':
+            continue
+        ids = doc.get('reservation_artifact_ids')
+        if (doc.get('stage') != 'cloud' or not isinstance(ids, list) or not 0 < len(ids) <= 512
+                or any(type(item) is not int or not 0 < item < 2**63 for item in ids)):
+            held.add(pid)
+            continue
+        references.update(ids)
+    # Follow global UUID identity too: deleting a conflicting scope must not erase rejection evidence.
+    for artifact_id, raw in con.execute("SELECT artifact_id,CASE WHEN typeof(meta)='text' AND length(meta)<=32768 "
+            "THEN meta END FROM artifacts WHERE kind='cloud_usage_reserve' AND ("
+            "artifact_id IN (SELECT value FROM json_each(?)) OR CASE WHEN json_valid(meta) THEN "
+            "json_extract(meta,'$.reservation_id') IN (SELECT value FROM json_each(?)) END)",
+            (json.dumps(sorted(references)), json.dumps(sorted(uuids)))):
+        meta = parsed(raw)
+        owner = meta.get('owner') if meta else None
+        if artifact_id in references or isinstance(owner, dict) and owner.get('source_type') == 'attachment_ocr':
+            references.add(artifact_id)
+            if meta is not None and isinstance(meta.get('reservation_id'), str):
+                protected.add(meta['reservation_id'])
+    pinned = set()
+    for row, meta in batch:
+        owner = meta.get('owner') if meta else None
+        if (row[0] in references or meta is None and has_ocr
+                or meta is not None and (isinstance(meta.get('reservation_id'), str) and meta['reservation_id'] in protected
+                    or isinstance(owner, dict) and owner.get('source_type') == 'attachment_ocr')):
+            pinned.add(row[0])
+    return held, pinned
+
+
 def _mark_cloud_usage_pruned(con, cutoff):
     """Durably record how far usage was pruned, in the deleting transaction: a period
     budget starting before it cannot be counted even if the clock later moves back."""
@@ -1096,6 +1153,9 @@ def _prune_cloud_usage(con, cutoff):
             if not rows:
                 return total
             held, pinned_ids = _source_repair_cloud_pins(con, rows)
+            attachment_held, attachment_ids = _attachment_cloud_pins(con, rows)
+            held.update(attachment_held)
+            pinned_ids.update(attachment_ids)
             _mark_cloud_usage_pruned(con, cutoff)
             for artifact_id, kind, pid, raw in rows:
                 if kind in ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition') and (pid in held or artifact_id in pinned_ids):

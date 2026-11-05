@@ -202,6 +202,11 @@ _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__
                              "patient_context_scan": patient_context_scan.__file__,
                              "patient_context_schedule": patient_context_schedule.__file__,
                              "patient_readiness_witness": patient_readiness_witness.__file__})
+_LOADED_SOURCE_PATHS.update({
+    'attachment_ocr': str(Path(__file__).resolve().parents[1] / 'attachment_ocr.py'),
+    'attachment_inference': str(Path(__file__).resolve().parents[1] / 'attachment_inference.py'),
+    'attachment_paid_results': str(Path(__file__).resolve().parents[1] / 'attachment_paid_results.py'),
+    'original_source_keys': str(Path(__file__).resolve().parents[2] / 'core' / 'original_source_keys.py')})
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in _LOADED_SOURCE_PATHS.items()}

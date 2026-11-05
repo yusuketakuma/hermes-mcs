@@ -334,6 +334,7 @@ def worker(parent, *, index=None):
     from mcs_util import DB, CONF_PATH, ProviderSettingsUnreadable, load_config
     initial = writer_lock.updater_state()
     phase = 0
+    ocr_turn = True
     _event("cloud_worker_started", parent=parent, source_digests=extract_llm._LOADED_SOURCE_DIGESTS)
     while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
         if not extract_llm._context_memory_available():
@@ -433,10 +434,20 @@ def worker(parent, *, index=None):
                     if phase % 2 == 0:
                         waiting["code"] = None
                         with _phase_progress("extract"):
-                            result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
-                                per_write_lock=True, workers=1, background=True,
-                                cloud_only=True, prioritize_patients=True,
-                                admitted_ids=extract_llm.cloud_backlog_admissions(ledger, cfg), carry=carry)
+                            result = None
+                            if (ocr_turn and not carry and isinstance(cfg.get('attachment_ocr'), dict)
+                                    and cfg['attachment_ocr'].get('enabled') is True):
+                                import attachment_inference
+                                ocr = attachment_inference.run_pending(ledger, cfg, stage='cloud',
+                                    deadline=time.monotonic() + 120, limit=1)
+                                if ocr['done'] or ocr['deferred']:
+                                    result = {**ocr, 'attachment_pages': True}
+                            ocr_turn = not ocr_turn
+                            if result is None:
+                                result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
+                                    per_write_lock=True, workers=1, background=True,
+                                    cloud_only=True, prioritize_patients=True,
+                                    admitted_ids=extract_llm.cloud_backlog_admissions(ledger, cfg), carry=carry)
                         carry = result.get("carry", carry)
                         if result.get("updated"):
                             allow_exit_settle = False
@@ -477,7 +488,8 @@ def worker(parent, *, index=None):
                             os.close(lock)
                     record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
                         "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
-                        "done_unit": "messages" if phase % 2 == 0 else "jobs",
+                        "done_unit": ("pages" if result.get('attachment_pages')
+                                      else "messages" if phase % 2 == 0 else "jobs"),
                         "completion_basis": "saved_work_units_not_patient_clinical_or_delivery_completion",
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
                     record.update(_pass_timing_observation(result))

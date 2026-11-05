@@ -584,7 +584,89 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
             if state["total"]:
                 progress += f"（{state['total']}区間中{state['completed']}区間完了）"
         block["text"] += "\n" + progress
+    records = attachment_ocr_records(db, mid)
+    if records:
+        block["text"] += "\n📎 文字起こし " + " · ".join(
+            f"{_ocr_label(record)} {len(record['pages'])}ページ {_ocr_analysis_label(record)}" if record["pages"]
+            else _ocr_label(record) for record in records)
     return block
+
+
+def attachment_ocr_records(db, mid):
+    """Read current OCR sources for this post without treating their text as metadata."""
+    import attachment_ocr
+    import attachment_inference
+    from mcs_util import load_config
+    cfg = load_config()
+    records = []
+    for row in db.execute(
+            "SELECT a.attachment_id,a.name,m.project_id FROM attachments a "
+            "JOIN messages m ON m.message_id=a.message_id "
+            "WHERE a.message_id=? AND m.body_state IS NOT 'deleted' ORDER BY a.attachment_id", (mid,)):
+        doc = attachment_ocr.current(db, row["attachment_id"], project_id=row["project_id"])
+        status = (doc if doc else attachment_ocr.view(
+            db, row["attachment_id"], project_id=row["project_id"]))
+        if status["state"] in ("unprocessed", "unavailable") and not status.get("artifact_id"):
+            continue
+        analysis = []
+        for page in doc['pages'] if doc else []:
+            if not page['text'].strip():
+                continue
+            key = f"attachment_ocr:{doc['artifact_id']}:{page['page']}"
+            result = attachment_inference.current(db, row['project_id'], key, cfg=cfg)
+            analysis.append((result['artifact_id'], result['result_hash'], result['stage'],
+                             result['require_cloud'], result['ready']) if result else None)
+        records.append({"attachment_id": row["attachment_id"], "name": row["name"],
+                        "state": status["state"], "artifact_id": status.get("artifact_id"),
+                        "text_hash": status.get("text_hash"), "pages": doc["pages"] if doc else [],
+                        'analysis': analysis})
+    return records
+
+
+def _ocr_label(record):
+    labels = {"complete": "完了", "empty": "文字なし", "failed": "失敗",
+              "unsupported": "対象外", "unavailable": "利用不可", "processing": "処理中"}
+    return labels.get(record["state"], "処理待ち")
+
+
+def _ocr_analysis_label(record):
+    pages = record['analysis']
+    if not pages:
+        return ''
+    local = sum(value is not None for value in pages)
+    cloud = sum(value is not None and value[2] == 'cloud' and value[4] for value in pages)
+    local_label = '✓' if local == len(pages) else f'{local}/{len(pages)}'
+    if any(value is None for value in pages):
+        cloud_label = '待ち'
+    elif any(value[3] is None for value in pages):
+        cloud_label = '?'
+    elif all(value[3] is False for value in pages):
+        cloud_label = '対象外'
+    else:
+        cloud_label = '✓' if cloud == len(pages) else f'{cloud}/{len(pages)}'
+    return f'🖥 {local_label} · ☁ {cloud_label}'
+
+
+def original_post_text(db, mid, message):
+    """Keep the chat body intact and append separately labelled attachment text."""
+    body = message["body_text"] or ("（本文なし）" if message["body_state"] in (None, "full")
+                                    else "（本文未取得）")
+    records = attachment_ocr_records(db, mid)
+    if not records:
+        return body
+    sections = [body, SECTION_RULE, "📎 添付の文字起こし"]
+    for record in records:
+        name = inline_text(record["name"] or "添付ファイル", 120)
+        sections.append(f"{name} · {_ocr_label(record)} {_ocr_analysis_label(record)}".rstrip())
+        for page in record["pages"]:
+            sections.extend([f"{page['page']}ページ", page["text"]])
+    return "\n".join(sections)
+
+
+def _ocr_generations(db, mids):
+    return {mid: [(r["attachment_id"], r["name"], r["artifact_id"], r["text_hash"], r["state"], r['analysis'])
+                  for r in records]
+            for mid in mids if (records := attachment_ocr_records(db, mid))}
 
 
 def extraction_failed(db, mid) -> bool:
@@ -678,7 +760,8 @@ def source_fingerprint(db, card, *, legacy_scope=False) -> str:
         # Selected artifact generations invalidate actions after corrections.
         ready = structured_view.fact_generations(
             db, [m["message_id"] for m in msgs])
-        return payload_hash({"k": "t", "msgs": [
+        ocr = _ocr_generations(db, [m["message_id"] for m in msgs])
+        return payload_hash({**({"attachment_ocr": ocr} if ocr else {}), "k": "t", "msgs": [
             (m["message_id"], m["content_hash"], m["body_state"],
              ready.get(m["message_id"], {}))
             for m in msgs],
@@ -705,14 +788,18 @@ def source_fingerprint(db, card, *, legacy_scope=False) -> str:
     # Evidence may change before the signal evaluator publishes its
     # next artifact, including on pages other than the one displayed.
     evidence_state = []
+    visible_evidence_ids = []
     ready = structured_view.fact_generations(db, [mid for _, mid in evidence_ids])
     for pid, mid in sorted(evidence_ids):
         row = db.execute(
             "SELECT content_hash,body_state FROM messages WHERE message_id=? AND project_id=?",
             (mid, pid)).fetchone()
+        if row:
+            visible_evidence_ids.append(mid)
         evidence_state.append((pid, mid, tuple(row) if row else None,
                                ready.get(mid, {}) if row else {}))
-    return payload_hash({"k": kind, "m": [
+    ocr = _ocr_generations(db, visible_evidence_ids)
+    return payload_hash({**({"attachment_ocr": ocr} if ocr else {}), "k": kind, "m": [
         (k, sigs[k]["artifact_id"], sigs[k]["content"].get("state"))
         for k in keys if k in sigs], "names": names,
         "evidence": evidence_state,
@@ -843,7 +930,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
         stamp_line = thread_stamp_row(
             db, mid, m["sender_id"] if "sender_id" in m.keys() else None,
             observed_time=stamp_time)
-    body = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full") else "（本文未取得）")
+    body = original_post_text(db, mid, m)
     if layout >= 2:
         if stamp_line:
             out.append(stamp_line)

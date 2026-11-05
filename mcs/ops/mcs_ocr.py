@@ -17,6 +17,7 @@ import attachment_ocr  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from mcs_util import DB, load_config  # noqa: E402
 import writer_lock  # noqa: E402
+from safe_io import atomic_write  # noqa: E402
 from writer_lock import acquire_run_lock  # noqa: E402
 
 DATA = str(Path(DB).parent)
@@ -44,7 +45,30 @@ def run(cfg):
     finally:
         os.close(fd)
     try:
-        return attachment_ocr.run_pending(ledger, cfg, deadline=time.monotonic() + 125, limit=1)
+        result = attachment_ocr.run_pending(
+            ledger, cfg, deadline=time.monotonic() + cfg["attachment_ocr"].get("timeout_seconds", 120) + 5, limit=1)
+        import attachment_inference
+        inference = attachment_inference.run_pending(ledger, cfg, stage='local',
+                                                     deadline=time.monotonic() + 120, limit=1)
+        result['local_done'] = inference['done']
+        result['local_deferred'] = inference['deferred']
+        if result.get("complete", 0) or result.get("empty", 0) or inference['done']:
+            fd = writer_lock.wait_run_lock(os.path.join(DATA, "run.lock"), wait_s=5,
+                                          expected_code_stamp=generation[1],
+                                          marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME))
+            if fd is None:
+                result["reason"] = "snapshot_deferred"
+            else:
+                try:
+                    if writer_lock.updater_state() != generation:
+                        result["reason"] = "writer_blocked"
+                    else:
+                        import maintenance
+                        if maintenance.refresh_snapshot(DB, force=True, deadline=time.monotonic() + 5) is None:
+                            result["reason"] = "snapshot_deferred"
+                finally:
+                    os.close(fd)
+        return result
     finally:
         ledger.close()
 
@@ -58,8 +82,15 @@ def main():
         result = run(load_config())
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
+    if Path(DATA).is_dir():
+        try:
+            atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
+                         lambda stream: json.dump({"at": time.time(), **result}, stream), mode=0o600)
+        except (OSError, ValueError):
+            result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
-    return 0 if result.get("reason") in (None, "disabled", "writer_busy", "busy") else 1
+    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0)
+                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
 
 
 if __name__ == "__main__":

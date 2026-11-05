@@ -247,6 +247,10 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 "active_dictionary_state": active_state,
                 "matching_pending_on_page": matching_pending,
                 "snapshot": view.meta, "gapless_verified": False}
+    if (cfg or {}).get('attachment_ocr', {}).get('enabled', False):
+        import mcs_queries
+        coverage['attachments'] = 'excluded_from_medication_timeline'
+        coverage['attachment_processing'] = mcs_queries.attachment_ocr_coverage(view.db, project_id, cfg)
     states = []
     if withdrawn:
         states.append("削除された投稿あり")

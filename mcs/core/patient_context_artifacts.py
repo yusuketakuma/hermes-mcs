@@ -7,6 +7,7 @@ import time
 
 from clinical_chunking import PLAN_VERSION
 import patient_context_plan as context_plan
+import original_source_keys
 import patient_context_scan as context_scan
 import re
 
@@ -38,8 +39,7 @@ def _key(pid, source_key):
         raise _invalid()
     if type(source_key) is int and 0 < source_key < 2**63:
         return source_key
-    if (isinstance(source_key, str) and re.fullmatch(r'karte:[1-9][0-9]{0,18}', source_key)
-            and int(source_key[6:]) < 2**63):
+    if original_source_keys.valid(source_key):
         return source_key
     raise _invalid()
 
@@ -589,7 +589,7 @@ def source_occurrence(db, pid, source):
     binding = (dependency_loss.source_binding_from_row(source)
                if source.get("source") == "chat" and "_source_revision" in source else
                dependency_loss.source_binding(db, pid, source["message_id"],
-                   **({"source_key":context_plan.source_key(source)} if source["source"] == "karte_summary" else {})))
+                   **({"source_key":context_plan.source_key(source)} if isinstance(context_plan.source_key(source), str) else {})))
     if not scope or not valid_hash(binding):
         raise ValueError("nightly_source_repair_changed")
     return {"source_binding":binding, "first_seen":source.get("first_seen"),

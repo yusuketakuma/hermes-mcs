@@ -2,6 +2,7 @@
 from __future__ import annotations
 import llm_availability
 
+import json
 import os
 import shutil
 import sqlite3
@@ -9,7 +10,7 @@ import stat
 import time
 from contextlib import suppress
 
-from health_policy import HEALTH_REL, STATUS_MAX_BYTES
+from health_policy import HEALTH_REL, STATUS_MAX_BYTES, freshness_deadline
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -24,6 +25,55 @@ WAL_WARN_BYTES = 256 * 1024 * 1024
 SNAPSHOT_VERIFY_WARN_RATIO = 0.6
 DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
 DB_MAINT_STATE_MAX_BYTES = 65536
+
+
+def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
+    """Read bounded private OCR evidence without exposing source IDs, paths or text."""
+    import attachment_ocr
+    if not isinstance(cfg, dict):
+        return {"state": "unknown", "reason": "attachment_ocr_config_unavailable"}
+    settings = cfg.get("attachment_ocr", {})
+    if isinstance(settings, dict) and settings.get("enabled", False) is False:
+        return {"state": "disabled"}
+    if attachment_ocr.config_error(cfg):
+        return {"state": "unknown", "reason": "attachment_ocr_config_invalid"}
+    path = os.path.join(data, "attachment_ocr_status.json")
+    counts = ("complete", "empty", "failed", "unsupported", "deferred", "pending_failed",
+              "local_done", "local_deferred")
+    try:
+        value = json.loads(safe_io.read_private_bytes(path, limit=4096))
+        if (not isinstance(value, dict) or set(value) - {"at", "reason", "queue_status", *counts}
+                or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
+            raise ValueError("ocr_status_invalid")
+        reason = value.get("reason")
+        known = {None, "disabled", "busy", "writer_busy", "writer_blocked", "config_invalid",
+                 "database_unavailable", "runtime_unavailable", "local_processing_failed",
+                 "snapshot_deferred", "status_unavailable"}
+        if not isinstance(reason, (str, type(None))) or reason not in known:
+            raise ValueError("ocr_status_invalid")
+        if any(key in value and (type(value[key]) is not int or value[key] < 0) for key in counts):
+            raise ValueError("ocr_status_invalid")
+        if reason is None and any(key not in value for key in counts if key not in ("pending_failed", "local_done", "local_deferred")):
+            raise ValueError("ocr_status_invalid")
+        if "queue_status" in value and value["queue_status"] not in ("known", "partial"):
+            raise ValueError("ocr_status_invalid")
+    except FileNotFoundError:
+        return {"state": "unknown", "reason": "attachment_ocr_status_missing"}
+    except (OSError, ValueError, TypeError, RecursionError):
+        return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+    detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
+              **{key: value[key] for key in counts if key in value}}
+    if now - value["at"] > freshness_deadline(cfg):
+        return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
+    if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred"):
+        return {**detail, "state": "failed", "reason": "attachment_ocr_processing_failed"}
+    if value.get("deferred", 0) or reason is not None:
+        return {**detail, "state": "deferred", "reason": "attachment_ocr_processing_deferred"}
+    if value.get("queue_status") != "known" or "pending_failed" not in value:
+        return {**detail, "state": "unknown", "reason": "attachment_ocr_queue_unverified"}
+    if value.get("local_deferred", 0):
+        return {**detail, "state": "deferred", "reason": "attachment_ocr_local_inference_deferred"}
+    return {**detail, "state": "ok"}
 
 def prev_health() -> dict:
     """The previously published health block ({} when unreadable)."""
@@ -896,13 +946,16 @@ def build_health(db, result: dict, status: str,
         backup["local"] = {"state": "unknown", "newest_age_s": None,
                            "observed_at": now}
     backup_bad = backup["state"] not in ("ok", "disabled")
+    import notify_spool
+    ocr = attachment_ocr_health(notify_spool.data_root(db), cfg if checked else None, now)
+    ocr_bad = ocr["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
     disk_low = attachment_disk_low(free_mb) or skipped == "disk_low"
     # M7: a backup skipped for lack of time is news only once the newest
     # daily copy is older than a day — one late tick is not an incident
     age = maintenance.newest_backup_age_s() if skipped == "deadline" else 0
     backup_deferred = skipped == "deadline" and (age is None or age > 86400)
-    if (run_overdue or guard_violations or backup_bad
+    if (run_overdue or guard_violations or backup_bad or ocr_bad
             or backup_deferred) and overall == "ok":
         overall = "degraded"
     previous = prev_health()
@@ -921,6 +974,7 @@ def build_health(db, result: dict, status: str,
             ("run_deadline_exceeded", run_overdue),
             ("ledger_relation_violations", guard_violations),
             ("backup_not_verified", backup_bad),
+            (ocr.get("reason"), ocr_bad),
             ("collection_incomplete", coll["collection"] != "ok"),
             ("notification_failed", bool(notify_res.get("failed"))),
             ("notification_deferred", bool(notify_res.get("skipped"))),
@@ -941,6 +995,7 @@ def build_health(db, result: dict, status: str,
         "run": run,
         "ledger_guards": guards,
         "backup": backup,
+        "attachment_ocr": ocr,
         "at": now,
         "unread_at": unread_at(result, status, now),
         **coll,

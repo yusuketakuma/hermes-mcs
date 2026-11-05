@@ -226,7 +226,7 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
         scope = context_queries.patient_context_scope(db, pid)
         sources = []
         if scope:
-            for source in context_queries.patient_context_sources(db, pid, hydrate=hydrate):
+            for source in context_queries.patient_context_sources(db, pid, hydrate=hydrate, cfg=cfg):
                 _scan_check(db)
                 sources.append(source)
         signed = []
@@ -238,13 +238,17 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
         contract = _contract(cfg, pid) if contract is None else contract
         dependencies = dependency_loss.read(db, pid)
         acquisition = initial_import_state.acquisition_status(db, pid)
+        attachment_coverage = context_queries.attachment_ocr_coverage(db, pid, cfg)
         signed_scope = {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")} if scope else None
         if signed_scope is not None:
             signed_scope["permission_refusal"] = scope.get("fetch_reason") if scope.get("fetch_reason") in (
                 "forbidden", "permission_denied", "access_revoked") else None
+        signature_parts = [signed_scope, contract, signed, dependencies["signature"], acquisition["signature"]]
+        if attachment_coverage["mode"] != "off":
+            signature_parts.append(attachment_coverage["signature"])
         return {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
-                "acquisition": acquisition,
-                "source_sig": _digest([signed_scope, contract, signed, dependencies["signature"], acquisition["signature"]])}
+                "acquisition": acquisition, "attachment_coverage": attachment_coverage,
+                "source_sig": _digest(signature_parts)}
     finally:
         if owns_read:
             db.rollback()
@@ -265,7 +269,7 @@ def _cloud_input_binding(db, pid, snapshot):
     for offset in range(0, len(pairs), 64):
         bindings.extend(dependency_loss.source_bindings(db, pairs[offset:offset + 64]))
     for source in snapshot['sources']:
-        if source['source'] == 'karte_summary':
+        if isinstance(context_plan.source_key(source), str):
             bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
     if any(not valid_hash(binding) for binding in bindings):
         raise ValueError('nightly_cloud_source_changed')
@@ -574,6 +578,10 @@ def _coverage(db, pid, sources, contract, facts, *, cfg=None, read_proof=None):
                          "WHERE project_id=?", (pid,)).fetchone()
     attachments = db.execute("SELECT COUNT(*) FROM attachments a JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=?", (pid,)).fetchone()[0]
     records = [s for s in sources if s["source"] == "karte_summary"]
+    pages = [s for s in sources if s["source"] == "attachment_ocr"]
+    attachment_coverage = context_queries.attachment_ocr_coverage(db, pid, cfg or {})
+    page_unscanned = sum(not s.get("empty") and (not context_plan.source_usable(s)
+        or not scans.get(context_plan.source_key(s), {}).get("complete")) for s in pages)
     return {"fetched": len(messages), "analyzed": complete,
             "karte_records": {"stored": len(records), "historical": sum(bool(s.get("historical")) for s in records),
                 "analyzed": sum(bool(scans.get(context_plan.source_key(s), {}).get("complete")) for s in records if context_plan.source_usable(s)),
@@ -583,9 +591,24 @@ def _coverage(db, pid, sources, contract, facts, *, cfg=None, read_proof=None):
             "observed_empty": sum(s.get("body_state") in (None, "full") and s.get("body_length") == 0 for s in messages),
             "incomplete": sum(s.get("body_state") not in (None, "full", "deleted") for s in messages),
             "acquisition": dict(patient) if patient else None,
-            "attachments": {"count": attachments, "analysis": "not_assessed"},
+            "attachments": {"count": attachments, "pages": len(pages), "processing": attachment_coverage,
+                "analyzed": sum(context_plan.source_usable(s) and bool(scans.get(context_plan.source_key(s), {}).get("complete")) for s in pages),
+                "extraction_pending": sum(s.get("extraction_ready") is False for s in pages),
+                "unscanned": page_unscanned,
+                "analysis": ("not_assessed" if attachment_coverage["mode"] == "off" else
+                    "complete" if attachment_coverage["complete"] and not page_unscanned else "partial")},
             "evidence_supported": len(facts), "evidence_total": len(facts),
             "human_accuracy": None}
+
+
+def _hydrate_source_body(db, pid, source):
+    key = context_plan.source_key(source)
+    if isinstance(key, str):
+        import original_source_keys
+        original = original_source_keys.source(db, pid, key)
+        return original.get("body_text", "") if original else ""
+    row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?", (pid, key)).fetchone()
+    return row[0] if row else ""
 
 
 def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
@@ -599,9 +622,7 @@ def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
         if not source or source.get("historical") and not allow_historical:
             return False
         if "body_text" not in source:
-            row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                             (pid, source["message_id"])).fetchone()
-            source["body_text"] = row[0] if row else ""
+            source["body_text"] = _hydrate_source_body(db, pid, source)
         if not context_plan.validated_source_facts(source, [fact]) or fact["id"] in by_id:
             return False
         by_id[fact["id"]] = fact
@@ -812,11 +833,12 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                 and counts["eligible"] == counts["audited"] + counts["skipped"] and not counts["incomplete"]
                 and not progress.get("held") and not progress.get("failure") and current
                 and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"]
-                and cloud_extraction_ready)
+                and cloud_extraction_ready and snapshot["attachment_coverage"]["complete"])
     fetch_allowed = snapshot["acquisition"]["complete"]
     eligible = bool(complete and options(cfg)["publication"] and not scope.get("is_archived") and fetch_allowed)
     status = ("out_of_scope" if _out_of_scope(snapshot) else "off" if not options(cfg)["enabled"]
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
+              else "attachment_extraction_pending" if not snapshot["attachment_coverage"]["complete"]
               else "cloud_extraction_pending" if not cloud_extraction_ready
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
@@ -835,6 +857,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     return {VERSION_KEY: CURRENT_VERSION, "complete": bool(complete), "publication_eligible": eligible,
             "status": status, "sources": counts, "summary": {"current": bool(current),
             "published": bool(meta.get("published") and eligible)},
+            "attachments": snapshot["attachment_coverage"],
             "dependencies": {key: snapshot["dependencies"][key] for key in ("complete", "gaps", "signature", "coverage")
                              if key in snapshot["dependencies"]},
             "source_sig": snapshot["source_sig"], "contract": snapshot["contract"]}
@@ -911,9 +934,7 @@ def _context_view_input(db, pid, *, cfg, proof_for):
     for fact in facts:
         source = sources.get(fact.get("source_key")) if isinstance(fact, dict) else None
         if source and "body_text" not in source:
-            row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                             (pid, source["message_id"])).fetchone()
-            source["body_text"] = row[0] if row else ""
+            source["body_text"] = _hydrate_source_body(db, pid, source)
         if not source or not context_plan.validated_source_facts(source, [fact]):
             return None
     by_id = {f["id"]: f for f in facts}
@@ -936,9 +957,7 @@ def _context_view_input(db, pid, *, cfg, proof_for):
         if not scans.get(key, {}).get("complete"):
             continue
         if "body_text" not in source:
-            row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                             (pid, source["message_id"])).fetchone()
-            source["body_text"] = row[0] if row else ""
+            source["body_text"] = _hydrate_source_body(db, pid, source)
         for fact in _scan_facts(db, pid, source, current["contract"], scans.get(key, {})):
             if type(fact.get("found_at")) in (int, float) and fact["found_at"] <= as_of:
                 (historical if source.get("historical") else by_id).setdefault(fact["id"], fact)
@@ -1090,7 +1109,8 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
     scope = snapshot.get("scope") or {}
     if (_out_of_scope(snapshot) or scope.get("is_archived")
             or not snapshot["acquisition"]["complete"]
-            or not snapshot["dependencies"]["complete"]):
+            or not snapshot["dependencies"]["complete"] or not _sources_intact(snapshot["sources"])
+            or not snapshot["attachment_coverage"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
     scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
     for source in snapshot["sources"]:
@@ -1115,7 +1135,7 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
     scope = context_queries.patient_context_scope(db, pid)
     if (not scope or scope.get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
         raise ValueError("patient_source_quality_scope")
-    sources = list(context_queries.patient_context_sources(db, pid, mid=source_key))
+    sources = list(context_queries.patient_context_sources(db, pid, mid=source_key, cfg=cfg))
     if len(sources) != 1:
         raise ValueError("patient_source_quality_source")
     source = sources[0]
@@ -1223,7 +1243,7 @@ def _quality_assessment(scfg):
 
 def _source_quality_hold_key(db, pid, cfg, source, chunks_sig):
     binding = dependency_loss.source_binding(db, pid, source["message_id"],
-        **({"source_key": context_plan.source_key(source)} if source["source"] == "karte_summary" else {}))
+        **({"source_key": context_plan.source_key(source)} if isinstance(context_plan.source_key(source), str) else {}))
     scope = context_queries.patient_context_scope(db, pid)
     return _digest([cfg, _quality_code(), scope, binding, source.get("first_seen"),
                     context_plan.source_signature(source), chunks_sig])
@@ -2807,11 +2827,11 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or progress.get("summary_pending", False))
     cloud_ready = (not quality_required
                    or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
-                   and _sources_intact(snapshot["sources"])
+                   and _sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
                    and all(_scan_ready(scan) for scan in scans))
     snapshot["unfinished"] = bool(summary_needed or not snapshot["acquisition"]["complete"]
         or not snapshot["dependencies"]["complete"] or not _sources_intact(snapshot["sources"])
-        or any(not _scan_ready(scan) for scan in scans))
+        or not snapshot["attachment_coverage"]["complete"] or any(not _scan_ready(scan) for scan in scans))
     pending = {"A": summary_needed and cloud_ready and _ready(progress, now),
                "B": any(not scan.get("complete") and _ready(scan, now) for scan in scans),
                "C": any(scan.get("complete") and (not _scan_ready(scan)
@@ -3152,9 +3172,10 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
         coverage = snapshot["dependencies"].get("coverage", {})
         repairable = (allow_dependency_repair and coverage.get("terminal") == 0
                       and coverage.get("repairable", 0) > 0
-                      and set(coverage.get("reasons", {})) == {"retained_karte_requires_audit"})
+                      and set(coverage.get("reasons", {})).issubset({"retained_karte_requires_audit", "retained_attachment_requires_audit"}))
         if (errors or _out_of_scope(snapshot) or paused(db, pid)
                 or not snapshot["acquisition"]["complete"]
+                or not _sources_intact(snapshot["sources"]) or not snapshot["attachment_coverage"]["complete"]
                 or not (snapshot["dependencies"]["complete"] or repairable)
                 or semantic_intake_hold.has_unstored(db, pid)
                 or complete is not None and not complete(pid)
@@ -3180,8 +3201,10 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                     (semantic_policy.JOB_KIND, pid, root)).fetchone():
                 return False
             if row["body_state"] == "deleted" or row["body_state"] == "full" and row["body_text"] == "":
-                if db.execute("SELECT 1 FROM attachments WHERE message_id=? "
-                              "AND state IS NOT 'withdrawn' LIMIT 1", (row["message_id"],)).fetchone():
+                if (row["body_state"] != "deleted" and snapshot["attachment_coverage"]["mode"] != "on"
+                        and (cfg.get("attachment_ocr") or {}).get("enabled") is not False
+                        and db.execute("SELECT 1 FROM attachments WHERE message_id=? "
+                                       "AND state IS NOT 'withdrawn' LIMIT 1", (row["message_id"],)).fetchone()):
                     return False
                 if row["body_state"] != "deleted":
                     html = row["body_html"]
@@ -4080,7 +4103,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
                     meta["source_sig"] = context_plan.source_signature(source)
                     meta["source_key"] = context_plan.source_key(source)
-                    source = next(context_queries.patient_context_sources(ledger.db, pid, mid=context_plan.source_key(source)), None)
+                    source = next(context_queries.patient_context_sources(ledger.db, pid, mid=context_plan.source_key(source), cfg=cfg), None)
                     if source is None:
                         return {"status": "source_changed", "done": 0}
                     selected_source[0] = source
@@ -4429,7 +4452,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     saved_scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
                     audited = all(_scan_ready(saved_scans.get(context_plan.source_key(s), {}))
                                   for s in snapshot["sources"] if context_plan.source_usable(s))
-                    intact = _sources_intact(snapshot["sources"])
+                    intact = _sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
                     prior_failure = _has_prior_quality_failure(ledger.db, pid)
                     quality_ok = (not (quality_required or prior_failure) or quality_identity is not None
                                   and (not quality_skipped or not prior_failure))
@@ -4450,7 +4473,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     checkpoint["facts"] = result.get("facts", [])[:context_plan.MAX_SOURCE_FACTS]
                     adopted_scan = _replace(ledger, SCAN, pid, {**checkpoint, **retry}, meta, source["message_id"],
                                             write_count=adoption_writes)
-                    if lane == "C" and source["source"] == "karte_summary" and source.get("historical"):
+                    if lane == "C" and (source["source"] == "attachment_ocr"
+                            or source["source"] == "karte_summary" and source.get("historical")):
                         prior_support = dependency_loss.capture_tx(ledger.db, pid, 0,
                             source_key=context_plan.source_key(source), artifact_ids=result["_audited_chunk_ids"])
                         written = dependency_loss.record_tx(ledger.db, prior_support, audited_source=True)
@@ -4470,7 +4494,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 # only the known adoption writes here.
                 epoch_row = ledger.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic_sched' "
                     "AND project_id=0 AND message_id=0").fetchone()
-                final_source = next(context_queries.patient_context_sources(ledger.db, pid, hydrate=False, mid=context_plan.source_key(source)), None)
+                final_source = next(context_queries.patient_context_sources(ledger.db, pid, hydrate=False, mid=context_plan.source_key(source), cfg=cfg), None)
                 valid_adoption = (
                     (tuple(epoch_row) if epoch_row is not None else None) == adoption_epoch
                     and _adoption_artifact_matches(ledger.db, adopted_scan, SCAN, pid, source['message_id'],

@@ -8,6 +8,8 @@ from datetime import date
 import re
 
 from inference_version import CURRENT_VERSION
+import original_source_keys
+
 from mcs_util import loads_dict
 import patient_context_artifacts as context_artifacts
 
@@ -33,14 +35,6 @@ def _active(db):
 
 
 
-def _karte_id(source_key):
-    if not isinstance(source_key, str) or re.fullmatch(r'karte:[1-9][0-9]{0,18}', source_key) is None:
-        raise ValueError('dependency_loss_source_key_invalid')
-    raw_id = int(source_key.split(':')[1])
-    if raw_id >= 2**63:
-        raise ValueError('dependency_loss_source_key_invalid')
-    return raw_id
-
 def source_binding_from_row(row):
     """Bind selected message fields and revision read in the same snapshot."""
     try:
@@ -56,13 +50,7 @@ def source_binding_from_row(row):
 def source_binding(db, pid, mid, *, source_key=None):
     """Read the occurrence fence, distinct from body hash (including observed ABA)."""
     if source_key is not None:
-        raw_id = _karte_id(source_key)
-        raw = db.execute("SELECT content,meta FROM artifacts WHERE kind='karte_summary' AND project_id=? AND artifact_id=?",
-                         (pid, raw_id)).fetchone()
-        if raw is None:
-            return None
-        return _digest(['karte-source/v1', pid, raw_id, _digest(loads_dict(raw['content']) or {}),
-                        (loads_dict(raw['meta']) or {}).get('karte_id')])
+        return original_source_keys.binding(db, pid, source_key)
     row = db.execute('SELECT ' + ','.join(_SOURCE_FIELDS) + ' FROM messages WHERE project_id=? AND message_id=?',
                      (pid, mid)).fetchone()
     if row is None:
@@ -152,12 +140,9 @@ def equivalent_tx(db, pid, mid, origin):
 
 def bind_facts(db, facts):
     """Attest a source set once on a borrowed snapshot; retain every unbound candidate unchanged."""
-    from mcs_queries import karte_source_record
     import patient_context_projection as state
     facts = list(facts)
     mids = {fact.get('message_id') for fact in facts if type(fact.get('message_id')) is int and fact['message_id'] > 0}
-    karte_ids = {_karte_id(fact['source_key']) for fact in facts
-                 if isinstance(fact.get('source_key'), str) and fact['source_key'].startswith('karte:')}
     sources = {}
     message_columns = {row[1] for row in db.execute('PRAGMA table_info(messages)')} if mids else set()
     revision_columns = {row[1] for row in db.execute('PRAGMA table_info(message_revisions)')} if mids else set()
@@ -171,13 +156,13 @@ def bind_facts(db, facts):
             revision = revisions.get(source['message_id'], 1)
             binding = _digest([[source.get(field) for field in _SOURCE_FIELDS], revision])
             sources[(source['project_id'], source['message_id'])] = (source, revision, binding)
-    if karte_ids:
-        for row in db.execute("SELECT * FROM artifacts WHERE kind='karte_summary' AND artifact_id IN "
-                              '(SELECT value FROM json_each(?))', (json.dumps(sorted(karte_ids)),)):
-            source = karte_source_record(row, row['project_id'])
-            binding = _digest(['karte-source/v1', row['project_id'], row['artifact_id'], source['content_hash'],
-                              (loads_dict(row['meta']) or {}).get('karte_id')])
-            sources[(row['project_id'], source['source_key'])] = (source, row['artifact_id'], binding)
+    external = {(fact.get('project_id'), fact.get('source_key')) for fact in facts
+                if isinstance(fact.get('source_key'), str)}
+    for pid, key in external:
+        source = original_source_keys.source(db, pid, key)
+        if source is not None:
+            sources[(pid, key)] = (source, original_source_keys.parse(key)[1],
+                                   original_source_keys.binding(db, pid, key))
     bound = []
     for original in facts:
         fact = {key: value for key, value in original.items() if key != 'dependency_origin'}
@@ -316,16 +301,12 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
     """Capture validated old support in memory under the caller's writer reservation."""
     _active(db)
     if source_key is not None:
-        from mcs_queries import karte_source_record
-        raw_id = _karte_id(source_key)
-        raw = db.execute("SELECT * FROM artifacts WHERE kind='karte_summary' AND project_id=? AND artifact_id=?",
-                         (pid, raw_id)).fetchone()
-        if raw is None:
-            raise ValueError('dependency_loss_karte_source_missing')
-        source = karte_source_record(raw, pid)
+        source = original_source_keys.source(db, pid, source_key)
+        if source is None:
+            raise ValueError('dependency_loss_original_source_missing')
         binding = source_binding(db, pid, 0, source_key=source_key)
         source['_binding'] = binding
-        revision = raw_id
+        revision = original_source_keys.parse(source_key)[1]
         condition, params = '0', ()
     else:
         source_row = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
@@ -542,7 +523,7 @@ def record_tx(db, snapshot, *, replacement_id=None, replacement_ids=(), audited_
     """Persist lost dependencies atomically; never persist quote, clinical value or support hash."""
     _active(db)
     pid, mid = snapshot['project_id'], snapshot['message_id']
-    if audited_source and not (isinstance(snapshot.get('source_key'), str) and snapshot['source_key'].startswith('karte:')):
+    if audited_source and not original_source_keys.valid(snapshot.get('source_key')):
         raise ValueError('dependency_loss_chat_audit_unsupported')
     equivalent = set()
     replacement_ids = list(replacement_ids) + ([replacement_id] if replacement_id is not None else [])
@@ -585,13 +566,12 @@ def _valid_loss(doc):
     origin = doc.get('origin') or {}
     if origin.get('message_id') == 0:
         try:
-            if _karte_id(origin.get('source_key')) != origin.get('revision'):
+            if original_source_keys.parse(origin.get('source_key'))[1] != origin.get('revision'):
                 return False
         except ValueError:
             return False
     if (type(origin.get('message_id')) is not int or origin['message_id'] < 0
-            or origin['message_id'] == 0 and (not isinstance(origin.get('source_key'), str)
-                or re.fullmatch(r'karte:[1-9][0-9]{0,18}', origin['source_key']) is None)
+            or origin['message_id'] == 0 and not original_source_keys.valid(origin.get('source_key'))
             or type(origin.get('revision')) is not int or not 0 < origin['revision'] < 2**63
             or not isinstance(origin.get('binding'), str) or re.fullmatch('[0-9a-f]{64}', origin['binding']) is None):
         return False
@@ -628,6 +608,26 @@ def read(db, pid):
                 'coverage': {'terminal': 1, 'repairable': 0, 'reasons': {'dependency_schema_unavailable': 1}}}
     retained_karte = {'karte:' + str(row[0]) for row in db.execute(
         "SELECT artifact_id FROM artifacts WHERE kind='karte_summary' AND project_id=?", (pid,))}
+    retained_originals = {}
+
+    def retain(key):
+        source = original_source_keys.source(db, pid, key)
+        if source is not None:
+            retained_originals[key] = _digest([pid, key, source['content_hash'],
+                original_source_keys.parse(key)[1], original_source_keys.binding(db, pid, key)])
+
+    for key in retained_karte:
+        retain(key)
+    for row in db.execute("SELECT artifact_id,CASE WHEN length(content)<=4194304 THEN content END AS content "
+                          "FROM artifacts WHERE kind='attachment_ocr_v1' AND project_id=?", (pid,)):
+        document = loads_dict(row['content']) or {}
+        pages = document.get('pages')
+        if not isinstance(pages, list) or len(pages) > 30:
+            continue
+        for page in pages:
+            key = f"attachment_ocr:{row['artifact_id']}:{page.get('page')}" if isinstance(page, dict) else None
+            if original_source_keys.valid(key):
+                retain(key)
     for row in db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id', (KIND, pid)):
         doc, meta = loads_dict(row[0]), loads_dict(row[1])
         if (doc is None or meta is None or doc.get('schema') != SCHEMA or doc.get('project_id') != pid
@@ -651,7 +651,7 @@ def read(db, pid):
         if doc['gap']:
             pending_gaps[occurrence] = origin
         elif doc.get('coverage') is True:
-            if doc.get('audited_source') is True and origin.get('source_key') in retained_karte:
+            if doc.get('audited_source') is True and retained_originals.get(origin.get('source_key')) == occurrence:
                 resolved.add(occurrence)
             continue
         elif (not isinstance(doc.get('entity'), str) or len(doc['entity']) != 64
@@ -662,10 +662,12 @@ def read(db, pid):
     for occurrence, origin in pending_gaps.items():
         if occurrence in resolved:
             continue
-        if origin.get('source_key') in retained_karte:
-            mark('retained_karte_requires_audit', terminal=False)
+        if retained_originals.get(origin.get('source_key')) == occurrence:
+            mark('retained_karte_requires_audit' if origin.get('source_key') in retained_karte
+                 else 'retained_attachment_requires_audit', terminal=False)
         else:
-            mark('historical_chat_body_unavailable')
+            mark('historical_original_body_unavailable' if original_source_keys.valid(origin.get('source_key'))
+                 else 'historical_chat_body_unavailable')
     if ({'message_id', 'project_id'}.issubset(columns['messages'])
             and {'message_id', 'seq', 'content_hash'}.issubset(columns['message_revisions'])):
         for row in db.execute('SELECT r.message_id,r.seq,r.content_hash FROM message_revisions r '

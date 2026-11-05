@@ -363,6 +363,24 @@ def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
         obs["state_reasons"] = list(reasons)
 
 
+
+def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
+    """Replace recorded OCR evidence with its own current bounded observation."""
+    from health_report import attachment_ocr_health
+    detail = attachment_ocr_health(os.path.join(home, "data"), cfg, now)
+    obs["attachment_ocr"] = detail
+    old = obs.get("state_reasons")
+    reasons = [code for code in old or [] if not code.startswith("attachment_ocr_")]
+    bad = detail["state"] not in ("ok", "disabled")
+    if bad:
+        reasons.append(detail["reason"])
+        if obs["status"] == "ok":
+            obs["status"] = "degraded"
+    elif obs["status"] == "degraded" and old and not reasons:
+        obs["status"] = "ok"
+    if bad or old is not None:
+        obs["state_reasons"] = reasons
+
 def _state_unreadable(path: str) -> bool:
     """A present state file that is no regular JSON object.
 
@@ -480,6 +498,7 @@ def evaluate(home: str = HOME, now: float | None = None,
         obs["notify_transport"] = "lineworks"
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
+    _apply_attachment_ocr(obs, home, now, cfg)
     state = load_config(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
@@ -513,7 +532,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     new_reason = bool(prior_known and not transition and gained
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
-                       or any(r.startswith("standalone_") for r in gained)))
+                       or any(r.startswith(("standalone_", "attachment_ocr_")) for r in gained)))
     alerted_at = state.get("detected_at", state.get("alerted_at"))
     invalid_alert_at = not finite_number(alerted_at) \
         or alerted_at > now
@@ -699,6 +718,15 @@ _BACKUP_FAILURE_JA = {
 }
 
 _REASON_JA = {
+    "attachment_ocr_config_unavailable": ("添付の文字起こし設定を確認できません", "設定の読込み状態を確認してください"),
+    "attachment_ocr_config_invalid": ("添付の文字起こし設定に不備があります", "attachment_ocrの設定を確認してください"),
+    "attachment_ocr_status_missing": ("添付の文字起こしの実行記録がありません", "OCRの実行経路と設定を確認してください"),
+    "attachment_ocr_status_corrupt": ("添付の文字起こしの実行記録を読み取れません", "OCRの状態ファイルと私有権限を確認してください"),
+    "attachment_ocr_status_stale": ("添付の文字起こしの実行記録が更新されていません", "OCRの実行経路と直近の実行結果を確認してください"),
+    "attachment_ocr_processing_failed": ("添付の文字起こしで処理失敗を記録しました", "OCRの設定・実行環境と直近の実行結果を確認してください"),
+    "attachment_ocr_local_inference_deferred": ("添付の文字起こし後のローカル解析が保留されています", "ローカルLLMの稼働状態と処理枠を確認してください。文字起こしの失敗を示すものではありません"),
+    "attachment_ocr_queue_unverified": ("添付の文字起こしの未解消エラーを全件確認できていません", "OCRの状態記録と処理待ちの範囲を確認してください"),
+    "attachment_ocr_processing_deferred": ("添付の文字起こしの保存・公開が保留されています", "次回のOCR実行結果と更新の保留状態を確認してください"),
     "worker_start_unverified": ("通知workerの起動を確認できません",
                                 "slack_profile / profile と対象gatewayの worker_started を確認"),
     "worker_start_failed": ("通知workerの起動に失敗しました",

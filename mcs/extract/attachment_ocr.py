@@ -13,6 +13,8 @@ import tempfile
 import time
 
 import writer_lock
+import patient_priority
+from safe_io import atomic_write, read_json_nofollow
 from mcs_util import valid_hash
 from worker_process import reap_worker
 
@@ -240,6 +242,36 @@ def view(db, attachment_id, project_id=None, include_text=False):
             else "unprocessed", "page_count": 0}
 
 
+def capture_dependencies_tx(db, *, attachment_id=None, message_id=None):
+    """Capture current OCR page dependencies before their source binding changes."""
+    import inference_dependency_loss as loss
+    import original_source_keys
+    if not db.in_transaction:
+        raise ValueError("dependency_loss_transaction_required")
+    column, value = ("attachment_id", attachment_id) if attachment_id is not None else ("message_id", message_id)
+    snapshots = []
+    for row in db.execute(f"SELECT attachment_id FROM attachments WHERE {column}=?", (value,)):
+        document = current(db, row[0])
+        if document is None:
+            continue
+        for page in document["pages"]:
+            key = f"attachment_ocr:{document['artifact_id']}:{page['page']}"
+            source = original_source_keys.source(db, document["project_id"], key)
+            if source is not None:
+                snapshots.append((source["_source_binding"], loss.capture_tx(
+                    db, document["project_id"], 0, source_key=key)))
+    return snapshots
+
+
+def record_dependencies_tx(db, snapshots):
+    """Record only OCR dependencies whose retained source occurrence changed."""
+    import inference_dependency_loss as loss
+    import original_source_keys
+    for binding, snapshot in snapshots:
+        if original_source_keys.binding(db, snapshot["project_id"], snapshot["source_key"]) != binding:
+            loss.record_tx(db, snapshot)
+
+
 def _document_text(document):
     if not isinstance(document, dict):
         raise ValueError("output_schema")
@@ -266,7 +298,10 @@ def _document_text(document):
                         or cell.get("contents") is not None and not isinstance(cell["contents"], str)
                         for cell in cells)):
                     raise ValueError("output_schema")
-                text = "\n".join(cell.get("contents") or "" for cell in sorted(cells, key=lambda c: (c["row"], c["col"])))
+                rows = {}
+                for cell in sorted(cells, key=lambda c: (c["row"], c["col"])):
+                    rows.setdefault(cell["row"], []).append(cell.get("contents") or "")
+                text = "\n".join("\t".join(row) for row in rows.values())
             blocks.append((index if item.get("order") is None else item["order"], text))
     return "\n".join(text for _, text in sorted(blocks, key=lambda item: item[0]))
 
@@ -351,23 +386,35 @@ def _runtime(executable, source, output, timeout):
     # Models remain readable; the runtime cannot write anywhere outside its private snapshot.
     profile = _sandbox_profile(executable, python, source)
     command = ["/usr/bin/sandbox-exec", "-p", profile, python, "-I", "-c", _BOOTSTRAP, str(source), str(output)]
-    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, env=env, cwd=source.parent, start_new_session=True)
+    process = None
+    previous = {}
+
+    def interrupted(number, frame):
+        raise SystemExit(128 + number)
+
     try:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            previous[number] = signal.signal(number, interrupted)
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, env=env, cwd=source.parent, start_new_session=True)
         process.wait(timeout=timeout)
     except BaseException:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        reap_worker(process)
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            reap_worker(process)
         raise
     finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
         # A successful leader must not leave a worker using private source bytes.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
     if process.returncode:
         raise ValueError({21: "engine_version", 22: "input_limits", 23: "output_limits"}.get(process.returncode, "engine_failed"))
     fd = os.open(output, os.O_RDONLY | os.O_NOFOLLOW)
@@ -405,21 +452,30 @@ def _due(doc, source):
 def _settle(ledger, source, doc, root, generation):
     fd = writer_lock.acquire_run_lock(str(root / "run.lock"))
     if fd is None:
+        fd = writer_lock.wait_run_lock(str(root / "run.lock"), wait_s=5,
+                                      expected_code_stamp=generation[1],
+                                      marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
+    if fd is None:
         return False
     try:
         if writer_lock.updater_state() != generation or generation[0]:
             return False
         with ledger.db:
+            ledger.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
             latest = _source(ledger.db, source["attachment_id"], source["project_id"])
             if (latest is None or latest["state"] != "downloaded"
                     or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
                     or not _due(_latest(ledger.db, latest), latest)):
                 return False
+            dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
             ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
                               "VALUES(?,?,?,?,?,?,?)", (KIND, source["project_id"], source["message_id"],
                               json.dumps(doc, ensure_ascii=False), "yomitoku", json.dumps({
                                   "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
                                   "runtime_contract": RUNTIME_CONTRACT}), time.time()))
+            record_dependencies_tx(ledger.db, dependencies)
+            import notify_cards
+            notify_cards.mark_snapshot_dirty(ledger.db)
         return True
     finally:
         os.close(fd)
@@ -448,9 +504,39 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
         generation = writer_lock.updater_state()
         if generation[0]:
             return {**counts, "reason": "writer_blocked"}
-        rows = ledger.db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' ORDER BY attachment_id").fetchall()
+        if deadline is not None and deadline - time.monotonic() < 1:
+            return counts
+        cursor_path = root / "attachment_ocr_cursor.json"
+        try:
+            cursor = read_json_nofollow(cursor_path, 1024)
+            if (not isinstance(cursor, dict) or any(type(cursor.get(key)) is not int or cursor[key] < 0
+                    for key in ("after", "offset", "turn"))):
+                raise ValueError("cursor_invalid")
+        except (OSError, ValueError):
+            cursor = {"after": 0, "offset": 0, "turn": 0}
+        priority = cursor["turn"] % 2 == 0
+        if priority:
+            rows = ledger.db.execute(
+                "SELECT a.attachment_id FROM attachments a JOIN messages m USING(message_id) "
+                "LEFT JOIN patients p ON p.project_id=m.project_id WHERE a.state='downloaded' "
+                "ORDER BY COALESCE(p.is_archived,0), " + patient_priority.activity_order_sql('m.project_id')
+                + ", a.attachment_id LIMIT 256 OFFSET ?", (cursor["offset"],)).fetchall()
+            if not rows:
+                cursor["offset"] = 0
+        else:
+            rows = ledger.db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
+                                     "AND attachment_id>? ORDER BY attachment_id LIMIT 256",
+                                     (cursor["after"],)).fetchall()
+            if not rows:
+                cursor["after"] = 0
         used = 0
         for row in rows:
+            if used >= limit or deadline is not None and deadline - time.monotonic() < 1:
+                break
+            if priority:
+                cursor["offset"] += 1
+            else:
+                cursor["after"] = row[0]
             source = _source(ledger.db, row[0])
             if source is None:
                 continue
@@ -498,6 +584,23 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                 counts[state] += 1
             else:
                 counts["deferred"] += 1
+        cursor["turn"] += 1
+        atomic_write(str(cursor_path), lambda stream: json.dump(cursor, stream), mode=0o600)
+        counts.update(pending_failed=0, queue_status="partial")
+        if deadline is None or time.monotonic() < deadline:
+            observed = ledger.db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
+                                         "ORDER BY attachment_id LIMIT 257").fetchall()
+            checked = 0
+            for item in observed[:256]:
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
+                source = _source(ledger.db, item[0])
+                prior = _latest(ledger.db, source) if source is not None else None
+                if source is not None and _matching(prior, source) and prior["state"] in ("failed", "unavailable"):
+                    counts["pending_failed"] += 1
+                checked += 1
+            if checked == len(observed):
+                counts["queue_status"] = "known"
         return counts
     finally:
         os.close(fd)

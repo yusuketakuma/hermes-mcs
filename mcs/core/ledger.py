@@ -246,6 +246,8 @@ class Ledger:
             self._intake_hold_touched = previous
 
     def _save_attachments(self, m, now: float):
+        import attachment_ocr
+        dependencies = attachment_ocr.capture_dependencies_tx(self.db, message_id=m.message_id)
         for a in m.attachments:
             saved = self.db.execute(
                 "SELECT local_path FROM attachments WHERE message_id=? AND file_id=? "
@@ -293,6 +295,7 @@ class Ledger:
         # a response that simply omitted the key must not withdraw rows
         if not getattr(m, "files_present", False) \
                 and m.body_state != "deleted":
+            attachment_ocr.record_dependencies_tx(self.db, dependencies)
             return
         keep = [a.file_id for a in m.attachments
                 if getattr(m, "body_state", "") != "deleted"]
@@ -307,6 +310,7 @@ class Ledger:
               UPDATE attachments SET state='withdrawn'
               WHERE message_id=? AND state != 'withdrawn'
             """, (m.message_id,))
+        attachment_ocr.record_dependencies_tx(self.db, dependencies)
 
     def _save_tree(self, m, new_ids: list, now: float,
                    project_id: int | None = None):
@@ -1129,6 +1133,9 @@ class Ledger:
                                        (m.message_id,)).fetchone()[0]} if possible_change and valid_hash(existing['content_hash']) else None)
         old_dependencies = (dependency_loss.capture_tx(self.db, m.project_id, m.message_id)
                             if support_possible and old_origin is not None else None)
+        import attachment_ocr
+        ocr_dependencies = (attachment_ocr.capture_dependencies_tx(self.db, message_id=m.message_id)
+                            if possible_change else [])
         edited = (existing is not None and existing["content_hash"] is not None
                   and existing["body_state"] in TERMINAL_BODY_STATES
                   and m.body_state in TERMINAL_BODY_STATES
@@ -1236,6 +1243,7 @@ class Ledger:
                                 + invalidation_scope, (m.message_id, m.project_id))
         if existing is not None and (edited or m.body_state in TERMINAL_BODY_STATES and existing["body_state"] != m.body_state):
             initial_import_state.dirty_source_tx(self.db, m.project_id, m.message_id, now)
+        attachment_ocr.record_dependencies_tx(self.db, ocr_dependencies)
         return 0 if existing is not None else 1
 
     def _save_message_metadata(self, m, *, source, now, body_changed=False):
@@ -2078,6 +2086,9 @@ class Ledger:
     def attachment_saved(self, attachment_id: int, path: str,
                          nbytes: int, sha256: str, semantic: bool = False):
         with self.db:
+            import attachment_ocr
+            self.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
+            dependencies = attachment_ocr.capture_dependencies_tx(self.db, attachment_id=attachment_id)
             row = self.db.execute(
                 "SELECT m.project_id,m.message_id,COALESCE(m.parent_id,m.message_id) root "
                 "FROM attachments a "
@@ -2092,6 +2103,7 @@ class Ledger:
                 state='downloaded',downloaded_at=?,error=NULL
               WHERE attachment_id=?
             """, (path, nbytes, sha256, now, attachment_id))
+            attachment_ocr.record_dependencies_tx(self.db, dependencies)
             if row and before is not None and before != self._semantic_message_fingerprint(
                     row["project_id"], row["message_id"]):
                 self._invalidate_thread_projections(row["project_id"], row["root"])
@@ -2118,6 +2130,9 @@ class Ledger:
                 and 400 <= int(kind[5:]) < 500
                 and int(kind[5:]) not in RETRY_LATER_4XX))
         with self.db:
+            import attachment_ocr
+            self.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
+            dependencies = attachment_ocr.capture_dependencies_tx(self.db, attachment_id=attachment_id)
             source = self.db.execute(
                 "SELECT m.project_id,m.message_id,a.state,"
                 "COALESCE(m.parent_id,m.message_id) root FROM attachments a "
@@ -2131,6 +2146,7 @@ class Ledger:
               WHERE attachment_id=?
             """, (time.time() + retry_in, kind[:80], permanent,
                   max_attempts, attachment_id))
+            attachment_ocr.record_dependencies_tx(self.db, dependencies)
             if source:
                 state = self.db.execute("SELECT state FROM attachments WHERE attachment_id=?",
                                         (attachment_id,)).fetchone()[0]

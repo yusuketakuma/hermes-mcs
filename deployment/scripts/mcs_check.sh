@@ -26,7 +26,12 @@ export MCS_LLM_SLOT=0
 rc=$?
 if [ "$rc" -eq 0 ]; then
   "$PY" -I __RUN_LOG_HELPER__ exec --data-dir __DATA__ -- \
-    "$PY" __REPO__/mcs/ops/mcs_ocr.py --run || true
+    "$PY" __REPO__/mcs/ops/mcs_ocr.py --run
+  ocr_rc=$?
+  if [ "$ocr_rc" -ne 0 ]; then
+    printf 'mcs check: attachment OCR exited %d — see %s\n' "$ocr_rc" "$LOG"
+    exit "$ocr_rc"
+  fi
 fi
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs check: run_check exited %d — see %s\n' "$rc" "$LOG"

@@ -81,6 +81,9 @@ def extract(pages):
         lines = text.splitlines(keepends=True)
         continuation_until = 0
         for index, line in enumerate(lines):
+            column_headings = sum(re.sub(r"[\s【】\[\]（）：:()]", "", cell) in _COMPACT_HEADINGS
+                                  for cell in line.rstrip("\r\n").split("\t"))
+            ambiguous_columns = column_headings > 1 or len(_COLUMN_HEADING.findall(line)) > 1
             match = _HEADING.match(line.rstrip("\r\n")) if index >= continuation_until else None
             next_heading = (match["bracket"] or match["plain"]) if match else None
             if next_heading is None and index >= continuation_until:
@@ -95,7 +98,7 @@ def extract(pages):
                         break
                     if not any(label.startswith(compact) for label in _COMPACT_HEADINGS):
                         break
-            if next_heading is not None:
+            if next_heading is not None or ambiguous_columns:
                 if offset > start:
                     sections.append({**source, "category": category, "heading": heading,
                                      "text": text[start:offset], "evidence_span": [start, offset],
@@ -103,9 +106,9 @@ def extract(pages):
                                      "status": section_status})
                 start = offset
                 heading = next_heading
-                category = _CATEGORY[heading]
+                category = _CATEGORY[heading] if heading is not None else "other"
                 section_status = "literal_candidate"
-                if len(_COLUMN_HEADING.findall(line)) > 1:
+                if ambiguous_columns:
                     category, section_status = "other", "needs_review"
             labels = list(_PUMP_LABEL.finditer(line))
             for label in labels:

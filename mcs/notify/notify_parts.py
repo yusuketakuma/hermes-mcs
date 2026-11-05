@@ -883,8 +883,7 @@ def face_posts(db, card, parts, content, present) -> tuple:
                     break
                 posts.append(post)
             continue
-        original = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full")
-                                      else "（本文未取得）")
+        original = notify_render.original_post_text(db, mid, m)
         stamp = notify_render.thread_stamp_row(db, mid, m["sender_id"])
         post = {"at": at, "stamps": [ln for ln in stamp.split("\n") if ln],
                 "original": original}

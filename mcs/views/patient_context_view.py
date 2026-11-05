@@ -76,6 +76,8 @@ def _assertion_key(item):
     """One written assertion, including its source revision and grounded attributes."""
     values = {key: item.get(key) for key in (
         "source", "message_id", "content_hash", "category", "subject", "reported_subject", "text", "quote", "evidence_span")}
+    if item.get("source") != "chat" and item.get("source_key") is not None:
+        values["source_key"] = item["source_key"]
     values["details"] = sorted(json.dumps(d, sort_keys=True, ensure_ascii=False)
                                for d in item.get("details") or [])
     return json.dumps(values, sort_keys=True, ensure_ascii=False)
@@ -245,8 +247,24 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
     items.extend(_mentions(db, project_id, senders))
     context_refresh, inference = patient_context_refresh.context_view_read(db, project_id, cfg=cfg)
     facts = (context_refresh or {}).get("facts") or []
-    scoped_facts = [fact for fact in facts if fact.get("project_id") is None
-                    or type(fact["project_id"]) is int and fact["project_id"] == project_id]
+    scoped_facts, ocr_sources = [], {}
+    for fact in facts:
+        if fact.get("project_id") is not None and (type(fact["project_id"]) is not int or fact["project_id"] != project_id):
+            continue
+        if fact.get("source") == "attachment_ocr":
+            import original_source_keys
+            import patient_context_plan
+            key = fact.get("source_key")
+            if (cfg is not None and not (isinstance(cfg.get("attachment_ocr"), dict)
+                    and cfg["attachment_ocr"].get("enabled") is True)
+                    or not original_source_keys.valid(key) or not key.startswith("attachment_ocr:")):
+                continue
+            if key not in ocr_sources:
+                ocr_sources[key] = original_source_keys.source(db, project_id, key)
+            source = ocr_sources[key]
+            if source is None or not patient_context_plan.validated_source_facts(source, [fact]):
+                continue
+        scoped_facts.append(fact)
     summary = (context_refresh or {}).get("summary") or []
     if len(scoped_facts) != len(facts):
         ids = {fact.get("id") for fact in scoped_facts if isinstance(fact.get("id"), str)}
@@ -268,6 +286,12 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
                  "message_id": fact.get("message_id"), "content_hash": fact.get("content_hash"),
                  "posted_at_ts": fact.get("posted_at_ts"), "sender": fact.get("sender"),
                  "source": fact.get("source", "chat"), **extra}
+        if fact.get("source_key") is not None:
+            entry["source_key"] = fact["source_key"]
+        if entry["source"] == "attachment_ocr":
+            source = ocr_sources[entry["source_key"]]
+            entry.update({key: source[key] for key in
+                ("parent_message_id", "attachment_id", "page", "source_artifact_id")})
         # A larger quote can contain different assertions, people or attributes.
         # Only identical source-bound meaning receives the discovery annotation.
         matches = [i for i in items if entry["content_hash"] and entry["source"]

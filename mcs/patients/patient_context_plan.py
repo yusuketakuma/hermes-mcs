@@ -229,7 +229,8 @@ def source_key(source):
 
 
 def source_usable(source):
-    return (source.get("body_state") in (None, "full")
+    return (source.get("extraction_ready") is not False
+            and source.get("body_state") in (None, "full")
             and (bool(source["body_text"].strip()) if isinstance(source.get("body_text"), str)
                  else (source.get("body_length") or 0) > 0))
 
@@ -325,6 +326,9 @@ def validated_source_facts(source, facts):
 
 
 def source_signature(source):
-    return source_digest({k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
+    fields = {k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
                     "body_length", "body_state", "posted_at", "posted_at_ts", "sender_id",
-                    "sender_name", "parent_id", "extraction_sig", "canonical_context", "source_key", "empty")})
+                    "sender_name", "parent_id", "extraction_sig", "canonical_context", "source_key", "empty")}
+    if source.get("source") == "attachment_ocr":
+        fields["source_binding"] = source.get("_source_binding")
+    return source_digest(fields)

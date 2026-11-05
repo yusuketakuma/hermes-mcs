@@ -23,10 +23,12 @@ def setup(tmp_path, monkeypatch):
     db = sqlite3.connect(root / "ledger.db")
     db.row_factory = sqlite3.Row
     db.executescript("""
-        CREATE TABLE messages(message_id INTEGER PRIMARY KEY,project_id INTEGER,body_state TEXT,parent_id INTEGER,body_text TEXT);
+        CREATE TABLE messages(message_id INTEGER PRIMARY KEY,project_id INTEGER,body_state TEXT,parent_id INTEGER,body_text TEXT,posted_at_ts INTEGER);
+        CREATE TABLE patients(project_id INTEGER PRIMARY KEY,is_archived INTEGER);
+        CREATE TABLE notification_meta(singleton INTEGER PRIMARY KEY,notify_dirty INTEGER);
         CREATE TABLE attachments(attachment_id INTEGER PRIMARY KEY,message_id INTEGER,state TEXT,sha256 TEXT,bytes INTEGER,local_path TEXT);
         CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,model TEXT,meta TEXT,created_at REAL);
-        INSERT INTO messages VALUES(10,20,'full',NULL,'chat stays separate');
+        INSERT INTO messages VALUES(10,20,'full',NULL,'chat stays separate',1);
     """)
     db.execute("INSERT INTO attachments VALUES(1,10,'downloaded',?,?,?)",
                (hashlib.sha256(blob).hexdigest(), len(blob), str(path)))
@@ -406,3 +408,146 @@ def test_bootstrap_pdf_rejects_page_or_pixel_limits_before_render(tmp_path, monk
     with pytest.raises(SystemExit) as caught:
         _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes)
     assert caught.value.code == 22
+
+
+def test_structured_table_columns_remain_ambiguous_in_medical_detail(setup, monkeypatch):
+    ledger, cfg, _, _, _ = setup
+    value = {"engine_version": ocr.ENGINE_VERSION, "pages": [{"page": 1, "engine": "yomitoku", "document": {
+        "paragraphs": [], "tables": [{"cells": [
+            {"row": 0, "col": 0, "contents": "既往歴"},
+            {"row": 0, "col": 1, "contents": "処方薬"},
+            {"row": 1, "col": 0, "contents": "合成病A"},
+            {"row": 1, "col": 1, "contents": "合成薬B"}]}]}}]}
+    pages = ocr._parse_output(json.dumps(value))
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
+    assert ocr.run_pending(ledger, cfg)["complete"] == 1
+    detail = ocr.view(ledger.db, 1, include_text=True)
+    assert detail["pages"][0]["text"] == "既往歴\t処方薬\n合成病A\t合成薬B"
+    assert all(section["category"] == "other" and section["status"] == "needs_review"
+               for section in detail["medical"]["sections"])
+
+
+def test_expired_deadline_never_scans(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    statements = []
+    ledger.db.set_trace_callback(statements.append)
+    assert ocr.run_pending(ledger, cfg, deadline=0)["complete"] == 0
+    assert not calls and not any("SELECT attachment_id" in sql for sql in statements)
+
+
+def test_busy_settle_waits_without_recomputing_and_marks_snapshot(setup, monkeypatch):
+    ledger, cfg, _, calls, path = setup
+    real = ocr.writer_lock.acquire_run_lock
+    attempts = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            return None
+        return real(lock)
+
+    def wait(lock, **kwargs):
+        attempts.append(kwargs)
+        return real(lock)
+
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    assert ocr.run_pending(ledger, cfg)["complete"] == 1
+    assert len(calls) == len(attempts) == 1
+    assert ledger.db.execute("SELECT notify_dirty FROM notification_meta").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("number", [ocr.signal.SIGTERM, ocr.signal.SIGHUP])
+def test_parent_signal_kills_runtime_group_and_restores_handler(tmp_path, monkeypatch, number):
+    old = ocr.signal.getsignal(number)
+    killed = []
+    process = SimpleNamespace(pid=1234, returncode=None)
+
+    def wait(timeout):
+        ocr.signal.getsignal(number)(number, None)
+
+    process.wait = wait
+    monkeypatch.setattr(ocr.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(ocr.os, "killpg", lambda *args: killed.append(args))
+    monkeypatch.setattr(ocr, "reap_worker", lambda process: None)
+    with pytest.raises(SystemExit) as caught:
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1)
+    assert caught.value.code == 128 + number
+    assert killed and ocr.signal.getsignal(number) == old
+
+
+def test_bounded_scan_reaches_backfill_beyond_completed_prefix(setup):
+    ledger, cfg, _, calls, _ = setup
+    for aid in range(2, 601):
+        ledger.db.execute("INSERT INTO attachments SELECT ?,message_id,state,sha256,bytes,local_path "
+                          "FROM attachments WHERE attachment_id=1", (aid,))
+    ledger.db.commit()
+    # The first candidate stays priority; backfill cursor must advance independently.
+    for _ in range(6):
+        assert ocr.run_pending(ledger, cfg)["complete"] == 1
+    assert len(calls) == 6
+    cursor = json.loads((Path(ledger.path).parent / "attachment_ocr_cursor.json").read_text())
+    assert cursor["after"] >= 3 and cursor["turn"] == 6
+
+
+def test_priority_uses_active_patient_activity_before_archived(setup, monkeypatch):
+    ledger, cfg, pages, _, _ = setup
+    ledger.db.execute("INSERT INTO patients VALUES(20,1)")
+    ledger.db.execute("INSERT INTO patients VALUES(21,0)")
+    ledger.db.execute("INSERT INTO messages VALUES(11,21,'full',NULL,'synthetic active',2)")
+    ledger.db.execute("INSERT INTO attachments SELECT 2,11,state,sha256,bytes,local_path FROM attachments WHERE attachment_id=1")
+    ledger.db.commit()
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
+    assert ocr.run_pending(ledger, cfg)["complete"] == 1
+    assert ocr.current(ledger.db, 2) and ocr.current(ledger.db, 1) is None
+
+
+def test_backfill_cursor_advances_past_bounded_cached_prefix(setup, monkeypatch):
+    ledger, cfg, pages, _, _ = setup
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
+    ocr.run_pending(ledger, cfg)
+    template = json.loads(ledger.db.execute("SELECT content FROM artifacts").fetchone()[0])
+    for aid in range(2, 602):
+        ledger.db.execute("INSERT INTO attachments SELECT ?,message_id,state,sha256,bytes,local_path "
+                          "FROM attachments WHERE attachment_id=1", (aid,))
+        if aid <= 600:
+            doc = {**template, "attachment_id": aid}
+            ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                              "VALUES(?,20,10,?,'yomitoku',?,1)", (ocr.KIND, json.dumps(doc),
+                                                                    json.dumps({"attachment_id": aid})))
+    ledger.db.commit()
+    for _ in range(6):
+        ocr.run_pending(ledger, cfg)
+    assert ocr.current(ledger.db, 601) is not None
+
+
+def test_status_keeps_backoff_failure_until_success(setup, monkeypatch):
+    ledger, cfg, pages, _, _ = setup
+
+    def fail(*args):
+        raise ValueError("synthetic failure")
+
+    monkeypatch.setattr(ocr, "_runtime", fail)
+    first = ocr.run_pending(ledger, cfg)
+    assert first["pending_failed"] == 1 and first["queue_status"] == "known"
+    backed_off = ocr.run_pending(ledger, cfg)
+    assert backed_off["failed"] == 0 and backed_off["pending_failed"] == 1
+    ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.next_try',0)")
+    ledger.db.commit()
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
+    for _ in range(3):
+        recovered = ocr.run_pending(ledger, cfg)
+        if recovered["complete"]:
+            break
+    assert recovered["complete"] == 1 and recovered["pending_failed"] == 0
+    assert recovered["queue_status"] == "known"
+
+
+def test_queue_status_does_not_claim_unobserved_rows_have_no_failures(setup, monkeypatch):
+    ledger, cfg, pages, _, _ = setup
+    for aid in range(2, 258):
+        ledger.db.execute("INSERT INTO attachments SELECT ?,message_id,state,sha256,bytes,local_path "
+                          "FROM attachments WHERE attachment_id=1", (aid,))
+    ledger.db.commit()
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: pages)
+    result = ocr.run_pending(ledger, cfg)
+    assert result["queue_status"] == "partial"

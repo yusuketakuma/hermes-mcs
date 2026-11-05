@@ -661,7 +661,7 @@ _PATIENT_SOURCE_CONTEXT_FIELDS = ("project_id", "message_id", "source", "content
 
 def _patient_quality_sources(sources):
     """Index exact source occurrences without granting publication or clinical validity."""
-    import re
+    import original_source_keys
     from mcs_util import valid_hash
 
     indexed, project_id = {}, None
@@ -671,11 +671,10 @@ def _patient_quality_sources(sources):
         pid, mid = source.get("project_id"), source.get("message_id")
         kind, key, body = source.get("source"), source.get("source_key", mid), source.get("body_text")
         if (type(pid) is not int or pid <= 0 or type(mid) is not int or mid < 0
-                or kind not in ("chat", "karte_summary")
+                or kind not in ("chat", "karte_summary", "attachment_ocr")
                 or (kind == "chat" and (mid <= 0 or type(key) is not int or key != mid))
-                or (kind == "karte_summary" and (mid != 0 or not isinstance(key, str)
-                    or re.fullmatch(r"karte:[1-9][0-9]{0,18}", key) is None
-                    or int(key[6:]) >= 2**63))
+                or (kind != "chat" and (mid != 0 or not original_source_keys.valid(key)
+                    or original_source_keys.parse(key)[0] != ("karte" if kind == "karte_summary" else kind)))
                 or not valid_hash(source.get("content_hash"))
                 or source.get("body_state") not in (None, "full")
                 or not isinstance(body, str) or not body.strip() or "\x00" in body):
@@ -698,7 +697,7 @@ def _patient_quality_facts(candidates, indexed):
             raise ValueError("patient_quality_fact_invalid")
         seen.add(fact["id"])
         kind, key = fact.get("source"), fact.get("source_key")
-        if not isinstance(kind, str) or kind not in ("chat", "karte_summary") or type(key) not in (int, str):
+        if not isinstance(kind, str) or kind not in ("chat", "karte_summary", "attachment_ocr") or type(key) not in (int, str):
             raise ValueError("patient_quality_fact_invalid")
         source = indexed.get((kind, key))
         if (source is None or type(fact.get("project_id")) is not int

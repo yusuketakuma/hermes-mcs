@@ -1188,6 +1188,8 @@ def merge(outs: list[dict]) -> dict:
     seen_labs: set = set()
     seen_events: set = set()
     for d in outs:
+        if isinstance(d.get('symptoms'), list):
+            out.setdefault('symptoms', [])
         for m in d.get("meds") or []:
             key = json.dumps(m, sort_keys=True, ensure_ascii=False)
             if key not in seen_meds:

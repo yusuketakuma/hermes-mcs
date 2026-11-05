@@ -1051,14 +1051,23 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         """(date, rest, link): short provenance — the date (a link to the patient's MCS room
         where the transport can show one), the profession (the name only when there is
         none; names are listed once in the 関係者 line) and the post number."""
+        ocr = item.get("source") == "attachment_ocr"
         karte = item.get("source") == "karte_summary"
-        where = ("旧連携サマリー" if item.get("historical") else "連携サマリー") if karte else f"#{item.get('message_id', '?')}"
+        ocr_current = False
+        if ocr:
+            parent, attachment, page = (item.get(key) for key in ("parent_message_id", "attachment_id", "page"))
+            ocr_current = all(type(value) is int and value > 0 for value in (parent, attachment, page))
+            where = f"親投稿 #{parent} · 添付 #{attachment} · {page}ページ" if ocr_current else "添付資料"
+        else:
+            where = ("旧連携サマリー" if item.get("historical") else "連携サマリー") if karte else f"#{item.get('message_id', '?')}"
         rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
             label = {"measured_on": "測定日の記載", "observed_on": "観察日の記載",
                      "onset": "発症日の記載", "last_confirmed_on": "最終確認日の記載"}.get(
                          item.get("event_date_kind"), "時点の記載")
             rest += f" · {label}: {item['event_date_text']}"
+        if ocr:
+            return "文書日時未確認", rest, room if ocr_current else None
         dated = posted_at(item) is not None
         date = "更新日時未確認" if karte and not dated else when(item)
         return date, rest, (room if dated and not karte else None)
@@ -1098,6 +1107,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             else:
                 rows.append({"group": item_group, "project_id": project_id, "message_id": item.get("message_id"),
                              "source_key": item.get("source_key"),
+                             **{key: item[key] for key in ("parent_message_id", "attachment_id", "page", "source_artifact_id") if key in item},
                              "quotes": quotes, "source": source, "date": date, "source_rest": rest,
                              **({"url": link} if link else {})})
 

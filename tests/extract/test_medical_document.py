@@ -52,6 +52,14 @@ def test_mixed_columns_do_not_assign_medications_to_history():
     assert section["text"] == text
 
 
+def test_tabbed_table_headings_keep_rows_without_assigning_the_wrong_column():
+    text = '既往歴\t処方薬\n合成病A\t合成薬B\n'
+    sections = _extract(text)['sections']
+    assert ''.join(section['text'] for section in sections) == text
+    assert sections[0]['category'] == 'other'
+    assert sections[0]['status'] == 'needs_review'
+
+
 def test_official_combined_sections_keep_whole_unsplit_evidence():
     text = "既往歴及び家族歴：本人は合成病Aなし。父は合成病B。\n症状経過及び検査結果：過去の合成値、現在不明。\n"
     sections = _extract(text)["sections"]

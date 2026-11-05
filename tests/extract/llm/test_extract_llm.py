@@ -980,6 +980,11 @@ def test_reply_rules_ride_context_only_and_root_posts_drop_reply(
     assert "返信判定" in prompts[3]
 
 
+def test_merge_preserves_explicit_empty_required_fields():
+    assert extract_validation.merge([{'symptoms': []}, {'symptoms': []}]) == {'symptoms': []}
+    assert extract_validation.merge([{}, {}]) == {}
+
+
 def test_merge_keeps_first_reply_and_dedupes_requests():
     a = {"requests": [{"to": "医師", "action": "確認", "kind": "request"}],
          "reply": {"kind": "ack", "evidence": "承知"}}

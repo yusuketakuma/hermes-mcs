@@ -1241,35 +1241,118 @@ def patient_context_scope(db, pid):
     return dict(row) if row else None
 
 
-def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True):
+def attachment_context_items(document, source):
+    """Seed context with separately validated clinical mentions and their exact source quotes."""
+    from patient_context_projection import clinical_state_fact
+
+    body = source["body_text"]
+    seeds = []
+    for field, category, target in (("meds", "medications", "medication_management"),
+                                    ("symptoms", "symptoms", "symptoms")):
+        entries = document.get(field)
+        if not isinstance(entries, list):
+            continue
+        for item in entries:
+            if (not isinstance(item, dict) or item_unverified(item)
+                    or item.get("subject") not in ("patient", "family", "other")):
+                continue
+            fact = clinical_state_fact(source, item, category, source="attachment_ocr")
+            if not fact or not fact.get("evidence_span") or fact["temporal"].get("unknown"):
+                continue
+            seeds.append({"category": target, "text": fact["evidence"], "evidence": fact["evidence"],
+                          "subject": item["subject"], "details": fact["details"]})
+    return merged_context(document, {"patient_context": seeds}, body)
+
+
+def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
     """Read current attachment pages as distinct sources without attributing them to a sender."""
+    import original_source_keys
     from attachment_ocr import current
     from snapshot_access import table_exists
 
+    if (cfg is not None and not (isinstance(cfg.get("attachment_ocr"), dict)
+            and cfg["attachment_ocr"].get("enabled") is True)):
+        return
     if not table_exists(db, "attachments"):
         return
-    params = (pid, mid) if mid is not None else (pid,)
+    external = isinstance(mid, str)
+    if external and not original_source_keys.valid(mid):
+        return
+    params = (pid, mid) if mid is not None and not external else (pid,)
     for row in db.execute(
-            "SELECT a.attachment_id,m.message_id,m.posted_at_ts FROM attachments a "
-            "JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=? "
-            + ("AND m.message_id=? " if mid is not None else "")
+            "SELECT a.attachment_id FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+            "WHERE m.project_id=? " + ("AND m.message_id=? " if len(params) == 2 else "")
             + "ORDER BY m.message_id,a.attachment_id", params):
         document = current(db, row["attachment_id"], project_id=pid)
         if document is None:
             continue
         for page in document["pages"]:
-            text = page["text"]
-            text_hash = page["text_hash"]
-            yield {"message_id": f"attachment_ocr:{document['artifact_id']}:{page['page']}",
-                   "parent_message_id": row["message_id"], "project_id": pid,
-                   "source": "attachment_ocr", "source_kind": "attachment_ocr",
-                   "attachment_id": row["attachment_id"], "artifact_id": document["artifact_id"],
-                   "page": page["page"], "text_hash": text_hash, "content_hash": text_hash,
-                   "posted_at_ts": row["posted_at_ts"], "body_length": len(text),
-                   **({"body_text": text} if hydrate else {})}
+            key = f"attachment_ocr:{document['artifact_id']}:{page['page']}"
+            if external and mid != key:
+                continue
+            record = original_source_keys.source(db, pid, key)
+            if record is not None:
+                import attachment_inference
+                analysis = (None if record["empty"] else
+                            attachment_inference.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
+                record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
+                record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
+                    record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
+                record["items"] = (attachment_context_items(analysis["document"], record)
+                                   if analysis and record["extraction_ready"] and hydrate else [])
+                if not hydrate:
+                    record.pop("body_text")
+                yield record
 
 
-def patient_context_sources(db, pid, *, hydrate=True, mid=None):
+def attachment_ocr_coverage(db, pid, cfg):
+    """Distinguish excluded attachment formats from unknown or unfinished OCR work."""
+    import attachment_ocr
+    from snapshot_access import table_exists
+
+    result = {"complete": True, "mode": "off", "total": 0, "eligible": 0, "excluded": 0,
+              "ocr_complete": 0, "clinical_pending": 0, "pending": 0}
+    if attachment_ocr.config_error(cfg):
+        result.update(complete=False, mode="invalid")
+    elif cfg.get("attachment_ocr", {}).get("enabled") is True:
+        result["mode"] = "on"
+    identities = []
+    if result["mode"] == "on" and table_exists(db, "attachments"):
+        import attachment_inference
+        import original_source_keys
+        for row in db.execute("SELECT a.attachment_id,a.state,a.sha256,a.bytes,a.downloaded_at "
+                "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+                "WHERE m.project_id=? AND a.state IS NOT 'withdrawn' AND m.body_state IS NOT 'deleted' "
+                "ORDER BY a.attachment_id", (pid,)):
+            result["total"] += 1
+            document = attachment_ocr.current(db, row["attachment_id"], project_id=pid)
+            state = attachment_ocr.view(db, row["attachment_id"], project_id=pid)["state"]
+            identity = [row["attachment_id"], "retained" if row["state"] in ("downloaded", "pruned") else row["state"],
+                        row["sha256"], row["bytes"], row["downloaded_at"], state]
+            if state == "unsupported":
+                result["excluded"] += 1
+            else:
+                result["eligible"] += 1
+                if document is None:
+                    result["pending"] += 1
+                else:
+                    result["ocr_complete"] += 1
+                    ready = True
+                    for page in document["pages"]:
+                        key = f"attachment_ocr:{document['artifact_id']}:{page['page']}"
+                        analysis = None if not page["text"].strip() else attachment_inference.current(db, pid, key, cfg=cfg)
+                        page_ready = not page["text"].strip() or bool(analysis and analysis.get("ready") is True)
+                        ready = ready and page_ready
+                        identity.append([key, original_source_keys.binding(db, pid, key), page_ready,
+                                         analysis.get("result_hash") if analysis else None])
+                    result["clinical_pending"] += int(not ready)
+            identities.append(identity)
+        result["complete"] = not (result["pending"] or result["clinical_pending"])
+    result["signature"] = payload_hash([result, identities])
+    return result
+
+
+def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
     """Read only the patient's original records, never previous generated prose."""
     from patient_context import context_items, extract_context, project_context_items
     from patient_context_plan import source_digest
@@ -1305,6 +1388,8 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None):
                               message.get("body_text"))
         yield {**message, "source": "chat", "items": items,
                "canonical_context": any(row[2] in ("canonical_projection", "semantic_facts_v4") for row in rows)}
+    if cfg is None or (isinstance(cfg.get("attachment_ocr"), dict) and cfg["attachment_ocr"].get("enabled") is True):
+        yield from attachment_ocr_sources(db, pid, mid=mid, hydrate=hydrate, cfg=cfg)
     if mid not in (None, 0) and not (isinstance(mid, str) and mid.startswith("karte:")):
         return
     scope = patient_context_scope(db, pid)
