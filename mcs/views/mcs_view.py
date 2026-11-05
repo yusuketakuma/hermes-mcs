@@ -633,7 +633,8 @@ class View:
         if view == "care_events":
             return pcv.care_events(self.db, pid, cfg=load_config())
         # current publication settings gate the published context, not the flag stored at generation
-        ev = pcv.evidence(self.db, pid, cfg=load_config())
+        cfg = load_config()
+        ev = pcv.evidence(self.db, pid, cfg=cfg)
         now = self.meta["generated_at"]
         return {
             "background": lambda: pcv.role_order(pcv.background(ev), role),
@@ -641,7 +642,7 @@ class View:
             "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
             "previsit": lambda: pcv.previsit(self.db, ev, now),
             "timeline": lambda: pcv.timeline(ev),
-            "observations": lambda: pcv.observations(self.db, ev),
+            "observations": lambda: pcv.observations(self.db, ev, cfg=cfg),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
             "handoff": lambda: pcv.handoff(self.db, ev),
             "transition_course": lambda: pcv.transition_course(ev),

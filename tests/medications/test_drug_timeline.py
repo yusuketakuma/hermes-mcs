@@ -82,7 +82,7 @@ def test_stale_plan_rule_fallback_deleted_and_partial_not_absence(corpus):
 def test_enabled_ocr_is_not_misreported_as_never_performed(corpus):
     cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
     report = drug_timeline.timeline(view_of(corpus), 1, cfg=cfg)
-    assert report['coverage']['attachments'] == 'excluded_from_medication_timeline'
+    assert report['coverage']['attachments'] == 'included_current_ocr'
     assert 'attachment_processing' in report['coverage']
 
 

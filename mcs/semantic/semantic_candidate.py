@@ -21,6 +21,7 @@ _MODULES = ('inference_version', 'inference_dependency_loss', 'patient_context_a
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
             'attachment_ocr', 'attachment_inference', 'attachment_paid_results', 'original_source_keys',
+            'attachment_extraction', 'attachment_inference_checkpoints', 'attachment_inference_contract', 'extraction_provenance',
             'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'extraction_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_publication', 'semantic_conversion', 'patient_context_plan', 'patient_context_scan', 'patient_context_schedule', 'patient_readiness_witness', 'patient_priority', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
@@ -31,6 +32,7 @@ _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LON
                   'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'}),
                   'cloud_policy': frozenset({'HOME', '_CURRENT_PRICE'}),
                   'mcs_config': frozenset({'REPO', 'CONFIG_RULES'}),
+                  'attachment_inference_contract': frozenset({'_PATH'}),
                   'rollup': frozenset({'HOME', 'DB'}),
                   'mcs_util': frozenset({'HOME', 'REPO', 'CONF_PATH', 'DB', 'ATTACH_DIR',
                                          'CACHE', 'CHROME_PROFILE'})}

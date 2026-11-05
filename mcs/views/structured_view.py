@@ -33,6 +33,7 @@ import re
 import sqlite3
 
 from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_signature
+import drug_map
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
 from mcs_util import loads_dict, search_fold
@@ -491,12 +492,40 @@ def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
     return lines
 
 
-def medication_entries(db, mid: int) -> tuple[list, list]:
+def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True) -> tuple[list, list]:
+    """Select ready attachment medications with the same clinical filters as post medications."""
+    import attachment_extraction
+    from mcs_util import load_config
+    cfg = load_config() if cfg is None else cfg
+    if not isinstance(cfg.get('attachment_ocr'), dict) or cfg['attachment_ocr'].get('enabled') is not True:
+        return [], []
+    row = db.execute("SELECT project_id FROM messages WHERE message_id=? AND body_state IS NOT 'deleted'", (mid,)).fetchone()
+    if row is None:
+        return [], []
+    dictionary, _ = drug_map.active_dictionary(db, cfg) if annotate else (None, None)
+    if dictionary is not None and not dictionary.approved:
+        dictionary = None
+    confirmed, uncertain = [], []
+    for source in attachment_extraction.iter_sources(db, row['project_id'], mid=mid, cfg=cfg):
+        refs = [{**dictionary.resolve(item['name'], i), 'source_kind': 'attachment_ocr'}
+                for i, item in enumerate(_items(source['document'], 'meds'))
+                if dictionary is not None and isinstance(item, dict) and item.get('name')]
+        meds, unverified = _med_entries(source['document'], {}, refs,
+                                      context=(source['body_text'], None, 'patient'))
+        where = f"（添付#{source['attachment_id']}・{source['page']}ページ）"
+        confirmed.extend((text + where, ref) for text, ref in meds)
+        uncertain.extend((text + where, ref) for text, ref in unverified)
+    return confirmed, uncertain
+
+
+def medication_entries(db, mid: int, *, cfg=None) -> tuple[list, list]:
     """The post's current (confirmed, unverified) medication entries with
     their dictionary annotations — the 💊 薬剤を確認 view's input."""
     v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
-    return _med_entries(mcs_queries.current_message_facts(db, mid) or {}, v1, _drug_refs(db, mid),
-                        context=_source_context(db, mid))
+    meds, unverified = _med_entries(mcs_queries.current_message_facts(db, mid) or {}, v1, _drug_refs(db, mid),
+                                   context=_source_context(db, mid))
+    attachment_meds, attachment_unverified = attachment_medication_entries(db, mid, cfg=cfg)
+    return meds + attachment_meds, unverified + attachment_unverified
 
 
 def medication_post_ids(db, mids):
@@ -505,6 +534,8 @@ def medication_post_ids(db, mids):
     batch = list(islice(ids, 1))
     if not batch:
         return
+    from mcs_util import load_config
+    cfg = load_config()
     fields, join = _source_context_columns(db, "source")
     rule = mcs_queries.current_message_artifact_query(mid="source.message_id")
     fact = mcs_queries.current_message_artifact_query(facts=True, mid="source.message_id", field='artifact_id')
@@ -524,7 +555,8 @@ def medication_post_ids(db, mids):
                     facts = loads_dict(artifact['content']) if artifact else None
                     facts = facts or {}
                     facts.pop('__mcs_internal_proof_v1', None)
-                if any(_med_entries(facts, v1, context=_source_context_row(row[3:]))):
+                if (any(_med_entries(facts, v1, context=_source_context_row(row[3:])))
+                        or any(attachment_medication_entries(db, row[0], cfg=cfg, annotate=False))):
                     yield row[0]
         finally:
             cursor.close()

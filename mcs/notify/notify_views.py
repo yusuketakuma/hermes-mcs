@@ -100,7 +100,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     # one current-summary read on this connection serves both sections
     summary = _karte_summary_from_artifact(db, project_id)
     lines.extend(_patient_context_lines(db, project_id, roll, summary))
-    lines.extend(_pharmacy_state_lines(db, project_id, roll))
+    lines.extend(_pharmacy_state_lines(db, project_id, roll, cfg=cfg))
     lines.extend(_registered_clinical_lines(db, project_id))
     # the 連携サマリー line always reads the newest artifact: the rollup
     # holds a copy frozen at its last rebuild, which a newer fetch
@@ -183,13 +183,12 @@ def _patient_context_lines(db, project_id, roll, summary=_UNREAD) -> list[str]:
     return lines
 
 
-def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
+def _pharmacy_state_lines(db, project_id, roll, *, cfg=None) -> list[str]:
     """Private excerpts of pharmacy reports, rechecked against their unchanged source."""
     from read_model import message_patient_context, reference_text
-    state = roll.get("pharmacy_state")
+    state = roll.get("pharmacy_state") or {}
     items = state.get("items") if isinstance(state, dict) else None
-    if not isinstance(items, list) or not items:
-        return []
+    items = items if isinstance(items, list) else []
     sources, valid = {}, []
     for report in items:
         if (not isinstance(report, dict) or type(report.get("project_id")) is not int
@@ -215,12 +214,32 @@ def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
         if (source and report.get("fingerprint") in fingerprints
                 and report in pharmacy_state_items({"patient_context": [report["parent"]]}, source)):
             valid.append({**report, "_reference": references.get(report["fingerprint"])})
+    import attachment_extraction
+    import original_source_keys
+    seen = {report['fingerprint'] for report in valid}
+    for source in attachment_extraction.iter_sources(db, project_id, cfg=cfg):
+        raw = original_source_keys.source(db, project_id, source['source_key'])
+        if (raw is None or source.get('project_id') != project_id
+                or source.get('_source_binding') != raw['_source_binding']
+                or source.get('body_text') != raw['body_text']
+                or any(source.get(key) != raw[key] for key in
+                       ('content_hash', 'parent_message_id', 'attachment_id', 'page', 'source_artifact_id'))):
+            continue
+        for report in pharmacy_state_items(source['document'], source):
+            if report['fingerprint'] not in seen:
+                valid.append(report)
+                seen.add(report['fingerprint'])
+    if not items and not valid:
+        return []
     lines = ["■ 服薬管理の報告"]
     for report in valid[:8]:
         label = DETAIL_LABELS[report["key"]][0]
         subject = {"patient": "本人", "family": "家族", "other": "他者", "unspecified": "主体未確認"}[report["subject"]]
         names = "・".join(report["drug_names"])
-        title = f"{label}（{mmdd(report['posted_at'])}・{subject}・投稿#{report['message_id']}）"
+        origin = (f"文書日時未確認・親投稿#{report['parent_message_id']}・添付#{report['attachment_id']}・{report['page']}ページ"
+                  if report.get('source') == 'attachment_ocr' else f"{mmdd(report['posted_at'])}・投稿#{report['message_id']}")
+        title = (f"{label}（{origin}・{subject}）" if report.get('source') == 'attachment_ocr' else
+                 f"{label}（{mmdd(report['posted_at'])}・{subject}・投稿#{report['message_id']}）")
         text = f"{names}: " if names else ""
         # The whole parent wording, rather than a scalar alone, retains denial and plans.
         text += report["parent"]["text"]
@@ -230,7 +249,7 @@ def _pharmacy_state_lines(db, project_id, roll) -> list[str]:
         lines.append("・現在の原文と照合できる報告なし")
     if len(valid) > 8:
         lines.append(f"  他{len(valid) - 8}報告（原記録で全文確認）")
-    if state.get("truncated") is True:
+    if isinstance(state, dict) and state.get("truncated") is True:
         lines.append("  集約は最新100報告まで（原記録で全文確認）")
     return lines
 
@@ -803,7 +822,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         return {"title": title, "head": [], "items": [], "more": 0,
                 "empty": "この投稿の薬剤情報を確認できません（削除・移動の可能性）。",
                 "notes": []}
-    meds, unverified = structured_view.medication_entries(db, message_id)
+    meds, unverified = structured_view.medication_entries(db, message_id, cfg=cfg)
     dictionary, dictionary_state = drug_map.active_dictionary(db, cfg) if cfg is not None else (None, "inactive")
     if dictionary is not None and not dictionary.approved:
         dictionary, dictionary_state = None, "inactive"
@@ -834,6 +853,12 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     head = [f"{'日時不明' if '?' in when else when} "
             f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
+    attachment_pending = False
+    if isinstance((cfg or {}).get('attachment_ocr'), dict) and cfg['attachment_ocr'].get('enabled') is True:
+        from mcs_queries import attachment_ocr_coverage
+        attachment_pending = not attachment_ocr_coverage(db, project_id, cfg, mid=message_id)['complete']
+        if attachment_pending:
+            head.append('添付資料の薬剤解析は未完了です')
     if refs:
         head.append("辞書の候補はすべて未確認です")
     elif not active:
@@ -862,7 +887,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     return {"title": title, "head": head,
             "items": items,
             "more": 0, "page": page, "pages": pages,
-            "empty": "この投稿から抽出された薬剤はありません。", "notes": notes}
+            "empty": "添付資料の解析待ちです。" if attachment_pending else "この投稿から抽出された薬剤はありません。", "notes": notes}
 
 
 def drug_search_view(db, cfg, project_id, query) -> dict:
@@ -1246,10 +1271,13 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             day = (event.get("event_day") if not event.get("date_uncertain") else None) or "日付未確認"
             add([{**event, "event_date_text": day}], "出来事の記録")
     elif section == "observations":
-        view = views.observations(db, ev)
-        head.append("原文に記載された検査・観測値を項目ごとに投稿順で表示")
+        view = views.observations(db, ev, cfg=cfg)
+        has_ocr = any(item.get('source') == 'attachment_ocr' for item in ev.get('items') or [])
+        head.append("原文の検査・観測値を項目別に表示（添付を含む系列は明示日付順）" if has_ocr else
+                    "原文に記載された検査・観測値を項目ごとに投稿順で表示")
         checks = view["source_checks"]
-        head.append(f"原文照合: {checks['verified']} / {checks['eligible']}投稿（1回最大50投稿）")
+        unit = '原資料' if has_ocr else '投稿'
+        head.append(f"原文照合: {checks['verified']} / {checks['eligible']}{unit}（1回最大50{unit}）")
         if checks["limited"] or checks["unavailable"]:
             head.append("原文の照合は一部のみ完了")
         for series in view["series"]:
@@ -1318,8 +1346,23 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
         status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
         status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
-        if (context_coverage.get("attachments") or {}).get("count"):
-            status.append(f"添付 {context_coverage['attachments']['count']}件（内容は未解析）")
+        attachments = context_coverage.get("attachments") or {}
+        if attachments.get("count"):
+            processing = attachments.get("processing") or {}
+            analysis = attachments.get("analysis")
+            state = "解析状況不明"
+            if processing.get("mode") == "off":
+                state = "OCR無効・内容未点検"
+            elif processing.get("mode") == "invalid":
+                state = "OCR設定不正・解析状況不明"
+            elif analysis == "complete":
+                state = "内容の点検完了"
+            elif analysis == "partial":
+                state = (f"内容の点検済み {attachments.get('analyzed', 0)}ページ / "
+                         f"未点検 {attachments.get('unscanned', 0)}ページ")
+            if processing.get("mode") == "on":
+                state += f"・OCR文字起こし完了 {processing.get('ocr_complete', 0)}件"
+            status.append(f"添付 {attachments['count']}件（{state}）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
     if section == "care_events":

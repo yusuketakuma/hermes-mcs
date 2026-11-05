@@ -1,0 +1,34 @@
+{
+  "additions": {
+    "attachment_extraction": "c8208122bc9ef5e7f2dfcc9781a33605fa0c0a187808458d6ce870e436d632cc",
+    "attachment_inference_checkpoints": "cbbb4c5631494ecb5b0e930fa6f896f1ddf73e2292e3459311a83f51766769f2",
+    "attachment_inference_contract": "c84420bc4176930b538feb4c8926a424fdd9cd87fa1d53ae94ba6c2f7ce0eaa3",
+    "extraction_provenance": "5fd1af0dab6d9db2c9bfbe2929cd7de3f6746989e6d27af79e451db0c2b718a0"
+  },
+  "baseline": "132d87d2994e8d6b5c4d6fce6f1790ced77ef9db",
+  "baseline_code_digest": "45a81b77ca67c360ac90ccca5e6667434396ce8afb61e4374e3e821be19739b0",
+  "components": {
+    "attachment_extraction": "c8208122bc9ef5e7f2dfcc9781a33605fa0c0a187808458d6ce870e436d632cc",
+    "attachment_inference": "d5b6582d983c9075ae5972fd9da9059af5beeb6cb07568dc5de111158870c742",
+    "attachment_inference_checkpoints": "cbbb4c5631494ecb5b0e930fa6f896f1ddf73e2292e3459311a83f51766769f2",
+    "attachment_inference_contract": "c84420bc4176930b538feb4c8926a424fdd9cd87fa1d53ae94ba6c2f7ce0eaa3",
+    "extract_llm": "eb0b65e8e4f886a238577be9cae2f4a6e10adb13970a6fa87aae7703d94374a5",
+    "extraction_provenance": "5fd1af0dab6d9db2c9bfbe2929cd7de3f6746989e6d27af79e451db0c2b718a0",
+    "mcs_queries": "ea103719a433ab3e48b4a84a7f913858d0af297bfc9aa55d987d30d615a53b37",
+    "patient_context": "8838689fd72dbab3bc274b4cc652c07b966e3e8acb6702f85681ab2492c57a53",
+    "semantic_candidate": "a479c8fec9bd23d1a1f27d3cd6d2b527a3f75f1f7a839d0976ea7bfd0f990138"
+  },
+  "replacements": {
+    "attachment_inference": "45a81b77ca67c360ac90ccca5e6667434396ce8afb61e4374e3e821be19739b0",
+    "extract_llm": "785f566ccad8410d43d38ad798c8582316857045ecfe21e9a8aabb04b5c8ec68",
+    "mcs_queries": "2a7b0892e52d4035109759f24b772ed3e1de10b0bd18407bc05e989ae2282f42",
+    "patient_context": "4c02f835b55ce5da5a315d7a5fb770a46d017a6f176a1c2395604b12875e9f7e",
+    "semantic_candidate": "97734a10680ccd8f6d72f6ef6b3caa6f1ddcfaca5358d786dcc1a266b1aef5db"
+  },
+  "schema": "attachment-refactor-witness/v1",
+  "versions": [
+    "1.0",
+    11,
+    4
+  ]
+}

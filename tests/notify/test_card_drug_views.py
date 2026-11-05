@@ -401,8 +401,8 @@ def test_reference_suggestions_require_current_approved_dictionary(led, tmp_path
         monkeypatch.setattr(drug_map, "active_dictionary", lambda *a: (dictionary, state))
     else:
         real = notify_views.structured_view.medication_entries
-        def entries(*a):
-            groups = real(*a)
+        def entries(*a, **kwargs):
+            groups = real(*a, **kwargs)
             return tuple([(text, {**ref, "name": ""} if fault == "invalid_name" else
                                   {**ref, "dict_sha256": "0" * 64}) for text, ref in group] for group in groups)
         monkeypatch.setattr(notify_views.structured_view, "medication_entries", entries)
@@ -498,8 +498,8 @@ def test_meds_view_never_displays_old_reference_after_config_change(led, tmp_pat
         real = notify_views.structured_view.medication_entries
         key, value = {"ref_id": ("dict_id", "wrong-id"), "ref_sha": ("dict_sha256", "0" * 64),
                       "ref_generation": ("resolver_version", "old-resolver")}[fault]
-        def entries(*args):
-            return tuple([(text, {**ref, key: value}) for text, ref in group] for group in real(*args))
+        def entries(*args, **kwargs):
+            return tuple([(text, {**ref, key: value}) for text, ref in group] for group in real(*args, **kwargs))
         monkeypatch.setattr(notify_views.structured_view, "medication_entries", entries)
     before = led.db.total_changes
     view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
@@ -603,8 +603,8 @@ def test_live_meds_revalidates_annotation_against_exact_dictionary(led, tmp_path
     _llm_extract(led, 101, {"meds": [{**MED, "name": "共通架空"}]})
     cfg = _dictionary(tmp_path, led)
     real = notify_views.structured_view.medication_entries
-    def entries(*args):
-        groups = deepcopy(real(*args))
+    def entries(*args, **kwargs):
+        groups = deepcopy(real(*args, **kwargs))
         for group in groups:
             for _, ref in group:
                 if fault in ("display", "code", "kind", "method"):

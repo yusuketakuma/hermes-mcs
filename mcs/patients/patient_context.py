@@ -170,16 +170,45 @@ def valid_reference_hash(value):
 def pharmacy_state_items(artifact, message) -> list[dict]:
     """Source-grounded pharmacy reports from one decoded current extraction, preserving each parent."""
     message = dict(message)
+    external = message.get("source") == "attachment_ocr"
     if (message.get("body_state") not in (None, "full")
             or type(message.get("project_id")) is not int or message["project_id"] <= 0
-            or type(message.get("message_id")) is not int or message["message_id"] <= 0
+            or type(message.get("message_id")) is not int
+            or (message["message_id"] != 0 if external else message["message_id"] <= 0)
             or not valid_reference_hash(message.get("content_hash"))):
         return []
+    source_fields = {}
+    if external:
+        import original_source_keys
+        key = message.get("source_key")
+        if not original_source_keys.valid(key):
+            return []
+        kind, raw_artifact, page = original_source_keys.parse(key)
+        if (kind != "attachment_ocr" or message.get("ready") is not True
+                or not valid_reference_hash(message.get("_source_binding"))
+                or not valid_reference_hash(message.get("result_hash"))
+                or any(type(message.get(field)) is not int or message[field] <= 0
+                       for field in ("parent_message_id", "attachment_id", "extraction_artifact_id"))
+                or type(message.get("source_artifact_id")) is not int or message["source_artifact_id"] != raw_artifact
+                or type(message.get("page")) is not int or message["page"] != page
+                or any(message.get(field) is not None for field in ("posted_at", "posted_at_ts", "sender_id", "sender_name"))
+                or not isinstance(message.get("body_text"), str)):
+            return []
+        try:
+            if hashlib.sha256(message["body_text"].encode("utf-8")).hexdigest() != message["content_hash"]:
+                return []
+        except UnicodeError:
+            return []
+        source_fields = {field: message[field] for field in ("source_key", "parent_message_id", "attachment_id", "page",
+                         "source_artifact_id", "extraction_artifact_id", "result_hash")}
+        source_fields["source_binding"] = message["_source_binding"]
     result = []
     for item in context_items(artifact, message.get("body_text")):
         parent = {key: item[key] for key in ("category", "text", "evidence", "subject")}
         parent["details"] = item.get("details", [])
         identity = {key: parent[key] for key in ("category", "text", "evidence", "subject")}
+        if external:
+            identity["source"] = [message["project_id"], message["source_key"], message["content_hash"], message["_source_binding"]]
         parent_fp = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         names = sorted({detail["value"] for detail in parent["details"] if detail["key"] == "drug_name"})
         for detail in parent["details"]:
@@ -194,7 +223,7 @@ def pharmacy_state_items(artifact, message) -> list[dict]:
                 "project_id": message["project_id"], "message_id": message["message_id"],
                 "content_hash": message["content_hash"], "posted_at": message.get("posted_at"),
                 "posted_at_ts": stamp if type(stamp) in (int, float) and math.isfinite(stamp) else None,
-                "source": "chat"})
+                "source": "attachment_ocr" if external else "chat", **source_fields})
     return result
 
 

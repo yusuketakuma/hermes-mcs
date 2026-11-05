@@ -60,7 +60,7 @@ def test_worst_case_real_thread_card_with_stamp_passes_the_worker_budget(
     monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
     monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
     monkeypatch.setattr(structured_view, "medication_entries",
-                        lambda db, mid: ([{"name": "合成薬"}], []))
+                        lambda db, mid, **kwargs: ([{"name": "合成薬"}], []))
     mids = tuple(range(100, 120))                 # several PAGE_THREAD pages
     _seed_thread(led, mids=mids)
     _add_request(led)
@@ -249,7 +249,7 @@ def test_stamp_row_is_left_out_rather_than_break_the_row_budget(led, monkeypatch
     monkeypatch.setitem(sys.modules, "stamp_write", _gate(True))
     monkeypatch.setattr(notify_cards, "drug_search_available", lambda db: True)
     monkeypatch.setattr(structured_view, "medication_entries",
-                        lambda db, mid: ([{"name": "合成薬"}], []))
+                        lambda db, mid, **kwargs: ([{"name": "合成薬"}], []))
     from notify_testkit import _llm_extract
     mids = tuple(range(100, 120))
     _seed_thread(led, mids=mids)

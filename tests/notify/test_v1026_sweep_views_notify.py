@@ -36,7 +36,7 @@ def test_meds_head_does_not_say_unavailable_while_items_show_candidates(led, mon
     led.db.execute("INSERT INTO messages(message_id,project_id,posted_at,profession,body_text,content_hash,"
                    "body_state) VALUES(100,1,'2026-10-01T09:00:00+09:00','薬剤師','本文','h','full')")
     ref = {"status": "ambiguous", "cands": [{}, {}], "dict_id": "fictional", "dict_sha256": "0" * 64}
-    monkeypatch.setattr(structured_view, "medication_entries", lambda db, mid: ([("合成薬", ref)], []))
+    monkeypatch.setattr(structured_view, "medication_entries", lambda db, mid, **kwargs: ([("合成薬", ref)], []))
     view = notify_views.meds_view(led.db, 1, 100)
     assert "辞書の候補はすべて未確認です" in view["head"]
     assert not set(notify_views._DICTIONARY_STATE.values()) & set(view["head"])

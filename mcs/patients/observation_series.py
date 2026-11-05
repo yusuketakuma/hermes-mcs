@@ -6,6 +6,8 @@ import re
 from clinical_values import (_FLOW_AFTER, _nearest_vital_label, _vital_numbers, grounded_vitals,
                              lab_candidate, written_day)
 from patient_context_projection import paired_date_conflict
+from mcs_util import valid_hash
+import original_source_keys
 
 _FIELDS = ("observation_name", "value", "unit", "condition", "measured_on", "observed_on", "last_confirmed_on")
 _RISK = re.compile(r"未確認|未確定|不明|疑い|かもしれ|未測定|未実施|未検査|ない|なし|無し|なく|"
@@ -29,6 +31,29 @@ _BLOOD_PRESSURE_LIST_ITEM = re.compile(
     r"(?![\d.．/／])\s*(?:mmHg)?", re.I)
 _TRAILING_OXYGEN_FLOW = re.compile(r"酸素\s*\d{1,3}(?:[.．]\d{1,2})?\s*[LＬ]"
                                   r"(?:\s*[/／]\s*分)?", re.I)
+
+
+_SOURCE_FIELDS = ("source_key", "source_binding", "parent_message_id", "attachment_id", "page",
+                  "source_artifact_id", "extraction_artifact_id")
+
+
+def source_identity(item):
+    """Keep original OCR pages distinct while retaining the existing chat identity."""
+    mid, digest = item.get("message_id"), item.get("content_hash")
+    if not valid_hash(digest):
+        return None
+    if item.get("source") == "chat" and type(mid) is int and mid > 0:
+        return mid, digest
+    key = item.get("source_key")
+    if (item.get("source") != "attachment_ocr" or type(mid) is not int or mid != 0
+            or not original_source_keys.valid(key) or original_source_keys.parse(key)[0] != "attachment_ocr"
+            or not valid_hash(item.get("source_binding")) or item.get("posted_at_ts") is not None):
+        return None
+    _, artifact, page = original_source_keys.parse(key)
+    if any(field in item and (type(item[field]) is not int or item[field] != expected)
+           for field, expected in (("source_artifact_id", artifact), ("page", page))):
+        return None
+    return key, digest
 
 
 def _subject(item):
@@ -203,6 +228,9 @@ def _reference(item):
     """Return only bounded source identity, never an isolated clinical fragment."""
     mid, digest = item.get("message_id"), item.get("content_hash")
     posted = item.get("posted_at_ts")
+    if item.get("source") == "attachment_ocr" and source_identity(item) is not None:
+        return {"source": "attachment_ocr", "message_id": 0, "content_hash": digest, "posted_at_ts": None,
+                **{key: item[key] for key in _SOURCE_FIELDS if key in item}}
     return {"source": "chat" if item.get("source") == "chat" else "unknown",
             "message_id": mid if type(mid) is int and mid > 0 else None,
             "content_hash": digest if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) else None,
@@ -213,10 +241,10 @@ def _whole_statement(item, source_bodies):
     """Accept only an exact unique quote covering one complete source sentence."""
     if not isinstance(source_bodies, dict):
         return False
-    mid, digest = item.get("message_id"), item.get("content_hash")
-    if type(mid) is not int or mid <= 0 or not isinstance(digest, str):
+    identity = source_identity(item)
+    if identity is None:
         return False
-    body = source_bodies.get((mid, digest))
+    body = source_bodies.get(identity)
     quote = item.get("quote")
     if not isinstance(body, str) or not body or not isinstance(quote, str) or body != quote:
         return False
@@ -230,14 +258,14 @@ def _visible_item(item):
     """Keep source-checked fields, excluding borrowed body/reference context."""
     allowed = ("category", "text", "quote", "subject", "reported_subject", "details", "message_id",
                "content_hash", "posted_at_ts", "sender", "profession", "temporality", "discovery",
-               "source", "evidence", "evidence_span", "temporal", "view_bucket", "relations")
+               "source", "evidence", "evidence_span", "temporal", "view_bucket", "relations", *_SOURCE_FIELDS)
     return {key: item[key] for key in allowed if key in item}
 
 
 def observation_series(ev, *, source_bodies=None):
     """Preserve source-bound rows; classify only whether grouping is unambiguous.
 
-    `source_bodies` maps (message_id, content_hash) to full source text verified
+    `source_bodies` maps (message_id or external source_key, content_hash) to full source text verified
     by the caller against the same patient and snapshot. It is never returned.
     Missing or partial originals cannot establish the subject or sentence scope.
     """
@@ -291,15 +319,13 @@ def observation_series(ev, *, source_bodies=None):
         conflicted = any(paired_date_conflict(str(item.get("quote") or ""), item.get("posted_at_ts"))
                          for item in items)
         valid = (key not in blocked_groups
-                 and all(_subject(item) == "patient" and not _unsafe(item) and item.get("source") == "chat"
-                     and type(item.get("message_id")) is int and item["message_id"] > 0
-                     and isinstance(item.get("content_hash"), str)
-                     and re.fullmatch(r"[0-9a-f]{64}", item["content_hash"])
+                 and all(_subject(item) == "patient" and not _unsafe(item) and source_identity(item) is not None
                      and isinstance(item.get("quote"), str) and item["quote"] for item in items)
                  and all(len(values[field]) == 1 for field in ("observation_name", "value", "unit"))
                  and len(values["condition"]) <= 1
-                 and date_kind in ("measured_on", "observed_on") and day is not None and posted is not None
-                 and day <= posted and not conflicted
+                 and date_kind in ("measured_on", "observed_on") and day is not None
+                 and (items[0].get("source") == "attachment_ocr" or posted is not None and day <= posted)
+                 and not conflicted
                  and all(_whole_statement(item, source_bodies) for item in items)
                  and all(_supported_item(item, values, date_kind) for item in items))
         if not valid:
@@ -317,7 +343,7 @@ def observation_series(ev, *, source_bodies=None):
         condition = next(iter(values["condition"])) if values["condition"] else None
         # Missing recorded conditions do not prove that two observations had
         # the same condition, so retain each source as its own series.
-        separate = None if condition is not None else (items[0]["message_id"], items[0]["content_hash"], key)
+        separate = None if condition is not None else (*source_identity(items[0]), key)
         identity = (next(iter(values["observation_name"])), next(iter(values["unit"])), condition, date_kind, separate)
         if identity not in identities:
             identities[identity] = len(series)
@@ -325,6 +351,11 @@ def observation_series(ev, *, source_bodies=None):
                            "condition": identity[2], "condition_status": "recorded" if condition else "not_recorded",
                            "event_date_kind": identity[3], "records": []})
         series[identities[identity]]["records"].append(record)
+    has_ocr = False
+    for group in series:
+        if any(item.get("source") == "attachment_ocr" for record in group["records"] for item in record["items"]):
+            has_ocr = True
+            group["records"].sort(key=lambda record: written_day(record["event_date_text"])[1])
     return {"view": "observation_series", "series": series, "unconfirmed": unconfirmed,
             "scope_valid": True, "scope_rejected": rejected,
-            "coverage": ev.get("coverage"), "order_basis": "posting_time_within_series"}
+            "coverage": ev.get("coverage"), "order_basis": "event_day_within_series" if has_ocr else "posting_time_within_series"}

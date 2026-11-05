@@ -138,6 +138,28 @@ def _groups(items):
     return list(groups.values())
 
 
+def _attachment_mentions(db, project_id, parent_mid, cfg):
+    """Read only the current, approved OCR originals of this stored-post page."""
+    import attachment_extraction
+    import original_source_keys
+
+    for original in attachment_extraction.iter_sources(db, project_id, mid=parent_mid, cfg=cfg):
+        if (original.get('ready') is not True or original.get('project_id') != project_id
+                or original.get('parent_message_id') != parent_mid
+                or not original_source_keys.valid(original.get('source_key'))
+                or not original['source_key'].startswith('attachment_ocr:')):
+            continue
+        document = original.get('document')
+        meds = document.get('meds', []) if isinstance(document, dict) else []
+        if not isinstance(meds, list):
+            continue
+        row = {key: original[key] for key in ('project_id', 'content_hash', 'source_key',
+               'parent_message_id', 'attachment_id', 'page', 'extraction_artifact_id')}
+        row.update(message_id=0, posted_at=None, posted_at_ts=None, body_state='full')
+        yield row, (original['source_artifact_id'], 'attachment_ocr'), meds, {}, original
+
+
+
 def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, cursor=None, cfg=None):
     """Page stored posts, preserving every medication mention and explicit coverage gaps."""
     if type(project_id) is not int or project_id <= 0:
@@ -197,17 +219,24 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
             missing += result is None
             if r["message_id"] in on_page:
                 memo[r["message_id"]] = result
+    ocr_enabled = (isinstance((cfg or {}).get('attachment_ocr'), dict)
+                   and cfg['attachment_ocr'].get('enabled') is True)
+
+    def sources():
+        for row in page['items']:
+            mid = row['message_id']
+            result = (None if row['body_state'] != 'full' else memo[mid] if mid in memo
+                      else mentions(view.reader, mid, cfg=cfg))
+            if result is not None:
+                refs = ({r['i']: r for r in drug_map.current_refs_with_progress(view.db, mid, progress)}
+                        if dictionary == 'derived' else {})
+                yield row, result[0], result[1], refs, None
+            if ocr_enabled:
+                yield from _attachment_mentions(view.db, project_id, mid, cfg)
+
     items = []
-    matching_pending = 0
-    for row in page["items"]:
-        mid = row["message_id"]
-        result = (None if row["body_state"] != "full" else memo[mid] if mid in memo
-                  else mentions(view.reader, mid, cfg=cfg))
-        if result is None:
-            continue
-        source, meds = result
-        refs = ({r["i"]: r for r in drug_map.current_refs_with_progress(view.db, row["message_id"], progress)}
-                if dictionary == "derived" else {})
+    matching_pending = ocr_mentions = 0
+    for row, source, meds, refs, original in sources():
         for i, med in enumerate(meds):
             ref = refs.get(i) if source[1] == "extract_llm" else None
             known_name = med.get("name_state") not in ("unknown", "ambiguous")
@@ -229,11 +258,20 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 subject = "family"
             elif subject not in ("patient", "family", "other"):
                 subject = "unknown"
+            change = change_details(med, subject, ref)
+            provenance = {"project_id": project_id, "message_id": row["message_id"]}
+            if original is not None:
+                from patient_context_projection import clinical_state_fact
+                fact = clinical_state_fact(original, med, 'medications', source='attachment_ocr')
+                temporal = (fact or {}).get('temporal') or {}
+                change['event_time'] = temporal.get('event_day') if not temporal.get('unknown', True) else None
+                provenance.update({key: row[key] for key in ('source_key', 'parent_message_id', 'attachment_id', 'page')})
+                ocr_mentions += 1
             items.append({**row, "mention": med, "subject_bucket": subject,
-                          "change": change_details(med, subject, ref),
+                          "change": change,
                           "source_kind": source[1], "source_artifact_id": source[0],
                           "candidate": ref, "matching": "current" if ref else "pending",
-                          "source": {"project_id": project_id, "message_id": row["message_id"]}})
+                          "source": provenance})
     replies = incomplete_reply_roots(view.db, project_id)
     coverage = {"period": {"since": since, "until": until},
                 "stored_posts": len(all_rows), "incomplete_bodies": incomplete,
@@ -247,10 +285,13 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 "active_dictionary_state": active_state,
                 "matching_pending_on_page": matching_pending,
                 "snapshot": view.meta, "gapless_verified": False}
-    if (cfg or {}).get('attachment_ocr', {}).get('enabled', False):
+    if ocr_enabled:
         import mcs_queries
-        coverage['attachments'] = 'excluded_from_medication_timeline'
+        coverage['attachments'] = 'included_current_ocr'
         coverage['attachment_processing'] = mcs_queries.attachment_ocr_coverage(view.db, project_id, cfg)
+        coverage['attachment_medication_mentions_on_page'] = ocr_mentions
+        coverage['attachment_scope'] = 'parent_post_page'
+        coverage['period_basis'] = 'parent_post_time'
     states = []
     if withdrawn:
         states.append("削除された投稿あり")
@@ -260,6 +301,8 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         states.append("未取得")
     if missing:
         states.append("未抽出")
+    if ocr_enabled and not coverage['attachment_processing']['complete']:
+        states.append("添付解析中")
     if failed or patient[0] == "failed":
         states.append("取得失敗")
     if dictionary != "derived" or matching_pending:

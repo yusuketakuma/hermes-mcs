@@ -196,6 +196,56 @@ def test_yomitoku_json_paragraphs_tables_figures_and_pdf_text():
     assert all(page["text_hash"] == ocr._hash(page["text"]) for page in pages)
 
 
+def test_document_table_preserves_sparse_rows_columns_and_empty_cells():
+    cells = [{"row": 0, "col": 0, "contents": "項目"},
+             {"row": 0, "col": 2, "contents": "用量"},
+             {"row": 1, "col": 0, "contents": "合成A"},
+             {"row": 1, "col": 15, "contents": "5 mg"},
+             {"row": 3, "col": 1, "contents": None}]
+    text = ocr._document_text({"paragraphs": [], "tables": [{"cells": list(reversed(cells))}]})
+    assert text == "項目\t\t用量\n合成A" + "\t" * 15 + "5 mg\n\n\t"
+    assert text.splitlines()[1].split("\t")[2] == ""
+
+
+def test_document_table_spans_reserve_blank_positions_without_repeating_text():
+    cells = [{"row": 0, "col": 0, "contents": "合成見出し", "row_span": 2, "col_span": 2},
+             {"row": 0, "col": 2, "contents": "用量"},
+             {"row": 1, "col": 2, "contents": "5 mg"}]
+    assert ocr._document_text({"paragraphs": [], "tables": [{"cells": cells}]}) == "合成見出し\t\t用量\n\t\t5 mg"
+
+
+@pytest.mark.parametrize("cell", [
+    {"row": -1}, {"col": -1}, {"row": True}, {"col": False},
+    {"row": 10 ** 100}, {"col": 10 ** 100},
+    {"row_span": 0}, {"col_span": -1}, {"row_span": True}, {"col_span": 1.5},
+    {"row_span": 10 ** 100}, {"col_span": 10 ** 100},
+])
+def test_document_table_rejects_invalid_indices_and_spans(cell):
+    with pytest.raises(ValueError, match="output_schema"):
+        ocr._document_text({"paragraphs": [], "tables": [{"cells": [{"row": 0, "col": 0, **cell}]}]})
+
+
+@pytest.mark.parametrize("first,second", [
+    ({}, {}), ({"row_span": 2}, {"row": 1}), ({"col_span": 2}, {"col": 1}),
+])
+def test_document_table_rejects_duplicate_or_overlapping_cells(first, second):
+    cells = [{"row": 0, "col": 0, **first}, {"row": 0, "col": 0, **second}]
+    with pytest.raises(ValueError, match="output_schema"):
+        ocr._document_text({"paragraphs": [], "tables": [{"cells": cells}]})
+
+
+def test_document_table_bounds_padding_and_combined_blocks(monkeypatch):
+    monkeypatch.setattr(ocr, "MAX_OUTPUT", 16)
+    document = {"paragraphs": [], "tables": [{"cells": [{"row": 0, "col": 16, "contents": "x"}]}]}
+    with pytest.raises(ValueError, match="output_schema"):
+        ocr._document_text(document)
+    document["tables"][0]["cells"][0]["col"] = 15
+    assert ocr._document_text(document) == "\t" * 15 + "x"
+    document["paragraphs"] = [{"contents": "x"}]
+    with pytest.raises(ValueError, match="output_schema"):
+        ocr._document_text(document)
+
+
 @pytest.mark.parametrize("value", [{}, {"engine_version": "0.5.1", "pages": []},
                                     {"engine_version": ocr.ENGINE_VERSION, "pages": [{"page": 2, "engine": "pdf_text", "text": "x"}]}])
 def test_rejects_invalid_runtime_output(value):

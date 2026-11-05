@@ -93,7 +93,7 @@ def test_meds_without_dictionary_explains_once_with_the_real_reason(led):
     import structured_view
     entries = ([("キラナ 5mg", None)], [])
     orig = structured_view.medication_entries
-    structured_view.medication_entries = lambda db, mid: entries
+    structured_view.medication_entries = lambda db, mid, **kwargs: entries
     try:
         view = notify_views.meds_view(led.db, 1, 100, cfg=CFG)
     finally:

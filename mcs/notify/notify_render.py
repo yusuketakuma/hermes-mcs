@@ -595,7 +595,7 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
 def attachment_ocr_records(db, mid):
     """Read current OCR sources for this post without treating their text as metadata."""
     import attachment_ocr
-    import attachment_inference
+    import attachment_extraction
     from mcs_util import load_config
     cfg = load_config()
     records = []
@@ -613,7 +613,7 @@ def attachment_ocr_records(db, mid):
             if not page['text'].strip():
                 continue
             key = f"attachment_ocr:{doc['artifact_id']}:{page['page']}"
-            result = attachment_inference.current(db, row['project_id'], key, cfg=cfg)
+            result = attachment_extraction.current(db, row['project_id'], key, cfg=cfg)
             analysis.append((result['artifact_id'], result['result_hash'], result['stage'],
                              result['require_cloud'], result['ready']) if result else None)
         records.append({"attachment_id": row["attachment_id"], "name": row["name"],

@@ -292,6 +292,7 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
             source = ocr_sources[entry["source_key"]]
             entry.update({key: source[key] for key in
                 ("parent_message_id", "attachment_id", "page", "source_artifact_id")})
+            entry["source_binding"] = source["_source_binding"]
         # A larger quote can contain different assertions, people or attributes.
         # Only identical source-bound meaning receives the discovery annotation.
         matches = [i for i in items if entry["content_hash"] and entry["source"]
@@ -678,24 +679,23 @@ def care_events(db, project_id, *, cfg=None) -> dict:
         return result
 
 
-def observations(db, ev, *, source_limit=50) -> dict:
+def observations(db, ev, *, source_limit=50, cfg=None) -> dict:
     """Project a bounded set of current source-bound observation records."""
-    from observation_series import observation_series
+    from observation_series import observation_series, source_identity
 
     project_id = ev.get("project_id")
     if type(project_id) is not int or project_id <= 0 or type(source_limit) is not int or not 1 <= source_limit <= 200:
         raise ValueError("observation_scope_invalid")
     keys, seen = [], set()
     for item in ev.get("items") or []:
-        if (item.get("category") != "observations" or item.get("source") != "chat"
-                or type(item.get("message_id")) is not int or not isinstance(item.get("content_hash"), str)):
+        if item.get("category") != "observations":
             continue
-        key = (item["message_id"], item["content_hash"])
-        if key not in seen:
+        key = source_identity(item)
+        if key is not None and key not in seen:
             keys.append(key)
             seen.add(key)
     selected = keys[:source_limit]
-    ids = sorted({mid for mid, _ in selected})
+    ids = sorted({mid for mid, _ in selected if type(mid) is int})
     originals = {}
     if ids:
         rows = db.execute("SELECT message_id,content_hash,body_text,body_html FROM messages "
@@ -709,9 +709,51 @@ def observations(db, ev, *, source_limit=50) -> dict:
             if (key in wanted and isinstance(body, str) and isinstance(html, str)
                     and hashlib.sha256(html.encode()).hexdigest() == digest and html_to_text(html) == body):
                 originals[key] = body
-    result = observation_series(ev, source_bodies=originals)
+    external = {key for key, _ in selected if isinstance(key, str)}
+    external_sources = {}
+    if external:
+        import attachment_extraction
+        import original_source_keys
+        for key in external:
+            source = attachment_extraction.source(db, project_id, key, cfg=cfg)
+            if source is None:
+                continue
+            raw = original_source_keys.source(db, project_id, key)
+            identity = (key, source.get("content_hash"))
+            body = source.get("body_text")
+            if (raw is not None and identity in selected and source.get("ready") is True
+                    and type(source.get("project_id")) is int and source["project_id"] == project_id
+                    and source.get("source") == "attachment_ocr" and type(source.get("message_id")) is int
+                    and source["message_id"] == 0 and source.get("posted_at_ts") is None
+                    and isinstance(body, str) and "\x00" not in body
+                    and body == raw["body_text"] and identity[1] == raw["content_hash"]
+                    and source.get("_source_binding") == raw["_source_binding"]
+                    and valid_hash(source.get("_source_binding"))
+                    and all(type(source.get(field)) is int and source[field] > 0 for field in
+                            ("parent_message_id", "attachment_id", "page", "source_artifact_id", "extraction_artifact_id"))
+                    and all(source[field] == raw[field] for field in
+                            ("parent_message_id", "attachment_id", "page", "source_artifact_id"))):
+                if len(body) <= 20000:
+                    originals[identity] = body
+                external_sources[key] = source
+    checked, rejected = [], 0
+    for item in ev.get("items") or []:
+        if item.get("category") == "observations" and item.get("source") == "attachment_ocr":
+            source = external_sources.get(item.get("source_key"))
+            if (source is None or item.get("project_id", project_id) != project_id
+                    or source_identity(item) != (source["source_key"], source["content_hash"])
+                    or item.get("source_binding") != source["_source_binding"]
+                    or item.get("extraction_artifact_id") not in (None, source["extraction_artifact_id"])):
+                rejected += 1
+                continue
+            item = {**item, **{key: source[key] for key in ("parent_message_id", "attachment_id", "page",
+                                                          "source_artifact_id", "extraction_artifact_id")}}
+        checked.append(item)
+    result = observation_series({**ev, "items": checked}, source_bodies=originals)
+    result["scope_rejected"] = (result.get("scope_rejected") or 0) + rejected
     result["source_checks"] = {"eligible": len(keys), "selected": len(selected), "verified": len(originals),
-                               "unavailable": len(selected) - len(originals), "limited": len(keys) > source_limit}
+                               "unavailable": len(selected) - len(originals), "limited": len(keys) > source_limit,
+                               **({"rejected": rejected} if external else {})}
     return result
 
 

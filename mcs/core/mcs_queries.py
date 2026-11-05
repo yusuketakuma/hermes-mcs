@@ -1292,9 +1292,9 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
                 continue
             record = original_source_keys.source(db, pid, key)
             if record is not None:
-                import attachment_inference
+                import attachment_extraction
                 analysis = (None if record["empty"] else
-                            attachment_inference.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
+                            attachment_extraction.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
                 record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
                 record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
                     record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
@@ -1305,10 +1305,12 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
                 yield record
 
 
-def attachment_ocr_coverage(db, pid, cfg):
+def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
     """Distinguish excluded attachment formats from unknown or unfinished OCR work."""
     import attachment_ocr
     from snapshot_access import table_exists
+    if mid is not None and (type(mid) is not int or mid <= 0):
+        raise ValueError('attachment_message_invalid')
 
     result = {"complete": True, "mode": "off", "total": 0, "eligible": 0, "excluded": 0,
               "ocr_complete": 0, "clinical_pending": 0, "pending": 0}
@@ -1318,12 +1320,13 @@ def attachment_ocr_coverage(db, pid, cfg):
         result["mode"] = "on"
     identities = []
     if result["mode"] == "on" and table_exists(db, "attachments"):
-        import attachment_inference
+        import attachment_extraction
         import original_source_keys
         for row in db.execute("SELECT a.attachment_id,a.state,a.sha256,a.bytes,a.downloaded_at "
                 "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
                 "WHERE m.project_id=? AND a.state IS NOT 'withdrawn' AND m.body_state IS NOT 'deleted' "
-                "ORDER BY a.attachment_id", (pid,)):
+                + ('AND m.message_id=? ' if mid is not None else '') + "ORDER BY a.attachment_id",
+                (pid, mid) if mid is not None else (pid,)):
             result["total"] += 1
             document = attachment_ocr.current(db, row["attachment_id"], project_id=pid)
             state = attachment_ocr.view(db, row["attachment_id"], project_id=pid)["state"]
@@ -1340,7 +1343,7 @@ def attachment_ocr_coverage(db, pid, cfg):
                     ready = True
                     for page in document["pages"]:
                         key = f"attachment_ocr:{document['artifact_id']}:{page['page']}"
-                        analysis = None if not page["text"].strip() else attachment_inference.current(db, pid, key, cfg=cfg)
+                        analysis = None if not page["text"].strip() else attachment_extraction.current(db, pid, key, cfg=cfg)
                         page_ready = not page["text"].strip() or bool(analysis and analysis.get("ready") is True)
                         ready = ready and page_ready
                         identity.append([key, original_source_keys.binding(db, pid, key), page_ready,

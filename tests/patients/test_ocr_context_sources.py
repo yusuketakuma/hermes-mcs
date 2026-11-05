@@ -18,7 +18,7 @@ def source_store(tmp_path, monkeypatch):
     led, key = seeded(tmp_path)
     result = {'artifact_id': 100, 'result_hash': payload_hash(['local']), 'ready': False,
               'document': {'patient_context': []}}
-    monkeypatch.setitem(sys.modules, 'attachment_inference', SimpleNamespace(current=lambda *a, **kw: dict(result)))
+    monkeypatch.setitem(sys.modules, 'attachment_extraction', SimpleNamespace(current=lambda *a, **kw: dict(result)))
     yield led, key, result
     led.close()
 
@@ -124,7 +124,7 @@ def test_verified_empty_page_needs_no_clinical_inference(source_store, monkeypat
     doc['pages'][0].update(text='', text_hash=attachment_ocr._hash(''))
     doc['text_hash'] = attachment_ocr._hash(json.dumps(doc['pages'], ensure_ascii=False, sort_keys=True))
     led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), artifact))
-    monkeypatch.setitem(sys.modules, 'attachment_inference', SimpleNamespace(
+    monkeypatch.setitem(sys.modules, 'attachment_extraction', SimpleNamespace(
         current=lambda *a, **kw: pytest.fail('empty original must not need clinical inference')))
     page = next(mcs_queries.patient_context_sources(led.db, 1, mid=key, cfg=OCR_CFG))
     assert page['empty'] and page['extraction_ready'] and refresh._sources_intact([page])

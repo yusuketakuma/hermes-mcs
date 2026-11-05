@@ -21,10 +21,11 @@ from worker_process import reap_worker
 KIND = "attachment_ocr_v1"
 SCHEMA = "attachment-ocr/v1"
 ENGINE_VERSION = "0.16.0"
-RUNTIME_CONTRACT = "yomitoku-0.16.0-cpu-lite-text-first/v1"
+RUNTIME_CONTRACT = "yomitoku-0.16.0-cpu-lite-text-first/table-grid-v2"
 MAX_INPUT = 64 * 1024 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024
 MAX_PAGES = 30
+MAX_TABLE_ENTRIES = 10000
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
 
 # Optional packages are imported only in the separate, network-denied runtime.
@@ -238,6 +239,8 @@ def view(db, attachment_id, project_id=None, include_text=False):
             result["medical"] = medical_document.extract(doc["pages"])
         return result
     prior = _latest(db, source)
+    if source['state'] == 'pruned':
+        return {'state': 'unavailable', 'page_count': 0, 'original_available': False}
     return {"state": prior["state"] if _matching(prior, source) and prior["state"] not in ("complete", "empty")
             else "unprocessed", "page_count": 0}
 
@@ -275,7 +278,7 @@ def record_dependencies_tx(db, snapshots):
 def _document_text(document):
     if not isinstance(document, dict):
         raise ValueError("output_schema")
-    blocks = []
+    blocks, output_size = [], 0
     for key in ("paragraphs", "tables", "figures"):
         items = document.get(key, [] if key == "figures" else None)
         if not isinstance(items, list):
@@ -293,15 +296,54 @@ def _document_text(document):
                 text = _document_text({"paragraphs": item.get("paragraphs"), "tables": []})
             else:
                 cells = item.get("cells")
-                if (not isinstance(cells, list) or any(not isinstance(cell, dict)
+                if (not isinstance(cells, list) or len(cells) > MAX_TABLE_ENTRIES
+                        or any(not isinstance(cell, dict)
                         or type(cell.get("row")) is not int or type(cell.get("col")) is not int
                         or cell.get("contents") is not None and not isinstance(cell["contents"], str)
                         for cell in cells)):
                     raise ValueError("output_schema")
-                rows = {}
-                for cell in sorted(cells, key=lambda c: (c["row"], c["col"])):
-                    rows.setdefault(cell["row"], []).append(cell.get("contents") or "")
-                text = "\n".join("\t".join(row) for row in rows.values())
+                rows, height, entries, content_size = {}, 0, 0, 0
+                for cell in cells:
+                    row, col = cell["row"], cell["col"]
+                    row_span, col_span = cell.get("row_span", 1), cell.get("col_span", 1)
+                    if (row < 0 or col < 0 or type(row_span) is not int or row_span < 1
+                            or type(col_span) is not int or col_span < 1
+                            or row + row_span > MAX_OUTPUT + 1 or col + col_span > MAX_OUTPUT + 1):
+                        raise ValueError("output_schema")
+                    entries += row_span
+                    content = cell.get("contents") or ""
+                    content_size += len(content.encode("utf-8"))
+                    if entries > MAX_TABLE_ENTRIES or content_size > MAX_OUTPUT:
+                        raise ValueError("output_schema")
+                    height = max(height, row + row_span)
+                    for offset in range(row_span):
+                        rows.setdefault(row + offset, []).append((col, col + col_span, content if offset == 0 else ""))
+                # Count every missing separator before allocating padding from runtime indices.
+                size = content_size + max(0, height - 1)
+                for row in rows.values():
+                    row.sort()
+                    end = 0
+                    for col, stop, _ in row:
+                        if col < end:
+                            raise ValueError("output_schema")
+                        end = stop
+                    size += end - 1
+                    if size > MAX_OUTPUT:
+                        raise ValueError("output_schema")
+                lines = []
+                previous_row = 0
+                for number, row in sorted(rows.items()):
+                    parts, previous_col = [], 0
+                    for col, stop, content in row:
+                        parts.extend(("\t" * (col - previous_col), content))
+                        previous_col = col
+                    parts.append("\t" * (stop - 1 - previous_col))
+                    lines.extend(("\n" * (number - previous_row), "".join(parts)))
+                    previous_row = number
+                text = "".join(lines)
+            output_size += len(text.encode("utf-8")) + bool(blocks)
+            if output_size > MAX_OUTPUT:
+                raise ValueError("output_schema")
             blocks.append((index if item.get("order") is None else item["order"], text))
     return "\n".join(text for _, text in sorted(blocks, key=lambda item: item[0]))
 

@@ -52,6 +52,9 @@ def reconcile(view, project_id, *, since=None, until=None, limit=50, cursor=None
                 "posted_at": item["posted_at"], "mention": med, "change": change,
                 "context": context, "candidate_only": True, "absence_confirmed": False,
                 "current_use_confirmed": False, "prescription_authority": False}
+        if item.get('source_kind') == 'attachment_ocr':
+            base.update({key: item[key] for key in ('source_key', 'parent_message_id', 'attachment_id',
+                        'page', 'extraction_artifact_id', 'source_kind', 'source')})
         if item["subject_bucket"] != "patient":
             candidates.append({**base, "status": "not_comparable", "reason": context[0], "comparisons": []})
             continue
