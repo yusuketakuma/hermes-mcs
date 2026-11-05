@@ -677,7 +677,9 @@ def test_semantic_run_off_keeps_overall_ok(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     result = {"errors": []}
     run_check._run_semantic(db, _sem_args(), {}, result, time.monotonic() + 480, False)
-    assert health_report.build_health(db.db, result, "ok")["overall"] == "ok"
+    assert health_report.build_health(
+        db.db, result, "ok",
+        cfg={"attachment_ocr": {"enabled": False}})["overall"] == "ok"
     db.close()
 
 

@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_ROOTS = ("mcs", "adapters", "hermes_plugin", "mcs_standalone",
                     "lineworks_adapter", "deployment", "scripts")
 ADAPTER = Path("mcs/ingest/mcs_adapter.py")
+AUTH = Path("mcs/ingest/mcs_authentication.py")
 CONTRACT = Path("mcs/core/mcs_contract.py")
 WORKER = Path("mcs/ingest/mcs_worker.py")
 DOWNLOAD = Path("mcs/ingest/mcs_download.py")
@@ -47,7 +48,7 @@ DELIVERY_SURFACES = ("mcs/notify", "adapters", "hermes_plugin",
                      "mcs_standalone", "lineworks_adapter")
 DELIVERY_ALLOWED_ADAPTER_NAMES = {"project_url"}
 NETWORK_MODULES = {"mcs_adapter", "mcs_worker", "mcs_cdp", "mcs_download", "run_check", "init_data",
-                   "cross_lists", "project_metadata"}
+                   "cross_lists", "project_metadata", "mcs_authentication"}
 
 
 # Scheduled launchers (LaunchAgents, cron-style shell wrappers) and the
@@ -230,7 +231,7 @@ def test_no_mcs_write_route_is_named_in_code():
 # Cross-list acquisition now uses only the adapter's bounded wire owner.
 # The current worker still prefix-checks the endpoint; its existing exact
 # holder permission remains, without granting it to pure cross-list parsing.
-ENDPOINT_IMPORTERS = {ADAPTER, WORKER}
+ENDPOINT_IMPORTERS = {ADAPTER, WORKER, AUTH}
 ENDPOINT_ATTRIBUTE_READERS = set()
 MCS_ENDPOINT_NAMES = {"API", "BASE"}
 MCS_ENDPOINT_MODULES = {"mcs_adapter", "mcs_contract"}
@@ -283,7 +284,7 @@ def test_mcs_origin_literal_is_confined():
         for _node, text in _string_constants(_parse(rel)):
             if "medical-care.net" in text:
                 found.add(rel)
-    assert found <= {ADAPTER, CONTRACT, DOWNLOAD}, sorted(map(str, found))
+    assert found <= {ADAPTER, AUTH, CONTRACT, DOWNLOAD}, sorted(map(str, found))
 
 
 def test_delivery_and_action_surfaces_hold_no_mcs_client():
@@ -347,14 +348,14 @@ def test_dom_clicks_exist_only_in_the_login_form():
                     actions.append((rel, fn.name if fn else None,
                                     " ".join(line.split())))
     assert sorted(actions) == sorted([
-        (ADAPTER, "_auto_login",
+        (AUTH, "_auto_login",
          "idEl.dispatchEvent(new Event('input', {bubbles:true}));"),
-        (ADAPTER, "_auto_login",
+        (AUTH, "_auto_login",
          "pwEl.dispatchEvent(new Event('input', {bubbles:true}));"),
-        (ADAPTER, "_auto_login", "btn.click();"),
+        (AUTH, "_auto_login", "btn.click();"),
     ]), actions
     # The click target is the login form's submit button on the MCS origin.
-    click_script = next(text for _n, text in _string_constants(_parse(ADAPTER))
+    click_script = next(text for _n, text in _string_constants(_parse(AUTH))
                         if "btn.click()" in text)
     assert "location.origin !== 'https://www.medical-care.net'" in click_script
     assert "button[type=submit]" in click_script
@@ -387,7 +388,7 @@ def test_cdp_only_opens_the_unreads_and_login_pages():
                      if isinstance(v, ast.Constant)]
                 if not any(isinstance(t, str) and "/json/new" in t for t in texts):
                     continue
-                page = _cdp_new_target(arg) if rel == ADAPTER else None
+                page = _cdp_new_target(arg) if rel in (ADAPTER, AUTH) else None
                 if page is None:
                     rejected.append(f"{rel}:{node.lineno}")
                 else:
