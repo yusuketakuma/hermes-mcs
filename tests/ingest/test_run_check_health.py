@@ -15,6 +15,10 @@ from ingest_testkit import _ledger, _message
 from run_check_stage_testkit import _lagging_patient, _pinned_history_adapter
 from run_check_stage_testkit import _no_disk_guard as _no_disk_guard
 
+# build_health treats a missing config as honest OCR 'unknown' (degraded);
+# health assertions pass an explicit synthetic disabled config like production.
+OCR_DISABLED_CFG = {"attachment_ocr": {"enabled": False}}
+
 
 def test_health_counts_held_sends_and_age_from_creation(tmp_path):
     db = _ledger(tmp_path)
@@ -164,7 +168,8 @@ def test_health_preserves_known_success_without_fabricating_it(
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10000)
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
-        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed")
+        health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed",
+                                            cfg=OCR_DISABLED_CFG)
         assert health["overall"] == "failed"
         assert health["last_ok_at"] == last_ok
         assert health["state_reasons"] == ["run_failed"]
@@ -182,7 +187,8 @@ def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch
         result = {"errors": ["synthetic stage error"], "incomplete": [1],
                   "notify": {"failed": 1, "skipped": 1, "parked": 1},
                   "backup_skipped": "disk_low"}
-        health = health_report.build_health(db.db, result, "partial")
+        health = health_report.build_health(db.db, result, "partial",
+                                            cfg=OCR_DISABLED_CFG)
         assert health["overall"] == "degraded"
         assert health["last_ok_at"] == 100.0
         assert health["state_reasons"] == [
@@ -190,11 +196,13 @@ def test_health_explains_failures_without_changing_overall(tmp_path, monkeypatch
             "notification_deferred", "notification_parked", "notification_held",
             "disk_low"]
         assert health["notify"]["held"] == 1
-        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
+        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok",
+                                             cfg=OCR_DISABLED_CFG)
         assert healthy["overall"] == "degraded"
         db.db.execute("UPDATE notify_outbox SET state='sent'")
         db.db.commit()
-        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
+        healthy = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok",
+                                             cfg=OCR_DISABLED_CFG)
         assert healthy["overall"] == "ok"
         assert healthy["last_ok_at"] == 1000.0
         assert healthy["state_reasons"] == []
@@ -212,13 +220,14 @@ def test_health_code_changed_does_not_degrade(tmp_path, monkeypatch):
     monkeypatch.setattr(run_check.time, "time", lambda: 1000.0)
     try:
         health = health_report.build_health(db.db, {"errors": ["code_changed"],
-                                        "notify": {}}, "partial")
+                                        "notify": {}}, "partial",
+                                        cfg=OCR_DISABLED_CFG)
         assert health["overall"] == "ok"
         assert health["last_ok_at"] == 1000.0
         assert health["state_reasons"] == ["code_changed"]
         real = health_report.build_health(
             db.db, {"errors": ["code_changed", "synthetic stage error"],
-                 "notify": {}}, "partial")
+                 "notify": {}}, "partial", cfg=OCR_DISABLED_CFG)
         assert real["overall"] == "degraded"
         assert real["state_reasons"][:2] == ["stage_errors", "code_changed"]
     finally:
@@ -290,7 +299,7 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
                         str(tmp_path / "health.json"))
 
     # happy path first — fresh present evidence bound to its source run
-    run_check._write_health(db, result, "ok", run_id=7)
+    run_check._write_health(db, result, "ok", run_id=7, cfg=OCR_DISABLED_CFG)
     h = json.loads((tmp_path / "health.json").read_text())
     assert h["overall"] == "ok" and h["run_id"] == 7 and h["at"]
 
@@ -301,7 +310,7 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(safe_io, 'atomic_publish_text', boom)
     run_id = db.begin_run(None, "tick")
     db.finish_run(run_id, "ok", "")
-    run_check._write_health(db, result, "ok", run_id=run_id)
+    run_check._write_health(db, result, "ok", run_id=run_id, cfg=OCR_DISABLED_CFG)
     assert any(e.startswith("health_write_failed")
                for e in result["errors"])
     kinds = [r[0] for r in db.db.execute(
@@ -423,7 +432,7 @@ def test_coverage_lag_is_information_not_an_error(tmp_path, monkeypatch):
     assert result["errors"] == []
     assert not result.get("coverage_stalled")
     monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "h.json"))
-    health = health_report.build_health(db.db, result, "ok")
+    health = health_report.build_health(db.db, result, "ok", cfg=OCR_DISABLED_CFG)
     assert health["collection"] == "ok" and health["overall"] == "ok"
     assert health["coverage_lagging"]["count"] == 1
     assert health["coverage_lagging"]["max_lag_s"] > 0
@@ -467,15 +476,18 @@ def test_jobs_only_health_carries_last_collection_verdict(tmp_path,
     monkeypatch.setattr(health_report, 'HEALTH_FILE',
                         str(tmp_path / "health.json"))
     run_check._write_health(db, {"errors": ["project 7: x"], "notify": {},
-                                 "incomplete": [7]}, "partial")
+                                 "incomplete": [7]}, "partial",
+                            cfg=OCR_DISABLED_CFG)
     run_check._write_health(
-        db, {"errors": [], "notify": {}, "jobs_only": True}, "ok")
+        db, {"errors": [], "notify": {}, "jobs_only": True}, "ok",
+        cfg=OCR_DISABLED_CFG)
     deep = json.loads((tmp_path / "health.json").read_text())
     assert deep["collection"] == "incomplete"
     assert deep["incomplete_projects"] == [7]
     assert deep["overall"] == "degraded"
     # the next full tick decides afresh
-    run_check._write_health(db, {"errors": [], "notify": {}}, "ok")
+    run_check._write_health(db, {"errors": [], "notify": {}}, "ok",
+                            cfg=OCR_DISABLED_CFG)
     tick = json.loads((tmp_path / "health.json").read_text())
     assert tick["collection"] == "ok" and tick["overall"] == "ok"
     db.close()
@@ -486,15 +498,16 @@ def test_health_reports_disk_state(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "h.json"))
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1000.0)
-    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok",
+                                        cfg=OCR_DISABLED_CFG)
     assert health["disk_free_mb"] == 1000 and health["disk_low"] is True
     assert health["overall"] == "ok"      # disk has its own alert path
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 1e6)
     assert not health_report.build_health(db.db, {"errors": [], "notify": {}},
-                                 "ok")["disk_low"]
+                                 "ok", cfg=OCR_DISABLED_CFG)["disk_low"]
     assert health_report.build_health(db.db, {"errors": [], "notify": {},
                                   "backup_skipped": "disk_low"},
-                             "ok")["disk_low"] is True
+                             "ok", cfg=OCR_DISABLED_CFG)["disk_low"] is True
     db.close()
 
 
@@ -502,6 +515,7 @@ def test_backup_skip_is_recorded(monkeypatch):
     import maintenance
     monkeypatch.setattr(maintenance, "daily_backup",
                         lambda *a: "skipped_disk_low")
+    monkeypatch.setattr(maintenance, "db_maintenance", lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
     result = {"errors": []}
