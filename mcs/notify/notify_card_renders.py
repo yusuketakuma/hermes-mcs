@@ -377,6 +377,13 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
     present = presenter(card["transport"])
+    # chat_format_version=1 opts Discord/LINE WORKS thread faces into the
+    # shared chat layout — only while the transport's presenter declares
+    # CHAT_BODY_ON_FACE, so a renderer that cannot show originals yet
+    # keeps producing legacy specs.
+    chat_v1 = (card["transport"] in ("discord", "lineworks")
+               and card["kind"] == "thread" and op in ("create", "update")
+               and getattr(present, "CHAT_BODY_ON_FACE", False))
     thread_on = card["kind"] != "patient_history" and (notify_scope.notify_cfg(cfg).get("card_thread") is True
                  or present.ALWAYS_THREAD or (card["transport"] == "slack" and card["kind"] == "thread"))
     # a logical-grouping "thread" (LINE WORKS) has no failed state, so
@@ -399,6 +406,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
                  if present.POST_ACTIONS and card["kind"] == "thread"
                  and card["delivery_state"] != "revoked"
                  and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
+                 and not (present.THREAD_DRUG_ACTIONS and in_thread_body
+                          and not chat_v1)
                  else [])
     spec["parts"] = {
         "containers": containers,
@@ -454,13 +463,6 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # thread carries the untruncated shown-set text (T7). Where the
     # transport shows bodies on the card, the posts the face holds whole
     # leave the thread (attachments and the rest stay there).
-    # chat_format_version=1 opts Discord/LINE WORKS thread faces into the
-    # shared chat layout — only while the transport's presenter declares
-    # CHAT_BODY_ON_FACE, so a renderer that cannot show originals yet
-    # keeps producing legacy specs.
-    chat_v1 = (card["transport"] in ("discord", "lineworks")
-               and card["kind"] == "thread" and op in ("create", "update")
-               and getattr(present, "CHAT_BODY_ON_FACE", False))
     if chat_v1:
         spec["parts"]["chat_format_version"] = 1
     face_posts, face_mids = [], frozenset()
@@ -481,12 +483,12 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
         spec["parts"]["thread_drug_actions"] = True
-    if present.THREAD_DRUG_ACTIONS and in_thread_body:
+    if chat_v1 and present.THREAD_DRUG_ACTIONS and in_thread_body:
         # chat-format v1 carries short posts whole on the face: their 💊
         # stays beside the post there; posts left in the thread keep the
-        # thread view. Legacy keeps every 💊 inside the thread.
-        post_mids = ([t for t in post_mids if t[1] in face_mids]
-                     if chat_v1 else [])
+        # thread view. Legacy keeps post_mids empty (every 💊 inside the
+        # thread) and is filtered out before this point.
+        post_mids = [t for t in post_mids if t[1] in face_mids]
     own = {}
     if post_mids:
         own["post_actions"] = _post_actions(db, card, content, post_mids, now)

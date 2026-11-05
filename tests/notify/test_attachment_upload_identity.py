@@ -14,7 +14,6 @@ from slack_testkit import SLACK, _attach, _granted_card, _mkworld
 from slack_testkit import isolated_slack_ledger as led
 
 __all__ = ["led"]
-pytestmark = pytest.mark.thread_bodies
 
 
 def _uploaded(led, tmp_path, monkeypatch):
