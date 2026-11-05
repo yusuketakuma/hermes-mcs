@@ -9,7 +9,7 @@ from adapters.common.spec import validate
 from notify_testkit import CFG, _dispatch, _intent, _latest_render, _seed_thread, led, pinned_clock
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "legacy_chat_format")
 STAMP = "スタンプ 👀2 合成 太郎・合成 花子 · 観測 10-01 10:00"
 
 

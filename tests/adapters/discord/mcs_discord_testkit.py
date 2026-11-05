@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import notify_cards
+import present_discord
 from notify_testkit import _llm_extract
 from discord_testkit import CFG, MISSING, NOW, FakeBot, FakeInteraction, _deliver
 from discord_testkit import discord_world as discord_world
@@ -135,6 +136,9 @@ def _drug_thread(world, monkeypatch, *, medication_count=1, older_medication=Fal
     sha = hashlib.sha256(raw).hexdigest()
     drug_map.derive(world.led, drug_map.load(path, expected_sha256=sha))
     monkeypatch.setitem(CFG, "drug_map", {"path": str(path), "sha256": sha})
+    # the thread drug view lives on a body post: keep every original off
+    # the v1 face so the spec still carries thread bodies
+    monkeypatch.setattr(present_discord, "FACE_ORIGINAL_MAX", 1)
     world.dispatch()
     _, reg, bot, spec = _delivered(world)
     message = bot.channels[42].sent[0]

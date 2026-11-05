@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import ledger as _ledger
 import notify_cards
@@ -22,6 +23,8 @@ from adapters.discord import delivery
 from discord_testkit import CFG, NOW, SETTINGS, FakeHTTP, FakeInteraction, FakeMessage, FakeThread, _deliver
 from discord_testkit import discord_world as discord_world
 from mcs_discord_testkit import _delivered as _delivered, _face as _face, _pin_wall_clock as _pin_wall_clock
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 def test_delivery_end_to_end(world):

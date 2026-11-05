@@ -26,7 +26,7 @@ from notify_testkit import (
 )
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 ACTOR = "lineworks:40029600:c72af563-0f21-4736-11e4-045237113344"
 
 

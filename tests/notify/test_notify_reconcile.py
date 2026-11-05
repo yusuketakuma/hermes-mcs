@@ -29,7 +29,7 @@ from notify_reconcile_testkit import CFG, NOW, _journal_claim, _journal_result, 
 from notify_testkit import pinned_clock
 
 __all__ = ["CFG", "pinned_clock", "world"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 
 
 def _attempt_row(led, aid, delivery_id, state="granted"):

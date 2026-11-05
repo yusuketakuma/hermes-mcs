@@ -10,9 +10,12 @@ import pytest
 import notify_cards
 import notify_scope
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render, _msg, _patient,
+
                             _receipt, _row, _seed_thread, _settle_bodies, _signal, _signal_row,
                             delivered_source, led,
                             pinned_clock)
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 __all__ = ["led", "pinned_clock"]
 

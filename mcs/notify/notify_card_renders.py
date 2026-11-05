@@ -230,6 +230,9 @@ def _presentation_fp(card, content, cfg=None) -> str:
     fp = content_fingerprint(content)
     if _stamp_enabled(cfg) and card["kind"] == "thread" and positive(card["project_id"]):
         fp = hashlib.sha256(f"{fp}:stamp".encode()).hexdigest()
+    if (card["kind"] == "thread" and card.get("transport") in ("discord", "lineworks")
+            and getattr(presenter(card["transport"]), "CHAT_BODY_ON_FACE", False)):
+        fp = hashlib.sha256(f"{fp}:chat-format:1".encode()).hexdigest()
     return fp
 
 
@@ -396,7 +399,6 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
                  if present.POST_ACTIONS and card["kind"] == "thread"
                  and card["delivery_state"] != "revoked"
                  and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
-                 and not (present.THREAD_DRUG_ACTIONS and in_thread_body)
                  else [])
     spec["parts"] = {
         "containers": containers,
@@ -479,6 +481,12 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
         spec["parts"]["thread_drug_actions"] = True
+    if present.THREAD_DRUG_ACTIONS and in_thread_body:
+        # chat-format v1 carries short posts whole on the face: their 💊
+        # stays beside the post there; posts left in the thread keep the
+        # thread view. Legacy keeps every 💊 inside the thread.
+        post_mids = ([t for t in post_mids if t[1] in face_mids]
+                     if chat_v1 else [])
     own = {}
     if post_mids:
         own["post_actions"] = _post_actions(db, card, content, post_mids, now)
@@ -491,6 +499,15 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     if own:
         # an older worker holds a spec carrying this key until restarted
         spec["parts"][card["transport"]] = own
+    if chat_v1 and card["transport"] == "lineworks":
+        from adapters.lineworks import cards as lineworks_cards
+        try:
+            lineworks_cards.render(spec)
+        except ValueError as exc:
+            if str(exc) not in {"lineworks_face_budget", "lineworks_flex_budget",
+                                "lineworks_button_budget", "lineworks_text_budget"}:
+                raise
+            budget_hold = budget_hold or "lineworks_face_budget"
     return spec, budget_hold
 
 

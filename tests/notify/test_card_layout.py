@@ -13,12 +13,15 @@ import notify_card_renders
 import notify_render
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from notify_testkit import (
+
     CFG, NOW, _add_request, _card, _deliver, _dispatch, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec,
     led as led,
 )
 from notify_lineworks_testkit import LINEWORKS, _deliver as _lw_deliver, _render as _lw_render
 from notify_testkit import delivered_source
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 def _texts(spec):

@@ -8,6 +8,11 @@ from adapters.lineworks.cards import validate
 from notify_lineworks_testkit import LINEWORKS, MID, _deliver
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread, led
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+
+
 __all__ = ["led"]
 
 

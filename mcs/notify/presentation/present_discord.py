@@ -120,6 +120,6 @@ def face_block_count(parts, face_posts=(), *, slots=0) -> int:
     buttons = sum(len(row) for row in parts.get("action_rows") or [])
     return (1 + zones                  # Container + >=1 TextDisplay per zone
             + zones + 1                # Separators: zones-1 + footer + rows
-            + (foot + FACE_TEXT_MAX - 1) // FACE_TEXT_MAX
+            + ((foot + FACE_TEXT_MAX - 1) // FACE_TEXT_MAX if FACE_TEXT_MAX else foot)
             + 3 * slots                # post-action Sections
             + 3 + buttons + 2)         # <=3 ActionRows + select/picker + items

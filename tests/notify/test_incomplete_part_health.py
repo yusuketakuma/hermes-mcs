@@ -11,6 +11,8 @@ import notify_scope
 from ingest_testkit import _ledger
 from notify_testkit import led as led
 
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
+
 
 NOW = 200_000.0
 SLACK = {'notify': {'interactive': 'slack'}}

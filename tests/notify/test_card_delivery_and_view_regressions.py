@@ -95,7 +95,7 @@ def test_earlier_native_content_fp_drifts_layout_once_and_keeps_ack_source(led, 
     assert notify_render.current_ackers(led.db, card["card_id"], source_generation, content["shown"]) == acknowledged
     assert notify_cards._generation_drift(card, content) == {}
     changed = {**content, "preview_text": "別のプレビュー"}
-    assert notify_render.content_fingerprint(changed) == card["content_fp"]
+    assert notify_cards._presentation_fp(card, changed) == card["content_fp"]
 
 
 @pytest.mark.parametrize("transport", ["lineworks", None])
@@ -115,10 +115,17 @@ def test_legacy_content_fp_migrates_only_when_delivery_presentation_changes(led,
                            "a": content.get("actor_fp")})
     card.update(content_fp=old_fp, source_fp=content["source_fp"])
     drift = notify_cards._generation_drift(card, content)
-    assert drift == {}
-    assert notify_cards._generation_drift(card, content) == {}
+    if transport == "lineworks":
+        # chat_format_version=1 is a presentation change: unchanged content migrates
+        assert drift == {"presentation_generation": card["presentation_generation"] + 1,
+                         "content_fp": notify_cards._presentation_fp(card, content)}
+        card.update(drift)
+        assert notify_cards._generation_drift(card, content) == {}
+    else:
+        assert drift == {}
+        assert notify_cards._generation_drift(card, content) == {}
     changed = {**content, "preview_text": "別のプレビュー"}
-    assert notify_render.content_fingerprint(changed) == card["content_fp"]
+    assert notify_cards._presentation_fp(card, changed) == card["content_fp"]
 
 
 def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):

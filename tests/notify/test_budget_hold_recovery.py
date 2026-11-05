@@ -8,7 +8,10 @@ import pytest
 import notify_spool
 import notify_recovery
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
+
                             _seed_thread, led as led)
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 @pytest.mark.parametrize("error_code", ["part_budget_exceeded", "thread_cleanup_budget_exceeded",

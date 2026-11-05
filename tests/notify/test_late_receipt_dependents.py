@@ -9,8 +9,11 @@ import notify_recovery
 import notify_spool
 from adapters.common import journal
 from notify_testkit import (CFG, NOW, SCOPE, _begin, _dispatch, _intent,
+
                             _latest_render, _part_receipt, _receipt, _seed_thread,
                             _uuid, led as led)
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 def _parts(led, render):

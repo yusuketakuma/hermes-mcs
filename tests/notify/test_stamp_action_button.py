@@ -12,6 +12,8 @@ import notify_action_tokens
 from notify_testkit import _dispatch, _intent, _seed_thread, _spec, led
 from notify_testkit import _button_ids as _ids
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+
 __all__ = ["led"]
 
 

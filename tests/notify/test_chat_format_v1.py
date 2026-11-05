@@ -13,8 +13,9 @@ from adapters.common import spec as spec_module
 from adapters.lineworks import cards as lw_cards
 from discord_testkit import _fake_discord
 from notify_lineworks_testkit import LINEWORKS
-from notify_testkit import (NOW, _dispatch, _intent, _latest_render,
-                            _seed_thread, led as led, pinned_clock)
+from notify_testkit import (CFG, NOW, _card, _deliver, _dispatch, _intent,
+                            _latest_render, _seed_thread, led as led,
+                            pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -71,8 +72,8 @@ def test_discord_v1_oversized_original_stays_in_thread(led, monkeypatch):
     assert spec_module.validate(spec) is spec
 
 
-def test_discord_legacy_spec_has_no_version_and_keeps_embed(led, monkeypatch):
-    # the autouse fixture already pins CHAT_BODY_ON_FACE=False
+def test_discord_legacy_spec_has_no_version_and_keeps_embed(led, monkeypatch, legacy_chat_format):
+    # Explicit legacy coverage; all other tests use the production default.
     _seed_thread(led, mids=(100,))
     led.db.execute("UPDATE messages SET body_text='合成の原文' WHERE message_id=100")
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
@@ -186,3 +187,65 @@ def test_lw_v1_unmapped_attachment_keeps_the_tail(led):
         ("body_part", "m:101#1"), ("attachment_part", "two.bin"),
         ("attachment_part", "orphan.bin")]
     assert [p["index"] for p in out] == list(range(len(out)))
+
+
+def test_chat_version_changes_presentation_fingerprint(monkeypatch):
+    import notify_card_renders as renders
+    card = {"transport": "discord", "kind": "thread", "project_id": 1}
+    monkeypatch.setattr(renders, "content_fingerprint", lambda content: "same-source")
+    monkeypatch.setattr(renders, "_stamp_enabled", lambda cfg: False)
+    monkeypatch.setattr(present_discord, "CHAT_BODY_ON_FACE", False)
+    old = renders._presentation_fp(card, {})
+    monkeypatch.setattr(present_discord, "CHAT_BODY_ON_FACE", True)
+    assert renders._presentation_fp(card, {}) != old
+
+
+def test_lw_budget_failure_holds_before_publication(led, monkeypatch):
+    _lw_seed(led, monkeypatch, mids=(100,))
+    def oversized(spec):
+        raise ValueError("lineworks_flex_budget")
+    monkeypatch.setattr(lw_cards, "render", oversized)
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), LINEWORKS)
+    row = _latest_render(led)
+    assert row["state"] == "held"
+    assert not row["spec_published"]
+
+
+def test_old_delivered_card_waits_for_unsettled_attempt_before_v1(led):
+    """A pre-v1 delivered card migrates to chat_format_version=1 only after
+    its in-flight attempt settles: granted/unknown attempts freeze the
+    re-render, a settled one lets the drift through."""
+    import notify_cards
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    _deliver(led)
+    render = _latest_render(led)
+    card = _card(led)
+    # stored fp predates the chat-format marker -> pending v1 migration
+    led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=?",
+                   ("f" * 64, card["card_id"]))
+    led.db.commit()
+    def renders():
+        return led.db.execute(
+            "SELECT COUNT(*) c FROM notification_renders").fetchone()["c"]
+    before = renders()
+    for state in ("granted", "unknown"):
+        led.db.execute("INSERT INTO notification_delivery_attempts"
+                       "(attempt_id,delivery_id,begin_command_id,state,created_at)"
+                       "VALUES(?,?,?,'" + state + "',?)",
+                       ("a" * 16, render["delivery_id"], "cmd-x", NOW))
+        led.db.commit()
+        assert notify_cards.sweep(led, CFG, now=NOW)["updated"] == 0
+        assert renders() == before
+        led.db.execute("DELETE FROM notification_delivery_attempts "
+                       "WHERE attempt_id=?", ("a" * 16,))
+        led.db.commit()
+    led.db.execute("INSERT INTO notification_delivery_attempts"
+                   "(attempt_id,delivery_id,begin_command_id,state,created_at)"
+                   "VALUES(?,?,?,'delivered',?)",
+                   ("a" * 16, render["delivery_id"], "cmd-x", NOW))
+    led.db.commit()
+    assert notify_cards.sweep(led, CFG, now=NOW)["updated"] == 1
+    latest = _latest_render(led)
+    assert latest["render_rev"] > render["render_rev"]
+    assert json.loads(latest["spec_json"])["parts"]["chat_format_version"] == 1

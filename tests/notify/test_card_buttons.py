@@ -779,6 +779,7 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     from discord_testkit import _fake_discord
     from adapters.common import spec as spec_mod
     from adapters.discord import cards as discord_cards
+    import present_discord
     mids = tuple(range(100, 112))
     _patient(led, 1, name="患" * 60)
     for m in mids:
@@ -812,6 +813,9 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     est += sum(len(line) + 4
                for post in spec["parts"].get("discord", {}).get("face_posts", [])
                for line in post["stamps"])
+    est += sum(present_discord._original_cost(post["original"])
+               for post in spec["parts"].get("discord", {}).get("face_posts", [])
+               if post.get("original"))
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     view = discord_cards.build_view(spec)
     real = sum(len(c.content) for c in view.items[0].children

@@ -18,8 +18,11 @@ import notify_cards
 import notify_spool
 import notify_render
 from notify_testkit import (
+
     CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _extract, _intent,
     _latest_render, _msg, _part_receipt, _receipt, _seed_thread, _uuid, led)
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 __all__ = ["led"]
 
@@ -1075,11 +1078,14 @@ def test_native_thread_layout_migrates_once_without_source_or_ack_generation_cha
         led.db.execute("UPDATE notification_cards SET content_fp=? WHERE card_id=1", (notify_render.content_fingerprint(old),))
     initial_source_generation = card["source_generation"]
     initial_presentation_generation = card["presentation_generation"]
-    # A release alone does not migrate already delivered layout-2 cards.
-    assert notify_cards.sweep(led, CFG, now=NOW + 1)["updated"] == 0
-    assert _card(led)["source_generation"] == initial_source_generation
-    assert _card(led)["presentation_generation"] == initial_presentation_generation
-    assert _latest_render(led)["delivery_id"] == first["delivery_id"]
+    # chat_format v1's presentation marker migrates the card exactly once;
+    # source and ack generations stay put and a later sweep is quiet.
+    assert notify_cards.sweep(led, CFG, now=NOW + 1)["updated"] == 1
+    migrated = _card(led)
+    assert migrated["source_generation"] == initial_source_generation
+    assert migrated["presentation_generation"] == initial_presentation_generation + 1
+    assert _latest_render(led)["delivery_id"] != first["delivery_id"]
+    assert notify_cards.sweep(led, CFG, now=NOW + 2)["updated"] == 0
 
 
 

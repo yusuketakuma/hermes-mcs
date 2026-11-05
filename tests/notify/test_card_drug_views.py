@@ -21,6 +21,15 @@ from medications_testkit import DOCUMENT
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
 
+
+@pytest.fixture(autouse=True)
+def _posts_stay_in_thread(monkeypatch):
+    """These suites exercise the thread drug view: under chat_format v1 an
+    original that fits the face leaves the thread, so keep every original
+    in its body part (the spec stays v1)."""
+    import present_discord
+    monkeypatch.setattr(present_discord, "FACE_ORIGINAL_MAX", 1)
+
 def _dictionary(tmp_path, led, *, activate=True, document=None):
     raw = json.dumps(DOCUMENT if document is None else document, ensure_ascii=False).encode()
     path = tmp_path / "fictional-drug-map.json"

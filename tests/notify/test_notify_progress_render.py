@@ -10,6 +10,8 @@ import notify_render
 from inference_dependency_loss import source_binding
 from notify_testkit import _card, _deliver, _dispatch, _intent, _seed_thread, led
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+
 __all__ = ["led"]
 
 

@@ -9,7 +9,10 @@ import mcs_requests
 import notify_spool
 import notify_transport as transport
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
+
                             _part_receipt, _receipt, _seed_thread, _uuid, led as led)
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 def prepare(led, kind="body_part"):

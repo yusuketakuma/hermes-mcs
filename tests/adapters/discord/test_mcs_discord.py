@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import notify_cards
 import notify_spool
@@ -18,6 +19,8 @@ from adapters.discord import actions as actions_mod, cards
 from discord_testkit import CFG, NOW, SETTINGS, FakeHTTP, FakeInteraction, FakeThread, _deliver
 from discord_testkit import discord_world as discord_world
 from mcs_discord_testkit import _delivered as _delivered, _pin_wall_clock as _pin_wall_clock
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 # ---------- paths / envelopes / journal / registry -----------------------

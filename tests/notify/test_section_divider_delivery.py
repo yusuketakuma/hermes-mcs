@@ -11,6 +11,11 @@ from notify_lineworks_testkit import LINEWORKS
 from notify_testkit import CFG, _dispatch, _intent, _latest_render, _seed_thread, led
 from slack_testkit import SLACK, _granted_card, _mkworld
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+
+
 __all__ = ["led"]
 
 

@@ -308,8 +308,8 @@ def _collecting_cards_unless_requested():
         yield
 
 
-@pytest.fixture(autouse=True)
-def _legacy_chat_format():
+@pytest.fixture
+def legacy_chat_format():
     """Suites written before chat_format_version keep the legacy Discord/
     LINE WORKS face (body as durable parts); chat-format tests opt back
     in per test."""
@@ -318,4 +318,17 @@ def _legacy_chat_format():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(present_discord, "CHAT_BODY_ON_FACE", False)
         patch.setattr(present_lineworks, "CHAT_BODY_ON_FACE", False)
+        yield
+
+
+@pytest.fixture
+def v1_thread_bodies():
+    """chat_format_version=1 specs whose originals all overflow to thread
+    body parts — contract suites that need durable parts keep the
+    production v1 format instead of opting into legacy."""
+    import present_discord
+    import present_lineworks
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(present_discord, "FACE_ORIGINAL_MAX", 1)
+        patch.setattr(present_lineworks, "FACE_ORIGINAL_MAX", 1)
         yield

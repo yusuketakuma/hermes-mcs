@@ -26,7 +26,7 @@ from notify_card_test_support import (
 )
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 
 
 def test_dispatch_seals_and_publishes(led, tmp_path):

@@ -24,6 +24,8 @@ from message_observations import get_message_metadata
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _msg, _patient, _signal_row, led
 import stamp_read
 
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+
 __all__ = ["led"]
 
 DAY = 86400

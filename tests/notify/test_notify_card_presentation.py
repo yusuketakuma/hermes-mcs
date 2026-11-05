@@ -22,7 +22,7 @@ from notify_card_test_support import (
 )
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 
 
 def test_body_action_returns_full_text(led, tmp_path):

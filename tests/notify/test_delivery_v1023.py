@@ -17,6 +17,8 @@ from notify_lineworks_testkit import LINEWORKS, MID, _deliver as deliver_lw
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _latest_render, _seed_thread, led as led
 import clinical_urgency
 
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
+
 
 def test_new_header_is_independent_from_long_original(led):
     _seed_thread(led, mids=(100,))

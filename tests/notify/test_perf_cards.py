@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import ledger as _ledger
@@ -35,6 +36,8 @@ import notify_cmds
 from adapters.common import envelopes, registry
 from adapters.discord import delivery
 from notify_testkit import NOW, SETTINGS
+
+pytestmark = pytest.mark.usefixtures("legacy_chat_format")
 
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user",

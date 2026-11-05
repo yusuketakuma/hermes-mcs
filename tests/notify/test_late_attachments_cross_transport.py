@@ -16,6 +16,8 @@ from common_testkit import ledger_fixture
 from notify_lineworks_testkit import LINEWORKS, MID as LW_MID
 from notify_testkit import CFG as DISCORD, NOW, _dispatch, _intent, _latest_render, _seed_thread
 
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
+
 
 led = ledger_fixture(data_dir=True)
 

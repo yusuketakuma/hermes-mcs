@@ -17,7 +17,7 @@ from notify_testkit import (
 )
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 
 
 def _requests(led, count, *, receipts=False):

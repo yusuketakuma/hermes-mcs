@@ -14,7 +14,7 @@ from notify_testkit import (CFG, MED, NOW, _dispatch, _drug_card, _drug_click,  
                             pinned_clock)
 
 __all__ = ["led", "pinned_clock"]
-pytestmark = pytest.mark.usefixtures("pinned_clock")
+pytestmark = pytest.mark.usefixtures("pinned_clock", "v1_thread_bodies")
 
 
 NO_THREAD = {**CFG, "notify": {**CFG["notify"], "card_thread": False}}

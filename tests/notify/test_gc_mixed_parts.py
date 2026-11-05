@@ -6,6 +6,11 @@ import notify_spool
 from notify_testkit import CFG, NOW, _begin, _dispatch, _intent, _latest_render, _receipt, _seed_thread
 from notify_testkit import _part_receipt, led as led
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
+
+
 
 def test_incomplete_render_keeps_spec_until_all_pending_parts_settle(led):
     _seed_thread(led)
