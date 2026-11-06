@@ -184,7 +184,7 @@ def _choose(prompt, choices, default="1"):
         print("表示されている番号を入力してください。")
 
 
-def _installed_setup_command(repo):
+def _installed_setup_command(repo, action="api-keys"):
     """Use the installed launcher's pinned runtime only for this checkout."""
     shim = Path.home() / ".local" / "bin" / "mcs"
     fd = os.open(str(shim), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -222,7 +222,29 @@ def _installed_setup_command(repo):
     parser = re.search(r'sub\.add_parser\(\s*["\']api-keys["\']', source("mcs_setup.py"))
     if not route or not parser:
         raise ValueError("setup_unverified")
-    return [words[1], cli, "setup", "api-keys"]
+    if action not in ('api-keys', 'slack-channels'):
+        raise ValueError('setup_action_unverified')
+    if action == 'slack-channels' and (
+            '"slack-channels"' not in source('mcs_cli.py')
+            or 'sub.add_parser("slack-channels"' not in source('mcs_setup.py')):
+        raise ValueError('setup_unverified')
+    return [words[1], cli, "setup", action]
+
+
+def _complete_slack_channels(env, repo):
+    try:
+        command = _installed_setup_command(repo, 'slack-channels')
+        setup_env = dict(env)
+        setup_env.pop('PYTHONPATH', None)
+        setup_env.pop('PYTHONHOME', None)
+        setup_env['MCS_LIFECYCLE_PINNED'] = '1'
+        result = subprocess.run(command, env=setup_env, cwd=repo, **_lifetime_fds())
+        if result.returncode == 0:
+            return 0
+    except (OSError, ValueError, UnicodeError):
+        pass
+    print('更新後のSlack運用ログ先の準備は未完了です。既存の患者情報先を保持し、作成結果は再送せず照合待ちです。mcs setup slack-channelsで状態を確認してください。')
+    return 1
 
 
 def _offer_api_keys(env, repo):
@@ -273,6 +295,8 @@ def interactive_update(cmd, env, repo):
     route = report.get("route")
     if route == "noop" and not report.get("blockers"):
         print("すでに選択した版です。更新は不要です。")
+        if _complete_slack_channels(env, repo):
+            return 1
         _offer_api_keys(env, repo)
         return 0
     if route not in ("apply", "reinstall") or report.get("blockers"):
@@ -334,6 +358,8 @@ def interactive_update(cmd, env, repo):
         print("更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。")
         return 1
     print("選択した版への更新完了を確認しました。mcs doctor で動作を確認し、通知先で応答を確認してください。")
+    if _complete_slack_channels(env, repo):
+        return 1
     _offer_api_keys(env, repo)
     return 0
 
@@ -455,6 +481,22 @@ def _main(argv=None) -> int:
                 print(f"{tag} は適用されていません。別の更新処理の実行中か、中断した更新の復旧待ちの可能性があります。"
                       "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
                 return 2
+            if args.cmd == 'apply' and rc == 0:
+                verify = list(cmd)
+                verify[2] = 'plan'
+                # Use the original plan shape, not apply-only confirmation/install options.
+                verify = [sys.executable, updater, 'plan'] + (
+                    ['--candidate-sha', candidate_sha, '--base-sha', base_sha] if candidate_sha is not None
+                    else ['--tag', tag])
+                checked = subprocess.run(verify, env=env, cwd=repo, capture_output=True, text=True,
+                                         timeout=600, **_lifetime_fds())
+                try:
+                    report = json.loads(checked.stdout)
+                except (ValueError, TypeError):
+                    return 1
+                if checked.returncode or not isinstance(report, dict) or report.get('route') != 'noop' or report.get('blockers'):
+                    return 1
+                return _complete_slack_channels(env, repo)
             return rc
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

@@ -213,19 +213,68 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     return settings
 
 
+def _start_slack_setup(ctx, native, adapter):
+    """Consume only a previously authorized setup intent on this native owner."""
+    _ensure_repo_root()
+    from pathlib import Path
+    from adapters.common.mcs_api import bootstrap
+    bootstrap()
+    import slack_channel_setup
+    from adapters.slack.provision import consume
+    get_config = getattr(ctx, 'get_config', None)
+    if not callable(get_config):
+        return None
+    data = get_config("data_root", None)
+    if not isinstance(data, str) or not data.strip() or _standalone_owned(data):
+        return None
+    root = Path(data).parent
+    state = slack_channel_setup.read(root)
+    if not state or state.get('state') in ('verified', 'applied'):
+        return None
+    profile, _ = _owner_identity(ctx, adapter)
+    binding = {'team_id': ctx.get_config('slack_team_id', None),
+               'application_id': ctx.get_config('slack_application_id', None),
+               'profile': ctx.get_config('slack_profile', None) or getattr(ctx, 'profile_name', None) or 'default'}
+    if profile != binding['profile'] or state.get('plan', {}).get('binding') != binding:
+        return None
+    if state['plan'].get('runtime_mode') != 'hermes':
+        return None
+    # Native client lifecycle and credentials remain owned by the existing gateway.
+    task = ctx.spawn_task(consume(root, native.client, binding), name='mcs-slack-setup')
+    if task is not None:
+        task.add_done_callback(lambda finished: None if finished.cancelled() else finished.exception())
+    return task
+
+
+class _SlackSetupOwner:
+    def __init__(self, task, supervisor=None):
+        self.task, self.supervisor = task, supervisor
+
+    def unload(self):
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+        if self.supervisor is not None:
+            self.supervisor.unload()
+
+
 def make_slack_factory(ctx):
     def factory(native, adapter):
+        bootstrap = None
+        try:
+            bootstrap = _start_slack_setup(ctx, native, adapter)
+        except (OSError, ValueError, ImportError):
+            _event_logger("mcs_slack")("worker_disabled", reason="setup_unverified")
         settings = _slack_adapter_settings(ctx)
         if settings is None:
             if ctx.get_config("slack_adapter_enabled", False) is True:
                 _event_logger("mcs_slack")("worker_disabled",
                                             reason="config_incomplete")
-            return None
+            return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         if _standalone_owned(settings["data_root"]):
             _event_logger("mcs_slack")("worker_disabled", reason="standalone_owned")
-            return None
+            return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         if not _owner_allowed(ctx, adapter, settings, "slack"):
-            return None
+            return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         _ensure_repo_root()
         from adapters.common import paths
         flags = paths.read_flags(settings["data_root"])
@@ -234,7 +283,7 @@ def make_slack_factory(ctx):
                 or flags.get("runtime_mode") == "standalone":
             _event_logger("mcs_slack")("worker_disabled", reason="route_flags_unready")
             _worker_witness(settings, "slack", "route_flags_unready")
-            return None
+            return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         # /mcs commands gate on the published route epoch
         settings["route_epoch"] = flags.get("route_epoch")
         from adapters.slack.tasks import Supervisor
@@ -244,8 +293,8 @@ def make_slack_factory(ctx):
         if not supervisor.start():
             _event_logger("mcs_slack")("worker_disabled", reason="worker_start_failed")
             _worker_witness(settings, "slack", "worker_start_failed")
-            return None
+            return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         _event_logger("mcs_slack")("worker_started")
         _worker_witness(settings, "slack", "worker_started")
-        return supervisor
+        return _SlackSetupOwner(bootstrap, supervisor) if bootstrap is not None else supervisor
     return factory

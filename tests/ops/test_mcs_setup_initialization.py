@@ -252,7 +252,8 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     guild_id) and gates out the discord-only keys."""
     import json
     _init_env(monkeypatch, tmp_path,
-              {"mcs_login_id": "u1", "notify_target": "slack:#mcs"})
+              {"mcs_login_id": "u1", "notify_target": "slack:#mcs",
+               "notify_system_target": "discord:1"})
     prompts = []
 
     def answer(prompt=""):
@@ -267,7 +268,8 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
             return {"notify.slack.profile": "ops",
                     "notify.slack.application_id": "A1",
                     "notify.slack.team_id": "T1",
-                    "notify.slack.channel_id": "C1"}[
+                    "notify.slack.channel_id": "C1",
+                    "notify.slack.allowed_user_ids": "U1"}[
                         prompt.split("設定項目: ", 1)[1].split()[0].rstrip(":")]
         return ""
 
@@ -279,7 +281,8 @@ def test_wizard_slack_scope_and_answers(monkeypatch, tmp_path):
     n = cfg["notify"]
     assert n["interactive"] == "slack"
     assert n["slack"] == {"profile": "ops", "application_id": "A1",
-                          "team_id": "T1", "channel_id": "C1"}
+                          "team_id": "T1", "channel_id": "C1",
+                          "allowed_user_ids": ["U1"]}
     assert "discord" not in n
     # discord-only keys were never prompted; card keys were (shared gate)
     assert not any("notify.discord." in p for p in prompts)

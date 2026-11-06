@@ -54,7 +54,7 @@ _SDK_FILES = {"mcs_discord/actions.py", "mcs_discord/cards.py"}
 _ASYNC_FILES = {"common/commands.py", "mcs_discord/actions.py", "mcs_discord/delivery.py",
                 "mcs_discord/tasks.py", "common/worker.py",
                 "mcs_slack/actions.py", "mcs_slack/delivery.py",
-                "mcs_slack/tasks.py"}
+                "mcs_slack/tasks.py", "mcs_slack/provision.py"}
 _ASYNC_MEMBERS = {"sleep", "to_thread", "CancelledError"}
 _SDK_MEMBERS = {
     "ui.LayoutView", "ui.TextDisplay", "ui.ActionRow", "ui.Button",
@@ -325,6 +325,12 @@ def gate_plugin_sandbox() -> list[str]:
                                          if identity == "lineworks/__main__.py" else set())
         if independent:
             async_members |= _STANDALONE_ASYNC
+        if identity == "mcs_slack/provision.py":
+            # One authorized setup request, using only the caller-owned native client.
+            async_members |= {"wait_for"}
+        if identity == "mcs_slack/standalone.py":
+            # Synchronous setup entry owns one finite guarded SDK session.
+            async_members |= {"run"}
         if identity == "common/commands.py":
             # Native command cancellation must await its owned synchronous work.
             async_members = {"to_thread", "create_task", "wait", "CancelledError"}
