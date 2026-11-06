@@ -23,6 +23,7 @@ import semantic_due_selection
 from semantic_testkit import _ledger
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
 from cloud_selection_progress_testkit import _claim_count as _claim_count, _make_paid_carry as _make_paid_carry, _select as _select, blocked_prefix as blocked_prefix, cloud_candidates as cloud_candidates
+from test_cloud_response_recovery import legacy_cloud_routes as legacy_cloud_routes
 
 
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
@@ -271,8 +272,9 @@ def test_retained_extract_pass_skips_selection_and_preserves_unknown_counts(clou
     monkeypatch.setattr(extract_llm_runner, '_select_pending', extract_llm._select_pending)
     monkeypatch.setattr(extract_llm, "_prepare_jobs", lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
     monkeypatch.setattr(extract_llm_runner, '_prepare_jobs', extract_llm._prepare_jobs)
-    report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
-                                     per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
+                                             per_write_lock=True, carry=carry)
     assert observed == [] and report["carry"] is carry
     assert report["carry_waiting"] is True and "cloud_selection_incomplete" not in report
     assert report["selected"] == report["fresh_selected"] == 0
