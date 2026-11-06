@@ -61,17 +61,16 @@ def _cloud_requirement(db, cfg, pid, key):
     if not cloud_policy.owns_unit_request(db, route='reextract',
             project_id=pid, unit_key=key + ':cloud'):
         return requirement(cfg, pid)
-    settings, errors = cloud_policy.resolve_settings(cfg)
-    if errors:
-        # owned, but scope and contract are unverifiable — stay held.
-        return True, None
-    if settings['mode'] != 'on' or not cloud_policy.in_scope(settings, 'reextract', pid):
-        # a proven revocation leaves the orphaned unit out of scope.
+    if cloud_policy.scope_revoked(cfg, 'reextract', pid):
+        # a proven revocation — declared off/dry_run or a verifiable
+        # route/project exclusion — leaves the orphaned unit out of scope.
         return False, None
+    # Owned and not revoked: a computed 'off' (mode omitted, key unreadable)
+    # or a broken config keeps the unit held — never released to local.
     try:
         return True, cloud_inference.cloud_provider_contract(cfg)
     except cloud_inference.CloudFallback:
-        return None, None
+        return True, None
 
 
 def validated(document, body, quality):
@@ -116,7 +115,8 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
     else:
         needed, provider_contract = _cloud_requirement(db, cfg, pid, key)
         local = stored(db, pid, key, 'local', cfg, contract_for=contract_for)
-        if (needed is not True or local is None or value.get('provider_contract') != provider_contract
+        if (needed is not True or local is None or provider_contract is None
+                or value.get('provider_contract') != provider_contract
                 or proof.get('providers') != [provider_contract['backend']]
                 or value.get('local_artifact_id') != local['artifact_id']):
             return None

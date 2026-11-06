@@ -319,3 +319,28 @@ def test_owned_page_stays_held_when_cloud_config_unverifiable(page_store, monkey
     assert _local(ledger, key) == local
     assert run(ledger, cfg, 'cloud')['done'] == 0
     assert len(sends) == 1 and not cloud_calls and _financial(ledger) == financial
+
+
+def test_contractless_cloud_artifact_is_unreadable_not_a_crash(page_store):
+    ledger, cfg, key, _, cloud_calls, _ = page_store
+    assert run(ledger, cfg, 'local')['done'] == 1
+    cfg['cloud_llm']['mode'] = 'on'
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
+    assert len(cloud_calls) == 1
+    # An artifact that predates contract binding (or a torn write) carries no
+    # provider_contract; once the profile can no longer be resolved the reader
+    # must fail closed — indexing into a missing contract crashed the worker.
+    row = ledger.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind=? "
+        "AND json_extract(meta,'$.stage')='cloud'", (worker.KIND,)).fetchone()
+    value = json.loads(row['content'])
+    value.pop('provider_contract', None)
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(value), row['artifact_id']))
+    cfg['cloud_llm']['bogus_field'] = 1
+    assert worker._stored(ledger.db, 1, key, 'cloud', cfg) is None
+    result = worker.current(ledger.db, 1, key, cfg=cfg)
+    assert result['ready'] is False and result['require_cloud'] is True
+    assert run(ledger, cfg, 'cloud')['done'] == 0 and len(cloud_calls) == 1

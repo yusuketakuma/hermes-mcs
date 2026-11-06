@@ -295,12 +295,51 @@ def test_owned_claim_unverifiable_keeps_head_and_tail_proceeds(routed, monkeypat
     assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
+def test_profile_unknown_owned_head_holds_and_tail_goes_local(routed, monkeypatch):
+    """limit=1: an owned head whose profile cannot be resolved keeps a
+    bounded claim — the refill still reaches the independent tail instead
+    of re-selecting the same unprovable head."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        # A valid history exists: the head passes source verification and
+        # only fails later, at profile resolution.
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-entry-profile', time.time())
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    cfg['cloud_llm']['bogus_field'] = 1
+    local = []
+    def extraction(body, **kwargs):
+        if kwargs.get('provider') is None:
+            local.append(body)
+            return {}
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert first['done'] == 1 and len(local) == 1
+    assert first['defer_reasons'].get('prepare_profile_unavailable') == 1
+    claim, = ledger.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
+                               "AND message_id=1").fetchall()
+    assert claim[0] > time.time()
+    second = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert second['done'] == 0 and second['deferred'] == 0
+    assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
 @pytest.mark.parametrize('variant', ['mode_omitted', 'auto_provider', 'unverifiable_cfg',
-                                     'explicit_off', 'out_of_scope'])
+                                     'key_gone', 'explicit_off', 'dry_run', 'out_of_scope'])
 def test_owned_unit_scope_proven_on_resolved_settings(routed, monkeypatch, variant):
     """Ownership is durable and precedes settings: a mode-omitted block with
-    a key resolves on, an unreadable config holds, and only a proven
-    revocation (explicit off / other project) releases the unit to local."""
+    a key resolves on, an unreadable config or a vanished key only computes
+    'off' — never a revocation — and only a declared retirement (explicit
+    off / other project) releases the unit to local."""
     ledger, cfg, calls, _reserves, _results = routed
     old(ledger)
     ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
@@ -319,8 +358,14 @@ def test_owned_unit_scope_proven_on_resolved_settings(routed, monkeypatch, varia
         cfg['cloud_llm']['provider'] = 'anthropic'
     elif variant == 'auto_provider':
         del cfg['cloud_llm']['mode']
+    elif variant == 'key_gone':
+        del cfg['cloud_llm']['mode']
+        monkeypatch.setattr(cloud_policy, 'api_key', lambda *a: None)
+        monkeypatch.setattr(cloud_policy, 'provider_key', lambda *a, **kw: None)
     elif variant == 'explicit_off':
         cfg['cloud_llm']['mode'] = 'off'
+    elif variant == 'dry_run':
+        cfg['cloud_llm']['mode'] = 'dry_run'
     elif variant == 'out_of_scope':
         cfg['cloud_llm']['project_ids'] = [2]
     else:
@@ -333,7 +378,7 @@ def test_owned_unit_scope_proven_on_resolved_settings(routed, monkeypatch, varia
         return worker._DEFERRED
     monkeypatch.setattr(worker, 'llm_extract', extraction)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    held = variant in ('mode_omitted', 'auto_provider', 'unverifiable_cfg')
+    held = variant in ('mode_omitted', 'auto_provider', 'unverifiable_cfg', 'key_gone')
     first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
     assert first['done'] == 1 and len(local) == 1
     assert bool(first['defer_reasons'].get('cloud_source_unverified')) == held

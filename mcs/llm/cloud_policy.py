@@ -382,6 +382,29 @@ def in_scope(cfg, route, project_id):
             and project_id not in c["exclude_project_ids"])
 
 
+def scope_revoked(cfg, route, project_id):
+    """An existing unit's scope retires only on what the config declares:
+    explicit off/dry_run, or a verifiable route/project exclusion. A
+    computed 'off' — mode omitted, key unreadable — proves nothing about
+    an existing reservation, so unverifiable config never revokes."""
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    if not isinstance(block, dict):
+        return False
+    c, errors = cloud_config(cfg)
+    if errors:
+        return False
+    if block.get("mode") in ("off", "dry_run"):
+        return True
+    if route not in c["routes"]:
+        return True
+    if type(project_id) is not int or project_id <= 0:
+        # A malformed project can prove no exclusion — stay unverifiable.
+        return False
+    return ("project_ids" in block and c["project_ids"] is not None
+            and project_id not in c["project_ids"]) \
+        or ("exclude_project_ids" in block and project_id in c["exclude_project_ids"])
+
+
 def owns_request(db, *, route, project_id, message_id):
     """A durable reservation already owns this message's cloud unit on `route`.
 
