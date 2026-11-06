@@ -626,14 +626,14 @@ def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_sender, 'send',
                         lambda argv, text, **kw: sent.append((argv, text)))
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"notify_target": "slack:#patients",
-                               "notify_system_target": "slack:#ops"}))
+    cfg.write_text(json.dumps({"notify_target": "slack:C12345678",
+                               "notify_system_target": "slack:C87654321"}))
     _health_file(tmp_path, {"overall": "failed", "at": 990})
     args = ["--home", str(tmp_path), "--config", str(cfg)]
     assert health_watch.main(args + ["--now", "1000"]) == 0
     assert len(sent) == 1
     argv, text = sent[0]
-    assert argv[argv.index("--to") + 1] == "slack:#ops"
+    assert argv[argv.index("--to") + 1] == "slack:C87654321"
     assert "🔴 MCS監視: 収集が失敗しました" in text
     assert health_watch.main(args + ["--now", "1001"]) == 0
     assert len(sent) == 1                      # deduped: no second send
@@ -643,12 +643,16 @@ def test_alert_delivery_without_target_or_with_failing_sender_is_silent(
         tmp_path, monkeypatch):
 
     import notify_sender
+    sent = []
     def boom(*a, **k):
+        sent.append(a)
         raise notify_sender.SendFailed("sender down")
     monkeypatch.setattr(notify_sender, 'send', boom)
     assert health_watch.deliver_alert({}, "x") is False
     assert health_watch.deliver_alert(
-        {"notify_target": "slack:#ops"}, "x") is False
+        {"notify_target": "slack:C12345678",
+         "notify_system_target": "slack:C87654321"}, "x") is False
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize("disk_only", [False, True])
@@ -665,7 +669,8 @@ def test_known_unsent_alert_retries_without_waiting_for_hour(tmp_path, monkeypat
 
     monkeypatch.setattr(notify_sender, 'send', send)
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"notify_system_target": "slack:#ops"}))
+    config.write_text(json.dumps({"notify_target": "slack:C12345678",
+                                 "notify_system_target": "slack:C87654321"}))
     _health_file(tmp_path, {"overall": "ok" if disk_only else "failed", "at": 990,
                             "disk_low": disk_only, "disk_free_mb": 123})
     args = ["--home", str(tmp_path), "--config", str(config)]
@@ -691,7 +696,8 @@ def test_unknown_alert_is_held_until_a_different_verdict(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
+    cfg.write_text(json.dumps({"notify_target": "slack:C12345678",
+                               "notify_system_target": "slack:C87654321"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
     for now in (1000, 1060, 5000):
         _health_file(tmp_path, {"overall": "failed", "at": now - 1})
@@ -722,7 +728,8 @@ def test_unknown_alert_realerts_after_interval(tmp_path, monkeypatch):
 
     monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
+    cfg.write_text(json.dumps({"notify_target": "slack:C12345678",
+                               "notify_system_target": "slack:C87654321"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
     later = 1000 + health_watch.REALERT_S + 1
     for now in (1000, 1060, later, later + 60):
@@ -743,7 +750,8 @@ def test_unknown_delivery_history_is_bounded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(notify_sender, 'send', send)
     cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"notify_target": "slack:#ops"}))
+    cfg.write_text(json.dumps({"notify_target": "slack:C12345678",
+                               "notify_system_target": "slack:C87654321"}))
     args = ["--home", str(tmp_path), "--config", str(cfg)]
     _health_file(tmp_path, {"overall": "failed", "at": 999})
     health_watch.main(args + ["--now", "1000"])
