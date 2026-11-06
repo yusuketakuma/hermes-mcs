@@ -650,7 +650,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             summary = (repaired["summary"] if same and quality_required and repaired is not None
                        else old["summary"] if same else infer(
                 lambda backend, reset, metrics=None, comparison=False: patient_context_quality_controller._summary(cfg, facts, deadline,
-                    admit if backend else local_admit, **({"provider": backend} if backend else {}),
+                    admit if backend else local_admit, source_sig=snapshot["source_sig"], **({"provider": backend} if backend else {}),
                     **({"metrics": metrics} if metrics is not None else {})),
                 unit_key="summary"))
             meta["scan_backends"] = sorted({
@@ -675,6 +675,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if (lane == "B" and not saved.get("complete")) or (
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
                     meta["source_sig"] = context_plan.source_signature(source)
+                    meta["original_source_sig"] = context_plan.original_source_signature(source)
                     meta["source_key"] = context_plan.source_key(source)
                     source = next(context_queries.patient_context_sources(ledger.db, pid, mid=context_plan.source_key(source), cfg=cfg), None)
                     if source is None:

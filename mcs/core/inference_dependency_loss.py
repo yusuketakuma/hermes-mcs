@@ -240,7 +240,7 @@ def _verified_cloud_context(db, pid, key, scan):
     import patient_context_plan as plan
     import semantic_audit
     import semantic_runtime
-    from mcs_queries import patient_context_scope, patient_context_sources, paused
+    from mcs_queries import patient_context_scope, patient_context_source, paused
 
     try:
         doc, meta = context_artifacts.decode_document(scan['content']), context_artifacts.decode_document(scan['meta'], metadata=True)
@@ -251,10 +251,11 @@ def _verified_cloud_context(db, pid, key, scan):
         descriptor = semantic_runtime.patient_source_pass_descriptor(db, pid, audit_key)
         if not isinstance(descriptor, dict):
             return False
-        actual = list(patient_context_sources(db, pid, mid=key))
-        if len(actual) != 1 or not plan.source_usable(actual[0]):
+        source = (original_source_keys.source(db, pid, key)
+                  if isinstance(key, str) and 'original_source_sig' in meta
+                  else patient_context_source(db, pid, key))
+        if source is None or not plan.source_usable(source):
             return False
-        source = actual[0]
         scope = patient_context_scope(db, pid)
         policy = descriptor.get('policy')
         if (not scope or scope.get('is_archived') or paused(db, pid) or scope.get('fetch_reason') in
@@ -265,13 +266,16 @@ def _verified_cloud_context(db, pid, key, scan):
         binding = source_binding(db, pid, source['message_id'], **({'source_key':key} if isinstance(key,str) else {}))
         occurrence = _context_occurrence(db, pid, source, binding)
         contract = meta.get('route_contract', meta.get('contract'))
+        # Retained original proof must not depend on today's derived-input config.
+        expected = (plan.original_source_signature(source) if 'original_source_sig' in meta
+                    else plan.source_signature(source, legacy=True))
         if (not isinstance(contract, dict) or not contract.get('provider')
-                or meta.get('source_sig') != plan.source_signature(source)):
+                or meta.get('original_source_sig', meta.get('source_sig')) != expected):
             return False
         selected = context_artifacts.selected_rows(db, pid, key, source_binding=binding,
             source_occurrence=occurrence, body_size=len(source['body_text']))
         if doc.get('accepted_candidate_ref') is None:
-            selected = context_artifacts.original_quality_rows(db, pid, key, scan, plan.source_signature(source),
+            selected = context_artifacts.original_quality_rows(db, pid, key, scan, meta['source_sig'],
                 contract, occurrence, len(source['body_text']))
         elif doc['accepted_candidate_ref'].get('chunks_sig') != chunks_sig:
             return False

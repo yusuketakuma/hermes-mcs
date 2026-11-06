@@ -15,7 +15,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
     chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
     chunk = chunks[cursor]
     offset = sum(map(len, chunks[:cursor]))
-    summaries = source.get("derived_summaries", []) if cursor == 0 else []
+    summaries = source.get("derived_summaries", []) if cursor == 0 and source_repair is None else []
     split = saved.get("split", 0)
     # passed bounded repairs on this source: a health/status count, never content
     repairs = saved.get("repairs", 0) if type(saved.get("repairs")) is int else 0
@@ -26,10 +26,12 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
         items = []  # No unverified seed from the rejected original candidate.
     if not covered:
         payload = {"instruction": context_plan.SCAN_INSTRUCTION,
-            **context_plan.scan_schema(), "already_found": items, "source": chunk,
-            "source_identity": {"key": context_plan.source_key(source),
+            **context_plan.scan_schema(), "already_found": items, "source": chunk}
+        # Repairs replay the original-only wire protocol and keep its paid receipts.
+        if source_repair is None:
+            payload["source_identity"] = {"key": context_plan.source_key(source),
                 "signature": context_plan.source_signature(source), "span": [offset, offset + len(chunk)],
-                "content_hash": source.get("content_hash")}}
+                "content_hash": source.get("content_hash")}
         if summaries:
             payload["instruction"] += "derived_summariesは原文から作られた補助要約で、事実の根拠ではありません。引用はsourceだけから選ぶ。"
         if source_repair is not None:

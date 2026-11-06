@@ -637,13 +637,18 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
         raise ValueError('nightly_source_repair_invalid')
     db.execute('SAVEPOINT source_repair_replay')
     try:
-        sources = list(context_queries.patient_context_sources(db, pid, mid=source_key))
-        if len(sources) != 1:
+        if isinstance(source_key, str) and 'original_source_sig' in origin:
+            import original_source_keys
+            source = original_source_keys.source(db, pid, source_key)
+        else:
+            source = context_queries.patient_context_source(db, pid, source_key)
+        if source is None:
             raise ValueError('nightly_source_repair_invalid')
-        source = sources[0]
         occurrence = source_occurrence(db, pid, source)
+        expected = (context_plan.original_source_signature(source) if 'original_source_sig' in origin
+                    else context_plan.source_signature(source, legacy=True))
         if (_digest(occurrence) != _digest(origin['source_occurrence'])
-                or context_plan.source_signature(source) != origin['source_sig']
+                or origin.get('original_source_sig', origin['source_sig']) != expected
                 or source['body_length'] != origin['body_length']):
             raise ValueError('nightly_source_repair_invalid')
         bindings = {}
