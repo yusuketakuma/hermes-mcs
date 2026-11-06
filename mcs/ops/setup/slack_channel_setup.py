@@ -43,13 +43,17 @@ def _validate(root, state):
                 or state.get('state') not in ('pending', 'blocked', 'unknown', 'verified', 'applied')):
             raise ValueError
         if set(state) - {'version', 'root', 'request_id', 'plan_hash', 'plan', 'roles',
-                         'state', 'reason', 'candidate_hash', 'applied_hash', 'worker_ready'}:
+                         'state', 'reason', 'candidate_hash', 'applied_hash', 'worker_ready',
+                         'flags_ready'}:
             raise ValueError
         if 'candidate_hash' in state and (state['state'] not in ('verified', 'applied')
                 or not re.fullmatch(r'[0-9a-f]{64}', state['candidate_hash'])
                 or state['state'] == 'applied' and state['candidate_hash'] != state.get('applied_hash')):
             raise ValueError
         if 'worker_ready' in state and (type(state['worker_ready']) is not bool or state['state'] != 'applied'):
+            raise ValueError
+        if 'flags_ready' in state and (type(state['flags_ready']) is not bool
+                                       or state['state'] != 'applied'):
             raise ValueError
         if state['state'] == 'applied' and not re.fullmatch(r'[0-9a-f]{64}', state.get('applied_hash', '')):
             raise ValueError
@@ -134,6 +138,18 @@ def _plan_surfaces(plan):
     if surfaces is None:
         return {'text': False, 'card': True}
     return surfaces
+
+
+def _legacy_plan_match(planned, desired):
+    """Resume a v1 plan only when every recorded requirement still matches.
+
+    v1 plans carry no surfaces key and meant card-only delivery; they may
+    resume solely for a request whose surfaces and all other plan fields
+    are identical. Any semantic drift keeps the existing-intent refusal."""
+    keys = ('binding', 'users', 'roles', 'base_hash', 'runtime_mode')
+    return ('surfaces' not in planned
+            and _plan_surfaces(planned) == desired['surfaces']
+            and all(planned.get(key) == desired.get(key) for key in keys))
 
 
 def _created_channel_profile(root, cfg, destination, role, configured_key):
@@ -257,7 +273,7 @@ def _configured_channels(cfg):
 
 def _post_complete(state):
     if not surfaces_card(state):
-        return state['state'] == 'applied'
+        return state['state'] == 'applied' and state.get('flags_ready') is True
     return (state['state'] == 'applied'
             and (state['plan']['runtime_mode'] != 'hermes'
                  or state.get('worker_ready') is True
@@ -336,7 +352,8 @@ def prepare(root, cfg, *, users=None):
                 return None
             if state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
                 return None
-            if state.get('plan_hash') != key:
+            if (state.get('plan_hash') != key
+                    and not _legacy_plan_match(state.get('plan'), desired)):
                 raise ValueError('slack_setup_existing_intent_conflict')
             return state
         state = {'version': 1, 'root': str(Path(root).absolute()), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
@@ -359,12 +376,16 @@ def candidate(root, cfg):
         raise ValueError('slack_setup_receipt_invalid')
     result = deepcopy(cfg)
     scope = result.setdefault('notify', {}).setdefault('slack', {})
-    if result.get('notify_target') in (None, '', 'slack:new'):
+    new_patient = result.get('notify_target') in (None, '', 'slack:new')
+    if new_patient:
         result['notify_target'] = 'slack:' + patient
-        if scope.get('channel_id') not in (None, '', patient):
+    if surfaces_card(state):
+        # The card surface shares the patient channel; a text-only setup
+        # leaves notify.slack.channel_id exactly as configured.
+        if new_patient and scope.get('channel_id') not in (None, '', patient):
             raise ValueError('slack_setup_patient_scope_conflict')
-    if not scope.get('channel_id'):
-        scope['channel_id'] = patient
+        if not scope.get('channel_id'):
+            scope['channel_id'] = patient
     result['notify_system_target'] = 'slack:' + system
     return result
 
@@ -565,13 +586,22 @@ def finish_runtime(root, cfg, args):
     if state is None or state.get('state') != 'applied':
         return
     if not surfaces_card(state):
-        # Text-only setups own no card worker: the applied CAS is the
-        # whole postphase. Flags are republished idempotently so a
-        # switch away from cards cannot leave a stale kill-switch.
+        # Text-only setups own no card worker: the applied CAS plus the
+        # published flags are the whole postphase. flags_ready is recorded
+        # only after publish_flags so a crash before it resumes here and a
+        # crash after it converges without another external call.
+        if state.get('flags_ready') is True:
+            return
         if state.get('applied_hash') != _hash(cfg):
             raise ValueError('slack_setup_not_ready_or_config_changed')
         notify_spool.ensure_dirs(str(Path(root) / 'data'))
         notify_spool.publish_flags(cfg, str(Path(root) / 'data'))
+        with config_edit._edit_lock(str(path(root))):
+            current = read(root)
+            if current != state:
+                raise ValueError('slack_setup_existing_intent_conflict')
+            current['flags_ready'] = True
+            save(root, current)
         return
     if _post_complete(state):
         return

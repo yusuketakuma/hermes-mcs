@@ -651,7 +651,7 @@ def test_text_only_bootstrap_creates_both_channels_without_card_worker(tmp_path,
     assert client.created == ['mcs', 'mcslog']
     assert saved['notify_target'] == 'slack:C000000001'
     assert saved['notify_system_target'] == 'slack:C000000002'
-    assert saved['notify']['slack']['channel_id'] == 'C000000001'
+    assert 'channel_id' not in saved['notify']['slack']
     assert saved['notify']['interactive'] == 'off'
     assert 'slack:new' not in json.dumps(saved)
     setup.applied(tmp_path, cfg, saved)
@@ -794,6 +794,102 @@ def test_v1_plan_without_surfaces_keeps_card_postphase(tmp_path):
     state['plan_hash'] = setup._hash(state['plan'])
     setup.save(tmp_path, state)
     assert setup.surfaces_card(state) is True
+
+
+def test_text_only_existing_card_field_is_preserved_not_rebound(tmp_path):
+    cfg, client = text_config(), Client()
+    cfg['notify']['slack']['channel_id'] = 'C000000098'
+    client.channels['C000000098'] = {'id': 'C000000098', 'is_private': True,
+                                    'is_member': True, 'is_archived': False}
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.created == ['mcslog']
+    saved = setup.candidate(tmp_path, cfg)
+    assert saved['notify_target'] == 'slack:C000000098'
+    assert saved['notify']['slack']['channel_id'] == 'C000000098'
+    assert saved['notify']['interactive'] == 'off'
+
+
+def test_v1_pending_plan_resumes_and_changed_request_is_refused(tmp_path):
+    cfg, client = config(), Client()
+    state = setup.prepare(tmp_path, cfg)
+    state['plan'].pop('surfaces')
+    state['plan_hash'] = setup._hash(state['plan'])
+    setup.save(tmp_path, state)
+    resumed = setup.prepare(tmp_path, cfg)
+    assert resumed['request_id'] == state['request_id']
+    assert resumed['plan_hash'] == state['plan_hash']
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    saved = setup.candidate(tmp_path, cfg)
+    setup.applied(tmp_path, cfg, saved)
+    import notify_spool
+    import setup_integration
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda *a: True)
+    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda *a: None)
+    monkeypatch.setattr(setup, 'reconnect_ready', lambda *a: None)
+    setup.finish_runtime(tmp_path, saved, SimpleNamespace(yes=True))
+    assert setup.read(tmp_path)['worker_ready'] is True
+    monkeypatch.undo()
+    drifted = deepcopy(cfg)
+    drifted['trickle_pages'] = 9
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.prepare(tmp_path, drifted)
+    surfaced = deepcopy(cfg)
+    surfaced['notify_target'] = 'slack:C000000098'
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.prepare(tmp_path, surfaced)
+
+
+def test_text_only_flags_publish_gates_completion_and_resume_converges(tmp_path, monkeypatch):
+    cfg, client = text_config(), Client()
+    import notify_spool
+    import setup_integration
+    import service_management
+    import mcs_util
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration',
+                        lambda *a: pytest.fail('text-only must not wire the card plugin'))
+    monkeypatch.setattr(setup_integration, '_apply_slack_text_bootstrap', lambda *a: True)
+    monkeypatch.setattr(service_management, 'hermes_cli',
+                        lambda *a, **k: SimpleNamespace(returncode=0))
+    def cli_consume(*a, **k):
+        consume(tmp_path, client, cfg)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service_management, 'hermes_cli', cli_consume)
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied' and 'flags_ready' not in state
+    assert setup.creation_unneeded(saved, state) is False
+    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
+    flags = []
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda c, r: flags.append(c))
+    real_save = setup.save
+    def crash_once(root, value):
+        if value.get('flags_ready') is True:
+            raise RuntimeError('synthetic crash before record')
+        return real_save(root, value)
+    monkeypatch.setattr(setup, 'save', crash_once)
+    with pytest.raises(RuntimeError, match='synthetic crash'):
+        setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+    assert 'flags_ready' not in setup.read(tmp_path)
+    monkeypatch.setattr(setup, 'save', real_save)
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved, saved]
+    state = setup.read(tmp_path)
+    assert state['flags_ready'] is True
+    assert setup.creation_unneeded(saved, state) is True
+    changed = deepcopy(saved)
+    changed['trickle_pages'] = 3
+    assert setup.prepare(tmp_path, changed) is None
+    assert setup.candidate(tmp_path, changed) == changed
+    assert len(client.created) == 2
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved, saved]
 
 
 def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, monkeypatch):

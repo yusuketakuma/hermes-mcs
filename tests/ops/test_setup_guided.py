@@ -24,9 +24,10 @@ def test_numbered_and_japanese_answers(kind, answer, expected):
 def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     cfg = {'runtime_mode': 'standalone', 'mcs_login_id': 'synthetic-login',
            'notify_target': 'slack:C1234567890', 'trickle_pages': 7,
-           'notify': {'interactive': 'slack'}}
-    answers = {'notify.slack.profile': 'default', 'notify.slack.application_id': 'A123',
-               'notify.slack.team_id': 'T123', 'notify.slack.allowed_user_ids': 'U123',
+           'notify': {'interactive': 'slack', 'slack': {'channel_id': 'C1234567890'}}}
+    answers = {'notify.slack.profile': 'default', 'notify.slack.application_id': 'A1234567890',
+               'notify.slack.team_id': 'T1234567890',
+               'notify.slack.allowed_user_ids': 'U1234567890',
                'notify.slack.project_ids': '101', 'drug_map.bundled': 'いいえ'}
     seen = []
 
@@ -48,7 +49,7 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     assert errors == [] and cloud['mode'] == 'on'
     assert (cloud['daily_cost_limit_usd'], cloud['monthly_cost_limit_usd']) == (25, 75)
     assert cloud_policy.cloud_config(cfg, key_present=False)[0]['mode'] == 'off'
-    assert cfg['notify']['slack']['allowed_user_ids'] == ['U123']
+    assert cfg['notify']['slack']['allowed_user_ids'] == ['U1234567890']
     assert cfg['notify']['slack']['project_ids'] == [101]
     assert mcs_setup.validate_config(cfg)[0] == []
 
@@ -163,7 +164,8 @@ def test_cancellation_after_save_reports_partial_progress(monkeypatch, tmp_path,
 @pytest.mark.parametrize('check_status', [0, 1])
 def test_reinit_after_saved_cancellation_keeps_choices_and_returns_check_result(
         monkeypatch, tmp_path, capsys, interruption, check_status):
-    initial = {'runtime_mode': 'standalone'}
+    initial = {'runtime_mode': 'standalone', 'notify_system_target': 'slack:G1234567890',
+               'notify': {'slack': {'channel_id': 'C1234567890'}}}
     _init_env(monkeypatch, tmp_path, initial)
     path = tmp_path / 'c.json'
     monkeypatch.setattr(mcs_util, 'load_config', lambda: (
@@ -174,8 +176,8 @@ def test_reinit_after_saved_cancellation_keeps_choices_and_returns_check_result(
         'setup.save': 'はい',
         'mcs_login_id': 'synthetic-login', 'notify_target': 'slack:C1234567890',
         'notify.interactive': '2', 'notify.slack.profile': 'synthetic-profile',
-        'notify.slack.application_id': 'A123', 'notify.slack.team_id': 'T123',
-        'notify.slack.allowed_user_ids': 'U123', 'notify.slack.project_ids': '101',
+        'notify.slack.application_id': 'A1234567890', 'notify.slack.team_id': 'T1234567890',
+        'notify.slack.allowed_user_ids': 'U1234567890', 'notify.slack.project_ids': '101',
     }
     seen = set()
 
@@ -194,7 +196,7 @@ def test_reinit_after_saved_cancellation_keeps_choices_and_returns_check_result(
     saved = json.loads(path.read_text())
     assert saved['runtime_mode'] == 'standalone'
     assert saved['notify_target'] == 'slack:C1234567890'
-    assert saved['notify']['slack']['allowed_user_ids'] == ['U123']
+    assert saved['notify']['slack']['allowed_user_ids'] == ['U1234567890']
     assert saved['notify']['slack']['project_ids'] == [101]
     assert path.stat().st_mode & 0o777 == 0o600
     assert '途中まで保存した設定は残っています' in capsys.readouterr().out
