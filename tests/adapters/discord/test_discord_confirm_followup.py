@@ -156,3 +156,32 @@ def test_sweep_sends_done_only_task_list_without_view(monkeypatch):
     assert not logs
     assert [m["content"] for m in discord.Webhook.sent] == ["タスク一覧"]
     assert discord.Webhook.sent[0]["view"] is MISSING
+
+
+def test_obsolete_stamp_result_consumes_followup_without_an_empty_sdk_message(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'discord', _fake_discord())
+    discord = sys.modules['discord']
+    discord.Webhook.sent = []
+    result = {'outcome': 'rejected', 'stamp_state': 'rejected', 'stamp_error': 'source_changed'}
+    monkeypatch.setattr(actions_mod.paths, 'read_result', lambda d, cid: result)
+    act = object.__new__(actions_mod.Actions)
+    act._native_admission = None
+    act._reg = _Reg({'obsolete': {'application_id': '1', 'token': 't'}})
+    act._dirs = {'cmd_results': 'unused'}
+    act._bot = SimpleNamespace()
+    act._log = lambda *args, **kwargs: None
+    act._followup_authorized = lambda rec: True
+    act._allowed_pid = lambda pid: True
+
+    async def still_allowed(rec):
+        return True
+
+    act._actor_still_allowed = still_allowed
+    ix = FakeInteraction('mcs:a:' + 'a' * 32, message_id=9)
+    asyncio.run(act._ephemeral(ix, ''))
+    asyncio.run(act._followup(ix, ''))
+    asyncio.run(act.sweep_followups())
+    asyncio.run(act.sweep_followups())
+    assert act._reg.followup('obsolete') is None
+    assert discord.Webhook.sent == [] and ix.followup.sent == [] and ix.response.message is None
+    assert ix.response.deferred == {'ephemeral': False, 'thinking': False}

@@ -142,13 +142,28 @@ def test_preview_names_the_selected_post_not_only_the_card_target():
 
 
 @pytest.mark.parametrize("code", ["stale_source", "source_changed", "stamp_target_changed"])
-def test_stamp_refusal_explains_explicit_reselection_without_resending(code):
+def test_obsolete_stamp_refusal_is_silent_without_affecting_other_actions(code):
     result = {"outcome": "rejected", "error": code, "stamp_reselect": True}
     out = text.ja(result)
-    assert "別の投稿" in out and "対象の投稿とスタンプを選び直し" in out
-    assert "前の操作は再送しません" in out
+    assert out == ""
+    assert text.view_answer(result, lambda pid: True) == []
     terminal = text.ja({"stamp_state": "rejected", "stamp_error": code})
     assert terminal == out
     # Unrelated old-source operations and unknown stamp deliveries keep their own advice.
-    assert "別の投稿" not in text.ja({"outcome": "rejected", "error": code})
+    assert text.ja({"outcome": "rejected", "error": code})
     assert "別の投稿" not in text.ja({"stamp_state": "unknown"})
+
+
+@pytest.mark.parametrize("code", ["stamp_not_allowed", "stamp_account_mismatch", "scope_mismatch", "stamp_receipt_invalid", "stamp_target_invalid", "actor_mismatch"])
+def test_stamp_permission_and_receipt_failures_still_have_an_answer(code):
+    assert text.ja({"stamp_state": "rejected", "stamp_error": code})
+    assert text.view_answer({"outcome": "rejected", "error": code, "stamp_reselect": True},
+                            lambda pid: True) is None
+
+
+def test_current_own_stamp_conflict_has_one_short_answer():
+    result = {'outcome': 'rejected', 'error': 'stamp_own_changed', 'stamp_reselect': True}
+    expected = 'スタンプの状態が変わったため、この操作は送信しませんでした。'
+    assert text.ja(result) == expected
+    assert text.ja({'stamp_state': 'rejected', 'stamp_error': 'stamp_own_changed'}) == expected
+    assert text.view_answer(result, lambda pid: True) is None

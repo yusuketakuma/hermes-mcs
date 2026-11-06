@@ -354,7 +354,7 @@ def dispatch(ledger, req, cfg, root, now=None):
             lambda command: dispatch(ledger, command, cfg, root, now))
         out = pressed if pressed is not None else notify_actions.apply_notification(ledger, req, cfg, now)
         if out.get("outcome") == "rejected" and out.get("error") in {
-                "stale_source", "source_changed", "stamp_target_changed"}:
+                "stale_source", "source_changed", "stamp_target_changed", "stamp_own_changed"}:
             import stamp_write
             return stamp_write.refresh_rejected(ledger, req, out, cfg, now)
         return out

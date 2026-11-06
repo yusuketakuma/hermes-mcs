@@ -7,7 +7,6 @@ under the collector's run lock. External attempt witnesses survive DB restoratio
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -78,15 +77,16 @@ def form(db, card, cfg, actor, now, token) -> dict:
     patient = db.execute("SELECT is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
     tok = db.execute("SELECT * FROM notification_action_tokens WHERE token=?", (token,)).fetchone()
     if (patient is None or patient[0] or tok is None or tok["action"] not in ("stamp", "stamp_press")
-            or tok["card_id"] != card["card_id"] or tok["expires_at"] <= now
-            or tok["need_source_gen"] != card["source_generation"]):
-        return {"error": "stamp_target_changed"}
+            or tok["card_id"] != card["card_id"]):
+        return {"error": "stamp_target_invalid"}
+    if tok["expires_at"] <= now:
+        return {"error": "token_expired"}
     scope = notify_scope.delivery_scope(cfg)
     if scope is None or not notify_scope.scope_matches(card, scope):
         return {"error": "scope_mismatch"}
     manifest = db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=? "
                           "AND card_id=? AND source_generation=?", (tok["need_manifest_id"],
-                          card["card_id"], card["source_generation"])).fetchone()
+                          card["card_id"], tok["need_source_gen"])).fetchone()
     try:
         mids = json.loads(manifest[0]) if manifest else []
     except (ValueError, TypeError):
@@ -98,7 +98,7 @@ def form(db, card, cfg, actor, now, token) -> dict:
         row = db.execute("SELECT message_id,parent_id,body_state,content_hash,posted_at,sender_name "
                          "FROM messages WHERE message_id=? AND project_id=?", (mid, card["project_id"])).fetchone()
         if (row is None or row["body_state"] != "full" or not valid_hash(row["content_hash"])
-                or (mid != card["root_message_id"] and row["parent_id"] != card["root_message_id"])):
+                or row["parent_id"] != (None if mid == card["root_message_id"] else card["root_message_id"])):
             continue
         own = _own(get_message_metadata(db, mid))
         prior = _latest(db, mid)
@@ -124,15 +124,20 @@ def form(db, card, cfg, actor, now, token) -> dict:
               "mcs_user_id": options(cfg)["account_user_id"]}
     # Other posts' re-observation must not void a confirm: the selected post's
     # own state is matched separately against expected_own at admission.
-    result["form_hash"] = payload_hash({**result, "posts": [
-        {k: v for k, v in p.items() if k != "own"} for p in posts]})
+    result["form_hash"] = _form_hash(result)
     return result
+
+
+def _form_hash(value, *, legacy=False):
+    excluded = {"own"} if legacy else {"own", "source_hash", "label"}
+    return payload_hash({**{k: v for k, v in value.items() if k != "form_hash"}, "posts": [
+        {k: v for k, v in post.items() if k not in excluded} for post in value["posts"]]})
 
 
 def refresh_rejected(ledger, req, result, cfg, now=None):
     """Refresh an authorized stale stamp card without replacing its rejected intent."""
     if (result.get("outcome") != "rejected"
-            or result.get("error") not in {"stale_source", "source_changed", "stamp_target_changed"}
+            or result.get("error") not in {"stale_source", "source_changed", "stamp_target_changed", "stamp_own_changed"}
             or not enabled(cfg, req.get("actor"))):
         return result
     try:
@@ -258,14 +263,20 @@ def enqueue_tx(db, req, cfg, root, now):
     current = form(db, card, cfg, req["actor"], now, req["token"])
     if current.get("error"):
         return current["error"], {}
-    if (current["form_hash"] != req["form_hash"] or req["mcs_user_id"] != current["mcs_user_id"]
-            or req["project_id"] != current["project_id"]):
-        return "stamp_target_changed", {}
+    if req["mcs_user_id"] != current["mcs_user_id"]:
+        return "stamp_account_mismatch", {}
+    if req["project_id"] != current["project_id"]:
+        return "scope_mismatch", {}
     post = next((p for p in current["posts"] if p["message_id"] == req["message_id"]), None)
-    if (post is None or post["source_hash"] != req["source_hash"]
-            or post["own"]["state"] != "observed"
-            or req["expected_own"] != {k: post["own"][k] for k in ("type", "observed_at")}):
+    if post is None:
+        return "stamp_target_invalid", {}
+    if req["form_hash"] not in (current["form_hash"], _form_hash(current, legacy=True)):
         return "stamp_target_changed", {}
+    if post["own"]["state"] != "observed":
+        return "stamp_observation_required", {}
+    if (req["expected_own"]["type"] != post["own"]["type"]
+            or post["own"]["observed_at"] < req["expected_own"]["observed_at"]):
+        return "stamp_own_changed", {}
     try:
         directory, namespace = _namespace(db, root, create=True)
         _, witnesses = _scope_witnesses(directory, req, namespace)
@@ -374,15 +385,18 @@ def _publish_result(ledger, root, value):
 
 
 def _fresh_post(adapter, ledger, req):
-    row = ledger.db.execute("SELECT parent_id FROM messages WHERE message_id=? AND project_id=?",
+    row = ledger.db.execute("SELECT parent_id,body_state FROM messages WHERE message_id=? AND project_id=?",
                             (req["message_id"], req["project_id"])).fetchone()
     if row is None:
         raise StampRefused("source_missing")
+    card = notify_scope.card_row(ledger.db, req["card_id"])
+    if (row["body_state"] != "full" or card is None or card["project_id"] != req["project_id"]
+            or row["parent_id"] != (None if req["message_id"] == card["root_message_id"] else card["root_message_id"])):
+        raise StampRefused("stamp_target_invalid")
     post = adapter.fetch_message_metadata(req["project_id"], req["message_id"], parent_id=row[0])
     if (post.message_id != req["message_id"] or post.project_id != req["project_id"]
-            or post.parent_id != row[0] or post.body_state != "full"
-            or hashlib.sha256((post.body_html or "").encode()).hexdigest() != req["source_hash"]):
-        raise StampRefused("source_changed")
+            or post.parent_id != row[0] or post.body_state != "full"):
+        raise StampRefused("stamp_target_invalid")
     now = time.time()
     captured = {key: {"value": value, "observed_at": now} for key, value in post.metadata.items()}
     own = _own(decode_metadata((canonical(captured).decode(), now,
@@ -412,9 +426,9 @@ def _check_live_intent(db, req, cfg, root, now, value):
     if current.get("error"):
         raise StampRefused(current["error"])
     if current["project_id"] != req["project_id"] or not any(
-            p["message_id"] == req["message_id"] and p["source_hash"] == req["source_hash"]
+            p["message_id"] == req["message_id"]
             for p in current["posts"]):
-        raise StampRefused("stamp_target_changed")
+        raise StampRefused("stamp_target_invalid")
 
 
 def _check_reconciliation(db, req, cfg, root):
@@ -490,7 +504,8 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
     else:
         if (value["state"] != "queued" or actual != req["expected_own"]["type"]
                 or value.get("frontier") != payload_hash(witnesses)):
-            _save_outcome(ledger, row["artifact_id"], value, "rejected", "stamp_target_changed")
+            error = "stamp_own_changed" if actual != req["expected_own"]["type"] else "stamp_target_changed"
+            _save_outcome(ledger, row["artifact_id"], value, "rejected", error)
             return "rejected"
         if time.monotonic() + 2 >= deadline:
             raise TimeoutError("stamp_wait_deadline")

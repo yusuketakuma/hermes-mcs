@@ -206,7 +206,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
         return {**base, "outcome": "rejected", "error": "interactive_off"}
     if card["delivery_state"] == "revoked":
         return {**base, "outcome": "rejected", "error": "card_revoked"}
-    if action in tokens.WRITE_ACTIONS and (
+    if action in tokens.WRITE_ACTIONS - {"stamp", "stamp_press"} and (
             (tok["need_source_gen"] is not None
              and tok["need_source_gen"] != card["source_generation"])
             or (card["source_fp"] is not None
@@ -305,7 +305,7 @@ def _stamp_press(db, base, card, actor, token, params, cfg, now, req) -> dict:
     post = next((p for p in form["posts"] if p["message_id"] == params.get("message_id")), None)
     kind, op = params.get("kind"), params.get("op")
     if post is None or kind not in dict(form["types"]) or op not in ("add", "cancel"):
-        return {**base, "outcome": "rejected", "error": "stamp_target_changed"}
+        return {**base, "outcome": "rejected", "error": "stamp_target_invalid"}
     own = post["own"]
     if own["state"] == "pending":
         return {**base, "outcome": "rejected", "error": "stamp_result_unknown"}
@@ -314,7 +314,7 @@ def _stamp_press(db, base, card, actor, token, params, cfg, now, req) -> dict:
     # The press means what the card showed: if the own stamp changed since the
     # render, an add would become a cancel (or back), so it is refused instead.
     if own["type"] != params.get("own") or (op == "cancel") != (own["type"] == kind):
-        return {**base, "outcome": "rejected", "error": "stamp_target_changed"}
+        return {**base, "outcome": "rejected", "error": "stamp_own_changed"}
     # The intent ages from the host-recorded click, never from when the runner got to it.
     clicked = req.get("clicked_at")
     if type(clicked) not in (int, float) or not math.isfinite(clicked) or clicked <= 0:

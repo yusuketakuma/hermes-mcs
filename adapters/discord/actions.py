@@ -872,6 +872,10 @@ class Actions:
 
     async def _ephemeral(self, interaction, text: str) -> None:
         try:
+            if not text:
+                if not interaction.response.is_done():
+                    await interaction.response.defer()
+                return
             if interaction.response.is_done():
                 await interaction.followup.send(
                     text, ephemeral=True, allowed_mentions=no_pings())
@@ -883,6 +887,8 @@ class Actions:
 
     async def _followup(self, interaction, text: str,
                         view=None) -> bool:
+        if not text and view is None:
+            return True
         try:
             # discord.py validates `view is not MISSING`, so a plain
             # None would TypeError — only pass a real view through

@@ -59,3 +59,14 @@ def test_stamp_form_without_runner_targets_is_never_prompted(tmp_path):
         "outcome": "applied", "action": "stamp", "modal": True, "params": {}}))
     assert w.reg.modal("lw-form-" + envelopes.actor_hash(ACTOR)) is None
     assert w.client.calls[-1][1]["text"] == text.STAMP_FORM_PENDING
+
+
+def test_obsolete_stamp_result_consumes_followup_without_an_empty_sdk_message(tmp_path):
+    w = world(tmp_path, action='stamp')
+    cid = 'obsolete-stamp'
+    w.reg.put_followup(cid, _rec())
+    _result(w, cid, {'outcome': 'rejected', 'stamp_state': 'rejected', 'stamp_error': 'source_changed'})
+    asyncio.run(w.actions._say('operator', ''))
+    asyncio.run(w.actions.sweep_followups())
+    asyncio.run(w.actions.sweep_followups())
+    assert w.reg.followup(cid) is None and w.client.calls == []

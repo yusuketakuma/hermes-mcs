@@ -46,6 +46,8 @@ class Actions:
         return context
 
     async def _say(self, user, value, actions=None):
+        if not value and not actions:
+            return
         if user not in self.settings["allowed_user_ids"] or not self._allowed():
             return
         # DMs, never a shared-room substitute for Slack ephemeral answers.

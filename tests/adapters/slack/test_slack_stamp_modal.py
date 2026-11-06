@@ -71,3 +71,19 @@ def test_stamp_click_without_a_runner_form_never_opens_a_blind_modal(tmp_path):
         assert app.client.views == []
         assert app.client.messages[-1]["text"] == common_text.STAMP_FORM_PENDING
     asyncio.run(scenario())
+
+
+def test_obsolete_stamp_result_consumes_followup_without_an_empty_sdk_message(tmp_path):
+    from slack_actions_testkit import SCOPE, TOKEN, TS
+
+    async def scenario():
+        actions, app, reg, dirs = fixture(tmp_path, kind='stamp')
+        cid = 'obsolete-stamp'
+        reg.put_followup(cid, {'kind': 'human', 'origin': {**SCOPE, 'message_id': TS},
+            'actor': 'slack:T_SYNTHETIC:U_OPERATOR', 'user': 'U_OPERATOR', 'token': TOKEN})
+        result(dirs, cid, outcome='rejected', stamp_state='rejected', stamp_error='source_changed')
+        await actions._say('C_SYNTHETIC', 'U_OPERATOR', '')
+        await actions.sweep_followups()
+        await actions.sweep_followups()
+        assert reg.followup(cid) is None and app.client.messages == []
+    asyncio.run(scenario())
