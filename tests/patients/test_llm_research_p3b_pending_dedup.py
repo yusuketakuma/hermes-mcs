@@ -20,12 +20,13 @@ __all__ = ["runtime"]   # the shared fixture is used by name below
 def counted(monkeypatch, led):
     """Count _snapshot/_pending calls and whole-patient messages reads."""
     counts = {'_snapshot': 0, '_pending': 0, 'messages': 0}
-    for name in ('_snapshot', '_pending'):
-        original = getattr(context_refresh, name)
+    for module, name in ((patient_context_refresh_sources, '_snapshot'),
+                         (patient_context_refresh_readiness, '_pending')):
+        original = getattr(module, name)
         def wrapper(*args, _name=name, _original=original, **kwargs):
             counts[_name] += 1
             return _original(*args, **kwargs)
-        monkeypatch.setattr(context_refresh, name, wrapper)
+        monkeypatch.setattr(module, name, wrapper)
     def trace(sql):
         if 'FROM messages m WHERE project_id=' in sql and 'AND message_id=' not in sql:
             counts['messages'] += 1

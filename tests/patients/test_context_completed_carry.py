@@ -29,7 +29,6 @@ import cloud_policy
 import extract_llm as worker
 import ledger as ledger_module
 import notify_spool
-import patient_context_refresh as refresh
 import semantic_runtime
 from test_anthropic_context_refresh import cloud as cloud, _SOURCE_REPAIR_PROVIDER
 from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
@@ -79,7 +78,7 @@ def _completed(runtime, cloud, monkeypatch, lane):
     fake_time = SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.mono,
                                perf_counter=lambda: clock.mono, sleep=sleep)
     for module in (worker, cloud_inference, cloud_client, cloud_policy,
-                   anthropic_client, ledger_module, semantic_runtime, refresh):
+                   anthropic_client, ledger_module, semantic_runtime, patient_context_refresh_state):
         monkeypatch.setattr(module, "time", fake_time)
     posts, answers = [], []
     blocked = [False]
