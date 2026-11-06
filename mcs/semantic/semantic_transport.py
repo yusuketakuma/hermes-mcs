@@ -143,7 +143,7 @@ _NON_DISCARD_STAGES = _PRESEND_REFUSAL_STAGES | {'cloud_guard'}
 # the other members' pass: the held member waits, the rest still run.
 MEMBER_HOLD_STAGES = frozenset({
     "cloud_unit_unresolved", "cloud_target_unverified", "realtime_target",
-    "cloud_fallback_unavailable", "cloud_capacity"})
+    "cloud_fallback_unavailable", "cloud_capacity", "cloud_guard"})
 
 
 @contextmanager
@@ -162,19 +162,13 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     # member units while a project-wide check would hold independent targets.
     # It reopens recovery only inside the configured scope: a revoked scope
     # still yields no transport for an owned target.
-    owns = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
-                                         project_id=job["project_id"], message_ids=targets)
-    if owns:
-        # Ownership is durable and precedes settings: the raw config's mode
-        # may resolve on via key presence, so scope is proven on resolved
-        # settings only. A broken config cannot release an owned target to
-        # local — keep it held; a proven out-of-scope (explicit off /
-        # other project) retires it to local like an unowned target.
-        settings, errors = cloud_policy.resolve_settings(cfg, HOME)
-        owned = bool(errors) or cloud_policy.in_scope(settings, "semantic_backlog",
-                                                      job["project_id"])
-    else:
-        owned = False
+    # Ownership is durable and precedes settings: an owned target stays
+    # held unless the config itself declares the retirement — explicit
+    # off/dry_run or a verifiable route/project exclusion. A computed
+    # 'off' (mode omitted, key unreadable) proves nothing.
+    owned = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
+                                          project_id=job["project_id"], message_ids=targets) \
+        and not cloud_policy.scope_revoked(cfg, "semantic_backlog", job["project_id"])
     if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
             or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
         if owned:

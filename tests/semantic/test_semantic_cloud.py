@@ -1280,13 +1280,14 @@ def test_process_job_unproven_chunk_holds_its_member_only(cloud, order):
     assert not any('メトホルミン' in p for p in local_prompts)
 
 
-@pytest.mark.parametrize('variant', ['unverifiable_cfg', 'mode_omitted',
-                                     'explicit_off', 'out_of_scope'])
-def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant):
+@pytest.mark.parametrize('variant', ['unverifiable_cfg', 'mode_omitted', 'key_gone',
+                                     'explicit_off', 'dry_run', 'out_of_scope'])
+def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, monkeypatch):
     """Ownership precedes settings: a config that cannot prove scope keeps
     the owned member held (unverifiable), a mode-omitted block resolves on
-    via the key, and only a proven revocation (explicit off / out of
-    scope) releases the unit to local."""
+    via the key, a vanished key only computes 'off' — never a revocation —
+    and only a declared retirement (explicit off / out of scope) releases
+    the unit to local."""
     from semantic_testkit import _PassJev, _llm_v2
     led, cfg, job, calls = cloud
     _mixed_targets(led, job, [2, 3], bodies={2: 'アムロジピン5mgを継続します。',
@@ -1298,8 +1299,14 @@ def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant):
         cfg['cloud_llm']['bogus_field'] = 1
     elif variant == 'mode_omitted':
         del cfg['cloud_llm']['mode']
+    elif variant == 'key_gone':
+        del cfg['cloud_llm']['mode']
+        monkeypatch.setattr(cloud_policy, 'api_key', lambda *a: None)
+        monkeypatch.setattr(cloud_policy, 'provider_key', lambda *a, **kw: None)
     elif variant == 'explicit_off':
         cfg['cloud_llm']['mode'] = 'off'
+    elif variant == 'dry_run':
+        cfg['cloud_llm']['mode'] = 'dry_run'
     else:
         cfg['cloud_llm']['project_ids'] = [2]
     local_prompts = []
@@ -1311,9 +1318,10 @@ def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant):
         time.monotonic() + 900, lane="backlog", diagnostics=semantic_drain._job_diagnostics(),
         cloud_transport=direct)
     assert not calls and len(rows(led, 'cloud_usage_reserve')) == 1
-    if variant == 'unverifiable_cfg':
-        # The provider cannot be built from an unreadable config: the whole
-        # job defers — nothing local, nothing sent, the reservation stays.
+    if variant in ('unverifiable_cfg', 'key_gone'):
+        # Unverifiable state holds every member on its own guard — nothing
+        # local, nothing sent, the reservation stays.  A vanished key only
+        # computes 'off': the owned member is never released to local.
         assert status == 'deferred' and not local_prompts
     elif variant == 'mode_omitted':
         # Resolved on via the key: the owned member holds, the independent

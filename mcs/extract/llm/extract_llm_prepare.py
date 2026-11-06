@@ -238,19 +238,14 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r["_target"] = target
         mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
             ledger, r, background=background) else "off"
-        owned = False
-        if mode == "off" and allow_cloud and cloud_policy.owns_request(
-                ledger.db, route="reextract", project_id=r["project_id"],
-                message_id=r["message_id"]):
-            # Ownership is durable and decided before settings: the raw
-            # config's mode may resolve on via key presence, so scope is
-            # proven on resolved settings only. A broken config cannot
-            # release the unit — keep it held; a proven out-of-scope
-            # (explicit off / dry_run / other project) retires it to
-            # local like an unowned row.
-            settings, errors = cloud_policy.resolve_settings(cfg, HOME)
-            owned = bool(errors) or (settings["mode"] == "on"
-                and cloud_policy.in_scope(settings, "reextract", r["project_id"]))
+        # Ownership is durable and decided before settings: an owned unit
+        # stays held unless the config itself declares the retirement —
+        # explicit off/dry_run or a verifiable route/project exclusion.
+        # A computed 'off' (mode omitted, key unreadable) proves nothing.
+        owned = mode == "off" and allow_cloud \
+            and cloud_policy.owns_request(ledger.db, route="reextract",
+                                          project_id=r["project_id"], message_id=r["message_id"]) \
+            and not cloud_policy.scope_revoked(cfg, "reextract", r["project_id"])
         if owned:
             # A closed send route retires new sends, never the unit a prior
             # reservation created: rebuild the provider so recovery, the

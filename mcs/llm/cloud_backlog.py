@@ -344,7 +344,8 @@ _DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
 # the unit's evidence cannot be proven this pass — an unverifiable head
 # must not starve the tail under a limited claim window.
 _HOLD_DEFER_REASONS = frozenset(
-    {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified"})
+    {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified",
+     "prepare_profile_unavailable"})
 
 
 def worker(parent, *, index=None):

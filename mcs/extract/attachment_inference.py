@@ -231,11 +231,12 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                 if stage == 'cloud' and local is None:
                     continue
                 # A closed send route retires new sends, never the unit a prior
-                # reservation created: owned pages still reach recovery or hold.
+                # reservation created: owned pages still reach recovery or hold
+                # unless the config itself declares the scope revoked.
                 if stage == 'cloud' and _requirement(cfg, row['project_id'])[0] is not True and not (
-                        cloud_policy.in_scope(cloud_inference.resolve_cloud_settings(cfg), 'reextract', row['project_id'])
-                        and cloud_policy.owns_unit_request(ledger.db, route='reextract',
-                            project_id=row['project_id'], unit_key=key + ':cloud')):
+                        cloud_policy.owns_unit_request(ledger.db, route='reextract',
+                            project_id=row['project_id'], unit_key=key + ':cloud')
+                        and not cloud_policy.scope_revoked(cfg, 'reextract', row['project_id'])):
                     continue
                 history = _history_snapshot(ledger.db, source) if stage == 'cloud' else None
                 if stage == 'cloud' and history is None:
