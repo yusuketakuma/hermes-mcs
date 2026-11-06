@@ -293,7 +293,8 @@ def test_init_secrets_from_env_not_argv(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mcs_setup.sys, "argv",
         ["mcs_setup", "init", "--yes", "--login-id", "u1",
-         "--notify-target", "slack:#mcs"])
+         "--notify-target", "slack:C000000001",
+         "--set", "notify_system_target=slack:G000000002"])
     assert mcs_setup.main() == 0
     assert stored == ["env-pw"]
     assert "TYPESAFE_API_KEY=env-key" in (tmp_path / ".env").read_text()

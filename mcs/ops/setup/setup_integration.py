@@ -347,17 +347,15 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     Returns False when the CLI is unavailable or any attempted write
     failed; keys left unset by choice (--yes, empty answer) are not
     failures."""
+    import hermes_credential_setup
     ntf = cfg.get("notify")
     if mcs_runtime.standalone(cfg):
         interactive = ntf.get("interactive") if isinstance(ntf, dict) else None
         used = {interactive} | {
             str(cfg.get(k) or "").partition(":")[0]
             for k in ("notify_target", "notify_system_target")}
-        wanted = [("DISCORD_BOT_TOKEN", "DiscordのBotトークン")] if "discord" in used else []
-        if "slack" in used:
-            wanted.append(("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"))
-        if "slack" in used:
-            wanted.append(("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
+        wanted = [(key, label) for transport in ("discord", "slack") if transport in used
+                  for key, label, _ in hermes_credential_setup.TOKENS[transport]]
         return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
             or ntf.get("interactive") not in ("discord", "slack"):
@@ -375,11 +373,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     print(f"\n{label}連携: Hermesの設定「{profile or '既定'}」へ保存します")
 
     fixed, lists = _plugin_settings_plan(transport, nd, args)
-    if transport == "discord":
-        tokens = (("DISCORD_BOT_TOKEN", "DiscordのBotトークン"),)
-    else:
-        tokens = (("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"),
-                  ("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
+    tokens = tuple((key, label) for key, label, _ in hermes_credential_setup.TOKENS[transport])
     missing = []
     failed = False
     for key, val in fixed.items():
@@ -458,6 +452,7 @@ def _apply_slack_text_bootstrap(cfg: dict, args, binding: dict) -> bool:
     data_root plus the verified team/application/profile triple. The card
     adapter, operator allowlists and project grants stay disabled, and the
     existing token store/CLI path is reused unchanged."""
+    import hermes_credential_setup
     exe = mcs_util.hermes_exe(cfg)
     if not runtime_inspection.executable_available(exe):
         print("\nHermesコマンドが見つかりません。連携設定は後で "
@@ -474,8 +469,7 @@ def _apply_slack_text_bootstrap(cfg: dict, args, binding: dict) -> bool:
             print(f"  settings.{key}: 設定")
         else:
             failed = True
-    tokens = (("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"),
-              ("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
+    tokens = tuple((key, label) for key, label, _ in hermes_credential_setup.TOKENS["slack"])
     failed |= _plugin_store_tokens(exe, profile, tokens, args)
     return not failed
 

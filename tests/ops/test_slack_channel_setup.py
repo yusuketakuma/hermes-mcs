@@ -953,3 +953,31 @@ def test_text_only_receipts_produce_a_valid_save_candidate(tmp_path, mode):
     assert state['state'] == 'applied' and 'worker_ready' not in state
     assert setup.candidate(tmp_path, saved) == saved
     assert client.created == ['mcs', 'mcslog']
+
+
+@pytest.mark.parametrize('token_store_failed', [False, True])
+def test_text_bootstrap_uses_common_token_store_without_card_grants(tmp_path, monkeypatch, token_store_failed):
+    import setup_integration
+    cfg = text_config()
+    binding = setup.plan(cfg)['binding']
+    args = SimpleNamespace(yes=True)
+    before = deepcopy(cfg)
+    monkeypatch.setattr(setup_integration, 'HOME', str(tmp_path))
+    monkeypatch.setattr(setup_integration.mcs_util, 'hermes_exe', lambda cfg: '/synthetic/hermes')
+    monkeypatch.setattr(setup_integration.runtime_inspection, 'executable_available', lambda exe: True)
+    settings = {}
+    monkeypatch.setattr(setup_integration, '_hermes_config_set',
+                        lambda exe, profile, key, value: settings.setdefault(key, value) is not None)
+    stores = []
+    def store(exe, profile, tokens, actual_args):
+        stores.append((exe, profile, tuple(key for key, _ in tokens), actual_args))
+        return token_store_failed
+    monkeypatch.setattr(setup_integration, '_plugin_store_tokens', store)
+    assert setup_integration._apply_slack_text_bootstrap(cfg, args, binding) is not token_store_failed
+    prefix = setup_integration.PLUGIN_SETTINGS + '.'
+    assert settings == {prefix + 'data_root': str(tmp_path / 'data'),
+                        prefix + 'slack_team_id': 'T000000001',
+                        prefix + 'slack_application_id': 'A000000001',
+                        prefix + 'slack_profile': 'synthetic'}
+    assert stores == [('/synthetic/hermes', 'synthetic', ('SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'), args)]
+    assert cfg == before and cfg['notify']['interactive'] == 'off'
