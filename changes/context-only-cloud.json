@@ -19,6 +19,7 @@
     "mcs/semantic/semantic_drain.py",
     "mcs/ops/cloud_cli.py",
     "mcs/notify/processing_route.py",
-    "mcs/extract/llm/extract_llm_runner.py"
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/semantic/semantic_transport.py"
   ]
 }

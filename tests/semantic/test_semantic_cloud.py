@@ -31,6 +31,7 @@ import semantic_transport as transport
 import writer_lock
 from semantic_testkit import _message, _patient
 from semantic_cloud_testkit import cloud as cloud, direct as direct, rows as rows, snapshot as snapshot
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_qc_purpose_uses_separate_fixed_provider_and_restores_context(cloud, monkeypatch):
@@ -939,3 +940,108 @@ def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud,
                                 lane='backlog', max_jobs=1, cloud_only=True)
     assert out['deferred'] == 1 and out['defer_reasons'] == {expected: 1}
     assert not calls and not rows(led, 'cloud_usage_reserve')
+
+
+def _member_targets(led, job):
+    """Grow the job's targets with a reply member, then re-capture the scope."""
+    led.save_messages([_message(2, parent=1, body='synthetic member reply')])
+    snapshot(led)
+    payload = json.loads(job['payload'])
+    payload['targets'] = [1, 2]
+    with led.db:
+        led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                       (json.dumps(payload), job['job_id']))
+    job['payload'] = json.dumps(payload)
+
+
+def test_owned_member_reservation_recovers_paid_under_closed_route(cloud):
+    led, cfg, job, calls = cloud
+    _member_targets(led, job)
+    with transport.inference_targets('synthetic-gen'):
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as chat:
+                transport.set_inference_target(2)
+                assert json.loads(chat('synthetic member prompt')) == {'facts': []}
+        assert len(calls) == len(rows(led, 'cloud_usage_reserve')) == 1
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda *a, **kw: pytest.fail('paid local fallback')) as chat:
+            transport.set_inference_target(2)
+            assert json.loads(chat('synthetic member prompt')) == {'facts': []}
+    # The paid response was recovered on the member unit — no second POST.
+    assert len(calls) == len(rows(led, 'cloud_usage_reserve')) == len(rows(led, 'cloud_usage_result')) == 1
+
+
+def test_owned_member_unknown_unit_holds_without_local_restart(cloud):
+    led, cfg, job, calls = cloud
+    _member_targets(led, job)
+    # A reservation already paid for member 2 whose outcome never arrived.
+    selection, errors = cloud_policy.resolve_profile(cfg, route='semantic_backlog', purpose='backlog')
+    assert not errors
+    reserver = cloud_policy.usage_reserver(
+        led, {'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)},
+        route='semantic_backlog', project_id=1, message_id=2,
+        unit_key=f"semantic:{job['job_id']}:",
+        owner={'semantic_target_id': 2, 'semantic_thread_root': 1},
+        input_binding='ab' * 32, selection=selection)
+    body = anthropic_client.AnthropicClient('synthetic').body('synthetic member prompt', 100, None)
+    with legacy_cloud_routes():
+        reserver(body, 30)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            assert chat is not None
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+    assert not local and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+def test_unowned_job_stays_local_under_closed_route(cloud):
+    led, cfg, job, calls = cloud
+    _member_targets(led, job)
+    # A reservation bound outside this job's payload targets holds nothing here.
+    led.save_messages([_message(3, body='synthetic unrelated thread')])
+    selection, errors = cloud_policy.resolve_profile(cfg, route='semantic_backlog', purpose='backlog')
+    assert not errors
+    reserver = cloud_policy.usage_reserver(
+        led, {'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)},
+        route='semantic_backlog', project_id=1, message_id=3,
+        unit_key='semantic:other-job:',
+        owner={'semantic_target_id': 3, 'semantic_thread_root': 3},
+        input_binding='ab' * 32, selection=selection)
+    with legacy_cloud_routes():
+        reserver(anthropic_client.AnthropicClient('synthetic').body('synthetic other prompt', 100, None), 30)
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                     lambda: True, direct) as chat:
+        assert chat is None
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('meta', [{'note': 'synthetic route-less meta'}, '{broken'])
+def test_semantic_owned_unit_holds_on_unverifiable_reservation(cloud, meta):
+    led, cfg, job, calls = cloud
+    _member_targets(led, job)
+    with led.db:
+        if isinstance(meta, str):
+            led.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_reserve',1,2,'{}','synthetic',?,?)", (meta, time.time()))
+        else:
+            led.artifact_add_tx('cloud_usage_reserve', '{}', project_id=1, message_id=2,
+                                model='synthetic', meta=meta)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            assert chat is not None
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+    assert not local and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 1
