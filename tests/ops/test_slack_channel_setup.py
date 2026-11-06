@@ -529,7 +529,7 @@ def test_required_rejects_invalid_notify_instead_of_reporting_no_work():
 
 
 @pytest.mark.parametrize('mode', ['hermes', 'standalone'])
-def test_text_only_slack_never_enters_channel_setup(tmp_path, monkeypatch, mode):
+def test_text_only_slack_with_both_channels_configured_is_creation_only_noop(tmp_path, monkeypatch, mode):
     cfg = config()
     cfg.update(runtime_mode=mode, notify_target='slack:C000000098', notify_system_target='slack:C000000099')
     cfg['notify']['interactive'] = 'off'
@@ -538,7 +538,10 @@ def test_text_only_slack_never_enters_channel_setup(tmp_path, monkeypatch, mode)
     assert validate_config(cfg)[0] == []
     import service_management
     monkeypatch.setattr(service_management, 'hermes_cli', lambda *_: pytest.fail('no service'))
-    assert setup.required(cfg) is False and setup.plan(cfg) is None
+    assert setup.required(cfg) is True
+    desired = setup.plan(cfg)
+    assert desired['surfaces'] == {'text': True, 'card': False}
+    assert setup.creation_unneeded(cfg, None) is True
     assert setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True)) == cfg
     assert setup.read(tmp_path) is None
 
@@ -546,25 +549,53 @@ def test_text_only_slack_never_enters_channel_setup(tmp_path, monkeypatch, mode)
 @pytest.mark.parametrize('state', ['pending', 'applied'])
 def test_text_only_command_preserves_an_older_channel_intent_without_side_effects(tmp_path, monkeypatch, state):
     import mcs_setup
+    root = tmp_path
+    monkeypatch.setattr(mcs_setup, 'HOME', str(root))
     cfg = config()
-    setup.prepare(tmp_path, cfg)
+    setup.prepare(root, cfg)
     if state == 'applied':
-        consume(tmp_path, Client(), cfg)
-        saved = setup.candidate(tmp_path, cfg)
-        setup.applied(tmp_path, cfg, saved)
+        consume(root, Client(), cfg)
+        saved = setup.candidate(root, cfg)
+        setup.applied(root, cfg, saved)
         cfg = saved
-    before = setup.path(tmp_path).read_bytes()
+    before = setup.path(root).read_bytes()
     cfg.update(notify_target='slack:#patients', notify_system_target='slack:#ops')
     cfg['notify']['interactive'] = 'off'
     monkeypatch.setattr(mcs_setup, '_init_config_snapshot', lambda: (cfg, {}))
     def forbidden(*args, **kwargs):
         pytest.fail('off must not save config, restart, or resume setup')
     monkeypatch.setattr(mcs_setup, '_init_save_config', forbidden)
-    for name in ('run_setup', 'applied', 'finish_runtime'):
+    for name in ('applied', 'finish_runtime'):
         monkeypatch.setattr(setup, name, forbidden)
-    assert setup.plan(cfg) is None
-    assert mcs_setup.cmd_slack_channels(SimpleNamespace()) == 0
-    assert setup.path(tmp_path).read_bytes() == before
+    # Invalid slack text targets fail closed: the sealed intent and the
+    # config snapshot stay untouched and no creation is attempted.
+    assert mcs_setup.cmd_slack_channels(SimpleNamespace()) == 1
+    assert setup.path(root).read_bytes() == before
+
+
+@pytest.mark.parametrize('state', ['pending', 'applied'])
+def test_text_only_valid_targets_conflict_with_sealed_card_intent(tmp_path, monkeypatch, state):
+    import mcs_setup
+    root = tmp_path
+    monkeypatch.setattr(mcs_setup, 'HOME', str(root))
+    cfg = config()
+    setup.prepare(root, cfg)
+    if state == 'applied':
+        consume(root, Client(), cfg)
+        saved = setup.candidate(root, cfg)
+        setup.applied(root, cfg, saved)
+        cfg = saved
+    before = setup.path(root).read_bytes()
+    cfg.update(notify_target='slack:C000000097', notify_system_target='slack:C000000096')
+    cfg['notify']['interactive'] = 'off'
+    monkeypatch.setattr(mcs_setup, '_init_config_snapshot', lambda: (cfg, {}))
+    def forbidden(*args, **kwargs):
+        pytest.fail('a diverged text config must not save or resume setup')
+    monkeypatch.setattr(mcs_setup, '_init_save_config', forbidden)
+    for name in ('applied', 'finish_runtime'):
+        monkeypatch.setattr(setup, name, forbidden)
+    assert mcs_setup.cmd_slack_channels(SimpleNamespace()) == 1
+    assert setup.path(root).read_bytes() == before
 
 
 def test_setup_intent_disappearing_after_prepare_stops_without_recreating_it(tmp_path, monkeypatch):
@@ -580,3 +611,209 @@ def test_setup_intent_disappearing_after_prepare_stops_without_recreating_it(tmp
     with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
         setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True))
     assert not setup.path(tmp_path).exists()
+
+
+def text_config():
+    """Text-only Slack setup: cards off, explicit new patient channel."""
+    cfg = config()
+    cfg['notify']['interactive'] = 'off'
+    cfg['notify_target'] = 'slack:new'
+    return cfg
+
+
+def test_text_only_bootstrap_creates_both_channels_without_card_worker(tmp_path, monkeypatch):
+    cfg, client = text_config(), Client()
+    import mcs_util
+    import notify_spool
+    import setup_integration
+    import service_management
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration',
+                        lambda *a: pytest.fail('text-only must not wire the card plugin'))
+    wired = []
+    def bootstrap(candidate, args, binding):
+        wired.append(binding['profile'])
+        return True
+    monkeypatch.setattr(setup_integration, '_apply_slack_text_bootstrap', bootstrap)
+    def cli(exe, profile, *command, **kwargs):
+        assert profile == 'synthetic'
+        if command == ('gateway', 'status'):
+            return SimpleNamespace(returncode=0)
+        assert command == ('gateway', 'restart')
+        consume(tmp_path, client, cfg)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service_management, 'hermes_cli', cli)
+    desired = setup.plan(cfg)
+    assert desired['surfaces'] == {'text': True, 'card': False}
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    assert wired == ['synthetic']
+    assert client.created == ['mcs', 'mcslog']
+    assert saved['notify_target'] == 'slack:C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000002'
+    assert saved['notify']['slack']['channel_id'] == 'C000000001'
+    assert saved['notify']['interactive'] == 'off'
+    assert 'slack:new' not in json.dumps(saved)
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied' and 'worker_ready' not in state
+    monkeypatch.setattr(notify_spool, 'ensure_dirs', lambda root: None)
+    flags = []
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda c, r: flags.append(c))
+    monkeypatch.setattr(setup, 'reconnect_ready',
+                        lambda *a: pytest.fail('text-only owns no card worker'))
+    setup.finish_runtime(tmp_path, saved, args)
+    assert flags == [saved]
+    assert setup.read(tmp_path).get('worker_ready') is None
+    assert setup.run_setup(tmp_path, saved, args) == saved
+    assert len(client.created) == 2
+
+
+def test_text_only_with_existing_system_creates_only_patient(tmp_path, monkeypatch):
+    cfg, client = text_config(), Client()
+    cfg['notify_system_target'] = 'slack:C000000099'
+    client.channels['C000000099'] = {'id': 'C000000099', 'is_private': True,
+                                    'is_member': True, 'is_archived': False}
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.created == ['mcs']
+    saved = setup.candidate(tmp_path, cfg)
+    assert saved['notify_target'] == 'slack:C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000099'
+
+
+def test_text_only_existing_patient_creates_only_mcslog(tmp_path):
+    cfg, client = text_config(), Client()
+    cfg['notify_target'] = 'slack:C000000098'
+    cfg['notify']['slack']['channel_id'] = 'C000000098'
+    client.channels['C000000098'] = {'id': 'C000000098', 'is_private': True,
+                                    'is_member': True, 'is_archived': False}
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.created == ['mcslog']
+    saved = setup.candidate(tmp_path, cfg)
+    assert saved['notify_target'] == 'slack:C000000098'
+    assert saved['notify_system_target'] == 'slack:C000000001'
+    assert saved['notify']['slack']['channel_id'] == 'C000000098'
+
+
+def test_text_only_explicit_send_profile_conflict_refused_before_creation(tmp_path):
+    cfg = text_config()
+    cfg['notify_bot_profile'] = 'other-profile'
+    with pytest.raises(ValueError, match='slack_setup_profile_conflict'):
+        setup.plan(cfg)
+    with pytest.raises(ValueError, match='slack_setup_profile_conflict'):
+        setup.prepare(tmp_path, cfg)
+    assert not setup.path(tmp_path).exists()
+
+
+def test_text_only_matching_explicit_send_profile_is_accepted(tmp_path):
+    cfg = text_config()
+    cfg['notify_bot_profile'] = 'synthetic'
+    desired = setup.plan(cfg)
+    assert desired['surfaces'] == {'text': True, 'card': False}
+
+
+def test_text_only_unset_send_profile_uses_binding_for_created_channel(tmp_path, monkeypatch):
+    import mcs_util
+    import notify_sender
+    cfg, client = text_config(), Client()
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    saved = setup.candidate(tmp_path, cfg)
+    setup.applied(tmp_path, cfg, saved)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    argv = notify_sender.send_argv(saved, saved['notify_target'],
+                                    str(tmp_path / 'config.json'), kind='new_messages')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
+    argv = notify_sender.send_argv(saved, saved['notify_system_target'],
+                                    str(tmp_path / 'config.json'), kind='run_failed')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
+
+
+def test_text_only_existing_patient_target_keeps_legacy_send_profile(tmp_path, monkeypatch):
+    import mcs_util
+    import notify_sender
+    cfg, client = text_config(), Client()
+    cfg['notify_target'] = 'slack:C000000098'
+    cfg['notify']['slack']['channel_id'] = 'C000000098'
+    cfg['notify_bot_profile'] = 'legacy'
+    client.channels['C000000098'] = {'id': 'C000000098', 'is_private': True,
+                                    'is_member': True, 'is_archived': False}
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    saved = setup.candidate(tmp_path, cfg)
+    setup.applied(tmp_path, cfg, saved)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    argv = notify_sender.send_argv(saved, 'slack:C000000098',
+                                    str(tmp_path / 'config.json'), kind='new_messages')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'legacy']
+
+
+def test_text_only_unapplied_created_patient_target_fails_before_http(tmp_path, monkeypatch):
+    import mcs_util
+    import notify_sender
+    cfg, client = text_config(), Client()
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    saved = setup.candidate(tmp_path, cfg)
+    record = setup.read(tmp_path)
+    record['state'] = 'verified'
+    setup.save(tmp_path, record)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    with pytest.raises(notify_sender.SendFailed):
+        notify_sender.send_argv(saved, saved['notify_target'],
+                                str(tmp_path / 'config.json'), kind='new_messages')
+
+
+def test_plan_surfaces_validation_rejects_malformed_records(tmp_path):
+    cfg, client = text_config(), Client()
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    state = setup.read(tmp_path)
+    for bad in ({'text': True}, {'text': True, 'card': True, 'extra': False},
+                {'text': 'yes', 'card': False}, {'text': False, 'card': False}):
+        damaged = deepcopy(state)
+        damaged['plan']['surfaces'] = bad
+        damaged['plan_hash'] = setup._hash(damaged['plan'])
+        with pytest.raises(ValueError):
+            setup.save(tmp_path, damaged)
+    legacy = deepcopy(state)
+    legacy['plan'].pop('surfaces')
+    legacy['plan_hash'] = setup._hash(legacy['plan'])
+    setup.save(tmp_path, legacy)
+    assert setup.read(tmp_path)['roles']['patient']['state'] == 'verified'
+
+
+def test_v1_plan_without_surfaces_keeps_card_postphase(tmp_path):
+    cfg, client = config(), Client()
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    state = setup.read(tmp_path)
+    state['plan'].pop('surfaces', None)
+    state['plan_hash'] = setup._hash(state['plan'])
+    setup.save(tmp_path, state)
+    assert setup.surfaces_card(state) is True
+
+
+def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, monkeypatch):
+    cfg, client = text_config(), Client()
+    cfg['runtime_mode'] = 'standalone'
+    import setup_integration
+    from adapters.slack import standalone
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda c, a: True)
+    consumed = []
+    def channels(root, binding):
+        consumed.append(binding['profile'])
+        consume(root, client, cfg)
+    monkeypatch.setattr(standalone, 'setup_channels', channels)
+    args = SimpleNamespace(yes=True, plugin_profile=None)
+    saved = setup.run_setup(tmp_path, cfg, args)
+    assert consumed == ['synthetic']
+    assert client.created == ['mcs', 'mcslog']
+    assert saved['notify_target'] == 'slack:C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000002'
+    assert saved['notify']['interactive'] == 'off'
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied' and 'worker_ready' not in state

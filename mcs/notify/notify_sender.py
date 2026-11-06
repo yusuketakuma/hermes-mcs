@@ -94,12 +94,17 @@ def send_argv(cfg: dict, target: str, config_path: str, *, kind: str | None = No
                 str(Path(config_path).parent), "--to", target, "--quiet"]
     argv = [mcs_util.hermes_exe(cfg)]
     profile = cfg.get("notify_bot_profile")
-    if kind in SYSTEM_ALERT_KINDS and target.startswith('slack:'):
+    if target.startswith('slack:'):
         import slack_channel_setup
+        system = kind in SYSTEM_ALERT_KINDS
         try:
-            created_profile = slack_channel_setup.system_send_profile(Path(config_path).parent, cfg, target)
+            created_profile = (slack_channel_setup.system_send_profile(
+                Path(config_path).parent, cfg, target) if system else
+                slack_channel_setup.patient_send_profile(
+                    Path(config_path).parent, cfg, target))
         except (OSError, ValueError, TypeError, RecursionError):
-            raise SendFailed('system_profile_unverified') from None
+            raise SendFailed('system_profile_unverified' if system
+                             else 'patient_profile_unverified') from None
         if created_profile is not None:
             return argv + ['-p', created_profile, 'send', '--to', target, '--quiet']
     if isinstance(profile, str) and re.fullmatch(r"[a-z0-9_-]+", profile):

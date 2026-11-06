@@ -558,6 +558,9 @@ def test_flags_publish_failure_fails_services_and_defers_the_switch_restart(monk
 def _slack_target_config():
     cfg = config(interactive="off")
     cfg["notify_target"] = "slack:C0SYNTHETIC"
+    # a local system route keeps Slack channel provisioning out of these
+    # plugin-flag tests — they cover scope wiring, not channel creation
+    cfg["notify_system_target"] = "local"
     cfg["notify"] = {"interactive": "off", "slack": {
         "profile": "default", "application_id": "A0SYNTHETIC", "team_id": "T0SYNTHETIC",
         "channel_id": "C0SYNTHETIC", "allowed_user_ids": ["U0OLD"], "project_ids": [1]}}
