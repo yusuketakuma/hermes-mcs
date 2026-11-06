@@ -212,6 +212,19 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         raise runtime.LLMNotSent('cloud_profile_unavailable') from None
 
     switched = False
+    possibly_sent_targets = set()
+
+    def target_id():
+        target = _inference_target.get()
+        return target[0] if target else job["message_id"]
+
+    def target_owned(mid):
+        # Per-actual-target ownership on the strict member binding: a member
+        # reservation must never take the job-level local switch — its unit
+        # still needs recovery or a hold. An alien reservation on the same
+        # thread stays a send guard only and never forbids this target's local.
+        return cloud_policy.owns_member_request(ledger.db, route="semantic_backlog",
+                                                project_id=job["project_id"], target_id=mid)
 
     def call_local(prompt, timeout):
         if not scoped_current():
@@ -223,7 +236,9 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     def local(prompt, timeout):
         nonlocal switched
-        if (local_fallback is None or any(p.possibly_sent for p in providers.values()) or not scoped_current()
+        mid = target_id()
+        if (local_fallback is None or mid in possibly_sent_targets or target_owned(mid)
+                or not scoped_current()
                 or fallback_current is not None and not fallback_current()):
             raise runtime.LLMNotSent('cloud_fallback_unavailable')
         switched = True
@@ -231,7 +246,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         return call_local(prompt, timeout)
 
     def chat(prompt, timeout=None):
-        if switched:
+        if switched and not target_owned(target_id()):
             _job_model.set(None)
             return call_local(prompt, timeout)
         try:
@@ -261,6 +276,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             provider.owner.update(semantic_source=payload_hash(source_occurrences),
                                   semantic_generation=_inference_generation.get(), semantic_phase=target[1])
         provider.input_binding = payload_hash(provider.owner) if provider.owner.get('semantic_source') else None
+        sent_before = provider.possibly_sent
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)
@@ -270,12 +286,17 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         except cloud_inference.CloudObservationIncomplete:
             raise runtime.LLMNotSent('cloud_guard') from None
         except cloud_inference.CloudBusy:
-            if local_fallback is not None:
+            if provider.possibly_sent and not sent_before:
+                possibly_sent_targets.add(provider.message_id)
+            if local_fallback is not None and not target_owned(provider.message_id):
                 return local(prompt, timeout)
             raise runtime.LLMNotSent("cloud_capacity") from None
         except cloud_inference.CloudFallback as error:
+            if provider.possibly_sent and not sent_before:
+                possibly_sent_targets.add(provider.message_id)
             if (local_fallback is not None and str(error) != 'cloud_unit_changed'
-                    and not any(p.possibly_sent for p in providers.values())):
+                    and provider.message_id not in possibly_sent_targets
+                    and not target_owned(provider.message_id)):
                 return local(prompt, timeout)
             if str(error) == 'cloud_send_blocked':
                 # A history-checked fresh request denied before reservation is

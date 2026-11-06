@@ -401,6 +401,19 @@ def owns_unit_request(db, *, route, project_id, unit_key):
         "LIMIT 1", (KINDS[0], project_id, unit_key, route)).fetchone() is not None
 
 
+def owns_member_request(db, *, route, project_id, target_id):
+    """owns_request narrowed to a member-bound semantic unit — the strict
+    `_semantic_financial_target` binding: logical_target_id, meta.message_id
+    and owner.semantic_target_id all equal the target. An alien reservation on
+    the same thread (different unit key, no owner) stays a send guard, never
+    an owner that forbids the target's local path."""
+    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? "
+        "AND json_valid(meta) AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
+        "AND json_extract(meta,'$.logical_target_id')=? AND json_extract(meta,'$.message_id')=? "
+        "AND json_extract(meta,'$.owner.semantic_target_id')=? LIMIT 1",
+        (KINDS[0], project_id, route, target_id, target_id, target_id)).fetchone() is not None
+
+
 def owns_any_request(db, *, route, project_id, message_ids):
     """owns_request over a set of member targets: thread jobs reserve per
     member, so ownership is membership in the job's payload targets. A
