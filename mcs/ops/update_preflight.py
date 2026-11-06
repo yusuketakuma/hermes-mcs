@@ -337,7 +337,8 @@ def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None)
         errors.append("standalone_requirements_changed")
     if "--with-yomitoku" in (recorded_install_args() or []) and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/requirements-ocr.txt", "scripts/setup_yomitoku.py"],
+             "deployment/requirements-ocr.txt", "scripts/setup_yomitoku.py",
+             "mcs/extract/ocr_model_contract.py"],
             **({} if deadline is None else {"deadline": deadline})).returncode != 0:
         errors.append("ocr_requirements_changed")
     return errors

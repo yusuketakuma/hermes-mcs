@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "OCRモデルの版を導入時と実行時で固定",
+  "summary": "OCRの4モデルを同じコミットIDに固定し、キャッシュの更新で読み取り条件が変わることを防ぎます。",
+  "upgrade": "OCR導入済みの環境はインストーラーの再実行が必要です。旧OCR結果は保持しますが現行結果として採用せず、原本が残る添付を再処理します。原本を削減済みの添付は再取得が必要です。OCRの有効化・クラウドの送信承認と予算は変更しません。",
+  "details": [
+    "重みと実行ファイルの確認後にだけ導入完了の印を保存します。",
+    "導入・実行・更新判定が同じ固定版契約を参照します。"
+  ],
+  "refs": [
+    "mcs/extract/ocr_model_contract.py",
+    "scripts/setup_yomitoku.py",
+    "docs/specs/ocr-processing.md"
+  ]
+}

@@ -10,13 +10,9 @@ import shutil
 import subprocess
 import sys
 
-VERSION = '0.16.0'
-MODELS = (
-    'KotaroKinoshita/yomitoku-text-detector-dbnet-v2_1',
-    'KotaroKinoshita/yomitoku-text-recognizer-parseq-tiny-dynw-v5',
-    'KotaroKinoshita/yomitoku-layout-parser-rtdtrv2-v2',
-    'KotaroKinoshita/yomitoku-table-structure-recognizer-rtdtrv2-open-beta',
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcs"))
+import _mcs_path  # noqa: E402,F401
+from ocr_model_contract import ENGINE_VERSION as VERSION, MODEL_JSON  # noqa: E402
 
 
 def run(args, *, env):
@@ -47,7 +43,7 @@ def setup(root: Path, repo: Path):
     run([str(python), '-I', '-c',
          'import sys; assert sys.version_info[:2] == (3, 13), "OCR requires Python 3.13"'], env=env)
     dependencies = (digest + '\n' + VERSION + '\n').encode()
-    expected = dependencies + ('\n'.join(MODELS) + '\n').encode()
+    expected = dependencies + (MODEL_JSON + '\n').encode()
     if not marker.exists() or not marker.read_bytes().startswith(dependencies):
         uv = shutil.which('uv')
         if not uv:
@@ -57,15 +53,16 @@ def setup(root: Path, repo: Path):
          f'from importlib.metadata import version; assert version("yomitoku") == {VERSION!r}'], env=env)
     # Local-only lookup needs each weight, since a snapshot directory alone can be incomplete.
     run([str(python), '-I', '-c',
-         "from huggingface_hub import snapshot_download, hf_hub_download; from huggingface_hub.errors import LocalEntryNotFoundError; import sys\n"
-         "for repo in sys.argv[1:]:\n"
+         "from huggingface_hub import snapshot_download, hf_hub_download; from huggingface_hub.errors import LocalEntryNotFoundError; import sys, json\n"
+         "for repo, revision in json.loads(sys.argv[1]).values():\n"
          "    try:\n"
-         "        hf_hub_download(repo_id=repo, filename='model.safetensors', local_files_only=True)\n"
+         "        hf_hub_download(repo_id=repo, filename='model.safetensors', revision=revision, local_files_only=True)\n"
          "    except LocalEntryNotFoundError:\n"
-         "        snapshot_download(repo_id=repo)\n", *MODELS], env=env)
-    marker.write_bytes(expected)
+         "        snapshot_download(repo_id=repo, revision=revision)\n"
+         "        hf_hub_download(repo_id=repo, filename='model.safetensors', revision=revision, local_files_only=True)\n", MODEL_JSON], env=env)
     if not (venv / 'bin' / 'yomitoku').is_file():
         raise ValueError('OCR executable was not installed')
+    marker.write_bytes(expected)
     print(f'OCR runtime ready: {venv / "bin" / "yomitoku"}')
     print('OCR remains disabled until attachment_ocr is configured. Model licence: noncommercial use only.')
 

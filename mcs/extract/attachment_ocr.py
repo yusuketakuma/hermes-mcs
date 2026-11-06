@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 import time
 
+from ocr_model_contract import ENGINE_VERSION, MODELS, RUNTIME_CONTRACT
+
 import writer_lock
 import patient_priority
 from safe_io import atomic_write, read_json_nofollow
@@ -21,8 +23,6 @@ from worker_process import reap_worker
 
 KIND = "attachment_ocr_v1"
 SCHEMA = "attachment-ocr/v1"
-ENGINE_VERSION = "0.16.0"
-RUNTIME_CONTRACT = "yomitoku-0.16.0-cpu-lite-text-first/table-grid-v2"
 MAX_INPUT = 64 * 1024 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024
 MAX_PAGES = 30
@@ -31,7 +31,7 @@ _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
 EXCLUDED_STATES = frozenset({"unsupported"})
 
 # Optional packages are imported only in the separate, network-denied runtime.
-_BOOTSTRAP = r'''
+_BOOTSTRAP = f'MODELS = {MODELS!r}\nENGINE_VERSION = {ENGINE_VERSION!r}\n' + r'''
 import importlib.metadata, json, math, os, resource, sys
 from contextlib import closing
 from pathlib import Path
@@ -39,7 +39,7 @@ resource.setrlimit(resource.RLIMIT_FSIZE, (2097152, 2097152))
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 source, output = Path(sys.argv[1]), Path(sys.argv[2])
 version = importlib.metadata.version("yomitoku")
-if version != "0.16.0":
+if version != ENGINE_VERSION:
     sys.exit(21)
 analyzer = None
 def ocr(image):
@@ -53,13 +53,8 @@ def ocr(image):
     if analyzer is None:
         from huggingface_hub import snapshot_download
         paths = {}
-        for role, repo in {
-            "detector": "yomitoku-text-detector-dbnet-v2_1",
-            "recognizer": "yomitoku-text-recognizer-parseq-tiny-dynw-v5",
-            "layout": "yomitoku-layout-parser-rtdtrv2-v2",
-            "table": "yomitoku-table-structure-recognizer-rtdtrv2-open-beta",
-        }.items():
-            snapshot = snapshot_download(repo_id="KotaroKinoshita/" + repo, local_files_only=True)
+        for role, (repo, revision) in MODELS.items():
+            snapshot = snapshot_download(repo_id=repo, revision=revision, local_files_only=True)
             path = source.parent / (role + ".json")
             with open(path, "x", encoding="utf-8") as stream:
                 os.chmod(path, 0o600)

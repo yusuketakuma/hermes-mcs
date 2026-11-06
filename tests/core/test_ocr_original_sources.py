@@ -111,3 +111,19 @@ def test_current_ocr_dependency_gap_can_be_resolved_only_by_source_audit(tmp_pat
         assert loss.read(led.db, 1)['complete']
     finally:
         led.close()
+
+
+@pytest.mark.parametrize('state', ['downloaded', 'pruned'])
+def test_model_revision_change_invalidates_old_original_without_erasing_it(tmp_path, monkeypatch, state):
+    led, key = seeded(tmp_path)
+    try:
+        led.db.execute("UPDATE attachments SET state=? WHERE attachment_id=1", (state,))
+        assert originals.source(led.db, 1, key) is not None
+        before = led.db.execute("SELECT content FROM artifacts WHERE kind=?", (attachment_ocr.KIND,)).fetchone()[0]
+        monkeypatch.setattr(attachment_ocr, 'RUNTIME_CONTRACT', attachment_ocr.RUNTIME_CONTRACT + '-new-revision')
+        assert originals.source(led.db, 1, key) is None
+        assert attachment_ocr.current(led.db, 1) is None
+        assert led.db.execute("SELECT content FROM artifacts WHERE kind=?", (attachment_ocr.KIND,)).fetchone()[0] == before
+        assert led.db.execute("SELECT state FROM attachments WHERE attachment_id=1").fetchone()[0] == state
+    finally:
+        led.close()

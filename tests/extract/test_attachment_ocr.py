@@ -380,7 +380,8 @@ def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), ras
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(set_num_threads=lambda count: None,
                                                              set_num_interop_threads=lambda count: None))
     monkeypatch.setitem(sys.modules, "yomitoku", SimpleNamespace(DocumentAnalyzer=Analyzer))
-    def snapshot_download(*, repo_id, local_files_only):
+    def snapshot_download(*, repo_id, revision, local_files_only):
+        assert (repo_id, revision) in ocr.MODELS.values()
         assert local_files_only is True
         assert repo_id.startswith("KotaroKinoshita/")
         assert "cell-detector" not in repo_id
