@@ -386,17 +386,29 @@ def owns_request(db, *, route, project_id, message_id):
     """A durable reservation already owns this message's cloud unit on `route`.
 
     Send closure retires new sends, never the ownership a prior reservation
-    created: the unit must still reach recovery or stay unresolved. A
+    created: the unit must still reach recovery or stay unresolved."""
+    return owns_any_request(db, route=route, project_id=project_id, message_ids=[message_id])
+
+
+def owns_any_request(db, *, route, project_id, message_ids):
+    """owns_request over a set of member targets: thread jobs reserve per
+    member, so ownership is membership in the job's payload targets. A
     reservation whose meta cannot prove a different route stays a
-    conservative hold — never an authorization to restart the unit locally."""
+    conservative hold — never an authorization to restart a unit locally."""
+    ids = sorted({m for m in message_ids if type(m) is int and m > 0})
+    if not ids:
+        return False
+    q = ",".join("?" * len(ids))
     return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND ("
         "(json_valid(meta) AND json_extract(meta,'$.route')=? AND "
-        "(message_id=? OR json_extract(meta,'$.message_id')=? "
-        "OR json_extract(meta,'$.unit_key')=? "
-        "OR json_extract(meta,'$.logical_target_id')=?)) OR "
-        "(message_id=? AND (NOT json_valid(meta) OR json_extract(meta,'$.route') IS NULL)) "
-        ") LIMIT 1", (KINDS[0], project_id, route, message_id, message_id,
-                     str(message_id), message_id, message_id)).fetchone() is not None
+        f"(message_id IN ({q}) OR json_extract(meta,'$.message_id') IN ({q}) "
+        f"OR json_extract(meta,'$.unit_key') IN ({q}) "
+        f"OR json_extract(meta,'$.logical_target_id') IN ({q}) "
+        f"OR json_extract(meta,'$.owner.semantic_target_id') IN ({q}))) OR "
+        f"(message_id IN ({q}) AND (NOT json_valid(meta) OR json_extract(meta,'$.route') IS NULL)) "
+        ") LIMIT 1",
+        (KINDS[0], project_id, route, *ids, *ids,
+         *(str(m) for m in ids), *ids, *ids, *ids)).fetchone() is not None
 
 
 def _logical_request_fp(body):

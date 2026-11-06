@@ -148,13 +148,28 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     import cloud_policy
     import writer_lock
     pl = runtime.parse_payload(job)
-    if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) or not cloud_policy.history_thread_allowed(
-            ledger.db, job["project_id"], job["message_id"]) or extract_llm._cloud_mode(
-            ledger, cfg, "semantic_backlog", job["project_id"]) != "on":
+    targets = pl.get("targets") or [job["message_id"]]
+    # Ownership is decided on the job's payload targets: reservations bind
+    # the member target, never the thread root, so a root-only check misses
+    # member units while a project-wide check would hold independent targets.
+    owned = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
+                                          project_id=job["project_id"], message_ids=targets)
+    if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
+            or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
+        if owned:
+            raise runtime.LLMNotSent('cloud_source_unverified')
+        yield None
+        return
+    if extract_llm._cloud_mode(ledger, cfg, "semantic_backlog", job["project_id"]) != "on" \
+            and not owned:
+        # A closed send route retires new sends, never the unit a prior
+        # reservation created: owned targets still reach recovery/hold.
         yield None
         return
     scope_snapshot = cloud_policy.history_thread_snapshot(ledger.db, job['project_id'], job['message_id'])
     if scope_snapshot is None:
+        if owned:
+            raise runtime.LLMNotSent('cloud_source_unverified')
         yield None
         return
     lock_lost = None
