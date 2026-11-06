@@ -21,6 +21,7 @@ import extraction_context
 import mcs_util
 from extract_testkit import _extract_artifact, _hash, _message, _qc_artifact
 from test_anthropic_runtime import _current_artifacts, _use_real_cloud_accounting, routed  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def _use_legacy_frame(led, row):
@@ -126,10 +127,11 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
                 value.quality_started_id = identity[0] if identity is not None else None
         return accepted
 
-    result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
-        posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
-        medication_hints=worker._frame_medications(row))
+    with legacy_cloud_routes():
+        result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
+            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
+            quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
+            medication_hints=worker._frame_medications(row))
     assert isinstance(result, dict)
     assert states == ["pending", "started", "completed"]
     assert [(model, effort) for model, effort, _ in sends] == [
@@ -269,10 +271,11 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
             value.quality_started_id = identity[0] if identity is not None else None
         return accepted
 
-    result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
-        posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-        quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
-        medication_hints=worker._frame_medications(row))
+    with legacy_cloud_routes():
+        result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
+            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
+            quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
+            medication_hints=worker._frame_medications(row))
     assert isinstance(result, dict) and len(sends) == 2
     row["_provider_evidence"] = meta.pop("_provider_evidence")
     result["_model"] = selection["model"]

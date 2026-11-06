@@ -10,6 +10,7 @@ import cloud_inference
 import extract_llm as worker
 from anthropic_client import AnthropicClient
 from test_anthropic_runtime import old, routed as routed, _bound_source, _use_real_cloud_accounting
+from test_cloud_response_recovery import legacy_cloud_routes
 from test_commit_hold_fairness import claim_rows
 
 
@@ -66,7 +67,8 @@ def test_paid_result_commit_guard_fences_defer_and_scope_loss(routed, monkeypatc
 
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert not fail_once[0] and len(posts) == 1
     assert result['done'] == 0 and result['deferred'] == 1
     receipt, = ledger.artifacts('cloud_usage_result')
@@ -83,7 +85,8 @@ def test_paid_result_commit_guard_fences_defer_and_scope_loss(routed, monkeypatc
     # Advance the synthetic claim beyond its bounded hold without sleeping.
     with ledger.db:
         ledger.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
-    later = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        later = worker.run_pending(ledger, limit=1, budget_s=180)
     assert later['done'] == 1 and len(posts) == 1
     assert responses[-1]['reused_response'] is True
     assert not ledger.artifacts('cloud_usage_disposition')
