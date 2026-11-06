@@ -19,6 +19,7 @@ import extract_llm
 import cloud_inference
 import semantic_drain
 from semantic_testkit import _cfg, _ledger, _message, _patient
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.fixture
@@ -142,11 +143,12 @@ def test_continuous_scope_selects_history_with_a_later_reply(history, monkeypatc
     history.semantic_seed(1, [1], {'source': 'history_import'})
     _continuous(history)
     history.save_messages([_message(2, parent=1, body='synthetic reply')])
-    if lane == 'semantic':
-        rows = semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]
-    else:
-        rows, _ = extract_llm._select_pending(history, 4, None, None, False,
-                                               cloud_only=True, prioritize_patients=True)
+    with legacy_cloud_routes():
+        if lane == 'semantic':
+            rows = semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]
+        else:
+            rows, _ = extract_llm._select_pending(history, 4, None, None, False,
+                                                   cloud_only=True, prioritize_patients=True)
     assert any(row['message_id'] == 1 for row in rows)
 
 

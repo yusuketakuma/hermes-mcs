@@ -39,7 +39,7 @@ def test_cache_write_details_survive_success_accounting_and_log(tmp_path, monkey
     provider = client.OpenAIClient("synthetic", post_fn=lambda *args: (calls.append(True) or 200, {}, body))
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "openai"}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reserve = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic")
+        reserve = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="synthetic")
         result = provider.complete("synthetic" * 100, deadline=time.monotonic() + 10, max_tokens=100,
                                    reserve_fn=reserve,
                                    after_result=lambda reservation, meta, **_answer: policy.record_result(ledger, reservation, meta))
@@ -100,7 +100,7 @@ def test_success_answer_hash_is_bound_to_settled_result_without_text(tmp_path, m
         {'type': 'output_text', 'text': answer}]}]), ensure_ascii=False).encode('utf-8')
     instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, raw))
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        reserve = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')
+        reserve = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='synthetic')
         result = instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
                                    reserve_fn=reserve,
                                    after_result=lambda reservation, meta, **_answer: policy.record_result(ledger, reservation, meta))
@@ -122,7 +122,7 @@ def test_prior_success_without_hash_keeps_accounting_and_has_no_proof(tmp_path, 
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+        reservation = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='synthetic')(
             instance.body('synthetic prompt', 100, None), 2)
         policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
             'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
@@ -138,7 +138,7 @@ def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tm
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+        reservation = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='synthetic')(
             instance.body('synthetic prompt', 100, None), 2)
         policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
             'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
@@ -162,7 +162,7 @@ def test_result_writer_rejects_invalid_new_answer_hash(tmp_path, monkeypatch, ba
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+        reservation = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='synthetic')(
             instance.body('synthetic prompt', 100, None), 2)
         with pytest.raises(AnthropicError, match='pricing_unverified'):
             policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
@@ -176,7 +176,7 @@ def test_discarded_success_hash_never_becomes_reservation_evidence(tmp_path, mon
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
-        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+        reservation = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='synthetic')(
             instance.body('synthetic prompt', 100, None), 2)
         policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
             'usage': usage(), 'http_class': 'http_200', 'error_kind': None,
@@ -309,7 +309,7 @@ def test_12h_cache_write_keeps_attempt_reserved_and_not_retried(tmp_path, monkey
     provider = client.OpenAIClient("synthetic", post_fn=lambda *args: (calls.append(True) or 200, {}, raw))
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "openai"}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reserve = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic")
+        reserve = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="synthetic")
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             provider.complete("synthetic" * 100, deadline=time.monotonic() + 10, max_tokens=100,
                               reserve_fn=reserve,
@@ -388,7 +388,7 @@ def test_proven_unsent_timeout_releases_only_that_synthetic_reservation(tmp_path
         raise client.bounded_http.NotSentTimeout("synthetic")
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         provider = client.OpenAIClient("synthetic", post_fn=post)
-        reserve = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic")
+        reserve = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="synthetic")
         with pytest.raises(AnthropicError, match="budget_exceeded"):
             provider.complete("synthetic", deadline=time.monotonic() + 10, max_tokens=100,
                               reserve_fn=reserve,
@@ -409,7 +409,7 @@ def test_duplicate_success_json_keeps_the_paid_attempt_reserved(tmp_path, monkey
         return 200, {}, b'{"usage":{},"usage":{}}'
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         provider = provider_type("synthetic", post_fn=post)
-        reserve = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic")
+        reserve = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="synthetic")
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             provider.complete("synthetic", deadline=time.monotonic() + 10, max_tokens=100,
                               reserve_fn=reserve,
@@ -593,7 +593,7 @@ def test_quota_marker_writer_rejects_inconsistent_evidence(tmp_path, monkeypatch
     provider_client = (anthropic_client.AnthropicClient("synthetic") if provider == "anthropic"
                        else client.OpenAIClient("synthetic"))
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reservation = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1,
+        reservation = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1,
             unit_key="synthetic")(provider_client.body("synthetic", 100, None), 2)
         result = {"model": reservation["model"], "request_fp": reservation["request_fp"],
                   "usage": None, "http_class": "http_429", "error_kind": "payment_required",
@@ -641,7 +641,7 @@ def test_mixed_provider_budgets_keep_legacy_reserves_and_original_receipts(tmp_p
                "openai": {"daily_cost_limit_usd": 5, "monthly_cost_limit_usd": 15}}
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "openai", "provider_budgets": budgets}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reserve = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic")(
+        reserve = policy.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="synthetic")(
             client.OpenAIClient("synthetic").body("x" * 500, 100, None), 2)
         reserve_id = ledger.db.execute("SELECT max(artifact_id) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0]
         meta = {"model": client.MODEL, "request_fp": reserve["request_fp"], "usage": usage(),
@@ -655,7 +655,7 @@ def test_mixed_provider_budgets_keep_legacy_reserves_and_original_receipts(tmp_p
             "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 15}}}}
         assert policy.budget_block_reason(ledger, capped) == "provider_daily_cap"
         legacy = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
-        policy.usage_reserver(ledger, legacy, route="reextract", project_id=1, unit_key="legacy")(
+        policy.usage_reserver(ledger, legacy, route="patient_context", project_id=1, unit_key="legacy")(
             {"model": policy.MODEL, "max_tokens": 100, "system": "synthetic system",
              "messages": [{"role": "user", "content": "another synthetic prompt"}]}, 2)
         tally = policy._tally(ledger)

@@ -59,7 +59,7 @@ def test_cloud_until_stops_new_reservations_after_the_window(tmp_path, now):
         cfg["cloud_llm"]["until"] = "2026-10-26T03:00:00+00:00"   # the same instant in UTC
         assert c.budget_block_reason(ledger, cfg) == "expired"
         with pytest.raises(c.AnthropicError) as raised:
-            c.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="u")(
+            c.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key="u")(
                 {"model": c.MODEL, "max_tokens": 100}, 2)
         assert (raised.value.kind, raised.value.detail) == ("budget_exceeded", "expired")
         assert ledger.artifacts("cloud_usage_reserve") == []
@@ -170,7 +170,7 @@ def test_period_budget_counts_all_spending_since_its_start_and_refuses_before_it
                 "messages": [{"role": "user", "content": unit}]}
 
     def reserve(ledger, cfg, unit):
-        return c.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key=unit)(body(unit), 2)
+        return c.usage_reserver(ledger, cfg, route="patient_context", project_id=1, unit_key=unit)(body(unit), 2)
 
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
         reservation = reserve(ledger, _period(), "u1")
@@ -383,7 +383,7 @@ def test_first_exempt_only_section_keeps_the_config_generation():
 def test_pruned_usage_stops_a_period_that_started_before_it_even_after_the_clock_moves_back(tmp_path, now):
     import maintenance
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
-        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
+        reservation = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="u1")(
             {"model": c.MODEL, "max_tokens": 100}, 2)
         assert reservation and c.budget_block_reason(ledger, _period()) is None
         # The clock ran ahead and maintenance pruned rows from inside the period.
@@ -431,7 +431,7 @@ def test_a_broken_or_duplicate_prune_mark_stays_and_keeps_periods_stopped(tmp_pa
 
 def test_a_result_after_the_price_table_expires_is_settled_at_its_reservation_price(tmp_path, now, monkeypatch):
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
-        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
+        reservation = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="u1")(
             {"model": c.MODEL, "max_tokens": 100}, 2)
         monkeypatch.setattr(c, "pricing_valid", lambda now=None, *, model=None: False)   # the table expired meanwhile
         result = {"model": c.MODEL, "request_fp": reservation["request_fp"], "http_class": "http_200",
@@ -453,7 +453,7 @@ def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation
         "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}}}}
     assert c.scope_generation(high) == c.scope_generation(low)
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reserve = c.usage_reserver(ledger, high, route="reextract", project_id=1, unit_key="paid")
+        reserve = c.usage_reserver(ledger, high, route="patient_context", project_id=1, unit_key="paid")
         reservation = reserve({"model": c.MODEL, "max_tokens": 100, "system": "synthetic system",
                                "messages": [{"role": "user", "content": "paid"}]}, 2)
         result = {"model": c.MODEL, "request_fp": reservation["request_fp"],
@@ -463,7 +463,7 @@ def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation
         assert len(ledger.artifacts("cloud_usage_result")) == 1
         assert c.budget_block_reason(ledger, low) == "provider_daily_cap"
         with pytest.raises(c.AnthropicError) as raised:
-            c.usage_reserver(ledger, low, route="reextract", project_id=1, unit_key="next")(
+            c.usage_reserver(ledger, low, route="patient_context", project_id=1, unit_key="next")(
                 {"model": c.MODEL, "max_tokens": 100, "system": "synthetic system",
                  "messages": [{"role": "user", "content": "next"}]}, 2)
         assert raised.value.detail == "provider_daily_cap"
@@ -473,7 +473,7 @@ def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation
 @pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt, ValueError, TypeError, c.AnthropicError])
 def test_cloud_result_and_circuit_roll_back_together_on_interruption(tmp_path, now, monkeypatch, failure):
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="atomic")(
+        reservation = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="atomic")(
             {"model": c.MODEL, "max_tokens": 100}, 2)
         c._circuit_result(ledger, c.AnthropicError("timeout", retryable=True))
         before = [dict(row) for row in ledger.artifacts("cloud_circuit")]
@@ -500,7 +500,7 @@ def test_cloud_result_and_circuit_roll_back_together_on_interruption(tmp_path, n
 
 def test_replayed_cloud_result_does_not_increment_circuit_twice(tmp_path, now):
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="replay")(
+        reservation = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="replay")(
             {"model": c.MODEL, "max_tokens": 100}, 2)
         metadata = {"model": c.MODEL, "request_fp": reservation["request_fp"], "usage": None,
                     "http_class": "timeout", "error_kind": "timeout"}

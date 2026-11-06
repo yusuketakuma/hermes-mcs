@@ -14,6 +14,7 @@ import semantic_store
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _message, _seeded
 from test_cloud_policy import _body, _cfg, _result, now
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ["now"]
 
@@ -44,9 +45,10 @@ def dataset(tmp_path, now):
             rid = None
             if provider != "local":
                 unit = f"synthetic-chunk-{index}"
-                reservation = policy.usage_reserver(
-                    ledger, _cfg(daily_request_budget=1000), route="semantic_backlog",
-                    project_id=pid, message_id=mid, unit_key=unit)(_body(unit), 2)
+                with legacy_cloud_routes():
+                    reservation = policy.usage_reserver(
+                        ledger, _cfg(daily_request_budget=1000), route="semantic_backlog",
+                        project_id=pid, message_id=mid, unit_key=unit)(_body(unit), 2)
                 policy.record_result(ledger, reservation, _result(reservation))
                 rid = reservation["reservation_id"]
                 reserves.append(dict(ledger.db.execute(
