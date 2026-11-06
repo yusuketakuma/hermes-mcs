@@ -85,8 +85,8 @@ def test_paid_result_commit_guard_fences_defer_and_scope_loss(routed, monkeypatc
     # Advance the synthetic claim beyond its bounded hold without sleeping.
     with ledger.db:
         ledger.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
-    with legacy_cloud_routes():
-        later = worker.run_pending(ledger, limit=1, budget_s=180)
+    # The paid unit must reach recovery under the closed send route.
+    later = worker.run_pending(ledger, limit=1, budget_s=180)
     assert later['done'] == 1 and len(posts) == 1
     assert responses[-1]['reused_response'] is True
     assert not ledger.artifacts('cloud_usage_disposition')

@@ -244,6 +244,14 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             if r['_cloud_history_snapshot'] is None:
                 mode = 'off'
         r["_cloud_background"] = background and mode in ("on", "shadow")
+        if (mode == "off" and allow_cloud
+                and cloud_policy.in_scope(cfg, "reextract", r["project_id"])
+                and cloud_policy.owns_request(ledger.db, route="reextract",
+                                              project_id=r["project_id"], message_id=r["message_id"])):
+            # A closed send route retires new sends, never the unit a prior
+            # reservation created: rebuild the provider so recovery, the
+            # unresolved hold, and send denial all run before local fallback.
+            mode = "on"
         if cloud_only and mode != "on":
             block("prepare_cloud_disabled")
             continue

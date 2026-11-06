@@ -1,17 +1,20 @@
 """Synthetic source history and preparation holds cannot starve healthy extraction."""
 import extract_llm_runner
+from contextlib import nullcontext
 from dataclasses import replace
 import json
 
 import pytest
 
+import cloud_backlog
 import cloud_inference
+import cloud_policy
 import extract_llm as worker
 import extraction_context as frames
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from extract_testkit import _message
-from test_anthropic_runtime import old, routed
+from test_anthropic_runtime import old, routed, real_usage_reserver, real_record_result
 from test_cloud_response_recovery import legacy_cloud_routes
 from test_drug_context_frame import frame_store, prepare
 
@@ -258,3 +261,43 @@ def test_many_refusals_keep_only_candidate_pages_and_healthy_jobs(routed, monkey
     assert result['done'] == 1 and result['selected'] == 11 and result['context_blocked'] == 10
     assert len(references) == 11 and max(retained) <= 3, retained
     assert not calls and not ledger.artifacts('cloud_usage_reserve')
+
+
+def test_owned_unknown_unit_holds_while_independent_local_proceeds(routed, monkeypatch):
+    """A closed route cannot local-replace an owned unit; a fresh source stays local."""
+    ledger, _cfg, _calls, _reserves, _results = routed
+    old(ledger)                                                        # stale extract: cloud-owned once sent
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])  # fresh row: local lane
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(cloud_backlog, 'request_slot', lambda *a: nullcontext(True))
+    local = []
+    def seed_then_defer(body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is None:
+            local.append(body)
+            return {}
+        provider.reserve(provider.client.body('synthetic owned input', 100, None), 30)
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', seed_then_defer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    with legacy_cloud_routes():
+        first = worker.run_pending(ledger, limit=2, workers=1, budget_s=180)
+    assert first['done'] == 1 and first['deferred'] == 1 and len(local) == 1
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+    def recover_then_defer(body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is None:
+            local.append(body)
+            return {}
+        provider('synthetic owned input', deadline=kwargs['deadline'], max_tokens=100)
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', recover_then_defer)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    again = worker.run_pending(ledger, limit=2, workers=1, budget_s=180)
+    assert again['deferred'] == 1 and len(local) == 1
+    assert again['defer_reasons'].get('cloud_unit_unresolved') == 1
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1
