@@ -32,7 +32,7 @@ def conf(tmp_path, monkeypatch):
     path.write_text(json.dumps({"mcs_login_id": "synthetic-login", "notify_target": "synthetic-target",
                                "notify": {"synthetic": True}}))
     monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
-    for module in (mcs_util, extract_llm, llm_availability):
+    for module in (mcs_util, extract_llm, extract_llm_prepare, llm_availability):
         monkeypatch.setattr(module, "load_config", lambda *a, **k: mcs_util.json.loads(path.read_text()), raising=False)
     for name in ("MCS_EXTRACT_PREFILTER", "MCS_DISK_GUARD_MB", "MCS_LLM_ADMISSION"):
         monkeypatch.delenv(name, raising=False)
