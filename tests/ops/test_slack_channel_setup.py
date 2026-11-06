@@ -106,7 +106,7 @@ def test_unknown_or_rejected_creation_is_never_retried(tmp_path, failure):
     assert setup.read(tmp_path)['state'] != 'verified'
 
 
-def test_missing_scope_rejection_retries_only_on_explicit_rerun(tmp_path):
+def test_missing_scope_rejection_retries_only_on_explicit_rerun(tmp_path, monkeypatch):
     cfg, client = config(), Client()
     client.failure = 'missing_scope'
     setup.prepare(tmp_path, cfg)
@@ -115,7 +115,24 @@ def test_missing_scope_rejection_retries_only_on_explicit_rerun(tmp_path):
     assert state['roles']['patient']['state'] == 'blocked'
     assert state['roles']['patient']['create_error'] == 'missing_scope'
     client.failure = None
-    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert consume(tmp_path, client, cfg) == state
+    assert client.created == ['mcs']
+    import service_management
+    import setup_integration
+    def integrate(*args):
+        pending = setup.read(tmp_path)
+        assert pending['state'] == pending['roles']['patient']['state'] == 'pending'
+        return True
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', integrate)
+    def cli(_exe, _profile, *command):
+        if command == ('gateway', 'status'):
+            return SimpleNamespace(returncode=0)
+        assert command == ('gateway', 'restart')
+        consume(tmp_path, client, cfg)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service_management, 'hermes_cli', cli)
+    setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True))
+    assert setup.read(tmp_path)['state'] == 'verified'
     assert client.created == ['mcs', 'mcs', 'mcslog']
 
 
@@ -427,3 +444,84 @@ def test_operator_override_cannot_widen_sealed_grants(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='operator_binding_mismatch'):
         setup.run_setup(tmp_path, config(), SimpleNamespace(yes=True, plugin_profile=None,
                                                           plugin_user_ids='U000000002'))
+
+
+@pytest.mark.parametrize('entry', ['init', 'slack-channels'])
+@pytest.mark.parametrize('interruption', ['before_hash', 'after_hash', 'after_cas'])
+def test_setup_resumes_each_config_publication_window_without_external_writes(
+        tmp_path, monkeypatch, entry, interruption):
+    import mcs_setup
+    import notify_spool
+    import setup_integration
+    from test_mcs_setup import _init_env
+    cfg, client = config(), Client()
+    _init_env(monkeypatch, tmp_path, cfg)
+    monkeypatch.setattr(mcs_setup, '_init_store_secrets', lambda *_: None)
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda *_: True)
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda *_: None)
+    finalized = []
+    monkeypatch.setattr(setup, 'reconnect_ready', lambda *_: finalized.append(True))
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    stage, applied = setup.stage_config, setup.applied
+    def interrupted_stage(*args):
+        if interruption == 'after_hash':
+            stage(*args)
+        raise OSError('synthetic interrupted publication')
+    if interruption == 'after_cas':
+        monkeypatch.setattr(setup, 'applied', lambda *_: (_ for _ in ()).throw(OSError('synthetic')))
+    else:
+        monkeypatch.setattr(setup, 'stage_config', interrupted_stage)
+    command = ['init', '--yes'] if entry == 'init' else ['slack-channels']
+    assert mcs_setup.main(command) == 1
+    state = setup.read(tmp_path)
+    assert state['state'] == 'verified'
+    assert ('candidate_hash' in state) == (interruption != 'before_hash')
+    saved = json.loads((tmp_path / 'c.json').read_text())
+    assert ('notify_system_target' in saved) == (interruption == 'after_cas')
+    monkeypatch.setattr(setup, 'stage_config', stage)
+    monkeypatch.setattr(setup, 'applied', applied)
+    assert mcs_setup.main(command) == 0
+    assert setup.read(tmp_path)['worker_ready'] is True
+    assert finalized == [True]
+    assert client.created == ['mcs', 'mcslog']
+    assert len(client.invites) == 2
+
+
+@pytest.mark.parametrize('damage', ['changed_config', 'incomplete_receipt', 'missing_hash'])
+def test_config_recovery_requires_exact_sealed_candidate_and_complete_receipt(tmp_path, damage):
+    cfg, client = config(), Client()
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    saved = setup.candidate(tmp_path, cfg)
+    setup.stage_config(tmp_path, cfg, saved)
+    if damage == 'changed_config':
+        saved['self_posts'] = True
+    else:
+        state = setup.read(tmp_path)
+        if damage == 'incomplete_receipt':
+            del state['roles']['patient']['create_receipt']
+        else:
+            del state['candidate_hash']
+        setup.path(tmp_path).write_text(json.dumps(state))
+    with pytest.raises(ValueError, match='existing_intent_conflict|state_unverified'):
+        setup.prepare(tmp_path, saved)
+    assert client.created == ['mcs', 'mcslog']
+
+
+@pytest.mark.parametrize('cfg,expected', [
+    (config(), True),
+    ({'notify_target': 'local', 'notify': {'interactive': 'off'}}, False),
+    ({**config(), 'notify_system_target': 'discord:1'}, False),
+    ({**config(), 'notify_target': 'local'}, True),
+])
+def test_required_is_pure_and_matches_plan_eligibility(monkeypatch, cfg, expected):
+    import service_management
+    monkeypatch.setattr(service_management, 'hermes_cli', lambda *_: pytest.fail('eligibility must be pure'))
+    assert setup.required(cfg) is expected
+    assert (setup.plan(cfg) is not None) is expected
+
+
+def test_required_rejects_invalid_notify_instead_of_reporting_no_work():
+    with pytest.raises(ValueError):
+        setup.required({'notify': 'invalid'})

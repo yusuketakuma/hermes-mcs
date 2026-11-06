@@ -69,12 +69,6 @@ async def _consume(root, client, binding):
             if time.monotonic() >= deadline:
                 raise ValueError('slack_setup_deadline')
             record = state['roles'][role]
-            if (record['state'] == 'blocked' and not record.get('id')
-                    and record.get('create_error') == 'missing_scope'):
-                # Slack rejected before creating anything; only this explicit
-                # setup re-run may retry. Other blocks stay for a human.
-                record['state'] = 'pending'
-                record.pop('create_error', None)
             if record['state'] == 'pending':
                 record['state'] = 'creating'
                 setup.save(root, state)  # write-before-send: unknown never creates again

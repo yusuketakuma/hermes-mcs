@@ -205,6 +205,7 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
+  *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
   *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac

@@ -184,8 +184,34 @@ def _choose(prompt, choices, default="1"):
         print("表示されている番号を入力してください。")
 
 
+def _setup_action_supported(repo, action):
+    def source(name):
+        with open(Path(repo) / "mcs" / "ops" / name, "rb") as stream:
+            raw = stream.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("setup_unverified")
+        return raw.decode("utf-8")
+
+    cli, setup = source("mcs_cli.py"), source("mcs_setup.py")
+    route = re.search(r'rest\[0\]\s+in\s*\([^)]*["\']' + re.escape(action) + r'["\']', cli)
+    parser = re.search(r'sub\.add_parser\(\s*["\']' + re.escape(action) + r'["\']', setup)
+    if bool(route) != bool(parser):
+        raise ValueError("setup_unverified")
+    if not route and not (re.search(r'rest\[0\]\s+in\s*\([^)]*["\']api-keys["\']', cli)
+                          and re.search(r'sub\.add_parser\(\s*["\']api-keys["\']', setup)):
+        raise ValueError("setup_unverified")
+    return bool(route)
+
+
 def _installed_setup_command(repo, action="api-keys"):
     """Use the installed launcher's pinned runtime only for this checkout."""
+    if action not in ('api-keys', 'slack-channels'):
+        raise ValueError('setup_action_unverified')
+    # Old CLIs route unknown setup arguments to init; never invoke that route.
+    if not _setup_action_supported(repo, action):
+        if action == 'slack-channels':
+            return None
+        raise ValueError('setup_unverified')
     shim = Path.home() / ".local" / "bin" / "mcs"
     fd = os.open(str(shim), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
@@ -209,31 +235,17 @@ def _installed_setup_command(repo, action="api-keys"):
     if (len(words) != 4 or words[0] != "exec" or words[2:] != [cli, "$@"]
             or not os.path.isabs(words[1]) or not os.access(words[1], os.X_OK)):
         raise ValueError("launcher_unverified")
-    def source(name):
-        with open(Path(repo) / "mcs" / "ops" / name, "rb") as stream:
-            raw = stream.read(2 * 1024 * 1024 + 1)
-        if len(raw) > 2 * 1024 * 1024:
-            raise ValueError("setup_unverified")
-        return raw.decode("utf-8")
-
-    # An older CLI routes unknown setup commands to init. Require the
-    # expected route and parser declarations before offering this argument.
-    route = re.search(r'rest\[0\]\s+in\s*\([^)]*["\']api-keys["\']', source("mcs_cli.py"))
-    parser = re.search(r'sub\.add_parser\(\s*["\']api-keys["\']', source("mcs_setup.py"))
-    if not route or not parser:
-        raise ValueError("setup_unverified")
-    if action not in ('api-keys', 'slack-channels'):
-        raise ValueError('setup_action_unverified')
-    if action == 'slack-channels' and (
-            '"slack-channels"' not in source('mcs_cli.py')
-            or 'sub.add_parser("slack-channels"' not in source('mcs_setup.py')):
-        raise ValueError('setup_unverified')
     return [words[1], cli, "setup", action]
 
 
-def _complete_slack_channels(env, repo):
+def _complete_slack_channels(env, repo, report=None):
+    if isinstance(report, dict) and report.get('slack_channels_required') is False:
+        return 0
     try:
         command = _installed_setup_command(repo, 'slack-channels')
+        if command is None:
+            print('選択した版にはSlack運用ログ先の準備機能がありません。更新の確認結果は保持しますが、チャンネル準備の完了は確認していません。')
+            return 0
         setup_env = dict(env)
         setup_env.pop('PYTHONPATH', None)
         setup_env.pop('PYTHONHOME', None)
@@ -245,6 +257,20 @@ def _complete_slack_channels(env, repo):
         pass
     print('更新後のSlack運用ログ先の準備は未完了です。既存の患者情報先を保持し、作成結果は再送せず照合待ちです。mcs setup slack-channelsで状態を確認してください。')
     return 1
+
+
+def _post_apply_plan(command, env, repo):
+    try:
+        checked = subprocess.run(command, env=env, cwd=repo, capture_output=True, text=True,
+                                 timeout=600, **_lifetime_fds())
+        report = json.loads(checked.stdout)
+        if (checked.returncode or not isinstance(report, dict)
+                or report.get('route') != 'noop' or report.get('blockers')):
+            raise ValueError
+        return report
+    except (subprocess.TimeoutExpired, OSError, ValueError, TypeError, RecursionError):
+        print('更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。')
+        return None
 
 
 def _offer_api_keys(env, repo):
@@ -295,7 +321,7 @@ def interactive_update(cmd, env, repo):
     route = report.get("route")
     if route == "noop" and not report.get("blockers"):
         print("すでに選択した版です。更新は不要です。")
-        if _complete_slack_channels(env, repo):
+        if _complete_slack_channels(env, repo, report):
             return 1
         _offer_api_keys(env, repo)
         return 0
@@ -348,17 +374,11 @@ def interactive_update(cmd, env, repo):
     if result.returncode:
         print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
         return result.returncode
-    try:
-        checked = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600, **_lifetime_fds())
-        final = json.loads(checked.stdout)
-        if (checked.returncode or not isinstance(final, dict)
-                or final.get("route") != "noop" or final.get("blockers")):
-            raise ValueError
-    except (subprocess.TimeoutExpired, OSError, ValueError, RecursionError):
-        print("更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。")
+    final = _post_apply_plan(cmd, env, repo)
+    if final is None:
         return 1
     print("選択した版への更新完了を確認しました。mcs doctor で動作を確認し、通知先で応答を確認してください。")
-    if _complete_slack_channels(env, repo):
+    if _complete_slack_channels(env, repo, final):
         return 1
     _offer_api_keys(env, repo)
     return 0
@@ -482,21 +502,14 @@ def _main(argv=None) -> int:
                       "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
                 return 2
             if args.cmd == 'apply' and rc == 0:
-                verify = list(cmd)
-                verify[2] = 'plan'
                 # Use the original plan shape, not apply-only confirmation/install options.
                 verify = [sys.executable, updater, 'plan'] + (
-                    ['--candidate-sha', candidate_sha, '--base-sha', base_sha] if candidate_sha is not None
+                    ['--candidate-sha', candidate_sha, '--base-sha', candidate_sha] if candidate_sha is not None
                     else ['--tag', tag])
-                checked = subprocess.run(verify, env=env, cwd=repo, capture_output=True, text=True,
-                                         timeout=600, **_lifetime_fds())
-                try:
-                    report = json.loads(checked.stdout)
-                except (ValueError, TypeError):
+                report = _post_apply_plan(verify, env, repo)
+                if report is None:
                     return 1
-                if checked.returncode or not isinstance(report, dict) or report.get('route') != 'noop' or report.get('blockers'):
-                    return 1
-                return _complete_slack_channels(env, repo)
+                return _complete_slack_channels(env, repo, report)
             return rc
         finally:
             shutil.rmtree(tmp, ignore_errors=True)

@@ -43,7 +43,11 @@ def _validate(root, state):
                 or state.get('state') not in ('pending', 'blocked', 'unknown', 'verified', 'applied')):
             raise ValueError
         if set(state) - {'version', 'root', 'request_id', 'plan_hash', 'plan', 'roles',
-                         'state', 'reason', 'applied_hash', 'worker_ready'}:
+                         'state', 'reason', 'candidate_hash', 'applied_hash', 'worker_ready'}:
+            raise ValueError
+        if 'candidate_hash' in state and (state['state'] not in ('verified', 'applied')
+                or not re.fullmatch(r'[0-9a-f]{64}', state['candidate_hash'])
+                or state['state'] == 'applied' and state['candidate_hash'] != state.get('applied_hash')):
             raise ValueError
         if 'worker_ready' in state and (type(state['worker_ready']) is not bool or state['state'] != 'applied'):
             raise ValueError
@@ -123,6 +127,19 @@ def save(root, state):
         json.dumps(state, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n'), mode=0o600)
 
 
+def required(cfg):
+    """Identify Slack setup targets without reading credentials or external settings."""
+    patient = cfg.get('notify_target')
+    system = cfg.get('notify_system_target')
+    if system and system != patient and not str(system).startswith('slack:'):
+        return False
+    notify = cfg.get('notify') or {}
+    if not isinstance(notify, dict):
+        raise ValueError('slack_setup_unverified')
+    return bool(isinstance(patient, str) and patient.startswith('slack:')
+                or notify.get('interactive') == 'slack')
+
+
 def plan(cfg, *, users=None):
     """Keep explicit separate system routes and describe only missing Slack destinations."""
     patient = cfg.get('notify_target')
@@ -131,10 +148,10 @@ def plan(cfg, *, users=None):
         return None
     if system and str(system).startswith('slack:') and not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system):
         raise ValueError('slack_setup_system_channel_invalid')
+    if not required(cfg):
+        return None
     notify = cfg.get('notify') or {}
     slack_text = isinstance(patient, str) and patient.startswith('slack:')
-    if not (slack_text or notify.get('interactive') == 'slack'):
-        return None
     scope = notify.get('slack') or {}
     card = scope.get('channel_id')
     if card is not None and (not isinstance(card, str)
@@ -188,6 +205,10 @@ def prepare(root, cfg, *, users=None):
         state = read(root)
         key = _hash(desired)
         if state:
+            if state.get('state') == 'verified' and state.get('candidate_hash') == _hash(cfg):
+                state.update(state='applied', applied_hash=state['candidate_hash'])
+                save(root, state)
+                return None
             if state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
                 return None
             if state.get('plan_hash') != key:
@@ -250,6 +271,18 @@ def run_setup(root, cfg, args):
         if not isinstance(selected, list) or sorted(set(selected)) != state['plan']['users']:
             raise ValueError('slack_setup_operator_binding_mismatch')
     args.plugin_user_ids = ','.join(state['plan']['users'])
+    with config_edit._edit_lock(str(path(root))):
+        state = read(root)
+        if state and state['state'] == 'blocked' and state.get('reason') == 'slack_setup_scope_required':
+            rejected = [record for record in state['roles'].values()
+                        if record['state'] == 'blocked' and not record['id']
+                        and record.get('create_error') == 'missing_scope']
+            if rejected:
+                for record in rejected:
+                    record['state'] = 'pending'
+                    record.pop('create_error', None)
+                state.update(state='pending', reason=None)
+                save(root, state)
     if state.get('state') in ('verified', 'applied'):
         return candidate(root, cfg)
     if not setup_integration._apply_plugin_integration(cfg, args):
@@ -311,13 +344,33 @@ def report_problem(error):
     return 1
 
 
+def stage_config(root, previous, saved):
+    """Seal the exact verified config before its owner's config CAS."""
+    if not required(previous):
+        return
+    with config_edit._edit_lock(str(path(root))):
+        state = read(root)
+        if state is None or candidate(root, previous) != saved:
+            raise ValueError('slack_setup_saved_config_mismatch')
+        if state['state'] == 'applied':
+            return
+        state['candidate_hash'] = _hash(saved)
+        save(root, state)
+
+
 def applied(root, previous, saved):
     """Record successful CAS only when its result matches the verified receipt exactly."""
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
-        if state is None or state.get('state') == 'applied':
+        if state is None:
+            return
+        if state.get('state') == 'applied':
+            if state.get('applied_hash') != _hash(saved):
+                raise ValueError('slack_setup_saved_config_mismatch')
             return
         if candidate(root, previous) != saved:
+            raise ValueError('slack_setup_saved_config_mismatch')
+        if state.get('candidate_hash') not in (None, _hash(saved)):
             raise ValueError('slack_setup_saved_config_mismatch')
         state.update(state='applied', applied_hash=_hash(saved))
         save(root, state)
