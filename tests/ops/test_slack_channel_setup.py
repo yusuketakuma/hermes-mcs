@@ -289,13 +289,14 @@ def test_normal_hermes_bootstrap_runs_before_config_cas(tmp_path, monkeypatch):
     assert setup.read(tmp_path)['worker_ready'] is True
 
 
-def test_distinct_existing_slack_targets_verified_without_creates(tmp_path):
+def test_distinct_existing_slack_targets_skip_creation_without_receipt(tmp_path):
     cfg, client = config(), Client()
     cfg.update(notify_target='slack:C000000098', notify_system_target='slack:C000000099')
+    cfg['notify']['slack']['channel_id'] = 'C000000098'
     for channel in ('C000000098', 'C000000099'):
         client.channels[channel] = {'id': channel, 'is_private': True, 'is_member': True, 'is_archived': False}
-    setup.prepare(tmp_path, cfg)
-    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert setup.prepare(tmp_path, cfg) is None
+    assert setup.read(tmp_path) is None
     assert setup.candidate(tmp_path, cfg) == cfg
     assert client.created == client.invites == []
 
@@ -410,14 +411,14 @@ def test_cmd_slack_channels_noops_without_pending_slack(tmp_path, monkeypatch, c
     assert mcs_setup.cmd_slack_channels(SimpleNamespace()) == 0
 
 
-def test_preflight_defers_only_missing_ids_for_pending_patient(tmp_path):
+def test_preflight_defers_missing_ids_for_optional_patient_surfaces(tmp_path):
     cfg = config()
     errors, _ = setup.preflight_errors(cfg)
     assert errors == []
     existing = deepcopy(cfg)
     existing['notify_target'] = 'slack:C000000099'
     errors, _ = setup.preflight_errors(existing)
-    assert any(error.startswith('notify.slack.channel_id:') for error in errors)
+    assert errors == []
     other = {'mcs_login_id': 'synthetic', 'runtime_mode': 'hermes',
              'notify': {'interactive': 'off'}}
     errors, _ = setup.preflight_errors(other)
