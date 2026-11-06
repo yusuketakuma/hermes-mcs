@@ -193,7 +193,7 @@ def _face_nodes(parts, posts):
     headers = {processing_route.compact_header(item): item
                for item in parts["containers"]
                if item.get("provider_scope") == "header"
-               and parts.get("processing_display_version") in (1, 2)}
+               and parts.get("processing_display_version") in (1, 2, 3)}
     if not posts:
         out, plain = [], []
         def flush():
@@ -229,7 +229,7 @@ def _face_nodes(parts, posts):
         value = notify_render.render_text({**parts, "containers": [item], "footer": []}, head="{}")
         if item.get("rule") and out:
             out.append(_text_node(notify_render.SECTION_RULE))
-        if item.get("provider_scope") == "header" and parts.get("processing_display_version") in (1, 2):
+        if item.get("provider_scope") == "header" and parts.get("processing_display_version") in (1, 2, 3):
             box = _provider_box(item)
             prefix = value.rsplit(" · ", 1)[0] if box and " · " in value else value
             if prefix:

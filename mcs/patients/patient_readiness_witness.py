@@ -16,7 +16,7 @@ _FUNCTIONS = frozenset({
     'json_insert', 'json_object', 'json_patch', 'json_quote', 'json_remove',
     'json_replace', 'json_set', 'json_type', 'json_valid', 'length', 'like', 'lower',
     'ltrim', 'max', 'min', 'nullif', 'printf', 'replace', 'round', 'rtrim',
-    'substr', 'substring', 'sum', 'total', 'trim', 'typeof', 'unicode', 'upper',
+    'substr', 'substring', 'sum', 'total', 'trim', 'typeof', 'unicode', 'upper', 'octet_length',
     'mcs_thin_fact_count',
 })
 _PRAGMAS = frozenset({'data_version', 'table_info', 'table_xinfo', 'table_list',
