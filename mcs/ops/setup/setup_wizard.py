@@ -52,8 +52,8 @@ WIZARD = [
          "MCS のログインID", None),
     ]),
     ("通知の送り先", [
-        ("notify_target", "req", None,
-         "通知の送り先（例: slack:<チャンネルID>、"
+        ("notify_target", "opt", None,
+         "患者情報の送り先（Slack新規作成は空欄。例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
          "エラーや動作状況の通知先（空欄なら通常の通知と同じ場所）", None),
@@ -85,10 +85,10 @@ WIZARD = [
          "Slack アプリID", _slack_on),
         ("notify.slack.team_id", "req", None,
          "Slack ワークスペース（team）ID", _slack_on),
-        ("notify.slack.channel_id", "req", None,
-         "カードの投稿先チャンネルID", _slack_on),
+        ("notify.slack.channel_id", "opt", None,
+         "カードの投稿先チャンネルID（新規作成は空欄）", _slack_on),
         ("notify.slack.allowed_user_ids", "reqcsv", None,
-         "操作を許可するSlackユーザーID・カンマ区切り", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
+         "操作を許可するSlackユーザーID・カンマ区切り（作成したチャンネルへ招待）", _slack_on),
         ("notify.slack.project_ids_auto", "bool", False,
          "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
         ("notify.slack.project_ids", "intlist", [],

@@ -21,6 +21,7 @@ from .tasks import Supervisor
 _API_METHODS = frozenset({
     "auth.test", "bots.info", "users.info", "apps.connections.open",
     "chat.postMessage", "chat.postEphemeral", "chat.update", "chat.delete",
+    "conversations.create", "conversations.info", "conversations.members", "conversations.invite",
     "conversations.history", "conversations.replies", "views.open", "files.getUploadURLExternal",
     "files.completeUploadExternal", "files.info",
 })
@@ -441,3 +442,26 @@ async def send(root, target, payload):
         return {"result": "delivered", "message_id": message_id}
     finally:
         await session.close()
+
+
+def setup_channels(root, binding):
+    """Run an explicit setup request through the guarded standalone SDK owner."""
+    from mcs_standalone.config import load_credentials
+    from mcs_standalone.credential_gate import _reader as credential_reader
+    from .provision import consume
+
+    async def run_setup():
+        with credential_reader(root):
+            credentials = load_credentials(root, 'slack')
+            def current():
+                if load_credentials(root, 'slack') != credentials:
+                    raise ValueError('slack_credentials_changed')
+            client, session = _client(credentials, current)
+            try:
+                problem = await asyncio.wait_for(_identity(client, binding), timeout=15)
+                if problem:
+                    raise ValueError(problem)
+                return await asyncio.wait_for(consume(root, client, binding), timeout=45)
+            finally:
+                await session.close()
+    return asyncio.run(run_setup())

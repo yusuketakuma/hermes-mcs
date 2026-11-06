@@ -229,7 +229,11 @@ def cmd_init(args) -> int:
     if why:
         print("初期設定: 復旧用Python " + why + "。config.jsonは保存していません")
         return 1
-    errors, _ = validate_config(cfg)
+    import slack_channel_setup
+    try:
+        errors, _ = slack_channel_setup.preflight_errors(cfg)
+    except (OSError, ValueError) as error:
+        return slack_channel_setup.report_problem(error)
     if errors:
         print("初期設定: 設定に誤りがあるため保存していません。次の項目を直してください")
         for error in errors:
@@ -278,6 +282,16 @@ def cmd_init(args) -> int:
               '現在の状態を確認してください')
         return 1
 
+    pre_channel_cfg = cfg
+    try:
+        cfg = slack_channel_setup.run_setup(HOME, cfg, args)
+    except (OSError, ValueError, TimeoutError) as error:
+        return slack_channel_setup.report_problem(error)
+    errors, _ = validate_config(cfg)
+    if errors:
+        print('チャンネル準備後の設定検証に失敗しました。設定は保存せず、作成結果の記録を保持しています。')
+        return 1
+
     for d in (os.path.join(HOME, "data"),
               os.path.join(HOME, "data", "cmd"),
               os.path.join(HOME, "chrome-profile")):
@@ -286,6 +300,8 @@ def cmd_init(args) -> int:
         os.chmod(d, 0o700)
     try:
         _init_save_config(cfg, initial_config, args)
+        if slack_channel_setup.plan(pre_channel_cfg) is not None:
+            slack_channel_setup.applied(HOME, pre_channel_cfg, cfg)
     except config_backup.BackupUncertain as error:
         if error.parent_unchanged:
             candidate = os.path.join(os.path.dirname(CONF_PATH) or '.', error.backup_name)
@@ -321,6 +337,7 @@ def cmd_init(args) -> int:
               "\nアプリの認証情報と操作を許可する人・場所のIDを用意してください。"
               "\n入力中のパスワードは表示されません。Ctrl+C で中止すると、保存済みの設定は残ります。")
     integration_ok = _apply_plugin_integration(cfg, args)
+
     if cfg.get("runtime_mode") == "standalone":
         integration_ok = integration_ok and _init_standalone_connectors(cfg, args, integration_ok)
         if not integration_ok:
@@ -344,6 +361,11 @@ def cmd_init(args) -> int:
             print("設定は保存しましたが、通知先の準備を完了できませんでした。"
                   "通知サービスの起動・同期へは進んでいません。保存先の権限と空き容量を確認し、mcs setupを再実行してください。")
             return 1
+    if integration_ok and (cfg.get('notify') or {}).get('interactive') == 'slack':
+        try:
+            slack_channel_setup.finish_runtime(HOME, cfg, args)
+        except (OSError, ValueError) as error:
+            return slack_channel_setup.report_problem(error)
     if cfg.get("runtime_mode") != "standalone" and isinstance(ntf, dict) \
             and ntf.get("interactive") in ("discord", "slack"):
         exe = mcs_util.hermes_exe(cfg)
@@ -378,6 +400,28 @@ def cmd_init(args) -> int:
             if feature_enabled(cfg, "csdc"):
                 setup_wizard.offer_sdc_enrollment(cfg)
     return result
+
+
+def cmd_slack_channels(args):
+    """Complete the same channel provisioning flow after an authorized update."""
+    from types import SimpleNamespace
+    import slack_channel_setup
+    try:
+        cfg, initial = _init_config_snapshot()
+        if slack_channel_setup.plan(cfg) is None:
+            return 0
+        args = SimpleNamespace(yes=True, plugin_profile=(cfg.get('notify') or {}).get('slack', {}).get('profile'),
+                               plugin_user_ids=None, plugin_chat_ids=None, plugin_role_ids=None,
+                               plugin_project_ids=None)
+        candidate = slack_channel_setup.run_setup(HOME, cfg, args)
+        if validate_config(candidate)[0]:
+            raise ValueError('slack_setup_unverified')
+        _init_save_config(candidate, initial, args)
+        slack_channel_setup.applied(HOME, cfg, candidate)
+        slack_channel_setup.finish_runtime(HOME, candidate, args)
+        return 0
+    except (OSError, ValueError, TimeoutError) as error:
+        return slack_channel_setup.report_problem(error)
 
 
 def _shipped_g6_criteria() -> tuple[dict, str]:
@@ -1280,6 +1324,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help='変更予定だけを表示します（設定やサービスは変更しません）')
     p.set_defaults(fn=cmd_services, yes=True)
+    p = sub.add_parser("slack-channels", help='Slackの患者情報先を保持して運用ログ先を準備します')
+    p.set_defaults(fn=cmd_slack_channels, yes=True)
     p = sub.add_parser("features", help='任意機能のセットアップ案内を表示するかを選びます（CSDCは現在既定で省略）')
     p.set_defaults(fn=cmd_features, yes=False)
     p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')

@@ -746,6 +746,10 @@ if [ -t 0 ] && [ -t 1 ]; then
         fi
     fi
 fi
+# Explicit installer lifecycle only; ordinary runtime startup never creates an intent.
+if [ "$SETUP_STATUS" -eq 0 ]; then
+    "$MCS_PY" "$SETUP" slack-channels || SETUP_STATUS=$?
+fi
 printf '\n設定後の確認コマンド:\n    %s %s check\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
     printf '    %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"

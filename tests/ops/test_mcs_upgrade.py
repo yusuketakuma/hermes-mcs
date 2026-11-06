@@ -161,6 +161,35 @@ def _release(work, bare, tag, files):
     return _git(work, "rev-parse", "HEAD").stdout.strip()
 
 
+# Marker-only CLI/parser declarations: _installed_setup_command verifies these
+# literals before routing through the installed launcher; they are never run.
+_SLACK_SETUP_SOURCES = {
+    "mcs/ops/mcs_cli.py":
+        'if rest[0] in ("api-keys", "slack-channels"):\n    pass\n',
+    "mcs/ops/mcs_setup.py":
+        'sub.add_parser("api-keys")\nsub.add_parser("slack-channels")\n',
+}
+
+
+def _slack_setup_shim(monkeypatch, tmp_path, repo, rc=0):
+    """Installed-launcher shim whose pinned runtime records the setup call."""
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    record = tmp_path / "setup_calls"
+    stub = tmp_path / "stub_runtime"
+    stub.write_text(f"#!/bin/sh\necho \"$@\" >> {record}\nexit {rc}\n")
+    stub.chmod(0o755)
+    cli = Path(os.path.realpath(repo)) / "mcs" / "ops" / "mcs_cli.py"
+    shim = home / ".local" / "bin" / "mcs"
+    shim.write_text("#!/bin/sh\n# MCS lifecycle launcher\n"
+                     "unset PYTHONPATH PYTHONHOME\n"
+                     "export MCS_LIFECYCLE_PINNED=1\n"
+                     f"exec {stub} {cli} \"$@\"\n")
+    shim.chmod(0o755)
+    return record
+
+
 def test_repo_root_follows_mcs_update_repo(tmp_path):
     env = {**os.environ, "MCS_UPDATE_REPO": str(tmp_path)}
     out = subprocess.run(
@@ -196,15 +225,34 @@ def test_launcher_runs_target_updater_against_live_repo(tmp_path, capfd):
     assert _git(repo, "status", "--porcelain").stdout == ""
 
 
-def test_launcher_apply_succeeds_only_when_the_tag_is_checked_out(tmp_path, capfd):
-    repo, bare = _make_repo(tmp_path)
-    stub = ("import os, subprocess\n"
-            "subprocess.run(['git', '-C', os.environ['MCS_UPDATE_REPO'], 'checkout', '-q',"
+def _plan_stub():
+    return ("import json, os, subprocess, sys\n"
+            "if sys.argv[1:2] == ['plan']:\n"
+            "    print(json.dumps({'route': 'noop'}))\n"
+            "else:\n"
+            "    subprocess.run(['git', '-C', os.environ['MCS_UPDATE_REPO'], 'checkout', '-q',"
             " 'refs/tags/v1.2.0'], check=True)\n")
-    _release(tmp_path / "remote-work", bare, "v1.2.0", {"mcs/ops/mcs_update.py": stub})
+
+
+def test_launcher_apply_succeeds_only_when_the_tag_is_checked_out(tmp_path, capfd, monkeypatch):
+    repo, bare = _make_repo(tmp_path)
+    _release(tmp_path / "remote-work", bare, "v1.2.0",
+             {"mcs/ops/mcs_update.py": _plan_stub(), **_SLACK_SETUP_SOURCES})
     _git(repo, "fetch", "-q", "--tags")
+    record = _slack_setup_shim(monkeypatch, tmp_path, repo)
     assert _launcher().main(["--repo", str(repo), "--no-fetch", "apply"]) == 0
     assert "適用されていません" not in capfd.readouterr().err
+    assert record.read_text().split()[-2:] == ["setup", "slack-channels"]
+
+
+def test_launcher_apply_reports_unverified_slack_setup(tmp_path, capfd, monkeypatch):
+    repo, bare = _make_repo(tmp_path)
+    _release(tmp_path / "remote-work", bare, "v1.2.0",
+             {"mcs/ops/mcs_update.py": _plan_stub(), **_SLACK_SETUP_SOURCES})
+    _git(repo, "fetch", "-q", "--tags")
+    _slack_setup_shim(monkeypatch, tmp_path, repo, rc=3)
+    assert _launcher().main(["--repo", str(repo), "--no-fetch", "apply"]) == 1
+    assert "Slack運用ログ先の準備は未完了" in capfd.readouterr().out
 
 
 def test_launcher_extracts_the_exact_local_candidate_without_fetch(tmp_path, monkeypatch, capfd):
