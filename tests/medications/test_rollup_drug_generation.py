@@ -7,6 +7,7 @@ import pytest
 
 import drug_map
 import rollup
+import rollup_builder
 from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 from ingest_testkit import _message
 from ledger import Ledger
@@ -76,7 +77,7 @@ def test_generation_change_during_cached_source_read_keeps_snapshot_consistent(s
     document = deepcopy(DOCUMENT)
     document['dict_id'] = 'fictional-replacement'
     replacement = _dictionary(tmp_path, document)
-    real = rollup.current_refs
+    real = rollup_builder.current_refs
     assert cached['medications'][0]['ref']['dict_id'] == 'fictional-v1'
     unknown = rollup.current_cached_refs(store.db, 1, cached, meta)
     assert unknown['rollup_freshness'] == 'unknown' and 'medications' not in unknown
@@ -91,14 +92,14 @@ def test_generation_change_during_cached_source_read_keeps_snapshot_consistent(s
             assert drug_map.derive(other, replacement, deadline=0)['status'] == 'partial'
             return refs
 
-        monkeypatch.setattr(rollup, 'current_refs', racing)
+        monkeypatch.setattr(rollup_builder, 'current_refs', racing)
         rendered = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
         assert [mid for mid, _ in calls] == [1]
         assert calls[0][1][0]['dict_id'] == 'fictional-v1'
         assert rendered['medications'][0]['name'] == 'キラナ'
         assert rendered['medications'][0]['ref']['dict_id'] == 'fictional-v1'
         assert drug_map.generation_signature(store.db) != old_generation
-        monkeypatch.setattr(rollup, 'current_refs', real)
+        monkeypatch.setattr(rollup_builder, 'current_refs', real)
         refreshed = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
         assert refreshed['medications'][0]['name'] == 'キラナ'
         assert 'ref' not in refreshed['medications'][0]

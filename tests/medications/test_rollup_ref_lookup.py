@@ -2,6 +2,7 @@
 
 import drug_map
 import rollup
+import rollup_builder
 from extract_testkit import _ledger
 from medications_testkit import _dictionary, _seed
 
@@ -12,8 +13,8 @@ def test_current_refs_called_only_for_med_ref_messages(tmp_path, monkeypatch):
     _seed(store, mid=1)
     _seed(store, mid=2, names=("未登録架空",), posted="2026-09-20T00:00:00+09:00")
     calls = []
-    real = rollup.current_refs
-    monkeypatch.setattr(rollup, "current_refs",
+    real = rollup_builder.current_refs
+    monkeypatch.setattr(rollup_builder, "current_refs",
                         lambda db, mid: calls.append(mid) or real(db, mid))
     rollup.build_rollup(store.db, 1)
     assert calls == []   # no med_ref rows: no per-message lookups

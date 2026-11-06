@@ -19,6 +19,7 @@ import inference_dependency_loss
 import inference_version
 import initial_import_state
 import rollup
+import rollup_builder
 from common_testkit import make_ledger
 from extract_testkit import _message
 from ledger import LedgerReader, publish_snapshot
@@ -213,7 +214,7 @@ def test_dictionary_cache_without_config_is_unknown_without_lookup(ledger, monke
     content, meta = _synthetic_dictionary_cache(ledger)
     def unexpected(*args):
         pytest.fail('unconfigured cache must not look up dictionary annotations')
-    monkeypatch.setattr(rollup, 'current_refs', unexpected)
+    monkeypatch.setattr(rollup_builder, 'current_refs', unexpected)
     result = rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
     assert result['rollup_freshness'] == 'unknown'
     assert result['measurement_coverage'] == {'complete': False, 'reason': 'configuration_unavailable'}
@@ -233,7 +234,7 @@ def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(led
         calls.append(mid)
         raise error
 
-    monkeypatch.setattr(rollup, 'current_refs', interrupted)
+    monkeypatch.setattr(rollup_builder, 'current_refs', interrupted)
     ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-change' WHERE project_id=1")
     try:
         with pytest.raises(sqlite3.OperationalError) as caught:
@@ -258,7 +259,7 @@ def test_dictionary_revalidation_schema_error_propagates_without_mutating_cache(
         calls.append(mid)
         raise error
 
-    monkeypatch.setattr(rollup, 'current_refs', unavailable)
+    monkeypatch.setattr(rollup_builder, 'current_refs', unavailable)
     with pytest.raises(type(error)) as caught:
         rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=CFG_A)
     assert caught.value is error and calls == [1]
@@ -275,7 +276,7 @@ def test_dictionary_revalidation_unknown_sqlite_error_is_not_retried(ledger, mon
         calls.append(mid)
         raise error
 
-    monkeypatch.setattr(rollup, 'current_refs', unavailable)
+    monkeypatch.setattr(rollup_builder, 'current_refs', unavailable)
     with pytest.raises(error_type) as caught:
         rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=CFG_A)
     assert caught.value is error and calls == [1]
