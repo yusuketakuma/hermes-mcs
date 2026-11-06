@@ -274,13 +274,11 @@ def test_non_reaction_metadata_error_does_not_invalidate_fresh_stamp_observation
     assert _receipt(scene, request)["stamp_state"] == "confirmed"
 
 
-@pytest.mark.parametrize("change", ["source", "archived", "actor", "account"])
+@pytest.mark.parametrize("change", ["archived", "actor", "account"])
 def test_changed_authorization_or_target_before_admission_never_writes(scene, change):
     request = _command(scene)
     ledger, cfg, _, api, _ = scene
-    if change == "source":
-        ledger.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", ("a" * 64,))
-    elif change == "archived":
+    if change == "archived":
         ledger.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
     elif change == "actor":
         request["actor"] = "discord:other-operator"
@@ -292,14 +290,12 @@ def test_changed_authorization_or_target_before_admission_never_writes(scene, ch
     assert api.posts == [] and api.gets == [] and api.profiles == 0
 
 
-@pytest.mark.parametrize("change", ["source", "archived", "actor", "account", "fresh_account", "fresh_source"])
+@pytest.mark.parametrize("change", ["archived", "actor", "account", "fresh_account"])
 def test_queued_intent_requires_current_target_and_authenticated_account(scene, change):
     request = _command(scene)
     assert _apply(scene, request)["stamp_state"] == "queued"
     ledger, cfg, _, api, _ = scene
-    if change == "source":
-        ledger.db.execute("UPDATE messages SET content_hash=? WHERE message_id=100", ("b" * 64,))
-    elif change == "archived":
+    if change == "archived":
         ledger.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
     elif change == "actor":
         cfg["stamps"]["operator"] = "discord:replacement"
@@ -307,8 +303,6 @@ def test_queued_intent_requires_current_target_and_authenticated_account(scene, 
         cfg["stamps"]["account_user_id"] = 88
     elif change == "fresh_account":
         api.account = 88
-    else:
-        api.changed_body = True
     ledger.db.commit()
     assert _drain(scene)["rejected"] == 1
     assert _receipt(scene, request)["stamp_state"] == "rejected"
@@ -719,7 +713,7 @@ def test_a_press_after_the_own_stamp_changed_is_refused_not_flipped(scene, shown
     button = next(b for b in _press_buttons(scene) if b["label"].startswith(label))
     _republish_own(scene, now_own)                 # MCS changed after the render
     result = _press(scene, label, button=button)
-    assert result["outcome"] == "rejected" and result["error"] == "stamp_target_changed"
+    assert result["outcome"] == "rejected" and result["error"] == "stamp_own_changed"
     assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?",
                                (stamp_write.KIND,)).fetchone()[0] == 0
     _drain(scene)
@@ -763,11 +757,11 @@ def test_changed_own_stamp_refreshes_for_explicit_post_reselection(scene):
     old = next(b for b in _press_buttons(scene) if b["label"].startswith("🙆"))
     _republish_own(scene, "accepted")
     result = _press(scene, "🙆", button=old)
-    assert result["error"] == "stamp_target_changed" and result["stamp_reselect"] is True
+    assert result["error"] == "stamp_own_changed" and result["stamp_reselect"] is True
     assert scene[3].posts == []
     assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (stamp_write.KIND,)).fetchone()[0] == 0
     # The old press keeps its meaning; only a new explicit form selection can proceed.
-    assert _press(scene, "🙆", button=old, serial=2)["error"] == "stamp_target_changed"
+    assert _press(scene, "🙆", button=old, serial=2)["error"] == "stamp_own_changed"
     token = _token_for(_spec(scene[0]), "stamp")
     fresh = (*scene[:4], token)
     command = _command(fresh, kind="viewed", mid=101)
@@ -805,15 +799,15 @@ def test_reselection_render_failure_preserves_the_original_refusal(scene, monkey
     assert scene[3].posts == []
 
 
-def test_stale_source_refuses_without_retargeting_the_press(scene):
+def test_source_update_keeps_the_same_post_press_valid(scene):
     button = next(b for b in _press_buttons(scene) if b["label"].startswith("👀"))
     scene[0].db.execute("UPDATE messages SET content_hash=? WHERE message_id=101", ("f" * 64,))
     scene[0].db.commit()
     result = _press(scene, "👀", button=button)
-    assert result["outcome"] == "rejected" and result["error"] == "stale_source"
-    assert result["stamp_reselect"] is True
+    assert result["outcome"] == "applied" and result["stamp_op"] == "add"
     assert scene[3].posts == []
-    assert scene[0].db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (stamp_write.KIND,)).fetchone()[0] == 0
+    assert _drain(scene)["confirmed"] == 1
+    assert scene[3].posts == [(101, "viewed", False)]
 
 
 @pytest.mark.parametrize("code", ["stamp_result_unknown", "stamp_observation_required", "stamp_restore_hold"])

@@ -412,6 +412,8 @@ class Actions:
 
     async def _say(self, channel, user, text, *, blocks=None, thread_ts=None,
                    navigation=None, authorized=None) -> bool:
+        if not text and not blocks and not navigation:
+            return True
         from .delivery import call_native  # same single Retry-After resend as cards
         client = self._client()
         if client is None:

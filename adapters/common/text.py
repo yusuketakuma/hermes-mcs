@@ -32,6 +32,7 @@ def escape_md(text: str) -> str:
 
 
 ERR_JA = {
+    "stamp_own_changed": "スタンプの状態が変わったため、この操作は送信しませんでした。",
     "unknown_token": "この操作は無効化されました（カードが更新された可能性があります）。",
     "token_expired": "操作の有効期限が切れています。最新のカードでやり直してください。",
     "stale_ui": "カードが更新されました。最新の表示で操作してください。",
@@ -118,23 +119,29 @@ def _applied_text(result: dict) -> str:
     return "反映しました。"
 
 
+def _obsolete_stamp_refusal(result):
+    reasons = {"source_changed", "stale_source", "stamp_target_changed"}
+    return (isinstance(result, dict) and (
+        result.get("stamp_reselect") and result.get("error") in reasons
+        or result.get("stamp_state") == "rejected"
+        and (result.get("stamp_error") or result.get("error")) in reasons))
+
+
 def ja(result: dict | None) -> str:
+    if _obsolete_stamp_refusal(result):
+        return ""
     if not result:
         return "結果を取得できませんでした（処理中の可能性があります）。"
     if result.get("stamp_state") == "rejected":
         # The runner's rejection code says why; an unknown code keeps the generic line.
         reason = result.get("stamp_error") or result.get("error")
-        if reason in {"source_changed", "stale_source", "stamp_target_changed"}:
-            return ja({"outcome": "rejected", "error": reason, "stamp_reselect": True})
+        if reason == "stamp_own_changed":
+            return ERR_JA[reason]
         known = str(reason).startswith("stamp_") and str(reason) in ERR_JA
         return STAMP_REJECTED_TEXT + ("\n" + ERR_JA[str(reason)] if known else "")
     if result.get("stamp_state") in STAMP_STATE_TEXT:
         return STAMP_STATE_TEXT[result["stamp_state"]]
     err = result.get("error")
-    if result.get("stamp_reselect"):
-        return (ERR_JA.get(str(err), STAMP_REJECTED_TEXT)
-                + "\n最新のカードで「別の投稿」（メニュー内にある場合があります）を開き、"
-                  "対象の投稿とスタンプを選び直してください。前の操作は再送しません。")
     if result.get("outcome") == "applied" or result.get("applied"):
         return _applied_text(result)
     if str(err).startswith("crash:"):
@@ -337,6 +344,8 @@ def view_answer(result: dict | None, allowed,
     click, a rejection, a modal open): each transport then answers
     with ``ja(result)`` or stays silent. Shared by the live interaction
     path and the delayed followup sweep of every transport."""
+    if _obsolete_stamp_refusal(result):
+        return []
     if not result or result.get("outcome") != "applied" \
             or result.get("modal"):
         return None
