@@ -10,6 +10,8 @@ import notify_recovery
 from notify_testkit import CFG, NOW, SCOPE, _uuid, led as led
 from test_card_part_resolve import prepare
 
+pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
+
 
 def snapshot(store, tmp_path):
     store.db.commit()
