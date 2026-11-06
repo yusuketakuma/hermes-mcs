@@ -1278,3 +1278,50 @@ def test_process_job_unproven_chunk_holds_its_member_only(cloud, order):
     assert any('ロサルタン' in p for p in local_prompts)
     assert not any('アムロジピン' in p for p in local_prompts)
     assert not any('メトホルミン' in p for p in local_prompts)
+
+
+@pytest.mark.parametrize('variant', ['unverifiable_cfg', 'mode_omitted',
+                                     'explicit_off', 'out_of_scope'])
+def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant):
+    """Ownership precedes settings: a config that cannot prove scope keeps
+    the owned member held (unverifiable), a mode-omitted block resolves on
+    via the key, and only a proven revocation (explicit off / out of
+    scope) releases the unit to local."""
+    from semantic_testkit import _PassJev, _llm_v2
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [2, 3], bodies={2: 'アムロジピン5mgを継続します。',
+                                            3: 'メトホルミン500mgが出ています'})
+    _member_reservation(led, cfg, job, 2)
+    # The reservation was made under the working config; mutate it after,
+    # as a deployment edit would.
+    if variant == 'unverifiable_cfg':
+        cfg['cloud_llm']['bogus_field'] = 1
+    elif variant == 'mode_omitted':
+        del cfg['cloud_llm']['mode']
+    elif variant == 'explicit_off':
+        cfg['cloud_llm']['mode'] = 'off'
+    else:
+        cfg['cloud_llm']['project_ids'] = [2]
+    local_prompts = []
+    def local(prompt, **kwargs):
+        local_prompts.append(prompt)
+        return _llm_v2(prompt)
+    status = semantic_drain._process_job(
+        led, semantic_drain.runtime_config(cfg)[0], job, _PassJev(), local,
+        time.monotonic() + 900, lane="backlog", diagnostics=semantic_drain._job_diagnostics(),
+        cloud_transport=direct)
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) == 1
+    if variant == 'unverifiable_cfg':
+        # The provider cannot be built from an unreadable config: the whole
+        # job defers — nothing local, nothing sent, the reservation stays.
+        assert status == 'deferred' and not local_prompts
+    elif variant == 'mode_omitted':
+        # Resolved on via the key: the owned member holds, the independent
+        # member still completes locally.
+        assert status == 'deferred'
+        assert any('メトホルミン' in p for p in local_prompts)
+        assert not any('アムロジピン' in p for p in local_prompts)
+    else:
+        # Proven revocation: the owned member is released to local too.
+        assert any('アムロジピン' in p for p in local_prompts)
+        assert any('メトホルミン' in p for p in local_prompts)

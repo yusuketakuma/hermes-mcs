@@ -162,10 +162,19 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     # member units while a project-wide check would hold independent targets.
     # It reopens recovery only inside the configured scope: a revoked scope
     # still yields no transport for an owned target.
-    owned = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
-                                          project_id=job["project_id"], message_ids=targets) \
-        and cloud_policy.in_scope(cloud_inference.resolve_cloud_settings(cfg),
-                                  "semantic_backlog", job["project_id"])
+    owns = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
+                                         project_id=job["project_id"], message_ids=targets)
+    if owns:
+        # Ownership is durable and precedes settings: the raw config's mode
+        # may resolve on via key presence, so scope is proven on resolved
+        # settings only. A broken config cannot release an owned target to
+        # local — keep it held; a proven out-of-scope (explicit off /
+        # other project) retires it to local like an unowned target.
+        settings, errors = cloud_policy.resolve_settings(cfg, HOME)
+        owned = bool(errors) or cloud_policy.in_scope(settings, "semantic_backlog",
+                                                      job["project_id"])
+    else:
+        owned = False
     if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
             or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
         if owned:
