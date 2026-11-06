@@ -263,6 +263,47 @@ def _followup_files(ledger, payload: dict, project_id):
     return (f"{preview}\n[MCS] 添付ファイル（後送）\n{a['name'] or 'file'}"), files
 
 
+_SYSTEM_TEXT = {
+    'session_expired': ('🔴 認証切れ', '新しい患者情報を取得できません。',
+                        'MCSへ手動で再ログインしてください。'),
+    'session_recovered': ('🟢 自動再ログインで復旧', '認証を復旧しました。収集の完了とは別です。',
+                          '次回の収集状況を確認してください。'),
+    'run_failed': ('🔴 収集処理の失敗', '新しい患者情報の更新が遅れる可能性があります。',
+                   'python3 mcs/ops/mcs_setup.py check で確認してください。'),
+    'health_write_failed': ('🔴 監視記録の保存失敗', '最新の稼働状況を確認できません。',
+                            '保存先の空き容量と書込み権限を確認してください。'),
+    'update_notice': ('ℹ️ 更新のお知らせ', '更新の確認・適用・復旧に関する記録があります。',
+                      'python3 mcs/ops/mcs_update.py status で更新状況を確認してください。'),
+}
+
+
+def _system_event_text(kind, payload):
+    """Render operational notices from fixed vocabulary without raw payload text."""
+    title, impact, action = _SYSTEM_TEXT[kind]
+    lines = [f'[MCSLOG] {title}', '影響: ' + impact, '次の操作: ' + action]
+    run_id = payload.get('run_id')
+    if type(run_id) is int and 0 < run_id < 2**63:
+        lines.append(f'実行: run {run_id}')
+    # Preserve only a known stage token; exception messages and source data stay local.
+    detail = payload.get('detail')
+    stage = detail.partition(':')[0] if isinstance(detail, str) else None
+    if stage in ('history_jobs', 'collection', 'bootstrap', 'unreads', 'self_probe'):
+        lines.append('処理: ' + stage)
+    if kind == 'update_notice':
+        # Legacy updater events contain frozen text. Read only the exact release header,
+        # never release notes, error strings, arbitrary commands or URLs from that text.
+        text = payload.get('text')
+        match = re.match(r'\A\[MCS\] 新しいバージョン (v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}) を検出しました(?:[（\n]|$)', text) if isinstance(text, str) else None
+        if match:
+            tag = match[1]
+            lines.append('候補版: ' + tag)
+            command = {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
+                       'tag': tag, 'reason': '<理由>'}
+            lines.append('適用前の確認: /mcs ' + json.dumps(command, ensure_ascii=False, separators=(',', ':')))
+    lines.append('コード: ' + kind)
+    return '\n'.join(lines)
+
+
 def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     """Returns (content, files). files = [(filename, local_path)] to upload."""
     try:
@@ -271,20 +312,8 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         raise ValueError("payload_invalid") from e
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
-    if ev["kind"] == "session_expired":
-        return ("[MCS] セッション失効 — 手動再ログインが必要です\n"
-                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
-    if ev["kind"] == "session_recovered":
-        # auto_login succeeded at the failure point — the expiry is
-        # reported as resolved, not as a manual-login demand
-        return ("[MCS] セッション失効 → 自動再ログインで復旧しました\n"
-                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
-    if ev["kind"] == "run_failed":
-        return ("[MCS] チェック失敗 — アダプタを確認してください\n"
-                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
-    if ev["kind"] == "health_write_failed":
-        return ("[MCS] health.json の書き込み失敗 — 監視用の状態ファイルが更新されていません\n"
-                f"run {payload.get('run_id')}: {payload.get('detail','')}"), []
+    if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
+        return _system_event_text(ev["kind"], payload), []
     if ev["kind"] == "daily_digest":
         # frozen at enqueue (ids and counts only); turning the digest
         # off drops a still-queued one instead of sending it late

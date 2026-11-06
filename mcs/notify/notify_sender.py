@@ -29,11 +29,16 @@ def target(cfg: dict, kind: str) -> str | None:
     """Delivery target in `hermes send --to` syntax. Patient-content
     events ONLY go to the explicitly configured target — a missing
     config must never spill bodies into a fallback destination
-    (Oracle B15). System alerts may override via notify_system_target."""
+    (Oracle B15). Slack system alerts require a separate configured destination."""
     t = cfg.get("notify_target")
     if kind in SYSTEM_ALERT_KINDS:
         st = cfg.get("notify_system_target")
-        if isinstance(st, str) and st.strip():
+        st = st.strip() if isinstance(st, str) else ''
+        patient = t.strip() if isinstance(t, str) else ''
+        if (patient == 'slack' or patient.startswith('slack:')) and (
+                not st or st.split(':', 2)[:2] == patient.split(':', 2)[:2]):
+            return None
+        if st:
             t = st
     return t.strip() if isinstance(t, str) and t.strip() else None
 
