@@ -384,7 +384,8 @@ def test_notify_kills_a_wedged_standalone_sender(tmp_path, monkeypatch):
     python.write_text("#!")
     python.chmod(0o755)
     (tmp_path / "config.json").write_text(json.dumps(
-        {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTH"}))
+        {"runtime_mode": "standalone", "notify_target": "slack:C12345678",
+         "notify_system_target": "slack:C87654321"}))
     calls = []
 
     class Wedged:

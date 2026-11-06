@@ -299,7 +299,7 @@ def _system_event_text(kind, payload):
             lines.append('候補版: ' + tag)
             command = {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
                        'tag': tag, 'reason': '<理由>'}
-            lines.append('患者情報チャンネルで実行（適用前の確認）: /mcs ' + json.dumps(command, ensure_ascii=False, separators=(',', ':')))
+            lines.append('/mcsの操作を許可したチャンネルで実行（適用前の確認）: /mcs ' + json.dumps(command, ensure_ascii=False, separators=(',', ':')))
     lines.append('コード: ' + kind)
     return '\n'.join(lines)
 
