@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import time
+import writer_lock
 import inference_version as inference
 import bounded_http
 from clinical_chunking import PLAN_VERSION
@@ -54,6 +55,7 @@ from extract_llm_source_contract import (
     _owns_current_source,
     _source_writable,
     _writer_current,
+    _writer_current_diagnostic,
 )
 from extract_llm_store import (
     _record_hold_tx,
@@ -311,7 +313,9 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
                 break
             time.sleep(1)
     try:
-        yield (fd is not None or not enabled) and _writer_current(full=enabled)
+        if enabled and fd is None:
+            writer_lock.record_writer_refusal("run_lock_not_acquired", "write_lock")
+        yield (fd is not None or not enabled) and _writer_current_diagnostic(full=enabled)
     finally:
         if fd is not None:
             os.close(fd)

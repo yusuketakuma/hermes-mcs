@@ -3,6 +3,7 @@ import fcntl
 import os
 import time
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 
 from mcs_util import HOME
 from safe_io import open_lock_file
@@ -12,6 +13,44 @@ UPDATE_MARKER_NAME = "update_in_progress.marker"
 _MCS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_LOCK_REACQUIRE_S = 150.0
 RUN_LOCK_POLL_S = 0.2
+_writer_refusal = ContextVar("writer_refusal", default=None)
+_WRITER_REFUSAL_STAGES = {
+    "writer_refusal_unclassified": frozenset({"writer_guard", "writer_fence"}),
+    "update_marker_present": frozenset({"update_restore_fence"}),
+    "restore_hold_present": frozenset({"update_restore_fence"}),
+    "restore_state_unverifiable": frozenset({"update_restore_fence"}),
+    "initial_writer_blocked": frozenset({"writer_fence"}),
+    "inference_source_changed": frozenset({"writer_fence"}),
+    "inference_version_changed": frozenset({"writer_fence"}),
+    "inference_source_unavailable": frozenset({"writer_fence"}),
+    "source_generation_changed": frozenset({"generation_fence"}),
+    "run_lock_not_acquired": frozenset({"write_lock", "ledger_lock"}),
+    "resident_sources_changed": frozenset({"startup_source_fence"}),
+    "loaded_sources_unverified": frozenset({"startup_source_fence"}),
+    "resident_sources_unavailable": frozenset({"startup_source_fence"}),
+    "startup_deadline_reached": frozenset({"ledger_startup", "resident_startup"}),
+}
+
+
+@contextmanager
+def capture_writer_refusal():
+    """Capture fixed refusal codes from the checks actually performed in this scope."""
+    diagnostic = {"writer_reason": "writer_refusal_unclassified", "writer_stage": "writer_guard"}
+    token = _writer_refusal.set(diagnostic)
+    try:
+        yield diagnostic
+    finally:
+        _writer_refusal.reset(token)
+
+
+def record_writer_refusal(reason: str, stage: str) -> None:
+    """Record a fixed code without repeating a filesystem or lock check."""
+    diagnostic = _writer_refusal.get()
+    if diagnostic is not None:
+        if (not isinstance(reason, str) or not isinstance(stage, str)
+                or stage not in _WRITER_REFUSAL_STAGES.get(reason, ())):
+            reason, stage = "writer_refusal_unclassified", "writer_guard"
+        diagnostic.update(writer_reason=reason, writer_stage=stage)
 
 
 def acquire_run_lock(path: str | None = None) -> int | None:
@@ -89,11 +128,19 @@ def writer_blocked() -> bool:
     """Block writers for update/restore holds or an unverifiable restore state."""
     data = os.path.join(HOME, "data")
     if os.path.lexists(os.path.join(data, UPDATE_MARKER_NAME)):
+        record_writer_refusal("update_marker_present", "update_restore_fence")
         return True
     try:
         from notify_spool import restore_writer_hold
-        return restore_writer_hold(data) is not None
+        hold = restore_writer_hold(data)
+        blocked = hold is not None
+        if blocked:
+            reason = ("restore_state_unverifiable" if isinstance(hold, dict) and hold.get("unreadable")
+                      else "restore_hold_present")
+            record_writer_refusal(reason, "update_restore_fence")
+        return blocked
     except Exception:
+        record_writer_refusal("restore_state_unverifiable", "update_restore_fence")
         return True
 
 

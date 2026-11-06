@@ -238,16 +238,37 @@ _INFERENCE_VERSION = inference.CURRENT_VERSION
 _INFERENCE_SOURCE_STAT = os.stat(inference.__file__).st_mtime_ns
 
 
+def _writer_current_diagnostic(*, full: bool = False) -> bool:
+    """Discard an earlier refusal before evaluating the existing boolean guard."""
+    writer_lock.record_writer_refusal("writer_refusal_unclassified", "writer_fence")
+    return _writer_current(full=full)
+
+
+
 def _writer_current(*, full: bool = False) -> bool:
     """Fence update boundaries; lockless bookkeeping checks only the version source."""
     try:
-        current = (not _WRITER_STATE[0]
-            and not writer_lock.writer_blocked()
-            and os.stat(inference.__file__).st_mtime_ns == _INFERENCE_SOURCE_STAT
-            and inference.CURRENT_VERSION == _INFERENCE_VERSION)
+        if _WRITER_STATE[0]:
+            writer_lock.record_writer_refusal("initial_writer_blocked", "writer_fence")
+            return False
+        if writer_lock.writer_blocked():
+            return False
+        if os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT:
+            writer_lock.record_writer_refusal("inference_source_changed", "writer_fence")
+            return False
+        if inference.CURRENT_VERSION != _INFERENCE_VERSION:
+            writer_lock.record_writer_refusal("inference_version_changed", "writer_fence")
+            return False
     except OSError:
+        writer_lock.record_writer_refusal("inference_source_unavailable", "writer_fence")
         return False
-    return current and (not full or writer_lock.updater_state() == _WRITER_STATE)
+    if full:
+        state = writer_lock.updater_state()
+        if state != _WRITER_STATE:
+            if not state[0]:
+                writer_lock.record_writer_refusal("source_generation_changed", "generation_fence")
+            return False
+    return True
 
 
 def _unsealed_source_pred(r) -> str:
