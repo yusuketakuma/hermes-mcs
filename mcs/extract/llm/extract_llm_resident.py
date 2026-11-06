@@ -61,6 +61,7 @@ from extract_llm_source_contract import (
     _RESIDENT_WRITE_WAIT_S,
     _SEMANTIC_RECENT_TURNS,
     _writer_current,
+    _writer_current_diagnostic,
 )
 
 _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
@@ -238,18 +239,26 @@ def _resident_loaded_sources_current():
 def _open_current_ledger(*, deadline=None, distinguish_fence=False, source_state=None):
     fd = writer_lock.acquire_run_lock()
     if fd is None:
+        writer_lock.record_writer_refusal("run_lock_not_acquired", "ledger_lock")
         return None
     try:
-        if not _writer_current(full=True):
+        if not _writer_current_diagnostic(full=True):
             return _RESIDENT_FENCE_LOST if distinguish_fence else None
         if source_state is not None:
             try:
-                if (_resident_source_state() != source_state or not _resident_loaded_sources_current()
-                        or not _writer_current(full=True)):
+                if _resident_source_state() != source_state:
+                    writer_lock.record_writer_refusal("resident_sources_changed", "startup_source_fence")
+                    return _RESIDENT_FENCE_LOST if distinguish_fence else None
+                if not _resident_loaded_sources_current():
+                    writer_lock.record_writer_refusal("loaded_sources_unverified", "startup_source_fence")
+                    return _RESIDENT_FENCE_LOST if distinguish_fence else None
+                if not _writer_current_diagnostic(full=True):
                     return _RESIDENT_FENCE_LOST if distinguish_fence else None
             except OSError:
+                writer_lock.record_writer_refusal("resident_sources_unavailable", "startup_source_fence")
                 return _RESIDENT_FENCE_LOST if distinguish_fence else None
         if deadline is not None and time.monotonic() >= deadline:
+            writer_lock.record_writer_refusal("startup_deadline_reached", "ledger_startup")
             return None
         return Ledger(DB)
     finally:
@@ -261,9 +270,11 @@ def _open_resident_ledger(deadline):
     try:
         source_state = _resident_source_state()
     except OSError:
+        writer_lock.record_writer_refusal("resident_sources_unavailable", "startup_source_fence")
         return None
-    while _writer_current(full=True):
+    while _writer_current_diagnostic(full=True):
         if time.monotonic() >= deadline:
+            writer_lock.record_writer_refusal("startup_deadline_reached", "resident_startup")
             return None
         led = _open_current_ledger(deadline=deadline, distinguish_fence=True, source_state=source_state)
         if led is _RESIDENT_FENCE_LOST:
@@ -272,10 +283,11 @@ def _open_resident_ledger(deadline):
             print(json.dumps({"event": "extractor_ledger_opened", "pid": os.getpid()}),
                   file=sys.stderr, flush=True)
             return led
-        if not _writer_current(full=True):
+        if not _writer_current_diagnostic(full=True):
             return None
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            writer_lock.record_writer_refusal("startup_deadline_reached", "resident_startup")
             return None
         if not waiting:
             print(json.dumps({"event": "extractor_waiting_for_writer", "pid": os.getpid()}),
@@ -327,9 +339,9 @@ def _main() -> int:
         return 0
     if args.revive_failed:
         # Keep the constructor and its bookkeeping in the same writer lifetime.
-        with _write_lock(True, wait_s=0) as locked:
-            if not locked or not _writer_current(full=True):
-                print(json.dumps({"ok": False, "error": "writer_unavailable"}))
+        with writer_lock.capture_writer_refusal() as diagnostic, _write_lock(True, wait_s=0) as locked:
+            if not locked or not _writer_current_diagnostic(full=True):
+                print(json.dumps({"ok": False, "error": "writer_unavailable", **diagnostic}))
                 return 1
             led = Ledger(DB)
             try:
@@ -379,16 +391,17 @@ def _main() -> int:
           file=sys.stderr, flush=True)
     stop = (time.monotonic() + args.stop_after
             if args.all and args.stop_after > 0 else None)
-    if args.all:
-        startup_deadline = time.monotonic() + _RESIDENT_STARTUP_WAIT_S
-        if stop is not None:
-            startup_deadline = min(startup_deadline, stop)
-        led = _open_resident_ledger(startup_deadline)
-    else:
-        led = _open_current_ledger()
-    if led is None:
-        print(json.dumps({"ok": False, "error": "writer_unavailable"}))
-        return 1
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        if args.all:
+            startup_deadline = time.monotonic() + _RESIDENT_STARTUP_WAIT_S
+            if stop is not None:
+                startup_deadline = min(startup_deadline, stop)
+            led = _open_resident_ledger(startup_deadline)
+        else:
+            led = _open_current_ledger()
+        if led is None:
+            print(json.dumps({"ok": False, "error": "writer_unavailable", **diagnostic}))
+            return 1
     # T18: under the v4 engine (fact_source=canonical) the legacy
     # extractor admits nothing: conversion manifests are v4 jobs. The
     # standalone daemon obeys the same boundary as the tick path, and
