@@ -1076,3 +1076,96 @@ def test_semantic_owned_unit_holds_on_unverifiable_reservation(cloud, meta):
                 chat('synthetic member prompt')
     assert not local and not calls
     assert len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+def _mixed_targets(led, job, order):
+    """Grow the job's payload targets into `order` with two reply members."""
+    led.save_messages([_message(2, parent=1, body='synthetic member reply'),
+                       _message(3, parent=1, body='synthetic independent reply')])
+    snapshot(led)
+    payload = json.loads(job['payload'])
+    payload['targets'] = list(order)
+    with led.db:
+        led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                       (json.dumps(payload), job['job_id']))
+    job['payload'] = json.dumps(payload)
+
+
+def _member_reservation(led, cfg, job, mid):
+    """A durable reservation for member `mid` whose outcome never arrived."""
+    selection, errors = cloud_policy.resolve_profile(cfg, route='semantic_backlog', purpose='backlog')
+    assert not errors
+    reserver = cloud_policy.usage_reserver(
+        led, {'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)},
+        route='semantic_backlog', project_id=1, message_id=mid,
+        unit_key=f"semantic:{job['job_id']}:",
+        owner={'semantic_target_id': mid, 'semantic_thread_root': 1},
+        input_binding='ab' * 32, selection=selection)
+    body = anthropic_client.AnthropicClient('synthetic').body('synthetic member prompt', 100, None)
+    with legacy_cloud_routes():
+        reserver(body, 30)
+
+
+def test_closed_route_independent_member_goes_local_while_owned_member_holds(cloud):
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            assert chat is not None
+            transport.set_inference_target(3)
+            chat('synthetic independent prompt')
+            assert local == ['synthetic independent prompt']
+            # A later owned member must not join the job-level local switch:
+            # its unresolved unit stays a hold, never a POST or local result.
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+    assert local == ['synthetic independent prompt'] and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+def test_closed_route_owned_member_holds_before_independent_member_goes_local(cloud):
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [2, 3])
+    _member_reservation(led, cfg, job, 2)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+            transport.set_inference_target(3)
+            chat('synthetic independent prompt')
+    assert local == ['synthetic independent prompt'] and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+def test_closed_route_paid_member_recovers_while_independent_member_goes_local(cloud):
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    with transport.inference_targets('synthetic-gen'):
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as chat:
+                transport.set_inference_target(2)
+                assert json.loads(chat('synthetic member prompt')) == {'facts': []}
+        assert len(calls) == len(rows(led, 'cloud_usage_reserve')) == 1
+        local = []
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            transport.set_inference_target(2)
+            assert json.loads(chat('synthetic member prompt')) == {'facts': []}
+            assert not local
+            transport.set_inference_target(3)
+            chat('synthetic independent prompt')
+    # The paid member answer was adopted without another POST; only the
+    # independent member took the local switch.
+    assert local == ['synthetic independent prompt'] and len(calls) == 1
+    assert len(rows(led, 'cloud_usage_reserve')) == len(rows(led, 'cloud_usage_result')) == 1
