@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import mcs_cli
-from ops_testkit import _load
+from ops_testkit import _load, patch_lifecycle_lookup
 from test_mcs_upgrade import _launcher
 
 
@@ -16,6 +16,10 @@ def _terminal(monkeypatch, answers):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     iterator = iter(answers)
     monkeypatch.setattr("builtins.input", lambda _: next(iterator))
+
+
+def _plan_report(route, **values):
+    return {"route": route, "slack_channels_required": False, **values}
 
 
 @pytest.mark.parametrize("answer,expected", [("", 1), ("0", 1), ("2", 3)])
@@ -26,7 +30,7 @@ def test_update_requires_explicit_execution(monkeypatch, answer, expected):
 
     def run(cmd, **kwargs):
         calls.append(cmd)
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"route": "noop", "blockers": []} if len(calls) == 3 else {"route": "reinstall", "install_args": []}))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop", blockers=[]) if len(calls) == 3 else _plan_report("reinstall", install_args=[])))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
     assert launcher.interactive_update(["python", "updater", "plan", "--tag", "v1.2.0"], {}, "/synthetic") == 0
@@ -61,9 +65,9 @@ def test_update_eof_is_cancellation(monkeypatch):
 def _recovery(monkeypatch, tmp_path, state):
     mod = _load()
     _terminal(monkeypatch, [])
-    monkeypatch.setattr(mod, "_load_state", lambda: state)
-    monkeypatch.setattr(mod, "_awaiting_consent", lambda: None)
-    monkeypatch.setattr(mod, "MARKER_PATH", str(tmp_path / "missing"))
+    patch_lifecycle_lookup(monkeypatch, mod, "_load_state", lambda: state)
+    patch_lifecycle_lookup(monkeypatch, mod, "_awaiting_consent", lambda: None)
+    patch_lifecycle_lookup(monkeypatch, mod, "MARKER_PATH", str(tmp_path / "missing"))
     return mod
 
 
@@ -202,7 +206,7 @@ def test_recovery_success_is_reported_only_after_journal_clears(monkeypatch, tmp
 def test_recovery_guide_requires_terminal_before_reading_state(monkeypatch):
     mod = _load()
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr(mod, "_load_state", lambda: pytest.fail("no read without terminal"))
+    patch_lifecycle_lookup(monkeypatch, mod, "_load_state", lambda: pytest.fail("no read without terminal"))
     assert mod.interactive_recovery() == 2
 
 
@@ -231,9 +235,9 @@ def test_reinstall_preserves_previous_optouts(monkeypatch):
     launcher = _launcher()
     _terminal(monkeypatch, ["2", ""])
     calls = []
-    report = {"route": "reinstall", "install_args": ["--no-llm", "--no-plugin"]}
+    report = _plan_report("reinstall", install_args=["--no-llm", "--no-plugin"])
     monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kwargs:
-                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps({"route": "noop", "blockers": []} if len(calls) == 3 else report)))
+                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop", blockers=[]) if len(calls) == 3 else report)))
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
     assert calls[1][-3:] == ["--reinstall", "--install-arg=--no-llm", "--install-arg=--no-plugin"]
 
@@ -267,7 +271,7 @@ def test_update_offers_api_keys_using_pinned_runtime(monkeypatch, tmp_path, upda
         if cmd[-2:] == ["setup", "api-keys"]:
             return SimpleNamespace(returncode=0)
         route = "apply" if updated and len(calls) == 1 else "noop"
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"route": route}))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report(route)))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
     assert launcher.interactive_update(["old-python", "updater", "plan"],
@@ -305,7 +309,7 @@ def test_update_key_setup_failure_keeps_update_success(monkeypatch, tmp_path, ca
             if case == "interrupt":
                 raise KeyboardInterrupt
             return SimpleNamespace(returncode=1)
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"route": "noop"}))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop")))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
     assert launcher.interactive_update(["python", "updater", "plan"], {}, repo) == 0
@@ -319,7 +323,7 @@ def test_noop_nonterminal_never_offers_or_launches_setup(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("no nonterminal prompt"))
     calls = []
     monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kwargs:
-                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout='{"route":"noop"}'))
+                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop"))))
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
     assert len(calls) == 1
 
@@ -328,10 +332,10 @@ def test_guided_apply_passes_approved_record_separately(monkeypatch):
     launcher = _launcher()
     _terminal(monkeypatch, ['2', '1'])
     calls = []
-    report = {'route': 'reinstall', 'install_args': ['--no-llm']}
+    report = _plan_report('reinstall', install_args=['--no-llm'])
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        value = {'route': 'noop', 'blockers': []} if len(calls) == 3 else report
+        value = _plan_report('noop', blockers=[]) if len(calls) == 3 else report
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
@@ -346,7 +350,7 @@ def test_guided_non_reinstall_does_not_require_an_install_record(monkeypatch):
     calls = []
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        value = {'route': 'noop', 'blockers': []} if len(calls) == 3 else {'route': 'apply', 'install_args': None}
+        value = _plan_report('noop', blockers=[]) if len(calls) == 3 else _plan_report('apply', install_args=None)
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
