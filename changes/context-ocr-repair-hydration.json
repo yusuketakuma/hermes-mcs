@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "OCRの修復結果が読取り時に拒否される問題を修正",
+  "summary": "添付OCRの修復結果を読み直す際に、保管したOCR原文で照合します。修復結果を保存できても、患者の記録まとめが完了待ちで止まる問題を修正します。",
+  "upgrade": "通常の更新手順で収集処理へ反映してください。既存の原本・修復候補・支払証明の削除や移行は不要です。",
+  "details": [
+    "本文を省いたOCRの読取りでも、既存の原本取得処理で全文を復元する。投稿IDが0のチャットとして空本文を取得しない。",
+    "原本の所属・source binding・有料応答の証明と引用の検証を維持する。OCR設定を無効にした後や補助要約の追加後も、原本に結び付いた修復証明を再生できる。",
+    "KarteとOCRの有料修復、独立した読取りトランザクションでの再生、改変拒否、追加POST・予約ゼロを合成テストで確認する。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh_sources.py",
+    "tests/patients/test_context_external_source_repair_replay.py"
+  ]
+}
