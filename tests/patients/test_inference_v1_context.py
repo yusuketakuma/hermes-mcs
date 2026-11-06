@@ -471,6 +471,23 @@ def test_proven_empty_readiness_retains_source_and_attachment_guards(runtime, mo
     assert not ready()
 
 
+def test_deleted_parent_with_unwithdrawn_attachment_remains_pending_when_ocr_is_enabled(runtime):
+    led, clock, _ = runtime
+    seed(led, body='', state='deleted', proof=False)
+    cfg = {'semantic': {**CFG['semantic'], 'mode': 'off'},
+           'attachment_ocr': {'enabled': True, 'executable': '/synthetic/ocr'}}
+    with led.db:
+        led.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(1,'synthetic','pending')")
+    coverage = mcs_queries.attachment_ocr_coverage(led.db, 1, cfg)
+    assert not coverage['complete'] and coverage['pending'] == coverage['total'] == 1
+    assert not patient_context_refresh_readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600)
+    assert not list(mcs_queries.attachment_ocr_sources(led.db, 1, cfg=cfg))
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='withdrawn' WHERE message_id=1")
+    assert mcs_queries.attachment_ocr_coverage(led.db, 1, cfg)['complete']
+    assert patient_context_refresh_readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600)
+
+
 def test_no_source_needs_explicit_acquisition_proof_even_after_an_empty_summary(runtime):
     led, _, calls = runtime
     seed(led, body='')

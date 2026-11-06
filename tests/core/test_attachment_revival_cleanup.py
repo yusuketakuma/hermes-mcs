@@ -58,6 +58,28 @@ def test_relist_existing_withdrawn_payload_keeps_downloaded(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize('state', ['snippet', 'unknown'])
+def test_incomplete_relisting_cannot_revive_a_deleted_posts_attachment(tmp_path, state):
+    db = _ledger(tmp_path)
+    message = _message(body='', state='deleted')
+    message.files_present = True
+    message.attachments = [Attachment('synthetic-file', 'synthetic.pdf', 'https://synthetic.invalid/file')]
+    try:
+        db.save_messages([message])
+        assert db.db.execute('SELECT state FROM attachments').fetchone()[0] == 'withdrawn'
+        message.body_state = state
+        db.save_messages([message])
+        assert db.db.execute('SELECT body_state FROM messages').fetchone()[0] == 'deleted'
+        assert db.db.execute('SELECT state FROM attachments').fetchone()[0] == 'withdrawn'
+        assert db.attachments_due() == []
+        message.body_state = 'full'
+        db.save_messages([message])
+        assert db.db.execute('SELECT body_state FROM messages').fetchone()[0] == 'full'
+        assert db.db.execute('SELECT state FROM attachments').fetchone()[0] == 'pending'
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize('state', ['pruned', 'withheld'])
 def test_relist_does_not_revive_retention_or_withheld_state(tmp_path, state):
     db, m, _, path = _stored_attachment(tmp_path)

@@ -635,7 +635,7 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                     (semantic_policy.JOB_KIND, pid, root)).fetchone():
                 return False
             if row["body_state"] == "deleted" or row["body_state"] == "full" and row["body_text"] == "":
-                if (row["body_state"] != "deleted" and snapshot["attachment_coverage"]["mode"] != "on"
+                if (snapshot["attachment_coverage"]["mode"] != "on"
                         and (cfg.get("attachment_ocr") or {}).get("enabled") is not False
                         and db.execute("SELECT 1 FROM attachments WHERE message_id=? "
                                        "AND state IS NOT 'withdrawn' LIMIT 1", (row["message_id"],)).fetchone()):

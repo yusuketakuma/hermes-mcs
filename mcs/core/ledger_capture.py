@@ -56,6 +56,11 @@ class LedgerCaptureMixin:
 
     def _save_attachments(self, m, now: float):
         import attachment_ocr
+        deleted = m.body_state == "deleted"
+        if m.body_state not in TERMINAL_BODY_STATES:
+            # Partial observations cannot undo a stored deletion.
+            deleted = self.db.execute("SELECT 1 FROM messages WHERE message_id=? AND body_state='deleted'",
+                                      (m.message_id,)).fetchone() is not None
         dependencies = attachment_ocr.capture_dependencies_tx(self.db, message_id=m.message_id)
         for a in m.attachments:
             saved = self.db.execute(
@@ -103,11 +108,10 @@ class LedgerCaptureMixin:
         # (complete list, possibly empty) or the post is deleted —
         # a response that simply omitted the key must not withdraw rows
         if not getattr(m, "files_present", False) \
-                and m.body_state != "deleted":
+                and not deleted:
             attachment_ocr.record_dependencies_tx(self.db, dependencies)
             return
-        keep = [a.file_id for a in m.attachments
-                if getattr(m, "body_state", "") != "deleted"]
+        keep = [a.file_id for a in m.attachments if not deleted]
         if keep:
             self.db.execute(f"""
               UPDATE attachments SET state='withdrawn'
