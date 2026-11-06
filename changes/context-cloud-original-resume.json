@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "クラウド再開時に患者コンテキストの原文を全区間確認",
+  "summary": "ローカルで調査済みの患者でも、クラウド処理の再開後は原文を先頭から確認します。ローカルの途中位置や完了記録を、クラウドでの確認完了とは扱いません。",
+  "upgrade": "追加操作は不要です。クラウド処理が再開できる患者では、既存の予算と送信制御に従って原文確認を行います。保存済みのローカル結果と課金記録は保持します。",
+  "details": [
+    "同じ入力のクラウド確認記録を優先し、後から保存されたローカル結果で確認済みの位置を失わないようにします。",
+    "原文の入力署名や処理先が変わった場合は、抽出項目が同じでも患者のまとめを再評価します。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_refresh_sources.py"
+  ]
+}
