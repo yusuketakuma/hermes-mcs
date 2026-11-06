@@ -219,6 +219,11 @@ class CloudBacklogPool:
         if settings["mode"] != "on":
             # Workers retire at the idle boundary after paid carry is settled.
             return
+        if not (cloud_policy.send_route("reextract")
+                and cloud_policy.send_route("semantic_backlog")):
+            # Individual cloud routes are closed to new sends; running workers
+            # still settle paid carry before retiring on their own fence.
+            return
         if not cloud_policy.selected_key(self.root):
             return
         selection, errors = cloud_policy.resolve_profile(
@@ -421,15 +426,20 @@ def worker(parent, *, index=None):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                routes_open = (cloud_policy.send_route("reextract")
+                               and cloud_policy.send_route("semantic_backlog"))
                 if index is not None:
-                    retire = settings["mode"] != "on" or index >= settings["max_concurrency"]
+                    retire = (settings["mode"] != "on" or not routes_open
+                              or index >= settings["max_concurrency"])
                     if time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
                         capacity = memory_workers(settings["max_concurrency"])
                         retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
                     if retire:
-                        _event("cloud_worker_retired", reason=("cloud_mode_off"
-                            if settings["mode"] != "on" else "capacity_reduced"))
+                        _event("cloud_worker_retired", reason=(
+                            "cloud_mode_off" if settings["mode"] != "on"
+                            else "cloud_route_closed" if not routes_open
+                            else "capacity_reduced"))
                         return
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")
@@ -437,6 +447,9 @@ def worker(parent, *, index=None):
                          else extract_llm.MAX_TOKENS)
                 if settings["mode"] != "on":
                     wait("cloud_mode_off")
+                    continue
+                if not routes_open:
+                    wait("cloud_route_closed")
                     continue
                 if errors or selection is None:
                     wait("cloud_profile_unavailable")

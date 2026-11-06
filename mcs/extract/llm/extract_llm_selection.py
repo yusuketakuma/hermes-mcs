@@ -626,7 +626,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract", purpose="backlog", root=HOME)
         if not errors and selection is not None:
             required_contract = cloud_inference.cloud_provider_contract(selection=selection)
-        if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
+        if (cfg["mode"] != "on" or "reextract" not in cfg["routes"]
+                or not cloud_policy.send_route("reextract")):
             owner = getattr(ledger, '_cloud_state_owner', None)
             if owner is not None and prioritize_patients:
                 owner._cloud_priority_progress = None

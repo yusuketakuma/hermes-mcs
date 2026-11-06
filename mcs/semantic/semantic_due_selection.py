@@ -628,6 +628,7 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
     cfg = load_config()
     settings = cloud_inference.resolve_cloud_settings(cfg)
     if (lane != "backlog" or settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
+            or not cloud_policy.send_route("semantic_backlog")
             or not cloud_policy.selected_key()):
         _cloud_selection_progress = None
         return [], [], [], [], {"turn": None}

@@ -153,7 +153,7 @@ class CloudInferenceUnit:
                           or updater[0] or live_key != key
                           or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                           # A paid result is kept while its scope holds, even if the send window closes.
-                          or not cloud_policy.eligible(now, route, project_id))
+                          or not cloud_policy.in_scope(now, route, project_id))
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline

@@ -98,7 +98,7 @@ v1.0適合には、保存済みの処理対象すべてを新しい推論版で�
 全対象という指定を、外部送信の許可範囲や無効設定を広げる根拠に使わない。
 
 既存のworker・job・lockを使い、有限件ずつ再予約する。新しい常駐サービスやQueueを追加しない。
-クラウド解析は許可済みの`reextract`・`patient_context`・`semantic_backlog`を使う。Anthropicは同期Messages API、OpenAIはResponses APIを使う。canonical生成の原文・品質・昇格条件は維持する。Message Batches APIは実装しない。
+クラウド解析の新規要求は`patient_context`による患者コンテキストの作成・更新に限る。`reextract`・`semantic_backlog` の新規送信は行わず、個別の履歴抽出と意味解析バックログはローカルで継続する。確定済みのクラウド結果と会計記録は、設定された対象範囲で読み取り・回復できる。Anthropicは同期Messages API、OpenAIはResponses APIを使う。canonical生成の原文・品質・昇格条件は維持する。Message Batches APIは実装しない。
 進捗には対象推論版、scope、列挙の上限ID、cursorを保存し、中断後は同じ世代から再開する。
 走査中の上限とcursorは、新着や解析結果の採用だけでは先頭へ戻さない。追加分は後続の有限範囲で追跡し、既存の対象の処理を進める。同じ入力で評価済みのjobを、患者全体が未完了という理由だけで再投入しない。待機の入力・証拠・job状態が同じ場合は全件を再走査しない。
 列挙終端だけで完了とせず、抽出・QC・semantic・患者コンテキスト・投影の現行性を確認する。

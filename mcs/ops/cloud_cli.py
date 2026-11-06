@@ -240,7 +240,7 @@ def _route_counts(db, cfg, settings, deadline):
             item["basic_requests_estimate"] += basic
             item["chunk_extra_requests_estimate"] += max(0, chunks - pending["scan_sources"])
             item["requests_estimate"] += pending["summary_units"] + chunks
-    if "reextract" in settings["routes"]:
+    if "reextract" in settings["routes"] and policy.send_route("reextract"):
         import extract_llm as extract
         import cloud_inference
         selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
@@ -278,7 +278,7 @@ def _route_counts(db, cfg, settings, deadline):
                 item["basic_requests_estimate"] += 1
                 item["chunk_extra_requests_estimate"] += requests - 1
                 item["requests_estimate"] += requests
-    if "semantic_backlog" in settings["routes"]:
+    if "semantic_backlog" in settings["routes"] and policy.send_route("semantic_backlog"):
         scope, params = _source_scope(settings, "j")
         rows = db.execute(
             "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
