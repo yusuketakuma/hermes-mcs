@@ -29,7 +29,7 @@ from adapters.lineworks import __main__ as cli
 from adapters.lineworks import server
 from hermes_plugin.card_workers import _interactive_settings
 from lineworks_testkit import NOW, SECRET, event, raw, signature, world
-from ops_testkit import _git, _load, _make_repo
+from ops_testkit import _git, _load, _make_repo, patch_lifecycle_lookup
 
 updater = test_mcs_update.updater   # shared fixture
 
@@ -283,7 +283,7 @@ def test_recovery_provenance_checks_filesystem_not_only_git_status(
         (repo / "deleted.txt").unlink()
 
     tool = updater if helper == "updater" else _load()
-    monkeypatch.setattr(tool, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, tool, "REPO", str(repo))
     before = _provenance_snapshot(repo)
     refused = False
     try:
@@ -356,7 +356,7 @@ def test_recovery_keeps_a_dangling_symlink_without_following_it(
     path.unlink()
     path.symlink_to("missing-target")
     tool = updater if helper == "updater" else _load()
-    monkeypatch.setattr(tool, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, tool, "REPO", str(repo))
     index = _git(repo, "ls-files", "--stage", "-v").stdout
 
     assert tool._local_changes_outside(prev, target) == ["f.txt"]
@@ -392,7 +392,7 @@ def test_recovery_allows_known_file_directory_transitions(
                            else (directory_commit, file_commit))
     _git(repo, "checkout", "-q", "--detach", origin if at == "source" else destination)
     tool = updater if helper == "updater" else _load()
-    monkeypatch.setattr(tool, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, tool, "REPO", str(repo))
     before = _provenance_snapshot(repo)
     try:
         assert tool._local_changes_outside(origin, destination) == []
@@ -425,7 +425,7 @@ def test_file_directory_reset_preserves_unknown_children(
         (repo / "shape").rmdir()
         (repo / "shape").symlink_to(private, target_is_directory=True)
     tool = updater if helper == "updater" else _load()
-    monkeypatch.setattr(tool, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, tool, "REPO", str(repo))
     before = _provenance_snapshot(repo)
     private_before = ((private / "known.txt").read_bytes() if private is not None else None)
     try:
