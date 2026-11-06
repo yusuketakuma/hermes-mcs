@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "添付OCRをYomitoku 0.16.1へ更新",
+  "summary": "添付ファイルの文字読取りに使うYomitokuを0.16.1へ更新します。",
+  "upgrade": "OCRを導入済みの場合は、通常のアップデーターでOCR用環境も更新してください。旧版のOCR結果は履歴として残し、保存されている原本から順次読み直します。原本を取得できない添付は取得不能として表示します。",
+  "details": [
+    "公式タグv0.16.1のコミット0279cf256e2588430d085e2dc958e8740be82921へ固定する。",
+    "Python 3.13の独立環境、CPU実行、4種類の固定モデルを維持する。幾何補正は有効化しない。",
+    "OCRの有効化設定とMCSの本番コードの適用は別に行う。"
+  ],
+  "refs": [
+    "mcs/extract/ocr_model_contract.py",
+    "deployment/requirements-ocr.txt",
+    "tests/ops/test_yomitoku_install.py",
+    "tests/extract/test_attachment_ocr_migration.py"
+  ]
+}

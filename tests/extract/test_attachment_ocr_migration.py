@@ -22,16 +22,17 @@ def test_table_span_has_a_memory_bound_before_expansion(monkeypatch):
             {'row': 0, 'col': 0, 'row_span': 3, 'contents': ''}]}]})
 
 
-def _legacy(db):
+def _legacy(db, runtime=LEGACY):
     with db:
         db.execute("UPDATE artifacts SET content=json_set(content,'$.runtime_contract',?) WHERE kind=?",
-                   (LEGACY, ocr.KIND))
+                   (runtime, ocr.KIND))
 
 
-def test_legacy_table_source_is_reprocessed_without_overwriting_history(setup):
+@pytest.mark.parametrize("runtime", [LEGACY, ocr.RUNTIME_CONTRACT.replace("0.16.1", "0.16.0")])
+def test_legacy_table_source_is_reprocessed_without_overwriting_history(setup, runtime):
     ledger, cfg, _, calls, _ = setup
     assert ocr.run_pending(ledger, cfg)['complete'] == 1
-    _legacy(ledger.db)
+    _legacy(ledger.db, runtime)
     before = tuple(ledger.db.execute('SELECT * FROM artifacts WHERE kind=?', (ocr.KIND,)).fetchone())
     assert ocr.current(ledger.db, 1) is None
     assert ocr.run_pending(ledger, cfg)['complete'] == 1

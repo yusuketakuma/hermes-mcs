@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-ENGINE_VERSION = "0.16.0"
+ENGINE_VERSION = "0.16.1"
 MODELS = {
     "detector": ("KotaroKinoshita/yomitoku-text-detector-dbnet-v2_1",
                  "3ac8375d1fd124e8074b013a32f2085d1199654c"),

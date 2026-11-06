@@ -16,7 +16,7 @@ Yomitokuの公開コード・モデルはCC BY-NC-SA 4.0です。個人の非商
 bash install.sh --with-yomitoku
 ```
 
-MCSのPythonとは別に、`MCS_ROOT/ocr-venv`へPython 3.13とYomitoku 0.16.0を導入します。
+MCSのPythonとは別に、`MCS_ROOT/ocr-venv`へPython 3.13とYomitoku 0.16.1を導入します。
 公式ソースの固定commitを使い、必要なモデルは導入時に取得します。
 既存のモデルキャッシュは削除しません。選択した導入項目は更新時にも引き継ぎ、
 依存や導入手順が変わった場合は再導入が必要になります。
