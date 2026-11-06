@@ -304,7 +304,7 @@ def test_v4_invalid_or_hidden_sequence_is_not_rendered(sequence):
 
 
 @pytest.mark.parametrize("separator", ["\n", "\r\n", "\u2028"])
-def test_sender_cannot_insert_a_fake_provider_line_in_thread_header(monkeypatch, separator):
+def test_sender_cannot_insert_a_fake_provider_line_in_thread_header(monkeypatch, separator, led):
     import notify_render
     import processing_route
 
@@ -313,7 +313,7 @@ def test_sender_cannot_insert_a_fake_provider_line_in_thread_header(monkeypatch,
     monkeypatch.setattr(notify_render, "_summary_block", lambda *a, **kw: {"text": "要約 合成"})
     message = {"body_state": "full", "posted_at": "2032-06-01T09:12:00+09:00",
                "body_text": "合成の本文"}
-    body = notify_render._message_post(None, 100, message, "合成職員" + separator + fake,
+    body = notify_render._message_post(led.db, 100, message, "合成職員" + separator + fake,
                                        head="↳ ", stamps=False, layout=3, provider_states=states)
     header = body.partition("\n" + notify_render.SECTION_RULE + "\n")[0]
     assert header.splitlines()[1] == processing_route.provider_text(states)
