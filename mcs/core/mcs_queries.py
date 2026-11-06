@@ -1426,6 +1426,7 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
         derived, derived_sig = _context_derived_summaries(db, message, rows, cfg)
         message["derived_summaries"] = derived if hydrate else []
         message["derived_summary_sig"] = derived_sig
+        message["derived_summary_chars"] = sum(len(summary["text"]) for summary in derived)
         items = source_patient_context(db, message, art_rows=list(reversed(rows))) if hydrate else []
         source = {key: message.get(key) for key in
                   ("project_id", "message_id", "content_hash", "posted_at_ts")}
