@@ -48,9 +48,15 @@ def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(rou
     now = worker.time.time()
     monkeypatch.setattr(worker.time, 'time', lambda: now + worker._PREPARE_HOLD_S + 1)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
-    with legacy_cloud_routes():
-        second = worker.run_pending(ledger, limit=1, budget_s=180)
+    infer = extract_llm_runner.llm_extract
+    def paid_only(*args, **kwargs):
+        assert kwargs.get('provider') is not None, 'paid unit fell back to local'
+        return infer(*args, **kwargs)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', paid_only)
+    assert not cloud_policy.send_route('reextract')
+    second = worker.run_pending(ledger, limit=1, budget_s=180)
     assert second['done'] == 1 and second['failed'] == second['deferred'] == 0
+    assert second['llm_calls']['calls'] == 0
     assert len(posts) == 1
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
         "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') ORDER BY artifact_id")] == money
