@@ -538,6 +538,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if cloud_only or unresolved or (str(error) == "cloud_send_blocked" and (saved or chunks_out)):
                     _CALL_NOTES.defer_reason = "cloud_unit_unresolved" if unresolved else "cloud_fallback"
                     return _DEFERRED
+                if str(error) == "cloud_unit_changed" and r.get("_cloud_owned"):
+                    # The owned unit's history pin failed: keep the paid unit
+                    # unresolved rather than restarting its claim locally.
+                    _CALL_NOTES.defer_reason = "currentness_unverified"
+                    return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
                     r.pop("_provider_contract", None)

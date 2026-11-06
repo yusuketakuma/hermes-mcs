@@ -10,6 +10,7 @@ import anthropic_client
 import cloud_backlog
 import cloud_policy
 import extract_llm as worker
+from extract_testkit import _message
 from test_anthropic_runtime import old, routed, real_usage_reserver, real_record_result
 from test_cloud_response_recovery import legacy_cloud_routes
 
@@ -106,4 +107,110 @@ def test_send_cap_does_not_reset_partial_cloud_chunks(routed, monkeypatch):
     report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
     assert report['deferred'] == 1 and report['done'] == 0 and len(seen) == 1
     # The seeded reservation is the only one: closed sends add no new POST.
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_owned_unit_defers_when_history_unverifiable(routed, monkeypatch):
+    """No captured scope: the owned unit holds; the independent row still goes local."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        # Deliberately no capture_history_tx: the scope snapshot cannot be taken.
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    local = []
+    def extraction(body, **kwargs):
+        if kwargs.get('provider') is None:
+            local.append(body)
+            return {}
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    report = worker.run_pending(ledger, limit=2, workers=1, budget_s=180, background=True)
+    assert report['done'] == 1 and len(local) == 1
+    assert report['defer_reasons'].get('cloud_source_unverified') == 1
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1 and not calls
+
+
+def test_owned_unit_defers_when_history_snapshot_changes(routed, monkeypatch):
+    """A history pin captured at prepare must still be verified at dispatch."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-entry-recovery', time.time())
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(cloud_backlog, 'request_slot', lambda *a: nullcontext(True))
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    # Prepare pins 'A'; every later verification reads the changed snapshot 'B'.
+    snapshots = iter(['synthetic-snap-A', 'synthetic-snap-B'])
+    monkeypatch.setattr(cloud_policy, 'history_thread_snapshot',
+                        lambda *a, **kw: next(snapshots, 'synthetic-snap-B'))
+    local = []
+    def extraction(body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is None:
+            local.append(body)
+            return {}
+        try:
+            provider('synthetic owned input', deadline=kwargs['deadline'], max_tokens=100)
+        except Exception:
+            pass
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
+    assert report['done'] == 0 and not local and not calls
+    assert report['defer_reasons'].get('currentness_unverified') == 1
+    assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('meta', [{'note': 'synthetic route-less meta'}, '{broken'])
+def test_owned_unit_holds_on_unverifiable_reservation_meta(routed, monkeypatch, meta):
+    """A reservation that cannot prove a different route stays a conservative hold."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-entry-recovery', time.time())
+        if isinstance(meta, str):
+            ledger.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_reserve',1,1,'{}','synthetic',?,?)", (meta, time.time()))
+        else:
+            ledger.artifact_add_tx('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                   model='synthetic', meta=meta)
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(cloud_backlog, 'request_slot', lambda *a: nullcontext(True))
+    local = []
+    def extraction(body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is None:
+            local.append(body)
+            return {}
+        try:
+            provider('synthetic owned input', deadline=kwargs['deadline'], max_tokens=100)
+        except Exception:
+            pass
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True)
+    assert report['done'] == 0 and report['deferred'] == 1
+    assert not local and not calls
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
