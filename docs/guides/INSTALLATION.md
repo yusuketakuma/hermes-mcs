@@ -574,7 +574,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `notify.card_thread` | bool | `true`（ウィザード既定。キー未設定のconfigではオフ） | 患者スレッドごとにカードのコンパニオンスレッドを立て本文・添付を配送。Slackの投稿カードはこの設定にかかわらず元投稿のスレッドを使用 |
 | `notify.card_thread_archive_min` | int | `10080` | 設定キーのみ（自動アーカイブは未実装） |
 | `notify.route_epoch` | int | `1` | 配送先を変えたとき +1 する番号 |
-| `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`） |
+| `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`）。自動作成したMCSLOGだけは、現在の送り先・接続設定と一致する作成記録のprofileを使う。患者情報と既存の明示した運用先のprofileは変更しない |
 | `notify_system_target` | str | なし | 稼働状況・エラー・復旧などの送り先。患者情報の本文・カードにSlackを使う場合は、各送り先と分離を確認できる明示先が必要。それ以外は空欄で`notify_target`と同じ。[分離の条件](STANDALONE.md#患者情報と運用通知の送り先) |
 | `notify_max_age_h` | num | なし | この時間より古い投稿は通知しない。設定時は期間内の新規取込みを既読でも通知（既読投稿は投稿時刻が必要） |
 | `notify_all_replies` | bool | false | リアルタイム通知経路で新規取得した返信を既読・投稿時刻によらず全件通知。返信には `notify_max_age_h` を適用しない。履歴一括取込み・保存済み返信の再送は対象外 |
@@ -835,7 +835,12 @@ Bot Token Scopes に追加: `chat:write`, `app_mentions:read`,
 
 患者情報と運用情報を分けて自動作成する場合は、非公開チャンネルの作成・操作者の招待に`groups:write`、チャンネルと所属の確認に`groups:read`も必要です。権限を追加した既存アプリは、ワークスペースへ再インストールして反映します。新規作成する`mcs`と`mcslog`は非公開とし、既存の患者情報先は移動しません。作成結果が不明な場合は、別名の作成や公開チャンネルへの変更をせず保留します。
 
-通常の導入・更新では、この準備を自動で行います。新規導入で患者情報先がなければ`mcs`と`mcslog`を作り、操作を許可したユーザーだけを招待します。既存の患者情報先と、別に設定された有効な運用先は保持します。権限不足・名前の競合・作成結果の不明などで止まった場合は、案内された条件を確認してから`mcs setup slack-channels`で準備を再開してください。結果が不明な作成・招待は自動で繰り返しません。
+Slackカードを使う導入・更新（`notify.interactive=slack`）では、この準備を自動で行います。
+新規導入で患者情報先がなければ`mcs`と`mcslog`を作り、操作を許可したユーザーだけを招待します。
+既存の患者情報先と、別に明示された運用先は保持します。`interactive=off`のテキスト専用設定では
+チャンネルを自動作成せず、分離済みの既存IDを`notify_system_target`へ指定します。
+権限不足・名前の競合・作成結果の不明などで止まった場合は、案内された条件を確認してから
+`mcs setup slack-channels`で準備を再開してください。結果が不明な作成・招待は自動で繰り返しません。
 
 Slack公式仕様: [チャンネル作成](https://docs.slack.dev/reference/methods/conversations.create/)・[非公開チャンネルの管理権限](https://docs.slack.dev/reference/scopes/groups.write/)・[操作者の招待](https://docs.slack.dev/reference/methods/conversations.invite/)。
 

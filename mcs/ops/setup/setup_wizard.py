@@ -56,7 +56,7 @@ WIZARD = [
          "患者情報の送り先（Slack新規作成は空欄。例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
-         "エラーや動作状況の通知先（Slackは空欄で専用チャンネルを作成）", None),
+         "エラーや動作状況の通知先（Slackカード利用時は空欄で専用チャンネルを作成）", None),
     ]),
     ("通知の形式を選ぶ", [
         ("notify.interactive", "choice:off,slack,discord,lineworks", "off",

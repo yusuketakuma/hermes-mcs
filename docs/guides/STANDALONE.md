@@ -138,6 +138,12 @@ LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設�
 LINE WORKSへ送信しません。Hermesモードの復旧用コピーは従来どおり`local`へ送ります。
 Hermes連携の通常送信・稼働監視も同じ条件で送り先を選びます。
 
+Hermesで自動作成したMCSLOGだけは、`data/slack-channel-setup.json`の作成記録と現在の送り先・
+接続設定が一致した場合に、作成元のprofileを明示して送ります。患者情報と既存の明示した運用先は、
+従来どおり`notify_bot_profile`を使います。記録が破損した場合や、新規作成先と一致する記録が未完了・
+現在の接続設定と不一致の場合は、別profileへ切り替えず送信を保留します。
+監視で`--config`を指定した場合も、その設定ファイルのあるrootの作成記録を使います。
+
 ## 常駐・診断
 
 macOSの`ai.mcs.standalone`が、定期7ジョブ、抽出worker2本、cmd/cmd_int取込と接続を所有します。
