@@ -842,6 +842,23 @@ def test_v1_pending_plan_resumes_and_changed_request_is_refused(tmp_path):
         setup.prepare(tmp_path, surfaced)
 
 
+def test_v1_plan_resumes_when_same_config_already_has_text_target(tmp_path):
+    cfg = config()
+    cfg['notify_target'] = 'slack:C000000097'
+    state = setup.prepare(tmp_path, cfg)
+    assert state['plan']['surfaces'] == {'text': True, 'card': True}
+    state['plan'].pop('surfaces')
+    state['plan_hash'] = setup._hash(state['plan'])
+    setup.save(tmp_path, state)
+    resumed = setup.prepare(tmp_path, cfg)
+    assert resumed['request_id'] == state['request_id']
+    assert resumed['plan_hash'] == state['plan_hash']
+    new_channel = deepcopy(cfg)
+    new_channel['notify_target'] = 'slack:new'
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.prepare(tmp_path, new_channel)
+
+
 def test_text_only_flags_publish_gates_completion_and_resume_converges(tmp_path, monkeypatch):
     cfg, client = text_config(), Client()
     import notify_spool
