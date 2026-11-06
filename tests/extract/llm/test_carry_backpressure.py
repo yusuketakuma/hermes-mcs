@@ -26,6 +26,7 @@ from test_lane_slot_and_lock import _carry_one, _claims
 from test_anthropic_runtime import (
     routed as routed, old, _use_real_cloud_accounting, _current_artifacts,
 )
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def forbid_new_work(monkeypatch):
@@ -119,8 +120,9 @@ def test_paid_save_wait_keeps_receipt_and_never_posts_again(routed, monkeypatch,
     monkeypatch.setattr(worker, 'llm_extract', extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, 'sleep', lambda seconds: None)
-    first = worker.run_pending(led, limit=1, budget_s=180, per_write_lock=True,
-                               write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        first = worker.run_pending(led, limit=1, budget_s=180, per_write_lock=True,
+                                   write_wait_s=1, carry=[])
     carry = first['carry']
     assert len(carry) == len(posts) == 1
     receipt = [(row['artifact_id'], row['meta']) for row in led.artifacts('cloud_usage_result')]

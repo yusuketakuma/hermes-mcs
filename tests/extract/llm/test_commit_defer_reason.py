@@ -4,6 +4,7 @@ import pytest
 
 import extract_llm as worker
 from test_anthropic_runtime import old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("reason,expected", [("completeness", "commit_completeness"), (None, "commit_rejected")])
@@ -18,7 +19,8 @@ def test_run_pending_counts_rejected_commit_exactly_once(routed, monkeypatch, re
 
     monkeypatch.setattr(worker, "_commit_extraction_atomic", rejected)
     monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
-    result = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert observed == [True]
     assert result["done"] == 0 and result["deferred"] == 1
     assert result["defer_reasons"] == {expected: 1}

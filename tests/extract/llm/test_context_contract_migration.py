@@ -19,6 +19,7 @@ from extract_testkit import _message
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from test_anthropic_runtime import old, routed, real_usage_reserver, real_record_result
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['routed']
 # git show 710b1356:mcs/extract/llm/extraction_context.py | shasum -a 256
@@ -104,7 +105,8 @@ def test_pre_fix_frame_keeps_paid_recovery_or_unknown_hold_at_next_cap(routed, m
         return worker._DEFERRED
     monkeypatch.setattr(worker, 'llm_extract', extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
+    with legacy_cloud_routes():
+        assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
     before = [dict(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
         "('extract_llm_context_v1','cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
     first_pass[0] = False
@@ -112,7 +114,8 @@ def test_pre_fix_frame_keeps_paid_recovery_or_unknown_hold_at_next_cap(routed, m
     monkeypatch.setattr(extract_llm_context, '_context_contract', worker._context_contract)
     monkeypatch.setattr(extract_llm_prepare, '_context_contract', worker._context_contract)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
-    assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
+    with legacy_cloud_routes():
+        assert worker.run_pending(ledger, limit=1, budget_s=180)['deferred'] == 1
     assert len(posts) == int(outcome == 'paid')
     assert replay == ([False, True] if outcome == 'paid' else [])
     assert [dict(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "

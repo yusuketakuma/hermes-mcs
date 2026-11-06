@@ -12,6 +12,7 @@ import cloud_inference
 from anthropic_client import AnthropicClient, MODEL
 from test_anthropic_runtime import old
 from test_anthropic_runtime import routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 _REAL_RESERVE = cloud_policy.usage_reserver
 _REAL_RESULT = cloud_policy.record_result
@@ -159,12 +160,14 @@ def test_reserve_refusal_defers_without_send_or_local_fallback(routed, monkeypat
         pytest.fail('a refused unit fell back to local')
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1 and not sent
     assert not [row for row in led.artifacts('cloud_usage_reserve')]
     assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
     assert cloud_policy.usage_report(led)['unresolved_requests'] == 0
-    worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        worker.run_pending(led, budget_s=180)
     assert not sent
 
 
@@ -196,7 +199,8 @@ def test_post_reservation_guard_refusal_never_sends_or_burns_retry(routed, monke
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report['done'] == 0 and report['deferred'] == 1 and not sent
     results = [json.loads(row['meta']) for row in led.artifacts('cloud_usage_result')]
     assert len(results) == 1 and results[0]['http_class'] == 'not_sent'
@@ -226,14 +230,16 @@ def test_post_result_failure_records_backoff_if_owner_is_available(routed, monke
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert sent == [True] and report['deferred'] == 1
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
               if json.loads(row['meta']).get('error')]
     assert len(errors) == 1 and errors[0]['attempts'] == 1 and errors[0]['next_try'] > time.time()
     accounting = cloud_policy.usage_report(led)
     assert accounting['unresolved_requests'] == 1 and accounting['daily_requests'] == 1
-    worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        worker.run_pending(led, budget_s=180)
     assert sent == [True]
 
 
@@ -270,7 +276,8 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
         return {}
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert sent == [True] and not returned_cloud
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
               if json.loads(row['meta']).get('error')]
@@ -279,7 +286,8 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
         assert not local and report['deferred'] == 1
         assert len(errors) == 1 and errors[0]['attempts'] == 1 and errors[0]['next_try'] > time.time()
         assert accounting['unresolved_requests'] == 1
-        worker.run_pending(led, budget_s=180)
+        with legacy_cloud_routes():
+            worker.run_pending(led, budget_s=180)
         assert sent == [True]
     else:
         assert local == [True] and report['done'] == 1 and not errors
@@ -316,14 +324,16 @@ def test_unknown_attempt_then_retry_scope_denial_still_records_backoff(routed, m
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1 and sent == [True]
     errors = [json.loads(row['meta']) for row in led.artifacts(worker.KIND)
               if json.loads(row['meta']).get('error')]
     assert len(errors) == 1 and errors[0]['attempts'] == 1 and errors[0]['next_try'] > time.time()
     accounting = cloud_policy.usage_report(led)
     assert accounting['daily_requests'] == 1 and accounting['unresolved_requests'] == 1
-    worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        worker.run_pending(led, budget_s=180)
     assert sent == [True]
 
 
@@ -353,7 +363,8 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
         pytest.fail('local breaker is open')
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report['deferred'] == 1
     assert sent == [True]
     assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
