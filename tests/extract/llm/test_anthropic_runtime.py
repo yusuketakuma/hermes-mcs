@@ -27,6 +27,7 @@ import inference_version as inference
 import mcs_util
 from extract_testkit import _ledger, _message
 from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, _use_real_cloud_accounting as _use_real_cloud_accounting, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize(("route", "purpose", "model", "effort", "tokens"), [
@@ -55,7 +56,8 @@ def test_cloud_unit_pins_profile_through_body_and_reservation(routed, monkeypatc
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route=route, purpose=purpose, project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 120,
         current=lambda: True, dispatch=lambda fn, **_kwargs: fn())
-    response = provider("synthetic prompt", deadline=time.monotonic() + 120, max_tokens=1600)
+    with legacy_cloud_routes():
+        response = provider("synthetic prompt", deadline=time.monotonic() + 120, max_tokens=1600)
     assert response["status"] == 200 and len(received) == len(reserved) == 1
     assert received[0]["model"] == model and received[0]["reasoning"] == {"effort": effort}
     assert received[0]["max_output_tokens"] == tokens
@@ -83,7 +85,8 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
     monkeypatch.setattr(worker, "_probe_format", lambda **kw: pytest.fail("cloud probed local GPU"))
     monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
     monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
-    report = worker.run_pending(led, budget_s=180, workers=1, batch_k=4, background=background)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, workers=1, batch_k=4, background=background)
     assert report["done"] == 2 and report["failed"] == 0
     assert len(calls) == len(reserves) == len(results) == 2
     assert {r["identity"]["unit_key"] for r in reserves} == {"1", "2"}
@@ -102,9 +105,9 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
 
 def test_missing_key_and_scope_leave_local(routed, monkeypatch):
     led, cfg, *_ = routed
-    assert worker._cloud_mode(led, cfg, "reextract", 2) == "off"
+    assert worker._cloud_mode(led, cfg, "patient_context", 2) == "off"
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: None)
-    assert worker._cloud_mode(led, cfg, "reextract", 1) == "off"
+    assert worker._cloud_mode(led, cfg, "patient_context", 1) == "off"
 
 
 @pytest.mark.parametrize("flag", ["qc_src", "thin_src", "human_src", "attempts"])
@@ -209,7 +212,8 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     waits = change in ('stop', 'daily_cap', 'monthly_cap', 'window_start')
     assert report["done"] == int(not waits) and not calls and len(reserves) == 1
     assert report['deferred'] == int(waits)
@@ -223,7 +227,7 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
 
 def test_injected_call_keeps_existing_json_validation(routed):
     led, cfg, *_ = routed
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {"symptoms": []}
@@ -239,7 +243,7 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
     class Client(original_client):
         def __init__(self, key, *, model, effort):
             assert key == "synthetic-openai"
-            assert (model, effort) == ("gpt-6-luna", "medium")
+            assert (model, effort) == ("gpt-6.1-sol", "medium")
             super().__init__(key, model=model, effort=effort)
 
         def complete(self, prompt, **kwargs):
@@ -248,10 +252,10 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
             return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop", "model": "gpt-6-luna"}
 
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
-    assert provider.model == provider.contract["model"] == "gpt-6-luna"
+    assert provider.model == provider.contract["model"] == "gpt-6.1-sol"
     assert provider.contract["backend"] == "openai"
     assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {"symptoms": []}
     assert seen == [True]
@@ -270,7 +274,8 @@ def test_cloud_failure_restarts_whole_post_with_local_checkpoint_contract(routed
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        result = worker.run_pending(led, budget_s=180)
     assert result["done"] == 1 and trace == [(True, {}), (False, {})]
     assert "backend" not in json.loads(led.artifacts(worker.KIND)[0]["meta"])
     assert not calls
@@ -293,7 +298,8 @@ def test_cloud_fallback_requires_a_known_attempt_outcome(routed, monkeypatch, kn
         return {}
     monkeypatch.setattr(worker, 'llm_extract', infer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report['done'] == int(known) and len(local) == int(known)
     assert len(calls) == int(known)
     if not known:
@@ -329,7 +335,7 @@ def test_same_source_is_checked_again_after_durable_reservation(routed, monkeypa
             return result
         return changed
     monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: valid[0], dispatch=lambda fn, **kw: fn())
     with pytest.raises(cloud_inference.CloudFallback):
@@ -378,7 +384,7 @@ def test_saved_provider_contract_is_the_fixed_request_shape_and_a_fresh_copy():
 
 def test_cloud_call_resets_prior_unit_integrity_and_records_once(routed):
     led, cfg, calls, reservations, results = routed
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     notes = worker._note_list()
@@ -422,7 +428,8 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report["done"] == 1 and len(local) == 1
     assert len(calls) == len(reserved) == len(results) == 1
     assert outcomes == [{"http_class": "http_200"}]
@@ -435,7 +442,7 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
 
 def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed, monkeypatch):
     led, cfg, calls, reserved, _ = routed
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     provider.guard()                                   # inside the window: the attempt may POST
