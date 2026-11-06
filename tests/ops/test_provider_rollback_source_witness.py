@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from ops_testkit import _git
+from ops_testkit import _git, patch_lifecycle_lookup
 from test_mcs_update import updater  # noqa: F401
 from test_update_rollback_guards import _head, _source_repo
 
@@ -97,8 +97,8 @@ def test_reviewed_prior_still_requires_target_readers(reviewed_source, monkeypat
     update, _, previous = reviewed_source
     real_tree = update._split_source_tree
     missing = [entry for entry in real_tree(previous) if entry[3] != "mcs/core/provider_settings.py"]
-    monkeypatch.setattr(update, "_PROVIDER_ROLLBACK_SOURCE_WITNESSES", frozenset({_witness(missing)}))
-    monkeypatch.setattr(update, "_split_source_tree", lambda ref: missing if ref == previous else real_tree(ref))
+    patch_lifecycle_lookup(monkeypatch, update, "_PROVIDER_ROLLBACK_SOURCE_WITNESSES", frozenset({_witness(missing)}))
+    patch_lifecycle_lookup(monkeypatch, update, "_split_source_tree", lambda ref: missing if ref == previous else real_tree(ref))
     assert not update._split_target_source_matches(previous, allow_reviewed_rollback=True)
 
 
@@ -115,7 +115,7 @@ def test_reviewed_prior_rechecks_target_tree(reviewed_source, monkeypatch):
                 return tree[:-1]
         return tree
 
-    monkeypatch.setattr(update, "_split_source_tree", changed)
+    patch_lifecycle_lookup(monkeypatch, update, "_split_source_tree", changed)
     assert not update._split_target_source_matches(previous, allow_reviewed_rollback=True)
 
 
