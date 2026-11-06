@@ -378,7 +378,14 @@ def _notify(text):
     if cfg.get("runtime_mode") == "standalone":
         # best-effort to the system-alert channel (notify_flush's choice)
         try:
-            target = cfg.get("notify_system_target") or cfg.get("notify_target")
+            patient = cfg.get("notify_target")
+            system = cfg.get("notify_system_target")
+            patient = patient.strip() if isinstance(patient, str) else ''
+            system = system.strip() if isinstance(system, str) else ''
+            if (patient == 'slack' or patient.startswith('slack:')) and (
+                    not system or system.split(':', 2)[:2] == patient.split(':', 2)[:2]):
+                return
+            target = system or patient
             python = os.path.join(mcs_recovery_core.HOME, "venv", "bin", "python3")
             entry = os.path.join(mcs_recovery_core.REPO, "mcs_standalone", "__main__.py")
             if isinstance(target, str) and os.access(python, os.X_OK) \

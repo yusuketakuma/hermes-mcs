@@ -689,7 +689,7 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
         return False                   # transport has not been called
     try:
         notify_sender.send(argv,
-                           "[MCS] 監視警報\n" + text,
+                           "[MCSLOG] 監視警報\n" + text,
                            deadline=time.monotonic() + 60)
         return True
     except (notify_sender.SendFailed, notify_sender.SendUsage):
@@ -904,7 +904,7 @@ def _impact(report: dict, reasons) -> str:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
     if report.get("run_status") == "ok":
         parts.append("収集は動いています。")
-    return "".join(parts) or "収集は動いていますが、確認が必要な状態です。"
+    return "".join(parts) or "稼働状況の確認が必要です。"
 
 
 _WAIT_JA = {
@@ -993,11 +993,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         return ["・記録された理由はありません", "　→ 次回の収集を待つ"]
     oldest = report.get("oldest_age_s") or {}
     standalone = report.get("runtime_mode") == "standalone"
-    host = report.get("host_details") if isinstance(report.get("host_details"), dict) else {}
     rows = []
     for code in reasons:
         base = code.split(":")[0]
-        meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        meaning, action = _REASON_JA.get(base, ("原因未分類の異常があります", f"{_CHECK} で確認"))
         if base in _CLOUD_REASON_JA:
             meaning, action = _CLOUD_REASON_JA[base]
         if standalone:
@@ -1016,8 +1015,6 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                       '外部で既読化された記録は再取得できない場合があります')
             if report.get('observations_recorded'):
                 meaning = '記録時点: ' + meaning
-        if isinstance(host.get(base), str) and host[base]:
-            meaning += f"（{host[base]}）"
         if base == "backup_not_verified":
             cause = report.get("backup_failure_code")
             if isinstance(cause, str) and cause in _BACKUP_FAILURE_JA:
@@ -1090,20 +1087,19 @@ def _alert_lines(report: dict) -> list[str]:
     last on one line for operators to search."""
     lines = []
     if report["alert"] and report["status"] != "ok":
-        status = report["status"]
-        reasons = report.get("state_reasons")
+        status = report["status"] if report["status"] in _STATUS_JA else 'unknown'
+        raw_reasons = report.get("state_reasons")
+        reasons = ([code if code in _REASON_JA or code in _CLOUD_REASON_JA else 'unknown'
+                    for code in raw_reasons] if isinstance(raw_reasons, list) else None)
         glyph = "🔴" if status in _SEVERE else "🟠"
-        lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, status)}")
+        lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, "状態を確認できません")}")
         lines.append("影響: " + _impact(report, reasons))
-        streak = report.get("streak") or {}
-        count, first, at = streak.get("count"), streak.get("first_at"), report.get("health_at")
-        if type(count) is int and count >= STREAK_ALERT and finite_number(first) \
-                and finite_number(at) and 0 <= at - first:
-            # observed count and the actual elapsed time, never a nominal cadence
-            lines.append(f"継続: 監視理由ごとの連続観測は最大{count}回"
-                         f"（該当理由の初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
         lines.append("原因と対処:")
-        lines.extend(_reason_rows(report, reasons))
+        reason_rows = _reason_rows(report, reasons)
+        shared = {line for line in reason_rows if line.startswith("　→ ") and reason_rows.count(line) > 1}
+        lines.extend(line for line in reason_rows if line not in shared)
+        for line in dict.fromkeys(line for line in reason_rows if line in shared):
+            lines.append("共通の対処: " + line.removeprefix("　→ "))
         interrupt = report.get("last_interrupt")
         at = report.get("health_at")
         if (interrupt and not report.get("observations_recorded")
@@ -1111,6 +1107,13 @@ def _alert_lines(report: dict) -> list[str]:
             label = _INTERRUPT_JA.get(interrupt["reason"], _INTERRUPT_JA["unknown"])
             # the run's own end time is not known — only when it was found
             lines.append(f"直近の中断: {label}（{_jst(interrupt['detected_at'])} に検出）")
+        streak = report.get("streak") or {}
+        count, first, at = streak.get("count"), streak.get("first_at"), report.get("health_at")
+        if type(count) is int and count >= STREAK_ALERT and finite_number(first) \
+                and finite_number(at) and 0 <= at - first:
+            # observed count and the actual elapsed time, never a nominal cadence
+            lines.append(f"継続: 監視理由ごとの連続観測は最大{count}回"
+                         f"（該当理由の初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
         lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
                      f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
         lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
