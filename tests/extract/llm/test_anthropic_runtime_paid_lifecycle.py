@@ -25,6 +25,7 @@ import cloud_inference
 import mcs_util
 from extract_testkit import _ledger
 from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, _use_real_cloud_accounting as _use_real_cloud_accounting, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("revoke", ["none", "scope", "source", "updater", "key"])
@@ -47,7 +48,8 @@ def test_paid_cloud_carry_survives_deadline_and_lease_renewal_but_not_revocation
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
-    report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     carry = report["carry"]
     assert report["done"] == 0 and len(carry) == 1 and len(calls) == 1
     row, lease, _ = carry[0]
@@ -91,7 +93,8 @@ def test_dryrun_counts_committed_post_once_after_lock_carry(routed, monkeypatch,
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
-    report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     assert len(report["carry"]) == 1 and not led.artifacts("cloud_usage_dryrun")
     blocked[0] = False
     worker._settle_carry(led, report["carry"])
@@ -150,7 +153,8 @@ def test_validated_cloud_unit_does_not_expire_before_commit(routed, monkeypatch,
         return value
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     count = 2 if parallel else 1
     assert report["done"] == count and len(calls) == count
     current = _current_artifacts(led)
@@ -181,10 +185,11 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
         return fn()
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=clock() + 180, current=lambda: True, dispatch=dispatch)
-    assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == '{"symptoms":[]}'
+    with legacy_cloud_routes():
+        assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == '{"symptoms":[]}'
     assert outcomes == [{"http_class": "http_200"}]
     assert dispatches[-2:] == [True, True]
-    with pytest.raises(cloud_inference.CloudFallback):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback):
         provider("new-send", deadline=clock() + 180, max_tokens=100)
     assert calls == ["synthetic"]
 
@@ -206,7 +211,8 @@ def test_paid_carry_scope_revocation_records_disposition_without_touching_result
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
-    result = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        result = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     assert len(result["carry"]) == 1 and len(calls) == len(reserves) == len(results) == 1
     cfg["cloud_llm"]["mode"] = "off"
     blocked[0] = False
@@ -253,7 +259,7 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
                                      input_binding="a" * 64)
 
     first = provider()
-    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         first("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(posts) == len(reserves) == len(results) == 1
@@ -302,7 +308,7 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
     reason = "cloud_guard_unverified" if fails_on_read in (1, 4) else "cloud_config_unverified"
-    with pytest.raises(cloud_inference.CloudObservationIncomplete, match=reason):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete, match=reason):
         provider("synthetic", deadline=deadline, max_tokens=100)
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(reserves) == len(results) == (1 if fails_on_read == 4 else 0)
@@ -339,7 +345,7 @@ def test_transient_read_error_after_reservation_stays_unsent_without_scope_disca
     deadline = time.monotonic() + 180
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
@@ -377,9 +383,10 @@ def test_config_read_failure_preserves_previously_settled_response(routed, monke
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn(),
                                      input_binding="b" * 64)
-    provider("synthetic", deadline=deadline, max_tokens=100)
+    with legacy_cloud_routes():
+        provider("synthetic", deadline=deadline, max_tokens=100)
     unavailable[0] = True
-    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
@@ -404,7 +411,8 @@ def test_http_deadline_reserves_existing_commit_margin_without_changing_unit_dea
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=unit_deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    assert provider("synthetic", deadline=repair_deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
+    with legacy_cloud_routes():
+        assert provider("synthetic", deadline=repair_deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
     assert seen == [repair_deadline - worker.patient_context_refresh.COMMIT_MARGIN]
     assert provider.deadline == unit_deadline and len(reserved) == len(results) == 1
 
@@ -448,7 +456,8 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
     monkeypatch.setattr(extract_llm_carry, '_write_lock', worker._write_lock)
     monkeypatch.setattr(extract_llm_resident, '_write_lock', worker._write_lock)
     monkeypatch.setattr(extract_llm_runner, '_write_lock', worker._write_lock)
-    report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     assert report["done"] == 0 and len(result_locks) == 2
     assert len(calls) == len(reserved) == len(results) == 1
     assert len(led.artifacts("cloud_usage_disposition")) == int(loss != "none")
@@ -489,7 +498,8 @@ def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed
         pytest.fail("local must not run while its breaker is open")
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report["deferred"] == 1 and report["done"] == 0 and len(calls) == len(results) == 1
     [error] = [json.loads(a["meta"]) for a in led.artifacts(worker.KIND) if json.loads(a["meta"]).get("error")]
     assert error["attempts"] == 1 and error["next_try"] > time.time()
@@ -639,7 +649,8 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
-    report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     carry = report["carry"]
     reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
     assert len(carry) == len(posts) == len(reserves) == len(results) == 1
@@ -663,7 +674,7 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     next_unit = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         message_id=2, unit_key="synthetic-next", deadline=deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_send_blocked"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback, match="cloud_send_blocked"):
         next_unit("different synthetic request", deadline=deadline, max_tokens=100)
     assert not next_unit.possibly_sent
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
@@ -687,7 +698,8 @@ def test_new_unit_deadline_preserves_paid_response_without_local_fallback(routed
         return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
             unit_key="synthetic-paid-deadline", input_binding="c" * 64, deadline=end,
             current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    assert unit(deadline)("synthetic", deadline=deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
+    with legacy_cloud_routes():
+        assert unit(deadline)("synthetic", deadline=deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
     saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
     expired = time.monotonic() + 1
     blocked = unit(expired)
