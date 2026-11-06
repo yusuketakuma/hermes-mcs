@@ -19,6 +19,7 @@ import cloud_policy
 import extract_llm
 import cloud_inference
 import semantic_drain
+import semantic_due_selection
 from semantic_testkit import _ledger
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
 from cloud_selection_progress_testkit import _claim_count as _claim_count, _make_paid_carry as _make_paid_carry, _select as _select, blocked_prefix as blocked_prefix, cloud_candidates as cloud_candidates
@@ -70,7 +71,7 @@ def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, 
     led, _ = blocked_prefix
     clock = [time.monotonic()]
     deadline = clock[0] + 10
-    module = semantic_drain if lane == "semantic" else extract_llm
+    module = semantic_due_selection if lane == "semantic" else extract_llm_selection
     monkeypatch.setattr(module, "time", SimpleNamespace(
         monotonic=lambda: clock[0], time=time.time, perf_counter=time.perf_counter))
     monkeypatch.setattr(cloud_inference, 'time', module.time)
