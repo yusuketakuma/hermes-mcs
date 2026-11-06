@@ -214,3 +214,82 @@ def test_owned_unit_holds_on_unverifiable_reservation_meta(routed, monkeypatch, 
     assert report['done'] == 0 and report['deferred'] == 1
     assert not local and not calls
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_unverifiable_owned_head_holds_and_tail_goes_local(routed, monkeypatch):
+    """limit=1: the owned head cannot verify its history — its bounded claim
+    holds it while the refill still reaches the independent tail."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        # Deliberately no capture_history_tx: the scope snapshot cannot be taken.
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    local = []
+    def extraction(body, **kwargs):
+        if kwargs.get('provider') is None:
+            local.append(body)
+            return {}
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert first['done'] == 1 and len(local) == 1
+    assert first['defer_reasons'].get('cloud_source_unverified') == 1
+    # the unverifiable head keeps a bounded claim — the next pass cannot re-block on it
+    claim, = ledger.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
+                               "AND message_id=1").fetchall()
+    assert claim[0] > time.time()
+    second = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert second['done'] == 0 and second['deferred'] == 0
+    assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_owned_claim_unverifiable_keeps_head_and_tail_proceeds(routed, monkeypatch):
+    """limit=1: a claimed owned unit whose currentness cannot be verified
+    keeps its bounded claim; the next pass reaches the independent tail."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+        cloud_policy.capture_history_tx(ledger.db, 'synthetic-entry-currentness', time.time())
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(cloud_backlog, 'request_slot', lambda *a: nullcontext(True))
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    # Prepare pins 'A'; every later verification reads the changed snapshot 'B'.
+    snapshots = iter(['synthetic-snap-A', 'synthetic-snap-B'])
+    monkeypatch.setattr(cloud_policy, 'history_thread_snapshot',
+                        lambda *a, **kw: next(snapshots, 'synthetic-snap-B'))
+    local = []
+    def extraction(body, **kwargs):
+        provider = kwargs.get('provider')
+        if provider is None:
+            local.append(body)
+            return {}
+        try:
+            provider('synthetic owned input', deadline=kwargs['deadline'], max_tokens=100)
+        except Exception:
+            pass
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert first['done'] == 0 and not local and not calls
+    assert first['defer_reasons'].get('currentness_unverified') == 1
+    assert ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim' "
+                             "AND message_id=1 AND next_try>?", (time.time(),)).fetchone()
+    second = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert second['done'] == 1 and len(local) == 1
+    assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1

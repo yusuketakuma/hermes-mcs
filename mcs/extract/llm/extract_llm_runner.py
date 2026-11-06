@@ -356,11 +356,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         skipped += row_skipped
         context_blocked += row_blocked
         for refused_row, reason in refused:
-            if reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES and time.monotonic() < deadline and _writer_current(full=True):
+            if (reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
+                    or reason in cloud_backlog._HOLD_DEFER_REASONS) \
+                    and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
                 _claim(ledger, refused_row, _PREPARE_HOLD_S)
-        if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES for _, reason in refused) or time.monotonic() >= deadline:
+        if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
+                           or reason in cloud_backlog._HOLD_DEFER_REASONS
+                           for _, reason in refused) or time.monotonic() >= deadline:
             break
         # A rejected head must not spend the healthy-job limit. Seeing a source
         # once per pass and the existing deadline bound an all-held backlog.
@@ -676,6 +680,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_discard"]()
                 deferred += 1
                 _defer_note("currentness_unverified")
+                if cloud_only or r.get("_cloud_owned"):
+                    # An unverifiable currentness keeps the bounded claim:
+                    # a head that cannot be proven must not re-head the queue.
+                    keep_lease = True
+                    keep_claims.add(id(r))
                 return
             transport = r.get("_transport")
             at = r.get("_transport_at")
@@ -696,7 +705,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _defer_note(r.get("_defer_reason") or "other")
                 # Keep the existing finite claim for an unresolved paid unit;
                 # repeated refusals must not monopolize a single-job cloud pass.
-                if cloud_only and r.get("_defer_reason") == "cloud_unit_unresolved":
+                if (cloud_only or r.get("_cloud_owned")) \
+                        and r.get("_defer_reason") in cloud_backlog._HOLD_DEFER_REASONS:
                     keep_lease = True
                     keep_claims.add(id(r))
                 if r.get("_cloud_failed"):
@@ -883,6 +893,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _defer_note(reason, count=count)
                 _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
                 if not prepared:
+                    if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
+                        # An unverifiable owned head keeps a bounded claim —
+                        # the next pass sees the tail instead of re-blocking.
+                        _claim(ledger, candidate, _PREPARE_HOLD_S)
                     if prioritize_patients and time.monotonic() < deadline:
                         _cloud_priority_discard(ledger, candidate['message_id'])
                     continue
@@ -1113,6 +1127,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 r["_cloud_discard"]()
                             deferred += 1
                             _defer_note("write_unavailable" if not held else "currentness_unverified")
+                            if held and (cloud_only or r.get("_cloud_owned")):
+                                keep_claims.add(id(r))
         if cloud_only and not _writer_current(full=True):
             writer_stopped = True
     except writer_lock.RunLockLost:

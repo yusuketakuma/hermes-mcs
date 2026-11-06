@@ -340,6 +340,11 @@ _COMPLETENESS_REJECTION_REASONS = frozenset("completeness_" + reason for reason 
 _COMMIT_REJECTION_REASONS |= _COMPLETENESS_REJECTION_REASONS
 _COMMIT_REJECTION_CODES = frozenset("commit_" + reason for reason in _COMMIT_REJECTION_REASONS)
 _DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
+# Defer reasons that keep a bounded claim instead of re-heading the queue:
+# the unit's evidence cannot be proven this pass — an unverifiable head
+# must not starve the tail under a limited claim window.
+_HOLD_DEFER_REASONS = frozenset(
+    {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified"})
 
 
 def worker(parent, *, index=None):
