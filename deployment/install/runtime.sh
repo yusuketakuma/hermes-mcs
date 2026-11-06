@@ -748,7 +748,11 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 # Explicit installer lifecycle only; ordinary runtime startup never creates an intent.
 if [ "$SETUP_STATUS" -eq 0 ]; then
-    "$MCS_PY" "$SETUP" slack-channels || SETUP_STATUS=$?
+    if [ "$SKIP_SERVICES" -eq 1 ]; then
+        skip "Slack専用チャンネルの自動準備は --no-services のため省略します。後で mcs setup で再開できます"
+    else
+        "$MCS_PY" "$SETUP" slack-channels || SETUP_STATUS=$?
+    fi
 fi
 printf '\n設定後の確認コマンド:\n    %s %s check\n' "$PYQ" "$SETUPQ"
 if [ "$RUNTIME_MODE" = standalone ]; then
