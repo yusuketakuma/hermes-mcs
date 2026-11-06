@@ -92,9 +92,11 @@ def _validate(root, state):
                     raise ValueError
             elif receipt is not None:
                 raise ValueError
-            if set(record) - {'name', 'id', 'state', 'create_receipt', 'invite_state'}:
+            if set(record) - {'name', 'id', 'state', 'create_receipt', 'invite_state', 'create_error'}:
                 raise ValueError
             if record.get('invite_state') not in (None, 'sending', 'confirmed'):
+                raise ValueError
+            if record.get('create_error') is not None and not isinstance(record['create_error'], str):
                 raise ValueError
             if state['state'] in ('verified', 'applied') and (
                     not channel_id or record['state'] != 'verified'
@@ -130,10 +132,14 @@ def plan(cfg, *, users=None):
     if system and str(system).startswith('slack:') and not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system):
         raise ValueError('slack_setup_system_channel_invalid')
     notify = cfg.get('notify') or {}
-    if not ((isinstance(patient, str) and patient.startswith('slack:'))
-            or not patient and notify.get('interactive') == 'slack'):
+    slack_text = isinstance(patient, str) and patient.startswith('slack:')
+    if not (slack_text or notify.get('interactive') == 'slack'):
         return None
     scope = notify.get('slack') or {}
+    card = scope.get('channel_id')
+    if card is not None and (not isinstance(card, str)
+            or not re.fullmatch(r'[CG][A-Z0-9]{8,}', card)):
+        raise ValueError('slack_setup_card_channel_invalid')
     binding = {key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
     binding['profile'] = binding['profile'] or cfg.get('notify_bot_profile') or 'default'
     if any(not isinstance(binding[key], str) or not binding[key].strip()
@@ -155,13 +161,20 @@ def plan(cfg, *, users=None):
     if not isinstance(users, list) or not users or any(
             not isinstance(user, str) or not re.fullmatch(r'[UW][A-Z0-9]{8,}', user) for user in users):
         raise ValueError('slack_setup_operators_required')
-    channel = patient.partition(':')[2] if patient else None
-    if channel and not re.fullmatch(r'[CG][A-Z0-9]{8,}', channel):
+    text_channel = patient.partition(':')[2] if slack_text else None
+    if text_channel and not re.fullmatch(r'[CG][A-Z0-9]{8,}', text_channel):
         raise ValueError('slack_setup_patient_channel_invalid')
+    patient_channel = text_channel or card
+    surfaces = {channel for channel in (text_channel, card) if channel}
+    system_channel = (system.partition(':')[2]
+                      if system and str(system).startswith('slack:') else None)
+    system_existing = (system_channel
+                       if system_channel and system_channel not in surfaces else None)
     return {'binding': binding, 'users': sorted(set(users)), 'roles': {
-        'patient': {'name': 'mcs', 'id': channel, 'state': 'existing' if channel else 'pending'},
-        'system': {'name': 'mcslog', 'id': system.partition(':')[2] if system and system != patient else None,
-                   'state': 'existing' if system and system != patient else 'pending'}},
+        'patient': {'name': 'mcs', 'id': patient_channel,
+                    'state': 'existing' if patient_channel else 'pending'},
+        'system': {'name': 'mcslog', 'id': system_existing,
+                   'state': 'existing' if system_existing else 'pending'}},
         'base_hash': _hash(cfg), 'runtime_mode': cfg.get('runtime_mode', 'hermes')}
 
 
@@ -199,11 +212,16 @@ def candidate(root, cfg):
                                     for v in (patient, system)):
         raise ValueError('slack_setup_receipt_invalid')
     result = deepcopy(cfg)
+    scope = result.setdefault('notify', {}).setdefault('slack', {})
     if not result.get('notify_target'):
         result['notify_target'] = 'slack:' + patient
-        scope = result.setdefault('notify', {}).setdefault('slack', {})
         if scope.get('channel_id') not in (None, patient):
             raise ValueError('slack_setup_patient_scope_conflict')
+        scope['channel_id'] = patient
+    elif (state['plan']['roles']['patient']['state'] == 'pending'
+            and not scope.get('channel_id')):
+        # The created patient channel serves the card surface; an explicit
+        # non-Slack text target ('local', discord:…) stays untouched.
         scope['channel_id'] = patient
     result['notify_system_target'] = 'slack:' + system
     return result

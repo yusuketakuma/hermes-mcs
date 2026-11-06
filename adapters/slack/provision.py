@@ -6,6 +6,7 @@ import time
 
 import config_edit
 import slack_channel_setup as setup
+from .delivery import single_attempt
 
 
 def _payload(value):
@@ -23,9 +24,10 @@ async def _call(client, method, **kwargs):
     return response
 
 
-def _channel(value, channel_id, user):
+def _channel(value, channel_id, user, *, private=True):
     return (isinstance(value, dict) and value.get('id') == channel_id
-            and value.get('is_private') is True and value.get('is_archived') is False
+            and (not private or value.get('is_private') is True)
+            and value.get('is_archived') is False
             and value.get('is_member') is True
             and value.get('is_shared') is not True and value.get('is_ext_shared') is not True
             and bool(user))
@@ -40,6 +42,15 @@ async def _consume(root, client, binding):
         plan = state.get('plan', {})
         if binding != plan.get('binding'):
             return {'state': 'blocked', 'reason': 'slack_setup_binding_mismatch'}
+        # The pinned SDK client retries internally by default, which would
+        # bypass write-before-send. Only a verified single-attempt copy may
+        # perform the bootstrap writes; the shared client stays unchanged.
+        sender = single_attempt(client)
+        if sender is None:
+            state.update(state='blocked', reason='slack_setup_client_unverified')
+            setup.save(root, state)
+            return state
+        client = sender
         identity = await _call(client, 'auth_test')
         if (identity.get('ok') is not True or identity.get('team_id') != binding['team_id']
                 or not identity.get('bot_id') or not identity.get('user_id')):
@@ -58,6 +69,12 @@ async def _consume(root, client, binding):
             if time.monotonic() >= deadline:
                 raise ValueError('slack_setup_deadline')
             record = state['roles'][role]
+            if (record['state'] == 'blocked' and not record.get('id')
+                    and record.get('create_error') == 'missing_scope'):
+                # Slack rejected before creating anything; only this explicit
+                # setup re-run may retry. Other blocks stay for a human.
+                record['state'] = 'pending'
+                record.pop('create_error', None)
             if record['state'] == 'pending':
                 record['state'] = 'creating'
                 setup.save(root, state)  # write-before-send: unknown never creates again
@@ -65,6 +82,8 @@ async def _consume(root, client, binding):
                 channel = response.get('channel') or {}
                 if response.get('ok') is not True or not channel.get('id'):
                     record['state'] = 'unknown' if response.get('error') == 'response_unknown' else 'blocked'
+                    if record['state'] == 'blocked':
+                        record['create_error'] = response.get('error')
                     state.update(state=record['state'], reason=(
                         'slack_setup_scope_required' if response.get('error') == 'missing_scope'
                         else 'slack_setup_name_conflict' if response.get('error') == 'name_taken'
@@ -82,7 +101,9 @@ async def _consume(root, client, binding):
                 setup.save(root, state)
                 return state
             response = await _call(client, 'conversations_info', channel=record['id'])
-            if response.get('ok') is not True or not _channel(response.get('channel'), record['id'], identity['user_id']):
+            if response.get('ok') is not True or not _channel(
+                    response.get('channel'), record['id'], identity['user_id'],
+                    private=bool(record.get('create_receipt'))):
                 state.update(state='blocked', reason='slack_setup_channel_unverified')
                 setup.save(root, state)
                 return state

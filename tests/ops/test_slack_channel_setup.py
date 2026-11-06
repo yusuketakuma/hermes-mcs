@@ -24,6 +24,8 @@ class Client:
         self.channels = {}
         self.members = {}
         self.failure = None
+        self.retry_handlers = ['default-retry']
+        self.observed_handlers = []
 
     async def auth_test(self):
         return {'ok': True, 'team_id': 'T000000001', 'bot_id': 'B000000001', 'user_id': 'U000000009'}
@@ -34,6 +36,7 @@ class Client:
     async def conversations_create(self, name, is_private):
         assert is_private is True
         self.created.append(name)
+        self.observed_handlers.append(list(self.retry_handlers))
         if self.failure == 'lost':
             raise TimeoutError
         if self.failure == 'cancel':
@@ -53,6 +56,7 @@ class Client:
 
     async def conversations_invite(self, channel, users):
         self.invites.append((channel, users))
+        self.observed_handlers.append(list(self.retry_handlers))
         self.members[channel] += users.split(',')
         return {'ok': True}
 
@@ -90,7 +94,7 @@ def test_existing_patient_members_never_changed(tmp_path):
     assert setup.candidate(tmp_path, cfg)['notify_target'] == cfg['notify_target']
 
 
-@pytest.mark.parametrize('failure', ['name_taken', 'missing_scope', 'lost'])
+@pytest.mark.parametrize('failure', ['name_taken', 'lost'])
 def test_unknown_or_rejected_creation_is_never_retried(tmp_path, failure):
     cfg, client = config(), Client()
     client.failure = failure
@@ -100,6 +104,85 @@ def test_unknown_or_rejected_creation_is_never_retried(tmp_path, failure):
     consume(tmp_path, client, cfg)
     assert client.created == ['mcs']
     assert setup.read(tmp_path)['state'] != 'verified'
+
+
+def test_missing_scope_rejection_retries_only_on_explicit_rerun(tmp_path):
+    cfg, client = config(), Client()
+    client.failure = 'missing_scope'
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    state = setup.read(tmp_path)
+    assert state['roles']['patient']['state'] == 'blocked'
+    assert state['roles']['patient']['create_error'] == 'missing_scope'
+    client.failure = None
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.created == ['mcs', 'mcs', 'mcslog']
+
+
+def test_consume_uses_single_attempt_copy_without_mutating_client(tmp_path):
+    cfg, client = config(), Client()
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.observed_handlers and all(h == [] for h in client.observed_handlers)
+    assert client.retry_handlers == ['default-retry']
+
+
+def test_consume_rejects_client_without_single_attempt_surface(tmp_path):
+    cfg, client = config(), Client()
+    client.retry_handlers = None
+    setup.prepare(tmp_path, cfg)
+    state = consume(tmp_path, client, cfg)
+    assert state['state'] == 'blocked'
+    assert state['reason'] == 'slack_setup_client_unverified'
+    assert client.created == []
+
+
+def test_existing_public_patient_channel_is_verified_without_move(tmp_path):
+    cfg, client = config(), Client()
+    cfg['notify_target'] = 'slack:C000000099'
+    cfg['notify']['slack']['channel_id'] = 'C000000099'
+    client.channels['C000000099'] = {'id': 'C000000099', 'is_private': False,
+                                     'is_member': True, 'is_archived': False}
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    assert client.created == ['mcslog']
+    assert 'C000000099' not in client.created
+
+
+def test_plan_system_equal_to_card_channel_supplements_mcslog():
+    cfg = config()
+    cfg['notify_target'] = 'slack:C000000001'
+    cfg['notify']['slack']['channel_id'] = 'C000000002'
+    cfg['notify_system_target'] = 'slack:C000000002'
+    desired = setup.plan(cfg)
+    assert desired['roles']['patient'] == {'name': 'mcs', 'id': 'C000000001', 'state': 'existing'}
+    assert desired['roles']['system'] == {'name': 'mcslog', 'id': None, 'state': 'pending'}
+
+
+def test_plan_local_target_with_slack_cards_is_not_safe():
+    cfg = config()
+    cfg['notify_target'] = 'local'
+    desired = setup.plan(cfg)
+    assert desired['roles']['patient']['state'] == 'pending'
+    assert desired['roles']['system']['state'] == 'pending'
+
+
+def test_plan_rejects_unverified_card_channel_before_creation():
+    cfg = config()
+    cfg['notify']['slack']['channel_id'] = 'not-a-channel'
+    with pytest.raises(ValueError, match='card_channel_invalid'):
+        setup.plan(cfg)
+
+
+def test_candidate_keeps_local_text_target_and_binds_created_card_channel(tmp_path):
+    cfg, client = config(), Client()
+    cfg['notify_target'] = 'local'
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    saved = setup.candidate(tmp_path, cfg)
+    assert saved['notify_target'] == 'local'
+    assert saved['notify']['slack']['channel_id'] == 'C000000001'
+    assert saved['notify_system_target'] == 'slack:C000000002'
 
 
 def test_cancel_records_unknown_and_never_recreates(tmp_path):
