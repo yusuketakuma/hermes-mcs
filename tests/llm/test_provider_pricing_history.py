@@ -1,5 +1,6 @@
 """Synthetic provider rotation preserves historical accounting and caps."""
 from contextlib import closing
+from datetime import datetime
 from decimal import Decimal
 import json
 from types import MappingProxyType
@@ -8,10 +9,16 @@ import pytest
 
 import cloud_policy as c
 import cloud_cli
+import cloud_usage_accounting
 from ledger import Ledger
-from test_cloud_policy import _cfg, _reserve, _result, now
+from test_cloud_policy import _cfg, _reserve, _result
 
-__all__ = ["now"]
+
+@pytest.fixture
+def now(monkeypatch):
+    value = datetime(2026, 11, 1, 12, tzinfo=c.JST).timestamp()
+    monkeypatch.setattr(c.time, "time", lambda: value)
+    return value
 
 
 def _rotate_anthropic(monkeypatch):
@@ -20,6 +27,7 @@ def _rotate_anthropic(monkeypatch):
     prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
     successor = MappingProxyType({**previous, "model": model, "price_version": version, "prices": prices})
     monkeypatch.setattr(c, "PRICE_DEFINITIONS", MappingProxyType({**c.PRICE_DEFINITIONS, (model, version): successor}))
+    monkeypatch.setattr(cloud_usage_accounting, "PRICE_DEFINITIONS", c.PRICE_DEFINITIONS)
     monkeypatch.setitem(c.PROVIDERS, "anthropic", model)
     monkeypatch.setattr(c.anthropic_client, "PRICE_VERSION", version)
     return model
@@ -68,7 +76,6 @@ def test_unknown_historical_version_stops_accounting_and_new_reservations(tmp_pa
 
 
 def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp_path, now, monkeypatch):
-    monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
     old_model, old_version = c.openai_client.MODEL, c.OPENAI_PRICE_VERSION
     previous = c.PRICE_DEFINITIONS[(old_model, old_version)]
     usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
@@ -83,6 +90,7 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
         prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
         successor = MappingProxyType({**previous, "model": model, "price_version": version, "prices": prices})
         monkeypatch.setattr(c, "PRICE_DEFINITIONS", MappingProxyType({**c.PRICE_DEFINITIONS, (model, version): successor}))
+        monkeypatch.setattr(cloud_usage_accounting, "PRICE_DEFINITIONS", c.PRICE_DEFINITIONS)
         monkeypatch.setitem(c.PROVIDERS, "openai", model)
         monkeypatch.setattr(c.openai_client, "PRICE_VERSION", version)
         monkeypatch.setattr(c.openai_client, "CURRENT_PRICE_VERSIONS", MappingProxyType({
@@ -116,7 +124,6 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
 
 
 def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_path, now, monkeypatch):
-    monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
     old_model, old_version = c.openai_client.MODEL, c.OPENAI_PRICE_VERSION
     previous = c.PRICE_DEFINITIONS[(old_model, old_version)]
     details = {"cached_tokens": 2, "cache_write_tokens": 4,
@@ -131,6 +138,7 @@ def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_pa
         prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
         successor = MappingProxyType({**previous, "model": model, "price_version": version, "prices": prices})
         monkeypatch.setattr(c, "PRICE_DEFINITIONS", MappingProxyType({**c.PRICE_DEFINITIONS, (model, version): successor}))
+        monkeypatch.setattr(cloud_usage_accounting, "PRICE_DEFINITIONS", c.PRICE_DEFINITIONS)
         monkeypatch.setitem(c.PROVIDERS, "openai", model)
         monkeypatch.setattr(c.openai_client, "PRICE_VERSION", version)
         metadata = {"model": old_model, "request_fp": reservation["request_fp"], "usage": usage,
@@ -154,8 +162,7 @@ def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_pa
     {"ttl_30m_tokens": 4},
     {"ttl_30m_tokens": 4, "ttl_12h_tokens": 0, "unknown": 0},
 ])
-def test_openai_unpriced_cache_details_do_not_settle_or_release_reservation(tmp_path, now, monkeypatch, breakdown):
-    monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
+def test_openai_unpriced_cache_details_do_not_settle_or_release_reservation(tmp_path, now, breakdown):
     usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
              "input_tokens_details": {"cached_tokens": 2, "cache_write_tokens": 4,
                                       "cache_write_tokens_details": breakdown},
