@@ -7,6 +7,7 @@ import restore_evidence
 from functools import partial
 import pytest
 from ops_testkit import _load, _receipts_db
+from ops_testkit import patch_lifecycle_lookup
 
 
 @pytest.mark.parametrize("scanner", ["update", "watchdog"])
@@ -31,7 +32,7 @@ def test_deep_corrupt_receipt_preserves_bound_consent(
     con.close()
     module = restore_evidence if scanner == "update" else _load()
     if scanner != "update":
-        monkeypatch.setattr(module, "LEDGER", str(path))
+        patch_lifecycle_lookup(monkeypatch, module, "LEDGER", str(path))
     read_consent = (partial(module.find_restore_consent, live_path=str(path)) if scanner == "update"
                     else module._consent_for)
     assert read_consent(report) == ("bound-consent" if has_bound_consent else None)
@@ -53,7 +54,7 @@ def _consent(tmp_path, monkeypatch, scanner, rows):
     con.close()
     module = restore_evidence if scanner == "update" else _load()
     if scanner != "update":
-        monkeypatch.setattr(module, "LEDGER", str(path))
+        patch_lifecycle_lookup(monkeypatch, module, "LEDGER", str(path))
     read = partial(module.find_restore_consent, live_path=str(path)) if scanner == "update" else module._consent_for
     return read(_REPORT)
 
@@ -177,7 +178,7 @@ def test_large_receipt_tables_are_streamed_not_materialised(tmp_path, monkeypatc
     con.close()
     recover = _load()
     for module in (mcs_update, recover):
-        monkeypatch.setattr(module, "LEDGER", str(path))
+        patch_lifecycle_lookup(monkeypatch, module, "LEDGER", str(path))
     for scan, expected in ((lambda: restore_evidence.find_restore_consent(_REPORT, live_path=str(path)), "bound"),
                            (lambda: recover._consent_for(_REPORT), "bound"),
                            (lambda: mcs_update.scan_pending_approvals({"executed": {}}),

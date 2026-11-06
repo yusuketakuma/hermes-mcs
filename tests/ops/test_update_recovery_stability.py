@@ -850,10 +850,10 @@ def _synthetic_flagless_rollback(updater, tmp_path, monkeypatch, engine):
     recovery = _load()
     for name in ("DATA", "REPO", "LEDGER", "STATE_PATH", "UPDATE_LOCK", "RUN_LOCK",
                  "MARKER_PATH", "REPORT_PATH"):
-        monkeypatch.setattr(recovery, name, getattr(updater, name))
-    monkeypatch.setattr(recovery, "_settings_migration_pending", lambda: False)
-    monkeypatch.setattr(recovery, "_release_scope", lambda path: nullcontext())
-    monkeypatch.setattr(recovery, "_notify", lambda text: None)
+        patch_lifecycle_lookup(monkeypatch, recovery, name, getattr(updater, name))
+    patch_lifecycle_lookup(monkeypatch, recovery, "_settings_migration_pending", lambda: False)
+    patch_lifecycle_lookup(monkeypatch, recovery, "_release_scope", lambda path: nullcontext())
+    patch_lifecycle_lookup(monkeypatch, recovery, "_notify", lambda text: None)
     return recovery, recovery.recover, repo, live, back, before, restarts
 
 

@@ -15,6 +15,7 @@ import sqlite3
 import pytest
 
 import restore_evidence
+from ops_testkit import patch_lifecycle_lookup
 
 
 @pytest.mark.parametrize("failure", [None, "backup_open", "live_read", "publish"])
@@ -146,8 +147,8 @@ def _synthetic_report_dbs(tmp_path):
 def _both_reports(tmp_path, monkeypatch, live, backup):
     from ops_testkit import _load
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
-    monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'DATA', str(tmp_path))
     normal = restore_evidence.create_loss_report(
         live_path=str(live), backup_path=str(backup), report_path=str(tmp_path / 'normal.json'))
     recovery = watchdog._loss_report(str(backup))
@@ -179,8 +180,8 @@ def test_count_or_watermark_read_failure_cannot_be_reported_as_zero(tmp_path, mo
             with closing(sqlite3.connect(path)) as con, con:
                 con.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, kind TEXT, content TEXT)')
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
-    monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'DATA', str(tmp_path))
     original = sqlite3.connect
     fault_hits = []
 
@@ -257,7 +258,7 @@ def test_complete_report_keeps_fields_but_requires_consent_to_the_extended_diges
                    'backup_schema': expected['backup_schema']}
         con.execute("INSERT INTO command_receipts VALUES('synthetic-old',?,'applied',1)", (json.dumps(receipt),))
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
     assert restore_evidence.find_restore_consent(report, live_path=str(live)) is None
     assert watchdog._consent_for(report) is None
     with closing(sqlite3.connect(live)) as con, con:
@@ -290,7 +291,7 @@ def test_artifact_change_invalidates_prior_consent_in_both_restore_paths(tmp_pat
                    'backup_schema': baseline['backup_schema']}
         con.execute("INSERT INTO command_receipts VALUES('synthetic-old',?,'applied',1)", (json.dumps(receipt),))
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
     assert restore_evidence.find_restore_consent(baseline, live_path=str(live)) == 'synthetic-old'
     assert watchdog._consent_for(baseline) == 'synthetic-old'
     with closing(sqlite3.connect(live)) as con, con:
@@ -349,8 +350,8 @@ def test_restore_entry_holds_on_report_read_error_with_existing_consent(
     monkeypatch.setattr(update_restore, 'RESTORE_REPORT_PATH', mcs_update.RESTORE_REPORT_PATH)
     report = _seed_consent(str(live), str(backup))
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'DATA', str(data))
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'DATA', str(data))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
     assert restore_evidence.find_restore_consent(report, live_path=str(live)) == 'cid-consent'
     assert watchdog._consent_for(report) == 'cid-consent'
     before = live.read_bytes(), backup.read_bytes()
