@@ -111,7 +111,7 @@ def test_local_commit_race_cannot_cancel_required_cloud_pass(local_then_cloud, m
     cfg['cloud_llm']['mode'] = 'on'
     reached = []
     target = '_claim' if boundary == 'claim' else '_commit_extraction_atomic'
-    original = getattr(worker, target)
+    original = getattr(extract_llm_runner, target)
     def local_finishes(db, row, *args, **kwargs):
         if not reached:
             columns = tuple(local)
@@ -120,7 +120,7 @@ def test_local_commit_race_cannot_cancel_required_cloud_pass(local_then_cloud, m
                               + ','.join('?' for _ in columns) + ')', tuple(local.values()))
             reached.append(row['message_id'])
         return original(db, row, *args, **kwargs)
-    monkeypatch.setattr(worker, target, local_finishes)
+    monkeypatch.setattr(extract_llm_runner, target, local_finishes)
     report = _cloud_pass(ledger)
     assert reached == [1] and report['done'] == 1
     cloud, meta = _current(ledger)
@@ -428,13 +428,13 @@ def test_projection_added_mid_race_keeps_required_cloud_pass(local_then_cloud, m
     cfg['cloud_llm']['mode'] = 'on'
     sealed = []
     target = '_claim' if boundary == 'claim' else '_commit_extraction_atomic'
-    original = getattr(worker, target)
+    original = getattr(extract_llm_runner, target)
     def concurrent_seal(db, row, *args, **kwargs):
         if not sealed:
             with db.db:
                 sealed.append(_seal_canonical_v4(db))
         return original(db, row, *args, **kwargs)
-    monkeypatch.setattr(worker, target, concurrent_seal)
+    monkeypatch.setattr(extract_llm_runner, target, concurrent_seal)
     report = _cloud_pass(ledger)
     assert sealed and report['done'] == 1 and len(cloud_calls) == 1
     rows = _current_artifacts(ledger)
