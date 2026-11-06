@@ -266,6 +266,42 @@ class _StaleGCDeadline(Exception):
     pass
 
 
+@contextlib.contextmanager
+def _stale_gc_transaction(db, deadline):
+    """Bound writer acquisition and SQL, clearing cancellation before rollback."""
+    previous_wait = db.execute("PRAGMA busy_timeout").fetchone()[0]
+    limited_wait = False
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _StaleGCDeadline()
+        wait_ms = min(previous_wait, int(remaining * 1000))
+        limited_wait = wait_ms < previous_wait
+        db.execute(f"PRAGMA busy_timeout={wait_ms}")
+        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        db.execute('BEGIN IMMEDIATE')
+        yield
+        if time.monotonic() >= deadline:
+            raise _StaleGCDeadline()
+        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+        limited_wait = remaining_ms < previous_wait
+        db.execute(f"PRAGMA busy_timeout={min(previous_wait, remaining_ms)}")
+        db.commit()
+    except BaseException as error:
+        db.set_progress_handler(None, 0)
+        if db.in_transaction:
+            db.rollback()
+        code = getattr(error, 'sqlite_errorcode', 0) & 255
+        if (isinstance(error, sqlite3.OperationalError)
+                and (limited_wait and code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                     or code == sqlite3.SQLITE_INTERRUPT and time.monotonic() >= deadline)):
+            raise _StaleGCDeadline() from error
+        raise
+    finally:
+        db.set_progress_handler(None, 0)
+        db.execute(f"PRAGMA busy_timeout={previous_wait}")
+
+
 def _gc_stale_artifacts(ledger, lock, per_write_lock: bool, *, deadline=None) -> None:
     """Reconcile a bounded stale-artifact page, resuming from durable progress."""
     global _stale_gc_at
@@ -282,8 +318,7 @@ def _gc_stale_artifacts(ledger, lock, per_write_lock: bool, *, deadline=None) ->
         with lock(per_write_lock, deadline=deadline) as held:
             if not held or not _writer_current() or time.monotonic() >= deadline:
                 return
-            with ledger.db:
-                ledger.db.execute('BEGIN IMMEDIATE')
+            with _stale_gc_transaction(ledger.db, deadline):
                 if not _writer_current() or time.monotonic() >= deadline:
                     raise _StaleGCDeadline()
                 state_row = ledger.db.execute(
