@@ -140,16 +140,28 @@ def _plan_surfaces(plan):
     return surfaces
 
 
-def _legacy_plan_match(planned, desired):
+def _legacy_plan_match(planned, desired, cfg):
     """Resume a v1 plan only when every recorded requirement still matches.
 
-    v1 plans carry no surfaces key and meant card-only delivery; they may
-    resume solely for a request whose surfaces and all other plan fields
-    are identical. Any semantic drift keeps the existing-intent refusal."""
+    v1 plans carry no surfaces key and existed only for card-enabled
+    requests (required() then meant interactive=slack). base_hash proves
+    the config is unchanged, so the same request may also carry an
+    existing concrete slack text target the v1 roles already covered.
+    Any semantic drift keeps the existing-intent refusal."""
     keys = ('binding', 'users', 'roles', 'base_hash', 'runtime_mode')
-    return ('surfaces' not in planned
-            and _plan_surfaces(planned) == desired['surfaces']
-            and all(planned.get(key) == desired.get(key) for key in keys))
+    if 'surfaces' in planned or not all(
+            planned.get(key) == desired.get(key) for key in keys):
+        return False
+    surfaces = desired['surfaces']
+    if surfaces['card'] is not True:
+        return False
+    if surfaces['text']:
+        # v1 predates 'slack:new': a text surface it could cover is only
+        # a concrete existing channel, never a create request.
+        target = cfg.get('notify_target')
+        return (isinstance(target, str)
+                and re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', target) is not None)
+    return True
 
 
 def _created_channel_profile(root, cfg, destination, role, configured_key):
@@ -353,7 +365,7 @@ def prepare(root, cfg, *, users=None):
             if state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
                 return None
             if (state.get('plan_hash') != key
-                    and not _legacy_plan_match(state.get('plan'), desired)):
+                    and not _legacy_plan_match(state.get('plan'), desired, cfg)):
                 raise ValueError('slack_setup_existing_intent_conflict')
             return state
         state = {'version': 1, 'root': str(Path(root).absolute()), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
