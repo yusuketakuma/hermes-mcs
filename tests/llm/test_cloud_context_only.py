@@ -14,7 +14,7 @@ import semantic_due_selection
 from anthropic_client import AnthropicError, MODEL
 from ledger import Ledger
 from semantic_cloud_testkit import cloud as cloud
-from semantic_testkit import _cfg, _ledger
+from semantic_testkit import _cfg, _ledger, _message, _patient
 
 
 @pytest.mark.parametrize("route", ["reextract", "semantic_backlog"])
@@ -66,22 +66,36 @@ def test_reservation_and_send_check_deny_closed_routes(tmp_path, route):
 
 def test_extract_cloud_selection_gate_rejects_closed_route(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
+    _patient(led)
+    led.save_messages([_message()])
+    with led.db:
+        led.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
+        led.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
+        cloud_policy.capture_history_tx(led.db, 'synthetic-gate', time.time())
     cfg = _cfg()
     cfg["cloud_llm"] = {"mode": "on", "project_ids": [1], "routes": ["reextract"]}
     monkeypatch.setattr(extract_llm_selection, "load_config", lambda *a: cfg)
+    monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
     result = extract_llm._select_pending(led, 64, None, None, False,
                                        cloud_only=True, prioritize_patients=True)
     assert result == ([], 0)
+    # Positive control: the same pending target is selected once the route is
+    # simulated open, so the empty result above comes from the send gate.
+    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
+    rows, _new = extract_llm._select_pending(led, 64, None, None, False,
+                                             cloud_only=True, prioritize_patients=True)
+    assert rows
 
 
-def test_semantic_cloud_due_gate_rejects_closed_route(tmp_path, monkeypatch):
-    led = _ledger(tmp_path)
-    cfg = _cfg()
-    cfg["cloud_llm"] = {"mode": "on", "project_ids": [1],
-                        "routes": ["semantic_backlog"]}
-    monkeypatch.setattr(semantic_due_selection, "load_config", lambda *a: cfg)
+def test_semantic_cloud_due_gate_rejects_closed_route(cloud, monkeypatch):
+    led, cfg, _job, _calls = cloud
+    cfg["cloud_llm"]["routes"] = ["semantic_backlog"]
     result = semantic_due_selection._select_cloud_due(led, "backlog", ("semantic",), False, 1)
     assert result == ([], [], [], [], {"turn": None})
+    # Positive control: the same due job is selected once the route is open.
+    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
+    selected = semantic_due_selection._select_cloud_due(led, "backlog", ("semantic",), False, 1)
+    assert selected[0]
 
 
 def test_route_counts_skip_closed_individual_routes(cloud, monkeypatch):
