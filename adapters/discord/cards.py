@@ -442,8 +442,7 @@ def attachment_file(blob: bytes, member):
     """Build a native file from bytes already checked by the attachment reader."""
     import discord
     from io import BytesIO
-    return discord.File(BytesIO(blob), filename=discord_file_name(member),
-                        spoiler=spoiler_attachment(member["name"]))
+    return discord.File(BytesIO(blob), filename=discord_file_name(member))
 
 
 async def send_attachment(target, path: str | BinaryIO, name: str,

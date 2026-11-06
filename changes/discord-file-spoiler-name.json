@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "Discordの非画像添付で非表示指定を保持",
+  "summary": "SPOILER_付きPDFなどの添付名を保持し、原文下のファイル表示と送信結果の照合が一致するようにします。",
+  "upgrade": "アダプター更新後の再起動で反映します。画像の非表示指定は維持し、送信結果が不明な既存の添付は自動再送しません。",
+  "refs": [
+    "adapters/discord/cards.py",
+    "tests/adapters/discord/test_discord_file_group_views.py"
+  ]
+}
