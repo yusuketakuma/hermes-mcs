@@ -428,8 +428,13 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
-def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
+def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None):
     """Recover only the latest source-bound, reserved empty repair candidate."""
+    def held(reason, reserved=True):
+        if reason_out is not None:
+            reason_out['code'] = reason
+        return None, reserved
+
     try:
         row = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
                          'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
@@ -441,40 +446,49 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
                             'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
                             (KIND_REPAIR, pid, mid)).fetchone()
         if marker is None:
-            return None, candidate_bound
+            return held('empty_repair_marker_missing', candidate_bound)
         marker_content, marker_meta = strict_json(marker['content']), strict_json(marker['meta'])
         if not isinstance(marker_content, dict) or not isinstance(marker_meta, dict):
-            return None, True
+            return held('empty_repair_marker_invalid')
         if not isinstance(marker_meta.get('fingerprint'), str):
-            return None, True
+            return held('empty_repair_marker_invalid')
         if marker_meta.get('fingerprint') != fp or marker_meta.get('empty_repair') is not True:
-            return None, candidate_bound
+            return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
-            return None, True
+            return held('empty_repair_marker_currentness')
         if row is None:
-            return None, True
+            return held('empty_repair_candidate_missing')
         if not isinstance(content, dict) or not isinstance(meta, dict):
-            return None, True
+            return held('empty_repair_candidate_invalid')
         proof = meta.get('provider_provenance')
         producer = _summary_producer({'content': content, 'meta': meta}, fp, policy, revision)
-        if (not is_current(meta) or meta.get('invalidated') or meta.get('stale')
-                or meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
+        # Keep the original predicate order and short-circuiting; these labels
+        # only describe the first failed gate, never weaken a recovery gate.
+        if not is_current(meta) or meta.get('invalidated') or meta.get('stale'):
+            return held('empty_repair_candidate_currentness')
+        if (meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
                 or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
-                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision
-                or type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
+                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision):
+            return held('empty_repair_candidate_binding')
+        if (type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
                 or marker_content != {'target_message_id': mid}
                 or marker_meta.get('policy_fingerprint') != policy
-                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1
-                or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
-                or not isinstance(content.get('claims'), list) or not content['claims']
-                or meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts)
-                or meta.get('prior') != _empty_repair_prior(db, pid, mid)
-                or proof != _summary_provenance(producer, fp, policy, revision, content)
-                or meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}):
-            return None, True
+                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1):
+            return held('empty_repair_marker_link')
+        if (type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
+                or not isinstance(content.get('claims'), list) or not content['claims']):
+            return held('empty_repair_claims_invalid')
+        if meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts):
+            return held('empty_repair_claim_binding')
+        if meta.get('prior') != _empty_repair_prior(db, pid, mid):
+            return held('empty_repair_prior_unverified')
+        if proof != _summary_provenance(producer, fp, policy, revision, content):
+            return held('empty_repair_provenance_unverified')
+        if meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}:
+            return held('empty_repair_audit_not_ready')
         return {'content': content, 'meta': meta, 'producer': producer}, True
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
-        return None, True
+        return held('empty_repair_validation_unavailable')
 
 
 def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
@@ -684,6 +698,25 @@ def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
             "findings": findings}
 
 
+def _fact_extraction_reason(reason):
+    # Unrecognised/free-form provider failures collapse to a fixed label.
+    if reason == "deadline":
+        return "fact_extract_deadline"
+    if reason == "model":
+        return "fact_extract_model"
+    return "fact_extract_incomplete"
+
+
+def _fixed_stop_reason(reason, fallback):
+    import cloud_backlog
+    return (reason if isinstance(reason, str) and reason in cloud_backlog._SEMANTIC_STOP_REASONS
+            else fallback)
+
+
+def _fact_stop_reason(stage):
+    return _fixed_stop_reason(stage.get('diagnostic_reason'), f"fact_stage_{stage['outcome']}")
+
+
 def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None,
                 jev_skip: str | None = None, activate_skip=None, skip_state=None):
@@ -747,9 +780,13 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         if prev_v2['meta'].get('repaired'):
             previous = v4._repaired_projection_producer(
                 ledger.db, pid, mid, fp, policy, member, prev_v2['content'], prev_v2['meta'])
-            if (previous is None or any(item.get('contract') != execution_contract for item in previous['base'])):
+            if previous is None:
                 # Historical publication stays intact; do not revive a spent repair.
-                return {"outcome": "incomplete", "v2_doc": None}, None, None
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_repaired_producer_unverified"}, None, None
+            if any(item.get('contract') != execution_contract for item in previous['base']):
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_repaired_contract_changed"}, None, None
         else:
             from semantic_extraction import rebuild_facts_v2_cached
             producer, contracts = {}, []
@@ -757,7 +794,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                 prev_v2['meta'], producer_out=producer, contracts_out=contracts)
             if (reason is not None or rebuilt is None or not producer.get('complete')
                     or mcs_util.payload_hash(rebuilt) != mcs_util.payload_hash(prev_v2['content'])):
-                return {"outcome": "incomplete", "v2_doc": None}, None, None
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_cached_rebuild_unverified"}, None, None
             if any(item.get('contract') != execution_contract for item in contracts):
                 prev_v2 = None
     if fact_source == "canonical":
@@ -780,7 +818,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         pass
     else:
         if time.monotonic() > deadline - 5:
-            return {"outcome": "incomplete", "v2_doc": None}, None, None
+            return {"outcome": "incomplete", "v2_doc": None,
+                    "diagnostic_reason": "fact_extract_deadline"}, None, None
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s1_extract", "start")
@@ -802,7 +841,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
             if fact_source == "canonical":
                 return {"outcome": "retryable"
                         if v2_result["failure_reason"] == "model"
-                        else "incomplete", "v2_doc": None}, None, None
+                        else "incomplete", "v2_doc": None,
+                        "diagnostic_reason": _fact_extraction_reason(v2_result["failure_reason"])}, None, None
             v2_doc = None      # shadow: incomplete doc not stored
             if v2_result["failure_reason"] != "deadline":
                 # Without a durable mark every retry re-extracted each
@@ -882,7 +922,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                 or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
             return _park_needs_review(
                 ledger, pid, mid, fp, policy, v2_doc), None, None
-        return {"outcome": "incomplete", "v2_doc": v2_doc}, None, None
+        return {"outcome": "incomplete", "v2_doc": v2_doc,
+                "diagnostic_reason": "fact_coverage_incomplete"}, None, None
     return None, v2_doc, doc_build
 
 
@@ -894,6 +935,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
     Returns (early, v2_doc, doc_hash): early is the _fact_stage result to
     return as-is, else None with the audited document and its hash."""
     fail_kind = "incomplete"
+    stop_reason = "fact_audit_incomplete"
     # POST_JEV: bidirectional audit must pass before the
     # canonical fact set feeds any consumer.  The audit artifact
     # is keyed by doc_hash, so a repaired document is always
@@ -911,6 +953,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         fact_audit = semantic_audit.cached_fact_audit(prev_fa, v2_doc, doc_hash)
         if fact_audit is None:
             if time.monotonic() > deadline - 5:
+                stop_reason = "fact_audit_deadline"
                 break
             from semantic_audit import audit_facts_v2
             jev_outcome = "unknown"
@@ -984,6 +1027,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             return _park_needs_review(ledger, pid, mid, fp, policy, v2_doc, fact_audit["findings"]), None, None
         disposition = semantic_audit.canonical_audit_disposition(fact_audit, v2_doc)
         if disposition == "wait":
+            stop_reason = "fact_audit_wait"
             error = getattr(jev_client, "last_error", None)
             if error is not None \
                     and jev.failure_class(error) == "failed":
@@ -1008,6 +1052,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                 and current_artifact(ledger.db, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
+                stop_reason = "fact_repair_deadline"
                 break      # repair still possible next pass
             # S3 (T18): reserve the single repair dispatch BEFORE
             # the model call — a crash leaves the 'started'
@@ -1157,7 +1202,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             ledger, pid, mid, fp, policy, v2_doc,
             fact_audit["findings"]), None, None
     if not audited:
-        return {"outcome": fail_kind, "v2_doc": v2_doc}, None, None
+        return {"outcome": fail_kind, "v2_doc": v2_doc,
+                "diagnostic_reason": stop_reason}, None, None
     return None, v2_doc, doc_hash
 
 
@@ -1173,13 +1219,15 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
         facts = prev_f["content"].get("facts", [])
     else:
         if time.monotonic() > deadline - 5:
-            return {"outcome": "incomplete", "v2_doc": None}, None
+            return {"outcome": "incomplete", "v2_doc": None,
+                    "diagnostic_reason": "fact_extract_deadline"}, None
         facts, f_complete, f_dropped, f_reason = semantic_extraction.extract_facts(
             llm_fn, member, deadline - 5, return_reason=True,
             ledger=ledger, source_fingerprint=fp, project_id=pid)
         if not f_complete:
             return {"outcome": "retryable" if f_reason == "model"
-                    else "incomplete", "v2_doc": None}, None
+                    else "incomplete", "v2_doc": None,
+                    "diagnostic_reason": _fact_extraction_reason(f_reason)}, None
         ledger.artifact_add(
             KIND_FACTS,
             json.dumps({"facts": facts,
@@ -1751,7 +1799,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     [{"code": f"fact_stage_{stage['outcome']}"}]
                     + list(stage.get("findings") or []),
                     doc_hash=(semantic_facts.doc_hash(doc) if doc else None))
-            _why(diagnostics, f"fact_stage_{stage['outcome']}")
+            _why(diagnostics, _fact_stop_reason(stage))
             if stage["outcome"] == "retryable":
                 retryable_failure = True
             elif stage["outcome"] == "hard_fail":
@@ -1884,10 +1932,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
+        empty_reason = {}
         recovered, empty_reserved = _empty_repair_candidate(
-            ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts)
+            ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
+            reason_out=empty_reason)
         if empty_reserved and recovered is None:
-            _why(diagnostics, 'empty_repair_unverified')
+            _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)
             incomplete = resource_wait = True
             continue
