@@ -385,6 +385,8 @@ DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動
 
 ## 6. 後処理と検証
 
+Slackでは、通常の更新経路が患者情報先を保持したまま運用ログ先を準備します。運用先が未設定または患者情報先と同一なら、非公開の`mcslog`を補完します。アプリの権限不足・名前の競合・作成結果不明などで止まった場合は、案内された条件を確認してから`mcs setup slack-channels`で準備を再開してください。不明な作成・招待を繰り返したり、運用先を患者情報先へ戻したりしません。設定の保存だけでなく、更新後の接続と通常の通知workerの起動確認までが必要です。
+
 1. `restarts` に `gateway` があり Hermes モードなら、apply は再起動を依頼します。`data/gateway_restart.json` が `supervisor_restart_verified` になるまでは再起動未完了として扱い、`hermes gateway status` で稼働も確認してください。`requested`・`failed`・`unknown` は反映の証拠ではありません。Hermes の版によっては、実行中の処理を理由に再起動を拒否しません。再起動を確認できない間は、旧 worker が新しい通知形式を処理する可能性があります。処理状況を確認し、安全に再起動できる時点で管理担当者が対応してください。
 2. `lineworks_adapter` があれば、[LINEWORKS.md](LINEWORKS.md) の手順で独立アダプターを再起動し `python -m lineworks_adapter check`。1.0.15では自動更新・巻戻し・復旧後の再起動を追加しましたが、この版への初回更新後も明示的な再起動と反映確認を行います。
 3. `notes` にある追加操作（承認済みのもの）を実行する。`apply` 経路で `recovery_tool_changed` が true なら §2 の表のとおり install.sh を再実行する。

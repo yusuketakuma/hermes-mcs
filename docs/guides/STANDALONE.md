@@ -77,6 +77,7 @@ Bot tokenを非表示入力で登録します。カード・添付・modal・本
 {
   "runtime_mode": "standalone",
   "notify_target": "slack:C0123456789",
+  "notify_system_target": "slack:C0987654321",
   "notify": {
     "interactive": "slack",
     "slack": {
@@ -91,6 +92,8 @@ Bot tokenを非表示入力で登録します。カード・添付・modal・本
   }
 }
 ```
+
+`notify_target`は患者情報のテキスト先、`notify.slack.channel_id`は患者情報カードの先、`notify_system_target`は運用情報の送り先です。原文・要約・添付・解析結果は患者情報側に送り、稼働状況・エラー・復旧は別の`mcslog`チャンネルに送ります。Slackでは運用先が未設定、患者情報のいずれかの先と同一、または分離を確認できない場合に運用通知を保留します。自動作成した運用チャンネルは、患者情報の閲覧・操作を許可するチャンネルの一覧へ追加しません。
 
 Discordは`notify.discord`に`application_id`・`guild_id`・`channel_id`と同じ
 actor/project範囲を設定します。`allowed_role_ids`は任意で、@everyoneは許可できません。
