@@ -386,12 +386,17 @@ def owns_request(db, *, route, project_id, message_id):
     """A durable reservation already owns this message's cloud unit on `route`.
 
     Send closure retires new sends, never the ownership a prior reservation
-    created: the unit must still reach recovery or stay unresolved."""
-    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
-        "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
-        "(json_extract(meta,'$.message_id')=? OR json_extract(meta,'$.unit_key')=? "
-        "OR json_extract(meta,'$.logical_target_id')=?) END "
-        "LIMIT 1", (KINDS[0], project_id, route, message_id, str(message_id), message_id)).fetchone() is not None
+    created: the unit must still reach recovery or stay unresolved. A
+    reservation whose meta cannot prove a different route stays a
+    conservative hold — never an authorization to restart the unit locally."""
+    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND ("
+        "(json_valid(meta) AND json_extract(meta,'$.route')=? AND "
+        "(message_id=? OR json_extract(meta,'$.message_id')=? "
+        "OR json_extract(meta,'$.unit_key')=? "
+        "OR json_extract(meta,'$.logical_target_id')=?)) OR "
+        "(message_id=? AND (NOT json_valid(meta) OR json_extract(meta,'$.route') IS NULL)) "
+        ") LIMIT 1", (KINDS[0], project_id, route, message_id, message_id,
+                     str(message_id), message_id, message_id)).fetchone() is not None
 
 
 def _logical_request_fp(body):
@@ -478,7 +483,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
         "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
         "WHEN json_type(meta)!='object' THEN 1 "
-        "WHEN json_extract(meta,'$.route')=? AND "
+        "WHEN (json_extract(meta,'$.route')=? OR json_type(meta,'$.route') IS NULL) AND "
         "(json_extract(meta,'$.unit_key')=? OR ? IN ('semantic_backlog','patient_context','reextract')) THEN 1 "
         "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
         "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",

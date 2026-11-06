@@ -238,20 +238,27 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r["_target"] = target
         mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
             ledger, r, background=background) else "off"
-        if background and mode in ('on', 'shadow'):
-            r['_cloud_history_snapshot'] = cloud_policy.history_thread_snapshot(
-                ledger.db, r['project_id'], r['message_id'])
-            if r['_cloud_history_snapshot'] is None:
-                mode = 'off'
-        r["_cloud_background"] = background and mode in ("on", "shadow")
-        if (mode == "off" and allow_cloud
-                and cloud_policy.in_scope(cfg, "reextract", r["project_id"])
-                and cloud_policy.owns_request(ledger.db, route="reextract",
-                                              project_id=r["project_id"], message_id=r["message_id"])):
+        owned = mode == "off" and allow_cloud \
+            and cloud_policy.in_scope(cfg, "reextract", r["project_id"]) \
+            and cloud_policy.owns_request(ledger.db, route="reextract",
+                                          project_id=r["project_id"], message_id=r["message_id"])
+        if owned:
             # A closed send route retires new sends, never the unit a prior
             # reservation created: rebuild the provider so recovery, the
             # unresolved hold, and send denial all run before local fallback.
             mode = "on"
+            r["_cloud_owned"] = True
+        if background and mode in ('on', 'shadow'):
+            r['_cloud_history_snapshot'] = cloud_policy.history_thread_snapshot(
+                ledger.db, r['project_id'], r['message_id'])
+            if r['_cloud_history_snapshot'] is None:
+                if owned:
+                    # The owned unit's history cannot be verified: keep it
+                    # unresolved rather than restarting a paid unit locally.
+                    block("cloud_source_unverified")
+                    continue
+                mode = 'off'
+        r["_cloud_background"] = background and mode in ("on", "shadow")
         if cloud_only and mode != "on":
             block("prepare_cloud_disabled")
             continue
