@@ -249,7 +249,7 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
         def complete(self, prompt, **kwargs):
             kwargs["before_attempt"]()
             seen.append(True)
-            return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop", "model": "gpt-6-luna"}
+            return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop", "model": self.model}
 
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
