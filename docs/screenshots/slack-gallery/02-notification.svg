@@ -4,7 +4,7 @@
 <rect x="0" y="0" width="1100" height="1300" rx="0" fill="#f6f4ef"/>
 <text x="28" y="34" font-size="14" fill="#087f5b" font-weight="bold">HERMES-MCS  /  SLACK  /  02</text>
 <text x="28" y="76" font-size="32" fill="#202124" font-weight="bold">返信ごとのカードで、確認と担当を共有。</text>
-<text x="28" y="107" font-size="18" fill="#66716f">Anthropicのキーのみ登録した例。操作の対象は、そのカードの投稿です。</text>
+<text x="28" y="107" font-size="18" fill="#66716f">投稿の処理状態と、カード作成時点の文脈の進捗を区別します。</text>
 <rect x="24" y="134" width="1052" height="1085" rx="12" fill="#fff" stroke="#dce2dd"/>
 <rect x="24" y="134" width="142" height="1085" rx="12" fill="#351638"/>
 <rect x="148" y="134" width="18" height="1085" rx="0" fill="#351638"/>
@@ -27,6 +27,7 @@
 <text x="240" y="283" font-size="21" fill="#202124" font-weight="bold">💬 山田 花子（あおぞら）</text>
 <text x="240" y="312.6" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 2 · @自分宛て</text>
 <text x="240" y="352.8" font-size="15" fill="#66716f">◐ 未完了</text>
+<text x="350" y="352.8" font-size="15" fill="#66716f">👤 73%</text>
 <text x="240" y="378.8" font-size="17" fill="#087f5b">↳ 返信 1件を保存済み</text>
 <path d="M240 394.0 L1010 394.0" stroke="#d5dcd7" fill="none"/>
 <text x="240" y="422.0" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
@@ -44,6 +45,7 @@
 <text x="240" y="765.6000000000001" font-size="21" fill="#202124" font-weight="bold">↳ 💬 山田 花子（あおぞら）</text>
 <text x="240" y="795.2000000000002" font-size="17" fill="#66716f">10-01〜 · 1投稿 · 📎 2 · @自分宛て</text>
 <text x="240" y="835.4000000000002" font-size="15" fill="#66716f">? 状況未取得</text>
+<text x="350" y="835.4000000000002" font-size="15" fill="#66716f">👤 91%</text>
 <path d="M240 853.4000000000002 L1010 853.4000000000002" stroke="#d5dcd7" fill="none"/>
 <text x="240" y="881.4000000000002" font-size="15" fill="#66716f">10-01 10:05 鈴木さん（ケアマネ・ひなた）</text>
 <text x="240" y="903.4000000000002" font-size="18" fill="#202124">要約 処理待ち</text>

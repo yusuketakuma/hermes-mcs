@@ -7,11 +7,13 @@ READMEの推奨通知先はSlack。先頭の全体像と、確認・担当、操
 
 PNGは日本語フォントやSVGの描画差に左右されず表示できるREADME用。
 対応するSVGと生成スクリプトを編集用のソースとして保持する。
-カード見出しの日時・投稿数と同じ欄に、短い解析状態と使用したサービスのアイコンを表示する。AnthropicとOpenAIは、使用を確認できたサービスに加え、設定と対象範囲から必要なクラウド解析の状態を表示する。キーや契約が未確認でも、必要な解析を完了扱いにしない。
+カード見出しの日時・投稿数と同じ欄に、投稿ごとの短い処理状態と、カードを初めて作成した時点の文脈の進捗を表示する。文脈の進捗は`👤 73%`のように示し、AnthropicやOpenAIのアイコンは表示しない。ローカル・Jevのアイコンは、その投稿で実行を確認できた場合に表示する。
 
-01は元投稿がローカル実行済みで、OpenAIの追加解析は「… 未完了」、返信は「◐ 未完了」の架空の例。02は元投稿が「◐ 未完了」、返信が「? 状況未取得」、03は「! 要確認」の例。未完了・不明の例では部分的な抽出結果を載せず、要約の待ち状態を示す。
+01は元投稿の処理が「✓ 完了」で文脈が73%、後から作成した返信カードは投稿の処理が「◐ 未完了」で文脈が91%の例。02は元投稿が「◐ 未完了」、返信が「? 状況未取得」、03は「! 要確認」の例。数値と時系列はすべて架空で、実際の処理結果ではない。投稿の処理が未完了・不明の例では部分的な抽出結果を載せず、要約の待ち状態を示す。
 
-…は必要な解析が未完了、!は要確認、?は状況未確認を表し、送信前の待機と実行中を推測で区別しない。✓は実行を確認済み、●は複数投稿のうち使用を確認できたことを表す。解析の完了状態とサービスの実行状態は区別する。カード最上部は固定アイコン💬を使う。
+文脈の割合はカード作成時点の記録で、後の進捗だけを理由に既存カードを更新しない。後から作る返信カードには、その返信カードの作成時点の割合を表示する。投稿の処理完了や文脈の進捗は、医療上の情報や対応がすべて揃ったことを意味しない。
+
+◐は投稿の処理が未完了、!は要確認、?は状況未確認を表し、送信前の待機と実行中を推測で区別しない。✓は実行を確認済み、●は複数投稿のうち使用を確認できたことを表す。投稿の処理状態・サービスの実行状態・文脈の進捗は区別する。カード最上部は固定アイコン💬を使う。
 
 01は元投稿と返信のそれぞれに、架空の画像とPDFをまとめて表示した例です。ファイルのプレビューと操作欄との厳密な順序は実Slackで未確認で、画像内の並びを実UIの保証には使いません。送信する全集合と、非公開の準備・表示完了・結果不明の区別は[Slackの原文と添付の配送](../../specs/semantic-evaluation.md#slackの原文と添付の配送)に従います。
 
@@ -43,7 +45,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 | 画面 | 根拠 |
 |---|---|
-| `01-overview` | `mcs/notify/notify_cards.py`の`_split_reply_targets`・`_bind_reply_thread`と`notify_render.reply_source`（元の投稿のカードと、スレッド内の返信カード）、`docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`の`_attachment_part`・`_file_group`（非公開の準備と、同じカードへのファイル群表示）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。見出しの添付件数と、要約を含まない投稿見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ） |
+| `01-overview` | `mcs/notify/notify_cards.py`の`_split_reply_targets`・`_bind_reply_thread`と`notify_render.reply_source`（元の投稿のカードと、スレッド内の返信カード）、`docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`の`_attachment_part`・`_file_group`（非公開の準備と、同じカードへのファイル群表示）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。見出しの添付件数と、要約を含まない投稿見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ）、`mcs/notify/processing_route.py`の`context_progress_text`・`compact_header`と`notify_card_renders._frozen_context_progress`（投稿処理とは別に、初回カード作成時の文脈の進捗を保持） |
 | `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、確認・担当・タスク作成も含めた「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
 | `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。1投稿を示す新形式では5種類だけを表示する。「🗂 別の投稿」は複数投稿をまとめた従来形式に保持する。通常操作は確認・担当・タスク作成を含め元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
@@ -109,3 +111,5 @@ CIはSVGの生成結果、PNGの完結性・サイズ・画像データ、両方
 2026-11-02の表示変更では、01〜03の解析状態を短い表示に改め、使用したサービスのアイコンを同じ行に配置した。SVG・PNGとハッシュを生成器から更新した。
 
 2026-11-04の添付表示では、01に元投稿と返信それぞれの画像・PDFをまとめた例を描き、01〜03の添付件数を合わせた。既存の生成器とmacOSのsipsでSVG・PNG・ハッシュを更新した。ファイルの検査やプレビュー、厳密な並びは実Slackで未確認であり、合成図の配置とは区別する。
+
+2026-11-06の表示変更では、01〜03のクラウド提供元アイコンを文脈の進捗へ置き換えた。元投稿73%・後から作成した返信91%は架空の値で、各カードの作成時点を示す。既存カードは進捗だけでは更新しない。医療本文・原文・操作・添付の配置を保ち、SVG・PNGとハッシュを既存の生成器とmacOSのsipsで更新した。
