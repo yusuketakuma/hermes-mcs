@@ -20,6 +20,23 @@ from mcs_util import HOME, load_config
 COMMIT_MARGIN = 5
 
 
+def _history_read_error(phase, error):
+    try:
+        if type(phase) is not str or phase not in ("recover_response", "request_send_block_reason"):
+            return
+        category = next((name for cls, name in (
+            (sqlite3.Error, "sqlite_error"), (ValueError, "value_error"),
+            (TypeError, "type_error"), (KeyError, "key_error"),
+            (cloud_client.CloudError, "cloud_error")) if isinstance(error, cls)), "read_error")
+        values = {"phase": phase, "error_category": category}
+        if isinstance(error, sqlite3.Error):
+            code = cloud_backlog._exception_observation(error).get("sqlite_errorcode")
+            values["sqlite_primary_code"] = code & 0xff if type(code) is int else "unknown"
+        cloud_backlog._event("cloud_history_read_error", **values)
+    except Exception:
+        pass  # Diagnostics must never replace the existing fail-closed refusal.
+
+
 class CloudFallback(Exception):
     """Discard this provider's unit and retry under the local contract."""
 
@@ -283,7 +300,8 @@ class CloudInferenceUnit:
                         input_binding=self._input_binding(),
                         request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
                         owner=self.owner, scope=self.scope)
-                except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError):
+                except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
+                    _history_read_error("recover_response", error)
                     raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
             saved = self.dispatch(recover, result=True)
             if saved is not None:
@@ -304,7 +322,8 @@ class CloudInferenceUnit:
                             route=self.route, project_id=self.project_id, message_id=self.message_id,
                             unit_key=self.unit_key, owner=self.owner, selection=self.selection,
                             input_binding=self._input_binding())
-                    except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError):
+                    except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
+                        _history_read_error("request_send_block_reason", error)
                         self.possibly_sent = True
                         raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
                 if self.dispatch(send_block_reason, result=True):
