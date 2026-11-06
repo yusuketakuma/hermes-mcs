@@ -41,8 +41,10 @@ def test_created_system_channel_pins_its_profile_without_changing_patient_profil
     assert cfg == before
 
 
-@pytest.mark.parametrize('existing', [False, True])
-def test_legacy_or_existing_explicit_system_channel_keeps_text_profile(tmp_path, monkeypatch, existing):
+@pytest.mark.parametrize('existing,state', [(False, None), (True, 'applied'),
+                                          (True, 'pending'), (True, 'blocked'),
+                                          (True, 'unknown'), (True, 'verified')])
+def test_legacy_or_existing_explicit_system_channel_keeps_text_profile(tmp_path, monkeypatch, existing, state):
     cfg = config()
     cfg.update(notify_target='slack:C000000098', notify_system_target='slack:C000000099', notify_bot_profile='legacy')
     cfg['notify']['slack']['channel_id'] = 'C000000098'
@@ -53,6 +55,9 @@ def test_legacy_or_existing_explicit_system_channel_keeps_text_profile(tmp_path,
         setup.prepare(tmp_path, cfg)
         consume(tmp_path, client, cfg)
         setup.applied(tmp_path, cfg, setup.candidate(tmp_path, cfg))
+        record = setup.read(tmp_path)
+        record['state'] = state
+        setup.save(tmp_path, record)
         assert client.created == []
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: 'synthetic-hermes')
     argv = notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')
@@ -66,6 +71,18 @@ def test_created_receipt_survives_unrelated_config_changes_but_does_not_own_anot
     assert notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')[1:3] == ['-p', 'synthetic']
     cfg['notify_system_target'] = 'slack:C000000099'
     assert notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')[1:3] == ['-p', 'legacy']
+
+
+@pytest.mark.parametrize('state', ['pending', 'blocked', 'unknown', 'verified'])
+def test_unfinished_created_receipt_does_not_own_another_system_target(tmp_path, monkeypatch, state):
+    cfg = created(tmp_path)
+    record = setup.read(tmp_path)
+    record['state'] = state
+    setup.save(tmp_path, record)
+    cfg['notify_system_target'] = 'slack:C000000099'
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: 'synthetic-hermes')
+    argv = notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'legacy']
 
 
 @pytest.mark.parametrize('field,value', [('profile', 'other'), ('profile', ''), ('profile', ' bad '),
@@ -85,7 +102,7 @@ def test_ambiguous_created_profile_is_never_passed_to_the_cli(tmp_path, profile)
         notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')
 
 
-@pytest.mark.parametrize('damage', ['corrupt', 'pending', 'unknown', 'root'])
+@pytest.mark.parametrize('damage', ['corrupt', 'pending', 'blocked', 'unknown', 'verified', 'root'])
 def test_unverified_setup_record_is_not_treated_as_legacy(tmp_path, damage):
     cfg = created(tmp_path)
     if damage == 'corrupt':

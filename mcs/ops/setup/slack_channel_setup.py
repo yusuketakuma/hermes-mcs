@@ -126,11 +126,11 @@ def system_send_profile(root, cfg, destination):
     state = read(root)
     if state is None:
         return None
-    if state['state'] != 'applied':
-        raise ValueError('slack_setup_system_profile_unverified')
     system = state['roles']['system']
     if not system.get('create_receipt') or destination != 'slack:' + system['id']:
         return None
+    if state['state'] != 'applied':
+        raise ValueError('slack_setup_system_profile_unverified')
     notify = cfg.get('notify')
     scope = notify.get('slack') if isinstance(notify, dict) else None
     binding = ({key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
