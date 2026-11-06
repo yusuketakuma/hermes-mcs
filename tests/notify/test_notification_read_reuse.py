@@ -72,6 +72,9 @@ def test_build_spec_shares_read_choices_but_mints_fresh_tokens(led, monkeypatch,
     _seed_thread(led)
     cfg = {**CFG, "notify": {**CFG["notify"], "card_thread": False}}
     _dispatch(led, _intent(led), cfg=cfg)
+    render = _latest_render(led)
+    assert _begin(led, render, cfg=cfg)["granted"]
+    assert _receipt(led, render, "0000000000000001", cfg=cfg)["applied"]
     card = _card(led)
     content = notify_render.card_content(led.db, card, cfg=cfg)
     calls = Counter()
