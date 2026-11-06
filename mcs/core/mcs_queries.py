@@ -1330,7 +1330,7 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
         import original_source_keys
         for row in db.execute("SELECT a.attachment_id,a.state,a.sha256,a.bytes,a.downloaded_at "
                 "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
-                "WHERE m.project_id=? AND a.state IS NOT 'withdrawn' AND m.body_state IS NOT 'deleted' "
+                "WHERE m.project_id=? AND a.state IS NOT 'withdrawn' "
                 + ('AND m.message_id=? ' if mid is not None else '') + "ORDER BY a.attachment_id",
                 (pid, mid) if mid is not None else (pid,)):
             result["total"] += 1
