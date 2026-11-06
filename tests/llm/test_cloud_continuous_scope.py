@@ -143,6 +143,16 @@ def test_continuous_scope_selects_history_with_a_later_reply(history, monkeypatc
     history.semantic_seed(1, [1], {'source': 'history_import'})
     _continuous(history)
     history.save_messages([_message(2, parent=1, body='synthetic reply')])
+    # Under the real closed policy this same non-empty fixture selects nothing;
+    # local progression is the live path (covered by the local+POST0 contract
+    # tests). The open-route branch only inspects the dormant selector's scope
+    # binding for historical paid work.
+    if lane == 'semantic':
+        assert not semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]
+    else:
+        closed, _ = extract_llm._select_pending(history, 4, None, None, False,
+                                                cloud_only=True, prioritize_patients=True)
+        assert not closed
     with legacy_cloud_routes():
         if lane == 'semantic':
             rows = semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]

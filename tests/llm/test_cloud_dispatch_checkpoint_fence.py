@@ -11,8 +11,8 @@ from mcs_util import payload_hash
 from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
 
 
-def provider(ledger, cfg, state, fence):
-    return cloud_inference.CloudInferenceUnit(ledger, cfg, route='reextract', project_id=1,
+def provider(ledger, cfg, state, fence, route='reextract'):
+    return cloud_inference.CloudInferenceUnit(ledger, cfg, route=route, project_id=1,
         message_id=1, unit_key='synthetic-unit', deadline=time.monotonic() + 180,
         current=lambda: state['current'], dispatch=lambda fn, **kwargs: fn(),
         owner={'lease': 'synthetic-first'}, input_binding=payload_hash('original-input'),
@@ -40,8 +40,11 @@ def test_dispatch_fence_is_presend_and_cannot_discard_existing_paid_answer(paid,
         recovered = provider(ledger, cfg, state, fence)(
             'synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
         assert recovered['reused_response'] is True and len(calls) == 1
-        with legacy_cloud_routes(), pytest.raises(cloud_client.CloudNotSent) as refused:
-            unit('new synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+        # New sends are checked on the live patient_context route; the closed
+        # reextract route would stop at admission before reaching the fence.
+        context_unit = provider(ledger, cfg, state, fence, route='patient_context')
+        with pytest.raises(cloud_client.CloudNotSent) as refused:
+            context_unit('new synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
         assert cloud_client.not_sent_reason(refused.value) == 'checkpoint_unverified'
         assert len(calls) == 1
         assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%'")] == money
@@ -54,7 +57,7 @@ def test_scope_loss_with_checkpoint_fence_still_rejects_paid_adoption(paid):
         with legacy_cloud_routes():
             unit('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
         state['current'] = False
-        with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'):
+        with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'):
             provider(ledger, cfg, state, lambda: False)(
                 'synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
         assert len(calls) == 1
@@ -65,6 +68,10 @@ def test_scope_loss_with_checkpoint_fence_still_rejects_paid_adoption(paid):
 def test_quality_child_inherits_checkpoint_dispatch_fence(paid):
     path, cfg, _calls, _locks, state, _unit, _restart = paid
     with closing(Ledger(path)) as ledger:
+        # Legacy-compat component check: spawn_quality_repair exists only on the
+        # closed reextract/backlog path, so the route is reopened solely for this
+        # fence-inheritance probe. The live-route fence contrast is the
+        # patient_context case in test_dispatch_fence_is_presend_and_cannot_discard_existing_paid_answer.
         unit = provider(ledger, cfg, state, lambda: False)
         child = unit.spawn_quality_repair()
         child.commit_guard()
