@@ -745,8 +745,10 @@ def _delivery_latency(db, retired, now):
             "p50_s": percentile(samples, .5), "p95_s": percentile(samples, .95)}
 
 
-def _delivery_completion(db, cfg, now):
+def _delivery_completion(db, cfg, now, observation=None):
     """Count latest render delivery evidence, separately from clinical validity or readership."""
+    if observation is not None:
+        observation["phase"] = "completion_counts"
     retired = retired_transports(cfg)
     live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
     row = db.execute(
@@ -764,6 +766,9 @@ def _delivery_completion(db, cfg, now):
         "COALESCE(SUM(l.state='delivered' AND p.n IS NULL),0) parts_unobserved "
         "FROM latest l LEFT JOIN parts p ON p.delivery_id=l.delivery_id", retired).fetchone()
     complete = row['all_parts_delivered']
+    if observation is not None:
+        observation["phase"] = "delivery_latency"
+    latency = _delivery_latency(db, retired, now)
     return {"status": "recorded", "observed_at": now,
             "scope": "latest_create_or_update_render_per_card_nonretired_transport",
             "basis": "stored_delivery_receipts_not_current_clinical_validity_or_readership",
@@ -773,10 +778,10 @@ def _delivery_completion(db, cfg, now):
             "unknown": row['unknown'], "incomplete": row['total'] - complete,
             "parts_unobserved": row['parts_unobserved'],
             "reason": "part_plan_unobserved" if row['parts_unobserved'] else None,
-            "latency": _delivery_latency(db, retired, now)}
+            "latency": latency}
 
 
-def health_cards(db, cfg=None) -> dict:
+def health_cards(db, cfg=None, *, observation=None) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
     ops.card_resolve (ids only, no patient data). Attempts on a retired
@@ -787,29 +792,43 @@ def health_cards(db, cfg=None) -> dict:
     retired = retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     live = f" AND r.transport NOT IN ({marks})" if retired else ""
+    if observation is not None:
+        observation["phase"] = "card_counts"
     states = {r["delivery_state"]: r["c"] for r in db.execute(
         "SELECT delivery_state,COUNT(*) c FROM notification_cards "
         "GROUP BY delivery_state")}
+    if observation is not None:
+        observation["phase"] = "pending_age"
     oldest = db.execute(
         "SELECT MIN(created_at) FROM notification_cards "
         "WHERE delivery_state='pending'").fetchone()[0]
+    if observation is not None:
+        observation["phase"] = "queued_renders"
     queued = db.execute(
         "SELECT COUNT(*) FROM notification_renders WHERE state='queued'"
     ).fetchone()[0]
+    if observation is not None:
+        observation["phase"] = "attempt_counts"
     unsettled = db.execute(
         "SELECT COUNT(*) c,MIN(a.created_at) o FROM "
         "notification_delivery_attempts a "
         "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
         "WHERE a.state IN ('granted','unknown')" + live, retired
     ).fetchone()
+    if observation is not None:
+        observation["phase"] = "retired_attempt_counts"
     retired_unsettled = db.execute(
         "SELECT COUNT(*) FROM notification_delivery_attempts a "
         "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
         f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks})",
         retired).fetchone()[0] if retired else 0
+    if observation is not None:
+        observation["phase"] = "last_delivery"
     last = db.execute(
         "SELECT MAX(updated_at) FROM notification_renders "
         "WHERE state='delivered'").fetchone()[0]
+    if observation is not None:
+        observation["phase"] = "unknown_renders"
     unknown = db.execute(
         "SELECT COUNT(*) FROM notification_renders WHERE state='unknown'"
     ).fetchone()[0]
@@ -817,6 +836,8 @@ def health_cards(db, cfg=None) -> dict:
     # carries the exact scope ops.card_resolve validates against, so
     # resolving is: check the remote channel -> submit the approval
     # flow. Never auto-resend: a granted attempt may already be remote.
+    if observation is not None:
+        observation["phase"] = "unsettled_worklist"
     worklist = db.execute(
         "SELECT a.attempt_id,a.delivery_id,a.state,a.message_id,"
         "a.error_code,a.created_at,r.card_id,r.transport,r.profile,"
@@ -825,6 +846,8 @@ def health_cards(db, cfg=None) -> dict:
         "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
         "WHERE a.state IN ('granted','unknown')" + live +
         " ORDER BY a.created_at LIMIT 20", retired).fetchall()
+    if observation is not None:
+        observation["phase"] = "retired_worklist"
     retired_items = [
         {"attempt_id": w["attempt_id"], "delivery_id": w["delivery_id"],
          "state": w["state"], "transport": w["transport"],
@@ -837,6 +860,8 @@ def health_cards(db, cfg=None) -> dict:
             "JOIN notification_renders r ON r.delivery_id=a.delivery_id "
             f"WHERE a.state IN ('granted','unknown') AND r.transport IN ({marks}) "
             "ORDER BY a.created_at LIMIT 20", retired)] if retired else []
+    if observation is not None:
+        observation["phase"] = "unknown_parts"
     unknown_parts = []
     for row in db.execute(
             "SELECT r.delivery_id,r.card_id,r.transport,r.payload_hash AS manifest_sha256,"
@@ -854,6 +879,12 @@ def health_cards(db, cfg=None) -> dict:
                                               item['error_code'], item['attempt_id'])
         item['error_code'] = item['recovery'].pop('error_code')
         unknown_parts.append(item)
+    if observation is not None:
+        observation["phase"] = "layout_inventory"
+    inventory = layout_migration_counts(db)
+    completion = _delivery_completion(db, cfg, now, observation)
+    if observation is not None:
+        observation["phase"] = "result_assembly"
     return {
         "pending": states.get("pending", 0),
         "delivered": states.get("delivered", 0),
@@ -862,10 +893,10 @@ def health_cards(db, cfg=None) -> dict:
         "message_deleted": states.get("message_deleted", 0),
         "revoked": states.get("revoked", 0),
         "oldest_pending_age_s": round(now - oldest, 1) if oldest else 0,
-        "layout_inventory": layout_migration_counts(db),
+        "layout_inventory": inventory,
         "unknown_parts": unknown_parts,
         "unknown_part_resolution": "カード本体はops.card_resolve、本文・添付はcard_part_planで確認後、人承認付きops.card_part_resolveを使ってください。",
-        "completion": _delivery_completion(db, cfg, now),
+        "completion": completion,
         "renders_queued": queued,
         "renders_unknown": unknown,
         "attempts_unsettled": unsettled["c"],

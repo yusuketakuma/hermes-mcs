@@ -53,7 +53,7 @@ def test_notification_readers_use_separate_time_budget(stored, monkeypatch, read
     clock = [100.0]
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
 
-    def read(db, *args):
+    def read(db, *args, **kwargs):
         assert db is stored
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 2000
         assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == min(
@@ -207,6 +207,8 @@ def test_card_observation_preserves_observed_zero(stored):
     report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
     assert report["cards"]["attempts_unsettled"] == 0
     assert report["cards"]["layout_inventory"] == []
+    assert report["cards"]["observation"]["phase"] == "result_assembly"
+    assert report["cards"]["observation"]["stop"] == "complete"
     assert report["attention"]["delivery_unsettled"]["attempts"] == 0
     assert "notification_cards_unavailable" not in report["state_reasons"]
 
@@ -220,7 +222,7 @@ def test_failed_card_read_is_unknown_and_reaches_monitor(stored, tmp_path, monke
     clock = [100.0]
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
 
-    def read(db, cfg=None):
+    def read(db, cfg=None, **kwargs):
         if failure == "unavailable":
             raise ValueError("SYNTHETIC_PRIVATE_ERROR")
         clock[0] += health_report.NOTIFICATION_OBSERVATION_S + 0.1
@@ -417,3 +419,228 @@ def test_unknown_blocks_never_hide_unreadable_reasons_or_delay_alert(tmp_path, u
     watched = health_watch.evaluate(str(tmp_path), NOW + 1, cfg={})
     assert watched["state_reasons"] is None
     assert watched["alert"] and not watched["alert_held"]
+
+
+def test_card_phase_markers_add_no_sql_or_delivery_changes(stored):
+    statements = []
+    stored.set_trace_callback(statements.append)
+    try:
+        original = notify_scope.health_cards(stored, {})
+        original_sql = list(statements)
+        statements.clear()
+        observation = {}
+        observed = notify_scope.health_cards(stored, {}, observation=observation)
+    finally:
+        stored.set_trace_callback(None)
+    assert observed == original
+    assert statements == original_sql
+    assert observation == {"phase": "result_assembly"}
+
+
+@pytest.mark.parametrize("helper,phase", [("layout_migration_counts", "layout_inventory"),
+                                         ("_delivery_latency", "delivery_latency")])
+def test_failed_card_phase_is_fixed_and_preserves_unknown(stored, monkeypatch, helper, phase):
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+
+    def unavailable(*args):
+        clock[0] += 0.125
+        raise ValueError("SYNTHETIC_PRIVATE_ERROR")
+
+    monkeypatch.setattr(notify_scope, helper, unavailable)
+    cards = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})["cards"]
+    assert cards["observation"] == {"phase": phase, "budget_s": 2.0,
+                                    "elapsed_s": 0.125, "remaining_s": 1.875,
+                                    "stop": "read_unavailable"}
+    assert cards["status"] == cards["completion"]["status"] == "unknown"
+    assert cards["pending"] is None and cards["completion"]["reason"] == "observation_unavailable"
+    assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(cards)
+
+
+@pytest.mark.parametrize("failure,stop,reason", [
+    ("sql_time", "time_limit", "observation_limit"),
+    ("length", "row_size_limit", "observation_unavailable"),
+    ("busy", "storage_busy", "observation_unavailable"),
+    ("interrupt", "read_unavailable", "observation_limit"),
+])
+def test_card_stop_classification_uses_causal_fixed_codes(stored, monkeypatch, failure, stop, reason):
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+    stored.execute("PRAGMA busy_timeout=7000")
+    original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    stored.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
+    before = stored.total_changes
+
+    def read(db, cfg=None, *, observation=None):
+        observation["phase"] = "completion_counts"
+        if failure == "sql_time":
+            clock[0] += 2.1
+            db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
+                       "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()
+        elif failure == "length":
+            db.execute("SELECT zeroblob(?)", (health_report.HEALTH_OBSERVATION_ROW_BYTES + 1,)).fetchone()
+        elif failure == "busy":
+            error = sqlite3.OperationalError("SYNTHETIC_PRIVATE_ERROR")
+            error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            raise error
+        else:
+            # An interrupt without this observer's expired progress handler is
+            # insufficient evidence to label the cause as its time limit.
+            error = sqlite3.OperationalError("interrupted")
+            error.sqlite_errorcode = sqlite3.SQLITE_INTERRUPT
+            raise error
+        pytest.fail("the synthetic observation should stop")
+
+    monkeypatch.setattr(notify_scope, "health_cards", read)
+    cards = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})["cards"]
+    assert cards["observation"]["phase"] == "completion_counts"
+    assert cards["observation"]["stop"] == stop
+    assert cards["observation"]["budget_s"] == 2.0
+    assert cards["observation"]["remaining_s"] >= 0
+    assert cards["reason"] == reason and cards["pending"] is None
+    assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(cards)
+    assert stored.total_changes == before and stored.in_transaction
+    assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
+    assert stored.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
+                          "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()[0] == 2001000
+
+
+def test_card_phases_share_one_window_and_caller_deadline(stored, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+
+    def read(db, cfg=None, *, observation=None):
+        observation["phase"] = "card_counts"
+        clock[0] += 0.3
+        observation["phase"] = "delivery_latency"
+        # Changing phases never starts a new window.
+        clock[0] += 0.3
+        return {"pending": 0}
+
+    monkeypatch.setattr(notify_scope, "health_cards", read)
+    cards = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok",
+                                      cfg={}, deadline=100.5)["cards"]
+    assert cards["observation"] == {"phase": "delivery_latency", "budget_s": 0.5,
+                                    "elapsed_s": 0.6, "remaining_s": 0.0, "stop": "time_limit"}
+    assert cards["status"] == "unknown" and cards["pending"] is None
+
+
+def test_depleted_card_budget_records_no_read(stored, monkeypatch):
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: 100.0)
+    calls = []
+    statements = []
+    observation = {}
+    stored.set_trace_callback(statements.append)
+    try:
+        with pytest.raises(RuntimeError, match="observation_limit"):
+            health_report.bounded_health_read(stored, lambda check: calls.append(check),
+                                              seconds=0, observation=observation)
+    finally:
+        stored.set_trace_callback(None)
+    assert calls == statements == []
+    assert observation == {"phase": "connection_setup", "budget_s": 0.0,
+                           "elapsed_s": 0.0, "remaining_s": 0.0, "stop": "budget_exhausted"}
+
+
+def test_item_limit_diagnostic_keeps_existing_boundary(stored, monkeypatch):
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(health_report, "HEALTH_OBSERVATION_ITEMS", 2)
+    observation = {}
+    checked = []
+
+    def read(check):
+        for _ in range(3):
+            check()
+            checked.append(True)
+
+    with pytest.raises(RuntimeError, match="observation_limit"):
+        health_report.bounded_health_read(stored, read, seconds=2, observation=observation)
+    assert checked == [True, True]
+    assert observation["stop"] == "item_limit"
+
+
+def test_card_failure_diagnostics_cannot_replace_read_failure(stored, monkeypatch):
+    clock_calls = [0]
+
+    def clock():
+        clock_calls[0] += 1
+        if clock_calls[0] > 2:
+            raise ValueError("SYNTHETIC_CLOCK_FAILURE")
+        return 100.0
+
+    monkeypatch.setattr(health_report.time, "monotonic", clock)
+    original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    stored.execute("PRAGMA busy_timeout=7000")
+
+    def read(check):
+        raise RuntimeError("SYNTHETIC_READ_FAILURE")
+
+    with pytest.raises(RuntimeError, match="SYNTHETIC_READ_FAILURE"):
+        health_report.bounded_health_read(stored, read, seconds=2, observation={})
+    assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
+    assert stored.execute("SELECT 1").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("failure", ["release", "restore", "both"])
+def test_card_cleanup_failure_is_unknown_and_attributed_to_cleanup(stored, monkeypatch, failure):
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: 100.0)
+    stored.execute("PRAGMA busy_timeout=7000")
+    original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    calls = []
+    errors = {"release": sqlite3.OperationalError("SYNTHETIC_PRIVATE_RELEASE"),
+              "restore": sqlite3.OperationalError("SYNTHETIC_PRIVATE_RESTORE")}
+
+    class CleanupFailure:
+        armed = True
+
+        def __getattr__(self, name):
+            return getattr(stored, name)
+
+        def set_progress_handler(self, callback, frequency):
+            if self.armed and callback is None:
+                calls.append("handler_clear")
+            return stored.set_progress_handler(callback, frequency)
+
+        def setlimit(self, category, limit):
+            if self.armed and limit == original_limit:
+                calls.append("limit_restore")
+            return stored.setlimit(category, limit)
+
+        def execute(self, sql, *args):
+            result = stored.execute(sql, *args)
+            if self.armed and sql == "RELEASE mcs_health_observation":
+                calls.append("release")
+                if failure in ("release", "both"):
+                    raise errors["release"]
+            if self.armed and sql == "PRAGMA busy_timeout=7000":
+                calls.append("wait_restore")
+                self.armed = False
+                if failure in ("restore", "both"):
+                    raise errors["restore"]
+            return result
+
+    proxy = CleanupFailure()
+    # Check the original cleanup exception object and precedence directly;
+    # the outer producer must then report the same technical failure as unknown.
+    observation = {}
+    with pytest.raises(sqlite3.OperationalError) as raised:
+        health_report.bounded_health_read(proxy, lambda check: {}, seconds=2,
+                                          observation=observation)
+    assert raised.value is errors["restore" if failure in ("restore", "both") else "release"]
+    assert calls == ["handler_clear", "limit_restore", "release", "wait_restore"]
+    assert observation["phase"] == "connection_cleanup"
+    assert observation["stop"] == "read_unavailable"
+    calls.clear()
+    proxy.armed = True
+    cards = health_report.build_health(proxy, {"errors": [], "notify": {}}, "ok", cfg={})["cards"]
+    assert cards["status"] == cards["completion"]["status"] == "unknown"
+    assert cards["pending"] is None and cards["reason"] == "observation_unavailable"
+    assert cards["observation"]["phase"] == "connection_cleanup"
+    assert cards["observation"]["stop"] == "read_unavailable"
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(cards)
+    assert calls == ["handler_clear", "limit_restore", "release", "wait_restore"]
+    assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
+    assert not stored.in_transaction
