@@ -69,6 +69,7 @@ REALTIME_CARRY_S = 86400      # notified arrivals stay on the realtime slot this
 # only when they fit before it, less this margin for the tail stages
 _WATCHDOG_EXIT_AT: float | None = None
 HARD_DEADLINE_MARGIN_S = 10
+HEALTH_PUBLISH_RESERVE_S = 5.0
 
 
 def _config() -> dict:
@@ -913,9 +914,12 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         # H4: a full copy + quick_check only when the ledger changed, the
         # notification flag asks for it, or the copy is an hour old
         dirty = notify_cards.snapshot_dirty(ledger)
+        hard = _hard_deadline()
+        snapshot_deadline = (None if hard is None else
+                             hard - health_report.HEALTH_SQL_BUDGET_S - HEALTH_PUBLISH_RESERVE_S)
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
-                               DB, force=dirty, deadline=_hard_deadline()), required=True)
+                               DB, force=dirty, deadline=snapshot_deadline), required=True)
         result["snapshot"] = state is not None
         result["snapshot_state"] = state
         if state is None:

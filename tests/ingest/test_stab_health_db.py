@@ -175,14 +175,16 @@ def test_disarm_clears_the_hard_deadline(monkeypatch):
     (True, "published", True, []),
     (False, None, False, ["snapshot: RuntimeError"]),
 ])
+@pytest.mark.parametrize("hard", [None, 530.0])
 def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
-        tmp_path, monkeypatch, dirty, state, cleared, errors):
+        tmp_path, monkeypatch, dirty, state, cleared, errors, hard):
     import notify_cards
     import notify_spool
     import notify_cmds
     db = _ledger(tmp_path)
     run_id = db.begin_run(None)
     calls = {}
+    monkeypatch.setattr(run_check, "_hard_deadline", lambda: hard)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda _l: dirty)
@@ -191,12 +193,91 @@ def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
 
     def refresh(_path, *, force, deadline=None):
         calls["force"] = force
+        calls["deadline"] = deadline
         return state
     monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     result = {"errors": [], "incomplete": [], "notify": {}}
     status = run_check._finish_run(db, {}, result, run_id, time.monotonic() + 60)
     assert calls["force"] is dirty
+    assert calls["deadline"] == (None if hard is None else 495.0)
     assert calls.get("cleared", False) is cleared
     assert result["errors"] == errors
     assert status == ("partial" if errors else "ok")
     db.close()
+
+
+@pytest.mark.parametrize("failure", ["signature_deadline", "copy_timeout", "validator_timeout"])
+def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
+        tmp_path, monkeypatch, failure):
+    import notify_cards
+    import notify_cmds
+    import notify_spool
+    import snapshots
+    from pathlib import Path
+
+    db = _ledger(tmp_path)
+    try:
+        source = db.db.execute("PRAGMA database_list").fetchone()[2]
+        destination = tmp_path / "snapshots"
+        published = snapshots.publish_snapshot(source, str(destination))
+        assert published is not None
+        old_snapshot = Path(published).read_bytes()
+        monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(destination))
+        marker = Path(maintenance._snapshot_sig_path())
+        marker.write_text(json.dumps({"sig": "synthetic-old", "published_at": 100}))
+        old_marker = marker.read_bytes()
+        health_path = tmp_path / "health.json"
+        health_path.write_text(json.dumps({"at": 100, "unread_at": 100,
+                                          "semantic_jobs": {"pending": 999}}))
+        monkeypatch.setattr(health_report, "HEALTH_FILE", str(health_path))
+        monkeypatch.setattr(run_check, "DB", source)
+        monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", 540.0)
+        monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
+        monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
+        monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda _: True)
+        cleared = []
+        monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
+                            lambda *a: cleared.append(True))
+        clock = [500.0 if failure == "signature_deadline" else 302.0]
+        monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
+
+        def prepare(_source, _tmp, deadline, _fd, _state):
+            assert failure != "signature_deadline", "expired snapshot started a copy"
+            assert deadline == 495.0
+            if failure == "copy_timeout":
+                clock[0] = deadline
+                snapshots._fail("copy_timeout")
+                return False
+            clock[0] += 176.031
+            return True
+
+        def verify(_path, *, deadline, **kwargs):
+            assert failure == "validator_timeout"
+            assert deadline == 495.0
+            remaining = deadline - clock[0]
+            clock[0] = deadline
+            snapshots._fail("validator_timeout", verify_s=remaining, budget_s=remaining)
+            return False
+
+        monkeypatch.setattr(snapshots, "_prepare_in_child", prepare)
+        monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
+        run_id = db.begin_run(None)
+        result = {"errors": [], "incomplete": [], "notify": {}}
+        status = run_check._finish_run(db, {}, result, run_id, 480.0)
+        assert status == "partial"
+        assert result["snapshot"] is False and result["snapshot_state"] is None
+        assert result["snapshot_failure"]["reason"] == failure
+        assert Path(published).read_bytes() == old_snapshot
+        assert marker.read_bytes() == old_marker and not cleared
+        assert run_check._hard_deadline() - clock[0] >= 30.0
+        run_check._write_health(db, result, status, run_id=run_id, cfg={})
+        health = json.loads(health_path.read_text())
+        assert health["at"] > 100 and health["unread_at"] == health["at"]
+        assert health["semantic_jobs"]["pending"] == 0
+        assert health["notify"]["incomplete_parts"]["total"] == 0
+        assert health["run_status"] == "partial"
+        assert run_check._hard_deadline() == 530.0
+    finally:
+        db.close()
