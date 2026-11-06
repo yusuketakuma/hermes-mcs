@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="860" viewBox="0 0 390 860" role="img" aria-labelledby="title desc">
+  <title id="title">未公開準備資料：クラウド解析の流れ</title>
+  <desc id="desc">解析対象を公平に選び、設定された条件でクラウドへ送り、結果を証跡と照合して保存・再利用します。待ちを分散し、確認途中の回答を保持する流れを示す説明図です。実画面や測定結果ではありません。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66829a"/></marker>
+  </defs>
+  <rect width="390" height="860" fill="#f4f7fb"/>
+  <g font-family="Hiragino Kaku Gothic ProN, sans-serif" fill="#18324b">
+    <text x="22" y="38" font-size="22" font-weight="700">待ちを分散し、結果を保持</text>
+    <text x="22" y="64" font-size="15">v1.1.2 未公開準備資料 · クラウド処理</text>
+    <rect x="18" y="84" width="354" height="86" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="34" y="115" font-size="19" font-weight="700">1　解析対象を公平に選ぶ</text>
+    <text x="34" y="143" font-size="15">患者ごとの処理順で待ちを分散</text>
+    <text x="34" y="166" font-size="14">確認待ちと後続処理を分ける</text>
+    <path d="M195 176V193" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="204" width="354" height="98" rx="14" fill="#e8f0fd" stroke="#a4bddc"/>
+    <text x="34" y="235" font-size="19" font-weight="700">2　条件を確認して送信</text>
+    <text x="34" y="263" font-size="15">利用設定・対象範囲・予算・承認を確認</text>
+    <text x="34" y="288" font-size="15">対象・取得範囲は既存設定に従う</text>
+    <path d="M195 308V325" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="336" width="354" height="128" rx="14" fill="#fff6e8" stroke="#d9ba83"/>
+    <text x="34" y="367" font-size="19" font-weight="700">3　結果を確認して保存・再利用</text>
+    <text x="34" y="397" font-size="15">回答は証跡と照合して保存・再利用</text>
+    <text x="34" y="422" font-size="15">確認途中・保存待ちの結果も保持</text>
+    <text x="34" y="447" font-size="14" font-weight="700">確認不能な結果を成功・失敗へ推測しない</text>
+    <path d="M195 470V487" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="498" width="354" height="128" rx="14" fill="#eef7ee" stroke="#a9c9a9"/>
+    <text x="34" y="529" font-size="19" font-weight="700">4　患者背景と通知へ反映</text>
+    <text x="34" y="559" font-size="15">背景抽出と意味解析で患者順位を共通化</text>
+    <text x="34" y="584" font-size="15">監視警報は正常な先送りと異常を区別</text>
+    <text x="34" y="609" font-size="14">未完了部品は状態別の内訳で表示</text>
+    <rect x="18" y="652" width="354" height="76" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="34" y="683" font-size="16" font-weight="700">この図の対象</text>
+    <text x="34" y="709" font-size="14">旧28件の説明。候補全体の受入証拠ではない</text>
+    <text x="34" y="732" font-size="13" fill="#4a6076">説明図は実画面や測定結果ではありません</text>
+  </g>
+</svg>

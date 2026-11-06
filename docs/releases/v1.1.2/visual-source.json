@@ -1,0 +1,65 @@
+{
+  "status": "unpublished_preparation_subset",
+  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+  "scope": "旧28件のクラウド処理説明。OCR・Discord・schema 12を含む候補全体の受入証拠ではない。",
+  "origin_commit": "b07790e1a7008aa563189648d25d1e8a819781e2",
+  "historical_source_head": "4c6727e272afda7c4c8f2c5e6e82c592f3960bbc",
+  "source_checkout_observation": {
+    "head": "f6ff162cf50c84968884481e06624ab5a033b518",
+    "dirty": true,
+    "observed_at": "2026-11-06T00:54:44.052169+00:00",
+    "release_sha_fixed": false
+  },
+  "source": "docs/releases/v1.1.2/cloud-continuity.svg",
+  "renderer": {
+    "tool": "macOS qlmanage + ImageMagick",
+    "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)",
+    "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
+    "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png"
+  },
+  "artifacts": [
+    {
+      "path": "docs/releases/v1.1.2/cloud-continuity.svg",
+      "sha256": "feb115f3fce9937530a5b87dc3dcae1b97fce523eed6b58abc4567498e2a4da0"
+    },
+    {
+      "path": "docs/releases/v1.1.2/cloud-continuity.png",
+      "sha256": "4d191d0ec4ad3af5f593065313f25f1a4e6642a8c37dcb6a61ec9b3d5a87bfe5"
+    }
+  ],
+  "source_file_observations": [
+    {
+      "path": "mcs/llm/cloud_inference.py",
+      "sha256": "31bfb86391775411135b90cf2a1f2ca74d23065df5d1ec8a25238699cb9e8f49"
+    },
+    {
+      "path": "mcs/llm/cloud_backlog.py",
+      "sha256": "e3d0b1cfbeebe2eac3e7956b0e5509f003198e8f6146512056c3ef771d45f57d"
+    },
+    {
+      "path": "mcs/ingest/health_report.py",
+      "sha256": "62dae82b247d9df4fa9662b84245089eeadfaa5b7e808cbee09b09544f9a82c4"
+    },
+    {
+      "path": "mcs/notify/notify_cards.py",
+      "sha256": "d4d512ebe361327a0edb2ca87cbaffe5498c4445a62c36ad082e25af253e9824"
+    },
+    {
+      "path": "mcs/patients/patient_context_refresh.py",
+      "sha256": "d859e31e961f1f5bf995b46a48a93b874ed1d8fb7fa483c2a6265605b67bbcfb"
+    }
+  ],
+  "verification": {
+    "local_png_dimensions": [
+      390,
+      860
+    ],
+    "local_png_view": "view_imageで文字欠け・重なりがないことを確認。未公開準備資料と対象範囲の表示を確認。",
+    "svg_png_same_generation": true,
+    "github_rendering": "not_checked",
+    "runtime_acceptance": "not_checked",
+    "drug_master_freshness": "not_checked",
+    "publication": "not_performed",
+    "production_apply": "not_performed"
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "status": "unpublished_preparation_subset",
+  "scope": "旧28件のクラウド処理説明。現候補全体の変更一覧・受入証拠ではない。",
+  "origin_commit": "b07790e1a7008aa563189648d25d1e8a819781e2",
+  "fragment_count": 28,
+  "records": [
+    {
+      "path": "changes/cloud-after-canonical-seal.json",
+      "id": "cloud-after-canonical-seal",
+      "title": "正準投影済みの投稿でも必須クラウド解析を実行",
+      "sha256": "be563c2ba9de562204caf61dfe502a3624603a40527750adfaca5ec5b6bc8f78"
+    },
+    {
+      "path": "changes/cloud-backlog-lock-fairness.json",
+      "id": "cloud-backlog-lock-fairness",
+      "title": "クラウド抽出がロック待ちで停止し続ける問題を修正",
+      "sha256": "d851c563ff89a3d15a81236f42b3cbd6dc10f37b844a1047ae439c065e3bd972"
+    },
+    {
+      "path": "changes/cloud-followup-estimate.json",
+      "id": "cloud-followup-estimate",
+      "title": "クラウド概算にローカル解析済みの後続処理を反映",
+      "sha256": "ca36d22482ccd90e503a341a1ffb42d585bc8d2366985eb77211597ca4888fd6"
+    },
+    {
+      "path": "changes/cloud-followup-progress-display.json",
+      "id": "cloud-followup-progress-display",
+      "title": "ローカル解析後のクラウド追加解析をコンパクトに表示",
+      "sha256": "1d8b7ad7bfeb80143b9a9fedd3bdc757a481256b6081c51c54cbb6835176a151"
+    },
+    {
+      "path": "changes/cloud-llm-observation-coverage.json",
+      "id": "cloud-llm-observation-coverage",
+      "title": "cloud-llm の保持記録が観測上限を超えても原因と観測範囲を返す",
+      "sha256": "4b54671c74afbd8db75cf701fb3fd9806432b16384cef39289cd2e354c91ec77"
+    },
+    {
+      "path": "changes/cloud-observation-defer-extract.json",
+      "id": "cloud-observation-defer-extract",
+      "title": "確認不能なクラウド解析がローカル解析へ退避しないように修正",
+      "sha256": "6c00f50e0b7d1ee7d838eff56a22f73df0e491c43b5266a28fe3075bf98bf9c3"
+    },
+    {
+      "path": "changes/cloud-observation-partial-boundary.json",
+      "id": "cloud-observation-partial-boundary",
+      "title": "クラウド診断の部分結果と未確認項目を正しく表示",
+      "sha256": "018f4f78bf08b992309c704b5305a992c9811b71aa2df53625d27fc0f06fe849"
+    },
+    {
+      "path": "changes/cloud-observation-read-gaps.json",
+      "id": "cloud-observation-read-gaps",
+      "title": "クラウド設定を確認できない間の回答破棄を防止",
+      "sha256": "80dc361e9124d81a7f19043caaa7d3fe5e6da1fd3c403232bd697453cd1bd596"
+    },
+    {
+      "path": "changes/cloud-paid-observation-incomplete.json",
+      "id": "cloud-paid-observation-incomplete",
+      "title": "回答受信後の確認不能で有料回答を破棄しない",
+      "sha256": "f5fd4f4fcc486c79d6f5e500ce6722195a9895d882b5465a4ca08b55ab77efdb"
+    },
+    {
+      "path": "changes/cloud-progress-permission-evidence.json",
+      "id": "cloud-progress-permission-evidence",
+      "title": "クラウド送信の承認証拠が不明な場合も進捗を表示",
+      "sha256": "c6e4589711ad93c8b3b34b68b088a1d1bda3d21898cdadde3ef8c9ed2f463cbf"
+    },
+    {
+      "path": "changes/context-proof-reader-ownership.json",
+      "id": "context-proof-reader-ownership",
+      "title": "患者背景の修復証拠を共通の読取経路へ集約",
+      "sha256": "61fddfe55773749fd9af1737e495489c2642053ec7d5859d5de80062eb42c828"
+    },
+    {
+      "path": "changes/drug-progress-read-parser.json",
+      "id": "drug-progress-read-parser",
+      "title": "薬剤辞書の進捗検証を読取り専用で再利用",
+      "sha256": "f760b83cdab71aeb7dcf2f5d818b134b0a9085756963f2c0160fae83a9e3efd1"
+    },
+    {
+      "path": "changes/extract-commit-cloud-observation.json",
+      "id": "extract-commit-cloud-observation",
+      "title": "クラウド解析結果の保存待ちを改善",
+      "sha256": "8b836babd19d4b9d714435fd6e66c2bd3a006e0e7fc9288cb232a850eda68196"
+    },
+    {
+      "path": "changes/local-then-cloud-completion.json",
+      "id": "local-then-cloud-completion",
+      "title": "ローカル解析後のクラウド解析を独立して判定",
+      "sha256": "bd38302bfb13f36eaca646c6b731d5672738f63da340f05ee706f1ddd10fe502"
+    },
+    {
+      "path": "changes/monitor-alert-accuracy.json",
+      "id": "monitor-alert-accuracy",
+      "title": "監視警報の件数と継続理由を明確化",
+      "sha256": "463237ed7bc908e2d0750a637adc248c34ddd61420321840f4b296ef8730b7d7"
+    },
+    {
+      "path": "changes/patient-context-cloud-extraction-gate.json",
+      "id": "patient-context-cloud-extraction-gate",
+      "title": "患者コンテキストの完了前にクラウド抽出を確認",
+      "sha256": "dbef87262f9741633d07f25cd58fa96a2fe0f9db54ce77943c074ccb9528882c"
+    },
+    {
+      "path": "changes/patient-context-scan-fairness.json",
+      "id": "patient-context-scan-fairness",
+      "title": "患者背景の確認が一部の患者で止まり続ける問題を修正",
+      "sha256": "6276bdd44bd15b5a26cfbaf92c1cd8e4611f9f65da88199176bd07e78551e083"
+    },
+    {
+      "path": "changes/patient-context-scan-integration.json",
+      "id": "patient-context-scan-integration",
+      "title": "患者背景の候補確認が期限切れでも後続へ進むよう修正",
+      "sha256": "ae8832ed6b3e8460a31656d538242ff57d239c53b628e2f6240914456d1e1f96"
+    },
+    {
+      "path": "changes/patient-context-scan-writer-wait.json",
+      "id": "patient-context-scan-writer-wait",
+      "title": "患者背景の候補確定時の書込み待ちを期限内に制限",
+      "sha256": "134adf48d1818d6429c1f384df6908f8d1500bcd9d8a5dbd4ecb03ca1e48258a"
+    },
+    {
+      "path": "changes/patient-context-write-readiness-proof.json",
+      "id": "patient-context-write-readiness-proof",
+      "title": "患者背景の保存前確認による他患者の保存待ちを軽減",
+      "sha256": "0378d75eb59615720cf2c17432b9739f2ca9a0ceb186dc430317f37d8859c062"
+    },
+    {
+      "path": "changes/patient-reader-source-fences.json",
+      "id": "patient-reader-source-fences",
+      "title": "患者背景の処理順と保存前判定にも更新検知を適用",
+      "sha256": "e7ea980f066d9dc2d30bcd899fa0179f433ce39e3db89779c3ad54d1091e3e5f"
+    },
+    {
+      "path": "changes/patient-readiness-drug-generation.json",
+      "id": "patient-readiness-drug-generation",
+      "title": "医薬品辞書の進捗確認を効率化",
+      "sha256": "2bd1e352537ad044a381a241050ac189e8adf1c5aca855b45219b18abdc9ab48"
+    },
+    {
+      "path": "changes/patient-readiness-witness.json",
+      "id": "patient-readiness-witness",
+      "title": "患者背景の完了判定に使う読取証拠を追加",
+      "sha256": "58e695e31f93c077be5a6931f210ac21dc56b4960fc5876c5e739e969f75a1b2"
+    },
+    {
+      "path": "changes/postdeploy-rollup-claim-witness.json",
+      "id": "postdeploy-rollup-claim-witness",
+      "title": "解析の占有期限更新による患者集約の不要な保留を解消",
+      "sha256": "626e60567c61f93e047cf3a2f5edfdc58f526403deb893539ee9a5f849a2f93a"
+    },
+    {
+      "path": "changes/resident-cloud-guard-fairness.json",
+      "id": "resident-cloud-guard-fairness",
+      "title": "クラウド確認待ちの先頭投稿が後続解析を塞ぐ問題を修正",
+      "sha256": "456b94d98bbd399d3016018d501bf916fa517034c664cc82bb5df017dc8a6505"
+    },
+    {
+      "path": "changes/resident-unresolved-source-fairness.json",
+      "id": "resident-unresolved-source-fairness",
+      "title": "結果確認待ちのクラウド要求で後続解析を妨げない",
+      "sha256": "0cd2da073606fdee3b49c63549f614fac28b7c15f54a4532d86e6ea214a15653"
+    },
+    {
+      "path": "changes/semantic-reprocess-reader-ownership.json",
+      "id": "semantic-reprocess-reader-ownership",
+      "title": "再処理の完了判定を共通の読取経路へ集約",
+      "sha256": "163a63848281095004739878701583a196fdcdea5975a85aa1f64ba6154576fb"
+    },
+    {
+      "path": "changes/shared-patient-activity-order.json",
+      "id": "shared-patient-activity-order",
+      "title": "背景抽出と意味解析の患者順位を共通化",
+      "sha256": "029d27175fdb415380bc49b07be060ddadadcc4e2abfafbdb60be55e7adf74fd"
+    }
+  ]
+}
