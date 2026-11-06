@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "サービスを省略した導入で初期設定を延期",
+  "summary": "install.sh --no-services では、サービスの起動やSlackチャンネル作成につながる対話初期設定を開始せず、後で再開するコマンドを案内します。通常の導入では、引き続き初期設定へ進めます。",
+  "upgrade": "--no-services でソフトを準備した後、初期設定を始める場合は mcs setup を実行してください。この操作では通知サービスの起動や不足するSlackチャンネルの作成が行われます。",
+  "refs": [
+    "deployment/install/runtime.sh",
+    "install.sh",
+    "tests/meta/test_install_sh_config.py"
+  ]
+}

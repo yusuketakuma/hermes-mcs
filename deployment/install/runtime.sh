@@ -732,7 +732,10 @@ printf '手順書: docs/guides/EASY_SETUP.md\n'
 printf '後で続ける場合のコマンド:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
 printf '    # 同じ初期設定を開く別のコマンド:\n'
 printf '    %s %s init\n' "$PYQ" "$SETUPQ"
-if [ -t 0 ] && [ -t 1 ]; then
+if [ "$SKIP_SERVICES" -eq 1 ]; then
+    printf '\n--no-services のため、サービスを起動する初期設定は後で行います。\n'
+    printf '再開する場合:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+elif [ -t 0 ] && [ -t 1 ]; then
     printf '\n  1) 続けて初期設定を始める（推奨）\n  2) 後で設定する\n'
     if ! choose '選択 [1・推奨 / 2 / 0・終了]: '; then
         _answer=2

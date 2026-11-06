@@ -7,6 +7,57 @@ import pytest
 from install_sh_testkit import INSTALL as INSTALL, SAVED_FLAGS as SAVED_FLAGS, _calls as _calls, _inject_before_config_persistence as _inject_before_config_persistence, _race_config_writer as _race_config_writer, _real_config_writer as _real_config_writer, _run as _run, _world as _world
 
 
+@pytest.mark.parametrize('no_services', [True, False])
+def test_interactive_no_services_defers_setup_and_preserves_normal_install(tmp_path, no_services):
+    import errno
+    import pty
+    import select
+    import time
+
+    _, _, stub, env = _world(tmp_path)
+    flags = ['--mode', 'hermes', '--no-brew', '--no-llm', '--no-plugin', '--no-recovery']
+    if no_services:
+        flags.append('--no-services')
+    master, slave = pty.openpty()
+    process = subprocess.Popen(['sh', str(INSTALL), *flags],
+                               stdin=slave, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    output = b''
+    deadline = time.monotonic() + 60
+    try:
+        # Accept installation and, if offered, the recommended immediate setup.
+        os.write(master, b'1\n1\n')
+        while True:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0 and select.select([master], [], [], remaining)[0], output
+            try:
+                chunk = os.read(master, 4096)
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+                break
+            if not chunk:
+                break
+            output += chunk
+            assert len(output) < 100000
+        assert process.wait(timeout=max(0.1, deadline - time.monotonic())) == 0, output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+    calls = _calls(stub)
+    for action in ('init', 'services', 'slack-channels'):
+        assert sum(f'mcs_setup.py {action}' in call for call in calls) == int(not no_services), calls
+    assert not any('gateway' in call or 'conversations.' in call for call in calls)
+    if no_services:
+        assert '初期設定を始める'.encode() not in output
+        assert '--no-services のため、サービスを起動する初期設定は後で行います。'.encode() in output
+        assert f"'{env['HOME']}/.local/bin/mcs' setup".encode() in output
+    else:
+        assert '初期設定を始める'.encode() in output
+
+
 @pytest.mark.parametrize('existing', [False, True])
 def test_config_changed_before_first_lock_stops_before_software(tmp_path, existing):
     home, hermes_home, stub_root, env = _world(tmp_path)
@@ -474,8 +525,6 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
     try:
         prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'2\n'),
                    ('この内容で導入する（推奨）'.encode(), b'1\n')]
-        if not race:
-            prompts.append(('初期設定を始める'.encode(), b'2\n'))
         for prompt, answer in prompts:
             while prompt not in output:
                 remaining = deadline - time.monotonic()
@@ -563,8 +612,6 @@ def test_interactive_bootstrap_runtime_choice_uses_checked_snapshot(tmp_path, ou
         if outcome == 'race':
             config.write_text(json.dumps({**common, 'synthetic_unknown': {'keep': False}}))
         answer_when('この内容で導入する（推奨）'.encode(), b'2\n' if outcome == 'cancel' else b'1\n')
-        if outcome == 'save':
-            answer_when('初期設定を始める'.encode(), b'2\n')
         while process.poll() is None:
             remaining = deadline - time.monotonic()
             assert remaining > 0
