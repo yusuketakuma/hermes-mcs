@@ -19,6 +19,7 @@ def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
     import json
     _init_env(monkeypatch, tmp_path, {
         "mcs_login_id": "u1", "notify_target": "slack",
+        "notify_system_target": "discord:1",
         "notify": {"interactive": "slack", "slack": {
             "profile": "main", "application_id": "app1", "team_id": "team1", "channel_id": "c1"}},
         "semantic": "off", "signals": "yes"})
@@ -336,7 +337,8 @@ def test_init_fails_when_plugin_settings_not_written(
     import json
     real_integration = mcs_setup._apply_plugin_integration
     _init_env(monkeypatch, tmp_path, {
-        "mcs_login_id": "u1", "notify_target": "slack", **cfg})
+        "mcs_login_id": "u1", "notify_target": "slack",
+        "notify_system_target": "discord:1", **cfg})
     _plugin_env(monkeypatch)
     monkeypatch.setattr(mcs_setup, "_apply_plugin_integration",
                         real_integration)
