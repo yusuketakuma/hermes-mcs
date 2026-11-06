@@ -51,7 +51,10 @@ def test_system_route_checks_both_patient_text_and_active_card_channel(
     for kind in notify_sender.SYSTEM_ALERT_KINDS:
         assert notify_sender.target(cfg, kind) == expected
     assert notify_sender.target(cfg, 'new_messages') == patient
+    assert _recovery_destination(monkeypatch, cfg) == expected
 
+
+def _recovery_destination(monkeypatch, cfg):
     from deployment.recovery import mcs_recovery_services as recovery
     sent = []
     class Process:
@@ -68,10 +71,59 @@ def test_system_route_checks_both_patient_text_and_active_card_channel(
     monkeypatch.setattr(recovery.os.path, 'isfile', lambda *args: True)
     monkeypatch.setattr(recovery.subprocess, 'Popen', popen)
     recovery._notify('synthetic')
-    if expected is None:
-        assert not sent
-    else:
-        assert len(sent) == 1 and sent[0][sent[0].index('--to') + 1] == expected
+    assert len(sent) <= 1
+    return sent[0][sent[0].index('--to') + 1] if sent else None
+
+
+@pytest.mark.parametrize(('patient', 'interactive', 'channel', 'system', 'expected'), [
+    ('slack:C12345678', 'off', None, 'discord:42', 'discord:42'),
+    ('slack:C12345678', 'off', None, 'discord:042', 'discord:042'),
+    ('discord:42', 'slack', 'C12345678', 'discord:42', None),
+    ('discord:42', 'slack', 'C12345678', 'discord:042', None),
+    ('discord:042', 'slack', 'C12345678', 'discord:42', None),
+    ('discord:٤٢', 'slack', 'C12345678', 'discord:42', None),
+    ('discord:42', 'slack', 'C12345678', 'discord:43', 'discord:43'),
+    ('discord:#patient', 'slack', 'C12345678', 'discord:43', None),
+    ('discord', 'slack', 'C12345678', 'discord:43', None),
+    ('discord:42:123', 'slack', 'C12345678', 'discord:43', None),
+    ('slack:C12345678', 'discord', '42', 'discord:42', None),
+    ('slack:C12345678', 'discord', '042', 'discord:42', None),
+    ('slack:C12345678', 'discord', '#patient', 'discord:43', None),
+    ('slack:C12345678', 'discord', None, 'discord:43', None),
+    ('slack:C12345678', 'discord', '', 'discord:43', None),
+    ('slack:C12345678', 'discord', '42', 'discord:43', 'discord:43'),
+    ('slack:#patient', 'slack', '#card', 'discord:42', 'discord:42'),
+    ('slack:C12345678', 'off', None, 'local', 'local'),
+    ('local', 'slack', 'C12345678', 'local', 'local'),
+    ('slack:C12345678', 'off', None, 'telegram:42', None),
+    ('slack:C12345678', 'off', None, 'discord:#mcslog', None),
+    ('discord:42', 'off', None, None, 'discord:42'),
+    ('discord:42', 'discord', '42', None, 'discord:42'),
+    ('local', 'off', None, None, 'local'),
+])
+def test_system_route_compares_transport_and_resolved_channel_ids(
+        monkeypatch, patient, interactive, channel, system, expected):
+    cfg = {'runtime_mode': 'standalone', 'notify_target': patient,
+           'notify_system_target': system,
+           'notify': {'interactive': interactive, interactive: {'channel_id': channel}}}
+    for kind in notify_sender.SYSTEM_ALERT_KINDS:
+        assert notify_sender.target(cfg, kind) == expected
+    assert notify_sender.target(cfg, 'new_messages') == patient
+    assert _recovery_destination(monkeypatch, cfg) == expected
+
+
+@pytest.mark.parametrize(('channel', 'expected'), [
+    ('synthetic-room', 'lineworks:synthetic-room'), (None, None),
+    ('other-room', None), ('#alias', None),
+])
+@pytest.mark.parametrize('interactive', ['off', 'lineworks'])
+def test_explicit_lineworks_system_target_keeps_its_configured_room_only(
+        monkeypatch, channel, expected, interactive):
+    cfg = {'runtime_mode': 'standalone', 'notify_target': 'slack:C12345678',
+           'notify_system_target': 'lineworks:synthetic-room',
+           'notify': {'interactive': interactive, 'lineworks': {'channel_id': channel}}}
+    assert notify_sender.target(cfg, 'run_failed') == (expected if interactive == 'off' else None)
+    assert _recovery_destination(monkeypatch, cfg) is None
 
 
 @pytest.mark.parametrize('kind', sorted(notify_sender.SYSTEM_ALERT_KINDS))

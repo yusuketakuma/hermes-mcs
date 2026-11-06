@@ -282,7 +282,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | 状態 | 自動応答 | 実装 |
 |---|---|---|
 | collection=incomplete | 次回 tick で再試行 + `health_watch.py` が degraded 遷移・新しい理由を system 通知（mcs_check.sh の stdout 行はログのみ） | ✅ |
-| health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target` へ直接送信。Slackでは患者情報先へ戻さず、運用先が未確定なら保留する。他の接続先は未設定時の従来の動作を維持 | ✅ |
+| health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target`へ直接送信。患者情報にSlackを使う場合は患者情報先へ戻さず、運用先が未確定なら保留。それ以外は未設定時に`notify_target`を使用 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
 | extract drainer 滞留 | 背景2枠の常駐 drain・6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
@@ -297,13 +297,20 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 
 | チャンネル | 用途 |
 |---|---|
-| `notify_target`（テキスト）・`notify.slack.channel_id`（Slackカード） | 患者情報の原文・要約・添付・解析結果、シグナル・依頼 |
-| `notify_system_target` | セッション失効・run 失敗・更新📋・復旧。Slackは患者情報と別のチャンネルを使い、未設定・同一チャンネルなら保留。他の接続先は未設定時の`notify_target`を維持 |
+| `notify_target`（テキスト）・有効な`notify.<transport>.channel_id`（カード） | 患者情報の原文・要約・添付・解析結果、シグナル・依頼 |
+| `notify_system_target` | セッション失効・run 失敗・更新📋・独立モードの復旧。患者情報にSlackを使わなければ、未設定時は`notify_target`を使用 |
 | `data/mcs.log` | 共通ログhelperが実行ログの記録とローテーションを管理。`run.log`・`extract_drain*.log`・`semantic_drain.log`等の旧名は移行元として扱う |
 | `health.json` | 機械可読な健全状態（外部監視・警報判定の正本） |
 | `update_state.json`📋 | 更新機構の状態・試行履歴・rollback 情報 |
 
-Slackの運用チャンネルは`mcslog`とし、患者情報のテキスト先・有効なカード先の両方と分ける。いずれかとの分離を確認できなければ運用通知を保留する。送る内容は固定の診断項目・件数・時刻・対処方法に限定し、患者名・投稿本文・添付本文・OCR結果・例外の自由文・生ログは含めない。送信結果が不明な記録は、チャンネルを分けても自動再送しない。
+患者情報の本文・有効な通知カードにSlackを使う場合、運用通知は各送り先との分離を確認できる
+明示先だけへ送る。いずれかの送り先との分離を確認できなければ運用通知を保留する。
+自動作成する運用チャンネルは`mcslog`とし、明示済みの別の接続先の確定IDも
+使用できる。同じ接続先の名前・スレッド指定や空欄は分離の証拠にしない。
+送る内容は固定の診断項目・件数・時刻・対処方法に限定し、患者名・投稿本文・添付本文・OCR結果・
+例外の自由文・生ログは含めない。送信結果が不明な記録は、チャンネルを分けても自動再送しない。
+詳細と復旧用コピーの送信範囲は
+[患者情報と運用通知の送り先](../guides/STANDALONE.md#患者情報と運用通知の送り先)を参照。
 
 ## 10. 責任分界
 
