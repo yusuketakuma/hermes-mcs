@@ -4,6 +4,8 @@ import json
 import pytest
 
 import anthropic_client
+import attachment_extraction
+import mcs_queries
 import cloud_policy
 import openai_client
 import original_source_keys
@@ -13,13 +15,15 @@ from anthropic_context_testkit import (
     _REPAIR_BED, _REPAIR_HOME, _SOURCE_REPAIR_CLIENT, cloud, runtime, source_repair,
 )
 from test_context_cloud_update_identity import finish, real_cloud, receipts
-from test_patient_context_refresh import seed
+from test_context_summary_sources import _ocr_local
+import test_ocr_local_context_pipeline as ocr_testkit
+from test_patient_context_refresh import _raw_proof, _semantic_proof, seed
 
 __all__ = ['cloud', 'runtime', 'source_repair', 'real_cloud']
 
 
-@pytest.fixture
-def paid_karte(runtime, source_repair, request, monkeypatch):
+@pytest.fixture(params=['karte', 'attachment_ocr'])
+def paid_external(runtime, source_repair, request, monkeypatch):
     # Restore the real provider and writer checks after the independent Jev oracle.
     monkeypatch.setattr(anthropic_client, 'AnthropicClient', _SOURCE_REPAIR_CLIENT)
     cfg, posts = request.getfixturevalue('real_cloud')
@@ -35,11 +39,20 @@ def paid_karte(runtime, source_repair, request, monkeypatch):
     ledger, _, _ = runtime
     body = _REPAIR_HOME + _REPAIR_BED
     seed(ledger, body=body)
-    with ledger.db:
-        ledger.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
-        aid = ledger.artifact_add('karte_summary', json.dumps({'comment': body}),
-            project_id=1, meta={'karte_id': 99})
-    key = f'karte:{aid}'
+    if request.param == 'karte':
+        with ledger.db:
+            ledger.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+            aid = ledger.artifact_add('karte_summary', json.dumps({'comment': body}),
+                project_id=1, meta={'karte_id': 99})
+        key = f'karte:{aid}'
+    else:
+        monkeypatch.setattr(ocr_testkit, 'OCR_TEXT', body)
+        key = ocr_testkit._retain_ocr(ledger)
+        with ledger.db:
+            _ocr_local(ledger, key, cfg, '合成OCRの補助要約です。')
+        assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg)['ready']
+        _raw_proof(ledger, 1, 1)
+        _semantic_proof(ledger, 1, 1, cfg=cfg)
     monkeypatch.setattr(anthropic_client, 'AnthropicClient', _SOURCE_REPAIR_CLIENT)
 
     def transport(_client, method, request_body, timeout, *, deadline):
@@ -72,19 +85,28 @@ def paid_karte(runtime, source_repair, request, monkeypatch):
 
 
 @pytest.mark.parametrize('tamper', [None, 'binding', 'scope', 'receipt'])
-def test_external_paid_repair_replays_original_only_and_rejects_tampering(paid_karte, tamper):
-    ledger, cfg, posts, key, origin, rows = paid_karte
+def test_external_paid_repair_replays_original_only_and_rejects_tampering(paid_external, tamper):
+    ledger, cfg, posts, key, origin, rows = paid_external
     before, sent = receipts(ledger), len(posts)
     original = original_source_keys.source(ledger.db, 1, key)
     assert 'items' not in original
     # A later interpretation and today's disabled OCR config are not original inputs.
     cfg['attachment_ocr'] = {'enabled': False}
+    if original['source'] == 'attachment_ocr':
+        assert mcs_queries.patient_context_source(ledger.db, 1, key, cfg=cfg) is None
     with ledger.db:
         ledger.artifact_add('extract_llm', json.dumps({'summary': '後から作られた合成補助要約'}),
             project_id=1, message_id=1, model='synthetic-local', meta={'hash': 'stale'})
+        if original['source'] == 'attachment_ocr':
+            new_summary = _ocr_local(ledger, key, cfg, '後から作られた合成OCR補助要約です。')
+            assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg)['artifact_id'] == new_summary
         if tamper == 'binding':
-            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
-                (json.dumps({'karte_id': 100}), original['source_artifact_id']))
+            if original['source'] == 'attachment_ocr':
+                ledger.db.execute('UPDATE attachments SET sha256=? WHERE attachment_id=?',
+                                  ('b' * 64, original['attachment_id']))
+            else:
+                ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                    (json.dumps({'karte_id': 100}), original['source_artifact_id']))
         elif tamper == 'scope':
             ledger.db.execute('UPDATE patients SET karte_id=100 WHERE project_id=1')
         elif tamper == 'receipt':

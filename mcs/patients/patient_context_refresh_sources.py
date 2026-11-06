@@ -740,9 +740,7 @@ def _source_repair_parts(db, pid, source, contract, repair_input_key, *, require
             source_occurrence=occurrence, body_size=source.get("body_length"), require_complete=require_complete,
             repair_provider=repair_provider)
     if "body_text" not in source:
-        row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
-                         (pid, source["message_id"])).fetchone()
-        source = {**source, "body_text":row[0] if row else ""}
+        source = {**source, "body_text": _hydrate_source_body(db, pid, source)}
     chunks, unique, material = [], {}, []
     for row in rows:
         doc = loads_dict(row["content"])
