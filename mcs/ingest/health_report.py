@@ -509,21 +509,45 @@ HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
 HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
 
-def bounded_health_read(db, read, seconds=None):
+def bounded_health_read(db, read, seconds=None, *, observation=None):
     """Bound additive reads on the tick-owned connection; preserve its transaction."""
     seconds = HEALTH_OBSERVATION_S if seconds is None else seconds  # read at call time
-    deadline = time.monotonic() + seconds
+    started = time.monotonic()
+    deadline = started + seconds
+
+    def sampled(at, stop=None):
+        if observation is not None:
+            observation.update(elapsed_s=round(max(0.0, at - started), 6),
+                               remaining_s=round(max(0.0, deadline - at), 6))
+            if stop is not None:
+                observation["stop"] = stop
+
+    if observation is not None:
+        observation.update(phase="connection_setup", budget_s=max(0.0, seconds),
+                           stop="read_unavailable")
     # a depleted window starts no read at all — the callback, the SQL and
     # the savepoint all stay untouched so the tick can finish on time
-    if time.monotonic() >= deadline:
+    at = time.monotonic()
+    sampled(at)
+    if at >= deadline:
+        sampled(at, "budget_exhausted")
         raise RuntimeError("observation_limit")
     items = 0
 
     def checkpoint():
         nonlocal items
         items += 1
-        if time.monotonic() >= deadline or items > HEALTH_OBSERVATION_ITEMS:
+        at = time.monotonic()
+        if at >= deadline or items > HEALTH_OBSERVATION_ITEMS:
+            sampled(at, "time_limit" if at >= deadline else "item_limit")
             raise RuntimeError("observation_limit")
+
+    def progress():
+        at = time.monotonic()
+        expired = at >= deadline
+        if expired:
+            sampled(at, "time_limit")
+        return int(expired)
 
     # This connection has no long-lived progress handler. Backup and detailed
     # observer handlers belong to their own connections, not the tick db.
@@ -536,20 +560,41 @@ def bounded_health_read(db, read, seconds=None):
                     min(previous_limit, HEALTH_OBSERVATION_ROW_BYTES))
         db.execute("SAVEPOINT mcs_health_observation")
         savepoint = True
-        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        db.set_progress_handler(progress, 1000)
         value = read(checkpoint)
-        if time.monotonic() >= deadline:
+        at = time.monotonic()
+        sampled(at, "time_limit" if at >= deadline else "complete")
+        if at >= deadline:
             raise RuntimeError("observation_limit")
         return value
+    except Exception as exc:
+        if observation is not None:
+            try:
+                # SQLite exposes stable numeric codes; never copy exception text.
+                code = getattr(exc, "sqlite_errorcode", None)
+                code = code & 255 if type(code) is int else None
+                stop = {sqlite3.SQLITE_TOOBIG: "row_size_limit",
+                        sqlite3.SQLITE_BUSY: "storage_busy",
+                        sqlite3.SQLITE_LOCKED: "storage_busy"}.get(code)
+                sampled(time.monotonic(), stop)
+            except Exception:
+                # Optional diagnostics must not replace the read failure or cleanup.
+                pass
+        raise
     finally:
-        db.set_progress_handler(None, 0)
-        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
         try:
-            if savepoint:
-                db.execute("RELEASE mcs_health_observation")
-        finally:
-            # A failed RELEASE must not leave the tick connection's short wait behind.
-            db.execute(f"PRAGMA busy_timeout={previous_wait}")
+            db.set_progress_handler(None, 0)
+            db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
+            try:
+                if savepoint:
+                    db.execute("RELEASE mcs_health_observation")
+            finally:
+                # A failed RELEASE must not leave the tick connection's short wait behind.
+                db.execute(f"PRAGMA busy_timeout={previous_wait}")
+        except Exception:
+            if observation is not None:
+                observation.update(phase="connection_cleanup", stop="read_unavailable")
+            raise
 
 
 def collection_diagnostics_health(db, errors, now, seconds=None):
@@ -701,10 +746,12 @@ def build_health(db, result: dict, status: str,
     # a signal digest scheduled interval_h ahead and never attempted is
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
+    card_observation = {}
     try:
         cards_health = bounded_health_read(
-            db, lambda _check: notify_scope.health_cards(db, cfg),
-            seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
+            db, lambda _check: notify_scope.health_cards(db, cfg, observation=card_observation),
+            seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
+            observation=card_observation)
     except Exception as exc:
         cards_health = dict.fromkeys((
             "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
@@ -715,6 +762,9 @@ def build_health(db, result: dict, status: str,
         cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc),
                             completion={"status": "unknown", "observed_at": now,
                                         "reason": _observation_failure(exc)})
+        if card_observation.get("stop") == "complete":
+            card_observation["stop"] = "read_unavailable"
+    cards_health["observation"] = card_observation
     cards_unknown = cards_health.get("status") == "unknown"
     incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
