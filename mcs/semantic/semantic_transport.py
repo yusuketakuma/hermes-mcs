@@ -137,6 +137,14 @@ _PRESEND_REFUSAL_STAGES = frozenset({
 # An unreadable observation cannot prove scope loss even after a paid response.
 _NON_DISCARD_STAGES = _PRESEND_REFUSAL_STAGES | {'cloud_guard'}
 
+# LLMNotSent stages bound to the member target being inferred — the member's
+# own paid unit, possibly-sent trace, or local-fallback provenance held, not
+# the job's generation/permission/lease. A member-level hold must not stop
+# the other members' pass: the held member waits, the rest still run.
+MEMBER_HOLD_STAGES = frozenset({
+    "cloud_unit_unresolved", "cloud_target_unverified", "realtime_target",
+    "cloud_fallback_unavailable", "cloud_capacity"})
+
 
 @contextmanager
 def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_fallback=None,
@@ -237,16 +245,21 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     def local(prompt, timeout):
         nonlocal switched
         mid = target_id()
+        if not scoped_current():
+            raise runtime.LLMNotSent('cloud_fallback_source_changed')
         if (local_fallback is None or mid in possibly_sent_targets or target_owned(mid)
-                or not scoped_current()
-                or fallback_current is not None and not fallback_current()):
+                or fallback_current is not None and not fallback_current(mid)):
             raise runtime.LLMNotSent('cloud_fallback_unavailable')
         switched = True
         _job_model.set(None)
         return call_local(prompt, timeout)
 
     def chat(prompt, timeout=None):
-        if switched and not target_owned(target_id()):
+        mid = target_id()
+        if switched and not target_owned(mid):
+            if (mid in possibly_sent_targets
+                    or fallback_current is not None and not fallback_current(mid)):
+                raise runtime.LLMNotSent('cloud_fallback_unavailable')
             _job_model.set(None)
             return call_local(prompt, timeout)
         try:
@@ -282,6 +295,21 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                                 max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)
         except cloud_client.CloudNotSent as error:
             reason = cloud_client.not_sent_reason(error)
+            # This call ended unverifiable — the flag may already be True from
+            # an earlier member's residue, but this member's own pre-send check
+            # also failed, so mark it too. The flag can only be True here when
+            # the call could not prove the request fresh.
+            if provider.possibly_sent:
+                possibly_sent_targets.add(provider.message_id)
+            if (reason == 'cloud_unit_unresolved' and local_fallback is not None
+                    and provider.message_id not in possibly_sent_targets
+                    and not target_owned(provider.message_id)):
+                # The project-level accounting scan cannot prove this send is
+                # fresh while an alien member's evidence is unverifiable — but
+                # this target is provably unbound, so its local path cannot
+                # replace any paid unit of its own. local() re-checks the same
+                # member binding and persisted-chunk provenance.
+                return local(prompt, timeout)
             raise runtime.LLMNotSent("cloud_not_sent" if reason == "not_sent" else reason) from error
         except cloud_inference.CloudObservationIncomplete:
             raise runtime.LLMNotSent('cloud_guard') from None
@@ -301,7 +329,11 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             if str(error) == 'cloud_send_blocked':
                 # A history-checked fresh request denied before reservation is
                 # a wait in the cloud-only lane, never a failed paid generation.
-                raise runtime.LLMNotSent('cloud_not_sent') from error
+                # For an owned member the wait is bound to its own unit, not
+                # the job: stage it so one member's hold cannot stop siblings.
+                raise runtime.LLMNotSent('cloud_unit_unresolved'
+                                         if target_owned(provider.message_id)
+                                         else 'cloud_not_sent') from error
             current()
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)

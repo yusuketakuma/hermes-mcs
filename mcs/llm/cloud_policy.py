@@ -402,16 +402,45 @@ def owns_unit_request(db, *, route, project_id, unit_key):
 
 
 def owns_member_request(db, *, route, project_id, target_id):
-    """owns_request narrowed to a member-bound semantic unit — the strict
-    `_semantic_financial_target` binding: logical_target_id, meta.message_id
-    and owner.semantic_target_id all equal the target. An alien reservation on
-    the same thread (different unit key, no owner) stays a send guard, never
-    an owner that forbids the target's local path."""
-    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? "
-        "AND json_valid(meta) AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
-        "AND json_extract(meta,'$.logical_target_id')=? AND json_extract(meta,'$.message_id')=? "
-        "AND json_extract(meta,'$.owner.semantic_target_id')=? LIMIT 1",
-        (KINDS[0], project_id, route, target_id, target_id, target_id)).fetchone() is not None
+    """Whether an unresolved reservation forbids member `target_id`'s local
+    path — three verdicts, not strict equality. A candidate row already binds
+    the target somewhere (row message_id or any member field); inside it:
+
+    - Member fields (logical_target_id / owner.semantic_target_id) present:
+      the reservation is a semantic member unit and it reached the target
+      filter — hold, even when the fields contradict each other.
+    - Member fields absent and the reservation is intact (valid meta with a
+      unit_key and a message_id matching its row): provably a complete
+      non-member unit — the member binding a member unit requires is missing
+      — so it stays a send guard only and never forbids local.
+    - Anything else (unparsable meta, missing unit/message identity):
+      unproven — unknown paid state must never release the member to local.
+
+    Only reservations on `route`, or unable to prove a different one, count."""
+    rows = db.execute("SELECT message_id, meta FROM artifacts WHERE kind=? AND project_id=? AND ("
+        "(message_id=? AND NOT json_valid(meta)) OR "
+        "(json_valid(meta) AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
+        "AND (message_id=? OR json_extract(meta,'$.message_id')=? "
+        "OR json_extract(meta,'$.logical_target_id')=? "
+        "OR json_extract(meta,'$.owner.semantic_target_id')=?)))",
+        (KINDS[0], project_id, target_id, route,
+         target_id, target_id, target_id, target_id)).fetchall()
+    for row in rows:
+        try:
+            meta = json.loads(row["meta"])
+        except (TypeError, ValueError):
+            meta = None
+        if not isinstance(meta, dict):
+            return True
+        owner = meta.get("owner")
+        if (meta.get("logical_target_id") is not None
+                or isinstance(owner, dict) and owner.get("semantic_target_id") is not None):
+            return True
+        if (isinstance(meta.get("unit_key"), str) and meta["unit_key"]
+                and meta.get("message_id") == row["message_id"]):
+            continue
+        return True
+    return False
 
 
 def owns_any_request(db, *, route, project_id, message_ids):

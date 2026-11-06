@@ -210,7 +210,7 @@ def test_not_sent_cloud_falls_back_locally_for_the_rest_of_the_unit(cloud, monke
     with legacy_cloud_routes():
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct, local_fallback=local_chat,
-                                         fallback_current=lambda: True) as chat:
+                                         fallback_current=lambda mid: True) as chat:
             assert json.loads(chat('synthetic first')) == {'facts': []}
             assert json.loads(chat('synthetic second')) == {'facts': []}
     assert len(attempts) == 1 and local == [transport.llm_model()] * 2
@@ -232,7 +232,7 @@ def test_local_fallback_rechecks_scope_on_each_call(cloud, monkeypatch, change):
     with legacy_cloud_routes():
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: state['current'], direct, local_fallback=local_chat,
-                                         fallback_current=lambda: True) as chat:
+                                         fallback_current=lambda mid: True) as chat:
             if change == 'between':
                 assert json.loads(chat('synthetic first')) == {'facts': []}
                 state['current'] = False
@@ -253,7 +253,7 @@ def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monke
     with legacy_cloud_routes():
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
-                                         fallback_current=lambda: state != 'partial') as chat:
+                                         fallback_current=lambda mid: state != 'partial') as chat:
             if state == 'partial':
                 with pytest.raises(transport.runtime.LLMNotSent):
                     chat('synthetic input')
@@ -1078,10 +1078,12 @@ def test_semantic_owned_unit_holds_on_unverifiable_reservation(cloud, meta):
     assert len(rows(led, 'cloud_usage_reserve')) == 1
 
 
-def _mixed_targets(led, job, order):
-    """Grow the job's payload targets into `order` with two reply members."""
-    led.save_messages([_message(2, parent=1, body='synthetic member reply'),
-                       _message(3, parent=1, body='synthetic independent reply')])
+def _mixed_targets(led, job, order, bodies=None):
+    """Grow the job's payload targets into `order` with reply members."""
+    bodies = bodies or {}
+    led.save_messages([_message(mid, parent=1,
+                                body=bodies.get(mid, 'synthetic reply'))
+                       for mid in order])
     snapshot(led)
     payload = json.loads(job['payload'])
     payload['targets'] = list(order)
@@ -1169,3 +1171,110 @@ def test_closed_route_paid_member_recovers_while_independent_member_goes_local(c
     # independent member took the local switch.
     assert local == ['synthetic independent prompt'] and len(calls) == 1
     assert len(rows(led, 'cloud_usage_reserve')) == len(rows(led, 'cloud_usage_result')) == 1
+
+
+@pytest.mark.parametrize('meta', [{'note': 'synthetic route-less meta'}, '{broken'])
+def test_closed_route_unverifiable_member_reservation_holds_after_sibling_switch(cloud, meta):
+    """A reservation bound to the member's message that cannot prove member
+    ownership — route-less or unparsable meta — is unproven, never 'not
+    owned': the sibling's local switch must not release it to the local path.
+    While member evidence cannot even be read, member 3's own send is also
+    unprovable (the pre-send check marks it possibly_sent), so it holds too
+    rather than silently replacing a request that may have left."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    with led.db:
+        if isinstance(meta, str):
+            led.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_reserve',1,2,'{}','synthetic',?,?)", (meta, time.time()))
+        else:
+            led.artifact_add_tx('cloud_usage_reserve', '{}', project_id=1, message_id=2,
+                                model='synthetic', meta=meta)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p)) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic independent prompt')
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+    assert local == [] and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('order', [[2, 3], [3, 2]])
+@pytest.mark.parametrize('held,expects_local', [
+    ('member_unit', True), ('broken_meta', False),
+    ('route_less_meta', False)])
+def test_process_job_member_hold_keeps_independent_member_local(cloud, order, held, expects_local):
+    """The real _process_job: a member-bound hold stops only that member —
+    the independent member still extracts and summarizes locally in the same
+    pass, the job defers, nothing is resent or locally replaced.
+
+    With member 2's evidence unreadable (broken/route-less), member 3's own
+    pre-send check cannot complete either — it is marked possibly_sent and
+    holds too, so only its local absence is asserted. With a readable unit,
+    member 3 still completes locally."""
+    from semantic_testkit import _PassJev, _llm_v2
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, order, bodies={2: 'アムロジピン5mgを継続します。',
+                                            3: 'メトホルミン500mgが出ています'})
+    if held == 'member_unit':
+        _member_reservation(led, cfg, job, 2)
+    elif held == 'broken_meta':
+        with led.db:
+            led.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_reserve',1,2,'{}','synthetic','{broken',?)", (time.time(),))
+    else:
+        with led.db:
+            led.artifact_add_tx('cloud_usage_reserve', '{}', project_id=1, message_id=2,
+                                model='synthetic', meta={'note': 'synthetic route-less meta'})
+    local_prompts = []
+    def local(prompt, **kwargs):
+        local_prompts.append(prompt)
+        return _llm_v2(prompt)
+    status = semantic_drain._process_job(
+        led, semantic_drain.runtime_config(cfg)[0], job, _PassJev(), local,
+        time.monotonic() + 900, lane="backlog", diagnostics=semantic_drain._job_diagnostics(),
+        cloud_transport=direct)
+    assert status == 'deferred'
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) <= 1
+    assert any('メトホルミン' in p for p in local_prompts) is expects_local
+    assert not any('アムロジピン' in p for p in local_prompts)
+
+
+@pytest.mark.parametrize('order', [[2, 3, 4], [4, 3, 2]])
+def test_process_job_unproven_chunk_holds_its_member_only(cloud, order):
+    """A member's own persisted chunk whose producer cannot be proven refuses
+    the local fallback — but only for that member: the owned member stays
+    unresolved, the clean member still completes locally."""
+    from semantic_testkit import _PassJev, _llm_v2
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, order, bodies={2: 'アムロジピン5mgを継続します。',
+                                            3: 'メトホルミン500mgが出ています',
+                                            4: 'ロサルタン50mgを開始しました'})
+    _member_reservation(led, cfg, job, 2)
+    with led.db:
+        # member 3's own persisted chunk cannot prove its producer — its
+        # local fallback must refuse while member 4's stays clear.
+        led.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "VALUES('semantic_extraction_chunk',1,3,'{}','synthetic','{broken',?)", (time.time(),))
+    local_prompts = []
+    def local(prompt, **kwargs):
+        local_prompts.append(prompt)
+        return _llm_v2(prompt)
+    status = semantic_drain._process_job(
+        led, semantic_drain.runtime_config(cfg)[0], job, _PassJev(), local,
+        time.monotonic() + 900, lane="backlog", diagnostics=semantic_drain._job_diagnostics(),
+        cloud_transport=direct)
+    assert status == 'deferred'
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) == 1
+    assert any('ロサルタン' in p for p in local_prompts)
+    assert not any('アムロジピン' in p for p in local_prompts)
+    assert not any('メトホルミン' in p for p in local_prompts)

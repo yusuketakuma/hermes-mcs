@@ -509,9 +509,18 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
             continue
         skip_state = {"reason": jev_skip}
-        stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
-                            jev_client, llm_fn, deadline, shadow_stats=shadow_stats, jev_skip=jev_skip,
-                            activate_skip=activate_skip, skip_state=skip_state)
+        try:
+            stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
+                                jev_client, llm_fn, deadline, shadow_stats=shadow_stats, jev_skip=jev_skip,
+                                activate_skip=activate_skip, skip_state=skip_state)
+        except runtime.LLMNotSent as error:
+            if error.stage not in semantic_transport.MEMBER_HOLD_STAGES:
+                raise
+            # The member's own paid unit or provenance held — never a local
+            # result and never a job-level stop: other targets still run.
+            _why(diagnostics, error.stage)
+            incomplete = resource_wait = True
+            continue
         if stage["outcome"] is not None:
             if fact_source == "canonical":
                 # T18: a fact-stage failure still leaves a durable
@@ -674,6 +683,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                 facts, verdicts, existing, deadline, diagnostics=diagnostics)
         if sent_error is not None:
+            if getattr(sent_error, "stage", None) in semantic_transport.MEMBER_HOLD_STAGES:
+                # member-bound hold (own paid unit/provenance): this target
+                # waits without a summary or PENDING write — later targets run
+                _why(diagnostics, sent_error.stage)
+                incomplete = resource_wait = True
+                continue
             not_sent = sent_error
         if summary is None:
             _why(diagnostics, f"summary_{summary_reason}")
@@ -732,6 +747,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         claim_input_binding = None
         jev_outcome = "unknown"
         empty_unverified = False
+        held_error = None
         empty_repair = recovered is not None
         empty_prior = recovered['meta']['prior'] if recovered else None
         empty_repair_id = recovered['meta']['repair_artifact_id'] if recovered else None
@@ -949,7 +965,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                               "PENDING", policy, scfg["summary_mode"])
                     if isinstance(error, (runtime.LLMNotSent,
                                           runtime.RuntimeBudget)):
-                        not_sent = error
+                        if getattr(error, "stage", None) in semantic_transport.MEMBER_HOLD_STAGES:
+                            held_error = error
+                        else:
+                            not_sent = error
                         incomplete = True
                         break
                     raise
@@ -1001,6 +1020,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             break
         if not_sent is not None:
             break
+        if held_error is not None:
+            # member-bound hold in the reserved repair path: this target
+            # waits without consuming audit state — later targets still run
+            _why(diagnostics, held_error.stage)
+            incomplete = resource_wait = True
+            continue
         if empty_repair and status == "PENDING":
             held_empty_targets.add(mid)
             empty_unverified = incomplete = resource_wait = True
@@ -1249,14 +1274,16 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                     return bundle["source_fingerprint"] if bundle else None
 
                 fingerprint = source()
-                def fallback_current():
-                    # Never join a local result to a previously persisted cloud
-                    # prefix, or to a chunk whose producer cannot be proven.
+                def fallback_current(mid):
+                    # Never join a member's local result to a previously
+                    # persisted cloud prefix, or to a chunk whose producer
+                    # cannot be proven — decided per actual target, so one
+                    # member's cloud chunks never forbid another's local.
                     import semantic_extraction
                     rows = ledger.db.execute("SELECT * FROM artifacts WHERE project_id=? AND kind IN (?,?) "
-                        "AND (NOT json_valid(meta) OR json_extract(meta,'$.source_fingerprint')=?)",
+                        "AND message_id IS ? AND (NOT json_valid(meta) OR json_extract(meta,'$.source_fingerprint')=?)",
                         (job['project_id'], semantic_extraction.KIND_CHUNK,
-                         semantic_extraction.KIND_CHUNK_V2, fingerprint)).fetchall()
+                         semantic_extraction.KIND_CHUNK_V2, mid, fingerprint)).fetchall()
                     return all(semantic_extraction._cached_provider(
                         ledger.db, row, semantic_transport.llm_model()) == 'local' for row in rows)
 
