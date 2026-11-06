@@ -632,6 +632,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
     assessment, threshold = origin.get('quality_assessment'), origin.get('quality_threshold')
     if (not isinstance(assessment, dict) or set(assessment) != {'code', 'policy'}
             or any(not valid_hash(value) for value in assessment.values())
+            or not valid_hash(origin.get('source_sig'))
             or type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
             or not cloud_inference.is_supported_cloud_contract(origin.get('repair_provider'))):
         raise ValueError('nightly_source_repair_invalid')
