@@ -20,7 +20,7 @@ import time
 import pytest
 
 import mcs_update
-from ops_testkit import _load
+from ops_testkit import _load, patch_lifecycle_lookup
 
 HOLD = "!sleep 37 | git update-index --index-info"   # git waits holding index.lock
 
@@ -34,7 +34,7 @@ def _repo(tmp_path):
 
 def _module(monkeypatch, which, repo):
     module = mcs_update if which == "update" else _load()
-    monkeypatch.setattr(module, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, module, "REPO", str(repo))
     children = []
     real = (owned_process if which == "update" else module).subprocess.Popen
 
@@ -153,7 +153,7 @@ def test_spawn_failure_keeps_each_tools_contract(monkeypatch, which):
 def test_interruption_stops_the_owned_session_and_reraises(tmp_path, monkeypatch, which):
     repo = _repo(tmp_path)
     module = mcs_update if which == "update" else _load()
-    monkeypatch.setattr(module, "REPO", str(repo))
+    patch_lifecycle_lookup(monkeypatch, module, "REPO", str(repo))
     children, locked = [], []
     real_popen = (owned_process if which == "update" else module).subprocess.Popen
     lock = repo / ".git" / "index.lock"
