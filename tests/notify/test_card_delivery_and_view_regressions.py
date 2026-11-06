@@ -276,7 +276,13 @@ def test_health_write_failed_alert_is_sent(led, monkeypatch):
     led.outbox_add("health_write_failed", None,
                    {"detail": "OSError", "run_id": 7})
     notify_flush.flush(led)
-    assert any("health.json" in s and "run 7: OSError" in s for s in sent)
+    assert len(sent) == 1
+    text = sent[0]
+    assert text.startswith("[MCSLOG]") and "監視記録の保存失敗" in text
+    assert "影響:" in text and "次の操作:" in text
+    assert "実行: run 7" in text
+    assert text.endswith("コード: health_write_failed")
+    assert "OSError" not in text
     assert led.db.execute("SELECT state FROM notify_outbox WHERE "
                           "kind='health_write_failed'").fetchone()[0] == "accepted"
 
