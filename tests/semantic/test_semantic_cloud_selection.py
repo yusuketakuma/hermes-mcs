@@ -18,6 +18,8 @@ import semantic_drain
 import writer_lock
 from semantic_testkit import _message, _patient
 from semantic_cloud_testkit import cloud as cloud, continuous_snapshot as continuous_snapshot, rows as rows, snapshot as snapshot
+# cloud_only 選択/ドレインの仕組みは退役 lane の休眠機構 — 実閉鎖policyは test_semantic_cloud で直接検証
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
@@ -32,10 +34,11 @@ def test_cloud_selection_requires_current_thread_receipt(cloud, lane, change):
             led.save_messages([_message()])
 
     def select():
-        if lane == "semantic":
-            return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
-        return extract_llm._select_pending(led, 10, None, None, False,
-            cloud_only=True, prioritize_patients=True)[0]
+        with legacy_cloud_routes():
+            if lane == "semantic":
+                return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
+            return extract_llm._select_pending(led, 10, None, None, False,
+                cloud_only=True, prioritize_patients=True)[0]
 
     assert not select()
     snapshot(led)
@@ -74,8 +77,9 @@ finally:
     monkeypatch.setattr(cloud_policy, "history_target_ready", probe)
     monkeypatch.setattr(semantic_drain, "_process_job", lambda *args, **kwargs: "deferred")
     try:
-        semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
-                               lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        with legacy_cloud_routes():
+            semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
+                                   lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert observed == ["acquired"]
         assert proc.wait(timeout=10) == 0
         assert writer_lock.acquire_run_lock(str(lock_path)) is None
@@ -117,8 +121,9 @@ def test_cloud_selection_refill_reuses_original_deadline(cloud, tmp_path, monkey
     monkeypatch.setattr(semantic_drain, "_job_lock", held_prefix)
     monkeypatch.setattr(semantic_drain, "_process_job", lambda *args, **kwargs: "deferred")
     try:
-        semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
-                               lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        with legacy_cloud_routes():
+            semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
+                                   lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert len(attempted) >= 10 and len(selections) >= 2
         assert all(item == (deadline, True) for item in selections)
         assert not calls and not rows(led, "cloud_usage_reserve")
@@ -158,8 +163,9 @@ def test_cloud_selection_refill_deadline_does_not_count_remaining_jobs(cloud, tm
     monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
     led.db.set_trace_callback(statements.append)
     try:
-        out = semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
-                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        with legacy_cloud_routes():
+            out = semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
+                                         lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert len(attempted) == 9 and selections == [deadline, deadline]
         assert out.get("cloud_selection_incomplete") is True and out["left"] is None
         assert out["cloud_selection_reason"] == "deadline"
@@ -230,8 +236,9 @@ def test_cloud_selection_rechecks_changes_after_unlock(cloud, tmp_path, monkeypa
                         lambda *args, **kwargs: pytest.fail("stale selection started work"))
     monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
     try:
-        out = semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
-                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        with legacy_cloud_routes():
+            out = semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
+                                         lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert changed
         assert out.get("cloud_selection_changed") is True
         if change.startswith("v2_"):
@@ -276,7 +283,8 @@ def test_cloud_selection_resumes_pages_and_preserves_sql_order(cloud, monkeypatc
             if sql.startswith('SELECT j.job_id,j.kind') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-                semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
+                with legacy_cloud_routes():
+                    semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
         finally:
             led.db.set_trace_callback(None)
         cursors.append(semantic_due_selection._cloud_selection_progress['cursor'])
@@ -284,7 +292,8 @@ def test_cloud_selection_resumes_pages_and_preserves_sql_order(cloud, monkeypatc
             led.db.execute("UPDATE patients SET station_name='synthetic' WHERE project_id=1")
     assert cursors == sorted(set(cursors)) and len(cursors) == 3
     clock[0] = 0.0
-    result = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        result = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert [row['project_id'] for row in result] == [5, 2, 3, 1, 4, 6]
     assert not calls and not led.db.in_transaction
 
@@ -306,7 +315,8 @@ def test_cloud_selection_rechecks_scope_and_deleted_job_after_incomplete(cloud, 
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-            semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
+            with legacy_cloud_routes():
+                semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
     finally:
         led.db.set_trace_callback(None)
     with led.db:
@@ -315,7 +325,8 @@ def test_cloud_selection_rechecks_scope_and_deleted_job_after_incomplete(cloud, 
                        "FROM artifacts WHERE kind='cloud_history_scope')",
                        ('{"version":1,"sources":{}}',))
     clock[0] = 0.0
-    result = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        result = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert result == [] and not calls and not led.db.in_transaction
 
 
@@ -325,10 +336,12 @@ def test_cloud_selection_refill_advances_job_ids_without_reselecting_excluded(cl
         led.save_messages([_message(mid)])
         led.semantic_seed(1, [mid], {'source': 'history_import'})
     snapshot(led)
-    first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
+    with legacy_cloud_routes():
+        first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
     first_ids = [row['job_id'] for row in first]
-    second = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1,
-                                              excluded=first_ids)[0]
+    with legacy_cloud_routes():
+        second = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1,
+                                                  excluded=first_ids)[0]
     second_ids = [row['job_id'] for row in second]
     assert len(first_ids) == 9 and second_ids
     assert first_ids == sorted(first_ids) and second_ids == sorted(second_ids)
@@ -357,14 +370,17 @@ def test_cloud_selection_revalidates_partial_batch_after_deadline(cloud, monkeyp
 
     monkeypatch.setattr(cloud_policy, 'history_target_ready', expire_on_second)
     with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-        semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
+        with legacy_cloud_routes():
+            semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
     assert checked == [1, 2] and not led.db.in_transaction
     monkeypatch.setattr(cloud_policy, 'history_target_ready', ready)
     clock[0] = 0.0
-    selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=10.0)[0]
     assert [row['job_id'] for row in selected] == [job['job_id']]
-    later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1,
-                                            excluded=[job['job_id']], deadline=10.0)[0]
+    with legacy_cloud_routes():
+        later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1,
+                                                excluded=[job['job_id']], deadline=10.0)[0]
     assert [row['job_id'] for row in later] == [job['job_id'] + 1]
     assert not calls
 
@@ -385,13 +401,15 @@ def test_cloud_selection_invalidates_progress_when_config_changes(cloud, monkeyp
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-            semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
+            with legacy_cloud_routes():
+                semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
     finally:
         led.db.set_trace_callback(None)
     old = semantic_due_selection._cloud_selection_progress['binding']
     cfg['cloud_llm']['project_ids'] = []
     clock[0] = 0.0
-    selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=10.0)[0]
     assert selected == [] and semantic_due_selection._cloud_selection_progress is None
     assert old is not None and not calls
 
@@ -404,7 +422,8 @@ def test_cloud_selection_memory_failure_is_incomplete(cloud, monkeypatch):
 
     monkeypatch.setattr(semantic_drain.mcs_util, 'payload_hash', out_of_memory)
     with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='memory'):
-        semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)
+        with legacy_cloud_routes():
+            semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)
     assert semantic_due_selection._cloud_selection_progress is None
     assert not calls and not led.db.in_transaction
 
@@ -437,7 +456,8 @@ def test_cloud_selection_incomplete_invalid_suffix_advances(cloud, monkeypatch):
     for _ in range(15):
         clock[0] = 0.0
         try:
-            batch = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)[0]
+            with legacy_cloud_routes():
+                batch = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)[0]
         except semantic_drain._CloudSelectionIncomplete:
             incomplete += 1
             continue
@@ -472,7 +492,8 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-            semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
+            with legacy_cloud_routes():
+                semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=1.0)
     finally:
         led.db.set_trace_callback(None)
     led.save_messages([_message(3)])
@@ -481,12 +502,15 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
         led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=3', (time.time() - 601,))
         led.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=3', (time.time() - 601,))
     clock[0] = 0.0
-    first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert [r['message_id'] for r in first] == [1, 2]
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET state='done' WHERE message_id IN (1,2)")
-    assert not semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
-    later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        assert not semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
+    with legacy_cloud_routes():
+        later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert [r['message_id'] for r in later] == [3]
     assert not calls
 
@@ -510,7 +534,8 @@ def test_cloud_selection_invalidates_replaced_database_inode(cloud, tmp_path, mo
             if sql.startswith('SELECT j.job_id,j.kind') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
-                semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
+                with legacy_cloud_routes():
+                    semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1, deadline=1.0)
         finally:
             led.db.set_trace_callback(None)
 

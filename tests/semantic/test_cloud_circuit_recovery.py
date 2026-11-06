@@ -9,6 +9,7 @@ import openai_client
 import semantic_runtime as runtime
 from anthropic_client import AnthropicClient, AnthropicError, MODEL
 from ledger import Ledger
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def _reserve(ledger, unit_key='synthetic'):
@@ -28,24 +29,26 @@ def test_late_success_is_saved_without_reopening_cloud_sends(tmp_path, monkeypat
     monkeypatch.setattr(runtime, '_circuit_now', lambda value: clock[0] if value is None else value)
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(Ledger(str(tmp_path / 'ledger.db'))) as owner, closing(Ledger(str(tmp_path / 'ledger.db'))) as other:
-        reservation = _reserve(owner)
-        _open(owner, clock[0])
-        cloud_policy.record_result(other, reservation, {
-            'model': MODEL, 'request_fp': reservation['request_fp'],
-            'usage': {'input_tokens': 10, 'output_tokens': 2},
-            'http_class': 'http_200', 'request_id': None, 'error_kind': None})
-        assert len(owner.artifacts('cloud_usage_result')) == 1
-        assert runtime.circuit_open(owner, now=clock[0], kind='cloud_circuit')
-        for model in (MODEL, openai_client.MODEL):
-            assert cloud_policy.global_block_reason(owner, model=model) == 'http_429'
-        with pytest.raises(AnthropicError, match='budget_exceeded'):
-            _reserve(owner, 'synthetic-while-open')
-        assert len(owner.artifacts('cloud_usage_reserve')) == 1
-        clock[0] += runtime._CIRCUIT_COOLDOWN_SECONDS
-        assert cloud_policy.global_block_reason(owner, model=MODEL) is None
-        with pytest.raises(AnthropicError, match='budget_exceeded'):
-            _reserve(owner)
-        assert _reserve(owner, 'synthetic-after-cooldown')
+        # Reservation mechanics exercise the retired route's accounting lane.
+        with legacy_cloud_routes():
+            reservation = _reserve(owner)
+            _open(owner, clock[0])
+            cloud_policy.record_result(other, reservation, {
+                'model': MODEL, 'request_fp': reservation['request_fp'],
+                'usage': {'input_tokens': 10, 'output_tokens': 2},
+                'http_class': 'http_200', 'request_id': None, 'error_kind': None})
+            assert len(owner.artifacts('cloud_usage_result')) == 1
+            assert runtime.circuit_open(owner, now=clock[0], kind='cloud_circuit')
+            for model in (MODEL, openai_client.MODEL):
+                assert cloud_policy.global_block_reason(owner, model=model) == 'http_429'
+            with pytest.raises(AnthropicError, match='budget_exceeded'):
+                _reserve(owner, 'synthetic-while-open')
+            assert len(owner.artifacts('cloud_usage_reserve')) == 1
+            clock[0] += runtime._CIRCUIT_COOLDOWN_SECONDS
+            assert cloud_policy.global_block_reason(owner, model=MODEL) is None
+            with pytest.raises(AnthropicError, match='budget_exceeded'):
+                _reserve(owner)
+            assert _reserve(owner, 'synthetic-after-cooldown')
 
 
 def test_cloud_explicit_reset_and_expired_success_still_close_circuit(tmp_path):

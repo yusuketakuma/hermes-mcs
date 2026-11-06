@@ -399,6 +399,7 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
     import semantic_store
     import writer_lock
     from semantic_testkit import _cfg, _ledger, _llm_v2, _message, _patient
+    from test_cloud_response_recovery import legacy_cloud_routes
 
     ledger = _ledger(tmp_path)
     try:
@@ -486,10 +487,11 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
 
         monkeypatch.setattr(semantic_drain, "_process_job_inner", stages)
         monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
-        status = semantic_drain._process_job(
-            ledger, semantic_drain.runtime_config(cfg)[0], job, None,
-            lambda *_a, **_kw: pytest.fail("local inference must not run"), deadline,
-            lane="backlog", diagnostics=semantic_drain._job_diagnostics(), cloud_transport=direct)
+        with legacy_cloud_routes():
+            status = semantic_drain._process_job(
+                ledger, semantic_drain.runtime_config(cfg)[0], job, None,
+                lambda *_a, **_kw: pytest.fail("local inference must not run"), deadline,
+                lane="backlog", diagnostics=semantic_drain._job_diagnostics(), cloud_transport=direct)
         assert status == {"hard_budget": "retry", "hard_off": "stale"}.get(change, "deferred_short")
         chunk = ledger.db.execute("SELECT * FROM artifacts WHERE kind=?",
                                   (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
@@ -524,8 +526,9 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
             assert len(calls) == 1
             return
         if change == "scope":
-            with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
-                assert chat is None
+            with legacy_cloud_routes():
+                with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+                    assert chat is None
             assert len(calls) == 1
             return
         if change == "job":
@@ -535,9 +538,10 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
         scfg = semantic_drain.runtime_config(cfg)[0]
         with transport.inference_targets(semantic_runtime.execution_generation(scfg)):
             transport.set_inference_target(member["message_id"])
-            with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
-                resumed = semantic_extraction.extract_facts_v2(chat, member, ledger=ledger, project_id=1,
-                                                              source_fingerprint=fingerprint)
+            with legacy_cloud_routes():
+                with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+                    resumed = semantic_extraction.extract_facts_v2(chat, member, ledger=ledger, project_id=1,
+                                                                  source_fingerprint=fingerprint)
         assert resumed["reused_chunks"] == [0]
         assert resumed["extraction_complete"] and len(calls) == len(resumed["completed_chunks"])
     finally:

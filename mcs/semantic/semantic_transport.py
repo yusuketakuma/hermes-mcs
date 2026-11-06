@@ -152,8 +152,12 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     # Ownership is decided on the job's payload targets: reservations bind
     # the member target, never the thread root, so a root-only check misses
     # member units while a project-wide check would hold independent targets.
+    # It reopens recovery only inside the configured scope: a revoked scope
+    # still yields no transport for an owned target.
     owned = cloud_policy.owns_any_request(ledger.db, route="semantic_backlog",
-                                          project_id=job["project_id"], message_ids=targets)
+                                          project_id=job["project_id"], message_ids=targets) \
+        and cloud_policy.in_scope(cloud_inference.resolve_cloud_settings(cfg),
+                                  "semantic_backlog", job["project_id"])
     if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) \
             or not cloud_policy.history_thread_allowed(ledger.db, job["project_id"], job["message_id"]):
         if owned:

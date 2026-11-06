@@ -59,17 +59,18 @@ def test_qc_purpose_uses_separate_fixed_provider_and_restores_context(cloud, mon
             pass
 
     monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Provider)
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: True, direct) as chat:
-        chat('normal')
-        with pytest.raises(ValueError), transport.quality_repair():
-            chat('qc repair')
-            assert transport.inference_model() == 'quality_repair'
-            assert transport.inference_requests() == ['backlog', 'quality_repair']
-            raise ValueError('synthetic')
-        assert transport.inference_model() == 'backlog'
-        assert transport._inference_purpose.get() == 'backlog'
-        chat('normal again')
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            chat('normal')
+            with pytest.raises(ValueError), transport.quality_repair():
+                chat('qc repair')
+                assert transport.inference_model() == 'quality_repair'
+                assert transport.inference_requests() == ['backlog', 'quality_repair']
+                raise ValueError('synthetic')
+            assert transport.inference_model() == 'backlog'
+            assert transport._inference_purpose.get() == 'backlog'
+            chat('normal again')
     assert calls == [('backlog', 8192), ('quality_repair', 32768), ('backlog', 8192)]
     assert len(created) == 2 and created[0].unit_key == created[1].unit_key
     assert transport._job_model.get() is None and transport._job_providers.get() is None
@@ -79,11 +80,12 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     led, cfg, job, calls = cloud
     assert "eligible" not in json.loads(job["payload"])
     model = transport.llm_model()
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: True, direct) as chat:
-        assert transport.inference_model() == anthropic_client.MODEL
-        assert transport.llm_model() == model
-        assert json.loads(chat("Synthetic facts JSON:")) == {"facts": []}
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            assert transport.inference_model() == anthropic_client.MODEL
+            assert transport.llm_model() == model
+            assert json.loads(chat("Synthetic facts JSON:")) == {"facts": []}
     assert transport.llm_model() == model
     assert len(calls) == len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 1
     reserve = json.loads(rows(led, "cloud_usage_reserve")[0]["meta"])
@@ -107,20 +109,21 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
     bundle = semantic_store.thread_bundle(led.db, 1, 1)
     scfg = semantic_drain.runtime_config(cfg)[0]
     deadline = time.monotonic() + 120
-    with transport.backlog_inference(led, cfg, job, deadline, lambda: True, direct,
-                                     local_fallback=lambda *a, **kw: pytest.fail("paid local fallback")) as chat:
-        summary, reason, error, sent_error, _ = semantic_drain._obtain_summary(
-            led, scfg, bundle, chat, lambda *args: None, 1, 1, bundle["source_fingerprint"],
-            "synthetic-policy", [], {}, None, deadline, diagnostics={})
-        assert summary is None and reason == "model" and sent_error is None
-        assert error["code"] == "json_object_invalid" and transport.last_llm_failure() == "length_stop"
-        assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
-        assert len(calls) == 1
-        prompt = calls[0]["messages"][0]["content"]
-        # the same paid logical request stays fenced: the refusal is a definite
-        # not-sent that defers the unit instead of failing or falling back
-        with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
-            chat(prompt)
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, deadline, lambda: True, direct,
+                                         local_fallback=lambda *a, **kw: pytest.fail("paid local fallback")) as chat:
+            summary, reason, error, sent_error, _ = semantic_drain._obtain_summary(
+                led, scfg, bundle, chat, lambda *args: None, 1, 1, bundle["source_fingerprint"],
+                "synthetic-policy", [], {}, None, deadline, diagnostics={})
+            assert summary is None and reason == "model" and sent_error is None
+            assert error["code"] == "json_object_invalid" and transport.last_llm_failure() == "length_stop"
+            assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
+            assert len(calls) == 1
+            prompt = calls[0]["messages"][0]["content"]
+            # the same paid logical request stays fenced: the refusal is a definite
+            # not-sent that defers the unit instead of failing or falling back
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat(prompt)
     reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
     assert len(calls) == len(reserves) == len(results) == 1
     result = json.loads(results[0]["meta"])
@@ -167,10 +170,11 @@ def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatc
 
     monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Provider)
     with pytest.raises(transport.runtime.LLMNotSent, match=stage):
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, direct) as chat:
-            assert json.loads(chat('synthetic first')) == {'facts': []}
-            chat('synthetic second')
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as chat:
+                assert json.loads(chat('synthetic first')) == {'facts': []}
+                chat('synthetic second')
     assert len(created) == 1 and created[0].completed_reservations
     assert not created[0].discarded
 
@@ -180,11 +184,12 @@ def test_same_prompt_for_distinct_targets_has_separate_reservations(cloud):
     led.save_messages([_message(2, parent=1, body='synthetic reply')])
     snapshot(led)
     with transport.inference_targets():
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, direct) as chat:
-            for target in (1, 2):
-                transport.set_inference_target(target)
-                assert json.loads(chat('same synthetic prompt')) == {'facts': []}
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as chat:
+                for target in (1, 2):
+                    transport.set_inference_target(target)
+                    assert json.loads(chat('same synthetic prompt')) == {'facts': []}
     assert len(calls) == 2
     assert [row['message_id'] for row in rows(led, 'cloud_usage_reserve')] == [1, 2]
 
@@ -202,11 +207,12 @@ def test_not_sent_cloud_falls_back_locally_for_the_rest_of_the_unit(cloud, monke
         local.append(transport.inference_model())
         return '{"facts": []}'
 
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: True, direct, local_fallback=local_chat,
-                                     fallback_current=lambda: True) as chat:
-        assert json.loads(chat('synthetic first')) == {'facts': []}
-        assert json.loads(chat('synthetic second')) == {'facts': []}
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct, local_fallback=local_chat,
+                                         fallback_current=lambda: True) as chat:
+            assert json.loads(chat('synthetic first')) == {'facts': []}
+            assert json.loads(chat('synthetic second')) == {'facts': []}
     assert len(attempts) == 1 and local == [transport.llm_model()] * 2
     assert not rows(led, 'cloud_usage_reserve')
 
@@ -223,14 +229,15 @@ def test_local_fallback_rechecks_scope_on_each_call(cloud, monkeypatch, change):
             state['current'] = False
         return '{"facts": []}'
     monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', unavailable)
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: state['current'], direct, local_fallback=local_chat,
-                                     fallback_current=lambda: True) as chat:
-        if change == 'between':
-            assert json.loads(chat('synthetic first')) == {'facts': []}
-            state['current'] = False
-        with pytest.raises(transport.runtime.LLMNotSent):
-            chat('synthetic next')
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: state['current'], direct, local_fallback=local_chat,
+                                         fallback_current=lambda: True) as chat:
+            if change == 'between':
+                assert json.loads(chat('synthetic first')) == {'facts': []}
+                state['current'] = False
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic next')
     assert state['calls'] == 1
 
 
@@ -243,14 +250,15 @@ def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monke
         raise cloud_inference.CloudFallback('synthetic_unavailable')
 
     monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', unavailable)
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
-                                     fallback_current=lambda: state != 'partial') as chat:
-        if state == 'partial':
-            with pytest.raises(transport.runtime.LLMNotSent):
-                chat('synthetic input')
-        else:
-            assert chat('synthetic input') is None
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
+                                         fallback_current=lambda: state != 'partial') as chat:
+            if state == 'partial':
+                with pytest.raises(transport.runtime.LLMNotSent):
+                    chat('synthetic input')
+            else:
+                assert chat('synthetic input') is None
 
 
 def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud, monkeypatch):
@@ -261,8 +269,9 @@ def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud,
     monkeypatch.setattr(extract_llm_progress, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
     monkeypatch.setattr(extract_llm_qc, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
     monkeypatch.setattr(extract_llm_selection, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
-    selected, _ = extract_llm._select_pending(led, 1, None, None, False,
-        cloud_only=True, prioritize_patients=True)
+    with legacy_cloud_routes():
+        selected, _ = extract_llm._select_pending(led, 1, None, None, False,
+            cloud_only=True, prioritize_patients=True)
     assert [row["message_id"] for row in selected] == [2]
 
 
@@ -280,16 +289,17 @@ def test_local_boundaries_do_not_send(cloud, denial):
         cfg["cloud_llm"]["project_ids"] = []
     else:
         cfg["cloud_llm"]["routes"] = ["reextract"]
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: True, direct) as chat:
-        if denial == "cap":
-            # The configured route must remain recoverable. A new request is
-            # still refused before any reservation or HTTP attempt.
-            assert callable(chat)
-            with pytest.raises(semantic_drain.runtime.LLMNotSent):
-                chat("synthetic historical input")
-        else:
-            assert chat is None
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            if denial == "cap":
+                # The configured route must remain recoverable. A new request is
+                # still refused before any reservation or HTTP attempt.
+                assert callable(chat)
+                with pytest.raises(semantic_drain.runtime.LLMNotSent):
+                    chat("synthetic historical input")
+            else:
+                assert chat is None
     assert not calls and not rows(led, "cloud_usage_reserve")
 
 
@@ -300,10 +310,12 @@ def test_eligible_background_job_after_one_hour_uses_cloud(cloud):
         payload = {**json.loads(job['payload']), 'eligible': True}
         led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (json.dumps(payload), job['job_id']))
     job['payload'] = json.dumps(payload)
-    selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
+    with legacy_cloud_routes():
+        selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
     assert [row['job_id'] for row in selected] == [job['job_id']]
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
-        assert chat and json.loads(chat('synthetic historical prompt')) == {'facts': []}
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+            assert chat and json.loads(chat('synthetic historical prompt')) == {'facts': []}
     assert len(calls) == 1
 
 
@@ -312,13 +324,15 @@ def test_observe_counts_history_jobs_without_reporting_realtime_as_cloud(cloud):
     led, cfg, job, _ = cloud
     settings = cloud_policy.cloud_config(cfg)[0]
     settings["routes"] = ["semantic_backlog"]
-    counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
+    with legacy_cloud_routes():
+        counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
     assert counts["semantic_backlog"]["targets"] == 1
     assert counts["semantic_backlog"]["requests_estimate"] == 2
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
             (json.dumps({**json.loads(job["payload"]), "eligible": True}), job["job_id"]))
-    counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
+    with legacy_cloud_routes():
+        counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
     assert counts["semantic_backlog"]["targets"] == 1
 
 
@@ -374,9 +388,10 @@ def test_source_changed_after_http_keeps_cost_and_discards(cloud):
         current[0] = False
         return result
 
-    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                     lambda: current[0], changed) as chat:
-        assert chat("Synthetic facts JSON:") is None
+    with legacy_cloud_routes():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: current[0], changed) as chat:
+            assert chat("Synthetic facts JSON:") is None
     assert len(calls) == len(rows(led, "cloud_usage_result")) == 1
     assert rows(led, "cloud_usage_disposition")
 
@@ -389,9 +404,10 @@ def test_lost_run_lock_does_not_write_results_or_disposition(cloud):
         raise writer_lock.RunLockLost(held=False)
 
     with pytest.raises(writer_lock.RunLockLost):
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, lost) as chat:
-            chat("Synthetic facts JSON:")
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, lost) as chat:
+                chat("Synthetic facts JSON:")
     assert len(calls) == len(rows(led, "cloud_usage_reserve")) == 1
     assert not rows(led, "cloud_usage_result")
     assert not rows(led, "cloud_usage_disposition")
@@ -410,10 +426,11 @@ def test_real_process_wrapper_selects_cloud_and_resets_model(cloud, monkeypatch)
     monkeypatch.setattr(semantic_drain.semantic_store, "refresh_cards_allowed", lambda *a: False)
     timing = {"s": 0.0}
     model = transport.llm_model()
-    assert semantic_drain._process_job(
-        led, semantic_drain.runtime_config(cfg)[0], job, None,
-        lambda *a, **kw: pytest.fail("local GPU used"), time.monotonic() + 120,
-        lane="backlog", diagnostics={}, cloud_transport=direct, llm_timing=timing) == "done"
+    with legacy_cloud_routes():
+        assert semantic_drain._process_job(
+            led, semantic_drain.runtime_config(cfg)[0], job, None,
+            lambda *a, **kw: pytest.fail("local GPU used"), time.monotonic() + 120,
+            lane="backlog", diagnostics={}, cloud_transport=direct, llm_timing=timing) == "done"
     assert len(calls) == 1 and timing["s"] > 0
     assert transport.llm_model() == model
 
@@ -445,9 +462,10 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
         monkeypatch.setattr(semantic_publication, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
         monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda *a: 60)
     result = {"errors": []}
-    out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
-                                jev_client=_PassJev(), lane="backlog", max_jobs=1,
-                                cloud_only=cloud_only)
+    with legacy_cloud_routes():
+        out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
+                                    jev_client=_PassJev(), lane="backlog", max_jobs=1,
+                                    cloud_only=cloud_only)
     assert out["done"] == 1 and not result["errors"], (out, result)
     assert calls
     fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
@@ -470,10 +488,11 @@ def test_full_cloud_capacity_defers_without_usage_or_local_fallback(cloud):
     led, cfg, job, calls = cloud
     cfg["cloud_llm"]["max_concurrency"] = 1
     with cloud_backlog.request_slot(extract_llm.HOME, 1):
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, direct) as chat:
-            with pytest.raises(semantic_runtime.LLMNotSent, match="cloud_capacity"):
-                chat("Synthetic facts JSON:")
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as chat:
+                with pytest.raises(semantic_runtime.LLMNotSent, match="cloud_capacity"):
+                    chat("Synthetic facts JSON:")
     assert not calls and not rows(led, "cloud_usage_reserve")
 
 
@@ -518,13 +537,16 @@ def test_cloud_and_resident_selection_prioritize_active_latest_patient(cloud):
         for mid in (1, 2, 3):
             led.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (mid * 100, mid))
     snapshot(led)
-    selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 3)[0]
+    with legacy_cloud_routes():
+        selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 3)[0]
     assert [r["project_id"] for r in selected] == [2, 1, 3]
-    selected = semantic_drain._select_due(led, "backlog", ("semantic",), False, 3,
-                                         prioritize_patients=True)[0]
+    with legacy_cloud_routes():
+        selected = semantic_drain._select_due(led, "backlog", ("semantic",), False, 3,
+                                             prioritize_patients=True)[0]
     assert [r["project_id"] for r in selected] == [2, 1, 3]
-    selected, _ = extract_llm._select_pending(led, 3, None, None, False,
-                                              cloud_only=True, prioritize_patients=True)
+    with legacy_cloud_routes():
+        selected, _ = extract_llm._select_pending(led, 3, None, None, False,
+                                                  cloud_only=True, prioritize_patients=True)
     assert [r["project_id"] for r in selected] == [2, 1, 3]
 
 
@@ -539,10 +561,12 @@ def test_selection_reads_receipt_once_for_multiple_candidates(cloud, lane):
     led.db.set_trace_callback(statements.append)
     try:
         if lane == "semantic":
-            selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 10)[0]
+            with legacy_cloud_routes():
+                selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 10)[0]
         else:
-            selected = extract_llm._select_pending(led, 10, None, None, False,
-                cloud_only=True, prioritize_patients=True)[0]
+            with legacy_cloud_routes():
+                selected = extract_llm._select_pending(led, 10, None, None, False,
+                    cloud_only=True, prioritize_patients=True)[0]
     finally:
         led.db.set_trace_callback(None)
     assert len(selected) >= 10
@@ -572,8 +596,9 @@ def test_selection_checks_each_thread_once_per_snapshot(cloud, monkeypatch, lane
             selected = [check(1, mid) for mid in range(1, 8)]
         assert all(selected)
     else:
-        selected = extract_llm._select_pending(led, 10, None, None, False,
-            cloud_only=True, prioritize_patients=True)[0]
+        with legacy_cloud_routes():
+            selected = extract_llm._select_pending(led, 10, None, None, False,
+                cloud_only=True, prioritize_patients=True)[0]
     assert len(selected) >= 2
     assert len(checked) == 1
 
@@ -675,11 +700,13 @@ def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
     try:
         assert outer.fetchone()[0] == 10
         if lane == "semantic":
-            selected = semantic_drain._select_cloud_due(
-                led, "backlog", ("semantic",), False, 1, deadline=time.monotonic() + 60)[0]
+            with legacy_cloud_routes():
+                selected = semantic_drain._select_cloud_due(
+                    led, "backlog", ("semantic",), False, 1, deadline=time.monotonic() + 60)[0]
         else:
-            selected = extract_llm._select_pending(led, 1, None, None, False,
-                cloud_only=True, prioritize_patients=True)[0]
+            with legacy_cloud_routes():
+                selected = extract_llm._select_pending(led, 1, None, None, False,
+                    cloud_only=True, prioritize_patients=True)[0]
         assert [row["message_id"] for row in selected] == [1]
         assert [row[0] for row in outer] == [20, 30]
         assert led.db.in_transaction
@@ -751,9 +778,10 @@ def test_cached_chunks_are_not_mixed_across_backends(cloud, monkeypatch, first):
     def use(backend):
         if backend == "local":
             return extract(local)
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, direct) as cloud_fn:
-            return extract(cloud_fn)
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as cloud_fn:
+                return extract(cloud_fn)
 
     use(first)
     before = [dict(row) for row in rows(led, semantic_extraction.KIND_CHUNK_V2)]
@@ -765,9 +793,10 @@ def test_cached_chunks_are_not_mixed_across_backends(cloud, monkeypatch, first):
             "synthetic-policy", "shadow", None, fn, time.monotonic() + 120)
 
     if first == "local":
-        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
-                                         lambda: True, direct) as cloud_fn:
-            assemble(cloud_fn)
+        with legacy_cloud_routes():
+            with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                             lambda: True, direct) as cloud_fn:
+                assemble(cloud_fn)
     else:
         assemble(local)
     assert len(calls) == count + (1 if first == "local" else 0)
@@ -866,8 +895,9 @@ def test_cloud_run_due_keeps_unconsumed_lookahead_across_ticks(cloud, monkeypatc
 
     monkeypatch.setattr(semantic_drain, '_process_job', process)
     for _ in range(12):
-        out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
-                                     lane='backlog', max_jobs=1, cloud_only=True)
+        with legacy_cloud_routes():
+            out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
+                                         lane='backlog', max_jobs=1, cloud_only=True)
         assert out['done'] == 1
     assert served == list(range(1, 13))
     assert not calls and not rows(led, 'cloud_usage_reserve')
@@ -936,8 +966,9 @@ def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud,
         kwargs['diagnostics']['not_sent'] = reason
         return 'deferred'
     monkeypatch.setattr(semantic_drain, '_process_job', process)
-    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
-                                lane='backlog', max_jobs=1, cloud_only=True)
+    with legacy_cloud_routes():
+        out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
+                                    lane='backlog', max_jobs=1, cloud_only=True)
     assert out['deferred'] == 1 and out['defer_reasons'] == {expected: 1}
     assert not calls and not rows(led, 'cloud_usage_reserve')
 
