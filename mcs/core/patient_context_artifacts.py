@@ -644,6 +644,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             source = context_queries.patient_context_source(db, pid, source_key)
         if source is None:
             raise ValueError('nightly_source_repair_invalid')
+        source = {**source, 'items': []}
         occurrence = source_occurrence(db, pid, source)
         expected = (context_plan.original_source_signature(source) if 'original_source_sig' in origin
                     else context_plan.source_signature(source, legacy=True))
