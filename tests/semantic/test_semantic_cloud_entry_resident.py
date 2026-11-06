@@ -13,6 +13,7 @@ import semantic_transport as transport
 from test_semantic_cloud import cloud, direct
 
 from test_cloud_entry_recovery import unrelated_reservation
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['cloud']
 
@@ -46,12 +47,15 @@ def test_semantic_resident_next_pass_checks_old_input(cloud, monkeypatch, prior,
         return semantic_drain._process_job(ledger, semantic_drain.runtime_config(cfg)[0], job, None,
             local_call, time.monotonic() + 180, lane='backlog', diagnostics=diagnostics, cloud_transport=direct)
     if prior == 'saved':
-        assert resident() == 'done'
+        with legacy_cloud_routes():
+            assert resident() == 'done'
     elif prior == 'unknown':
-        with pytest.raises(Interrupted):
-            resident()
+        with legacy_cloud_routes():
+            with pytest.raises(Interrupted):
+                resident()
     if prior == 'fresh':
-        unrelated_reservation(ledger, cfg, 'semantic_backlog')
+        with legacy_cloud_routes():
+            unrelated_reservation(ledger, cfg, 'semantic_backlog')
     before = len(calls)
     if barrier == 'budget':
         cfg['cloud_llm']['daily_cost_limit_usd'] = 0
@@ -88,6 +92,6 @@ def test_cloud_only_fresh_denial_is_wait_without_paid_failure(cloud, monkeypatch
     status = semantic_drain._process_job(ledger, semantic_drain.runtime_config(cfg)[0], job, None,
         lambda *a, **k: pytest.fail('cloud-only denial cannot call local'), time.monotonic() + 180,
         lane='backlog', diagnostics=diagnostics, cloud_transport=direct, cloud_only=True)
-    assert status == 'deferred' and diagnostics['not_sent'] == 'cloud_not_sent'
+    assert status == 'deferred' and diagnostics['not_sent'] == 'cloud_scope_or_budget'
     assert not calls and not ledger.artifacts('cloud_usage_reserve')
     assert not ledger.artifacts('cloud_usage_result') and not ledger.artifacts('cloud_usage_disposition')
