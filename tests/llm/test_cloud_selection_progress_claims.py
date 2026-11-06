@@ -26,6 +26,7 @@ import cloud_inference
 from anthropic_client import AnthropicClient
 from ledger import Ledger
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes as legacy_cloud_routes
 from cloud_selection_progress_testkit import _REAL_BLOCK as _REAL_BLOCK, _REAL_RESERVER as _REAL_RESERVER, _REAL_RESULT as _REAL_RESULT, _claim_count as _claim_count, _cloud_pass as _cloud_pass, _complete_cloud_tx as _complete_cloud_tx, _complete_local_tx as _complete_local_tx, _select as _select, blocked_prefix as blocked_prefix, cloud_candidates as cloud_candidates
 
 
@@ -154,8 +155,9 @@ def test_empty_cloud_pass_does_not_count_the_global_backlog(cloud_candidates, mo
                         lambda *a: pytest.fail("cloud pass counted the global backlog"))
     monkeypatch.setattr(extract_llm_runner, '_backlog_report', extract_llm._backlog_report)
     for _ in range(2):
-        report = extract_llm.run_pending(led, limit=1, budget_s=180, admitted_ids=set(),
-            background=True, cloud_only=True, prioritize_patients=True)
+        with legacy_cloud_routes():
+                    report = extract_llm.run_pending(led, limit=1, budget_s=180, admitted_ids=set(),
+                        background=True, cloud_only=True, prioritize_patients=True)
         assert report["done"] == report["selected"] == 0
         assert report["left"] is report["left_estimate"] is report["left_estimate_age_s"] is None
         assert report["queue_ages_s"] == {"oldest": None, "newest": None}
@@ -252,16 +254,18 @@ def test_background_cloud_claim_rechecks_pending_without_cloud_only(cloud_candid
 
     monkeypatch.setattr(extract_llm, "_claim", race)
     monkeypatch.setattr(extract_llm_runner, '_claim', extract_llm._claim)
-    first = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-                                    allow_cloud=True, prioritize_patients=True)
+    with legacy_cloud_routes():
+            first = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                                            allow_cloud=True, prioritize_patients=True)
     assert changed and first["done"] == 0
     assert calls == reservations == results == [] and _claim_count(led) == 0
     if change == "retry":
         assert led.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND {extract_llm.pending_pred(led.db)}",
                               (changed[0],)).fetchone()
     else:
-        second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-                                         allow_cloud=True, prioritize_patients=True)
+        with legacy_cloud_routes():
+                    second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                                                     allow_cloud=True, prioritize_patients=True)
         assert second["done"] == 1 and len(reservations) == len(calls) == len(results) == 1
         assert reservations[0]["identity"]["message_id"] != changed[0]
     assert _claim_count(led) == 0
@@ -460,8 +464,9 @@ def test_cloud_claim_preparation_exception_preserves_claim_only_after_observed_u
     monkeypatch.setattr(extract_llm_prepare, '_ensure_v1', extract_llm._ensure_v1)
     monkeypatch.setattr(extract_llm_runner, '_ensure_v1', extract_llm._ensure_v1)
     with pytest.raises(sqlite3.OperationalError, match='synthetic preparation exception'):
-        extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
-            background=True, cloud_only=True, prioritize_patients=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
+                        background=True, cloud_only=True, prioritize_patients=True, carry=[])
     assert _claim_count(led) == int(updater_changed)
     assert len(releases) == int(not updater_changed)
     assert not _current_artifacts(led) and calls == reservations == results == []
@@ -514,7 +519,8 @@ def test_refused_unit_yields_selection_without_bypassing_send_guard(cloud_candid
 ])
 def test_prepare_refusal_reports_fixed_reason_without_private_error(cloud_candidates, monkeypatch, cause, expected):
     led, *_ = cloud_candidates
-    rows, _ = extract_llm._select_pending(led, 1, None, None, False, cloud_only=True)
+    with legacy_cloud_routes():
+            rows, _ = extract_llm._select_pending(led, 1, None, None, False, cloud_only=True)
     assert len(rows) == 1
     rows = [dict(rows[0])]
     deadline = time.monotonic() + 60
@@ -547,13 +553,29 @@ def test_prepare_refusal_reports_fixed_reason_without_private_error(cloud_candid
         monkeypatch.setattr(extract_llm, "_pending_context_frame", unavailable)
         monkeypatch.setattr(extract_llm_prepare, '_pending_context_frame', extract_llm._pending_context_frame)
     reasons = {}
-    jobs, skipped, blocked = extract_llm._prepare_jobs(
-        led, rows, extract_llm._resolved_llm(), False, cloud_only=True,
-        load_checkpoints=False, deadline=deadline, blocked_reasons=reasons)
+    # Refusal-reason mechanics exercise the dormant cloud_only lane.
+    with legacy_cloud_routes():
+        jobs, skipped, blocked = extract_llm._prepare_jobs(
+            led, rows, extract_llm._resolved_llm(), False, cloud_only=True,
+            load_checkpoints=False, deadline=deadline, blocked_reasons=reasons)
     assert jobs == [] and skipped == 0 and blocked == 1
     assert reasons == {expected: 1}
     assert expected in extract_llm.cloud_backlog._DEFER_REASONS
     assert _claim_count(led) == 0
+
+
+def test_prepare_blocks_unowned_rows_under_closed_route(cloud_candidates):
+    led, *_ = cloud_candidates
+    with legacy_cloud_routes():
+        rows, _ = extract_llm._select_pending(led, 1, None, None, False, cloud_only=True)
+    assert len(rows) == 1
+    reasons = {}
+    jobs, skipped, blocked = extract_llm._prepare_jobs(
+        led, [dict(rows[0])], extract_llm._resolved_llm(), False, cloud_only=True,
+        load_checkpoints=False, deadline=time.monotonic() + 60,
+        blocked_reasons=reasons)
+    assert jobs == [] and skipped == 0 and blocked == 1
+    assert reasons == {"prepare_cloud_disabled": 1}
 
 
 def test_prepare_reasons_reach_cloud_pass_accounting(cloud_candidates, monkeypatch):

@@ -21,6 +21,7 @@ import extract_llm
 import cloud_inference
 from anthropic_client import AnthropicClient
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes as legacy_cloud_routes
 from cloud_selection_progress_testkit import _REAL_BLOCK as _REAL_BLOCK, _REAL_RESERVER as _REAL_RESERVER, _REAL_RESULT as _REAL_RESULT, _claim_count as _claim_count, _make_paid_carry as _make_paid_carry, blocked_prefix as blocked_prefix, cloud_candidates as cloud_candidates
 
 
@@ -38,8 +39,9 @@ def test_empty_carry_still_reports_incomplete_selection(cloud_candidates, monkey
     monkeypatch.setattr(extract_llm, "_prepare_jobs",
                         lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
     monkeypatch.setattr(extract_llm_runner, '_prepare_jobs', extract_llm._prepare_jobs)
-    report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
-                                    per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
+                                            per_write_lock=True, carry=carry)
     assert len(observed) == 1 and report["carry"] is carry
     assert report["cloud_selection_incomplete"] is True and report["cloud_selection_reason"] == "deadline"
     assert report["selected"] is report["fresh_selected"] is report["left"] is report["left_estimate"] is None
@@ -71,16 +73,18 @@ def test_incomplete_selection_renews_then_saves_carried_paid_result(cloud_candid
     monkeypatch.setattr(extract_llm_runner, '_select_pending', extract_llm._select_pending)
     for _ in range(2):
         wall[0] += 300
-        result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+        with legacy_cloud_routes():
+                    result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
         assert 'cloud_selection_incomplete' not in result and result['done'] == 0
         assert result['selected'] == result['fresh_selected'] == 0
         assert result['left'] is result['left_estimate'] is None
         assert result['carry'] is carry and len(carry) == 1 and carry[0][1] > wall[0] + 120
         assert len(calls) == len(reservations) == len(results) == 1
     lock['held'] = True
-    result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
     assert 'cloud_selection_incomplete' not in result and result['done'] == result['carried'] == 1
     assert result['selected'] == result['fresh_selected'] == 0
     assert carry == [] and len(_current_artifacts(led)) == 1 and _claim_count(led) == 0
@@ -95,7 +99,8 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
     mid = carry[0][0]['message_id']
     body = AnthropicClient('synthetic').body(calls[0], extract_llm.MAX_TOKENS, None)
     reserve = _REAL_RESERVER(led, cfg, route='reextract', project_id=1, message_id=mid, unit_key=str(mid))
-    receipt = reserve(body, 2)
+    with legacy_cloud_routes():
+        receipt = reserve(body, 2)
     _REAL_RESULT(led, receipt, {'model': receipt['model'], 'request_fp': receipt['request_fp'],
         'usage': {'input_tokens': 10, 'output_tokens': 5}, 'http_class': 'http_200',
         'request_id': 'synthetic', 'error_kind': None})
@@ -121,15 +126,17 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
     lease = carry[0][1]
     for now in (lease - 10, lease + 1):
         wall[0] = now
-        result = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
-            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+        with legacy_cloud_routes():
+                    result = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
+                        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
         assert 'cloud_selection_incomplete' not in result and result['carry'] is carry and len(carry) == 1
         assert result['selected'] == result['fresh_selected'] == 0
         assert result['left'] is result['left_estimate'] is None
         assert result['done'] == 0 and len(calls) == len(reservations) == len(results) == 1
     lock['held'] = True
-    result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
     assert 'cloud_selection_incomplete' not in result and result['done'] == 0
     assert result['selected'] == result['fresh_selected'] == 0
     assert result['deferred'] == 1 and carry == [] and not _current_artifacts(led)
@@ -147,16 +154,18 @@ def test_successful_selection_retains_unsettled_carry_until_the_next_pass(cloud_
     monkeypatch.setattr(extract_llm, '_select_pending', lambda *args, **kwargs: ([], 0))
     monkeypatch.setattr(extract_llm_runner, '_select_pending', extract_llm._select_pending)
     before = carry[0][1]
-    result = extract_llm.run_pending(led, limit=1, budget_s=budget, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            result = extract_llm.run_pending(led, limit=1, budget_s=budget, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
     retained = result['carry']
     assert result['done'] == 0 and len(retained) == 1 and retained[0][1] >= before
     row = led.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
     assert row is not None and row[0] == retained[0][1]
     assert len(calls) == len(reservations) == len(results) == 1
     lock['held'] = True
-    result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=retained)
+    with legacy_cloud_routes():
+            result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=retained)
     assert result['done'] == result['carried'] == 1 and result['carry'] == []
     assert len(_current_artifacts(led)) == 1 and _claim_count(led) == 0
     assert len(calls) == len(reservations) == len(results) == 1
@@ -170,8 +179,9 @@ def test_paid_carry_scope_revocation_is_discarded_and_counted(cloud_candidates, 
         lambda *a, **kw: (_ for _ in ()).throw(extract_llm._CloudSelectionIncomplete('deadline')))
     monkeypatch.setattr(extract_llm_runner, '_select_pending', extract_llm._select_pending)
     lock['held'] = True
-    result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+    with legacy_cloud_routes():
+            result = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
     assert 'cloud_selection_incomplete' not in result
     assert result['selected'] == result['fresh_selected'] == 0
     assert result['done'] == 0 and result['carried'] == 1 and result['deferred'] == 1
@@ -184,8 +194,9 @@ def test_paid_carry_scope_revocation_is_discarded_and_counted(cloud_candidates, 
 
 def test_carry_deadline_keeps_unprocessed_paid_result_and_lease(cloud_candidates, monkeypatch):
     led, carry, lock, calls, reservations, results = _make_paid_carry(cloud_candidates, monkeypatch)
-    second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
+    with legacy_cloud_routes():
+            second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
     assert len(second['carry']) == 1 and len(calls) == 2
     carry.extend(second['carry'])
     row, lease, commit = carry[0]
@@ -221,8 +232,9 @@ def test_carry_deadline_keeps_unprocessed_paid_result_and_lease(cloud_candidates
 
 def test_carry_partial_success_then_sqlite_error_retries_only_remaining(cloud_candidates, monkeypatch):
     led, carry, lock, calls, reservations, results = _make_paid_carry(cloud_candidates, monkeypatch)
-    second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
+    with legacy_cloud_routes():
+            second = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+                cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
     assert len(second['carry']) == 1
     row, lease, commit = second['carry'][0]
     attempts = []
@@ -289,8 +301,9 @@ def test_retained_short_budget_skips_lock_wait_and_preserves_paid_result(
     monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     try:
-        report = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
-            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
+        with legacy_cloud_routes():
+                    report = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
+                        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
         assert clock[0] == 100.0
         assert report['selected'] == report['fresh_selected'] == 0
         assert report['left'] is report['left_estimate'] is None
@@ -333,16 +346,18 @@ def test_paid_checkpoint_replays_after_later_candidate_database_error(cloud_cand
     monkeypatch.setattr(extract_llm, 'llm_extract', fail_second)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     with pytest.raises(sqlite3.OperationalError, match='synthetic_missing_table'):
-        extract_llm.run_pending(led, limit=2, workers=1, budget_s=180, background=True,
-            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=2, workers=1, budget_s=180, background=True,
+                        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
     assert len(sent) == 1 and _claim_count(led) == 0 and not _current_artifacts(led)
     assert len(led.artifacts('cloud_usage_reserve')) == len(led.artifacts('cloud_usage_result')) == 1
     assert led.artifacts('extract_llm_chunk')
     invocations.clear()
     lock['held'] = True
     with pytest.raises(sqlite3.OperationalError, match='synthetic_missing_table'):
-        extract_llm.run_pending(led, limit=2, workers=1, budget_s=180, background=True,
-            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=2, workers=1, budget_s=180, background=True,
+                        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
     assert len(_current_artifacts(led)) == 1 and _claim_count(led) == 0
     assert len(sent) == 1
     assert len(led.artifacts('cloud_usage_reserve')) == len(led.artifacts('cloud_usage_result')) == 1
@@ -407,9 +422,10 @@ def test_cloud_tail_lock_contention_respects_observed_update_fence(
     monkeypatch.setattr(extract_llm_store, 'time', extract_llm.time)
     monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     try:
-        report = extract_llm.run_pending(led, limit=1, budget_s=180, workers=1,
-            background=True, cloud_only=True, prioritize_patients=True,
-            per_write_lock=True, write_wait_s=1, carry=[])
+        with legacy_cloud_routes():
+                    report = extract_llm.run_pending(led, limit=1, budget_s=180, workers=1,
+                        background=True, cloud_only=True, prioritize_patients=True,
+                        per_write_lock=True, write_wait_s=1, carry=[])
         assert len(attempts) >= 2 and len(calls) == len(reservations) == len(results) == 1
         assert report['done'] == 0 and len(report['carry']) == 1
         assert report['deferred'] == int(blocked_before_tail)
@@ -449,8 +465,9 @@ def test_cloud_extract_exception_preserves_claim_only_after_observed_update(
     monkeypatch.setattr(extract_llm, 'llm_extract', fail)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     with pytest.raises(sqlite3.OperationalError, match='synthetic extract exception'):
-        extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
-            background=True, cloud_only=True, prioritize_patients=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
+                        background=True, cloud_only=True, prioritize_patients=True, carry=[])
     assert _claim_count(led) == int(updater_changed)
     assert len(releases) == int(not updater_changed)
     assert not _current_artifacts(led) and calls == reservations == results == []
@@ -479,9 +496,10 @@ def test_carried_settle_exception_keeps_original_claim_without_new_selection(
     monkeypatch.setattr(extract_llm_carry, '_release', extract_llm._release)
     monkeypatch.setattr(extract_llm_runner, '_release', extract_llm._release)
     with pytest.raises(sqlite3.OperationalError, match='synthetic settle exception'):
-        extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
-            background=True, cloud_only=True, prioritize_patients=True,
-            per_write_lock=True, carry=carry)
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
+                        background=True, cloud_only=True, prioritize_patients=True,
+                        per_write_lock=True, carry=carry)
     assert len(passes) == 1 and len(carry) == 1
     assert _claim_count(led) == 1 and releases == []
     assert len(calls) == len(reservations) == len(results) == 1
@@ -513,8 +531,9 @@ def test_cloud_flush_exception_preserves_claim_only_after_observed_update(
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     monkeypatch.setattr(extract_llm.queue, 'SimpleQueue', FailingQueue)
     with pytest.raises(sqlite3.OperationalError, match='synthetic flush exception'):
-        extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
-            background=True, cloud_only=True, prioritize_patients=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
+                        background=True, cloud_only=True, prioritize_patients=True, carry=[])
     assert _claim_count(led) == int(updater_changed)
     assert len(releases) == int(not updater_changed)
     assert not _current_artifacts(led) and calls == reservations == results == []
@@ -555,8 +574,9 @@ def test_cloud_handle_exception_preserves_claim_only_after_observed_update(
     monkeypatch.setattr(extract_llm_runner, '_owns_current_source', extract_llm._owns_current_source)
     monkeypatch.setattr(extract_llm_store, '_owns_current_source', extract_llm._owns_current_source)
     with pytest.raises(sqlite3.OperationalError, match='synthetic handle exception'):
-        extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
-            background=True, cloud_only=True, prioritize_patients=True, carry=[])
+        with legacy_cloud_routes():
+                    extract_llm.run_pending(led, limit=1, workers=1, budget_s=180,
+                        background=True, cloud_only=True, prioritize_patients=True, carry=[])
     assert _claim_count(led) == int(updater_changed)
     assert len(releases) == (0 if updater_changed else 2)
     assert not _current_artifacts(led) and calls == reservations == results == []

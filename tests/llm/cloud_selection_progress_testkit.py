@@ -72,11 +72,15 @@ def blocked_prefix(tmp_path, monkeypatch):
 
 
 def _select(led, lane, *, deadline=None):
-    if lane == "semantic":
-        return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1,
-            deadline=deadline, isolated=deadline is not None)[0]
-    return extract_llm._select_pending(led, 64, None, None, False,
-        cloud_only=True, prioritize_patients=True, deadline=deadline)[0]
+    # The reextract/semantic lanes are dormant send routes; selection
+    # mechanics are still exercised under the legacy-open gate only.
+    from test_cloud_response_recovery import legacy_cloud_routes
+    with legacy_cloud_routes():
+        if lane == "semantic":
+            return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1,
+                deadline=deadline, isolated=deadline is not None)[0]
+        return extract_llm._select_pending(led, 64, None, None, False,
+            cloud_only=True, prioritize_patients=True, deadline=deadline)[0]
 
 
 @pytest.fixture
@@ -98,8 +102,10 @@ def cloud_candidates(routed, monkeypatch):
 
 
 def _cloud_pass(led, *, limit=1):
-    return extract_llm.run_pending(led, limit=limit, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, batch_k=4)
+    from test_cloud_response_recovery import legacy_cloud_routes
+    with legacy_cloud_routes():
+        return extract_llm.run_pending(led, limit=limit, budget_s=180, background=True,
+            cloud_only=True, prioritize_patients=True, batch_k=4)
 
 
 def _claim_count(led):
@@ -154,8 +160,10 @@ def _make_paid_carry(cloud_candidates, monkeypatch):
     monkeypatch.setattr(extract_llm_carry, '_write_lock', extract_llm._write_lock)
     monkeypatch.setattr(extract_llm_resident, '_write_lock', extract_llm._write_lock)
     monkeypatch.setattr(extract_llm_runner, '_write_lock', extract_llm._write_lock)
-    first = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
-        cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
+    from test_cloud_response_recovery import legacy_cloud_routes
+    with legacy_cloud_routes():
+        first = extract_llm.run_pending(led, limit=1, budget_s=180, background=True,
+            cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=[])
     assert first['done'] == 0 and len(first['carry']) == 1
     assert len(calls) == len(reservations) == len(results) == 1
     return led, first['carry'], lock, calls, reservations, results

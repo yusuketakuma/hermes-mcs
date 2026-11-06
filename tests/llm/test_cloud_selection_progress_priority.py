@@ -20,6 +20,7 @@ import extract_llm
 import cloud_inference
 from semantic_testkit import _message, _patient
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes as legacy_cloud_routes
 from cloud_selection_progress_testkit import _claim_count as _claim_count, _cloud_pass as _cloud_pass, _complete_cloud_tx as _complete_cloud_tx, _select as _select, blocked_prefix as blocked_prefix, cloud_candidates as cloud_candidates
 
 
@@ -40,8 +41,10 @@ def test_cloud_priority_walk_matches_fixed_snapshot_order(cloud_candidates, olde
         cloud_policy.capture_history_tx(led.db, 'synthetic-order', time.time())
     args = (led, 100, None, None, oldest_first)
     kwargs = {'cloud_only': True, 'prioritize_patients': True}
-    expected = extract_llm._select_pending(*args, **kwargs)[0]
-    actual = extract_llm._select_pending(*args, **kwargs, deadline=time.monotonic() + 120)[0]
+    with legacy_cloud_routes():
+            expected = extract_llm._select_pending(*args, **kwargs)[0]
+    with legacy_cloud_routes():
+            actual = extract_llm._select_pending(*args, **kwargs, deadline=time.monotonic() + 120)[0]
     assert [r['message_id'] for r in actual] == [r['message_id'] for r in expected]
     assert len(actual) == 68
 
@@ -54,8 +57,9 @@ def test_cloud_priority_retains_patient_order_without_retaining_all_message_meta
         led.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
         led.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
         cloud_policy.capture_history_tx(led.db, 'synthetic-bounded-order', time.time())
-    rows, _ = extract_llm._select_pending(led, 4, None, None, False, cloud_only=True,
-        prioritize_patients=True, deadline=time.monotonic() + 120)
+    with legacy_cloud_routes():
+            rows, _ = extract_llm._select_pending(led, 4, None, None, False, cloud_only=True,
+                prioritize_patients=True, deadline=time.monotonic() + 120)
     assert len(rows) == len({r['message_id'] for r in rows}) == 4
     retained_bytes = len(json.dumps(led._cloud_priority_progress).encode())
     assert retained_bytes < 2048, retained_bytes
@@ -280,8 +284,9 @@ def test_cloud_priority_consumes_all_selected_in_fixed_order_over_single_unit_pa
 def test_cloud_priority_short_budget_keeps_selected_candidates_for_next_pass(cloud_candidates):
     led, _, calls, reservations, results = cloud_candidates
     expected = [row['message_id'] for row in _select(led, 'extract')]
-    report = extract_llm.run_pending(led, limit=1, budget_s=50, background=True,
-        cloud_only=True, prioritize_patients=True)
+    with legacy_cloud_routes():
+            report = extract_llm.run_pending(led, limit=1, budget_s=50, background=True,
+                cloud_only=True, prioritize_patients=True)
     assert report['done'] == 0 and calls == reservations == results == []
     assert _claim_count(led) == 0
     assert _cloud_pass(led)['done'] == 1
