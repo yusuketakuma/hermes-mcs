@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from ops_testkit import patch_lifecycle_lookup
+
 
 @pytest.fixture
 def watchdog(tmp_path, monkeypatch):
@@ -22,7 +24,7 @@ def watchdog(tmp_path, monkeypatch):
                         "MARKER_PATH": data / "update_in_progress.marker",
                         "REPORT_PATH": data / "recovery_report.json",
                         "REPO": tmp_path / "synthetic-repo"}.items():
-        monkeypatch.setattr(module, name, str(value))
+        patch_lifecycle_lookup(monkeypatch, module, name, str(value))
     return module
 
 
@@ -46,10 +48,10 @@ def test_first_split_forward_recovery_holds(watchdog, monkeypatch, flag, head, t
         "sha": target, "prev_sha": prev, "provider_settings_migration_required": flag,
     }, "stages": [], "applied": []}))
     before = journal.read_bytes()
-    monkeypatch.setattr(watchdog, "_head", lambda: head)
-    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", lambda: pytest.fail("hold changed git state"))
-    monkeypatch.setattr(watchdog, "_restart_drainers", lambda **_k: pytest.fail("hold restarted drainers"))
-    monkeypatch.setattr(watchdog, "_restart_services", lambda *_a, **_k: pytest.fail("hold restarted services"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_head", lambda: head)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean_stale_git_locks", lambda: pytest.fail("hold changed git state"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_drainers", lambda **_k: pytest.fail("hold restarted drainers"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_services", lambda *_a, **_k: pytest.fail("hold restarted services"))
     assert watchdog._recover_legacy(if_stale=True) == 1
     assert journal.read_bytes() == before
     assert marker.is_file()
@@ -68,7 +70,7 @@ def test_first_split_hold_with_unverifiable_marker_reports_no_stop_proof(watchdo
     marker = Path(watchdog.MARKER_PATH)
     marker.symlink_to(Path(watchdog.DATA) / "missing")
     before = journal.read_bytes()
-    monkeypatch.setattr(watchdog, "_head", lambda: "target")
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_head", lambda: "target")
     assert watchdog._recover_legacy() == 1
     assert marker.is_symlink() and journal.read_bytes() == before
     report = json.loads(Path(watchdog.REPORT_PATH).read_text())
@@ -83,9 +85,9 @@ def test_first_split_head_changed_before_classification_is_held(watchdog, monkey
     }, "stages": [], "applied": []}))
     before = journal.read_bytes()
     heads = iter(("previous", "target"))
-    monkeypatch.setattr(watchdog, "_head", lambda: next(heads))
-    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", lambda: [])
-    monkeypatch.setattr(watchdog, "_clean", lambda: pytest.fail("changed HEAD passed hold"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_head", lambda: next(heads))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean_stale_git_locks", lambda: [])
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean", lambda: pytest.fail("changed HEAD passed hold"))
     assert watchdog._recover_legacy() == 1
     assert journal.read_bytes() == before
     assert Path(watchdog.MARKER_PATH).is_file()
@@ -101,12 +103,12 @@ def test_first_split_guard_preserves_existing_recovery_routes(watchdog, monkeypa
     Path(watchdog.STATE_PATH).write_text(json.dumps({
         "v": 1, "applying": applying, "stages": [], "applied": [],
     }))
-    monkeypatch.setattr(watchdog, "_head", lambda: "previous" if kind == "pre_merge" else "target")
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_head", lambda: "previous" if kind == "pre_merge" else "target")
     class ExistingRouteReached(Exception):
         pass
     def reached():
         raise ExistingRouteReached
-    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", reached)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean_stale_git_locks", reached)
     with pytest.raises(ExistingRouteReached):
         watchdog._recover_legacy()
 
@@ -137,9 +139,9 @@ def test_unverified_provider_state_blocks_recovery_before_locks(watchdog, monkey
     else:
         suspect.write_text("synthetic private canary")
     original = (marker.read_bytes(), journal.read_bytes() if with_journal else None)
-    monkeypatch.setattr(watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
-    monkeypatch.setattr(watchdog, "_git", lambda *_a, **_k: pytest.fail("unverified state ran git"))
-    monkeypatch.setattr(watchdog, "_restart_drainers", lambda **_k: pytest.fail("unverified state restarted"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_git", lambda *_a, **_k: pytest.fail("unverified state ran git"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_drainers", lambda **_k: pytest.fail("unverified state restarted"))
     assert watchdog._recover_legacy() == 2
     assert (marker.read_bytes(), journal.read_bytes() if with_journal else None) == original
     assert os.path.lexists(suspect)
@@ -156,9 +158,9 @@ def test_pending_appearing_after_initial_check_keeps_marker_and_journal(watchdog
         fd = original()
         (data / ".provider-settings-pending.json").write_text("synthetic pending")
         return fd
-    monkeypatch.setattr(watchdog, "_lock_provider_editor", activate)
-    monkeypatch.setattr(watchdog, "_git", lambda *_a, **_k: pytest.fail("pending ran git"))
-    monkeypatch.setattr(watchdog, "_restart_drainers", lambda **_k: pytest.fail("pending restarted"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_lock_provider_editor", activate)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_git", lambda *_a, **_k: pytest.fail("pending ran git"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_drainers", lambda **_k: pytest.fail("pending restarted"))
     assert watchdog._recover_legacy() == 2
     assert marker.read_text() == "synthetic marker"
     assert (data / ".provider-settings-pending.json").read_text() == "synthetic pending"
@@ -174,7 +176,7 @@ def test_unreadable_provider_marker_state_is_not_legacy(watchdog, monkeypatch):
             raise PermissionError("synthetic private canary")
         return original(path, *args, **kwargs)
     monkeypatch.setattr(watchdog.os, "stat", denied)
-    monkeypatch.setattr(watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
     assert watchdog._recover_legacy() == 2
     assert marker.read_text() == "synthetic marker"
 
@@ -185,7 +187,7 @@ def test_unreadable_remnant_scan_keeps_marker(watchdog, monkeypatch):
     def denied(_fd):
         raise PermissionError("synthetic private canary")
     monkeypatch.setattr(watchdog.os, "scandir", denied)
-    monkeypatch.setattr(watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", lambda *_: pytest.fail("unverified state took recovery lock"))
     assert watchdog._recover_legacy() == 2
     assert marker.read_text() == "synthetic marker"
 
@@ -231,7 +233,7 @@ def test_legacy_orphan_cleanup_holds_editor_lock(watchdog, monkeypatch):
         finally:
             os.close(fd)
         original()
-    monkeypatch.setattr(watchdog, "_remove_marker", checked)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_remove_marker", checked)
     assert watchdog._recover_legacy() == 0
     assert not marker.exists()
 
@@ -249,8 +251,8 @@ def _linked_root(watchdog, tmp_path, monkeypatch):
     for name, value in {"DATA": logical_data, "STATE_PATH": logical_data / "update_state.json",
                         "UPDATE_LOCK": logical_data / "update.lock", "RUN_LOCK": logical_data / "run.lock",
                         "MARKER_PATH": logical_data / "update_in_progress.marker"}.items():
-        monkeypatch.setattr(watchdog, name, str(value))
-    monkeypatch.setattr(watchdog, "_release_scope", lambda _path: nullcontext())
+        patch_lifecycle_lookup(monkeypatch, watchdog, name, str(value))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_release_scope", lambda _path: nullcontext())
     return target, link, data
 
 
@@ -267,7 +269,7 @@ def test_private_link_split_still_holds(watchdog, tmp_path, monkeypatch):
     marker = data / "update_in_progress.marker"
     marker.write_text("synthetic marker")
     (data / ".provider-settings-authority.json").write_text("synthetic authority")
-    monkeypatch.setattr(watchdog, "_try_lock", lambda *_: pytest.fail("split state took recovery lock"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", lambda *_: pytest.fail("split state took recovery lock"))
     assert watchdog.recover() == 2
     assert marker.read_text() == "synthetic marker"
 
@@ -292,16 +294,16 @@ def test_private_link_replaced_with_same_target_is_held(watchdog, tmp_path, monk
         def changed_gate(_path):
             replace_link()
             yield
-        monkeypatch.setattr(watchdog, "_release_scope", changed_gate)
+        patch_lifecycle_lookup(monkeypatch, watchdog, "_release_scope", changed_gate)
     else:
         original = watchdog._lock_provider_editor
         def changed_editor():
             fd = original()
             replace_link()
             return fd
-        monkeypatch.setattr(watchdog, "_lock_provider_editor", changed_editor)
-    monkeypatch.setattr(watchdog, "_git", lambda *_a, **_k: pytest.fail("changed root ran git"))
-    monkeypatch.setattr(watchdog, "_restart_drainers", lambda **_k: pytest.fail("changed root restarted"))
+        patch_lifecycle_lookup(monkeypatch, watchdog, "_lock_provider_editor", changed_editor)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_git", lambda *_a, **_k: pytest.fail("changed root ran git"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_drainers", lambda **_k: pytest.fail("changed root restarted"))
     assert watchdog.recover() == 2
     assert marker.read_text() == "synthetic marker"
     assert journal.read_bytes() == old_journal
@@ -320,7 +322,7 @@ def test_link_replacement_releases_previously_acquired_update_lock(watchdog, tmp
             link.symlink_to(target, target_is_directory=True)
         return fd
 
-    monkeypatch.setattr(watchdog, "_try_lock", change_after_update_lock)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", change_after_update_lock)
     assert watchdog.recover() == 2
     assert marker.read_text() == "synthetic marker"
     fd = os.open(data / "update.lock", os.O_RDWR)

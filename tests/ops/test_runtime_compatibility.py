@@ -223,7 +223,7 @@ def _deployed_recovery(monkeypatch, tmp_path, *, owner=mcs_setup):
     executable.chmod(0o700)
     (agents / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
         {"ProgramArguments": [str(executable), "synthetic-recovery.py"]}))
-    monkeypatch.setattr(owner, "AGENTS_DIR", str(agents))
+    patch_lifecycle_lookup(monkeypatch, owner, "AGENTS_DIR", str(agents))
     return str(executable)
 
 
