@@ -34,10 +34,17 @@ def _rows(db):
 def test_card_migration_preserves_all_children_ids_unknown_receipts_and_connection_settings():
     db = _old()
     before = _rows(db)
+    part_columns = tuple(row[1] for row in db.execute('PRAGMA table_info(notification_render_parts)'))
+    assert len(part_columns) == 13 and 'remote_file_id' not in part_columns
     objects = [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type IN ('index','trigger') AND tbl_name='notification_cards' ORDER BY name")]
     children = [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' AND sql LIKE '%REFERENCES notification_cards%'")]
     ledger_schema.initialize(db, schema_version=ledger.SCHEMA_VERSION)
-    assert _rows(db) == before
+    assert tuple(row[1] for row in db.execute('PRAGMA table_info(notification_render_parts)')) == (
+        *part_columns, 'remote_file_id')
+    # Every historical column and row stays intact; an old receipt proves no file ID.
+    expected = {**before, 'notification_render_parts': [
+        (*row, None) for row in before['notification_render_parts']]}
+    assert _rows(db) == expected
     assert [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type IN ('index','trigger') AND tbl_name='notification_cards' ORDER BY name")] == objects
     assert [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' AND sql LIKE '%REFERENCES notification_cards%'")] == children
     assert db.execute('PRAGMA foreign_key_check').fetchall() == []
