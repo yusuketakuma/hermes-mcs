@@ -375,7 +375,8 @@ def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatc
     import openai_client
     import semantic_runtime
 
-    monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
     seen = []
     original = semantic_runtime._record_cloud_circuit_result_tx
     def observe(ledger, error, *args, **kwargs):
