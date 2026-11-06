@@ -1361,8 +1361,43 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
     return result
 
 
+def _context_derived_summaries(db, message, rows, cfg):
+    summaries, identities = [], []
+    for row in sorted(rows, key=lambda row: (row[2], row[1])):
+        if row[2] not in ("extract_v1", "extract_llm"):
+            continue
+        if row[2] == "extract_llm" and not selected_artifact_proof_valid(db, row[1]):
+            continue
+        text = (loads_dict(row[3]) or {}).get("summary")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        summaries.append({"kind": row[2], "artifact_id": row[1], "text": text})
+        identities.append([row[2], row[1], extraction_input_signature(row[3], row[5], row[4])])
+    if cfg is not None:
+        import semantic_policy
+        import semantic_send_gate
+        import semantic_store
+
+        # An omitted mode must not resolve credentials during this borrowed read.
+        scfg, errors = semantic_policy.semantic_config(cfg)
+        pid, mid = message["project_id"], message["message_id"]
+        root = message["parent_id"] or mid
+        if (not errors and semantic_send_gate.enforce_block_reason(db, scfg, pid) is None
+                and not semantic_send_gate.intake_root_held(db, pid, root)):
+            summary = semantic_send_gate.current_summary(db, pid, mid,
+                lambda: semantic_store.thread_bundle(db, pid, root, [mid]),
+                semantic_policy.policy_fingerprint(scfg))
+            if summary is not None:
+                text = json.dumps(summary["content"], ensure_ascii=False, sort_keys=True)
+                summaries.append({"kind": "semantic_summary", "artifact_id": summary["artifact_id"], "text": text})
+                identities.append(["semantic_summary", summary["artifact_id"],
+                    extraction_input_signature(summary["content"], summary["meta"])])
+    return summaries, payload_hash([message["project_id"], message["message_id"],
+                                    message["content_hash"], identities])
+
+
 def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
-    """Read only the patient's original records, never previous generated prose."""
+    """Read original records with current derived summaries as supplemental inputs."""
     from patient_context import context_items, extract_context, project_context_items
     from patient_context_plan import source_digest
     extractions = {}
@@ -1388,6 +1423,9 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
         message = dict(row)
         rows = extractions.get(message["message_id"], [])
         message["extraction_sig"] = source_digest(sorted((r[2], extraction_input_signature(r[3], r[5], r[4])) for r in rows))
+        derived, derived_sig = _context_derived_summaries(db, message, rows, cfg)
+        message["derived_summaries"] = derived if hydrate else []
+        message["derived_summary_sig"] = derived_sig
         items = source_patient_context(db, message, art_rows=list(reversed(rows))) if hydrate else []
         source = {key: message.get(key) for key in
                   ("project_id", "message_id", "content_hash", "posted_at_ts")}
