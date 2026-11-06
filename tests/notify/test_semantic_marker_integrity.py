@@ -170,7 +170,7 @@ def test_normal_flush_uses_complete_snapshot_and_sends_once(tmp_path, monkeypatc
         event = _semantic_event(db)
         monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
         monkeypatch.setattr(notify_sender, "target", lambda *args: "synthetic")
-        monkeypatch.setattr(notify_sender, "send_argv", lambda *args: [])
+        monkeypatch.setattr(notify_sender, "send_argv", lambda *args, kind=None: [])
         monkeypatch.setattr(notify_sender, "hermes_free", lambda *args: False)
         sent = []
         monkeypatch.setattr(notify_sender, "send", lambda *args, **kwargs: sent.append(True))
@@ -193,7 +193,7 @@ def test_flush_resumes_after_a_proven_send_failure_without_repeating_chunks(tmp_
         assert len(chunks) > 1
         monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
         monkeypatch.setattr(notify_sender, "target", lambda *args: "synthetic")
-        monkeypatch.setattr(notify_sender, "send_argv", lambda *args: [])
+        monkeypatch.setattr(notify_sender, "send_argv", lambda *args, kind=None: [])
         monkeypatch.setattr(notify_sender, "hermes_free", lambda *args: False)
         calls, accepted = [], []
 

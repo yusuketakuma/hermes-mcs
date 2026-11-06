@@ -525,3 +525,57 @@ def test_required_is_pure_and_matches_plan_eligibility(monkeypatch, cfg, expecte
 def test_required_rejects_invalid_notify_instead_of_reporting_no_work():
     with pytest.raises(ValueError):
         setup.required({'notify': 'invalid'})
+
+
+@pytest.mark.parametrize('mode', ['hermes', 'standalone'])
+def test_text_only_slack_never_enters_channel_setup(tmp_path, monkeypatch, mode):
+    cfg = config()
+    cfg.update(runtime_mode=mode, notify_target='slack:C000000098', notify_system_target='slack:C000000099')
+    cfg['notify']['interactive'] = 'off'
+    cfg['notify']['slack'].update(channel_id='C000000098', project_ids=[1])
+    from mcs_config import validate_config
+    assert validate_config(cfg)[0] == []
+    import service_management
+    monkeypatch.setattr(service_management, 'hermes_cli', lambda *_: pytest.fail('no service'))
+    assert setup.required(cfg) is False and setup.plan(cfg) is None
+    assert setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True)) == cfg
+    assert setup.read(tmp_path) is None
+
+
+@pytest.mark.parametrize('state', ['pending', 'applied'])
+def test_text_only_command_preserves_an_older_channel_intent_without_side_effects(tmp_path, monkeypatch, state):
+    import mcs_setup
+    cfg = config()
+    setup.prepare(tmp_path, cfg)
+    if state == 'applied':
+        consume(tmp_path, Client(), cfg)
+        saved = setup.candidate(tmp_path, cfg)
+        setup.applied(tmp_path, cfg, saved)
+        cfg = saved
+    before = setup.path(tmp_path).read_bytes()
+    cfg.update(notify_target='slack:#patients', notify_system_target='slack:#ops')
+    cfg['notify']['interactive'] = 'off'
+    monkeypatch.setattr(mcs_setup, '_init_config_snapshot', lambda: (cfg, {}))
+    def forbidden(*args, **kwargs):
+        pytest.fail('off must not save config, restart, or resume setup')
+    monkeypatch.setattr(mcs_setup, '_init_save_config', forbidden)
+    for name in ('run_setup', 'applied', 'finish_runtime'):
+        monkeypatch.setattr(setup, name, forbidden)
+    assert setup.plan(cfg) is None
+    assert mcs_setup.cmd_slack_channels(SimpleNamespace()) == 0
+    assert setup.path(tmp_path).read_bytes() == before
+
+
+def test_setup_intent_disappearing_after_prepare_stops_without_recreating_it(tmp_path, monkeypatch):
+    cfg = config()
+    pending = setup.prepare(tmp_path, cfg)
+    def disappearing(*args):
+        setup.path(tmp_path).unlink()
+        return pending
+    monkeypatch.setattr(setup, 'prepare', disappearing)
+    import setup_integration
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration',
+                        lambda *a: pytest.fail('missing intent cannot start integration'))
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True))
+    assert not setup.path(tmp_path).exists()

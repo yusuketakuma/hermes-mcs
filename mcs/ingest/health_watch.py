@@ -671,7 +671,7 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
     return delivery
 
 
-def deliver_alert(cfg: dict, text: str) -> bool | None:
+def deliver_alert(cfg: dict, text: str, *, config_path: str | None = None) -> bool | None:
     """Best-effort copy of an alert line to the system notification
     target. cron/launchd stdout only reaches a log file, and the
     outbox drains inside run_check — the very producer a stale verdict
@@ -684,7 +684,7 @@ def deliver_alert(cfg: dict, text: str) -> bool | None:
         target = notify_sender.target(cfg, "run_failed")
         if not target:
             return False
-        argv = notify_sender.send_argv(cfg, target, mcs_util.CONF_PATH)
+        argv = notify_sender.send_argv(cfg, target, config_path or mcs_util.CONF_PATH, kind='run_failed')
     except Exception:
         return False                   # transport has not been called
     try:
@@ -1157,7 +1157,7 @@ def _watch(args, cfg) -> int:
         except OSError:
             pass
         return 1                         # never send without the intent witness
-    outcome = deliver_alert(cfg, "\n".join(lines))
+    outcome = deliver_alert(cfg, "\n".join(lines), config_path=getattr(args, 'config', None) or CONF_PATH)
     delivery["outcome"] = ("delivered" if outcome is True else
                            "not_sent" if outcome is False else "unknown")
     if outcome is True:

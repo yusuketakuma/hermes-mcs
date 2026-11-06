@@ -108,7 +108,7 @@ ARGV = [sys.executable, "/synthetic/lineworks_adapter/__main__.py", "send"]
 def test_lineworks_tempfail_is_retried_and_unknown_is_held(tmp_path, monkeypatch, returncode):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(notify_sender, 'target', lambda *a: "lineworks:synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: list(ARGV))
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a, kind=None: list(ARGV))
     monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("合成通知", []))
     monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=returncode, stdout="", stderr=""))

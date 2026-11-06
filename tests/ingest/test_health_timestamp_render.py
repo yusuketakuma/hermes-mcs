@@ -43,7 +43,7 @@ def test_unknown_time_does_not_stop_alert_or_weaken_unknown_delivery_hold(
     _health(tmp_path, at, last_ok)
     sent = []
 
-    def send(cfg, text):
+    def send(cfg, text, *, config_path=None):
         state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
         assert state["delivery"]["outcome"] == "unknown"
         assert state["last"]["status"] == status
