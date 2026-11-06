@@ -106,6 +106,28 @@ def test_unknown_or_rejected_creation_is_never_retried(tmp_path, failure):
     assert setup.read(tmp_path)['state'] != 'verified'
 
 
+@pytest.mark.parametrize('failure', ['name_taken', 'lost'])
+def test_held_setup_stops_before_plugin_or_gateway_changes(tmp_path, monkeypatch, failure):
+    cfg, client = config(), Client()
+    client.failure = failure
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    before = setup.path(tmp_path).read_bytes()
+    state = setup.read(tmp_path)
+    assert state['state'] in ('blocked', 'unknown')
+    import service_management
+    import setup_integration
+    def forbidden(*args, **kwargs):
+        pytest.fail('held setup cannot change plugin settings or restart the gateway')
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', forbidden)
+    monkeypatch.setattr(setup_integration, '_apply_slack_text_bootstrap', forbidden)
+    monkeypatch.setattr(service_management, 'hermes_cli', forbidden)
+    with pytest.raises(ValueError, match=state['reason']):
+        setup.run_setup(tmp_path, cfg, SimpleNamespace(yes=True))
+    assert setup.path(tmp_path).read_bytes() == before
+    assert client.created == ['mcs']
+
+
 def test_missing_scope_rejection_retries_only_on_explicit_rerun(tmp_path, monkeypatch):
     cfg, client = config(), Client()
     client.failure = 'missing_scope'

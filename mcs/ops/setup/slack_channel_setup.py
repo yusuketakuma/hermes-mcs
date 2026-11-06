@@ -445,6 +445,8 @@ def run_setup(root, cfg, args):
                     record.pop('create_error', None)
                 state.update(state='pending', reason=None)
                 save(root, state)
+    if state['state'] in ('blocked', 'unknown'):
+        raise ValueError(state.get('reason') or 'slack_setup_unverified')
     if state.get('state') in ('verified', 'applied'):
         return candidate(root, cfg)
     if (state['plan']['runtime_mode'] == 'hermes'

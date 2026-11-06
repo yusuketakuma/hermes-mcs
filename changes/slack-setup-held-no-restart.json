@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "Slack設定の保留時に不要な再起動を防止",
+  "summary": "Slackチャンネルの作成結果が不明な場合や、名前の競合などで準備が停止している場合は、設定を再実行してもプラグイン設定の書換えやgatewayの再起動を始めず、保存済みの停止理由を表示します。",
+  "upgrade": "追加の設定は不要です。作成結果が不明な記録や停止理由は保持し、自動で作成を繰り返しません。権限不足（missing_scope）が確認された場合の明示的な再設定による再試行は維持します。",
+  "refs": [
+    "mcs/ops/setup/slack_channel_setup.py",
+    "tests/ops/test_slack_channel_setup.py"
+  ]
+}
