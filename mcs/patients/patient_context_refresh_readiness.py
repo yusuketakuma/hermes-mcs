@@ -139,6 +139,9 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     sources = snapshot["sources"]
     scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
+    cloud_scanned = (not snapshot["contract"].get("provider") or all(
+        scans.get(context_plan.source_key(source), {}).get("_provider_contract")
+        for source in sources if context_plan.source_usable(source)))
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "skipped", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
     counts["total"] = len(sources)
@@ -178,6 +181,8 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                 and cloud_extraction_ready and snapshot["attachment_coverage"]["complete"])
     fetch_allowed = snapshot["acquisition"]["complete"]
     eligible = bool(complete and patient_context_refresh_state.options(cfg)["publication"] and not scope.get("is_archived") and fetch_allowed)
+    # A verified local publication remains usable without claiming the pending cloud inspection.
+    complete = complete and cloud_scanned
     status = ("out_of_scope" if patient_context_refresh_state._out_of_scope(snapshot) else "off" if not patient_context_refresh_state.options(cfg)["enabled"]
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
               else "attachment_extraction_pending" if not snapshot["attachment_coverage"]["complete"]
@@ -192,7 +197,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                    and progress.get("quality_state") == "held"
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
               else "acquisition_incomplete" if not fetch_allowed
-              else "scan_pending" if counts["scanned"] < counts["eligible"]
+              else "scan_pending" if not cloud_scanned or counts["scanned"] < counts["eligible"]
               else "audit_pending" if counts["audited"] + counts["skipped"] < counts["eligible"]
               else "summary_pending" if not complete
               else "excluded" if counts["eligible"] == 0 and counts["excluded"] else "empty" if counts["eligible"] == 0 else "complete")
@@ -355,13 +360,14 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
     stored = patient_context_refresh_sources._scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
-    scans = []
+    scans, required_scans = [], []
     for source in snapshot["sources"]:
         patient_context_refresh_sources._scan_check(db)
         if context_plan.source_usable(source):
             scan = stored.get(context_plan.source_key(source), {})
-            # Local fallback remains readable, but is not a completed cloud scan.
-            scans.append({} if cloud_scan and not scan.get("_provider_contract") else scan)
+            scans.append(scan)
+            # Local audits and summaries may advance while raw cloud inspection remains due.
+            required_scans.append({} if cloud_scan and not scan.get("_provider_contract") else scan)
     recheck_available = False
     quality_required = bool(snapshot["contract"].get("provider") or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
     if (not estimate and quality_required
@@ -391,22 +397,23 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_code()])
     summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
-                    or cloud_scan and meta.get("provider") != snapshot["contract"].get("provider")
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(quality_required and not meta.get("quality_audit_key"))
                     or bool(recheck_available and meta.get("quality_audit_status") == "SKIPPED")
                     or quality_changed
                     or progress.get("summary_pending", False))
-    cloud_ready = (not quality_required
+    cloud_summary_needed = cloud_scan and meta.get("provider") != snapshot["contract"].get("provider")
+    local_ready = (not quality_required
                    or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
                    and patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
                    and all(patient_context_refresh_sources._scan_ready(scan) for scan in scans))
-    snapshot["unfinished"] = bool(summary_needed or not snapshot["acquisition"]["complete"]
+    cloud_ready = local_ready and all(patient_context_refresh_sources._scan_ready(scan) for scan in required_scans)
+    snapshot["unfinished"] = bool(summary_needed or cloud_summary_needed or not snapshot["acquisition"]["complete"]
         or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
-        or not snapshot["attachment_coverage"]["complete"] or any(not patient_context_refresh_sources._scan_ready(scan) for scan in scans))
-    pending = {"A": summary_needed and cloud_ready and _ready(progress, now),
-               "B": any(not scan.get("complete") and _ready(scan, now) for scan in scans),
+        or not snapshot["attachment_coverage"]["complete"] or any(not patient_context_refresh_sources._scan_ready(scan) for scan in required_scans))
+    pending = {"A": (summary_needed or cloud_summary_needed and cloud_ready) and local_ready and _ready(progress, now),
+               "B": any(not scan.get("complete") and _ready(scan, now) for scan in required_scans),
                "C": any(scan.get("complete") and (not patient_context_refresh_sources._scan_ready(scan)
                          or recheck_available and scan.get("_audit_skipped")) and _ready(scan, now)
                         for scan in scans)}

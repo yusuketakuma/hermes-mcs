@@ -519,6 +519,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         nonlocal provider, shadow_call, estimated_unit
         # A local cursor cannot stand in for cloud inspection of the original.
         use_cloud = mode == "on"
+        local_saved = dict(saved) if saved and not saved.get("_provider_contract") else None
         if use_cloud:
             provider = cloud_for(unit_key, mid)
             try:
@@ -570,6 +571,10 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     if isinstance(error, ValueError):
                         raise
                     raise ValueError("nightly_cloud_failed") from error
+        if local_saved:
+            saved.update(local_saved)
+            if saved.get("complete"):
+                raise patient_context_refresh_state.Deferred("nightly_cloud_pending")
         if not local_admit():
             raise patient_context_refresh_state.Deferred("nightly_local_capacity")
         local_route()
@@ -586,10 +591,15 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             facts, total, projected = patient_context_refresh_sources._all_facts(ledger.db, pid, snapshot, night_id, projected=True, cfg=cfg)
             old, old_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
             changed = patient_context_refresh_state._facts_sig(facts)
+            summary_scans = patient_context_refresh_sources._current_scans(
+                ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+            cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
+            same_backend = (mode != "on" or old_meta.get("provider") == snapshot["contract"].get("provider")
+                            or not cloud_sources_ready and not old_meta.get("provider"))
             same = (old.get("facts_sig") == changed and old_meta.get("source_sig") == snapshot["source_sig"]
                     and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
-                    and (mode != "on" or old_meta.get("provider") == snapshot["contract"].get("provider")))
-            if (old_meta.get("quality_audit_key") and old_meta.get("source_sig") == snapshot["source_sig"]
+                    and same_backend)
+            if (same_backend and old_meta.get("quality_audit_key") and old_meta.get("source_sig") == snapshot["source_sig"]
                     and old_meta.get("scan_sig") == frozen_scan_sig and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
                     and patient_context_refresh_sources._summary_valid(ledger.db, pid, old, {context_plan.source_key(s): s for s in snapshot["sources"]},
                                        allow_historical=True)):
@@ -655,7 +665,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 unit_key="summary"))
             meta["scan_backends"] = sorted({
                 (scan.get("_provider_contract") or {}).get("backend", "local")
-                for scan in patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg).values()})
+                for scan in summary_scans.values()})
             result = {"version": 1, "facts": facts, "facts_sig": changed, "summary": summary,
                       "temporal_view": {key: projected[key] for key in ("groups", "relations")},
                       "facts_total": total, "truncated": total > len(facts),
@@ -668,11 +678,10 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if not context_plan.source_usable(source):
                     continue
                 saved = scans.get(context_plan.source_key(source), {})
-                if mode == "on" and not saved.get("_provider_contract"):
-                    saved = {}
-                if not patient_context_refresh_readiness._ready(saved, now):
+                cloud_pending = lane == "B" and mode == "on" and not saved.get("_provider_contract")
+                if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
-                if (lane == "B" and not saved.get("complete")) or (
+                if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
                     meta["source_sig"] = context_plan.source_signature(source)
                     meta["original_source_sig"] = context_plan.original_source_signature(source)
