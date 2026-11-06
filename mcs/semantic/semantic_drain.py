@@ -541,6 +541,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 if (time.monotonic() >= deadline or fresh is None or tuple(fresh) != tuple(job) or live_errors
                         or live_scfg['mode'] == 'off' or live_settings['mode'] != 'on'
                         or 'semantic_backlog' not in live_settings['routes']
+                        or not cloud_policy.send_route("semantic_backlog")
                         or not cloud_policy.selected_key()
                         or live_settings['project_ids'] is not None and project not in live_settings['project_ids']
                         or project in live_settings['exclude_project_ids']

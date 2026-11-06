@@ -363,8 +363,18 @@ def selected_key(root=None, cfg=None):
     return provider_key(settings["provider"], root)
 
 
+def send_route(route):
+    """Routes still permitted to create new cloud requests."""
+    return route == "patient_context"
+
+
 def eligible(cfg, route, project_id):
-    """Evaluate explicit route/scope only; callers separately check key presence."""
+    """Allow new cloud inference only for patient context within its scope."""
+    return send_route(route) and in_scope(cfg, route, project_id)
+
+
+def in_scope(cfg, route, project_id):
+    """Keep historical response scope independent of permission for a new send."""
     c = _cfg(cfg)
     return (c["mode"] != "off" and route in c["routes"]
             and type(project_id) is int and project_id > 0
