@@ -1466,3 +1466,10 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
             continue
         source = karte_source_record(row, pid, historical=not current_record)
         yield {**source, "items": extract_context(source["body_text"]) if hydrate else []}
+
+
+def patient_context_source(db, pid, key, *, cfg=None, hydrate=True):
+    """Select one exact original source, distinct from its related attachment pages."""
+    from patient_context_plan import source_key
+    return next((source for source in patient_context_sources(db, pid, mid=key, cfg=cfg, hydrate=hydrate)
+                 if source_key(source) == key), None)

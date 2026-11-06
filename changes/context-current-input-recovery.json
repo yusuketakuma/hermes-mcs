@@ -1,0 +1,22 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト更新時の原資料と入力の照合を修正",
+  "summary": "添付のある投稿を本文とOCRページの別々の出典として確認し、補助要約だけが変わった場合も現在の入力に対応するまとめを生成します。原資料の監査済み証拠は、現在の補助要約や解析設定と分けて照合します。",
+  "upgrade": "追加操作は不要です。保留中の対象は既存の処理周回と予算制御に従って再確認します。過去の本文・添付・監査・会計記録は保持し、不明な送信結果を未送信に変更しません。",
+  "details": [
+    "まとめの生成要求に入力署名を含め、同じ抽出項目を持つ別の入力と区別します。",
+    "本文の品質確認では、同じ投稿に属するOCRページを混ぜず、出典キーが一致する原資料だけを選びます。",
+    "原資料だけの署名を保存し、保持された証拠の照合で現在の解析設定への依存を避けます。旧記録は従来の署名で検証します。",
+    "品質修復は原文だけを対象とする既存の要求形式を維持し、保存済み応答の再検証に使います。"
+  ],
+  "refs": [
+    "mcs/core/inference_dependency_loss.py",
+    "mcs/core/mcs_queries.py",
+    "mcs/core/patient_context_artifacts.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_refresh_sources.py",
+    "mcs/patients/patient_context_scan.py"
+  ]
+}

@@ -571,10 +571,10 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
     scope = context_queries.patient_context_scope(db, pid)
     if (not scope or scope.get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
         raise ValueError("patient_source_quality_scope")
-    sources = list(context_queries.patient_context_sources(db, pid, mid=source_key, cfg=cfg))
-    if len(sources) != 1:
+    source = context_queries.patient_context_source(db, pid, source_key, cfg=cfg)
+    if source is None:
         raise ValueError("patient_source_quality_source")
-    source = sources[0]
+    sources = [source]
     body = source.get("body_text")
     if source.get("project_id") != pid or not context_plan.source_usable(source) or not isinstance(body, str):
         raise ValueError("patient_source_quality_source")

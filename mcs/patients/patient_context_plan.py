@@ -325,10 +325,23 @@ def validated_source_facts(source, facts):
 
 
 
-def source_signature(source):
+def _source_identity(source):
     fields = {k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
                     "body_length", "body_state", "posted_at", "posted_at_ts", "sender_id",
-                    "sender_name", "parent_id", "extraction_sig", "derived_summary_sig", "canonical_context", "source_key", "empty")}
+                    "sender_name", "parent_id", "source_key", "empty")}
     if source.get("source") == "attachment_ocr":
         fields["source_binding"] = source.get("_source_binding")
+    return fields
+
+
+def original_source_signature(source):
+    """Bind the original independently of current interpretation or provider settings."""
+    return source_digest(_source_identity(source))
+
+
+def source_signature(source, *, legacy=False):
+    fields = {**_source_identity(source), **{key: source.get(key) for key in
+        ("extraction_sig", "canonical_context")}}
+    if not legacy:
+        fields["derived_summary_sig"] = source.get("derived_summary_sig")
     return source_digest(fields)
