@@ -15,6 +15,7 @@ import history_walk
 import notify_views
 import mcs_queries
 import rollup
+import rollup_builder
 from common_testkit import make_ledger
 from extract_testkit import _hash, _message
 
@@ -236,7 +237,7 @@ def test_acquisition_signature_uses_one_borrowed_snapshot_during_other_writer(st
     baseline = rollup._message_source_signature(store.db, 1, 1)
     path = store.db.execute("PRAGMA database_list").fetchone()[2]
     other = sqlite3.connect(path)
-    original = rollup._acquisition_state
+    original = rollup_builder._acquisition_state
     changed = False
 
     def mutate_after_first_read(db, project_id):
@@ -247,7 +248,7 @@ def test_acquisition_signature_uses_one_borrowed_snapshot_during_other_writer(st
             changed = True
         return original(db, project_id)
 
-    monkeypatch.setattr(rollup, "_acquisition_state", mutate_after_first_read)
+    monkeypatch.setattr(rollup_builder, "_acquisition_state", mutate_after_first_read)
     try:
         assert rollup._message_source_signature(store.db, 1, 1) == baseline
         assert changed and not store.db.in_transaction

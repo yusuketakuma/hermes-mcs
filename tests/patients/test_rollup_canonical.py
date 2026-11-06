@@ -818,7 +818,7 @@ def test_rollup_decodes_in_bounded_pages_and_preserves_source_order(monkeypatch)
         assert kinds == ['extract_llm'] * len(rows)
         return [row['message_id'] % 2 == 0 for row in rows]
 
-    monkeypatch.setattr(rollup, 'decode_current_extractions', decode)
+    monkeypatch.setattr(rollup_builder, 'decode_current_extractions', decode)
     monkeypatch.setattr(rollup_builder, '_measurement_sources_bound', bound)
     inputs = rollup_builder._rollup_inputs(None, messages, arts, {}, None)
     first = next(inputs)
