@@ -278,3 +278,44 @@ def test_journal_scope_revocation_settles_and_discards_before_reenable(page_stor
     cfg['cloud_llm']['mode'] = 'on'
     assert run(ledger, cfg, 'cloud')['done'] == 0
     assert len(cloud_calls) == 1 and worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
+
+
+def test_unowned_page_completes_and_reads_local_despite_broken_cloud_config(page_store):
+    ledger, cfg, key, local_calls, cloud_calls, _ = page_store
+    assert run(ledger, cfg, 'local')['done'] == 1
+    local = _local(ledger, key)
+    # A closed send route never requires the cloud: unreadable settings must not
+    # make an unowned page's durable local result invisible or retry forever.
+    cfg['cloud_llm'] = 'broken'
+    result = worker.current(ledger.db, 1, key, cfg=cfg)
+    assert result['ready'] is True and result['require_cloud'] is False
+    assert result['stage'] == 'local'
+    assert _local(ledger, key) == local and not cloud_calls
+    assert run(ledger, cfg, 'cloud')['done'] == 0 and not cloud_calls
+
+
+def test_owned_page_stays_held_when_cloud_config_unverifiable(page_store, monkeypatch):
+    ledger, cfg, key, _, cloud_calls, _ = page_store
+    assert run(ledger, cfg, 'local')['done'] == 1
+    local = _local(ledger, key)
+    cfg['cloud_llm']['mode'] = 'on'
+    sends = []
+
+    def unknown(self, method, body, timeout, **kwargs):
+        sends.append(body)
+        raise KeyboardInterrupt('synthetic unknown transport')
+
+    monkeypatch.setattr(AnthropicClient, 'request', unknown)
+    with pytest.raises(KeyboardInterrupt):
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
+    assert len(sends) == len(ledger.artifacts('cloud_usage_reserve')) == 1
+    financial = _financial(ledger)
+    # A durable reservation still owns the page: unverifiable settings hold it
+    # for recovery, never release it to the local result and never resend.
+    cfg['cloud_llm'] = 'broken'
+    result = worker.current(ledger.db, 1, key, cfg=cfg)
+    assert result['ready'] is False and result['require_cloud'] is True
+    assert _local(ledger, key) == local
+    assert run(ledger, cfg, 'cloud')['done'] == 0
+    assert len(sends) == 1 and not cloud_calls and _financial(ledger) == financial
