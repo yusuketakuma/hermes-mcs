@@ -7,6 +7,7 @@ import cloud_policy
 import mcs_util
 import semantic_candidate as candidate
 from candidate_testkit import approved_config
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_cloud_sources_cover_client_methods_and_real_modules():
@@ -36,6 +37,7 @@ def test_explicit_off_and_dry_run_never_read_credentials(monkeypatch):
                 "mode": mode, "project_ids": [1], "provider": provider}}) is None
 
 
+@legacy_cloud_routes()
 def test_cloud_interpretation_scope_and_mode_are_bound(monkeypatch):
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-key")
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
@@ -48,6 +50,7 @@ def test_cloud_interpretation_scope_and_mode_are_bound(monkeypatch):
 
 @pytest.mark.parametrize("block", [{}, {"daily_cost_limit_usd": 2}, {"mode": "on", "project_ids": [1]},
                                      {"mode": "shadow", "project_ids": [1]}])
+@legacy_cloud_routes()
 def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monkeypatch, block):
     cfg = {"cloud_llm": block}
     key = [None]
@@ -67,12 +70,14 @@ def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monke
     assert candidate.candidate_fingerprint(cfg) == local
 
 
+@legacy_cloud_routes()
 def test_a_key_without_a_cost_cap_never_binds_a_provider(monkeypatch):
     cfg = {"cloud_llm": {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-uncapped-key")
     assert candidate._cloud_contract(cfg) is None
 
 
+@legacy_cloud_routes()
 def test_adding_a_key_cannot_reuse_a_local_only_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
     key = [None]
@@ -92,6 +97,7 @@ def test_adding_a_key_cannot_reuse_a_local_only_approval(tmp_path, monkeypatch):
     assert receipt.read_bytes() == before
 
 
+@legacy_cloud_routes()
 def test_explicit_provider_contract_uses_its_own_key(monkeypatch):
     calls = []
 
@@ -108,6 +114,7 @@ def test_explicit_provider_contract_uses_its_own_key(monkeypatch):
     assert "synthetic-openai-key" not in json.dumps(contract)
 
 
+@legacy_cloud_routes()
 def test_semantic_profiles_are_part_of_candidate_contract(monkeypatch):
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_a, **_kw: 'synthetic-key')
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'openai',
@@ -135,3 +142,42 @@ def test_loaded_code_contract_never_reads_credentials_and_does_not_lend_mutable_
     first.clear()
     assert candidate.loaded_source_contract() == {'synthetic_module': 'a' * 64}
     assert captures == [True]
+
+
+@pytest.mark.parametrize('provider', ['auto', 'anthropic', 'openai'])
+@pytest.mark.parametrize('mode', [None, 'off', 'dry_run', 'shadow', 'on'])
+def test_closed_semantic_route_never_resolves_credentials(monkeypatch, provider, mode):
+    def forbidden(*args, **kwargs):
+        pytest.fail('closed semantic route resolved credentials')
+    monkeypatch.setattr(cloud_policy, 'resolve_settings', forbidden)
+    monkeypatch.setattr(cloud_policy, 'provider_key', forbidden)
+    monkeypatch.setattr(cloud_policy, 'selected_key', forbidden)
+    block = {'provider': provider, 'project_ids': [1]}
+    if mode is not None:
+        block['mode'] = mode
+    assert not cloud_policy.send_route('semantic_backlog')
+    assert candidate._cloud_contract({'cloud_llm': block}) is None
+
+
+def test_closed_cloud_settings_do_not_change_local_candidate_or_weaken_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    def forbidden(*args, **kwargs):
+        pytest.fail('local candidate resolved cloud credentials')
+    monkeypatch.setattr(cloud_policy, 'resolve_settings', forbidden)
+    cfg = approved_config({'semantic': {'mode': 'assist', 'project_ids': [1],
+                                       'fact_source': 'canonical'}})
+    report = cfg['semantic']['fact_source_evidence']
+    identity = cfg['semantic']['fact_source_approval']
+    receipt = tmp_path / 'data' / 'semantic_approvals' / (identity + '.json')
+    before = receipt.read_bytes()
+    fingerprint = candidate.candidate_fingerprint(cfg)
+    cfg['cloud_llm'] = {'mode': 'on', 'project_ids': [1], 'provider': 'auto',
+                        'profiles': {'backlog': 'sol-high'}}
+    assert candidate.candidate_fingerprint(cfg) == fingerprint
+    assert candidate.promotion_problem(cfg, report) is None
+    assert candidate.approval_matches(cfg, report, identity)
+    cfg['local_llm'] = {'model': 'synthetic-changed-local-model'}
+    assert candidate.candidate_fingerprint(cfg) != fingerprint
+    assert candidate.promotion_problem(cfg, report) == 'candidate_mismatch'
+    assert not candidate.approval_matches(cfg, report, identity)
+    assert receipt.read_bytes() == before
