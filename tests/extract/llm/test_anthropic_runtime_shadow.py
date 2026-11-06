@@ -12,6 +12,7 @@ import extract_llm as worker
 import cloud_inference
 from extract_testkit import _hash
 from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, old as old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_shadow_comparison_follows_commit_and_never_replaces_local(routed, monkeypatch):
@@ -29,7 +30,8 @@ def test_shadow_comparison_follows_commit_and_never_replaces_local(routed, monke
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180)
     assert report["done"] == 1 and phases == ["local", "cloud"] and len(calls) == 1
     assert "backend" not in json.loads(led.artifacts(worker.KIND)[0]["meta"])
     assert len(led.artifacts("cloud_compare_v1")) == 1
@@ -73,7 +75,8 @@ def test_failed_shadow_attempt_keeps_unit_and_unknown_quality_denominators(route
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    assert worker.run_pending(led, budget_s=180)["done"] == 1
+    with legacy_cloud_routes():
+        assert worker.run_pending(led, budget_s=180)["done"] == 1
     meta = json.loads(led.artifacts("cloud_compare_v1")[0]["meta"])
     assert meta["units"] == 1 and meta["validated_units"] == 0
     assert meta["cloud_facts"] is meta["rejected"] is meta["held"] is None
@@ -105,7 +108,8 @@ def test_shadow_scope_change_during_validation_records_discard(routed, monkeypat
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    assert worker.run_pending(led, budget_s=180)["done"] == 1
+    with legacy_cloud_routes():
+        assert worker.run_pending(led, budget_s=180)["done"] == 1
     assert len(calls) == len(reserved) == len(results) == 1
     assert "backend" not in json.loads(led.artifacts(worker.KIND)[0]["meta"])
     assert len(led.artifacts("cloud_usage_disposition")) == 1
@@ -130,7 +134,8 @@ def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    worker.run_pending(led, budget_s=180)
+    with legacy_cloud_routes():
+        worker.run_pending(led, budget_s=180)
     assert len(calls) == 1 and len(reserves) == 1
 
 
@@ -215,7 +220,8 @@ def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkey
         return {}
     monkeypatch.setattr(worker, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(led, budget_s=180, per_write_lock=True)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, budget_s=180, per_write_lock=True)
     assert report["done"] == 1 and len(calls) == 1
     # the pending row was written with the commit, under its lock; the measured
     # result could not be written without the lock, so the unit stays uncompared
