@@ -197,7 +197,7 @@ class Screen:
                   "attention": "! 要確認", "unknown": "? 状況未取得"}
         status = self.processing[post]
         self.text(x, y + 18, labels[status], 15, MUTED)
-        self.text(x + 110, y + 18, "👤 " + ("73%" if post == 0 else "91%"), 15, MUTED)
+        self.text(x + 110, y + 18, "👤 " + ("73%" if post == 0 else "5%"), 15, MUTED)
         providers = ("jev", "local") if status == "complete" else ()
         for index, provider in enumerate(providers):
             left = x + 210 + index * 75
