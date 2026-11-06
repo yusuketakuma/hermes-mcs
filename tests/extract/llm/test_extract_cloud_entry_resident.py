@@ -293,3 +293,57 @@ def test_owned_claim_unverifiable_keeps_head_and_tail_proceeds(routed, monkeypat
     second = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
     assert second['done'] == 1 and len(local) == 1
     assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('variant', ['mode_omitted', 'auto_provider', 'unverifiable_cfg',
+                                     'explicit_off', 'out_of_scope'])
+def test_owned_unit_scope_proven_on_resolved_settings(routed, monkeypatch, variant):
+    """Ownership is durable and precedes settings: a mode-omitted block with
+    a key resolves on, an unreadable config holds, and only a proven
+    revocation (explicit off / other project) releases the unit to local."""
+    ledger, cfg, calls, _reserves, _results = routed
+    old(ledger)
+    ledger.save_messages([_message(2, "別の合成本文。", project_id=1)])
+    with ledger.db:
+        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 601,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 601,))
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, 'record_result', real_record_result)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
+    with legacy_cloud_routes():
+        unrelated_reservation(ledger, cfg, 'reextract')
+    # The reservation was made under the working config; mutate it after,
+    # as a deployment edit would.
+    if variant == 'mode_omitted':
+        del cfg['cloud_llm']['mode']
+        cfg['cloud_llm']['provider'] = 'anthropic'
+    elif variant == 'auto_provider':
+        del cfg['cloud_llm']['mode']
+    elif variant == 'explicit_off':
+        cfg['cloud_llm']['mode'] = 'off'
+    elif variant == 'out_of_scope':
+        cfg['cloud_llm']['project_ids'] = [2]
+    else:
+        cfg['cloud_llm']['bogus_field'] = 1
+    local = []
+    def extraction(body, **kwargs):
+        if kwargs.get('provider') is None:
+            local.append(body)
+            return {}
+        return worker._DEFERRED
+    monkeypatch.setattr(worker, 'llm_extract', extraction)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    held = variant in ('mode_omitted', 'auto_provider', 'unverifiable_cfg')
+    first = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    assert first['done'] == 1 and len(local) == 1
+    assert bool(first['defer_reasons'].get('cloud_source_unverified')) == held
+    second = worker.run_pending(ledger, limit=1, workers=1, budget_s=180, background=True, oldest_first=True)
+    if held:
+        # the owned head stays claimed and unprocessed — nothing local,
+        # nothing posted, the reservation untouched.
+        assert second['done'] == 0 and second['deferred'] == 0
+        assert len(local) == 1
+    else:
+        # proven revocation: the head completed locally, the tail follows.
+        assert second['done'] == 1 and len(local) == 2
+    assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
