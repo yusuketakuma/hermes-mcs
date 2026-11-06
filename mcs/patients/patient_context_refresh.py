@@ -256,7 +256,7 @@ def _scan_covered(db, seen):
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete):
     """Advance a bounded scan before evaluating each patient's current evidence."""
-    import extract_llm
+    cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
     best, selected = {}, None
     rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
@@ -290,7 +290,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 published = patient_context_refresh_state._published_version(reader.db, pid)
                 snapshot, progress, pending = patient_context_refresh_readiness._pending(
                     reader.db, pid, cfg, now=now,
-                    cloud_scan=extract_llm._cloud_mode(ledger, cfg, "patient_context", pid) == "on")
+                    cloud_scan=cloud_scan(pid))
                 patient_context_refresh_sources._scan_check(reader.db)
                 if patient_context_refresh_state._out_of_scope(snapshot):
                     continue

@@ -323,6 +323,25 @@ def _ready(progress, now):
                            and progress.get("next_try", 0) <= now)
 
 
+def _cloud_scan_for(ledger, cfg):
+    """Reuse availability within one observation, retaining each patient's scope."""
+    import cloud_policy
+    import extract_llm
+    # Assume a key only for scope parsing; the existing mode check proves availability.
+    scope, _ = cloud_policy.cloud_config(cfg, key_present=True)
+    mode = None
+
+    def enabled(pid):
+        nonlocal mode
+        if not cloud_policy.eligible(scope, "patient_context", pid):
+            return False
+        if mode is None:
+            mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
+        return mode == "on"
+
+    return enabled
+
+
 def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False):
     snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract)
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
@@ -399,7 +418,11 @@ def pending_estimate(db, pid, cfg, *, now=None, contract=None):
     empty = dict.fromkeys(("targets", "summary_units", "scan_sources", "scan_chunks_estimate", "input_chars"), 0)
     if not patient_context_refresh_state.options(cfg)["enabled"]:
         return empty
-    snapshot, _, pending = _pending(db, pid, cfg, now=now, contract=contract, estimate=True)
+    from types import SimpleNamespace
+    cloud_scan = (bool(contract.get("provider")) if contract is not None else
+                  _cloud_scan_for(SimpleNamespace(db=db), cfg)(pid))
+    snapshot, _, pending = _pending(db, pid, cfg, now=now, contract=contract, estimate=True,
+                                    cloud_scan=cloud_scan)
     if patient_context_refresh_state._out_of_scope(snapshot):
         return empty
     block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
@@ -415,6 +438,8 @@ def pending_estimate(db, pid, cfg, *, now=None, contract=None):
         if pending["A"]:
             totals["input_chars"] += size
         saved = scans.get(context_plan.source_key(source), {})
+        if cloud_scan and not saved.get("_provider_contract"):
+            saved = {}
         if saved.get("complete") or not _ready(saved, now):
             continue
         split = saved.get("split", 0)
@@ -481,10 +506,13 @@ def status(db, cfg):
     Patients run_due never works on are left out, so the counts match the worker."""
     counts = dict.fromkeys(("initial_pending", "delta_pending", "history_pending",
                            "audit_pending", "failed", "complete"), 0)
+    from types import SimpleNamespace
+    cloud_scan = _cloud_scan_for(SimpleNamespace(db=db), cfg)
     for row in db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
         pid = row[0]
         with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
-            snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for)
+            snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for,
+                                                  cloud_scan=cloud_scan(pid))
             if patient_context_refresh_state._out_of_scope(snapshot):
                 continue
             old, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
