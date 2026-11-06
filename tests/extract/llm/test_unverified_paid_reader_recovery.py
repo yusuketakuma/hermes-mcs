@@ -6,6 +6,7 @@ import json
 import extract_llm as worker
 from extract_testkit import _hash, _message
 from test_anthropic_runtime import AnthropicClient, _use_real_cloud_accounting, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing_false(routed, monkeypatch):
@@ -36,7 +37,8 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
         return worker._commit_rejected(row, 'completeness_pending')
     monkeypatch.setattr(worker, '_commit_extraction_atomic', formerly_rejected)
     monkeypatch.setattr(extract_llm_runner, '_commit_extraction_atomic', worker._commit_extraction_atomic)
-    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert reached == [True] and first['done'] == first['failed'] == 0 and first['deferred'] == 1
     assert first['defer_reasons'] == {'commit_completeness_pending': 1}
     assert posts
@@ -63,7 +65,8 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
     monkeypatch.setattr(worker.time, 'time', lambda: now + worker._PREPARE_HOLD_S + 1)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
     count = len(posts)
-    second = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        second = worker.run_pending(ledger, limit=1, budget_s=180)
     assert fresh_replays == [True]
     assert second['done'] == 1 and second['failed'] == second['deferred'] == 0
     assert second['llm_calls']['calls'] == 0 and len(posts) == count

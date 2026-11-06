@@ -6,6 +6,7 @@ import json
 import cloud_policy
 import extract_llm as worker
 from test_anthropic_runtime import AnthropicClient, _use_real_cloud_accounting, old, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(routed, monkeypatch):
@@ -32,7 +33,8 @@ def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(rou
         return persist(*args, **kwargs)
     monkeypatch.setattr(worker, '_persist_chunks', once)
     monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
-    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert len(refused) == len(posts) == 1
     assert first['done'] == first['failed'] == 0 and first['deferred'] == 1
     assert first['defer_reasons'] == {'checkpoint_unverified': 1}
@@ -46,7 +48,8 @@ def test_refused_fresh_checkpoint_reuses_saved_paid_answer_after_finite_wait(rou
     now = worker.time.time()
     monkeypatch.setattr(worker.time, 'time', lambda: now + worker._PREPARE_HOLD_S + 1)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
-    second = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        second = worker.run_pending(ledger, limit=1, budget_s=180)
     assert second['done'] == 1 and second['failed'] == second['deferred'] == 0
     assert len(posts) == 1
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
