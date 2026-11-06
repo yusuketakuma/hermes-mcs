@@ -651,7 +651,7 @@ def test_text_only_bootstrap_creates_both_channels_without_card_worker(tmp_path,
     assert client.created == ['mcs', 'mcslog']
     assert saved['notify_target'] == 'slack:C000000001'
     assert saved['notify_system_target'] == 'slack:C000000002'
-    assert 'channel_id' not in saved['notify']['slack']
+    assert saved['notify']['slack']['channel_id'] == 'C000000001'
     assert saved['notify']['interactive'] == 'off'
     assert 'slack:new' not in json.dumps(saved)
     setup.applied(tmp_path, cfg, saved)
@@ -930,3 +930,26 @@ def test_text_only_standalone_bootstrap_uses_guarded_setup_channels(tmp_path, mo
     setup.applied(tmp_path, cfg, saved)
     state = setup.read(tmp_path)
     assert state['state'] == 'applied' and 'worker_ready' not in state
+
+
+@pytest.mark.parametrize('mode', ['hermes', 'standalone'])
+def test_text_only_receipts_produce_a_valid_save_candidate(tmp_path, mode):
+    import mcs_config
+    cfg, client = text_config(), Client()
+    cfg['runtime_mode'] = mode
+    if mode == 'standalone':
+        cfg['notify']['slack']['project_ids'] = [101]
+    setup.prepare(tmp_path, cfg)
+    assert consume(tmp_path, client, cfg)['state'] == 'verified'
+    saved = setup.candidate(tmp_path, cfg)
+    assert mcs_config.validate_config(saved)[0] == []
+    assert saved['notify']['slack']['channel_id'] == 'C000000001'
+    assert saved['notify']['interactive'] == 'off'
+    assert saved['notify']['slack']['allowed_user_ids'] == cfg['notify']['slack']['allowed_user_ids']
+    assert saved['notify']['slack'].get('project_ids') == cfg['notify']['slack'].get('project_ids')
+    setup.stage_config(tmp_path, cfg, saved)
+    setup.applied(tmp_path, cfg, saved)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'applied' and 'worker_ready' not in state
+    assert setup.candidate(tmp_path, saved) == saved
+    assert client.created == ['mcs', 'mcslog']

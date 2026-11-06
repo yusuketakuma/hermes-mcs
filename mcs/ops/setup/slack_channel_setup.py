@@ -392,12 +392,11 @@ def candidate(root, cfg):
     if new_patient:
         result['notify_target'] = 'slack:' + patient
     if surfaces_card(state):
-        # The card surface shares the patient channel; a text-only setup
-        # leaves notify.slack.channel_id exactly as configured.
         if new_patient and scope.get('channel_id') not in (None, '', patient):
             raise ValueError('slack_setup_patient_scope_conflict')
-        if not scope.get('channel_id'):
-            scope['channel_id'] = patient
+    # The connection schema requires this ID even when interactive cards are off.
+    if not scope.get('channel_id'):
+        scope['channel_id'] = patient
     result['notify_system_target'] = 'slack:' + system
     return result
 
