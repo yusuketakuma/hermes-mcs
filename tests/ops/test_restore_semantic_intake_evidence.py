@@ -8,6 +8,7 @@ import pytest
 
 import restore_evidence
 from ops_testkit import _load
+from ops_testkit import patch_lifecycle_lookup
 
 
 INTAKE_CASES = [
@@ -44,8 +45,8 @@ def _insert_evidence(db, table, kind, row_id):
 
 def _reports(tmp_path, monkeypatch, live, backup):
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
-    monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'DATA', str(tmp_path))
     normal = restore_evidence.create_loss_report(
         live_path=str(live), backup_path=str(backup), report_path=str(tmp_path / 'report.json'))
     separate = watchdog._loss_report(str(backup))
@@ -140,8 +141,8 @@ def test_unverifiable_evidence_refuses_restore_report(tmp_path, monkeypatch, lim
                 (i, 'semantic_intake_unstored_v1', i, 0, payload, 'pending', 0)
                 for i in range(1, count + 1)])
     watchdog = _load()
-    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
-    monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'LEDGER', str(live))
+    patch_lifecycle_lookup(monkeypatch, watchdog, 'DATA', str(tmp_path))
     with pytest.raises(restore_evidence.RestoreEvidenceError, match='restore_report_read_failed'):
         restore_evidence.create_loss_report(live_path=str(live), backup_path=str(backup),
                                             report_path=str(tmp_path / 'report.json'))

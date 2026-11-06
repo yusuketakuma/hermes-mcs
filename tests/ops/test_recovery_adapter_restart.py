@@ -6,6 +6,7 @@ import time
 
 import pytest
 from ops_testkit import _load
+from ops_testkit import patch_lifecycle_lookup
 
 TARGET, PREV = "b" * 40, "a" * 40
 LW_LABEL = "ai.mcs.lineworks"
@@ -22,17 +23,17 @@ def _world(monkeypatch, tmp_path, cfg, *, path):
                         ("MARKER_PATH", data / "update_in_progress.marker"),
                         ("REPORT_PATH", data / "recovery_report.json"),
                         ("AGENTS_DIR", tmp_path / "agents")):
-        monkeypatch.setattr(recover, name, str(value))
+        patch_lifecycle_lookup(monkeypatch, recover, name, str(value))
     started, notices = [], []
 
     def popen(argv, **kw):
         started.append(list(argv))
     monkeypatch.setattr(recover.subprocess, "Popen", popen)
-    monkeypatch.setattr(recover, "_notify", notices.append)
-    monkeypatch.setattr(recover, "_restart_drainers", lambda bounce=True: [])
-    monkeypatch.setattr(recover, "_reconcile_membership", lambda snapshot: [])
-    monkeypatch.setattr(recover, "_head", lambda: TARGET)
-    monkeypatch.setattr(recover, "_clean", lambda: True)
+    patch_lifecycle_lookup(monkeypatch, recover, "_notify", notices.append)
+    patch_lifecycle_lookup(monkeypatch, recover, "_restart_drainers", lambda bounce=True: [])
+    patch_lifecycle_lookup(monkeypatch, recover, "_reconcile_membership", lambda snapshot: [])
+    patch_lifecycle_lookup(monkeypatch, recover, "_head", lambda: TARGET)
+    patch_lifecycle_lookup(monkeypatch, recover, "_clean", lambda: True)
     entry = {"tag": "v9.9.9", "sha": TARGET, "prev_sha": PREV,
              "command_id": "cid-1", "at": time.time()}
     if path == "resumed_done":
@@ -74,7 +75,7 @@ def test_completed_recovery_restarts_the_lineworks_adapter(monkeypatch, tmp_path
 ])
 def test_no_lineworks_restart_outside_hermes_lineworks(monkeypatch, tmp_path, cfg):
     recover, started, _ = _world(monkeypatch, tmp_path, cfg, path="resumed_done")
-    monkeypatch.setattr(recover, "_standalone_status", lambda: None)
+    patch_lifecycle_lookup(monkeypatch, recover, "_standalone_status", lambda: None)
     recover.recover()
     assert _lineworks_kicks(started) == []
 
@@ -100,7 +101,7 @@ def test_known_lineworks_kickstart_failure_is_reported(monkeypatch, tmp_path, pa
 def test_lost_standalone_restart_request_is_reported_not_success(monkeypatch, tmp_path, path):
     recover, _, notices = _world(monkeypatch, tmp_path,
                                  {"runtime_mode": "standalone"}, path=path)
-    monkeypatch.setattr(recover, "_standalone_status", lambda: {"generation": "a" * 32})
+    patch_lifecycle_lookup(monkeypatch, recover, "_standalone_status", lambda: {"generation": "a" * 32})
     real = recover.tempfile.mkstemp
 
     def full(*args, **kw):
@@ -122,7 +123,7 @@ def test_lost_gateway_restart_request_is_reported_not_success(monkeypatch, tmp_p
     state = json.loads(open(recover.STATE_PATH).read())
     state["applying"]["plugin_changed"] = True
     open(recover.STATE_PATH, "w").write(json.dumps(state))
-    monkeypatch.setattr(recover, "request_gateway_restart", lambda *a: False)
+    patch_lifecycle_lookup(monkeypatch, recover, "request_gateway_restart", lambda *a: False)
     assert recover.recover() == 1
     assert _report(recover)["result"] == "restart_request_failed"
     assert any("再起動" in text for text in notices)
@@ -131,7 +132,7 @@ def test_lost_gateway_restart_request_is_reported_not_success(monkeypatch, tmp_p
 def test_restart_request_success_keeps_the_completed_result(monkeypatch, tmp_path):
     recover, _, _ = _world(monkeypatch, tmp_path, {"runtime_mode": "standalone"},
                            path="resumed_done")
-    monkeypatch.setattr(recover, "_standalone_status", lambda: {"generation": "a" * 32})
+    patch_lifecycle_lookup(monkeypatch, recover, "_standalone_status", lambda: {"generation": "a" * 32})
     assert recover.recover() == 0
     assert _report(recover)["result"] == "resumed_done"
     request = json.loads((tmp_path / "data" / "standalone-restart.request").read_text())

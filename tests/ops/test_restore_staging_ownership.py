@@ -12,6 +12,7 @@ import pytest
 
 import mcs_update
 from ops_testkit import _load
+from ops_testkit import patch_lifecycle_lookup
 
 
 def _db(path, rows):
@@ -45,10 +46,10 @@ class World:
         self.backup = tmp_path / "backup.db"
         _db(self.live, ["live"])
         _db(self.backup, ["backup"])
-        monkeypatch.setattr(self.mod, "LEDGER", str(self.live))
-        monkeypatch.setattr(self.mod, "STATE_PATH", str(self.data / "update_state.json"))
+        patch_lifecycle_lookup(monkeypatch, self.mod, "LEDGER", str(self.live))
+        patch_lifecycle_lookup(monkeypatch, self.mod, "STATE_PATH", str(self.data / "update_state.json"))
         if which == "recover":
-            monkeypatch.setattr(self.mod, "DATA", str(self.data))
+            patch_lifecycle_lookup(monkeypatch, self.mod, "DATA", str(self.data))
 
     def journal(self, applying=True, **extra):
         state = {"v": 1, "stages": [], "applied": [], "attempts": {}, "executed": {},
@@ -117,7 +118,7 @@ def test_record_write_failure_removes_only_our_new_copy(world, monkeypatch):
     def fail(*a, **k):
         raise OSError("synthetic journal write failure")
     target = world.mod.journal_store if world.which == "update" else world.mod
-    monkeypatch.setattr(target, name, fail)
+    patch_lifecycle_lookup(monkeypatch, target, name, fail)
     with pytest.raises(OSError):
         world.replace()
     assert world.staging() == [] and _rows(world.live) == ["live"]
@@ -207,7 +208,7 @@ def test_copy_swapped_before_cleanup_is_kept_with_its_record(world, monkeypatch)
         with open(path, "wb") as handle:                # a different inode now
             handle.write(b"synthetic foreign file")
         return real(path)
-    monkeypatch.setattr(world.mod, "_file_sha256", swap)
+    patch_lifecycle_lookup(monkeypatch, world.mod, "_file_sha256", swap)
     with pytest.raises(OSError, match="backup_changed_during_restore"):
         world.replace()
     assert len(world.staging()) == 1
