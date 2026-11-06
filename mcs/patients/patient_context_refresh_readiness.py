@@ -323,7 +323,7 @@ def _ready(progress, now):
                            and progress.get("next_try", 0) <= now)
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None):
+def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False):
     snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract)
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
     if progress.get("source_sig") != snapshot["source_sig"]:
@@ -340,7 +340,9 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     for source in snapshot["sources"]:
         patient_context_refresh_sources._scan_check(db)
         if context_plan.source_usable(source):
-            scans.append(stored.get(context_plan.source_key(source), {}))
+            scan = stored.get(context_plan.source_key(source), {})
+            # Local fallback remains readable, but is not a completed cloud scan.
+            scans.append({} if cloud_scan and not scan.get("_provider_contract") else scan)
     recheck_available = False
     quality_required = bool(snapshot["contract"].get("provider") or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
     if (not estimate and quality_required
@@ -370,6 +372,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_code()])
     summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
+                    or cloud_scan and meta.get("provider") != snapshot["contract"].get("provider")
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(quality_required and not meta.get("quality_audit_key"))
