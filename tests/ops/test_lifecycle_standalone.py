@@ -88,8 +88,16 @@ def test_recovery_tool_follows_the_runtime(monkeypatch, tmp_path):
     assert len(started) == 1
     request = json.loads((tmp_path / "data" / "standalone-restart.request").read_text())
     assert request["generation"] == "a" * 32 and len(request["request_id"]) == 32
-    monkeypatch.setattr(services.os, "access", lambda *args: False)
+    (tmp_path / "config.json").write_text(json.dumps({
+        "runtime_mode": "standalone", "notify_target": "slack:C12345678",
+        "notify_system_target": "discord:42"}))
+    checked = []
+    def unavailable(path, mode):
+        checked.append((path, mode))
+        return False
+    monkeypatch.setattr(services.os, "access", unavailable)
     services._notify("synthetic")       # no interpreter: best-effort skip
+    assert checked == [(str(tmp_path / "venv/bin/python3"), services.os.X_OK)]
     assert len(started) == 1
     # standalone-owned agents count as known: a rollback never deletes them
     assert {"ai.mcs.standalone", "ai.mcs.cron.mcs-check"} <= core.KNOWN_AGENT_LABELS
