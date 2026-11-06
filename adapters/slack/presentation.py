@@ -243,6 +243,10 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             blocks.append(dict(_DIVIDER))
         if (card_kind == "thread" and version in (2, 3, 4) and item.get("provider_scope") == "header"
                 and kind == "text"):
+            if parts.get('processing_display_version') == 3:
+                from processing_route import compact_header
+                blocks.extend(contexts(compact_header(item)))
+                continue
             states = item["provider_states"]
             text = item["text"]
             visible = _visible_providers(item.get("visible_providers")) if version in (3, 4) else None

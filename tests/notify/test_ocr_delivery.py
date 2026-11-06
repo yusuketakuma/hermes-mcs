@@ -56,7 +56,7 @@ def test_current_ocr_body_is_separate_scoped_and_not_metadata(led, transport):
         led.db, _card(transport), {"shown": "[100,200]"}, max_chars=None,
         stamps=False, include_summary=False)
     assert "原文をそのまま保持\n二行目\n" + notify_render.SECTION_RULE in body
-    assert "📎 添付の文字起こし\n合成資料.pdf · 完了 🖥 0/1 · ☁ 待ち\n1ページ\n合成OCR本文 <@U123>" in body
+    assert "📎 添付の文字起こし\n合成資料.pdf · 完了 🖥 0/1\n1ページ\n合成OCR本文 <@U123>" in body
     assert "OTHER-PATIENT-OCR" not in body
     summary = notify_render._summary_block(led.db, 100)["text"]
     assert "📎 文字起こし 完了 1ページ" in summary
@@ -65,13 +65,13 @@ def test_current_ocr_body_is_separate_scoped_and_not_metadata(led, transport):
 
 
 @pytest.mark.parametrize(('analysis', 'label'), [
-    ([None], '🖥 0/1 · ☁ 待ち'),
-    ([(1, 'hash', 'local', True, False)], '🖥 ✓ · ☁ 0/1'),
-    ([(2, 'hash', 'cloud', True, True)], '🖥 ✓ · ☁ ✓'),
-    ([(1, 'hash', 'local', False, True)], '🖥 ✓ · ☁ 対象外'),
-    ([(1, 'hash', 'local', None, False)], '🖥 ✓ · ☁ ?'),
+    ([None], '🖥 0/1'),
+    ([(1, 'hash', 'local', True, False)], '🖥 ✓'),
+    ([(2, 'hash', 'cloud', True, True)], '🖥 ✓'),
+    ([(1, 'hash', 'local', False, True)], '🖥 ✓'),
+    ([(1, 'hash', 'local', None, False)], '🖥 ✓'),
 ])
-def test_ocr_compact_stage_icons_do_not_conflate_local_and_cloud(analysis, label):
+def test_ocr_compact_stage_icons_only_show_local_processing(analysis, label):
     assert notify_render._ocr_analysis_label({'analysis': analysis}) == label
 
 

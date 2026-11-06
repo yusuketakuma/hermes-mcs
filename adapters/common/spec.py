@@ -404,7 +404,7 @@ def validate(spec) -> dict:
         _err("bad_containers")
     if "processing_display_version" in parts and (
             type(parts["processing_display_version"]) is not int
-            or parts["processing_display_version"] not in (1, 2)
+            or parts["processing_display_version"] not in (1, 2, 3)
             or parts.get("provider_states_version") != 4):
         _err("bad_processing_display")
     if "section_divider_version" in parts and (
@@ -420,10 +420,13 @@ def validate(spec) -> dict:
     visible = [c for c in containers if isinstance(c, dict) and "visible_providers" in c]
     progress = [c for c in containers if isinstance(c, dict) and
                 ("processing_status" in c or "provider_sequence" in c)]
+    context_progress = [c for c in containers if isinstance(c, dict) and 'context_progress' in c]
+    if context_progress and parts.get('processing_display_version') != 3:
+        _err('bad_context_progress')
     footer = parts.get("footer")
     if isinstance(footer, list) and any(isinstance(c, dict) and
                                        any(k in c for k in ("provider_scope", "visible_providers",
-                                                            "processing_status", "provider_sequence"))
+                                                            "processing_status", "provider_sequence", "context_progress"))
                                        for c in footer):
         _err("bad_provider_states")
     if states or scoped or visible or progress or "provider_states_version" in parts:
@@ -433,7 +436,7 @@ def validate(spec) -> dict:
             _err("bad_provider_states")
         labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                   "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
-        if parts.get("processing_display_version") == 2:
+        if parts.get("processing_display_version") in (2, 3):
             labels.update(incomplete="未完了", attention="要確認", unverified="状況未確認")
         providers = (("anthropic", "Anthropic"), ("openai", "OpenAI"),
                      ("jev", "Jev"), ("local", "💻"))
@@ -489,6 +492,11 @@ def validate(spec) -> dict:
                                              or len(set(sequence)) != 2 or "jev" not in sequence
                                              or any(key not in selected for key in sequence)):
                     _err("bad_provider_states")
+                if parts.get('processing_display_version') == 3:
+                    from processing_route import valid_context_progress
+                    if (context_progress != [header] or selected != ['jev', 'local']
+                            or sequence is not None or not valid_context_progress(header.get('context_progress'))):
+                        _err('bad_context_progress')
             elif progress:
                 _err("bad_provider_states")
             header_index = next(i for i, container in enumerate(containers) if container is header)
@@ -514,7 +522,7 @@ def validate(spec) -> dict:
             else:
                 aggregate = {key: ("used" if any(post[key] in ("done", "partial") for post in posts)
                                   else "unknown") for key, _ in providers}
-            if parts.get("processing_display_version") == 2:
+            if parts.get("processing_display_version") in (2, 3):
                 from processing_route import aggregate_provider_states
                 aggregate = aggregate_provider_states(posts, followup=True)
             if values != aggregate:
@@ -529,7 +537,12 @@ def validate(spec) -> dict:
             fallback = " · ".join(fallback_parts)
             if version == 4:
                 order = " → ".join(names[key] for key in sequence) if sequence else "不明"
-                fallback = status_labels[status] + " · 採用結果の処理順: " + order + " · " + fallback
+                if parts.get('processing_display_version') == 3:
+                    from processing_route import context_progress_text
+                    fallback = ' · '.join(value for value in (status_labels[status],
+                        context_progress_text(header['context_progress']), fallback) if value)
+                else:
+                    fallback = status_labels[status] + " · 採用結果の処理順: " + order + " · " + fallback
             text = header.get("text")
             if (not isinstance(text, str) or len(text.splitlines()) != 1
                     or (text != fallback and not (text.endswith(" · " + fallback)

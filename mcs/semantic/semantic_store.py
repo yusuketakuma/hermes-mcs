@@ -746,7 +746,7 @@ def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
         return 'held'
 
 
-def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None):
+def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None, observe_paused=False):
     """Observe one stored source without mistaking job completion for coverage."""
     from mcs_queries import current_v4_id, paused
     import semantic_publication as v4
@@ -757,7 +757,8 @@ def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None):
         return 'scope'
     if scfg['project_ids'] is not None and pid not in scfg['project_ids']:
         return 'scope'
-    if paused(ledger.db, pid):
+    # Display-only observations may inspect existing proofs; scheduling keeps the pause gate.
+    if not observe_paused and paused(ledger.db, pid):
         return 'paused'
     if row['body_state'] == 'deleted':
         return 'deleted'

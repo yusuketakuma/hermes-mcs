@@ -4,6 +4,7 @@ import notify_scope
 import notify_history
 import hashlib
 import json
+import re
 import secrets
 import uuid
 from mcs_contract import project_url
@@ -331,6 +332,82 @@ def _render_op(card) -> str | None:
     return "update"
 
 
+def _frozen_context_progress(db, card, cfg, now):
+    """Append one creation observation in the first sealed-plan transaction, not in previews."""
+    import processing_route
+    import patient_context_progress
+    from mcs_util import strict_json
+
+    if not db.in_transaction:
+        raise ValueError('context_progress_transaction_required')
+    kind = 'patient_context_progress_snapshot_v1'
+    identity = {'card_id': card['card_id'], 'card_key': card['card_key'],
+                'project_id': card['project_id'],
+                'scope_hash': payload_hash(notify_scope.stored_scope(card))}
+    rows = db.execute("SELECT CASE WHEN length(content)<=8192 THEN content END AS content, "
+        "CASE WHEN length(meta)<=8192 THEN meta END AS meta FROM artifacts WHERE kind=? AND project_id=? "
+        "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.card_id') END=? ORDER BY artifact_id LIMIT 2",
+        (kind, card['project_id'], card['card_id'])).fetchall()
+    unknown = {**patient_context_progress.observation(), 'observed_at': 0}
+    if rows:
+        if len(rows) != 1:
+            return unknown
+        try:
+            value, meta = strict_json(rows[0]['content']), strict_json(rows[0]['meta'])
+            bound = (isinstance(meta, dict) and meta == identity
+                     and type(meta.get('card_id')) is int and type(meta.get('project_id')) is int)
+            return value if bound and processing_route.valid_context_progress(value) else unknown
+        except (ValueError, TypeError, RecursionError):
+            return unknown
+    # A prior spec is historical evidence, not permission to observe its past anew.
+    old = bool(card['message_id'] is not None or card['desired_render_rev']
+               or card['applied_render_rev'] or db.execute(
+                   'SELECT 1 FROM notification_renders WHERE card_id=? LIMIT 1', (card['card_id'],)).fetchone())
+    value = ({**patient_context_progress.observation(), 'observed_at': 0} if old else
+             {**patient_context_progress.read(db, card['project_id'], cfg), 'observed_at': now})
+    if not processing_route.valid_context_progress(value):
+        raise ValueError('context_progress_invalid')
+    db.execute('INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)',
+        (kind, card['project_id'], json.dumps(value, ensure_ascii=False), 'display', json.dumps(identity), now))
+    return value
+
+
+def _context_progress_header(db, card, containers, cfg, now):
+    import processing_route
+    from notify_render import PROCESSING_STATUS_LABELS
+
+    headers = [item for item in containers if item.get('provider_scope') == 'header']
+    if len(headers) != 1 or 'processing_status' not in headers[0]:
+        return containers
+    progress = _frozen_context_progress(db, card, cfg, now)
+    header = headers[0]
+    old = processing_route.provider_text(header['provider_states'], header['visible_providers'],
+                                         header.get('provider_sequence'))
+    prefix = header['text'][:-len(old)].removesuffix(' · ')
+    prefix = prefix.partition(' · 採用結果の処理順: ')[0]
+    label = PROCESSING_STATUS_LABELS[header['processing_status']]
+    prefix = prefix[:-len(label)].removesuffix(' · ') if prefix.endswith(label) else prefix
+    visible = [key for key in processing_route.PROVIDERS if key in ('jev', 'local')]
+    text = ' · '.join(part for part in (prefix, label, processing_route.context_progress_text(progress),
+        processing_route.provider_text(header['provider_states'], visible)) if part)
+    updated = {**header, 'text': text, 'visible_providers': visible, 'provider_sequence': None,
+               'context_progress': progress}
+    result = []
+    for item in containers:
+        if item is header:
+            result.append(updated)
+            continue
+        # Change only the generated final OCR-status line, preserving its fingerprint model.
+        text = item.get('text')
+        if isinstance(text, str):
+            before, separator, status = text.rpartition('\n')
+            if status.startswith('📎 文字起こし '):
+                status = re.sub(r' · ☁ (?:待ち|対象外|\?|✓|[0-9]+/[0-9]+)', '', status)
+                item = {**item, 'text': before + separator + status}
+        result.append(item)
+    return result
+
+
 def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tuple[dict, str | None]:
     """Persist the view/token identity and return (spec, optional part-budget hold).
 
@@ -393,6 +470,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         or card["thread_state"] not in ("failed", "deleted"))
     containers, footer = present.face(content["containers"],
                                       content["footer"], op, cfg)
+    if card['kind'] == 'thread' and op != 'revoke':
+        containers = _context_progress_header(db, card, containers, cfg, now)
     # per-post 💊 buttons outrank the optional list buttons: reserve
     # their component slots (section + accessory) before row 4 fills up
     # Discord answers a card-face click in the channel, so where the
@@ -434,7 +513,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
 
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") == 4:
-        spec["parts"]["processing_display_version"] = 2
+        spec["parts"]["processing_display_version"] = (3 if any('context_progress' in c for c in containers) else 2)
     if card["layout"] >= 3 and op != "revoke":
         spec["parts"]["section_divider_version"] = 1
     post_source_id = own_post(card)

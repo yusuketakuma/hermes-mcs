@@ -385,7 +385,7 @@ def _page_processing_status(progresses):
 
 
 def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
-                   include_progress=True, compact_progress=True) -> dict:
+                   include_progress=True, compact_progress=True, legacy_ocr=False) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
@@ -412,7 +412,7 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
     records = attachment_ocr_records(db, mid)
     if records:
         block["text"] += "\n📎 文字起こし " + " · ".join(
-            f"{_ocr_label(record)} {len(record['pages'])}ページ {_ocr_analysis_label(record)}" if record["pages"]
+            f"{_ocr_label(record)} {len(record['pages'])}ページ {_ocr_analysis_label(record, legacy=legacy_ocr)}" if record["pages"]
             else _ocr_label(record) for record in records)
     return block
 
@@ -454,22 +454,20 @@ def _ocr_label(record):
     return labels.get(record["state"], "処理待ち")
 
 
-def _ocr_analysis_label(record):
+def _ocr_analysis_label(record, *, legacy=False):
     pages = record['analysis']
     if not pages:
         return ''
     local = sum(value is not None for value in pages)
-    cloud = sum(value is not None and value[2] == 'cloud' and value[4] for value in pages)
     local_label = '✓' if local == len(pages) else f'{local}/{len(pages)}'
-    if any(value is None for value in pages):
-        cloud_label = '待ち'
-    elif any(value[3] is None for value in pages):
-        cloud_label = '?'
-    elif all(value[3] is False for value in pages):
-        cloud_label = '対象外'
-    else:
-        cloud_label = '✓' if cloud == len(pages) else f'{cloud}/{len(pages)}'
-    return f'🖥 {local_label} · ☁ {cloud_label}'
+    if legacy:
+        cloud = sum(value is not None and value[2] == 'cloud' and value[4] for value in pages)
+        cloud_label = ('待ち' if any(value is None for value in pages)
+            else '?' if any(value[3] is None for value in pages)
+            else '対象外' if all(value[3] is False for value in pages)
+            else '✓' if cloud == len(pages) else f'{cloud}/{len(pages)}')
+        return f'🖥 {local_label} · ☁ {cloud_label}'
+    return f'🖥 {local_label}'
 
 
 def original_post_text(db, mid, message):
@@ -960,7 +958,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
                                              label=layout < 2, include_progress=(layout < 2 if _provider_version == 0 else _provider_version in (1, 2)),
-                                             compact_progress=_provider_version >= 4))
+                                             compact_progress=_provider_version >= 4, legacy_ocr=True))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD

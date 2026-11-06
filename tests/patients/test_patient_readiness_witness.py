@@ -468,3 +468,24 @@ def test_non_sqlite_rows_and_changed_factory_cannot_be_sealed(dbs):
     result = record(reader, 'SELECT id FROM observations WHERE id=1')
     writer.row_factory = None
     assert not matches(result, writer)
+
+
+def test_ocr_patient_scope_builtin_is_recorded_without_allowing_arbitrary_functions(dbs):
+    from types import SimpleNamespace
+    import time
+    from patient_context_refresh_sources import _candidate_reader
+    from patient_read_scope import patient_scope_valid
+
+    _, writer = dbs
+    writer.execute('CREATE TABLE patients(project_id INTEGER PRIMARY KEY,is_archived INTEGER,fetch_state TEXT,fetch_reason TEXT)')
+    writer.execute("INSERT INTO patients VALUES(1,0,'complete',NULL)")
+    writer.commit()
+    with _candidate_reader(SimpleNamespace(db=writer), time.monotonic() + 60) as reader:
+        with witness.Recording(reader.db) as recording:
+            assert patient_scope_valid(reader.db, 1)
+            result = recording.seal()
+        assert result is not None
+    assert matches(result, writer)
+    writer.execute("UPDATE patients SET fetch_reason='access_revoked' WHERE project_id=1")
+    writer.commit()
+    assert not matches(result, writer)

@@ -326,6 +326,16 @@ def compact_header(header):
     sequence = header.get("provider_sequence")
     fallback = provider_text(states, visible, sequence)
     prefix = header["text"][:-len(fallback)].removesuffix(" · ")
+    if 'context_progress' in header:
+        # The frozen context value remains text on every transport.
+        for label, short in COMPACT_STATUS_LABELS.items():
+            prefix = prefix.replace(label + ' · ', short + ' · ', 1)
+            if prefix == label:
+                prefix = short
+        ordered = [key for key in visible if key in ('jev', 'local')]
+        providers = '  '.join(f'{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}'
+                              for key in ordered if states[key] in COMPACT_MARKS)
+        return prefix + (' · ' + providers if providers else '')
     prefix = prefix.partition(" · 採用結果の処理順: ")[0]
     for label, short in COMPACT_STATUS_LABELS.items():
         if prefix == label or prefix.endswith(" · " + label):
@@ -335,3 +345,32 @@ def compact_header(header):
     providers = "  ".join(f"{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}"
                           for key in ordered if states[key] in COMPACT_MARKS)
     return prefix + (" · " + providers if providers else "")
+
+
+def valid_context_progress(value):
+    """Validate only the sealed display evidence, never grant inference or send permission."""
+    from mcs_util import valid_hash
+    if (not isinstance(value, dict) or set(value) != {
+            'proof_version', 'percent', 'stage', 'held', 'source_sig', 'observed_at'}
+            or type(value['proof_version']) is not int or value['proof_version'] != 1
+            or type(value['held']) is not bool
+            or type(value['observed_at']) not in (int, float)
+            or not math.isfinite(value['observed_at']) or value['observed_at'] < 0):
+        return False
+    percent, stage = value['percent'], value['stage']
+    if stage in ('unknown', 'inactive'):
+        return percent is None and (value['source_sig'] is None or valid_hash(value['source_sig']))
+    ranges = {'inputs': (0, 5), 'local': (5, 10), 'sources': (10, 79),
+              'audit': (80, 89), 'summary': (90, 99), 'complete': (100, 100)}
+    return (isinstance(stage, str) and stage in ranges and type(percent) is int
+            and ranges[stage][0] <= percent <= ranges[stage][1]
+            and valid_hash(value['source_sig']))
+
+
+def context_progress_text(value):
+    if not valid_context_progress(value):
+        raise ValueError('context_progress_invalid')
+    if value['stage'] == 'inactive':
+        return ''
+    percent = '—' if value['percent'] is None else str(value['percent']) + '%'
+    return '👤 ' + percent + (' 保留' if value['held'] else '')
