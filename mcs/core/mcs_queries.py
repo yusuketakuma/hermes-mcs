@@ -1304,6 +1304,18 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
         record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
         record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
             record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
+        summaries, summary_identity = [], None
+        if analysis and analysis.get("ready") is True:
+            text = analysis["document"].get("summary")
+            if isinstance(text, str) and text.strip():
+                summaries.append({"kind": "attachment_extract_" + analysis["stage"],
+                                  "artifact_id": analysis["artifact_id"], "text": text})
+                summary_identity = [analysis["artifact_id"], analysis["stage"],
+                                    analysis["contract"], analysis["result_hash"]]
+        record["derived_summaries"] = summaries if hydrate else []
+        record["derived_summary_chars"] = sum(len(summary["text"]) for summary in summaries)
+        record["derived_summary_sig"] = payload_hash([pid, key, record["content_hash"],
+                                                      record["_source_binding"], summary_identity])
         record["items"] = (attachment_context_items(analysis["document"], record)
                            if analysis and record["extraction_ready"] and hydrate else [])
         if not hydrate:

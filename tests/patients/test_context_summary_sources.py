@@ -114,3 +114,82 @@ def test_semantic_summary_rejects_stale_or_unverified_receipts(tmp_path, change)
         assert _source(led, cfg=_cfg("enforce"))["derived_summaries"] == []
     finally:
         led.close()
+
+
+def _ocr_local(led, key, cfg, text):
+    import attachment_extraction
+    import original_source_keys
+    from mcs_util import payload_hash
+
+    source = original_source_keys.source(led.db, 1, key)
+    document = {"symptoms": [], "summary": text}
+    quality = {"completeness_chunks": 1, "completeness": {
+        "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+    assert attachment_extraction.validated(document, source["body_text"], quality)
+    value = {"schema": attachment_extraction.SCHEMA, "source_key": key,
+        "source_binding": source["_source_binding"], "stage": "local",
+        "contract": attachment_extraction.contract(cfg), "document": document,
+        "result_hash": payload_hash(document), "quality": quality,
+        "provider_evidence": {"complete": True, "providers": ["local"]},
+        "provider_contract": None, "local_artifact_id": None, "reservation_artifact_ids": []}
+    return led.artifact_add(attachment_extraction.KIND, json.dumps(value), project_id=1,
+        message_id=source["parent_message_id"], meta={"source_key": key, "stage": "local"})
+
+
+def test_attachment_summary_uses_real_current_validator_and_stable_source_binding(tmp_path):
+    import attachment_extraction
+    from test_ocr_original_sources import seeded
+
+    led, key = seeded(tmp_path)
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"},
+           "cloud_llm": {"mode": "off"}}
+    try:
+        text = "合成薬Aの中止を記録。" * 5
+        aid = _ocr_local(led, key, cfg, text)
+        assert attachment_extraction.current(led.db, 1, key, cfg=cfg)["ready"] is True
+        def read(hydrate=True):
+            return next(mcs_queries.attachment_ocr_sources(led.db, 1, mid=key, cfg=cfg, hydrate=hydrate))
+        full, lean = read(), read(False)
+        assert full["derived_summaries"] == [{"kind": "attachment_extract_local", "artifact_id": aid, "text": text}]
+        assert full["body_text"] != text and full["source_key"] == key
+        assert full["derived_summary_chars"] == lean["derived_summary_chars"] == len(text)
+        assert full["derived_summary_sig"] == lean["derived_summary_sig"]
+        assert lean["derived_summaries"] == [] and "body_text" not in lean
+        with led.db:
+            led.db.execute("UPDATE attachments SET downloaded_at=2 WHERE attachment_id=1")
+            led.db.execute("UPDATE artifacts SET created_at=3 WHERE artifact_id=?", (aid,))
+        assert read()["derived_summary_sig"] == full["derived_summary_sig"]
+        assert not list(mcs_queries.attachment_ocr_sources(led.db, 2, mid=key, cfg=cfg))
+        _ocr_local(led, key, cfg, "変更された合成要約")
+        assert read()["derived_summary_sig"] != full["derived_summary_sig"]
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize("fault", ["contract", "proof", "unready"])
+def test_attachment_summary_excludes_stale_unverified_or_unready_analysis(tmp_path, fault):
+    import attachment_extraction
+    from test_ocr_original_sources import seeded
+
+    led, key = seeded(tmp_path)
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"},
+           "cloud_llm": {"mode": "off"}}
+    try:
+        aid = _ocr_local(led, key, cfg, "合成薬Aの中止を記録。")
+        if fault == "unready":
+            cfg["cloud_llm"]["mode"] = "on"
+        else:
+            saved = json.loads(led.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
+            if fault == "contract":
+                saved["contract"] = "stale"
+            else:
+                saved["provider_evidence"]["complete"] = False
+            with led.db:
+                led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(saved), aid))
+        analysis = attachment_extraction.current(led.db, 1, key, cfg=cfg)
+        assert analysis is None or analysis["ready"] is False
+        source = next(mcs_queries.attachment_ocr_sources(led.db, 1, mid=key, cfg=cfg))
+        assert source["derived_summaries"] == [] and source["derived_summary_chars"] == 0
+        assert source["extraction_ready"] is False
+    finally:
+        led.close()
