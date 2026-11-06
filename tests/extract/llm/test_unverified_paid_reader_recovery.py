@@ -3,6 +3,7 @@ import extract_llm_runner
 from contextlib import nullcontext
 import json
 
+import cloud_policy
 import extract_llm as worker
 from extract_testkit import _hash, _message
 from test_anthropic_runtime import AnthropicClient, _use_real_cloud_accounting, routed as routed
@@ -65,8 +66,13 @@ def test_zero_http_paid_replay_writes_unverified_candidate_without_reintroducing
     monkeypatch.setattr(worker.time, 'time', lambda: now + worker._PREPARE_HOLD_S + 1)
     cfg['cloud_llm']['daily_cost_limit_usd'] = 0
     count = len(posts)
-    with legacy_cloud_routes():
-        second = worker.run_pending(ledger, limit=1, budget_s=180)
+    infer = extract_llm_runner.llm_extract
+    def paid_only(*args, **kwargs):
+        assert kwargs.get('provider') is not None, 'paid unit fell back to local'
+        return infer(*args, **kwargs)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', paid_only)
+    assert not cloud_policy.send_route('reextract')
+    second = worker.run_pending(ledger, limit=1, budget_s=180)
     assert fresh_replays == [True]
     assert second['done'] == 1 and second['failed'] == second['deferred'] == 0
     assert second['llm_calls']['calls'] == 0 and len(posts) == count
