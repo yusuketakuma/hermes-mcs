@@ -126,7 +126,7 @@ LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設�
 
 ### 患者情報と運用通知の送り先
 
-患者情報のテキスト通知は`notify_target`へ、通知カードは有効な`notify.interactive`のチャンネルへ送ります。
+患者情報のテキスト通知は`notify_target`へ、通知カードは有効な接続先の`notify.<transport>.channel_id`へ送ります。
 患者情報の本文・カードにSlackを使う場合、運用通知の`notify_system_target`には各送り先と
 分離を確認できる明示先が必要です。SlackはC/Gで始まる確定済みチャンネルID、Discordは数字の
 チャンネルIDを使い、別の接続先も選べます。同じ接続先の名前・スレッド指定や空欄は、
@@ -138,9 +138,12 @@ LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設�
 LINE WORKSへ送信しません。Hermesモードの復旧用コピーは従来どおり`local`へ送ります。
 Hermes連携の通常送信・稼働監視も同じ条件で送り先を選びます。
 
-Hermesで自動作成したMCSLOGだけは、`data/slack-channel-setup.json`の作成記録と現在の送り先・
-接続設定が一致した場合に、作成元のprofileを明示して送ります。患者情報と既存の明示した運用先は、
-従来どおり`notify_bot_profile`を使います。記録が破損した場合や、新規作成先と一致する記録が未完了・
+Slackカードとテキスト専用のどちらも、初期設定・更新時に患者情報用の`mcs`と運用情報用の`mcslog`を
+不足する分だけ非公開で準備します。既存の送り先と`interactive=off`は保持します。
+
+Hermesで自動作成した患者情報用チャンネルとMCSLOGは、`data/slack-channel-setup.json`の作成記録と
+現在の送り先・接続設定が一致した場合に、作成元のprofileを明示して送ります。
+既存の明示したチャンネルには、従来どおり`notify_bot_profile`を使います。記録が破損した場合や、新規作成先と一致する記録が未完了・
 現在の接続設定と不一致の場合は、別profileへ切り替えず送信を保留します。
 監視で`--config`を指定した場合も、その設定ファイルのあるrootの作成記録を使います。
 

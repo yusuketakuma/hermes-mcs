@@ -233,12 +233,15 @@ INSTALLATION.md 付録B を案内し、次を収集:
 Slack も `init` が設定ブロックとトークンを書き込む。`init` を使えない
 場合の手動設定手順は 5-3 を参照。
 
-Slackカードを使う導入（`notify.interactive=slack`）では、患者情報用の`mcs`と運用情報用の
-`mcslog`を非公開で自動作成する。新規作成する場合は患者情報先・カード先を空欄にし、
-招待する操作者のIDを明示する。既存の患者情報先がある場合は移動せず、明示された別の運用先も保持する。
-`interactive=off`のテキスト専用設定では自動作成を行わず、分離済みの既存IDを
-`notify_system_target`へ指定する。Slackアプリに`groups:write`と`groups:read`が必要で、
-追加後は再インストールする。作成や招待の結果が不明なら繰り返さず保留する。
+Slackカード（`notify.interactive=slack`）とSlackのテキスト通知のどちらも、導入時に
+患者情報用の`mcs`と運用情報用の`mcslog`について、不足するチャンネルを非公開で自動作成する。
+患者情報用チャンネルを新設する場合は`notify_target=slack:new`を指定し、招待する操作者のIDを明示する。
+設定には確定したIDを保存する。空の`notify.slack.channel_id`にも同じIDを補完し、既存値は保持する。
+既存の患者情報先と、明示された別の運用先も保持する。
+テキスト専用の`interactive=off`は維持し、カードの利用を有効にはしない。
+新規作成にはSlackアプリの`groups:write`と`groups:read`が必要で、追加後は再インストールする。
+`install.sh --no-services`は自動準備を省略する。後で`mcs setup slack-channels`から再開できる。
+作成や招待の結果が不明なら繰り返さず保留する。
 `mcslog`を患者情報の閲覧・操作を許可する先へ追加しない。
 
 ### 4-3. Discord の場合
