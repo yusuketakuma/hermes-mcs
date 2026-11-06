@@ -370,10 +370,40 @@ def _reconcile_membership(snapshot):
     return problems
 
 
+_RECOVERY_COMPLETE_TEXTS = frozenset({
+    '[MCS] 中断された更新の後処理を完了しました',
+    '[MCS] 中断された更新の、プログラム切り替え後の処理を完了しました',
+    '[MCS] 中断されたプログラムの統合を取り消し、更新前の状態に戻しました。',
+    '[MCS] 更新前後のファイルが混在していたため、更新前の状態に戻しました。',
+    '[MCS] プログラムの切り替え前に中断した更新を終了しました。',
+    '[MCS] 中断された更新の復旧を完了しました。',
+})
+_RECOVERY_RESTART_FAILED_TEXT = (
+    '[MCS] 更新の復旧後に再起動要求を保存・起動できません。'
+    '更新記録と稼働プロセスを確認し、常駐プロセスを再起動してください。')
+
+
+def _notification_text(text):
+    """Use fixed recovery notices even when this stdlib-only bundle runs outside the repo."""
+    if isinstance(text, str) and text in _RECOVERY_COMPLETE_TEXTS:
+        title = '🟢 更新・復旧の処理完了'
+        impact = '復旧処理を完了しました。収集・通知の再開は別途確認してください。'
+    elif text == _RECOVERY_RESTART_FAILED_TEXT:
+        title = '🔴 再起動要求の失敗・要確認'
+        impact = '常駐処理が再開していない可能性があります。'
+    else:
+        title = '🟠 更新・復旧の状態確認'
+        impact = '復旧の完了は確認できません。私有の更新記録を確認してください。'
+    return ('[MCSLOG] ' + title + '\n影響: ' + impact
+            + '\n次の操作: python3 mcs/ops/mcs_update.py status'
+            + '\n稼働の確認: python3 mcs/ops/mcs_setup.py doctor')
+
+
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
     mcs_recovery_core._check_recovery_root()
+    text = _notification_text(text)
     cfg = mcs_recovery_core._runtime_config()
     if cfg.get("runtime_mode") == "standalone":
         # best-effort to the system-alert channel (notify_flush's choice)

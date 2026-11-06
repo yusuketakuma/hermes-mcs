@@ -106,3 +106,48 @@ def test_repeated_health_actions_are_listed_once_without_dropping_causes():
     assert text.count('原因未分類の異常があります') == 2
     assert text.count('python3 mcs/ops/mcs_setup.py check') == 1
     assert '共通の対処:' in text and 'synthetic_patient' not in text
+
+
+@pytest.mark.parametrize('mode', ['standalone', 'hermes'])
+@pytest.mark.parametrize('source', [
+    'synthetic_patient_123 diagnosis /private/synthetic.pdf https://synthetic.invalid/patient',
+    'RuntimeError: synthetic_patient_123',
+    '[MCS] 中断された更新の後処理を完了しました synthetic_patient_123',
+])
+def test_recovery_sender_never_transmits_raw_input(monkeypatch, mode, source):
+    from deployment.recovery import mcs_recovery_services as recovery
+    captured = []
+    class Process:
+        def communicate(self, text, **kwargs):
+            captured.append(json.loads(text) if isinstance(text, bytes) else text)
+    def popen(argv, **kwargs):
+        captured.append(argv)
+        return Process()
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_check_recovery_root', lambda: None)
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_runtime_config', lambda: {
+        'runtime_mode': mode, 'notify_target': 'slack:C12345678', 'notify_system_target': 'slack:C87654321'})
+    monkeypatch.setattr(recovery.mcs_recovery_core, 'HOME', '/synthetic/home', raising=False)
+    monkeypatch.setattr(recovery.mcs_recovery_core, 'REPO', '/synthetic/repo', raising=False)
+    monkeypatch.setattr(recovery.os, 'access', lambda *a: True)
+    monkeypatch.setattr(recovery.os.path, 'isfile', lambda *a: True)
+    monkeypatch.setattr(recovery.shutil, 'which', lambda *a: '/synthetic/hermes')
+    monkeypatch.setattr(recovery.subprocess, 'Popen', popen)
+    recovery._notify(source)
+    wire = json.dumps(captured, ensure_ascii=False)
+    assert captured and '更新・復旧の状態確認' in wire
+    assert 'synthetic_patient_123' not in wire and 'synthetic.pdf' not in wire
+    assert 'https://' not in wire and 'RuntimeError' not in wire
+    assert '🟢' not in wire
+
+
+@pytest.mark.parametrize(('source', 'title'), [
+    ('[MCS] 中断された更新の後処理を完了しました', '🟢 更新・復旧の処理完了'),
+    ('[MCS] 更新の復旧後に再起動要求を保存・起動できません。'
+     '更新記録と稼働プロセスを確認し、常駐プロセスを再起動してください。', '🔴 再起動要求の失敗・要確認'),
+])
+def test_recovery_fixed_results_keep_completion_distinct_from_failed_restart(source, title):
+    from deployment.recovery import mcs_recovery_services as recovery
+    text = recovery._notification_text(source)
+    assert title in text
+    assert 'mcs_update.py status' in text and 'mcs_setup.py doctor' in text
+    assert '収集・通知の再開は別途確認' in text if '🟢' in title else '🟢' not in text
