@@ -12,7 +12,7 @@ from test_patient_context_refresh import seed, step
 __all__ = ['runtime', 'cloud', 'real_cloud']
 
 
-def test_local_context_stays_usable_until_real_cloud_inspects_every_input(runtime, real_cloud, monkeypatch):
+def test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_every_input(runtime, real_cloud, monkeypatch):
     ledger, _, local_calls = runtime
     cfg, posts = real_cloud
     body = '本人は合成の自宅で生活しています。' * 170 + '\n\n' + '合成の通院記録です。' * 170
