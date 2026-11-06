@@ -35,7 +35,7 @@ def _rotate_anthropic(monkeypatch):
 
 def test_old_reservation_and_result_keep_original_prices_after_rotation(tmp_path, now, monkeypatch):
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reservation = c.usage_reserver(ledger, _cfg(), route="reextract", project_id=1, unit_key="u")(
+        reservation = c.usage_reserver(ledger, _cfg(), route="patient_context", project_id=1, unit_key="u")(
             {"model": c.MODEL, "max_tokens": 100, "messages": [{"role": "user", "content": "synthetic"}]}, 2)
         maximum = Decimal(reservation["max_cost_usd"])
         model = _rotate_anthropic(monkeypatch)
@@ -47,7 +47,7 @@ def test_old_reservation_and_result_keep_original_prices_after_rotation(tmp_path
         assert c.max_cost(100, input_bound=256, model=model) < Decimal("0.0008")
         assert c.budget_block_reason(ledger, capped, max_tokens=100, input_bound=256) == "provider_daily_cap"
         with pytest.raises(c.AnthropicError) as duplicate:
-            c.usage_reserver(ledger, _cfg(), route="reextract", project_id=1, unit_key="u")(
+            c.usage_reserver(ledger, _cfg(), route="patient_context", project_id=1, unit_key="u")(
                 {"model": model, "max_tokens": 100,
                  "messages": [{"role": "user", "content": "synthetic"}]}, 2)
         assert duplicate.value.detail == "cloud_unit_unresolved"
@@ -83,7 +83,7 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
              "output_tokens_details": {"reasoning_tokens": 0}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         body = c.openai_client.OpenAIClient("synthetic-key").body("synthetic prompt", 100, None)
-        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="reextract",
+        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="patient_context",
                                       project_id=1, unit_key="openai-old")(body, 2)
         maximum = Decimal(reservation["max_cost_usd"])
         model, version = "synthetic-openai-next", "synthetic-openai-next-version"
@@ -132,7 +132,7 @@ def test_openai_30m_cache_details_survive_historical_settlement_and_tally(tmp_pa
              "input_tokens_details": details, "output_tokens_details": {"reasoning_tokens": 0}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         body = c.openai_client.OpenAIClient("synthetic-key").body("synthetic prompt", 100, None)
-        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="reextract",
+        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="patient_context",
                                       project_id=1, unit_key="openai-cache")(body, 2)
         model, version = "synthetic-openai-next", "synthetic-openai-next-version"
         prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
@@ -169,7 +169,7 @@ def test_openai_unpriced_cache_details_do_not_settle_or_release_reservation(tmp_
              "output_tokens_details": {"reasoning_tokens": 0}}
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         body = c.openai_client.OpenAIClient("synthetic-key").body("synthetic prompt", 100, None)
-        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="reextract",
+        reservation = c.usage_reserver(ledger, _cfg(provider="openai"), route="patient_context",
                                       project_id=1, unit_key="openai-cache-invalid")(body, 2)
         metadata = {"model": reservation["model"], "request_fp": reservation["request_fp"], "usage": usage,
                     "http_class": "http_200", "request_id": "synthetic", "error_kind": None}

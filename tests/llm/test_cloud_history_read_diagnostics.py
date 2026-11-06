@@ -11,7 +11,7 @@ import cloud_client
 import cloud_inference
 import cloud_policy
 from ledger import Ledger
-from test_cloud_response_recovery import paid as paid
+from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
 
 
 _SECRET = "synthetic-private-detail"
@@ -92,7 +92,8 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         error.sqlite_errorcode, error.sqlite_errorname = code, name
     with closing(Ledger(path)) as ledger:
         if existing_paid:
-            _ask(unit(ledger))
+            with legacy_cloud_routes():
+                _ask(unit(ledger))
         before, sent, slots = _history(ledger), len(calls), len(locks)
         provider = unit(ledger, owner=_SECRET)
         provider.unit_key = _SECRET if not existing_paid else provider.unit_key
@@ -154,7 +155,8 @@ def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, 
         raise OSError(_SECRET)
 
     with closing(Ledger(path)) as ledger:
-        _ask(unit(ledger))
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
         before, sent, slots = _history(ledger), len(calls), len(locks)
         provider = unit(ledger)
         with monkeypatch.context() as patch:
@@ -171,7 +173,8 @@ def test_paid_answer_proof_failure_remains_recoverable_without_resend(
         paid, monkeypatch, capsys, error_class, category):
     path, _cfg, calls, locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        original = _ask(unit(ledger))
+        with legacy_cloud_routes():
+            original = _ask(unit(ledger))
         before, sent, slots = _history(ledger), len(calls), len(locks)
         def failed_proof(*args, **kwargs):
             raise error_class(_SECRET)

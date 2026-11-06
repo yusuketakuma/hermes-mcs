@@ -1,5 +1,5 @@
 """Paid answers survive restart; exact receipts never authorize another HTTP attempt."""
-from contextlib import closing, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 import json
 import time
 from types import SimpleNamespace
@@ -64,6 +64,17 @@ def paid(tmp_path, monkeypatch):
     return path, cfg, calls, locks, state, unit, Restart
 
 
+@contextmanager
+def legacy_cloud_routes():
+    """Reproduce the pre-policy regime only while seeding paid artifacts.
+
+    Recovery, replay and commit checks must run under the closed-route policy;
+    wrap only the sends that create the historical paid data."""
+    from unittest.mock import patch
+    with patch.object(cloud_policy, 'send_route', lambda route: True):
+        yield
+
+
 def _ask(unit, tokens=100):
     return unit('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=tokens)
 
@@ -81,7 +92,7 @@ def test_post_response_observation_distinguishes_unknown_from_changed_scope(paid
         provider = unit(ledger, current=current)
         error = (cloud_inference.CloudObservationIncomplete if observation == 'unknown'
                  else cloud_inference.CloudFallback)
-        with pytest.raises(error):
+        with pytest.raises(error), legacy_cloud_routes():
             _ask(provider)
         assert len(calls) == 1
         result = ledger.artifacts('cloud_usage_result')[0]
@@ -111,7 +122,8 @@ def test_temporary_send_gate_keeps_previously_paid_answer(paid, monkeypatch, wai
             assert checking[0], 'temporary send denial must precede expensive source proof'
             return True
         provider = unit(ledger, current=current)
-        original = _ask(provider)
+        with legacy_cloud_routes():
+            original = _ask(provider)
         before = [tuple(row) for row in ledger.db.execute(
             "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")]
         with monkeypatch.context() as patch:
@@ -163,7 +175,7 @@ def test_unreadable_post_response_guard_preserves_recoverable_answer(paid, monke
             patch.setattr(cloud_policy, 'resolve_profile', observed_profile)
             patch.setattr(cloud_policy, 'selected_key', observed_key)
             provider = unit(ledger, current=current)
-            with pytest.raises(cloud_inference.CloudObservationIncomplete):
+            with pytest.raises(cloud_inference.CloudObservationIncomplete), legacy_cloud_routes():
                 _ask(provider)
             assert not provider.discarded and provider.final_disposition is None
         result = ledger.artifacts('cloud_usage_result')[0]
@@ -186,7 +198,8 @@ def test_transient_unknown_requires_a_new_authoritative_check_before_returning_a
         return True
     with closing(Ledger(path)) as ledger:
         provider = unit(ledger, current=current)
-        answer = _ask(provider)
+        with legacy_cloud_routes():
+            answer = _ask(provider)
         assert answer['text'] == '{"synthetic":"answer"}'
         assert len(checks) >= 2 and len(calls) == 1
         assert not provider.discarded and provider.final_disposition is None
@@ -202,7 +215,7 @@ def test_explicit_scope_withdrawal_remains_final_even_if_profile_cannot_be_read(
             patch.setattr(cloud_policy, 'resolve_profile', lambda *a, **k: (
                 (None, ['synthetic unavailable']) if calls else profile(*a, **k)))
             provider = unit(ledger)
-            with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'):
+            with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'), legacy_cloud_routes():
                 _ask(provider)
             assert provider.discarded
             assert json.loads(ledger.artifacts('cloud_usage_result')[0]['meta'])['disposition'] == 'discarded_scope'
@@ -215,7 +228,7 @@ def test_restart_reuses_atomic_paid_answer_without_capacity_reservation_or_new_b
     path, cfg, calls, locks, state, unit, restart = paid
     state['crash'] = True
     with closing(Ledger(path)) as ledger:
-        with pytest.raises(restart):
+        with pytest.raises(restart), legacy_cloud_routes():
             _ask(unit(ledger))
         assert len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == 1
         result = ledger.artifacts('cloud_usage_result')[0]
@@ -238,7 +251,8 @@ def test_recovery_keeps_a_known_rejected_attempt_and_reuses_the_later_paid_answe
     path, _cfg, calls, locks, state, unit, _restart = paid
     state['reject_first'] = True
     with closing(Ledger(path)) as ledger:
-        answer = _ask(unit(ledger))
+        with legacy_cloud_routes():
+            answer = _ask(unit(ledger))
         assert len(calls) == 2 and len(ledger.artifacts('cloud_usage_reserve')) == 2
     with closing(Ledger(path)) as ledger:
         recovered = _ask(unit(ledger, owner='restart'))
@@ -252,7 +266,8 @@ def test_recovery_keeps_a_known_rejected_attempt_and_reuses_the_later_paid_answe
 def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damage):
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        _ask(unit(ledger))
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
         with ledger.db:
             if damage in ('answer', 'missing_answer'):
                 content = '{}' if damage == 'missing_answer' else '{"text":"tampered","finish_reason":"stop"}'
@@ -303,7 +318,8 @@ def test_patient_input_recovery_binding_detects_aba_even_when_original_text_retu
 def test_recovery_rechecks_current_adoption_authority(paid, denial):
     path, cfg, calls, _locks, state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        _ask(unit(ledger))
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
     with closing(Ledger(path)) as ledger:
         provider = unit(ledger, owner='new')
         if denial == 'owner':
@@ -323,7 +339,7 @@ def test_response_insert_failure_leaves_reservation_unknown_and_never_resends(pa
         ledger.db.execute("CREATE TRIGGER stop_result BEFORE INSERT ON artifacts "
                           "WHEN NEW.kind='cloud_usage_result' BEGIN SELECT RAISE(ABORT,'synthetic disk fault'); END")
         ledger.db.commit()
-        with pytest.raises(cloud_inference.CloudFallback):
+        with pytest.raises(cloud_inference.CloudFallback), legacy_cloud_routes():
             _ask(unit(ledger))
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
         assert not ledger.artifacts('cloud_usage_result')

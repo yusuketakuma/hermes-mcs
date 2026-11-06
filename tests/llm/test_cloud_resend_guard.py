@@ -14,6 +14,16 @@ import openai_client
 from semantic_testkit import _ledger, _message, _patient
 
 
+@pytest.fixture(autouse=True)
+def _open_send_routes(monkeypatch):
+    """Exercise reservation-guard mechanics on every configured route.
+
+    Individual cloud routes accept no new sends in production; the guard's
+    per-route record interpretation stays as accounting safety code. Closed
+    send policy itself is covered by test_cloud_context_only.py."""
+    monkeypatch.setattr(cloud_policy, 'send_route', lambda route: True)
+
+
 def _db(tmp_path):
     ledger = _ledger(tmp_path)
     _patient(ledger)

@@ -134,7 +134,7 @@ def _assert_unverified_without_http(ledger, cfg, *, expected_kind='pricing_unver
     before = len(ledger.artifacts(c.KINDS[0]))
     calls = []
     client = AnthropicClient('synthetic', post_fn=lambda *args: calls.append(True), max_attempts=1)
-    reserve = c.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='different')
+    reserve = c.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='different')
     with pytest.raises(AnthropicError) as caught:
         client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100, reserve_fn=reserve)
     assert caught.value.kind == expected_kind
@@ -229,7 +229,7 @@ def test_paid_result_survives_unrelated_corrupt_timestamp_but_new_sends_stop(tmp
             c.record_result(ledger, reservation, metadata, **answer)
 
         client = AnthropicClient('synthetic', post_fn=post, max_attempts=1)
-        reserve = c.usage_reserver(ledger, _cfg(), route='reextract', project_id=1, unit_key='paid')
+        reserve = c.usage_reserver(ledger, _cfg(), route='patient_context', project_id=1, unit_key='paid')
         answer = client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100,
                                  reserve_fn=reserve, after_result=save)
         assert answer['text'] == '合成の回答' and sent == [True] and len(received) == 1
@@ -244,7 +244,7 @@ def test_paid_result_survives_unrelated_corrupt_timestamp_but_new_sends_stop(tmp
         assert c.budget_block_reason(ledger, _cfg()) == 'pricing_unverified'
         with pytest.raises(AnthropicError, match='pricing_unverified'):
             client.complete('新しい合成入力', deadline=time.monotonic() + 30, max_tokens=100,
-                            reserve_fn=c.usage_reserver(ledger, _cfg(), route='reextract',
+                            reserve_fn=c.usage_reserver(ledger, _cfg(), route='patient_context',
                                                         project_id=1, unit_key='next'))
         assert sent == [True] and len(ledger.artifacts(c.KINDS[0])) == 2
         assert ledger.db.execute('SELECT created_at FROM artifacts WHERE artifact_id=?',
@@ -415,7 +415,7 @@ def test_concurrent_precheck_commit_cannot_bypass_transactional_cap_or_open_circ
         assert c.global_block_reason(ledger, model=MODEL) is None
         calls = []
         client = AnthropicClient('synthetic', post_fn=lambda *args: calls.append(True), max_attempts=1)
-        reserve = c.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='third')
+        reserve = c.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='third')
         with pytest.raises(AnthropicError, match='budget_exceeded'):
             client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100, reserve_fn=reserve)
         assert not calls and len(ledger.artifacts(c.KINDS[0])) == 2

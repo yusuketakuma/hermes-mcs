@@ -7,6 +7,7 @@ import pytest
 
 import cloud_cli
 import cloud_policy
+import cloud_usage_accounting
 from ledger import Ledger
 
 
@@ -17,6 +18,8 @@ def local(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: None)
     monkeypatch.setattr(cloud_cli.jev, "api_key", lambda root=None: None)
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, **kw: True)
+    # max_cost re-checks pricing inside cloud_usage_accounting's own namespace.
+    monkeypatch.setattr(cloud_usage_accounting, "pricing_valid", lambda now=None, **kw: True)
     (tmp_path / "data").mkdir()
     with closing(Ledger(str(tmp_path / "data/ledger.db"))) as ledger:
         yield tmp_path, ledger, now

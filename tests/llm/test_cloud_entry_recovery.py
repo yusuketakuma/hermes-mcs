@@ -11,7 +11,7 @@ import cloud_client
 import cloud_inference
 import cloud_policy
 from ledger import Ledger
-from test_cloud_response_recovery import paid
+from test_cloud_response_recovery import legacy_cloud_routes, paid
 
 __all__ = ['paid']
 
@@ -27,7 +27,8 @@ def test_next_unit_checks_history_before_fresh_send_denial(paid, monkeypatch, ol
     path, cfg, calls, locks, state, unit, _ = paid
     with closing(Ledger(path)) as ledger:
         if old in ('saved', 'no_body', 'orphan', 'orphan_prior_month'):
-            unit(ledger)('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+            with legacy_cloud_routes():
+                unit(ledger)('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
             if old == 'orphan_prior_month':
                 with ledger.db:
                     ledger.db.execute("UPDATE artifacts SET created_at=? WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')",
@@ -40,7 +41,8 @@ def test_next_unit_checks_history_before_fresh_send_denial(paid, monkeypatch, ol
                     ledger.db.execute("UPDATE artifacts SET content='{}' WHERE kind='cloud_usage_result'")
         elif old != 'fresh':
             first = unit(ledger)
-            first.reserve(first.client.body('synthetic prompt', 100, None), 30)
+            with legacy_cloud_routes():
+                first.reserve(first.client.body('synthetic prompt', 100, None), 30)
             if old in ('legacy', 'tampered'):
                 row = ledger.artifacts('cloud_usage_reserve')[0]
                 meta = json.loads(row['meta'])
@@ -78,7 +80,8 @@ def test_next_unit_checks_history_before_fresh_send_denial(paid, monkeypatch, ol
 def test_current_source_denial_still_precedes_saved_answer_recovery(paid):
     path, cfg, calls, _locks, state, unit, _ = paid
     with closing(Ledger(path)) as ledger:
-        unit(ledger)('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+        with legacy_cloud_routes():
+            unit(ledger)('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
         cfg['cloud_llm']['daily_cost_limit_usd'] = 0
         state['current'] = False
         with pytest.raises(cloud_inference.CloudFallback, match='cloud_unit_changed'):
@@ -102,7 +105,8 @@ def unrelated_reservation(ledger, cfg, route, *, project_id=1, message_id=1):
 def test_unrelated_unknown_does_not_pin_new_input_to_cloud(paid, monkeypatch, barrier, age):
     path, cfg, calls, locks, state, unit, _ = paid
     with closing(Ledger(path)) as ledger:
-        unrelated_reservation(ledger, cfg, 'reextract')
+        with legacy_cloud_routes():
+            unrelated_reservation(ledger, cfg, 'reextract')
         if age == 'prior_month':
             with ledger.db:
                 ledger.db.execute("UPDATE artifacts SET created_at=? WHERE kind='cloud_usage_reserve'", (previous_month(),))
@@ -122,10 +126,11 @@ def test_same_text_new_source_occurrence_never_reuses_or_falls_back_at_cap(paid,
     path, cfg, calls, locks, _state, unit, _ = paid
     with closing(Ledger(path)) as ledger:
         original = unit(ledger)
-        if old == 'saved':
-            original('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
-        else:
-            original.reserve(original.client.body('synthetic prompt', 100, None), 30)
+        with legacy_cloud_routes():
+            if old == 'saved':
+                original('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+            else:
+                original.reserve(original.client.body('synthetic prompt', 100, None), 30)
         cfg['cloud_llm']['daily_cost_limit_usd'] = 0
         before = len(calls), len(locks)
         different_occurrence = unit(ledger, binding='different-source-occurrence')
@@ -145,7 +150,8 @@ def test_other_project_valid_unknown_does_not_block_local_new_input(paid, monkey
         _patient(ledger, 2)
         ledger.save_messages([_message(2, pid=2)])
         cfg['cloud_llm']['project_ids'] = [1, 2]
-        unrelated_reservation(ledger, cfg, 'reextract', project_id=2, message_id=2)
+        with legacy_cloud_routes():
+            unrelated_reservation(ledger, cfg, 'reextract', project_id=2, message_id=2)
         if age == 'prior_month':
             with ledger.db:
                 ledger.db.execute("UPDATE artifacts SET created_at=? WHERE kind='cloud_usage_reserve'", (previous_month(),))

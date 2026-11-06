@@ -34,7 +34,7 @@ def _body(unit):
 
 
 def _reserve(db, cfg=None, unit="u", **kw):
-    return c.usage_reserver(db, cfg or _cfg(), route="reextract", project_id=1,
+    return c.usage_reserver(db, cfg or _cfg(), route="patient_context", project_id=1,
                             unit_key=unit, **kw)(_body(unit), 2)
 
 
@@ -106,9 +106,13 @@ def test_null_cloud_block_is_a_config_error_not_an_omission():
 
 @pytest.mark.parametrize("scope,allowed", [(None,True), ([],False), ([1],True), ([2],False)])
 def test_explicit_scope_and_exclusion(scope, allowed):
-    assert c.eligible(_cfg(project_ids=scope), "reextract", 1) is allowed
-    assert not c.eligible(_cfg(project_ids=scope, exclude_project_ids=[1]), "reextract", 1)
-    assert not c.eligible(_cfg(project_ids=scope), "other", 1)
+    # Historical scope stays readable on closed routes; new sends additionally
+    # require an open send route, which only patient_context has.
+    assert c.in_scope(_cfg(project_ids=scope), "reextract", 1) is allowed
+    assert not c.in_scope(_cfg(project_ids=scope, exclude_project_ids=[1]), "reextract", 1)
+    assert not c.in_scope(_cfg(project_ids=scope), "other", 1)
+    assert c.eligible(_cfg(project_ids=scope), "patient_context", 1) is allowed
+    assert not c.eligible(_cfg(project_ids=scope), "reextract", 1)
 
 
 @pytest.mark.parametrize("settings", [dict(mode="invalid"), dict(project_ids=[True]), dict(model="other"),
@@ -164,10 +168,10 @@ def test_conflicting_result_restores_max_and_requires_explicit_resume(tmp_path, 
         report = c.usage_report(db)
         assert report["pricing_unverified"]
         assert Decimal(report["monthly_cost_usd"]) == _max()
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "pricing_unverified"
         # Later success must not reset a terminal circuit.
         c._circuit_result(db, None)
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "pricing_unverified"
 
 
 @pytest.mark.parametrize("settled", [False, True])
@@ -343,7 +347,7 @@ def test_expired_prices_stop_and_dryrun_is_scope_free(tmp_path, now, monkeypatch
         monkeypatch.setattr(c.time, "time", lambda: datetime(2026, 11, 26, tzinfo=c.JST).timestamp())
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             _reserve(db)
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "pricing_unverified"
 
 
 def test_dryrun_requires_success_transaction_and_rolls_back_with_it(tmp_path):
@@ -364,11 +368,11 @@ def test_terminal_circuit_only_resume_clears(tmp_path, now, kind):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         c._circuit_result(db, AnthropicError(kind))
         c._circuit_result(db, None)
-        assert c.block_reason(db, _cfg(), "reextract", 1) == kind
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == kind
         c.resume(db)
-        assert c.block_reason(db, _cfg(), "reextract", 1) is None
+        assert c.block_reason(db, _cfg(), "patient_context", 1) is None
         c.stop(db)
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "paused"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "paused"
 
 
 def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatch):
@@ -388,7 +392,7 @@ def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatc
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
         cfg = _cfg(provider="openai")
         body = openai_client.OpenAIClient("synthetic").body("synthetic", 100, None)
-        reservation = c.usage_reserver(ledger, cfg, route="reextract", project_id=1,
+        reservation = c.usage_reserver(ledger, cfg, route="patient_context", project_id=1,
                                        unit_key="synthetic")(body, 2)
         c.record_result(ledger, reservation, {
             "model": openai_client.MODEL, "request_fp": reservation["request_fp"],
@@ -412,10 +416,10 @@ def test_repeated_contract_failures_open_but_mixed_classes_do_not(tmp_path, now)
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         for kind in ("contract_error", "transport", "contract_error"):
             c._circuit_result(db, AnthropicError(kind, retryable=kind == "transport"))
-        assert c.block_reason(db, _cfg(), "reextract", 1) is None
+        assert c.block_reason(db, _cfg(), "patient_context", 1) is None
         c._circuit_result(db, AnthropicError("contract_error"))
         c._circuit_result(db, AnthropicError("contract_error"))
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "contract_error"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "contract_error"
 
 
 def test_corrupt_usage_result_never_reduces_reserve(tmp_path, now):
@@ -436,7 +440,7 @@ def test_successful_http_without_usage_stops_and_retains_maximum(tmp_path, now):
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             c.record_result(db, r, _result(r, usage=None))
         assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == _max()
-        assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
+        assert c.block_reason(db, _cfg(), "patient_context", 1) == "pricing_unverified"
 
 
 def test_key_based_auto_mode_preserves_explicit_scope_budget_and_off():
@@ -924,7 +928,7 @@ def test_original_receipt_evidence_permits_normal_bound_receipts_of_another_pati
         c.record_result(ledger, reservation, _result(reservation))
         aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
         expected = c.reservation_evidence(ledger.db, aid)
-        other = c.usage_reserver(ledger, _cfg(project_ids=[1, 2]), route='reextract', project_id=2,
+        other = c.usage_reserver(ledger, _cfg(project_ids=[1, 2]), route='patient_context', project_id=2,
             unit_key='synthetic-other')({'model': MODEL, 'max_tokens': 100}, 2)
         c.record_result(ledger, other, _result(other))
         ledger.db.execute('BEGIN')

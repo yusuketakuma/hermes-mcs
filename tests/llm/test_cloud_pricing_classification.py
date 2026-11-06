@@ -7,7 +7,7 @@ import pytest
 import cloud_client
 import cloud_policy
 from ledger import Ledger
-from test_cloud_response_recovery import paid
+from test_cloud_response_recovery import legacy_cloud_routes, paid
 
 __all__ = ['paid']
 
@@ -16,7 +16,8 @@ __all__ = ['paid']
 def test_corrupt_result_preflight_keeps_pricing_stop_and_never_falls_back(paid, monkeypatch, circuit_error):
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        unit(ledger)('synthetic original prompt', deadline=time.monotonic() + 60, max_tokens=100)
+        with legacy_cloud_routes():
+            unit(ledger)('synthetic original prompt', deadline=time.monotonic() + 60, max_tokens=100)
         with ledger.db:
             ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.usage.input_tokens',-1) "
                               "WHERE kind='cloud_usage_result'")
@@ -48,7 +49,8 @@ def test_same_prompt_changed_binding_classifies_full_receipt_set(paid, damage, e
     import json
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
-        unit(ledger)('synthetic same prompt', deadline=time.monotonic() + 60, max_tokens=100)
+        with legacy_cloud_routes():
+            unit(ledger)('synthetic same prompt', deadline=time.monotonic() + 60, max_tokens=100)
         if damage == 'missing_reserve':
             with ledger.db:
                 ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
