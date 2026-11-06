@@ -87,6 +87,8 @@ sys.path.insert(0,str(Path(source)/'mcs'))
 import _mcs_path
 import cloud_policy
 import mcs_update as update
+import update_repository as repository
+import update_runtime_migration as migration
 cloud_policy.provider_key=lambda *_a,**_k:None
 update.REPO=repo
 update.HOME=home
@@ -96,10 +98,10 @@ update.UPDATE_LOCK=str(Path(update.DATA)/'update.lock')
 update.RUN_LOCK=str(Path(update.DATA)/'run.lock')
 update.MARKER_PATH=str(Path(update.DATA)/__import__('writer_lock').UPDATE_MARKER_NAME)
 update.REPORT_PATH=str(Path(update.DATA)/'recovery_report.json')
-update._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
+update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
     update._split_source_tree(previous),ensure_ascii=True,separators=(',',':')).encode('ascii')).hexdigest()})
 if case in ('old_reader','already_split','early_old_reader'):
-    update._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
+    update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
 events=[]
 def change_mode():
     path=Path(home)/'config.json'
@@ -113,7 +115,7 @@ if case.startswith('mode_selected_'):
         verified=original_prior(*args,**kwargs)
         change_mode()
         return verified
-    update._provider_prior_source_verified=change_after_selection
+    update._provider_prior_source_verified=migration._provider_prior_source_verified=change_after_selection
 def quiesce(mode):
     events.append('quiesce:'+mode)
     if case=='reinstall_second_stop_failure' and events.count('quiesce:'+mode)==2:
@@ -131,13 +133,13 @@ def services():
     settings=Path(update.DATA)/'provider_settings'
     assert all((settings/(name+'.json')).is_file() for name in ('anthropic','openai','jev'))
     events.append('services')
-update._quiesce_for_mode=quiesce
-update._plan_runtime_migration=lambda *_a,**_k:None
-update._prepare_run_log=lambda **_k:None
-update._services_reconcile=services
-update.restart_agents=lambda:events.append('restart') or []
-update._postcheck=lambda *_a,**_k:[]
-update._enqueue_notice=lambda *_a,**_k:None
+update._quiesce_for_mode=migration._quiesce_for_mode=quiesce
+update._plan_runtime_migration=migration._plan_runtime_migration=lambda *_a,**_k:None
+update._prepare_run_log=migration._prepare_run_log=lambda **_k:None
+update._services_reconcile=migration._services_reconcile=services
+update.restart_agents=migration.restart_agents=lambda:events.append('restart') or []
+update._postcheck=migration._postcheck=lambda *_a,**_k:[]
+update._enqueue_notice=migration._enqueue_notice=lambda *_a,**_k:None
 if case.startswith('mode_before_publication_'):
     original_migrate=update.update_migrations.migrate_provider_settings
     def change_before_publication(root,*,before_publication=None):
@@ -155,7 +157,7 @@ if case.startswith('mode_after_publication_'):
         return saved
     provider_settings.commit=change_after_publication
 if case in ('reinstall_success','reinstall_second_stop_failure'):
-    update._verify_install_options_base=lambda *_a,**_k:events.append('verify-install')
+    update._verify_install_options_base=migration._verify_install_options_base=lambda *_a,**_k:events.append('verify-install')
     def plan(state):
         events.append('runtime-plan')
         state['applying']['runtime_migration']={'backup_path':'/synthetic-backup'}
@@ -163,17 +165,17 @@ if case in ('reinstall_success','reinstall_second_stop_failure'):
     def reinstall(applying):
         events.append('reinstall')
         applying['reinstall_done']=True
-    update._plan_runtime_migration=plan
-    update._reinstall=reinstall
-    update._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
+    update._plan_runtime_migration=migration._plan_runtime_migration=plan
+    update._reinstall=migration._reinstall=reinstall
+    update._use_migrated_runtime=migration._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
 if case.startswith('early_'):
     def forbidden(*_a,**_k):
         events.append('forbidden-runtime-effect')
         raise RuntimeError('synthetic forbidden runtime effect')
-    update._plan_runtime_migration=forbidden
-    update._verify_install_options_base=forbidden
-    update._reinstall=forbidden
-    update._use_migrated_runtime=forbidden
+    update._plan_runtime_migration=migration._plan_runtime_migration=forbidden
+    update._verify_install_options_base=migration._verify_install_options_base=forbidden
+    update._reinstall=migration._reinstall=forbidden
+    update._use_migrated_runtime=migration._use_migrated_runtime=forbidden
 try:
     result=update.cmd_post_merge()
 except Exception as exc:
@@ -378,6 +380,9 @@ sys.path.insert(0,str(Path(source)/'mcs'))
 import _mcs_path
 import cloud_policy
 import mcs_update as update
+import update_repository as repository
+import update_runtime_migration as migration
+import update_recovery as recovery
 cloud_policy.provider_key=lambda *_a,**_k:None
 update.REPO=repo
 update.HOME=home
@@ -388,9 +393,9 @@ update.RUN_LOCK=str(Path(update.DATA)/'run.lock')
 update.MARKER_PATH=str(Path(update.DATA)/__import__('writer_lock').UPDATE_MARKER_NAME)
 update.REPORT_PATH=str(Path(update.DATA)/'recovery_report.json')
 previous=json.loads(Path(update.STATE_PATH).read_text())['applying']['prev_sha']
-update._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
+update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset({hashlib.sha256(json.dumps(
     update._split_source_tree(previous),ensure_ascii=True,separators=(',',':')).encode('ascii')).hexdigest()})
-if case=='bad_witness':update._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
+if case=='bad_witness':update._PROVIDER_PRIOR_SOURCE_WITNESSES=repository._PROVIDER_PRIOR_SOURCE_WITNESSES=frozenset()
 events=[]
 reports=[]
 def locks_held():
@@ -413,20 +418,20 @@ def services():
         assert all((Path(update.DATA)/'provider_settings'/(name+'.json')).is_file()
                    for name in ('anthropic','openai','jev'))
     events.append('services')
-update._quiesce_for_mode=quiesce
-update._migrate_log_tail=lambda:None
-update._check_runtime_restore=lambda *_a:None
-update._clean_stale_git_locks=lambda:[]
-update._awaiting_consent_marker=lambda:None
-update._last_report=lambda:{}
-update._services_reconcile=services
-update.restart_agents=lambda *_a,**_k:events.append('restart') or []
-update.restart_services=lambda *_a,**_k:events.append('restart-services')
-update._postcheck=lambda *_a,**_k:[]
-update._enqueue_notice=lambda *_a,**_k:True
-update._report=lambda result,detail,**extra:reports.append({'result':result,**extra})
+update._quiesce_for_mode=migration._quiesce_for_mode=recovery._quiesce_for_mode=quiesce
+update._migrate_log_tail=recovery._migrate_log_tail=lambda:None
+update._check_runtime_restore=recovery._check_runtime_restore=lambda *_a:None
+update._clean_stale_git_locks=recovery._clean_stale_git_locks=lambda:[]
+update._awaiting_consent_marker=recovery._awaiting_consent_marker=lambda:None
+update._last_report=recovery._last_report=lambda:{}
+update._services_reconcile=recovery._services_reconcile=services
+update.restart_agents=recovery.restart_agents=lambda *_a,**_k:events.append('restart') or []
+update.restart_services=recovery.restart_services=lambda *_a,**_k:events.append('restart-services')
+update._postcheck=recovery._postcheck=lambda *_a,**_k:[]
+update._enqueue_notice=recovery._enqueue_notice=lambda *_a,**_k:True
+update._report=recovery._report=lambda result,detail,**extra:reports.append({'result':result,**extra})
 if case=='runtime_reinstall_done':
-    update._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
+    update._use_migrated_runtime=recovery._use_migrated_runtime=lambda *_a,**_k:events.append('use-migrated-runtime')
 if case=='bad_fd':
     wrong_fd=os.open(str(Path(update.DATA)/'other.lock'),os.O_RDWR|os.O_CREAT,0o600)
     fcntl.flock(wrong_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -434,7 +439,7 @@ if case=='bad_fd':
     def wrong_recovery_fd(state,**kwargs):
         kwargs['recovery_fds']=(wrong_fd,kwargs['recovery_fds'][1])
         return original_guard(state,**kwargs)
-    update._legacy_provider_migration_guard=wrong_recovery_fd
+    update._legacy_provider_migration_guard=recovery._legacy_provider_migration_guard=wrong_recovery_fd
 if case in ('commit_before','commit_after'):
     import provider_settings
     original_commit=provider_settings.commit
@@ -718,20 +723,20 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         patch_lifecycle_lookup(monkeypatch, updater, name, str(value))
     monkeypatch.setenv('HOME', str(runtime))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: json.loads((runtime / 'config.json').read_text()))
-    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])
-    monkeypatch.setattr(updater, 'precheck_local', lambda *_a, **_k: [])
-    monkeypatch.setattr(updater, 'precheck_tag', lambda *_a, **_k: [])
-    monkeypatch.setattr(updater, '_baseline_check', lambda *_a, **_k: [])
-    monkeypatch.setattr(updater, '_plan_runtime_migration', lambda *_a, **_k: None)
-    monkeypatch.setattr(updater, 'quiesce', lambda: updater._write_marker())
-    monkeypatch.setattr(updater, '_enqueue_notice', lambda *_a, **_k: None)
+    patch_lifecycle_lookup(monkeypatch, updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])
+    patch_lifecycle_lookup(monkeypatch, updater, 'precheck_local', lambda *_a, **_k: [])
+    patch_lifecycle_lookup(monkeypatch, updater, 'precheck_tag', lambda *_a, **_k: [])
+    patch_lifecycle_lookup(monkeypatch, updater, '_baseline_check', lambda *_a, **_k: [])
+    patch_lifecycle_lookup(monkeypatch, updater, '_plan_runtime_migration', lambda *_a, **_k: None)
+    patch_lifecycle_lookup(monkeypatch, updater, 'quiesce', lambda: updater._write_marker())
+    patch_lifecycle_lookup(monkeypatch, updater, '_enqueue_notice', lambda *_a, **_k: None)
     parent_effects = []
-    monkeypatch.setattr(updater, 'restart_services', lambda *_a, **_k: parent_effects.append('restart-services'))
-    monkeypatch.setattr(updater, '_services_reconcile', lambda: None)
-    monkeypatch.setattr(updater, 'restart_agents', lambda: parent_effects.append('restart') or [])
-    monkeypatch.setattr(updater, '_rollback_tree', lambda *_a, **_k: parent_effects.append('rollback'))
+    patch_lifecycle_lookup(monkeypatch, updater, 'restart_services', lambda *_a, **_k: parent_effects.append('restart-services'))
+    patch_lifecycle_lookup(monkeypatch, updater, '_services_reconcile', lambda: None)
+    patch_lifecycle_lookup(monkeypatch, updater, 'restart_agents', lambda: parent_effects.append('restart') or [])
+    patch_lifecycle_lookup(monkeypatch, updater, '_rollback_tree', lambda *_a, **_k: parent_effects.append('rollback'))
     reports = []
-    monkeypatch.setattr(updater, '_report', lambda result, detail, **extra: reports.append((result, extra)))
+    patch_lifecycle_lookup(monkeypatch, updater, '_report', lambda result, detail, **extra: reports.append((result, extra)))
     monkeypatch.setattr(maintenance, 'preupdate_backup', lambda *_a, **_k: str(data / 'synthetic-backup'))
 
     # The real _run_post_merge owns spawning and passes its actual locked FDs.
