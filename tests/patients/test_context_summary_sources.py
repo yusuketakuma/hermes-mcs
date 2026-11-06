@@ -29,6 +29,7 @@ def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
         assert shallow["derived_summary_sig"] == source["derived_summary_sig"]
         assert shallow["extraction_sig"] == source["extraction_sig"]
         assert shallow["derived_summaries"] == []
+        assert shallow["derived_summary_chars"] == source["derived_summary_chars"] == len(text)
         assert "body_text" not in shallow
         row = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
         meta = json.loads(row[0])
@@ -85,6 +86,8 @@ def test_validated_semantic_summary_uses_existing_gate_and_explicit_policy(tmp_p
         assert source["derived_summaries"] == [{"kind": "semantic_summary", "artifact_id": saved["artifact_id"],
             "text": json.dumps(json.loads(saved["content"]), ensure_ascii=False, sort_keys=True)}]
         assert len(json.loads(source["derived_summaries"][0]["text"])["claims"]) == 20
+        assert source["derived_summary_chars"] == len(source["derived_summaries"][0]["text"])
+        assert source["derived_summary_chars"] == _source(led, cfg=cfg, hydrate=False)["derived_summary_chars"]
         assert source["derived_summary_sig"] == _source(led, cfg=cfg, hydrate=False)["derived_summary_sig"]
         for invalid_cfg in (None, {}, _cfg("shadow"), _cfg("enforce", calibration_version="changed-policy")):
             assert _source(led, cfg=invalid_cfg)["derived_summaries"] == []
