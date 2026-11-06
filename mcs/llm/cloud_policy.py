@@ -382,6 +382,18 @@ def in_scope(cfg, route, project_id):
             and project_id not in c["exclude_project_ids"])
 
 
+def owns_request(db, *, route, project_id, message_id):
+    """A durable reservation already owns this message's cloud unit on `route`.
+
+    Send closure retires new sends, never the ownership a prior reservation
+    created: the unit must still reach recovery or stay unresolved."""
+    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
+        "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
+        "(json_extract(meta,'$.message_id')=? OR json_extract(meta,'$.unit_key')=? "
+        "OR json_extract(meta,'$.logical_target_id')=?) END "
+        "LIMIT 1", (KINDS[0], project_id, route, message_id, str(message_id), message_id)).fetchone() is not None
+
+
 def _logical_request_fp(body):
     """Identify the same prompt across the two supported provider envelopes."""
     system = body.get('system', body.get('instructions'))

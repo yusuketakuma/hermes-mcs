@@ -14,6 +14,7 @@
     "mcs/llm/cloud_inference.py",
     "mcs/llm/cloud_backlog.py",
     "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/extract/llm/extract_llm_prepare.py",
     "mcs/semantic/semantic_due_selection.py",
     "mcs/semantic/semantic_drain.py",
     "mcs/ops/cloud_cli.py",
