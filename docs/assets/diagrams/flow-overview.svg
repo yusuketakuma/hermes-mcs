@@ -1,60 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="390" height="1152" viewBox="0 0 390 1152" role="img" aria-labelledby="flow-overview-title flow-overview-desc" id="flow-overview-root"><title id="flow-overview-title">MCSの収集・ローカル解析・クラウド解析</title><desc id="flow-overview-desc">原文を保存し、条件付きの背景入力からローカル常駐と設定時の独立クラウドworkerで解析し、根拠・品質・現在性を照合して保存する。対象の保存記録が条件を満たすと患者コンテキストを更新し、その完成を全通知の前提にせず通知・検索・本人記録まとめへ使う概念図。</desc><defs>
-      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="1152" viewBox="0 0 390 1152" role="img" aria-labelledby="flow-overview-title flow-overview-desc" id="flow-overview-root"><title id="flow-overview-title">個別解析はローカル、クラウドは患者コンテキスト</title><desc id="flow-overview-desc">投稿と添付OCRを端末内で個別解析する。通知を先に出し、要約・原文・OCR全文を使う患者コンテキスト作成と更新に限って、設定したクラウドを利用する。新しい情報や編集で更新し、未取得や結果不明は未完了のまま保持する。</desc><defs>
+      <style>1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
       #flow-overview-root { font-family: "Hiragino Sans",sans-serif; }
       #flow-overview-root .diagram-container { overflow-x:auto }</style><marker id="flow-overview-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#66716f"/></marker></defs><rect width="390" height="1152" fill="#f6f4ef"/>
-<text x="20" y="34" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="20" fill="#202124" font-weight="600">収集から、解析・保存・活用まで</text>
-<text x="20" y="59" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">概念図 · 完全合成 / 実データなし</text>
+<text x="20" y="34" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="20" fill="#202124" font-weight="600">個別解析と患者背景の更新</text>
+<text x="20" y="59" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#202124">概念図 · 完全合成 / 実データなし</text>
 <path d="M195 172 V194" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M195 320 V340 Q195 348 187 348 H107 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M195 320 V340 Q195 348 203 348 H283 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M107 588 V612 Q107 620 115 620 H171 V642" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M283 588 V612 Q283 620 275 620 H219 V642" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M171 814 V838 Q171 846 163 846 H107 V868" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
-<path d="M219 814 V838 Q219 846 227 846 H283 V868" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M171 320 V340 Q171 348 163 348 H107 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M219 320 V340 Q219 348 227 348 H283 V370" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M107 588 V612 Q107 620 115 620 H187 Q195 620 195 628 V642" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M171 812 V840 Q171 848 163 848 H107 V866" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
+<path d="M194 954 H202" fill="none" stroke="#66716f" stroke-width="1.5" marker-end="url(#flow-overview-arrow)"/>
 <rect x="20" y="84" width="350" height="88" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="32" y="111" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">1  MCS収集 → 原文保存</text>
-<text x="32" y="137" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得した投稿・添付の情報を</text>
-<text x="32" y="160" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">このMacのSQLiteへ保存</text>
+<text x="32" y="111" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">1  原文・添付を保存</text>
+<text x="32" y="137" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">投稿・返信・画像・PDFなどを</text>
+<text x="32" y="160" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">このMacへ原文と添付を保存</text>
 <rect x="20" y="196" width="350" height="124" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="32" y="223" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">2  利用できる背景を入力へ</text>
-<text x="32" y="249" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定時、スレッド履歴・患者背景を利用</text>
-<text x="32" y="272" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得範囲・鮮度などの条件を確認</text>
-<text x="32" y="295" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">未取得の情報を、取得済みとして扱わない</text>
+<text x="32" y="223" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">2  個別解析はローカルLLM</text>
+<text x="32" y="249" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">新着・過去の投稿・添付OCRを解析</text>
+<text x="32" y="272" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">原文とOCRの文章は区別して保存</text>
+<text x="32" y="295" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得・根拠・品質・現在性を照合</text>
 <rect x="20" y="372" width="174" height="216" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="32" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">3  ローカル常駐</text>
-<text x="32" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">新着を優先して解析</text>
-<text x="32" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">このMacのLLMを利用</text>
-<text x="32" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">原文から情報を抽出</text>
-<text x="32" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">履歴も順次処理</text>
-<rect x="204" y="372" width="166" height="216" rx="8" fill="#e2efe8" stroke="#087f5b"/>
-<text x="216" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">4  クラウド</text>
-<text x="216" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定時の独立worker</text>
-<text x="216" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">Anthropic / OpenAI</text>
-<text x="216" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">履歴・患者背景を解析</text>
-<text x="216" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">予算・対象を確認</text>
-<text x="216" y="517" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">送信前の条件を確認</text>
+<text x="32" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">3  全資料を入力へ</text>
+<text x="32" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">取得済みの要約</text>
+<text x="32" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">チャット原文</text>
+<text x="32" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">添付OCR全文</text>
+<text x="32" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">出典・版・区間を確認</text>
+<text x="32" y="517" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">長文は分割して処理</text>
+<rect x="204" y="372" width="166" height="216" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="216" y="399" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">通知は先に表示</text>
+<text x="216" y="425" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">原文・添付を通知</text>
+<text x="216" y="448" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">作成時の進捗を表示</text>
+<text x="216" y="471" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">患者コンテキストの</text>
+<text x="216" y="494" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">完成を待たない</text>
 <rect x="20" y="644" width="350" height="168" rx="8" fill="#e2efe8" stroke="#087f5b"/>
-<text x="32" y="671" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">5  照合して保存・再開</text>
-<text x="32" y="697" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">推論エンジン v1.0・原文根拠と照合</text>
-<text x="32" y="720" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">品質・保存対象の現在性を確認</text>
-<text x="32" y="743" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">部分結果と送信の証拠を保持して保存再開</text>
-<text x="32" y="766" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">結果不明をローカルへ無条件に再送しない</text>
+<text x="32" y="671" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">4  設定時のクラウドLLM</text>
+<text x="32" y="697" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">患者コンテキストの作成・更新だけに使用</text>
+<text x="32" y="720" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">Anthropic / OpenAI · 予算・対象を確認</text>
+<text x="32" y="743" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">個別投稿のクラウド再抽出は行わない</text>
+<text x="32" y="766" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">結果不明は保留し、同じ要求を再送しない</text>
 <rect x="20" y="868" width="174" height="172" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="32" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">6  患者背景を更新</text>
-<text x="32" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">対象の保存記録が</text>
-<text x="32" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">現行世代・必要品質を</text>
-<text x="32" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">満たすと更新</text>
-<text x="32" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">次の解析への利用も</text>
-<text x="32" y="1013" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">設定・鮮度条件に従う</text>
+<text x="32" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">5  患者背景を更新</text>
+<text x="32" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">新着・編集・OCRで</text>
+<text x="32" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">同日でも都度更新</text>
+<text x="32" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">入力が同じなら再送0</text>
+<text x="32" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">原文根拠・品質を</text>
+<text x="32" y="1013" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">満たす結果を保存</text>
 <rect x="204" y="868" width="166" height="172" rx="8" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="216" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">7  通知・活用</text>
-<text x="216" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">通知 / 検索</text>
-<text x="216" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">本人記録まとめ</text>
-<text x="216" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">患者背景の完成を</text>
-<text x="216" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">全通知の前提に</text>
-<text x="216" y="1013" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">しない</text>
-<text x="20" y="1076" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="13" fill="#66716f">実線：保存した情報の流れ</text>
-<text x="20" y="1101" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">処理完了と、必要な品質を満たすことは別に確認。</text>
-<text x="20" y="1126" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#66716f">クラウドの利用先・範囲は設定と送信条件に従う。</text>
+<text x="216" y="895" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="16" fill="#202124" font-weight="600">6  閲覧・活用</text>
+<text x="216" y="921" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">背景・最近の変化</text>
+<text x="216" y="944" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">連絡・訪問前の確認</text>
+<text x="216" y="967" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">本人記録まとめ</text>
+<text x="216" y="990" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="14" fill="#202124">未完了は区別</text>
+<text x="20" y="1076" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="13" fill="#202124">実線：保存した情報の流れ</text>
+<text x="20" y="1101" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#202124">Jevの個別投稿監査は継続します。</text>
+<text x="20" y="1126" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',sans-serif" font-size="12" fill="#202124">クラウドの利用先・対象・予算は設定に従います。</text>
 </svg>
