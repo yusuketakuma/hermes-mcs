@@ -282,7 +282,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | 状態 | 自動応答 | 実装 |
 |---|---|---|
 | collection=incomplete | 次回 tick で再試行 + `health_watch.py` が degraded 遷移・新しい理由を system 通知（mcs_check.sh の stdout 行はログのみ） | ✅ |
-| health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target`（無ければ notify_target）へ直接送信 | ✅ |
+| health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target`へ直接送信。Slackの患者通知がなければ、未設定時は`notify_target`を使用 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
 | extract drainer 滞留 | 背景2枠の常駐 drain・6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
@@ -297,11 +297,17 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 
 | チャンネル | 用途 |
 |---|---|
-| `notify_target`（カード/テキスト） | 患者コンテンツ・シグナル・依頼 |
-| `notify_system_target`（無ければ notify_target） | セッション失効・run 失敗・更新📋・復旧 |
+| `notify_target`（テキスト）・有効な`notify.<transport>.channel_id`（カード） | 患者コンテンツ・シグナル・依頼 |
+| `notify_system_target` | セッション失効・run 失敗・更新📋・独立モードの復旧。Slackの患者通知がなければ、未設定時は`notify_target`を使用 |
 | `data/mcs.log` | 共通ログhelperが実行ログの記録とローテーションを管理。`run.log`・`extract_drain*.log`・`semantic_drain.log`等の旧名は移行元として扱う |
 | `health.json` | 機械可読な健全状態（外部監視・警報判定の正本） |
 | `update_state.json`📋 | 更新機構の状態・試行履歴・rollback 情報 |
+
+Slackの患者本文・有効な通知カードがある場合、運用通知は患者通知の各送り先と分離を確認できる
+明示先だけへ送る。別の接続先の確定IDも使用できる。同じ接続先の名前・スレッド指定や
+空欄は分離の証拠にしない。詳細と復旧用コピーの送信範囲は
+[患者情報と運用通知の送り先](../guides/STANDALONE.md#患者情報と運用通知の送り先)を参照。
+運用通知は固定文を使い、原文・添付・自由記述のエラー詳細を含めない。
 
 ## 10. 責任分界
 

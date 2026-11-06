@@ -399,6 +399,23 @@ def _notification_text(text):
             + '\n稼働の確認: python3 mcs/ops/mcs_setup.py doctor')
 
 
+def _channel_target(value, cfg):
+    transport, _, channel = value.partition(':')
+    if transport == 'slack' and re.fullmatch(r'[CG][A-Z0-9]{8,}', channel):
+        return transport, channel
+    if transport == 'discord' and channel.isdecimal():
+        try:
+            return transport, str(int(channel))
+        except ValueError:
+            return None
+    if transport == 'lineworks' and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}', channel):
+        notify = cfg.get('notify')
+        scope = notify.get('lineworks') if isinstance(notify, dict) else None
+        if isinstance(scope, dict) and channel == scope.get('channel_id'):
+            return transport, channel
+    return None
+
+
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
@@ -412,16 +429,20 @@ def _notify(text):
             system = cfg.get("notify_system_target")
             patient = patient.strip() if isinstance(patient, str) else ''
             system = system.strip() if isinstance(system, str) else ''
-            patients = [patient] if patient == 'slack' or patient.startswith('slack:') else []
+            patients = [patient]
             notify = cfg.get('notify')
-            if isinstance(notify, dict) and notify.get('interactive') == 'slack':
-                slack = notify.get('slack')
-                channel = slack.get('channel_id') if isinstance(slack, dict) else None
-                patients.append('slack:' + channel.strip() if isinstance(channel, str) else '')
-            if patients:
-                if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system)
-                        or any(not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', p)
-                               or system == p for p in patients)):
+            if isinstance(notify, dict) and notify.get('interactive') in ('slack', 'discord', 'lineworks'):
+                transport = notify['interactive']
+                scope = notify.get(transport)
+                channel = scope.get('channel_id') if isinstance(scope, dict) else None
+                patients.append(transport + ':' + (channel.strip() if isinstance(channel, str) else ''))
+            if any(p.partition(':')[0] == 'slack' for p in patients) and system != 'local':
+                # Keep typed separation in sync with notify_sender.target.
+                destination = _channel_target(system, cfg)
+                if (destination is None or any(
+                        p.partition(':')[0] == destination[0]
+                        and _channel_target(p, cfg) in (None, destination)
+                        for p in patients)):
                     return
             target = system or patient
             python = os.path.join(mcs_recovery_core.HOME, "venv", "bin", "python3")

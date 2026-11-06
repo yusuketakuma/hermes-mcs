@@ -575,7 +575,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `notify.card_thread_archive_min` | int | `10080` | 設定キーのみ（自動アーカイブは未実装） |
 | `notify.route_epoch` | int | `1` | 配送先を変えたとき +1 する番号 |
 | `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`） |
-| `notify_system_target` | str | なし | 障害・システム通知の送り先（空欄=`notify_target` と同じ） |
+| `notify_system_target` | str | なし | 障害・システム通知の送り先。Slackの患者本文・カードがある場合は、それぞれと分離を確認できる明示先が必要。それ以外は空欄で`notify_target`と同じ。[分離の条件](STANDALONE.md#患者情報と運用通知の送り先) |
 | `notify_max_age_h` | num | なし | この時間より古い投稿は通知しない。設定時は期間内の新規取込みを既読でも通知（既読投稿は投稿時刻が必要） |
 | `notify_all_replies` | bool | false | リアルタイム通知経路で新規取得した返信を既読・投稿時刻によらず全件通知。返信には `notify_max_age_h` を適用しない。履歴一括取込み・保存済み返信の再送は対象外 |
 | `hermes_bin` | str | 自動検出 | `hermes` コマンドのパス |

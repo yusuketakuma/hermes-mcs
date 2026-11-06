@@ -25,6 +25,23 @@ SYSTEM_ALERT_KINDS = frozenset({
 })
 
 
+def _channel_target(value, cfg):
+    transport, _, channel = value.partition(':')
+    if transport == 'slack' and re.fullmatch(r'[CG][A-Z0-9]{8,}', channel):
+        return transport, channel
+    if transport == 'discord' and channel.isdecimal():
+        try:
+            return transport, str(int(channel))
+        except ValueError:
+            return None
+    if transport == 'lineworks' and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}', channel):
+        notify = cfg.get('notify')
+        scope = notify.get('lineworks') if isinstance(notify, dict) else None
+        if isinstance(scope, dict) and channel == scope.get('channel_id'):
+            return transport, channel
+    return None
+
+
 def target(cfg: dict, kind: str) -> str | None:
     """Delivery target in `hermes send --to` syntax. Patient-content
     events ONLY go to the explicitly configured target — a missing
@@ -35,17 +52,20 @@ def target(cfg: dict, kind: str) -> str | None:
         st = cfg.get("notify_system_target")
         st = st.strip() if isinstance(st, str) else ''
         patient = t.strip() if isinstance(t, str) else ''
-        patients = [patient] if patient == 'slack' or patient.startswith('slack:') else []
+        patients = [patient]
         notify = cfg.get('notify')
-        if isinstance(notify, dict) and notify.get('interactive') == 'slack':
-            slack = notify.get('slack')
-            channel = slack.get('channel_id') if isinstance(slack, dict) else None
-            patients.append('slack:' + channel.strip() if isinstance(channel, str) else '')
-        if patients:
-            # Names and thread aliases cannot prove separation without a lookup.
-            if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', st)
-                    or any(not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', p)
-                           or st == p for p in patients)):
+        if isinstance(notify, dict) and notify.get('interactive') in ('slack', 'discord', 'lineworks'):
+            transport = notify['interactive']
+            scope = notify.get(transport)
+            channel = scope.get('channel_id') if isinstance(scope, dict) else None
+            patients.append(transport + ':' + (channel.strip() if isinstance(channel, str) else ''))
+        if any(p.partition(':')[0] == 'slack' for p in patients) and st != 'local':
+            # Keep typed separation in sync with the checkout-independent recovery copy.
+            system = _channel_target(st, cfg)
+            if (system is None or any(
+                    p.partition(':')[0] == system[0]
+                    and _channel_target(p, cfg) in (None, system)
+                    for p in patients)):
                 return None
         if st:
             t = st

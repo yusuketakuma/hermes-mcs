@@ -119,6 +119,20 @@ CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileか
 LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設定します。
 独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。
 
+### 患者情報と運用通知の送り先
+
+患者本文は`notify_target`へ、通知カードは有効な`notify.interactive`のチャンネルへ送ります。
+Slackの患者本文・カードがある場合、運用通知の`notify_system_target`には患者通知の各送り先と
+分離を確認できる明示先が必要です。SlackはC/Gで始まる確定済みチャンネルID、Discordは数字の
+チャンネルIDを使い、別の接続先も選べます。同じ接続先の名前・スレッド指定や空欄は、
+別チャンネルの証拠として扱いません。未設定・同一チャンネル・分離を確認できない場合は保留します。
+Slackの患者通知がなければ、運用通知先が空欄のときは従来どおり`notify_target`を使います。
+
+明示の`local`は端末内の出力先として扱います。通常送信のLINE WORKSは既存の
+`notify.lineworks.channel_id`と一致する通知先だけを使います。独立モードの復旧用コピーは
+LINE WORKSへ送信しません。Hermesモードの復旧用コピーは従来どおり`local`へ送ります。
+Hermes連携の通常送信・稼働監視も同じ条件で送り先を選びます。
+
 ## 常駐・診断
 
 macOSの`ai.mcs.standalone`が、定期7ジョブ、抽出worker2本、cmd/cmd_int取込と接続を所有します。

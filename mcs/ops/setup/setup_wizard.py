@@ -56,7 +56,7 @@ WIZARD = [
          "通知の送り先（例: slack:<チャンネルID>、"
          "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
-         "エラーや動作状況の通知先（空欄なら通常の通知と同じ場所）", None),
+         "エラーや動作状況の通知先（Slackは空欄で専用チャンネルを作成）", None),
     ]),
     ("通知の形式を選ぶ", [
         ("notify.interactive", "choice:off,slack,discord,lineworks", "off",

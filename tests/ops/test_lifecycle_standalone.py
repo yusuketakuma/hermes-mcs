@@ -73,25 +73,26 @@ def test_update_precheck_needs_no_hermes_in_standalone(monkeypatch):
 
 def test_recovery_tool_follows_the_runtime(monkeypatch, tmp_path):
     recover = _load()
-    monkeypatch.setattr(recover, "HOME", str(tmp_path))
-    monkeypatch.setattr(recover, "DATA", str(tmp_path / "data"))
+    core, services = recover.mcs_recovery_core, recover.mcs_recovery_services
+    monkeypatch.setattr(core, "HOME", str(tmp_path))
+    monkeypatch.setattr(core, "DATA", str(tmp_path / "data"))
     (tmp_path / "data").mkdir()
-    monkeypatch.setattr(recover, "AGENTS_DIR", str(tmp_path))
-    started = _popen_log(monkeypatch, recover)
-    recover._restart_gateway()
-    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-3] == recover.DATA
+    monkeypatch.setattr(core, "AGENTS_DIR", str(tmp_path))
+    started = _popen_log(monkeypatch, services)
+    services._restart_gateway()
+    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-3] == core.DATA
     (tmp_path / "config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     (tmp_path / "ai.mcs.standalone.plist").write_text("")
-    monkeypatch.setattr(recover, "_standalone_status", lambda: {"generation": "a" * 32})
-    recover._restart_gateway()
+    monkeypatch.setattr(services, "_standalone_status", lambda: {"generation": "a" * 32})
+    services._restart_gateway()
     assert len(started) == 1
     request = json.loads((tmp_path / "data" / "standalone-restart.request").read_text())
     assert request["generation"] == "a" * 32 and len(request["request_id"]) == 32
-    monkeypatch.setattr(recover, "_setup_python", lambda: None)
-    recover._notify("synthetic")       # no interpreter: best-effort skip
+    monkeypatch.setattr(services.os, "access", lambda *args: False)
+    services._notify("synthetic")       # no interpreter: best-effort skip
     assert len(started) == 1
     # standalone-owned agents count as known: a rollback never deletes them
-    assert {"ai.mcs.standalone", "ai.mcs.cron.mcs-check"} <= recover.KNOWN_AGENT_LABELS
+    assert {"ai.mcs.standalone", "ai.mcs.cron.mcs-check"} <= core.KNOWN_AGENT_LABELS
 
 
 def test_update_ops_find_the_standalone_wrapper(monkeypatch, tmp_path):
