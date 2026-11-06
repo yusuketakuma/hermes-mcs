@@ -174,6 +174,7 @@ _LOADED_SOURCE_PATHS.update({
     'attachment_observation_seeds': str(Path(__file__).resolve().parents[1] / 'clinical' / 'attachment_observation_seeds.py'),
     'measurement_sources': str(Path(__file__).resolve().parents[2] / 'patients' / 'measurement_sources.py'),
     'measurement_timeline': str(Path(__file__).resolve().parents[2] / 'patients' / 'measurement_timeline.py'),
+    'ocr_model_contract': str(Path(__file__).resolve().parents[1] / 'ocr_model_contract.py'),
     'attachment_ocr': str(Path(__file__).resolve().parents[1] / 'attachment_ocr.py'),
     'attachment_inference': str(Path(__file__).resolve().parents[1] / 'attachment_inference.py'),
     'attachment_extraction': str(Path(__file__).resolve().parents[1] / 'attachment_extraction.py'),
