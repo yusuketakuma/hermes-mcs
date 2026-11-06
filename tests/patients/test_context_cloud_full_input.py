@@ -34,3 +34,49 @@ def test_cloud_reads_full_original_after_local_checkpoint(runtime, cloud, monkey
     count = len(cloud[0])
     assert step(runtime)["status"] == "complete"
     assert len(cloud[0]) == count
+
+
+def test_supplemental_summary_is_fully_chunked_and_separate_from_original(runtime):
+    import json
+    import mcs_queries
+    import patient_context_plan as plan
+    import patient_context_scan as scan
+
+    ledger, clock, _ = runtime
+    seed(ledger, body="完全合成の原文です。")
+    source = next(mcs_queries.patient_context_sources(ledger.db, 1))
+    text = ('合成の補助要約"\\\u0001' * 1500)
+    source["derived_summaries"] = [{"kind": "extract_llm", "artifact_id": 123, "text": text}]
+    source["derived_summary_sig"] = plan.source_digest(text)
+    calls = []
+
+    def answer(payload):
+        assert len(json.dumps(payload, ensure_ascii=False)) <= plan.MAX_PROMPT_CHARS
+        assert payload["source"] == source["body_text"]
+        assert payload["source_identity"]["signature"] == plan.source_signature(source)
+        calls.append(payload)
+        return {"patient_context": []}
+
+    result = scan.scan_source(source, {}, "synthetic", answer_for=answer, clock=lambda: clock.wall)
+    assert result["complete"] and not result["facts"]
+    assert len(calls) > 1
+    pages = [page for call in calls for page in call["derived_summaries"]]
+    assert "".join(page["text"] for page in pages) == text
+    assert [page["span"][0] for page in pages] == [
+        sum(len(prior["text"]) for prior in pages[:index]) for index in range(len(pages))]
+
+
+def test_supplemental_summary_cannot_supply_an_original_quote(runtime):
+    import mcs_queries
+    import patient_context_scan as scan
+
+    ledger, clock, _ = runtime
+    seed(ledger, body="完全合成の原文です。")
+    source = next(mcs_queries.patient_context_sources(ledger.db, 1))
+    derived = "原文にない合成の指示です。"
+    source["derived_summaries"] = [{"kind": "extract_llm", "artifact_id": 123, "text": derived}]
+    def answer(payload):
+        return {"patient_context": [{"category": "living", "text": derived,
+            "evidence": derived, "subject": "unspecified", "details": []}]}
+    with pytest.raises(ValueError, match="nightly_unsupported_items"):
+        scan.scan_source(source, {}, "synthetic", answer_for=answer, clock=lambda: clock.wall)
