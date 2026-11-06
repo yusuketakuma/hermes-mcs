@@ -22,6 +22,14 @@ def _slack_on(cfg):
     return transport_enabled(cfg, "slack")
 
 
+def _slack_connect_on(cfg):
+    """Slack connection identity is also needed for text-only targets:
+    channel provisioning binds team/application/profile even when cards
+    stay off. Card-only fields keep the narrower _slack_on gate."""
+    target = cfg.get("notify_target")
+    return _slack_on(cfg) or isinstance(target, str) and target.startswith("slack:")
+
+
 def _lineworks_on(cfg):
     return transport_enabled(cfg, "lineworks")
 
@@ -53,8 +61,8 @@ WIZARD = [
     ]),
     ("通知の送り先", [
         ("notify_target", "opt", None,
-         "患者情報の送り先（Slack新規作成は空欄。例: slack:<チャンネルID>、"
-         "discord:<チャンネルID>、lineworks:<トークルームID>）", None),
+         "患者情報の送り先（Slack新規作成は slack:new。カード利用時の新規作成は空欄。"
+         "例: slack:<チャンネルID>、discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
          "エラーや動作状況の通知先（Slackカード利用時は空欄で専用チャンネルを作成）", None),
     ]),
@@ -80,15 +88,15 @@ WIZARD = [
     ]),
     ("Slackの接続先と操作できる人", [
         ("notify.slack.profile", "req", None,
-         "この接続先を区別する名前（プロファイル名。例: mcs）", _slack_on),
+         "この接続先を区別する名前（プロファイル名。例: mcs）", _slack_connect_on),
         ("notify.slack.application_id", "req", None,
-         "Slack アプリID", _slack_on),
+         "Slack アプリID", _slack_connect_on),
         ("notify.slack.team_id", "req", None,
-         "Slack ワークスペース（team）ID", _slack_on),
+         "Slack ワークスペース（team）ID", _slack_connect_on),
         ("notify.slack.channel_id", "opt", None,
          "カードの投稿先チャンネルID（新規作成は空欄）", _slack_on),
         ("notify.slack.allowed_user_ids", "reqcsv", None,
-         "操作を許可するSlackユーザーID・カンマ区切り（作成したチャンネルへ招待）", _slack_on),
+         "操作を許可するSlackユーザーID・カンマ区切り（作成したチャンネルへ招待）", _slack_connect_on),
         ("notify.slack.project_ids_auto", "bool", False,
          "公開済みscope snapshotからプロジェクトを解決", lambda cfg: cfg.get("runtime_mode") == "standalone" and _slack_on(cfg)),
         ("notify.slack.project_ids", "intlist", [],
@@ -361,6 +369,7 @@ def ask(key: str, kind: str, default, desc: str, cur, present=False):
             if key in ("notify_target", "notify_system_target"):
                 print("    Slack は投稿先チャンネルを開き、チャンネル名 → 詳細の最下部でIDを確認します。"
                       "\n    slack: に続けてそのIDを入力します（入力形式の例: slack:C0123456789）。"
+                      "\n    新しいSlackチャンネルを患者情報の送り先に作る場合は slack:new と入力します。"
                       "\n    Discord / LINE WORKS は担当者に通知先のIDを確認してください。"
                       "\n    手順: docs/guides/EASY_SETUP.md、詳しいIDの調べ方: docs/guides/INSTALLATION.md")
             if kind.startswith("req") and eff is None:

@@ -452,6 +452,34 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
     return not failed
 
 
+def _apply_slack_text_bootstrap(cfg: dict, args, binding: dict) -> bool:
+    """Wire only the slack connection identity a text-only channel setup
+    needs before the native factory can consume the pending intent:
+    data_root plus the verified team/application/profile triple. The card
+    adapter, operator allowlists and project grants stay disabled, and the
+    existing token store/CLI path is reused unchanged."""
+    exe = mcs_util.hermes_exe(cfg)
+    if not runtime_inspection.executable_available(exe):
+        print("\nHermesコマンドが見つかりません。連携設定は後で "
+              f"`hermes config set {PLUGIN_SETTINGS}.<key> <値>` で行ってください")
+        return False
+    profile = binding['profile']
+    data = os.path.join(HOME, "data")
+    failed = False
+    for key, val in (("data_root", data),
+                     ("slack_team_id", binding["team_id"]),
+                     ("slack_application_id", binding["application_id"]),
+                     ("slack_profile", binding["profile"])):
+        if _hermes_config_set(exe, profile, f"{PLUGIN_SETTINGS}.{key}", val):
+            print(f"  settings.{key}: 設定")
+        else:
+            failed = True
+    tokens = (("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"),
+              ("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
+    failed |= _plugin_store_tokens(exe, profile, tokens, args)
+    return not failed
+
+
 def _init_apply_set_overrides(cfg: dict, set_args) -> int | None:
     """Apply `--set KEY=JSON` overrides to cfg; return 1 when init must stop."""
     # --set KEY=JSON gives non-interactive coverage of every config

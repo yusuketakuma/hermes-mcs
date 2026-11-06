@@ -28,7 +28,7 @@ def created(root, *, profile='synthetic', mode='hermes'):
 
 
 @pytest.mark.parametrize('profile,bot', [('synthetic', None), ('synthetic', 'legacy'), ('default', None)])
-def test_created_system_channel_pins_its_profile_without_changing_patient_profile(tmp_path, monkeypatch, profile, bot):
+def test_created_channels_pin_their_binding_profile_for_both_surfaces(tmp_path, monkeypatch, profile, bot):
     cfg = created(tmp_path, profile=profile)
     if bot is None:
         del cfg['notify_bot_profile']
@@ -36,8 +36,10 @@ def test_created_system_channel_pins_its_profile_without_changing_patient_profil
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: 'synthetic-hermes')
     argv = notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')
     assert argv[:3] == ['synthetic-hermes', '-p', profile]
+    # Text to the created patient channel is served by the same verified
+    # binding profile — the creating bot is the only proven member.
     patient = notify_sender.send_argv(cfg, cfg['notify_target'], str(tmp_path / 'config.json'), kind='new_messages')
-    assert patient[:3] == (['synthetic-hermes', '-p', bot] if bot else ['synthetic-hermes', 'send', '--to'])
+    assert patient[:3] == ['synthetic-hermes', '-p', profile]
     assert cfg == before
 
 

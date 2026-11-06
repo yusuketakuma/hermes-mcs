@@ -18,6 +18,9 @@ def _config(transport, mode="hermes"):
     scope["guild_id" if transport == "discord" else "team_id"] = "456"
     cfg = {"mcs_login_id": "synthetic", "notify_target": transport + ":" + channel,
            "notify": {"interactive": transport, "route_epoch": 7, transport: scope}}
+    if transport == "slack":
+        # an existing separate system route keeps channel setup a no-op
+        cfg["notify_system_target"] = "slack:C9999999999"
     if mode is not None:
         cfg["runtime_mode"] = mode
     return cfg
@@ -93,7 +96,8 @@ def test_existing_independent_routes_still_publish_without_hermes_gateway(monkey
 
 
 def test_noninteractive_init_does_not_publish_or_start_gateway(monkeypatch, tmp_path):
-    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "notify": {"interactive": "off"}}
+    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123",
+           "notify_system_target": "local", "notify": {"interactive": "off"}}
     _init_env(monkeypatch, tmp_path, cfg)
     monkeypatch.setattr(notify_spool, "ensure_dirs", lambda *a: pytest.fail("notification directory write"))
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a: pytest.fail("flags write"))

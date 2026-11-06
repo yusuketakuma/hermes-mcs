@@ -362,7 +362,7 @@ def cmd_init(args) -> int:
             print("設定は保存しましたが、通知先の準備を完了できませんでした。"
                   "通知サービスの起動・同期へは進んでいません。保存先の権限と空き容量を確認し、mcs setupを再実行してください。")
             return 1
-    if integration_ok and (cfg.get('notify') or {}).get('interactive') == 'slack':
+    if integration_ok and slack_channel_setup.required(cfg):
         try:
             slack_channel_setup.finish_runtime(HOME, cfg, args)
         except (OSError, ValueError) as error:
