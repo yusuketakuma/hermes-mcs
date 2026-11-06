@@ -19,20 +19,20 @@ def db():
     connection.close()
 
 
-@pytest.mark.parametrize("reader,inner", [
-    (lambda db: rollup.build_rollup(db, 1), "_build_rollup"),
-    (lambda db: rollup.current_cached_refs(db, 1, {}, None), "_current_cached_refs"),
+@pytest.mark.parametrize("reader,owner,inner", [
+    (lambda db: rollup.build_rollup(db, 1), rollup_builder, "_build_rollup"),
+    (lambda db: rollup.current_cached_refs(db, 1, {}, None), rollup, "_current_cached_refs"),
 ])
-def test_readers_keep_borrowed_transaction_after_success_and_failure(db, monkeypatch, reader, inner):
+def test_readers_keep_borrowed_transaction_after_success_and_failure(db, monkeypatch, reader, owner, inner):
     db.execute("INSERT INTO marker VALUES (7)")
-    monkeypatch.setattr(rollup, inner, lambda *_args, **_kwargs: {"synthetic": True})
+    monkeypatch.setattr(owner, inner, lambda *_args, **_kwargs: {"synthetic": True})
     assert reader(db) == {"synthetic": True}
     error = ValueError("synthetic failure")
 
     def fail(*_args, **_kwargs):
         raise error
 
-    monkeypatch.setattr(rollup, inner, fail)
+    monkeypatch.setattr(owner, inner, fail)
     with pytest.raises(ValueError) as caught:
         reader(db)
     assert caught.value is error
@@ -41,12 +41,12 @@ def test_readers_keep_borrowed_transaction_after_success_and_failure(db, monkeyp
     assert db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("reader,inner,name", [
-    (lambda db: rollup.build_rollup(db, 1), "_build_rollup", "rollup_build_read"),
-    (lambda db: rollup.current_cached_refs(db, 1, {}, None), "_current_cached_refs", "rollup_cache_read"),
+@pytest.mark.parametrize("reader,owner,inner,name", [
+    (lambda db: rollup.build_rollup(db, 1), rollup_builder, "_build_rollup", "rollup_build_read"),
+    (lambda db: rollup.current_cached_refs(db, 1, {}, None), rollup, "_current_cached_refs", "rollup_cache_read"),
 ])
-def test_success_does_not_hide_release_failure(db, monkeypatch, reader, inner, name):
-    monkeypatch.setattr(rollup, inner, lambda *_args, **_kwargs: {"synthetic": True})
+def test_success_does_not_hide_release_failure(db, monkeypatch, reader, owner, inner, name):
+    monkeypatch.setattr(owner, inner, lambda *_args, **_kwargs: {"synthetic": True})
     db.set_authorizer(lambda action, arg1, arg2, *_: sqlite3.SQLITE_DENY
                       if action == sqlite3.SQLITE_SAVEPOINT and arg1 == "RELEASE"
                       and arg2 == name else sqlite3.SQLITE_OK)
@@ -58,13 +58,13 @@ def test_success_does_not_hide_release_failure(db, monkeypatch, reader, inner, n
         db.rollback()
 
 
-@pytest.mark.parametrize("reader,inner", [
-    (lambda db: rollup.build_rollup(db, 1), "_build_rollup"),
-    (lambda db: rollup.current_cached_refs(db, 1, {}, None), "_current_cached_refs"),
+@pytest.mark.parametrize("reader,owner,inner", [
+    (lambda db: rollup.build_rollup(db, 1), rollup_builder, "_build_rollup"),
+    (lambda db: rollup.current_cached_refs(db, 1, {}, None), rollup, "_current_cached_refs"),
 ])
 @pytest.mark.parametrize("code", [sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_FULL,
                                   sqlite3.SQLITE_IOERR | (3 << 8)])
-def test_auto_rollback_preserves_original_error(db, monkeypatch, reader, inner, code):
+def test_auto_rollback_preserves_original_error(db, monkeypatch, reader, owner, inner, code):
     db.execute("INSERT INTO marker VALUES (7)")
     error = sqlite3.OperationalError("synthetic SQLite failure")
     error.sqlite_errorcode = code
@@ -73,18 +73,18 @@ def test_auto_rollback_preserves_original_error(db, monkeypatch, reader, inner, 
         connection.rollback()  # Simulate SQLite discarding the entire transaction.
         raise error
 
-    monkeypatch.setattr(rollup, inner, fail)
+    monkeypatch.setattr(owner, inner, fail)
     with pytest.raises(sqlite3.OperationalError) as caught:
         reader(db)
     assert caught.value is error and caught.value.sqlite_errorcode == code
     assert not db.in_transaction and db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("reader,inner", [
-    (lambda db: rollup.build_rollup(db, 1), "_build_rollup"),
-    (lambda db: rollup.current_cached_refs(db, 1, {}, None), "_current_cached_refs"),
+@pytest.mark.parametrize("reader,owner,inner", [
+    (lambda db: rollup.build_rollup(db, 1), rollup_builder, "_build_rollup"),
+    (lambda db: rollup.current_cached_refs(db, 1, {}, None), rollup, "_current_cached_refs"),
 ])
-def test_nested_source_binding_auto_rollback_propagates_to_caller(db, monkeypatch, reader, inner):
+def test_nested_source_binding_auto_rollback_propagates_to_caller(db, monkeypatch, reader, owner, inner):
     db.execute("CREATE TABLE messages(message_id INTEGER)")
     db.execute("INSERT INTO marker VALUES (7)")
     error = sqlite3.DatabaseError("synthetic disk failure")
@@ -97,7 +97,7 @@ def test_nested_source_binding_auto_rollback_propagates_to_caller(db, monkeypatc
 
     monkeypatch.setattr(inference_dependency_loss, "_source_bindings_page", fail)
     monkeypatch.setattr(inference_dependency_loss, "source_binding", lambda *_: replay.append(True))
-    monkeypatch.setattr(rollup, inner, lambda connection, *_args, **_kwargs:
+    monkeypatch.setattr(owner, inner, lambda connection, *_args, **_kwargs:
                         inference_dependency_loss.source_bindings(connection, [(1, 1)]))
     with pytest.raises(sqlite3.DatabaseError) as caught:
         reader(db)
