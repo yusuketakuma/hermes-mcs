@@ -130,9 +130,19 @@ def test_requested_cloud_failure_falls_back_to_verified_local_context(runtime, c
     cloud[2][0] = True
     result = step(runtime)
     assert result['status'] == 'progressed'
-    drain(runtime)
-    assert local_calls and not cloud[0] and patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
-    assert step(runtime)['status'] == 'complete'
+    for _ in range(30):
+        result = step(runtime)
+        if patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG):
+            break
+    else:
+        pytest.fail('verified local fallback did not become usable')
+    assert local_calls and not cloud[0]
+    assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
+    assert patient_context_refresh_readiness.status(led.db, CFG)['history_pending'] == 1
+    count = len(local_calls)
+    for _ in range(3):
+        assert step(runtime)['status'] != 'complete'
+    assert len(local_calls) == count and not cloud[0]
 
 
 def test_failed_cloud_does_not_bypass_local_admission(runtime, cloud):
