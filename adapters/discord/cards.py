@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import BinaryIO
 
 from adapters.common.spec import MAX_BUTTONS, MAX_COMPONENTS, MAX_TEXT, MAX_TOTAL_TEXT
+from adapters.common.spec import discord_file_name
 from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
                                            plan_controls, stamp_label)
 from adapters.common.text import escape_md, notification_preview
@@ -73,6 +74,9 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
     stamps = {p["at"]: p["stamps"] for p in own.get("face_posts") or []} if face else {}
     # chat-format originals are the post's body, not decoration: every
     # fallback level keeps them (only stamp rows are droppable).
+    files = {}
+    for member in _surface_files(spec, "card"):
+        files.setdefault(member["face_at"], []).append(member)
     originals = {p["at"]: p["original"] for p in own.get("face_posts") or []
                  if p.get("original")}
     for index, c in enumerate(spec["parts"]["containers"]):
@@ -92,6 +96,8 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
             if original:
                 rows.append("-# 原文")
                 rows.extend(f"> {esc(ln)}" for ln in original.splitlines())
+            if index in files:
+                rows.append({"files": files[index]})
         if index in actions:
             # (subtext line, button): a Section with the post's 💊 accessory
             cur.append(("-# " + esc(c["text"]).replace("\n", " "), actions[index]))
@@ -123,7 +129,7 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
 
 def _zone_text(zone) -> list:
     """A zone's lines with each post-action (line, button) pair reduced to its line."""
-    return [ln if isinstance(ln, str) else ln[0] for ln in zone]
+    return [ln if isinstance(ln, (str, dict)) else ln[0] for ln in zone]
 
 
 def _button_items(spec, primary_actions=()):
@@ -288,7 +294,9 @@ def build_view(spec: dict):
                 out.extend(discord.ui.TextDisplay(chunk)
                            for chunk in _text_chunks(run))
                 run = []
-                if line is not None:
+                if isinstance(line, dict):
+                    out.extend(_file_components(line["files"]))
+                elif line is not None:
                     text, button = line
                     out.append(discord.ui.Section(
                         discord.ui.TextDisplay(text),
@@ -311,12 +319,16 @@ def build_view(spec: dict):
             children.extend(rows)
         return children
 
+    has_files = bool(_surface_files(spec, "card"))
+
     def too_big(children):
         # the Container, its children (a Section also counts its text
         # and accessory) and every row's items count
         nested = sum(2 for c in children if getattr(c, "accessory", None) is not None)
-        return len(children) > _CONTAINER_MAX or 1 + len(children) + nested + sum(
-            len(r.children) for r in rows) > MAX_COMPONENTS
+        containers = (len(children) + _CONTAINER_MAX - 1) // _CONTAINER_MAX if has_files else 1
+        return ((not has_files and len(children) > _CONTAINER_MAX)
+                or containers + len(children) + nested + sum(
+                    len(r.children) for r in rows) > MAX_COMPONENTS)
 
     def text_len(children):
         return sum(len(getattr(t, "content", None) or "")
@@ -338,16 +350,73 @@ def build_view(spec: dict):
     levels += [(zones, False), (one(zones), False), ([_zone_text(one(zones)[0])], False)]
     for groups, checked in levels:
         children = layout(groups)
-        if not (too_big(children) or (checked or spec["parts"].get("section_divider_version") == 1)
+        if not (too_big(children) or (checked or has_files or spec["parts"].get("section_divider_version") == 1)
                 and text_len(children) > MAX_TOTAL_TEXT):
             break
     else:
+        if has_files:
+            raise ValueError("discord_file_group_budget")
         if spec["parts"].get("section_divider_version") == 1:
             raise ValueError("discord_section_budget")
     if not children:
         children.append(discord.ui.TextDisplay("—"))
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*children, accent_color=_accent(spec)))
+    width = _CONTAINER_MAX if has_files else len(children)
+    for start in range(0, len(children), width):
+        view.add_item(discord.ui.Container(*children[start:start + width],
+                                          accent_color=_accent(spec)))
+    return view
+
+
+def _surface_files(spec, surface):
+    manifest = spec["parts"].get("manifest") or []
+    group = next((p for p in manifest if p.get("kind") == "file_group"
+                  and p.get("surface") == surface), None)
+    if group is None:
+        return []
+    by_id = {p["part_id"]: p for p in manifest}
+    return [by_id[pid] for pid in group["members"]]
+
+
+def _file_components(members):
+    import discord
+    out, images = [], []
+    for member in [*members, None]:
+        if member is not None and spoiler_attachment(member["name"]):
+            images.append(discord.MediaGalleryItem(
+                "attachment://" + discord_file_name(member),
+                description=member["name"], spoiler=True))
+            continue
+        if images:
+            out.append(discord.ui.MediaGallery(*images))
+            images = []
+        if member is not None:
+            out.append(discord.ui.File(
+                "attachment://" + discord_file_name(member),
+                spoiler=member["name"].startswith("SPOILER_")))
+    return out
+
+
+def thread_body_view(spec, part, body, *, controls=None):
+    """Render an escaped body and its sealed files in one Components V2 message."""
+    import discord
+    children = [discord.ui.TextDisplay(chunk) for chunk in _text_chunks([body])]
+    children.extend(_file_components(_surface_files(spec, part["part_id"])))
+    buttons = list(getattr(controls, "children", ())) if controls is not None else []
+    for start in range(0, len(buttons), MAX_BUTTONS):
+        row = discord.ui.ActionRow()
+        for button in buttons[start:start + MAX_BUTTONS]:
+            row.add_item(button)
+        children.append(row)
+    containers = (len(children) + _CONTAINER_MAX - 1) // _CONTAINER_MAX
+    if (containers + len(children) + len(buttons) > MAX_COMPONENTS
+            or sum(len(getattr(c, "content", "")) for c in children) > MAX_TOTAL_TEXT):
+        raise ValueError("discord_file_group_budget")
+    view = discord.ui.LayoutView(timeout=None)
+    for start in range(0, len(children), _CONTAINER_MAX):
+        view.add_item(discord.ui.Container(*children[start:start + _CONTAINER_MAX],
+                                          accent_color=_accent(spec)))
+    view.stop()
     return view
 
 
