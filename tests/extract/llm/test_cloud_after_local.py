@@ -1,4 +1,4 @@
-"""Synthetic local-first completion must leave a source eligible for paid cloud extraction."""
+"""Synthetic local completion is final: the individual cloud lane stays closed."""
 import extract_llm_context
 import extract_llm_prepare
 import extract_llm_provider
@@ -22,6 +22,7 @@ import semantic_policy
 from candidate_testkit import approved_config
 from extract_testkit import _message
 from test_anthropic_runtime import AnthropicClient, _current_artifacts, _use_real_cloud_accounting, routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['routed']
 
@@ -75,7 +76,7 @@ def _current(ledger):
     return rows[0], json.loads(rows[0]['meta'])
 
 
-def test_real_local_completion_is_followed_by_one_cloud_extraction(local_then_cloud):
+def test_local_completion_is_final_and_cloud_lane_stays_closed(local_then_cloud):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     first = _local_pass(ledger)
     assert first['done'] == 1 and local_calls and not cloud_calls
@@ -83,13 +84,13 @@ def test_real_local_completion_is_followed_by_one_cloud_extraction(local_then_cl
     assert meta['provider_provenance']['providers'] == ['local']
     cfg['cloud_llm']['mode'] = 'on'
     second = _cloud_pass(ledger)
-    assert second['done'] == 1, 'a current local result must not satisfy cloud completion'
-    cloud, meta = _current(ledger)
-    assert cloud['artifact_id'] != local['artifact_id']
-    assert meta['backend'] == 'anthropic' and meta['provider_provenance']['providers'] == ['anthropic']
-    assert len(cloud_calls) == len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == 1
-    third = _cloud_pass(ledger)
-    assert third['done'] == 0 and len(cloud_calls) == 1
+    assert second['done'] == 0, 'individual cloud extraction is closed; the local result stands'
+    assert not cloud_calls
+    assert not ledger.artifacts('cloud_usage_reserve') and not ledger.artifacts('cloud_usage_result')
+    current, meta = _current(ledger)
+    assert current['artifact_id'] == local['artifact_id']
+    assert meta['provider_provenance']['providers'] == ['local']
+    assert _cloud_pass(ledger)['done'] == 0 and not cloud_calls
 
 
 def _financial_rows(ledger):
@@ -98,41 +99,27 @@ def _financial_rows(ledger):
         "'cloud_usage_disposition') ORDER BY artifact_id")]
 
 
-@pytest.mark.parametrize('boundary', ['claim', 'publish'])
-def test_local_commit_race_cannot_cancel_required_cloud_pass(local_then_cloud, monkeypatch, boundary):
+def test_closed_cloud_lane_never_reaches_claim_or_publish(local_then_cloud, monkeypatch):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     local, _meta = _current(ledger)
-    local = dict(local)
-    # Replay the exact record from the real local execution at the raced commit
-    # boundary. No candidate metadata or execution/provenance proof is invented.
-    with ledger.db:
-        ledger.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (local['artifact_id'],))
     cfg['cloud_llm']['mode'] = 'on'
     reached = []
-    target = '_claim' if boundary == 'claim' else '_commit_extraction_atomic'
-    original = getattr(extract_llm_runner, target)
-    def local_finishes(db, row, *args, **kwargs):
-        if not reached:
-            columns = tuple(local)
-            with db.db:
-                db.db.execute('INSERT INTO artifacts (' + ','.join(columns) + ') VALUES ('
-                              + ','.join('?' for _ in columns) + ')', tuple(local.values()))
-            reached.append(row['message_id'])
-        return original(db, row, *args, **kwargs)
-    monkeypatch.setattr(extract_llm_runner, target, local_finishes)
+    for target in ('_claim', '_commit_extraction_atomic'):
+        original = getattr(extract_llm_runner, target)
+        def spy(db, row, *args, _original=original, _name=target, **kwargs):
+            reached.append(_name)
+            return _original(db, row, *args, **kwargs)
+        monkeypatch.setattr(extract_llm_runner, target, spy)
     report = _cloud_pass(ledger)
-    assert reached == [1] and report['done'] == 1
-    cloud, meta = _current(ledger)
-    assert cloud['artifact_id'] != local['artifact_id']
-    assert meta['provider_provenance']['providers'] == ['anthropic']
-    assert len(cloud_calls) == 1 and len(local_calls) == 1
-    financial = _financial_rows(ledger)
-    assert _cloud_pass(ledger)['done'] == 0
-    assert len(cloud_calls) == 1 and _financial_rows(ledger) == financial
+    assert report['done'] == 0 and not reached
+    assert not cloud_calls and not _financial_rows(ledger)
+    current, _meta = _current(ledger)
+    assert current['artifact_id'] == local['artifact_id']
+    assert len(local_calls) == 1
 
 
-def test_protected_local_prior_is_held_without_cloud_completion_or_resend(local_then_cloud):
+def test_protected_local_prior_is_final_without_cloud_completion_or_resend(local_then_cloud):
     ledger, cfg, _local_calls, cloud_calls, answers = local_then_cloud
     body = '本人は合成薬Aを服用していません。'
     ledger.save_messages([_message(body=body)])
@@ -148,20 +135,13 @@ def test_protected_local_prior_is_held_without_cloud_completion_or_resend(local_
     assert json.loads(local['content'])['meds'][0]['negated'] is True
     cfg['cloud_llm']['mode'] = 'on'
     report = _cloud_pass(ledger)
-    assert report['done'] == 0 and report['held_prior'] == 1
-    assert cloud_calls, 'the hold must follow actual cloud extraction, not pre-send exclusion'
+    assert report['done'] == 0 and not cloud_calls, (
+        'the closed lane cannot overwrite the protected local prior')
+    assert not _financial_rows(ledger)
     current, meta = _current(ledger)
     assert current['artifact_id'] == local['artifact_id'] and current['content'] == local['content']
     assert meta['provider_provenance']['providers'] == ['local']
-    selection, errors = cloud_policy.resolve_profile(cfg, route='reextract', purpose='backlog')
-    assert not errors
-    source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    assert worker.progress_for_message(ledger.db, source, model=selection['model'])['state'] != 'complete'
-    hold = [json.loads(row['content']) for row in ledger.artifacts(worker.UPGRADE_KIND)]
-    assert any(item.get('reason') == 'protected_loss' for item in hold)
-    financial, count = _financial_rows(ledger), len(cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 0
-    assert _financial_rows(ledger) == financial and len(cloud_calls) == count
+    assert _cloud_pass(ledger)['done'] == 0 and not cloud_calls
 
 
 def test_unknown_paid_cloud_keeps_local_prior_and_never_resends(local_then_cloud, monkeypatch):
@@ -174,7 +154,7 @@ def test_unknown_paid_cloud_keeps_local_prior_and_never_resends(local_then_cloud
         reached.append(body)
         raise KeyboardInterrupt('synthetic interruption after reservation')
     monkeypatch.setattr(AnthropicClient, 'request', interrupted)
-    with pytest.raises(KeyboardInterrupt):
+    with legacy_cloud_routes(), pytest.raises(KeyboardInterrupt):
         _cloud_pass(ledger)
     assert len(reached) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert not ledger.artifacts('cloud_usage_result')
@@ -190,40 +170,13 @@ def test_unknown_paid_cloud_keeps_local_prior_and_never_resends(local_then_cloud
 
 
 def _stale_prior(ledger, artifact_id):
-    """Make a current local artifact stale so a mixed (non-cloud-only) pass
-    still owes this row a cloud unit — the same pending+cloud-eligible shape
-    the ordinary lane hands to the broad fallback arm."""
+    """Make a current local artifact stale so the next pass owes this row work."""
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.extract_version',?) "
                           "WHERE artifact_id=?", (worker.EXTRACT_VERSION - 1, artifact_id))
 
 
-def _extract_artifacts(ledger):
-    return ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=1 "
-                             "ORDER BY artifact_id", (worker.KIND,)).fetchall()
-
-
-def _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls):
-    claim, = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim'").fetchall()
-    payload = json.loads(claim['payload'])
-    source = ledger.db.execute('SELECT content_hash FROM messages WHERE project_id=? AND message_id=?',
-                                (claim['project_id'], claim['message_id'])).fetchone()
-    assert payload['hash'] == source['content_hash']
-    assert type(payload['owner_token']) is str and payload['owner_token']
-    assert claim['state'] == 'pending'
-    assert claim['next_try'] - claim['updated_at'] == worker._PREPARE_HOLD_S
-    assert time.time() < claim['next_try']
-    financial, sends = _financial_rows(ledger), len(cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 0
-    assert len(cloud_calls) == sends and _financial_rows(ledger) == financial
-    assert [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM fetch_jobs WHERE kind='extract_claim'")] == [tuple(claim)]
-    # Advance the synthetic clock to the actual CAS expiry without editing the claim.
-    monkeypatch.setattr(worker.time, 'time', lambda: claim['next_try'])
-    return financial
-
-
-def test_unsent_observation_incomplete_defers_without_local_fallback(local_then_cloud, monkeypatch):
+def test_stale_prior_is_reprocessed_locally_without_cloud_send(local_then_cloud, monkeypatch):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     local, _meta = _current(ledger)
@@ -231,48 +184,29 @@ def test_unsent_observation_incomplete_defers_without_local_fallback(local_then_
     _stale_prior(ledger, local['artifact_id'])
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: False)
     report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
-    assert report['done'] == 0 and report['deferred'] == 1
-    assert report['defer_reasons'].get('cloud_guard') == 1
-    assert not cloud_calls, 'a refused send must not reach the wire'
-    assert len(local_calls) == 1, 'unverified observation must not fall back to local'
-    rows = _extract_artifacts(ledger)
-    assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
+    assert report['done'] == 1, 'closed cloud lane leaves stale work to the local lane'
+    assert len(local_calls) == 2 and not cloud_calls
     assert not _financial_rows(ledger), 'nothing was sent or billed'
-    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
-    _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 1
-    assert len(cloud_calls) == 1
     current, meta = _current(ledger)
-    assert meta['provider_provenance']['providers'] == ['anthropic']
+    assert current['artifact_id'] != local['artifact_id']
+    assert meta['provider_provenance']['providers'] == ['local']
 
 
-def test_paid_response_observation_incomplete_keeps_answer_and_defers(local_then_cloud, monkeypatch):
-    ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
+def test_paid_cloud_answer_is_preserved_without_resend_under_closed_route(local_then_cloud):
+    ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
-    local, _meta = _current(ledger)
     cfg['cloud_llm']['mode'] = 'on'
-    _stale_prior(ledger, local['artifact_id'])
-    real_load = cloud_inference.load_config
-    def unreadable_after_send():
-        return {} if cloud_calls else real_load()
-    monkeypatch.setattr(cloud_inference, 'load_config', unreadable_after_send)
-    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
-    assert report['done'] == 0 and report['deferred'] == 1
-    assert report['defer_reasons'].get('cloud_guard') == 1
-    assert len(cloud_calls) == 1, 'the paid response was received once'
-    assert len(local_calls) == 1, 'an adopted-paid answer must not fall back to local'
+    with legacy_cloud_routes():
+        assert _cloud_pass(ledger)['done'] == 1
+    assert len(cloud_calls) == 1
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert len(ledger.artifacts('cloud_usage_result')) == 1
-    assert not ledger.artifacts('cloud_usage_disposition'), 'paid answer must not be discarded'
-    rows = _extract_artifacts(ledger)
-    assert [row['artifact_id'] for row in rows] == [local['artifact_id']]
-    monkeypatch.setattr(cloud_inference, 'load_config', real_load)
-    financial = _advance_after_cloud_guard_hold(ledger, monkeypatch, cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 1
-    assert len(cloud_calls) == 1, 'the kept response must be recovered, not resent'
-    assert _financial_rows(ledger) == financial
+    financial = _financial_rows(ledger)
     current, meta = _current(ledger)
     assert meta['provider_provenance']['providers'] == ['anthropic']
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1
+    assert _financial_rows(ledger) == financial
+    assert _current(ledger)[0]['artifact_id'] == current['artifact_id']
 
 
 def test_source_edit_between_selection_and_claim_cannot_send_old_input(local_then_cloud, monkeypatch):
@@ -289,7 +223,7 @@ def test_source_edit_between_selection_and_claim_cannot_send_old_input(local_the
     monkeypatch.setattr(worker, '_claim', edit_before_claim)
     monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     assert _cloud_pass(ledger)['done'] == 0
-    assert changed == [1] and not cloud_calls and not _financial_rows(ledger)
+    assert changed == [] and not cloud_calls and not _financial_rows(ledger)
 
 
 def _selected_contract(cfg):
@@ -303,7 +237,8 @@ def test_cloud_completion_needs_exact_contract_source_and_provider_seal(local_th
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert _cloud_pass(ledger)['done'] == 1
+    with legacy_cloud_routes():
+        assert _cloud_pass(ledger)['done'] == 1
     cloud, meta = _current(ledger)
     source = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
     contract = _selected_contract(cfg)
@@ -343,7 +278,8 @@ def test_quality_attention_is_not_cloud_complete_and_is_not_rebilled(local_then_
         'status': 'current', 'subject': 'patient', 'action': 'stop', 'negated': False, 'evidence': body}]}
     assert _local_pass(ledger)['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert _cloud_pass(ledger)['done'] == 1
+    with legacy_cloud_routes():
+        assert _cloud_pass(ledger)['done'] == 1
     source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
     contract = _selected_contract(cfg)
     assert worker.cloud_completion(ledger.db, source, contract) == 'attention'
@@ -354,25 +290,22 @@ def test_quality_attention_is_not_cloud_complete_and_is_not_rebilled(local_then_
     assert _financial_rows(ledger) == before and len(cloud_calls) == count
 
 
-def test_completed_cloud_prefix_does_not_consume_followup_selection_limit(local_then_cloud):
+def test_local_followup_completes_without_any_cloud_selection(local_then_cloud):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert _cloud_pass(ledger)['done'] == 1
-    first_cloud = len(cloud_calls)
     cfg['cloud_llm']['mode'] = 'off'
     ledger.save_messages([_message(2, body='完全合成の後続記録です。', posted_at='2026-09-18T00:00:00+09:00')])
-    assert _local_pass(ledger)['done'] == 1
     with ledger.db:
-        ledger.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
-        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
+        ledger.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (time.time() - 1200,))
+        ledger.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=2', (time.time() - 1200,))
         cloud_policy.capture_history_tx(ledger.db, 'synthetic-followup-tail', time.time())
+    assert _local_pass(ledger)['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert _cloud_pass(ledger)['done'] == 1
-    assert len(cloud_calls) == first_cloud + 1
+    assert _cloud_pass(ledger)['done'] == 0 and not cloud_calls
     rows = _current_artifacts(ledger)
     assert len(rows) == 2
-    assert all(json.loads(row['meta'])['provider_provenance']['providers'] == ['anthropic'] for row in rows)
+    assert all(json.loads(row['meta'])['provider_provenance']['providers'] == ['local'] for row in rows)
 
 
 
@@ -399,7 +332,7 @@ def _v4_row(ledger, artifact_id):
         "SELECT * FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone())
 
 
-def test_canonical_projection_does_not_cancel_required_cloud_pass(local_then_cloud):
+def test_canonical_projection_leaves_closed_cloud_lane_idle(local_then_cloud):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     local, _meta = _current(ledger)
@@ -407,22 +340,15 @@ def test_canonical_projection_does_not_cancel_required_cloud_pass(local_then_clo
     sealed_v4 = _v4_row(ledger, v4_id)
     cfg['cloud_llm']['mode'] = 'on'
     report = _cloud_pass(ledger)
-    assert report['done'] == 1 and len(cloud_calls) == 1, (
-        'a sealed canonical projection must not cancel the required cloud pass')
-    rows = _current_artifacts(ledger)
-    assert len(rows) == 1   # the cloud artifact supersedes the local extract row
-    assert json.loads(rows[0]['meta'])['provider_provenance']['providers'] == ['anthropic']
-    source = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
-    assert worker.cloud_completion(ledger.db, source, _selected_contract(cfg)) == 'complete'
-    assert _v4_row(ledger, v4_id) == sealed_v4   # rawcloud write never touches the projection
-    assert local['content'] != rows[0]['content'] or rows[0]['artifact_id'] != local['artifact_id']
-    before, count = _financial_rows(ledger), len(cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 0
-    assert _financial_rows(ledger) == before and len(cloud_calls) == count
+    assert report['done'] == 0 and not cloud_calls and not _financial_rows(ledger)
+    current, meta = _current(ledger)
+    assert current['artifact_id'] == local['artifact_id']
+    assert meta['provider_provenance']['providers'] == ['local']
+    assert _v4_row(ledger, v4_id) == sealed_v4
 
 
 @pytest.mark.parametrize('boundary', ['claim', 'publish'])
-def test_projection_added_mid_race_keeps_required_cloud_pass(local_then_cloud, monkeypatch, boundary):
+def test_projection_added_mid_pass_cannot_open_closed_cloud_lane(local_then_cloud, monkeypatch, boundary):
     ledger, cfg, local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
@@ -436,16 +362,10 @@ def test_projection_added_mid_race_keeps_required_cloud_pass(local_then_cloud, m
         return original(db, row, *args, **kwargs)
     monkeypatch.setattr(extract_llm_runner, target, concurrent_seal)
     report = _cloud_pass(ledger)
-    assert sealed and report['done'] == 1 and len(cloud_calls) == 1
-    rows = _current_artifacts(ledger)
-    assert len(rows) == 1
-    cloud_meta = json.loads(rows[0]['meta'])
-    assert cloud_meta['provider_provenance']['providers'] == ['anthropic']
-    assert cloud_meta['backend'] == 'anthropic' and cloud_meta.get('source_binding')
-    assert _v4_row(ledger, sealed[0]) is not None
-    financial, count = _financial_rows(ledger), len(cloud_calls)
-    assert _cloud_pass(ledger)['done'] == 0
-    assert _financial_rows(ledger) == financial and len(cloud_calls) == count
+    assert sealed == [] and report['done'] == 0
+    assert not cloud_calls and not _financial_rows(ledger)
+    current, meta = _current(ledger)
+    assert meta['provider_provenance']['providers'] == ['local']
 
 
 def _worker_cloud_pass(ledger, cfg, carry=None):
@@ -457,15 +377,12 @@ def _worker_cloud_pass(ledger, cfg, carry=None):
                               carry=carry or [])
 
 
-def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_cloud,
-                                                                    tmp_path, monkeypatch):
+def test_canonical_sources_complete_locally_while_worker_cloud_lane_stays_closed(
+        local_then_cloud, tmp_path, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     v4_id = _seal_canonical_v4(ledger)
     sealed_v4 = _v4_row(ledger, v4_id)
-    # Raw history sources must also reach the cloud lane under canonical:
-    # msg2 unsealed (pending arm) and msg3 sealed without an extract artifact
-    # (canonical raw — the sealed cloud_followup arm covers it).
     ledger.save_messages([_message(mid=2, body='完全合成の経過補記です。',
                                    posted_at='2026-09-19T01:00:00+09:00'),
                           _message(mid=3, body='完全合成の経過補記その2です。',
@@ -495,23 +412,24 @@ def test_canonical_source_reaches_cloud_through_the_resident_worker(local_then_c
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     # The generic legacy admission set is closed under canonical — that
-    # closure used to leave the required cloud pass with zero targets. A
-    # cloud_only pass runs no legacy inference, so the safe canonical
-    # admission is unrestricted; the receipted scope and contract still gate.
+    # closure used to leave the required cloud pass with zero targets. The
+    # closed individual cloud lane now selects nothing at all, while local
+    # extraction still completes every pending source.
     assert worker.legacy_admissions(ledger, cfg) == set()
     assert worker.cloud_backlog_admissions(ledger, cfg) is None
-    first = _worker_cloud_pass(ledger, cfg)
-    second = _worker_cloud_pass(ledger, cfg, carry=first.get('carry'))
-    third = _worker_cloud_pass(ledger, cfg, carry=second.get('carry'))
-    assert first['done'] == 1 and second['done'] == 1 and third['done'] == 1
-    assert len(cloud_calls) == 3
+    report = worker.run_pending(ledger, limit=3, workers=1, budget_s=180,
+                                allow_cloud=False)
+    assert report['done'] == 1   # only the unsealed raw msg2 owes local extraction
+    for _ in range(2):
+        assert _worker_cloud_pass(ledger, cfg)['done'] == 0
+    assert not cloud_calls and not _financial_rows(ledger)
     done_ids = sorted(row[0] for row in ledger.db.execute(
         "SELECT DISTINCT message_id FROM artifacts WHERE kind='extract_llm'"))
-    assert done_ids == [1, 2, 3]   # sealed local-complete, raw, and sealed-raw all ran
+    assert done_ids == [1, 2]   # msg3 stays canonical-owned via its v4 seal
+    metas = {row['message_id']: json.loads(row['meta']) for row in _current_artifacts(ledger)}
+    assert all(meta['provider_provenance']['providers'] == ['local']
+               for meta in metas.values())
     assert _v4_row(ledger, v4_id) == sealed_v4 and _v4_row(ledger, v3_id) is not None
-    financial, count = _financial_rows(ledger), len(cloud_calls)
-    assert _worker_cloud_pass(ledger, cfg)['done'] == 0
-    assert _financial_rows(ledger) == financial and len(cloud_calls) == count
 
 
 @pytest.mark.parametrize('semantic', ["typo", {"fact_source": "canonical"}, {"fact_source": "legacy"}])
@@ -559,7 +477,7 @@ def test_hold_still_vetoes_cloud_pass_on_a_sealed_source(local_then_cloud):
     assert meta['provider_provenance']['providers'] == ['local']
 
 
-def test_low_signal_greeting_is_not_prefilter_settled_in_cloud_only(local_then_cloud, monkeypatch):
+def test_low_signal_greeting_is_not_settled_by_the_closed_cloud_lane(local_then_cloud, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     monkeypatch.setattr(worker, '_prefilter_enabled', lambda: True)
     monkeypatch.setattr(extract_llm_runner, '_prefilter_enabled', worker._prefilter_enabled)
@@ -571,35 +489,27 @@ def test_low_signal_greeting_is_not_prefilter_settled_in_cloud_only(local_then_c
     cfg['cloud_llm']['mode'] = 'on'
     report = worker.run_pending(ledger, limit=2, workers=1, budget_s=180,
                                 cloud_only=True, background=True)
-    assert report['done'] == 2 and len(cloud_calls) == 2
+    assert report['done'] == 0 and not cloud_calls and not _financial_rows(ledger)
+    worker.run_pending(ledger, limit=2, workers=1, budget_s=180, allow_cloud=False)
     rows = ledger.db.execute(
         "SELECT meta FROM artifacts WHERE kind=? AND message_id=2 ORDER BY artifact_id DESC",
         (worker.KIND,)).fetchall()
-    assert rows and all('prefilter' not in json.loads(row['meta']) for row in rows)
+    assert rows
     meta = json.loads(rows[0]['meta'])
-    assert meta['provider_provenance']['providers'] == ['anthropic']
+    assert meta.get('provider_provenance', {}).get('providers') != ['anthropic']
 
 
-def test_hold_created_after_selection_prevents_cloud_claim(local_then_cloud, monkeypatch):
+def test_hold_does_not_block_the_closed_cloud_lane(local_then_cloud):
     ledger, cfg, _local_calls, cloud_calls, _answers = local_then_cloud
     assert _local_pass(ledger)['done'] == 1
     local, _meta = _current(ledger)
+    with ledger.db:
+        worker._record_hold_tx(ledger, dict(ledger.db.execute(
+            'SELECT * FROM messages WHERE message_id=1').fetchone()), local, 'protected_loss')
     cfg['cloud_llm']['mode'] = 'on'
-    original = worker._claim
-    reached = []
     before = _financial_rows(ledger)
-    def concurrent_hold(db, row, *args, **kwargs):
-        if not reached:
-            with db.db:
-                worker._record_hold_tx(db, row, local, 'protected_loss')
-            reached.append(row['message_id'])
-        return original(db, row, *args, **kwargs)
-    monkeypatch.setattr(worker, '_claim', concurrent_hold)
-    monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     result = _cloud_pass(ledger)
-    assert reached == [1] and result['done'] == 0
-    assert not cloud_calls and _financial_rows(ledger) == before
-    assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
+    assert result['done'] == 0 and not cloud_calls and _financial_rows(ledger) == before
     current, _meta = _current(ledger)
     assert current['artifact_id'] == local['artifact_id']
     assert len(ledger.artifacts(worker.UPGRADE_KIND)) == 1
