@@ -504,8 +504,9 @@ sys.path.insert(0,{str(source)!r})
 sys.path.insert(0,{str(source / 'mcs')!r})
 import _mcs_path
 import release_apply_owner as owner
+import release_apply_checks
 import update_journal
-owner._control_root=lambda _:Path({str(entry.store.root)!r})
+owner._control_root=release_apply_checks._control_root=lambda _:Path({str(entry.store.root)!r})
 fd,*locks=map(int,os.environ[owner.CHILD_FDS_ENV].split(':'))
 if {mode!r} == 'zero_no_consumption':sys.exit(0)
 state=owner._adopt_post_merge({entry.runtime_home!r},{entry.repository!r},ticket_fd=fd,locks=tuple(locks),deadline=time.monotonic()+2)

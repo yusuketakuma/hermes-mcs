@@ -7,7 +7,7 @@ import pytest
 
 import mcs_update
 import owned_process
-from ops_testkit import _load
+from ops_testkit import _load, patch_lifecycle_lookup
 
 
 @pytest.mark.parametrize('kind', ['update', 'recovery'])
@@ -18,16 +18,16 @@ def test_services_failure_uses_owned_runner_and_fixed_diagnostics(
     script = tmp_path / 'mcs/ops/mcs_setup.py'
     script.parent.mkdir(parents=True)
     script.write_text('# fully synthetic service entry\n')
-    monkeypatch.setattr(module, 'REPO', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, module, 'REPO', str(tmp_path))
     if kind == 'update':
         # Run-log installation has separate coverage; exercise owned service cleanup.
-        monkeypatch.setattr(module, '_prepare_run_log', lambda: None)
+        patch_lifecycle_lookup(monkeypatch, module, '_prepare_run_log', lambda: None)
     if kind == 'recovery':
-        monkeypatch.setattr(module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
-        monkeypatch.setattr(module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
-        monkeypatch.setattr(module, '_runtime_mode', lambda: 'standalone')
-        monkeypatch.setattr(module, '_runtime_config', lambda: {})
-        monkeypatch.setattr(module, '_setup_python', lambda: sys.executable)
+        patch_lifecycle_lookup(monkeypatch, module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
+        patch_lifecycle_lookup(monkeypatch, module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
+        patch_lifecycle_lookup(monkeypatch, module, '_runtime_mode', lambda: 'standalone')
+        patch_lifecycle_lookup(monkeypatch, module, '_runtime_config', lambda: {})
+        patch_lifecycle_lookup(monkeypatch, module, '_setup_python', lambda: sys.executable)
     calls = []
 
     def owned(argv, timeout, env, stdin=None):
@@ -40,7 +40,7 @@ def test_services_failure_uses_owned_runner_and_fixed_diagnostics(
             raise OSError('SYNTHETIC_SECRET_CANARY')
         return subprocess.CompletedProcess(argv, 1, 'SYNTHETIC_SECRET_CANARY', '')
 
-    monkeypatch.setattr(owned_process if kind == 'update' else module,
+    patch_lifecycle_lookup(monkeypatch, owned_process if kind == 'update' else module,
                         'run_owned' if kind == 'update' else '_run_owned', owned)
     # A direct subprocess.run would appear successful and bypass cleanup.
     monkeypatch.setattr(module.subprocess, 'run', lambda argv, **kw:
@@ -68,18 +68,18 @@ def test_service_timeout_stops_its_synthetic_helper_tree(tmp_path, monkeypatch, 
         f'child = subprocess.Popen([sys.executable, {str(helper)!r}])\n'
         f'Path({str(pidfile)!r}).write_text(str(child.pid))\n'
         'time.sleep(30)\n')
-    monkeypatch.setattr(module, 'REPO', str(tmp_path))
+    patch_lifecycle_lookup(monkeypatch, module, 'REPO', str(tmp_path))
     if kind == 'update':
         # Run-log installation has separate coverage; exercise owned service cleanup.
-        monkeypatch.setattr(module, '_prepare_run_log', lambda: None)
+        patch_lifecycle_lookup(monkeypatch, module, '_prepare_run_log', lambda: None)
     if kind == 'recovery':
-        monkeypatch.setattr(module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
-        monkeypatch.setattr(module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
-        monkeypatch.setattr(module, '_runtime_mode', lambda: 'standalone')
-        monkeypatch.setattr(module, '_runtime_config', lambda: {})
-        monkeypatch.setattr(module, '_setup_python', lambda: sys.executable)
+        patch_lifecycle_lookup(monkeypatch, module, 'AGENTS_DIR', str(tmp_path / 'no-agents'))
+        patch_lifecycle_lookup(monkeypatch, module, 'MANIFEST_PATH', str(tmp_path / 'no-manifest'))
+        patch_lifecycle_lookup(monkeypatch, module, '_runtime_mode', lambda: 'standalone')
+        patch_lifecycle_lookup(monkeypatch, module, '_runtime_config', lambda: {})
+        patch_lifecycle_lookup(monkeypatch, module, '_setup_python', lambda: sys.executable)
     run = owned_process.run_owned if kind == 'update' else module._run_owned
-    monkeypatch.setattr(owned_process if kind == 'update' else module,
+    patch_lifecycle_lookup(monkeypatch, owned_process if kind == 'update' else module,
                         'run_owned' if kind == 'update' else '_run_owned', lambda argv, timeout, env, stdin=None:
                         run(argv, 2, env, stdin))
     try:

@@ -30,7 +30,12 @@ def test_services_migrate_existing_fetch_jobs_without_duplicates(tmp_path, monke
     assert mcs_setup.cmd_services(args) == 0
     assert [call for call in calls if call[1:3] in (
         ["cron", "create"], ["cron", "edit"], ["cron", "remove"])] == mutations
-    assert len(service_management.inspect_cron('/x/hermes')) == 6
+    rows = service_management.inspect_cron('/x/hermes')
+    assert len(rows) == len({row['script'] for row in rows}) == 7
+    assert {row['script'] for row in rows} == {
+        'mcs_check.sh', 'mcs_health.sh', 'mcs_deep.sh', 'mcs_ocr.sh',
+        'mcs_llm_catchup.sh', 'llamacpp_restart_if_idle.sh', 'mcs_update.sh'}
+    assert actual['mcs_ocr.sh']['schedule'] == '* * * * *'
 
 
 def test_standalone_fetches_only_on_ten_minute_grid(tmp_path, monkeypatch):

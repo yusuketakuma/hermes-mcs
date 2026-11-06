@@ -485,6 +485,9 @@ def test_installer_invalid_lock_stops_before_runtime_or_sdk_mutation(tmp_path):
     (repo / 'deployment').mkdir(parents=True)
     (repo / 'deployment/sdc-release-lock.json').write_text('{}')
     (repo / 'install.sh').write_bytes((root / 'install.sh').read_bytes())
+    (repo / 'deployment/install').mkdir()
+    (repo / 'deployment/install/runtime.sh').write_bytes(
+        (root / 'deployment/install/runtime.sh').read_bytes())
     for name in ('mcs', 'adapters'):
         (repo / name).symlink_to(root / name, target_is_directory=True)
     python_stub = stubs / 'bin/python3'
