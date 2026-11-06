@@ -93,6 +93,9 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
     attachment.parent.mkdir(parents=True)
     attachment.write_bytes(b"synthetic")
     cfg = {"runtime_mode": "standalone", "notify_target": target}
+    if target.startswith("slack:"):
+        cfg["notify_system_target"] = "slack:C0SYSTEM99"
+    assert notify_sender.target(cfg, "run_failed") == cfg.get("notify_system_target", target)
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: "/nonexistent/hermes")
@@ -101,7 +104,10 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
                         lambda *a, **kw: calls.append(kw["input"])
                         or SimpleNamespace(returncode=0, stdout="", stderr=""))
 
+    rendered = []
+
     def render(*args):
+        rendered.append(True)
         if change == "before_fingerprint":
             attachment.write_bytes(b"different-synthetic-content")
         return "合成通知", [("fixture.txt", str(attachment))]
@@ -122,6 +128,7 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
             stored_attachment(led, attachment)
         eid = led.outbox_add("run_failed", None, {})
         result = notify_flush.flush(led)
+        assert rendered == [True]
         assert calls == [], "unverified attachment reached the sender"
         assert result["failed"] == 1 and result.get("uncertain", 0) == 0
         row = led.db.execute(
@@ -134,8 +141,11 @@ def test_standalone_never_reseals_replaced_or_untracked_attachment(
 
 @pytest.mark.parametrize("returncode,retried", [(75, True), (1, False)])
 def test_standalone_tempfail_retries_but_unknown_holds(tmp_path, monkeypatch, returncode, retried):
-    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC"}
-    _, result, row, _ = _flush(tmp_path, monkeypatch, cfg, returncode)
+    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC",
+           "notify_system_target": "slack:C0SYSTEM99"}
+    calls, result, row, _ = _flush(tmp_path, monkeypatch, cfg, returncode)
+    (argv, _), = calls
+    assert argv[argv.index("--to") + 1] == cfg["notify_system_target"]
     assert result["failed"] == 1
     if retried:       # provably not accepted -> scheduled retry, no hold
         assert row["next_try"] is not None and result.get("uncertain", 0) == 0
@@ -148,19 +158,22 @@ def test_standalone_permanent_failure_quarantines_after_five_attempts(
     """A permanently-refused send (revoked token, deleted channel) keeps
     the backoff retries — a short outage self-heals — then quarantines
     like every deterministic fault instead of retrying hourly forever."""
-    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC"}
+    cfg = {"runtime_mode": "standalone", "notify_target": "slack:C0SYNTHETIC",
+           "notify_system_target": "slack:C0SYSTEM99"}
     monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *a: ("合成通知", []))
+    calls = []
     monkeypatch.setattr(notify_sender.subprocess, "run",
-                        lambda *a, **k: SimpleNamespace(
+                        lambda argv, **k: calls.append(argv) or SimpleNamespace(
                             returncode=75, stdout="", stderr=""))
     (tmp_path / "data").mkdir(parents=True)
     led = Ledger(str(tmp_path / "data" / "ledger.db"))
     eid = led.outbox_add("run_failed", None, {})
-    for _ in range(4):
+    for attempt in range(4):
         res = notify_flush.flush(led)
+        assert len(calls) == attempt + 1
         row = led.db.execute(
             "SELECT state,next_try FROM notify_outbox WHERE event_id=?",
             (eid,)).fetchone()
@@ -173,6 +186,8 @@ def test_standalone_permanent_failure_quarantines_after_five_attempts(
         "SELECT state,next_try FROM notify_outbox WHERE event_id=?",
         (eid,)).fetchone()
     led.close()
+    assert len(calls) == 5
+    assert all(argv[argv.index("--to") + 1] == cfg["notify_system_target"] for argv in calls)
     assert res["failed"] == 1 and row["state"] == "failed" \
         and row["next_try"] is None            # held — never re-armed
 
