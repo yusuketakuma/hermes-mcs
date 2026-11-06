@@ -57,6 +57,18 @@ from semantic_summary_stages import (
 )
 from semantic_store import KIND_LOOP_COMPLETION as KIND_LOOP_COMPLETION
 
+def _fact_stop_reason(stage):
+    return _fixed_stop_reason(stage.get('diagnostic_reason'), f"fact_stage_{stage['outcome']}")
+
+
+
+def _fixed_stop_reason(reason, fallback):
+    import cloud_backlog
+    return (reason if isinstance(reason, str) and reason in cloud_backlog._SEMANTIC_STOP_REASONS
+            else fallback)
+
+
+
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                    prev, deadline, *, diagnostics: dict):
     """Primary Jev proposition assessment of one target, durably recorded.
@@ -512,7 +524,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     [{"code": f"fact_stage_{stage['outcome']}"}]
                     + list(stage.get("findings") or []),
                     doc_hash=(semantic_facts.doc_hash(doc) if doc else None))
-            _why(diagnostics, f"fact_stage_{stage['outcome']}")
+            _why(diagnostics, _fact_stop_reason(stage))
             if stage["outcome"] == "retryable":
                 retryable_failure = True
             elif stage["outcome"] == "hard_fail":
@@ -645,10 +657,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
+        empty_reason = {}
         recovered, empty_reserved = _empty_repair_candidate(
-            ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts)
+            ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
+            reason_out=empty_reason)
         if empty_reserved and recovered is None:
-            _why(diagnostics, 'empty_repair_unverified')
+            _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)
             incomplete = resource_wait = True
             continue

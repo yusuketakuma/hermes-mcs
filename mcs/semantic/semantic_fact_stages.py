@@ -26,6 +26,16 @@ from semantic_summary_stages import (
     _shadow_v2_tried,
 )
 
+def _fact_extraction_reason(reason):
+    # Unrecognised/free-form provider failures collapse to a fixed label.
+    if reason == "deadline":
+        return "fact_extract_deadline"
+    if reason == "model":
+        return "fact_extract_model"
+    return "fact_extract_incomplete"
+
+
+
 def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                 jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None,
                 jev_skip: str | None = None, activate_skip=None, skip_state=None):
@@ -89,9 +99,13 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         if prev_v2['meta'].get('repaired'):
             previous = v4._repaired_projection_producer(
                 ledger.db, pid, mid, fp, policy, member, prev_v2['content'], prev_v2['meta'])
-            if (previous is None or any(item.get('contract') != execution_contract for item in previous['base'])):
+            if previous is None:
                 # Historical publication stays intact; do not revive a spent repair.
-                return {"outcome": "incomplete", "v2_doc": None}, None, None
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_repaired_producer_unverified"}, None, None
+            if any(item.get('contract') != execution_contract for item in previous['base']):
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_repaired_contract_changed"}, None, None
         else:
             from semantic_extraction import rebuild_facts_v2_cached
             producer, contracts = {}, []
@@ -99,7 +113,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                 prev_v2['meta'], producer_out=producer, contracts_out=contracts)
             if (reason is not None or rebuilt is None or not producer.get('complete')
                     or mcs_util.payload_hash(rebuilt) != mcs_util.payload_hash(prev_v2['content'])):
-                return {"outcome": "incomplete", "v2_doc": None}, None, None
+                return {"outcome": "incomplete", "v2_doc": None,
+                        "diagnostic_reason": "fact_cached_rebuild_unverified"}, None, None
             if any(item.get('contract') != execution_contract for item in contracts):
                 prev_v2 = None
     if fact_source == "canonical":
@@ -122,7 +137,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         pass
     else:
         if time.monotonic() > deadline - 5:
-            return {"outcome": "incomplete", "v2_doc": None}, None, None
+            return {"outcome": "incomplete", "v2_doc": None,
+                    "diagnostic_reason": "fact_extract_deadline"}, None, None
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s1_extract", "start")
@@ -144,7 +160,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
             if fact_source == "canonical":
                 return {"outcome": "retryable"
                         if v2_result["failure_reason"] == "model"
-                        else "incomplete", "v2_doc": None}, None, None
+                        else "incomplete", "v2_doc": None,
+                        "diagnostic_reason": _fact_extraction_reason(v2_result["failure_reason"])}, None, None
             v2_doc = None      # shadow: incomplete doc not stored
             if v2_result["failure_reason"] != "deadline":
                 # Without a durable mark every retry re-extracted each
@@ -224,7 +241,8 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                 or (prev_v2 and prev_v2["meta"].get("coverage_retry")):
             return _park_needs_review(
                 ledger, pid, mid, fp, policy, v2_doc), None, None
-        return {"outcome": "incomplete", "v2_doc": v2_doc}, None, None
+        return {"outcome": "incomplete", "v2_doc": v2_doc,
+                "diagnostic_reason": "fact_coverage_incomplete"}, None, None
     return None, v2_doc, doc_build
 
 
@@ -236,6 +254,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
     Returns (early, v2_doc, doc_hash): early is the _fact_stage result to
     return as-is, else None with the audited document and its hash."""
     fail_kind = "incomplete"
+    stop_reason = "fact_audit_incomplete"
     # POST_JEV: bidirectional audit must pass before the
     # canonical fact set feeds any consumer.  The audit artifact
     # is keyed by doc_hash, so a repaired document is always
@@ -253,6 +272,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         fact_audit = semantic_audit.cached_fact_audit(prev_fa, v2_doc, doc_hash)
         if fact_audit is None:
             if time.monotonic() > deadline - 5:
+                stop_reason = "fact_audit_deadline"
                 break
             from semantic_audit import audit_facts_v2
             jev_outcome = "unknown"
@@ -326,6 +346,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             return _park_needs_review(ledger, pid, mid, fp, policy, v2_doc, fact_audit["findings"]), None, None
         disposition = semantic_audit.canonical_audit_disposition(fact_audit, v2_doc)
         if disposition == "wait":
+            stop_reason = "fact_audit_wait"
             error = getattr(jev_client, "last_error", None)
             if error is not None \
                     and jev.failure_class(error) == "failed":
@@ -350,6 +371,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                 and current_artifact(ledger.db, KIND_FACT_REPAIR,
                              mid, fp) is None:
             if time.monotonic() > deadline - 5:
+                stop_reason = "fact_repair_deadline"
                 break      # repair still possible next pass
             # S3 (T18): reserve the single repair dispatch BEFORE
             # the model call — a crash leaves the 'started'
@@ -499,7 +521,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             ledger, pid, mid, fp, policy, v2_doc,
             fact_audit["findings"]), None, None
     if not audited:
-        return {"outcome": fail_kind, "v2_doc": v2_doc}, None, None
+        return {"outcome": fail_kind, "v2_doc": v2_doc,
+                "diagnostic_reason": stop_reason}, None, None
     return None, v2_doc, doc_hash
 
 
@@ -513,13 +536,15 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
         facts = prev_f["content"].get("facts", [])
     else:
         if time.monotonic() > deadline - 5:
-            return {"outcome": "incomplete", "v2_doc": None}, None
+            return {"outcome": "incomplete", "v2_doc": None,
+                    "diagnostic_reason": "fact_extract_deadline"}, None
         facts, f_complete, f_dropped, f_reason = semantic_extraction.extract_facts(
             llm_fn, member, deadline - 5, return_reason=True,
             ledger=ledger, source_fingerprint=fp, project_id=pid)
         if not f_complete:
             return {"outcome": "retryable" if f_reason == "model"
-                    else "incomplete", "v2_doc": None}, None
+                    else "incomplete", "v2_doc": None,
+                    "diagnostic_reason": _fact_extraction_reason(f_reason)}, None
         ledger.artifact_add(
             KIND_FACTS,
             json.dumps({"facts": facts,
