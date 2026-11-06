@@ -20,6 +20,7 @@ import extract_llm as worker
 import cloud_inference
 from extract_testkit import _hash, _ledger, _message
 from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, _split_checkpoint_cloud_jobs as _split_checkpoint_cloud_jobs, _use_real_cloud_accounting as _use_real_cloud_accounting, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("change", ["none", "answer", "prompt", "contract", "owner", "unit", "missing_hash", "missing_finish"])
@@ -37,8 +38,9 @@ def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeyp
         prompt, answer = "synthetic prompt", '{"synthetic":"answer"}'
         body = client.body(prompt, selection["max_tokens"], None)
         owner = {"lease": "synthetic-lease"}
-        reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
-            unit_key="synthetic-unit", owner=owner, selection=selection)(body, 30)
+        with legacy_cloud_routes():
+            reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
+                unit_key="synthetic-unit", owner=owner, selection=selection)(body, 30)
         usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
                  "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
         result = {"model": selection["model"], "request_fp": reservation["request_fp"],
@@ -48,7 +50,8 @@ def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeyp
             result["answer_text_sha256_v1"] = hashlib.sha256(answer.encode()).hexdigest()
         if change == "missing_finish":
             result.pop("answer_finish_reason_v1")
-        real_record_result(ledger, reservation, result)
+        with legacy_cloud_routes():
+            real_record_result(ledger, reservation, result)
         row = ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()
         contract = cloud_inference.cloud_provider_contract(selection=selection)
         args = {"reservation_artifact_id": row[0], "reservation_id": reservation["reservation_id"],
@@ -113,13 +116,15 @@ def test_pending_repair_origin_rebuilds_prompt_from_current_source(tmp_path, mon
         answer = json.dumps({"symptoms": []})
         client = worker.openai_client.OpenAIClient("synthetic", model=selection["model"], effort=selection["effort"])
         request = client.body(prompt, selection["max_tokens"], None)
-        reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
-            unit_key="1", owner={"lease": 123.0}, selection=selection)(request, 30)
+        with legacy_cloud_routes():
+            reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
+                unit_key="1", owner={"lease": 123.0}, selection=selection)(request, 30)
         usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
                  "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
-        real_record_result(ledger, reservation, {"model": selection["model"], "request_fp": reservation["request_fp"],
-            "http_class": "http_200", "usage": usage, "error_kind": None,
-            "answer_text_sha256_v1": hashlib.sha256(answer.encode()).hexdigest(), "answer_finish_reason_v1": "stop"})
+        with legacy_cloud_routes():
+            real_record_result(ledger, reservation, {"model": selection["model"], "request_fp": reservation["request_fp"],
+                "http_class": "http_200", "usage": usage, "error_kind": None,
+                "answer_text_sha256_v1": hashlib.sha256(answer.encode()).hexdigest(), "answer_finish_reason_v1": "stop"})
         provider = SimpleNamespace(completed_reservations=[reservation], ledger=ledger, contract=contract,
             purpose="backlog", dispatch=lambda fn, **_kwargs: fn())
         origin = {**worker._cloud_origin_for_checkpoint(provider, prompt, answer), "qc_src": None}
@@ -224,14 +229,15 @@ def test_paid_cloud_split_resumes_completed_children_without_resending(routed, m
     provider = PausedProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic-split",
         deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
     completed, splits = {}, {}
-    with pytest.raises(cloud_inference.CloudBusy, match="synthetic-before-next-child"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudBusy, match="synthetic-before-next-child"):
         worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_out=completed,
                            on_split=lambda key, size: splits.__setitem__(key, size))
     assert len(completed) == 1 and splits and len(prompts) == 2
     paid_prefix = list(prompts)
     meta = {}
-    result = worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_in=completed, splits_in=splits,
-                                meta_out=meta)
+    with legacy_cloud_routes():
+        result = worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_in=completed, splits_in=splits,
+                                    meta_out=meta)
     assert isinstance(result, dict) and meta["checkpoint_reuses"] == 1
     assert "".join(item["text"] for item in result["patient_context"]) == body
     assert prompts[:2] == paid_prefix and len(set(prompts)) == len(prompts)
@@ -277,7 +283,7 @@ def test_malformed_thinking_never_creates_cloud_splits_or_extra_http(routed, mon
     deadline = time.monotonic() + 180
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, unit_key="synthetic-invalid",
         deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_failed"):
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_failed"):
         worker.llm_extract("完全合成の本文です。", provider=provider, deadline=deadline,
                            chunks_out=completed, on_split=lambda *args: splits.append(args))
     assert not splits and not completed
@@ -306,7 +312,8 @@ def test_run_pending_rejected_checkpoint_stops_further_cloud_posts(routed, monke
 
     monkeypatch.setattr(worker, "_persist_chunks", rejected_checkpoint)
     monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
-    report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
     assert rejected == set(bodies) and report["done"] == 0
     assert not [post for post in posts if post["after_rejection"]], posts
     assert len(posts) == len(reservations) == len(results) == (2 if reject == "split" else 4)
@@ -330,7 +337,8 @@ def test_run_pending_acknowledged_split_keeps_full_cloud_coverage(routed, monkey
 
     monkeypatch.setattr(worker, "_persist_chunks", acknowledged)
     monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
-    report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
+    with legacy_cloud_routes():
+        report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
     assert report["done"] == 2 and not rejected and sorted(saved_splits) == [1, 2]
     assert len(posts) == len(reservations) == len(results) == 6
     current = _current_artifacts(led)
@@ -358,11 +366,12 @@ def test_run_pending_split_ack_wait_releases_on_deadline_or_owner_stop(routed, m
 
     monkeypatch.setattr(worker, "_persist_chunks", stopped)
     monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
-    if stop == "owner":
-        with pytest.raises(RuntimeError, match="synthetic-owner-checkpoint-stop"):
-            worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)
-    else:
-        assert worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)["done"] == 0
+    with legacy_cloud_routes():
+        if stop == "owner":
+            with pytest.raises(RuntimeError, match="synthetic-owner-checkpoint-stop"):
+                worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)
+        else:
+            assert worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)["done"] == 0
     assert clock() - started < 3 and rejected
     assert 1 <= len(posts) <= 2 and not [post for post in posts if post["after_rejection"]]
     assert not _current_artifacts(led)
@@ -437,7 +446,8 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
     monkeypatch.setattr(extract_llm_provider, '_probe_format', worker._probe_format)
     monkeypatch.setattr(extract_llm_runner, '_probe_format', worker._probe_format)
 
-    result = worker.run_pending(led, limit=1, workers=1, budget_s=600, cloud_only=True)
+    with legacy_cloud_routes():
+        result = worker.run_pending(led, limit=1, workers=1, budget_s=600, cloud_only=True)
     assert result['done'] == 1, (result, states, sends)
     assert 'pending' in states and 'started' in states and 'completed' in states
     assert any(model == 'gpt-6.1-sol' and effort == 'high' for model, effort, _ in sends)
