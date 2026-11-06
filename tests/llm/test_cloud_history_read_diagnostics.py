@@ -3,10 +3,10 @@ from contextlib import closing
 import json
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 
-import cloud_backlog
 import cloud_client
 import cloud_inference
 import cloud_policy
@@ -61,8 +61,9 @@ def _assert_refusal(provider, phase, prompt):
 
 def _events(capsys):
     captured = capsys.readouterr()
+    assert captured.out == ""
     assert _SECRET not in captured.out + captured.err
-    records = [json.loads(line) for line in captured.out.splitlines()]
+    records = [json.loads(line) for line in captured.err.splitlines()]
     for record in records:
         record.pop("pid")
         record.pop("ts")
@@ -147,7 +148,7 @@ def test_nonfixed_phase_is_never_logged(capsys, phase):
 
 
 @pytest.mark.parametrize("phase", _READS)
-def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, monkeypatch, phase):
+def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, monkeypatch, capsys, phase):
     path, _cfg, calls, locks, _state, unit, _restart = paid
     def failed_log(*args, **kwargs):
         raise OSError(_SECRET)
@@ -157,10 +158,11 @@ def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, 
         before, sent, slots = _history(ledger), len(calls), len(locks)
         provider = unit(ledger)
         with monkeypatch.context() as patch:
-            patch.setattr(cloud_backlog, "_event", failed_log)
+            patch.setattr(cloud_inference, "sys", SimpleNamespace(stderr=SimpleNamespace(write=failed_log)))
             patch.setattr(ledger, "db", ReadFailure(ledger.db, phase, sqlite3.OperationalError(_SECRET)))
             _assert_refusal(provider, phase, "synthetic prompt" if phase == "recover_response" else _SECRET)
         assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
+    assert _events(capsys) == []
 
 
 @pytest.mark.parametrize("error_class,category", [(ValueError, "value_error"), (TypeError, "type_error"),

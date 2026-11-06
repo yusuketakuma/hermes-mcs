@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+import os
 import re
 import sqlite3
+import sys
 import time
 
 import anthropic_client
@@ -32,7 +35,8 @@ def _history_read_error(phase, error):
         if isinstance(error, sqlite3.Error):
             code = cloud_backlog._exception_observation(error).get("sqlite_errorcode")
             values["sqlite_primary_code"] = code & 0xff if type(code) is int else "unknown"
-        cloud_backlog._event("cloud_history_read_error", **values)
+        print(json.dumps({"event": "cloud_history_read_error", "pid": os.getpid(),
+                          "ts": time.time(), **values}), file=sys.stderr, flush=True)
     except Exception:
         pass  # Diagnostics must never replace the existing fail-closed refusal.
 
