@@ -14,9 +14,10 @@ Freshness deadline comes from config (health.tick_interval_s, default
 Output contract: alert content is status codes/counters only — never
 patient data. stdout carries one alert line on alert transitions
 (watchdog convention) and the same lines go to notify_system_target
-(else notify_target); data/health_watch_status.json is the durable
+(Slack requires a distinct channel ID); data/health_watch_status.json is the durable
 machine-readable status, published atomically.
 """
+from collections import Counter
 import argparse
 from datetime import datetime
 import fcntl
@@ -1096,7 +1097,7 @@ def _alert_lines(report: dict) -> list[str]:
         lines.append("影響: " + _impact(report, reasons))
         lines.append("原因と対処:")
         reason_rows = _reason_rows(report, reasons)
-        shared = {line for line in reason_rows if line.startswith("　→ ") and reason_rows.count(line) > 1}
+        shared = {line for line, count in Counter(reason_rows).items() if line.startswith("　→ ") and count > 1}
         lines.extend(line for line in reason_rows if line not in shared)
         for line in dict.fromkeys(line for line in reason_rows if line in shared):
             lines.append("共通の対処: " + line.removeprefix("　→ "))

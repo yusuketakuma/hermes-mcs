@@ -47,7 +47,7 @@ def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command():
     text, files = notify_flush._format_event(None, {'kind': 'update_notice', 'payload': json.dumps(payload)})
     assert '候補版: v1.2.3' in text and 'run 7' in text and files == []
     assert 'synthetic_patient' not in text and 'unsafe' not in text
-    command = json.loads(text.split('適用前の確認: /mcs ')[1].splitlines()[0])
+    command = json.loads(text.split('患者情報チャンネルで実行（適用前の確認）: /mcs ')[1].splitlines()[0])
     assert command == {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
                        'tag': 'v1.2.3', 'reason': '<理由>'}
     from adapters.common import human_commands
@@ -56,6 +56,14 @@ def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command():
     request = human_commands._new_control(mcs_requests, {'user_id': 'SYNTHETIC'},
                                          command, None, 'ops.update_apply')
     assert request['version'] == 1 and mcs_requests.validate(request) is None
+    from adapters.slack.actions import Actions
+    actions = object.__new__(Actions)
+    actions._active = True
+    actions._settings = {'team_id': 'SYNTHETIC_TEAM', 'application_id': 'SYNTHETIC_APP',
+                         'allowed_user_ids': ['SYNTHETIC'], 'channel_id': 'C12345678'}
+    body = {'team_id': 'SYNTHETIC_TEAM', 'api_app_id': 'SYNTHETIC_APP', 'user_id': 'SYNTHETIC'}
+    assert actions._slash_scope_ok({**body, 'channel_id': 'C12345678'})
+    assert not actions._slash_scope_ok({**body, 'channel_id': 'C87654321'})
 
 
 def test_health_unknown_codes_and_host_details_never_escape_and_counts_remain():
@@ -151,3 +159,19 @@ def test_recovery_fixed_results_keep_completion_distinct_from_failed_restart(sou
     assert title in text
     assert 'mcs_update.py status' in text and 'mcs_setup.py doctor' in text
     assert '収集・通知の再開は別途確認' in text if '🟢' in title else '🟢' not in text
+
+
+@pytest.mark.parametrize(('patient', 'system'), [
+    ('slack:#patient', 'slack:C87654321'), ('slack:C12345678', 'slack:#mcslog'),
+    ('slack:#same', 'slack:C12345678'), ('slack:D12345678', 'slack:C87654321'),
+    ('slack:C12345678:123.456', 'slack:C87654321'), ('slack', 'slack:C87654321'),
+])
+def test_system_route_requires_resolved_channel_ids_in_sender_and_recovery(monkeypatch, patient, system):
+    cfg = {'runtime_mode': 'standalone', 'notify_target': patient, 'notify_system_target': system}
+    assert notify_sender.target(cfg, 'run_failed') is None
+    assert notify_sender.target(cfg, 'new_messages') == patient
+    from deployment.recovery import mcs_recovery_services as recovery
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_check_recovery_root', lambda: None)
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_runtime_config', lambda: cfg)
+    monkeypatch.setattr(recovery.subprocess, 'Popen', lambda *a, **kw: pytest.fail('must not send'))
+    recovery._notify('synthetic')
