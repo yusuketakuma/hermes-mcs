@@ -101,7 +101,7 @@ def test_unchanged_pid_remains_unknown(gateway, monkeypatch):
         return real(argv, **kwargs)
     monkeypatch.setattr(rec.subprocess, 'run', run)
     clock = [0]
-    monkeypatch.setattr(rec, 'time', SimpleNamespace(time=lambda: 0,
+    monkeypatch.setattr(rec.mcs_recovery_gateway, 'time', SimpleNamespace(time=lambda: 0,
         monotonic=lambda: clock[0], sleep=lambda n: clock.__setitem__(0, clock[0] + n)))
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
     assert json.loads((data / 'gateway_restart.json').read_text())['status'] == 'unknown'
@@ -516,7 +516,7 @@ def test_live_session_refusal_waits_without_interrupting_owned_work(gateway, mon
         return real(argv, **kwargs)
 
     monkeypatch.setattr(rec.subprocess, 'run', run)
-    monkeypatch.setattr(rec, 'time', SimpleNamespace(time=lambda: 0,
+    monkeypatch.setattr(rec.mcs_recovery_gateway, 'time', SimpleNamespace(time=lambda: 0,
         monotonic=lambda: clock[0], sleep=sleep))
     result = rec._gateway_restart_run(str(data), str(agents), 501)
     report = json.loads((data / 'gateway_restart.json').read_text())
@@ -557,7 +557,7 @@ def test_only_exact_guard_refusal_is_retried(gateway, monkeypatch, output, code)
         return real(argv, **kwargs)
 
     monkeypatch.setattr(rec.subprocess, 'run', run)
-    monkeypatch.setattr(rec.time, 'sleep', lambda _: pytest.fail('nonbusy failure must not wait'))
+    monkeypatch.setattr(rec.mcs_recovery_gateway.time, 'sleep', lambda _: pytest.fail('nonbusy failure must not wait'))
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
     assert len(attempts) == 1
     report = json.loads((data / 'gateway_restart.json').read_text())
