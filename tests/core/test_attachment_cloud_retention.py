@@ -10,6 +10,7 @@ from test_maintenance_retention_cleanup import _ledger, _repair_accounting, _exp
 from test_attachment_inference import page_store, run
 from test_cloud_after_local import local_then_cloud
 from test_anthropic_runtime import routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['page_store', 'local_then_cloud', 'routed']
 
@@ -60,7 +61,8 @@ def test_real_ocr_cloud_result_remains_current_after_financial_retention(page_st
     ledger, cfg, key, _, cloud_calls, _ = page_store
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert run(ledger, cfg, 'cloud')['done'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
     before = worker.current(ledger.db, 1, key, cfg=cfg)
     assert before['ready'] and before['stage'] == 'cloud'
     cutoff = time.time() - maintenance.CLOUD_USAGE_KEEP_S

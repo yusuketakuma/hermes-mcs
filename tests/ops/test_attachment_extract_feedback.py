@@ -15,6 +15,7 @@ import original_source_keys
 from test_attachment_inference import page_store as base_page_store, run
 from test_cloud_after_local import local_then_cloud  # noqa: F401
 from test_anthropic_runtime import routed  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['base_page_store']
 
@@ -76,7 +77,8 @@ def test_cloud_report_keeps_old_accounting_and_binds_new_cloud_to_new_local(page
     ledger, cfg, key, local_calls, cloud_calls, _ = page_store
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
-    assert run(ledger, cfg, 'cloud')['done'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
     old = worker.current(ledger.db, 1, key, cfg=cfg)
     old_financial = _financial(ledger)
     req = _request(ledger, cfg, key)
@@ -87,7 +89,8 @@ def test_cloud_report_keeps_old_accounting_and_binds_new_cloud_to_new_local(page
     local = worker.current(ledger.db, 1, key, cfg=cfg)
     assert local['stage'] == 'local' and not local['ready']
     assert local['artifact_id'] > old['local_artifact_id']
-    assert run(ledger, cfg, 'cloud')['done'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
     current = worker.current(ledger.db, 1, key, cfg=cfg)
     assert current['local_artifact_id'] == local['artifact_id'] and current['ready']
     assert _financial(ledger)[:len(old_financial)] == old_financial
@@ -137,7 +140,8 @@ def test_unknown_paid_cloud_cannot_be_reclassified_by_human_feedback(page_store,
 
     monkeypatch.setattr(AnthropicClient, 'request', unknown)
     with pytest.raises(KeyboardInterrupt):
-        run(ledger, cfg, 'cloud')
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
     financial = _financial(ledger)
     assert mcs_requests.apply_command(ledger, req, cfg=cfg)['error'] == 'extraction_changed'
     assert _financial(ledger) == financial and not ledger.artifacts(attachment_feedback.KIND)

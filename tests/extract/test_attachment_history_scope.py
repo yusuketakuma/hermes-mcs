@@ -7,6 +7,7 @@ import pytest
 import attachment_inference as worker
 import cloud_policy
 from test_attachment_inference import page_store, run, routed, local_then_cloud
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['page_store', 'routed', 'local_then_cloud']
 
@@ -25,10 +26,12 @@ def test_cloud_requires_receipted_parent_history_and_age(page_store, mutation):
             ledger.db.execute('UPDATE messages SET first_seen=? WHERE message_id=1', (time.time(),))
         else:
             ledger.db.execute('UPDATE messages SET notified_at=? WHERE message_id=1', (time.time(),))
-    result = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        result = run(ledger, cfg, 'cloud')
     assert result['done'] == 0 and result['deferred'] > 0
     assert not cloud_calls and not ledger.artifacts('cloud_usage_reserve')
-    assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
+    with legacy_cloud_routes():
+        assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
 
 
 def test_scope_revoked_after_unit_creation_stops_send(page_store, monkeypatch):
@@ -42,7 +45,8 @@ def test_scope_revoked_after_unit_creation_stops_send(page_store, monkeypatch):
             ledger.artifact_add_tx('cloud_history_scope', '{"version":1,"sources":{}}')
         return unit
     monkeypatch.setattr(worker.cloud_inference, 'CloudInferenceUnit', revoked)
-    result = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        result = run(ledger, cfg, 'cloud')
     assert result['done'] == 0 and result['deferred'] > 0
     assert not cloud_calls
 
@@ -63,7 +67,8 @@ def test_received_paid_response_checks_scope_but_not_new_send_age(page_store, mo
                 ledger.db.execute('UPDATE messages SET notified_at=? WHERE message_id=1', (time.time(),))
         return answer
     monkeypatch.setattr(client, 'request', changed)
-    result = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        result = run(ledger, cfg, 'cloud')
     assert len(cloud_calls) == 1 and ledger.artifacts('cloud_usage_reserve')
     assert ledger.artifacts('cloud_usage_result')
     assert (result['done'] == 1) is adopt
@@ -103,7 +108,8 @@ def test_parent_body_edit_during_http_holds_then_readopts_same_paid_answer(page_
         ledger.save_messages([replace(_message(body='合成の親投稿を更新しました。'), message_id=1)])
         return answer
     monkeypatch.setattr(client, 'request', edited)
-    assert run(ledger, cfg, 'cloud')['done'] == 0
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 0
     assert len(cloud_calls) == 1
     assert worker.original_source_keys.binding(ledger.db, 1, key) == source_before
     assert ledger.artifacts('cloud_usage_result') and not ledger.artifacts('cloud_usage_disposition')

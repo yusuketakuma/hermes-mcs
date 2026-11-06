@@ -390,6 +390,17 @@ def owns_request(db, *, route, project_id, message_id):
     return owns_any_request(db, route=route, project_id=project_id, message_ids=[message_id])
 
 
+def owns_unit_request(db, *, route, project_id, unit_key):
+    """owns_request keyed on a durable unit_key for targets without a message id —
+    attachment pages reserve `attachment_ocr:<id>:<page>:cloud`. A reservation
+    whose meta binds the key but cannot prove a different route stays a
+    conservative hold."""
+    return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? "
+        "AND json_valid(meta) AND json_extract(meta,'$.unit_key')=? "
+        "AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
+        "LIMIT 1", (KINDS[0], project_id, unit_key, route)).fetchone() is not None
+
+
 def owns_any_request(db, *, route, project_id, message_ids):
     """owns_request over a set of member targets: thread jobs reserve per
     member, so ownership is membership in the job's payload targets. A

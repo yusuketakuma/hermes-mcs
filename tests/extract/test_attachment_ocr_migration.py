@@ -11,6 +11,7 @@ from test_attachment_inference import page_store as page_store, run
 from test_attachment_inference_recovery import _lose_accounting_lock
 from test_cloud_after_local import local_then_cloud  # noqa: F401
 from test_anthropic_runtime import routed  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 
 LEGACY = 'yomitoku-0.16.0-cpu-lite-text-first/v1'
 
@@ -59,7 +60,8 @@ def test_legacy_source_paid_journal_settles_without_adoption_or_resend(page_stor
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, sends, monkeypatch)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     assert len(sends) == 1 and len(journal.pending(ocr._data_root(ledger))) == 1
     _legacy(ledger.db)
     unavailable[0] = False

@@ -228,7 +228,14 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                     finished = False
                     break
                 local = _stored(ledger.db, row['project_id'], key, 'local', cfg)
-                if stage == 'cloud' and (local is None or _requirement(cfg, row['project_id'])[0] is not True):
+                if stage == 'cloud' and local is None:
+                    continue
+                # A closed send route retires new sends, never the unit a prior
+                # reservation created: owned pages still reach recovery or hold.
+                if stage == 'cloud' and _requirement(cfg, row['project_id'])[0] is not True and not (
+                        cloud_policy.in_scope(cloud_inference.resolve_cloud_settings(cfg), 'reextract', row['project_id'])
+                        and cloud_policy.owns_unit_request(ledger.db, route='reextract',
+                            project_id=row['project_id'], unit_key=key + ':cloud')):
                     continue
                 history = _history_snapshot(ledger.db, source) if stage == 'cloud' else None
                 if stage == 'cloud' and history is None:
