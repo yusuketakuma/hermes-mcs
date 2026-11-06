@@ -118,13 +118,15 @@ def _settle_bodies(led, render):
 
 
 def _receipt(led, render, attempt_id, result="delivered",
-             message_id="m-1", error_code=None, n=9, cfg=CFG):
+             message_id="m-1", error_code=None, n=9, cfg=CFG, files=None):
     req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(n),
            "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
            "render_rev": render["render_rev"],
            "payload_hash": render["payload_hash"], "route_epoch": 1,
            "correlation": render["correlation"], **SCOPE,
            "result": result, "message_id": message_id}
+    if files is not None:
+        req["files"] = files
     if error_code is not None:
         req["error_code"] = error_code
     return notify_transport.apply_transport_receipt(led, req, cfg, now=NOW)
@@ -324,9 +326,38 @@ def _dispatch_with_source(led, event, cfg=CFG, now=NOW):
     return _dispatch(led, event, cfg, now)
 
 
+def _surface_file_echo(spec, surface):
+    """Synthetic full file evidence for one Discord surface's real receipt."""
+    if spec["delivery"].get("transport", "discord") != "discord":
+        return None
+    manifest = spec["parts"].get("manifest") or []
+    group = next((p for p in manifest if p["kind"] == "file_group"
+                  and p.get("surface") == surface), None)
+    if group is None:
+        return None
+    from adapters.common.spec import discord_file_name
+    by_id = {p["part_id"]: p for p in manifest}
+    return [{"part_id": pid, "wire_name": discord_file_name(by_id[pid]),
+             "bytes": by_id[pid]["bytes"],
+             "remote_file_id": by_id[pid].get("prior_remote_file_id")
+             or f"synthetic-{by_id[pid]['attachment_id']}-{by_id[pid]['sha256'][:12]}"}
+            for pid in group["members"]]
+
+
+def _wire_parts(spec):
+    """Only real calls receive receipts; grouped files settle with their surface."""
+    manifest = spec["parts"].get("manifest") or []
+    grouped = set()
+    if spec["delivery"].get("transport", "discord") == "discord":
+        for part in manifest:
+            if part["kind"] == "file_group":
+                grouped.update([part["part_id"], *part["members"]])
+    return [p for p in manifest if p["part_id"] not in grouped]
+
+
 def _part_receipt(led, render, part_id, result="delivered",
                   remote_id="r-1", error_code=None, aid=None, n=50,
-                  mutate=None):
+                  mutate=None, files=None):
     """A Discord (v1) part_receipt applied through the real transport."""
     req = {"version": 1, "op": "part_receipt", "command_id": _uuid(n),
            "attempt_id": aid or f"p:{render['delivery_id'].replace('-', '')}:{part_id}",
@@ -339,6 +370,9 @@ def _part_receipt(led, render, part_id, result="delivered",
         req["remote_id"] = remote_id
     if error_code is not None:
         req["error_code"] = error_code
+    if files is not None:
+        req["kind"] = "body_part"
+        req["files"] = files
     if mutate:
         mutate(req)
     return notify_transport.apply_part_receipt(led, req, CFG, now=NOW)

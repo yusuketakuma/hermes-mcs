@@ -292,14 +292,15 @@ def _val_transport_receipt(req, cid) -> str | None:
                      "delivery_id", "render_rev", "payload_hash",
                      "route_epoch", "correlation", "profile",
                      "application_id", "guild_id", "channel_id",
-                     "result", "message_id", "error_code"}):
+                     "result", "message_id", "error_code", "files"}):
         return "unknown_field"
     return (_delivery_ids(req, cid, _ATTEMPT_ID)
             or _delivery_integrity(req)
             or _correlation(req)
             or _route_identity(req)
             or _guild_id(req)
-            or _result_fields(req, "message_id"))
+            or _result_fields(req, "message_id")
+            or notify_transport.files_echo_error(req))
 
 
 def _val_part_receipt(req, cid) -> str | None:
@@ -308,7 +309,7 @@ def _val_part_receipt(req, cid) -> str | None:
                      "route_epoch", "correlation", "profile",
                      "application_id", "guild_id", "channel_id",
                      "part_id", "kind", "result", "remote_id",
-                     "error_code"}):
+                     "error_code", "files"}):
         return "unknown_field"
     return (_delivery_ids(req, cid, _PART_ATTEMPT_ID)
             or _delivery_integrity(req)
@@ -316,7 +317,8 @@ def _val_part_receipt(req, cid) -> str | None:
             or _route_identity(req)
             or _guild_id(req)
             or _part_identity(req)
-            or _result_fields(req, "remote_id"))
+            or _result_fields(req, "remote_id")
+            or notify_transport.files_echo_error(req))
 
 
 def _val_thread_receipt(req, cid, slack: bool) -> str | None:

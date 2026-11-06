@@ -438,6 +438,14 @@ def spoiler_attachment(name: str) -> bool:
     return str(name or "").lower().endswith(_IMAGE_SUFFIX)
 
 
+def attachment_file(blob: bytes, member):
+    """Build a native file from bytes already checked by the attachment reader."""
+    import discord
+    from io import BytesIO
+    return discord.File(BytesIO(blob), filename=discord_file_name(member),
+                        spoiler=spoiler_attachment(member["name"]))
+
+
 async def send_attachment(target, path: str | BinaryIO, name: str,
                           content: str | None = None):
     """File upload for a durable attachment part — kept here so

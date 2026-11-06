@@ -9,7 +9,7 @@ import sqlite3
 import time
 
 import measurement_reader
-from snapshot_access import snapshot_meta
+from snapshot_access import READABLE_SCHEMA_VERSIONS, snapshot_meta
 
 
 _JST = timezone(timedelta(hours=9))
@@ -74,7 +74,7 @@ def read_snapshot(path, project_id, *, cfg=None, timeout_s=_TIMEOUT_S, cursor=No
         db.row_factory = sqlite3.Row
         db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         db.execute("BEGIN")
-        if db.execute("PRAGMA user_version").fetchone()[0] not in (5, 6, 7, 8, 9, 10, 11):
+        if db.execute("PRAGMA user_version").fetchone()[0] not in READABLE_SCHEMA_VERSIONS:
             return _unknown("snapshot_unavailable")
         if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             return _unknown("snapshot_unavailable")

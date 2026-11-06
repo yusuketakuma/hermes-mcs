@@ -1,15 +1,34 @@
 {
   "category": "added",
   "title": "Discord・LINE WORKSの通知カードに投稿原文を表示",
-  "summary": "DiscordとLINE WORKSのスレッドカードで、各投稿の原文をカード面に表示できるようになりました。これまで原文はスレッド内の別投稿に分かれていましたが、投稿ごとの要約・原文・スタンプがカード上でまとまって見えます。",
-  "upgrade": "更新後、Discord/LINE WORKSの通知処理を新しいコードへ切り替えると適用されます。LINE WORKSは独立アダプターの再起動、Hermes plugin経由の場合はgatewayの再起動が必要です。旧形式で配信済みのカードは新版の面と互換がないため再利用せず、新しいカードとして投稿します。表示形式の変更のみで、送信条件・承認条件・結果不明時の再送禁止は変わりません。",
+  "summary": "DiscordとLINE WORKSの通知カードに各投稿の原文を表示します。Discordでは画像やPDFなどの添付を、その原文の下にまとめて表示します。",
+  "upgrade": "更新後、Discord/LINE WORKSの通知処理を新しいコードへ切り替えると適用されます。LINE WORKSは独立アダプターの再起動、Hermes plugin経由の場合はgatewayの再起動が必要です。旧形式で配信済みのカードは新版の面と互換がないため再利用せず、新しいカードとして投稿します。Discordの添付は対応する本文と同じ要求で配信する方式へ変わります。通知対象・既読化の条件と、結果不明時の自動再送禁止は維持します。添付グループの復旧では全添付の証拠を確認します。 Discordの添付証拠を保存するためDB形式は12になります。更新前のバックアップを保持し、すべての通知workerを新版へ切り替えてください。旧workerは新しいDB形式へ書き込めません。",
   "details": [
     "通知仕様に chat_format_version=1 を追加し、DiscordはComponents V2、LINE WORKSはFlexカードで投稿ごとの原文とスタンプ行を描画します。",
     "原文が面に収まらない投稿は従来どおりスレッド本文パーツに残り、原文が表示から欠けることはありません。",
     "💊薬剤の確認・検索は投稿が表示される面に従います。カード面に原文が収まる投稿はその投稿の横の💊から、スレッドに残る投稿はスレッド本文の先頭にある従来の薬剤ビューから、いずれも本人だけに見える回答で開けます。",
     "LINE WORKSでは chat_format_version=1 のとき、各投稿の添付ファイルをその投稿の本文・原文の直後へ個別ジャーナルのまま並べ替えます。元投稿に対応づかない添付は末尾に保持します。",
     "旧形式の配信済みカードを新版仕様が再利用すると原文がどこにも表示されないため、chat_format_version と face_posts が一致する場合だけカードを再利用します。",
-    "既存の仕様（chat_format_version なし）は従来どおりの描画・配送を維持し、未知の結果を成功扱いしない・重複送信しない条件は変更していません。"
+    "既存の仕様（chat_format_version なし）は従来どおりの描画・配送を維持し、未知の結果を成功扱いしない・重複送信しない条件は変更していません。",
+    "Discordの添付はカードまたは対応するスレッド本文と同じ送信・更新でまとめて配信し、画像はMediaGallery、PDF等はFileとして原文直下に表示します。画像を開く前の折り畳みは維持します。",
+    "ファイル数10件、1ファイル20MiB、送信全体25MiBから64KiBの余裕を引いた上限を超える場合や、元投稿との対応を確認できない場合は、通知全体を保留します。",
+    "再利用する添付は、保存したDiscordのファイルID、投稿ID、原本のhash・サイズ・名称と照合します。不明な既存添付を自動で削除・再アップロードしません。",
+    "送信結果が不明な添付の承認では、既存の人承認条件に加え、対応する投稿と添付集合の証拠を要求します。"
   ],
-  "refs": ["adapters/common/spec.py", "adapters/discord/cards.py", "adapters/discord/delivery.py", "adapters/lineworks/cards.py", "adapters/lineworks/client.py", "mcs/notify/notify_card_renders.py", "mcs/notify/notify_parts.py", "mcs/notify/presentation/present_discord.py", "mcs/notify/presentation/present_lineworks.py", "mcs/notify/presentation/present_slack.py", "adapters/common/provider_assets.py"]
+  "refs": [
+    "adapters/common/spec.py",
+    "adapters/discord/cards.py",
+    "adapters/discord/delivery.py",
+    "adapters/lineworks/cards.py",
+    "adapters/lineworks/client.py",
+    "mcs/notify/notify_card_renders.py",
+    "mcs/notify/notify_parts.py",
+    "mcs/notify/presentation/present_discord.py",
+    "mcs/notify/presentation/present_lineworks.py",
+    "mcs/notify/presentation/present_slack.py",
+    "adapters/common/provider_assets.py",
+    "mcs/core/ledger_schema.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/notify/notify_recovery.py"
+  ]
 }

@@ -18,7 +18,7 @@ from functools import partial
 
 from adapters.common import paths, registry, worker
 from adapters.common.announce import new_reply_announced
-from adapters.common.spec import post_scoped
+from adapters.common.spec import post_scoped, discord_file_name
 from . import cards
 
 # discord.py releases whose HTTPClient.request retry loop and private
@@ -149,6 +149,11 @@ def _thread_parent_guild(thread) -> tuple[str, str]:
 CAPABILITY_REJECT = frozenset({401, 403})
 
 
+class _FilesUnverified(RuntimeError):
+    """A grouped surface's file set could not be proven — the outcome
+    stays unknown; a fresh POST fallback would duplicate the post."""
+
+
 class PrefetchFailed(Exception):
     """A read before any write failed ambiguously — nothing was sent."""
 
@@ -252,14 +257,57 @@ class DeliveryWorker(worker.DeliveryWorker):
                 # a legacy embed message requires explicitly clearing
                 # content and embeds (discord.py edit contract).
                 payload.update(content=None, embed=None)
+            members = self._group_members(spec, "card")
+            if members:
+                # the card surface's files ride this same edit: every
+                # current attachment is retained and only members whose
+                # file is not already proven upload — the response
+                # proves the whole set in one call.
+                files = await self._edit_group_files(msg, members)
+                if files is None:
+                    return {"result": "unknown",
+                            "error_code": "attachment_mismatch"}
+                try:
+                    resp = await msg.edit(
+                        **payload,
+                        attachments=files,
+                        allowed_mentions=cards.no_pings())
+                except Exception:
+                    return {"result": "unknown",
+                            "error_code": "file_group_unverified"}
+                response_channel = getattr(resp, "channel", None)
+                if (resp is None or str(getattr(resp, "id", "")) != str(mid)
+                        or (response_channel is not None and str(response_channel.id) != str(channel.id))):
+                    return {"result": "unknown",
+                            "error_code": "file_group_unverified"}
+                echo = self._files_echo(resp, members)
+                if echo is None:
+                    return {"result": "unknown",
+                            "error_code": "file_group_unverified"}
+                return {"result": "delivered", "message_id": mid,
+                        "files": echo}
             await msg.edit(**payload, allowed_mentions=cards.no_pings())
             return {"result": "delivered", "message_id": mid}
+        members = self._group_members(spec, "card")
+        files = await self._member_files(members) if members else []
+        if members and files is None:
+            return {"result": "unknown", "error_code": "attachment_mismatch"}
+        send_payload = cards.message_payload(spec)
+        if files:
+            send_payload["files"] = files
         sent = await single_post(           # create / notice
-            self._bot, partial(channel.send, **cards.message_payload(spec),
+            self._bot, partial(channel.send, **send_payload,
                                allowed_mentions=cards.no_pings()),
             retry_allowed=self._retry_gate(spec))
-        return {"result": "delivered",
-                "message_id": str(sent.id)}
+        out = {"result": "delivered",
+               "message_id": str(sent.id)}
+        if members:
+            echo = self._files_echo(sent, members)
+            if echo is None:
+                return {"result": "unknown",
+                        "error_code": "file_group_unverified"}
+            out["files"] = echo
+        return out
 
     # -- durable part deliveries ----------------------------------------
 
@@ -342,41 +390,181 @@ class DeliveryWorker(worker.DeliveryWorker):
             return {"result": "delivered", "remote_id": str(rid)}
         return {"result": "not_sent", "error_code": "unsupported_part"}
 
+    # -- discord file_group: member files ride their surface's call ----
+
+    @staticmethod
+    def _group_members(spec: dict, surface: str) -> list:
+        """Ordered member attachment_part entries of the sealed group
+        anchored to ``surface`` (``card`` or a body_part part_id)."""
+        manifest = spec["parts"].get("manifest") or []
+        group = next((p for p in manifest
+                      if p.get("kind") == "file_group"
+                      and p.get("surface") == surface), None)
+        if group is None:
+            return []
+        by_id = {p["part_id"]: p for p in manifest}
+        return [by_id[m] for m in group.get("members") or () if m in by_id]
+
+    @staticmethod
+    def _wire_names(name) -> set:
+        """Filenames a member's attachment may carry remotely — the
+        sealed name plus the SPOILER_ normalization discord.py applies."""
+        name = str(name or "")
+        uploaded = name
+        while uploaded.startswith("SPOILER_"):
+            uploaded = uploaded[8:]
+        if uploaded != name or cards.spoiler_attachment(name):
+            uploaded = "SPOILER_" + uploaded
+        return {name, uploaded}
+
+    async def _member_files(self, members: list) -> list | None:
+        """discord.File per member, bytes re-verified against the sealed
+        sha256/bytes — None when any blob fails verification."""
+        out = []
+        for m in members:
+            blob = await asyncio.to_thread(
+                paths.read_verified_attachment, m.get("path"), m, self._root)
+            if blob is None:
+                return None
+            out.append(cards.attachment_file(blob, m))
+        return out
+
+    @staticmethod
+    def _match_attachment(msg, m: dict):
+        """Retain only the exact file id and source identity sealed by a prior receipt."""
+        if str(getattr(msg, "id", "")) != m.get("prior_remote_id") or not m.get("prior_remote_file_id"):
+            return None
+        hits = [a for a in getattr(msg, "attachments", ()) or ()
+                if str(getattr(a, "id", "")) == m["prior_remote_file_id"]
+                and getattr(a, "size", None) == m.get("bytes")
+                and getattr(a, "filename", None) == discord_file_name(m)]
+        return hits[0] if len(hits) == 1 else None
+
+    async def _edit_group_files(self, msg, members):
+        """Validate the complete retained file set before making one surface edit."""
+        existing = list(getattr(msg, "attachments", ()) or ())
+        retained, missing = [], []
+        for member in members:
+            match = self._match_attachment(msg, member)
+            if match is None:
+                if member.get("prior_remote_id") or member.get("prior_remote_file_id"):
+                    return None
+                missing.append(member)
+            else:
+                retained.append(match)
+        if len(existing) != len(retained) or {str(a.id) for a in existing} != {str(a.id) for a in retained}:
+            return None
+        files = await self._member_files(missing)
+        return None if files is None else retained + files
+
+    def _files_echo(self, msg, members: list) -> list | None:
+        """Bijection between the group's members and the response
+        message's attachments — every member exactly one remote file
+        id; any missing/extra/ambiguous match fails the whole group."""
+        atts = list(getattr(msg, "attachments", ()) or ())
+        if len(atts) != len(members):
+            return None
+        used, file_ids, echo = set(), set(), []
+        for m in members:
+            hits = [(i, a) for i, a in enumerate(atts)
+                    if i not in used
+                    and getattr(a, "size", None) == m.get("bytes")
+                    and getattr(a, "filename", None) == discord_file_name(m)]
+            if len(hits) != 1:
+                return None
+            i, a = hits[0]
+            used.add(i)
+            fid = getattr(a, "id", None)
+            if fid is None or str(fid) in file_ids:
+                return None
+            file_ids.add(str(fid))
+            echo.append({"part_id": m["part_id"],
+                         "wire_name": getattr(a, "filename", None),
+                         "bytes": m.get("bytes"),
+                         "remote_file_id": str(fid)})
+        return echo
+
+    async def _group_bound(self, spec, part, mid, ctx, members):
+        """Prove the complete file set on an already bound surface without another write."""
+        msg = ctx.get("matched_msg")
+        if msg is None or getattr(msg, "id", None) != int(mid):
+            thread = ctx.get("thread")
+            if thread is None:
+                return {"result": "unknown",
+                        "error_code": "file_group_unverified"}
+            try:
+                msg = await thread.fetch_message(int(mid))
+            except Exception:
+                return {"result": "unknown",
+                        "error_code": "file_group_unverified"}
+        echo = self._files_echo(msg, members)
+        if any(self._match_attachment(msg, member) is None for member in members):
+            echo = None
+        if echo is None:
+            return {"result": "unknown",
+                    "error_code": "file_group_unverified"}
+        return {"result": "delivered", "remote_id": str(mid),
+                "files": echo}
+
     async def _text_part(self, spec: dict, thread, part: dict, body: str,
                          ctx: dict, *, view=None, update_view=False) -> dict:
         """Post one text message into the thread — deduped against this
         bot's history and rewritten in place when its text changed."""
+        members = self._group_members(spec, part["part_id"]) \
+            if part["kind"] == "body_part" else []
+        if members:
+            view = cards.thread_body_view(spec, part, body, controls=view)
+        wire_body = None if members else body
         if part.get("edit_only") is True:
-            return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
+            return await self._edit_only_prior(spec, thread, part, wire_body, ctx,
+                                               view=view, members=members)
         scoped = post_scoped(spec)
+        if members and part.get("prior_remote_id"):
+            return await self._edit_only_prior(spec, thread, part, wire_body, ctx,
+                                               view=view, members=members)
         if scoped and part.get("prior_remote_id"):
             mid = await self._remote_match(thread, body, ctx, view=view,
                                            update_view=update_view, prior=part["prior_remote_id"])
             if mid is not None:
+                if members:
+                    return await self._group_bound(spec, part, mid, ctx, members)
                 return {"result": "delivered", "remote_id": str(mid)}
-            return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
+            return await self._edit_only_prior(spec, thread, part, wire_body, ctx,
+                                               view=view, members=members)
         if not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into a pre-existing thread — a chunk whose
             # text is already remote binds to that message id
             # instead of posting a duplicate (remote-verified)
             mid = await self._remote_match(
-                thread, body, ctx, view=view, update_view=update_view)
+                thread, body, ctx, view=None if members else view,
+                update_view=False if members else update_view, grouped=bool(members))
             if mid is not None:
+                if members:
+                    return await self._group_bound(spec, part, mid, ctx, members)
                 return {"result": "delivered",
                         "remote_id": str(mid)}
             # the chunk's text changed since it was first posted
             # (the extraction arrived, a reply joined): rewrite that
             # post so the thread keeps one post per chunk
             mid = await self._rewrite_prior(
-                thread, part.get("prior_remote_id"), body, ctx,
-                view=view, update_view=update_view)
+                thread, part.get("prior_remote_id"), wire_body, ctx,
+                view=view, update_view=update_view, members=members)
             if mid is not None:
+                if members:
+                    return {"result": "delivered", "remote_id": str(mid),
+                            "files": ctx["group_files"]}
                 return {"result": "delivered",
                         "remote_id": str(mid)}
+        files = await self._member_files(members) if members else []
+        if members and files is None:
+            return {"result": "unknown", "error_code": "attachment_mismatch"}
+        send_kwargs = {"allowed_mentions": cards.no_pings()}
+        if view is not None:
+            send_kwargs["view"] = view
+        if files:
+            send_kwargs["files"] = files
         sent = await single_post(
-            self._bot, partial(thread.send, body,
-                               allowed_mentions=cards.no_pings(),
-                               **({"view": view} if view is not None else {})),
+            self._bot, partial(thread.send, wire_body, **send_kwargs),
             retry_allowed=self._retry_gate(spec))
         rid = getattr(sent, "id", None)
         if not rid:
@@ -384,9 +572,16 @@ class DeliveryWorker(worker.DeliveryWorker):
             # identity — honest unknown, never a bare 'delivered'
             return {"result": "unknown",
                     "error_code": "missing_remote_id"}
+        out = {"result": "delivered", "remote_id": str(rid)}
+        if members:
+            echo = self._files_echo(sent, members)
+            if echo is None:
+                return {"result": "unknown",
+                        "error_code": "file_group_unverified"}
+            out["files"] = echo
         if new_reply_announced(spec, part):
             await self._announce_reply(spec, body, sent)
-        return {"result": "delivered", "remote_id": str(rid)}
+        return out
 
     async def _announce_reply(self, spec: dict, body: str, sent) -> None:
         """Discord has no reply_broadcast: a late reply gets one short channel
@@ -453,8 +648,18 @@ class DeliveryWorker(worker.DeliveryWorker):
         ctx["thread"] = thread
         return {"result": "delivered", "remote_id": str(thread.id)}
 
+    @staticmethod
+    def _group_body_text(message):
+        def texts(components):
+            for component in components:
+                content = getattr(component, "content", None)
+                if isinstance(content, str):
+                    yield content
+                yield from texts(getattr(component, "components", ()) or ())
+        return next(texts(getattr(message, "components", ()) or ()), None)
+
     async def _remote_match(self, thread, text: str, ctx: dict, *,
-                            view=None, update_view=False, prior=None):
+                            view=None, update_view=False, prior=None, grouped=False):
         """Bounded history scan — a content match binds the part to the
         real remote message id (remote-verified delivery); a miss means
         send. Only messages authored by this bot may bind: historical or
@@ -470,8 +675,11 @@ class DeliveryWorker(worker.DeliveryWorker):
             aid = getattr(getattr(m, "author", None), "id", None)
             if aid != me_id:
                 continue                # not ours — never binds a part
-            if m.id in ctx["consumed"] or m.content != text:
+            if m.id in ctx["consumed"]:
                 continue
+            if m.content != text:
+                if not grouped or self._group_body_text(m) != text:
+                    continue
             if prior is not None and str(m.id) != str(prior):
                 continue
             if update_view or view is not None:
@@ -483,10 +691,11 @@ class DeliveryWorker(worker.DeliveryWorker):
                         return None     # rejected edit: verify prior or post afresh
                     raise
             ctx["consumed"].add(m.id)
+            ctx["matched_msg"] = m
             return m.id
         return None
 
-    async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False):
+    async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False, members=None):
         """Edit only the exact owned thread post; uncertain ownership or edits never POST."""
         missing_is_settled = not post_scoped(spec)
         prior = part.get("prior_remote_id")
@@ -521,12 +730,29 @@ class DeliveryWorker(worker.DeliveryWorker):
                     and getattr(a, "size", None) == part.get("bytes") for a in getattr(msg, "attachments", ())):
                 return {"result": "unknown", "error_code": "edit_file_unverified"}
             verified = True
-            response = await msg.edit(content=text, view=view, allowed_mentions=cards.no_pings())
+            edit_kwargs = {"content": text, "view": view,
+                           "allowed_mentions": cards.no_pings()}
+            if members:
+                files = await self._edit_group_files(msg, members)
+                if files is None:
+                    return {"result": "unknown",
+                            "error_code": "attachment_mismatch"}
+                edit_kwargs["attachments"] = files
+            response = await msg.edit(**edit_kwargs)
             if response is not None:
                 channel = getattr(response, "channel", None)
                 if (getattr(response, "id", None) != pid
                         or (channel is not None and str(channel.id) != str(thread.id))):
                     return {"result": "unknown", "error_code": "edit_response_unverified"}
+                if members:
+                    ctx["matched_msg"] = response
+                    echo = self._files_echo(response, members)
+                    if echo is None:
+                        return {"result": "unknown",
+                                "error_code": "file_group_unverified"}
+                    ctx["consumed"].add(pid)
+                    return {"result": "delivered", "remote_id": str(prior),
+                            "files": echo}
         except Exception as exc:
             if getattr(exc, "status", None) in REVOKE_GONE_STATUS:     # already gone
                 return ({"result": "delivered", "remote_id": str(prior)} if missing_is_settled else
@@ -534,6 +760,10 @@ class DeliveryWorker(worker.DeliveryWorker):
             if verified and worker.is_definitive_reject(exc):
                 return {"result": "not_sent", "error_code": f"http_{exc.status}"}
             return {"result": "unknown", "error_code": "edit_result_unknown"}
+        if members:
+            # the edit committed but returned no message to prove the
+            # file set on — honest unknown, never a bare delivered
+            return {"result": "unknown", "error_code": "file_group_unverified"}
         ctx["consumed"].add(pid)
         return {"result": "delivered", "remote_id": str(prior)}
 
@@ -561,7 +791,7 @@ class DeliveryWorker(worker.DeliveryWorker):
         return msg
 
     async def _rewrite_prior(self, thread, prior, text: str, ctx: dict, *,
-                             view=None, update_view=False):
+                             view=None, update_view=False, members=None):
         """Edit this bot's earlier post of the same chunk in place and
         return its id. Only a message this bot authored in this thread
         can be rewritten — a missing, foreign or already-bound target,
@@ -569,18 +799,34 @@ class DeliveryWorker(worker.DeliveryWorker):
         thread), returns None so the caller posts a new chunk exactly as
         before. An edit is idempotent, so unlike a POST it needs no
         single-shot guard; a crash after the edit is re-bound by
-        ``_remote_match``. Any other failure is unknown and propagates."""
+        ``_remote_match``. Any other failure is unknown and propagates.
+        With ``members`` the same edit carries the surface's unproven
+        files; an unverifiable file set raises instead of falling back
+        to a fresh POST that would duplicate the post."""
         msg = await self._own_prior(thread, prior, ctx)
         if msg is None:
             return None
+        edit_kwargs = {"content": text,
+                       "allowed_mentions": cards.no_pings()}
+        if update_view or view is not None:
+            edit_kwargs["view"] = view
+        if members:
+            files = await self._edit_group_files(msg, members)
+            if files is None:
+                raise _FilesUnverified
+            edit_kwargs["attachments"] = files
         try:
-            await msg.edit(content=text, allowed_mentions=cards.no_pings(),
-                           **({"view": view} if update_view or view is not None else {}))
+            resp = await msg.edit(**edit_kwargs)
         except Exception as exc:
             if worker.is_definitive_reject(exc):
                 return None       # the edit did not commit — post afresh
             raise
         ctx["consumed"].add(msg.id)
+        if members:
+            if resp is None or self._files_echo(resp, members) is None:
+                raise _FilesUnverified
+            ctx["matched_msg"] = resp
+            ctx["group_files"] = self._files_echo(resp, members)
         return msg.id
 
     async def _reuse_prior_file(self, thread, prior, ctx: dict):

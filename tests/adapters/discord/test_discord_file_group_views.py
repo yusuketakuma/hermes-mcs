@@ -118,3 +118,27 @@ def test_body_surface_keeps_escaped_original_then_files_then_medication_controls
     untouched = copy.deepcopy(spec)
     cards.thread_body_view(spec, {"part_id": "body:0002"}, body)
     assert spec == untouched
+
+
+def test_group_upload_uses_verified_bytes_and_sdk_file_owner(tmp_path):
+    import asyncio
+    import hashlib
+    from adapters.discord.delivery import DeliveryWorker
+    directory = tmp_path / 'attachments'
+    directory.mkdir()
+    path = directory / 'synthetic.png'
+    blob = b'synthetic-image'
+    path.write_bytes(blob)
+    member = _member(1, 'synthetic.png')
+    member.update(path=str(path), bytes=len(blob), sha256=hashlib.sha256(blob).hexdigest())
+    instance = object.__new__(DeliveryWorker)
+    instance._root = str(tmp_path)
+    native, = asyncio.run(instance._member_files([member]))
+    try:
+        assert native.filename == discord_file_name(member)
+        assert native.fp.read() == blob
+        assert native.spoiler is True
+    finally:
+        native.close()
+    path.write_bytes(b'x' * len(blob))
+    assert asyncio.run(instance._member_files([member])) is None

@@ -510,6 +510,14 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
                                 "lineworks_button_budget", "lineworks_text_budget"}:
                 raise
             budget_hold = budget_hold or "lineworks_face_budget"
+    if chat_v1 and card["transport"] == "discord":
+        from adapters.common.spec import validate
+        try:
+            validate(spec)
+        except ValueError as exc:
+            if str(exc) not in {"component_budget", "text_budget", "bad_discord_file_group"}:
+                raise
+            budget_hold = budget_hold or "discord_file_group_budget"
     return spec, budget_hold
 
 

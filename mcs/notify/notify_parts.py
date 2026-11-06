@@ -911,12 +911,11 @@ def _post_group_of(name, groups):
     return None
 
 
-def _order_chat_attachment_parts(db, manifest, att_entries, groups, face_mids,
-                                 cleanup_keys):
-    """LINE WORKS chat-format order, sealed by the planner: each post's
-    files are the journaled messages right after that post's own thread
-    content; a post carried whole on the card face leads with its files
-    in post order. Files whose source maps to no group keep the tail."""
+def _chat_attachment_buckets(db, manifest, att_entries, groups, face_mids,
+                             cleanup_keys):
+    """Shared chat-format bucket plan: each post's files lead (face posts)
+    or follow (body posts) their own surface; unmapped files keep the
+    tail. Returns (lead, after, tail, last_real) keyed by post group."""
     ids = [e["attachment_id"] for e in att_entries]
     ph = ",".join("?" * len(ids))
     mid_of = {r["attachment_id"]: r["message_id"] for r in db.execute(
@@ -941,6 +940,17 @@ def _order_chat_attachment_parts(db, manifest, att_entries, groups, face_mids,
             after.setdefault(g, []).append(e)
         else:
             lead.setdefault(g, []).append(e)
+    return lead, after, tail, last_real
+
+
+def _order_chat_attachment_parts(db, manifest, att_entries, groups, face_mids,
+                                 cleanup_keys):
+    """LINE WORKS chat-format order, sealed by the planner: each post's
+    files are the journaled messages right after that post's own thread
+    content; a post carried whole on the card face leads with its files
+    in post order. Files whose source maps to no group keep the tail."""
+    lead, after, tail, last_real = _chat_attachment_buckets(
+        db, manifest, att_entries, groups, face_mids, cleanup_keys)
     out, led = [], False
     for i, e in enumerate(manifest):
         out.append(e)
@@ -959,6 +969,55 @@ def _order_chat_attachment_parts(db, manifest, att_entries, groups, face_mids,
     for i, e in enumerate(out):
         e["index"] = i
     return out
+
+
+def _order_discord_file_groups(db, manifest, att_entries, groups, face_mids,
+                               cleanup_keys):
+    """Discord chat-format file groups, sealed by the planner: each
+    post's available files ride the surface carrying that post's
+    original — face posts on the card message, body posts on their last
+    body_part — as one ``file_group:<surface>`` anchor right after the
+    members. Unavailable captions stay individual lines after their
+    group; files whose post maps to no surface are returned unmapped
+    so the caller holds the render instead of silently splitting."""
+    lead, after, tail, last_real = _chat_attachment_buckets(
+        db, manifest, att_entries, groups, face_mids, cleanup_keys)
+    def available(e):
+        return e.get("unavailable") is not True
+    unmapped = [e for e in tail if available(e)]
+    tail = [e for e in tail if not available(e)]
+    card_members = [e for key, _m in groups for e in lead.get(key, ())
+                    if available(e)]
+    card_lines = [e for key, _m in groups for e in lead.get(key, ())
+                  if not available(e)]
+    out, led = [], False
+
+    def emit_group(surface, members, lines):
+        out.extend(members)
+        if members:
+            out.append({"part_id": f"file_group:{surface}",
+                        "kind": "file_group", "index": 0,
+                        "surface": surface,
+                        "members": [m["part_id"] for m in members]})
+        out.extend(lines)
+
+    for i, e in enumerate(manifest):
+        out.append(e)
+        if not led and e.get("kind") == "thread":
+            led = True
+            emit_group("card", card_members, card_lines)
+        g = (_post_group_of(e.get("name"), groups)
+             if e.get("kind") == "body_part" else None)
+        if g is not None and last_real.get(g) == i:
+            emit_group(e["part_id"],
+                       [x for x in after.get(g, ()) if available(x)],
+                       [x for x in after.get(g, ()) if not available(x)])
+    if not led:
+        emit_group("card", card_members, card_lines)
+    out.extend(tail)
+    for i, e in enumerate(out):
+        e["index"] = i
+    return out, unmapped
 
 
 def _provider_visibility(parts):
@@ -1308,7 +1367,60 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and entry.get("caption") and entry["caption"] != proven[2]):
                 entry["edit_only"] = True
         att_entries.append(entry)
-    if (card["transport"] == "lineworks" and att_entries
+    if (card["transport"] == "discord" and att_entries
+            and spec.get("kind") == "thread"
+            and spec.get("op") in ("create", "update")
+            and parts.get("chat_format_version") == 1):
+        # Discord chat-format file groups: each post's files ride the
+        # surface carrying that post's original as one atomic upload;
+        # unmapped or over-budget files hold the whole render.
+        from adapters.common import spec as _spec
+        manifest, unmapped = _order_discord_file_groups(
+            db, manifest, att_entries, groups, face_mids, cleanup_keys)
+        if unmapped:
+            budget_hold = budget_hold or "attachment_surface_unmapped"
+        rules = [i for i, c in enumerate(parts["containers"])
+                 if c.get("rule") and c.get("type") == "text"]
+        face_at = dict(zip(content["shown"], rules))
+        for member in manifest:
+            if member.get("kind") != "attachment_part" or member.get("unavailable"):
+                continue
+            source = db.execute("SELECT message_id FROM attachments WHERE attachment_id=?",
+                                (member["attachment_id"],)).fetchone()
+            if source and source[0] in face_mids:
+                member["face_at"] = face_at.get(source[0])
+            proofs = [row for row in db.execute(
+                "SELECT p.remote_id,p.remote_file_id,r.* FROM notification_render_parts p "
+                "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+                "WHERE r.card_id=? AND r.state='delivered' AND p.state='delivered' "
+                "AND p.kind='attachment_part' AND p.attachment_id=? AND p.payload_sha256=? "
+                "AND p.bytes=? AND p.name=? AND p.remote_file_id IS NOT NULL",
+                (card["card_id"], member["attachment_id"], member["sha256"],
+                 member["bytes"], member["name"])) if scope_matches(row, stored_scope(card))]
+            proven = {(row["remote_id"], row["remote_file_id"]) for row in proofs}
+            if len(proven) == 1:
+                member["prior_remote_id"], member["prior_remote_file_id"] = proven.pop()
+            elif member.get("prior_remote_id"):
+                budget_hold = budget_hold or "attachment_upload_identity_unverified"
+
+        by_id = {e["part_id"]: e for e in manifest}
+        over = False
+        for e in manifest:
+            if e.get("kind") != "file_group":
+                continue
+            members = [by_id[m] for m in e["members"]]
+            if (len(members) > _spec.DISCORD_GROUP_MAX_MEMBERS
+                    or any(m.get("bytes", 0) > _spec.DISCORD_GROUP_MAX_FILE_BYTES
+                           for m in members)
+                    or sum(m.get("bytes", 0) for m in members)
+                    > _spec.DISCORD_GROUP_MAX_REQUEST_BYTES
+                    - _spec.DISCORD_GROUP_REQUEST_OVERHEAD):
+                over = True
+            e["sha256"] = _spec.discord_file_group_sha256(
+                {**spec, "parts": parts}, e["surface"], members)
+        if over or len(manifest) > _spec.MAX_PARTS:
+            budget_hold = budget_hold or "discord_file_group_budget"
+    elif (card["transport"] == "lineworks" and att_entries
             and parts.get("chat_format_version") == 1):
         # Chat-format order is sealed here: each post's files are the
         # journaled messages right after that post's own thread content;
@@ -1346,7 +1458,7 @@ def seed_parts(db, spec, now) -> None:
                  attachment_id,state,error_code,updated_at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
             (spec["delivery_id"], p["part_id"], p["kind"], p["index"],
-             p.get("sha256"), p.get("bytes"), p.get("name"),
+             p.get("sha256"), p.get("bytes"), p.get("surface", p.get("name")),
              p.get("attachment_id"),
              "not_sent" if unavailable else "pending",
              "attachment_unavailable" if unavailable else None, now))

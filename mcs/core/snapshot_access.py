@@ -2,6 +2,9 @@
 
 import math
 
+# Explicit read compatibility: new writer generations need a separate reader review.
+READABLE_SCHEMA_VERSIONS = (5, 6, 7, 8, 9, 10, 11, 12)
+
 
 def table_exists(db, name: str) -> bool:
     return db.execute(

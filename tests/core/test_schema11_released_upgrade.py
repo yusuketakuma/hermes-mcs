@@ -1,4 +1,4 @@
-"""Schema 11 migration against the retained exact released v1.1.0 DDL."""
+"""Current migration against the retained exact released v1.1.0 DDL."""
 from contextlib import closing
 import sqlite3
 
@@ -36,7 +36,7 @@ def test_schema11_preserves_released_v110_parts_and_adds_group_only_after_commit
             db.set_authorizer(authorize)
             try:
                 with pytest.raises(sqlite3.DatabaseError):
-                    ledger_schema._migrate(db, schema_version=11, fts=False)
+                    ledger_schema._migrate(db, schema_version=ledger.SCHEMA_VERSION, fts=False)
             finally:
                 db.set_authorizer(None)
             assert db.execute("PRAGMA user_version").fetchone()[0] == 10
@@ -48,9 +48,9 @@ def test_schema11_preserves_released_v110_parts_and_adds_group_only_after_commit
         assert _records(path) == before
         return
     with closing(ledger.Ledger(str(path))) as store:
-        assert store.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION == 11
+        assert store.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION == 12
         assert [tuple(row) for row in store.db.execute(
-            "SELECT * FROM notification_render_parts ORDER BY delivery_id,part_id")] == original_parts
+            "SELECT * FROM notification_render_parts ORDER BY delivery_id,part_id")] == [(*row, None) for row in original_parts]
         assert {row[1] for row in store.db.execute("PRAGMA index_list(notification_render_parts)")} >= {
             "idx_nparts_pending", "idx_nparts_state_delivery"}
         assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []

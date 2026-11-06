@@ -9,7 +9,8 @@ import notify_cards
 import notify_parts
 import notify_spool
 import notify_transport
-from notify_testkit import CFG, NOW, _attach, _dispatch, _intent, _latest_render, _seed_thread, led as led
+from notify_testkit import (CFG, NOW, _attach, _dispatch, _intent, _latest_render,
+                            _seed_thread, _surface_file_echo, _wire_parts, led as led)
 from slack_testkit import SLACK
 
 
@@ -20,20 +21,30 @@ def settle(led, cfg, render, *, error=None, kind="attachment_part"):
     assert notify_transport.apply_transport_begin(
         led, envelopes.transport_begin(claim), cfg, now=NOW)["granted"]
     assert notify_transport.apply_transport_receipt(
-        led, envelopes.transport_receipt(claim, "delivered", message_id="1790000000.000001"),
+        led, envelopes.transport_receipt(claim, "delivered", message_id="1790000000.000001",
+                                         files=_surface_file_echo(spec, "card")),
         cfg, now=NOW)["applied"]
     target = next(part for part in spec["parts"]["manifest"] if part["kind"] == kind)
-    for part in spec["parts"]["manifest"][1:]:
+    group = next((p for p in spec["parts"]["manifest"]
+                  if p["kind"] == "file_group" and target["part_id"] in p.get("members", ())), None)
+    if group is not None and spec["delivery"].get("transport", "discord") == "discord":
+        target = next(p for p in spec["parts"]["manifest"] if p["part_id"] == group["surface"])
+        assert target["kind"] == "body_part"
+    for part in _wire_parts(spec)[1:]:
         unknown = error is not None and part == target
         remote_id = "1790000000.000001" if part["kind"] == "thread" else "synthetic-" + part["part_id"]
         receipt = envelopes.part_receipt(claim, part, "unknown" if unknown else "delivered",
                                          remote_id=None if unknown else remote_id,
-                                         error_code=error if unknown else None)
+                                         error_code=error if unknown else None,
+                                         files=None if unknown else _surface_file_echo(spec, part["part_id"]))
         assert notify_transport.apply_part_receipt(led, receipt, cfg, now=NOW)["applied"]
     return claim, target
 
 
 def caption_update(led, monkeypatch, cfg, error, kind="attachment_part"):
+    if cfg is CFG:
+        import present_discord
+        monkeypatch.setattr(present_discord, "FACE_ORIGINAL_MAX", 1)
     if kind == "body_part":
         # Keep a real thread-body part instead of moving its synthetic text to the face.
         import present_slack

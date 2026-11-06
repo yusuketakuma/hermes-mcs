@@ -114,7 +114,8 @@ def _receipt_env(claim: dict, op: str, result: str, attempt_id: str,
 
 def transport_receipt(claim: dict, result: str,
                       message_id: str | None = None,
-                      error_code: str | None = None) -> dict:
+                      error_code: str | None = None,
+                      files: list | None = None) -> dict:
     """Factual outcome of the granted attempt — never a guess."""
     env = _receipt_env(claim, "transport_receipt", result,
                        claim["attempt_id"])
@@ -122,12 +123,15 @@ def transport_receipt(claim: dict, result: str,
         env["message_id"] = str(message_id)
     if error_code is not None:
         env["error_code"] = error_code
+    if files is not None:
+        env["files"] = files
     return env
 
 
 def part_receipt(claim: dict, part: dict, result: str,
                  remote_id: str | None = None,
-                 error_code: str | None = None) -> dict:
+                 error_code: str | None = None,
+                 files: list | None = None) -> dict:
     """Factual outcome of one durable part (thread/body/attachment).
 
     Same echo contract as transport_receipt — every identity field is
@@ -142,6 +146,8 @@ def part_receipt(claim: dict, part: dict, result: str,
         env["remote_id"] = str(remote_id)
     if error_code is not None:
         env["error_code"] = error_code
+    if files is not None:
+        env["files"] = files
     return env
 
 

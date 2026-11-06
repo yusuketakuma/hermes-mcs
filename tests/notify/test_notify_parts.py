@@ -20,7 +20,8 @@ import notify_render
 from notify_testkit import (
 
     CFG, NOW, SCOPE, _attach, _begin, _card, _dispatch, _extract, _intent,
-    _latest_render, _msg, _part_receipt, _receipt, _seed_thread, _uuid, led)
+    _latest_render, _msg, _part_receipt, _receipt, _seed_thread, _uuid, led,
+    _surface_file_echo)
 
 pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
@@ -499,12 +500,14 @@ def test_update_plan_reuses_the_post_of_an_unchanged_attachment(led, tmp_path):
                if p["kind"] == "attachment_part")
     assert _prior_ids(r1) == {}
     _deliver_bodies(led, r1, "msg-1", n=120)
-    _part_receipt(led, r1, att, remote_id="file-msg-1", n=125)
+    delivered = _part(led, r1["delivery_id"], att)
+    assert delivered["state"] == "delivered"
     _msg(led, 300, parent=100, body="新しい記録")
     _dispatch(led, _intent(led, payload={"message_ids": [300]}))
     r2 = _latest_render(led)
     assert r2["op"] == "update"
-    assert _prior_ids(r2)[att] == "file-msg-1"
+    assert _prior_ids(r2)[att] == delivered["remote_id"]
+    assert next(p for p in _spec(r2)["parts"]["manifest"] if p["part_id"] == att)["prior_remote_file_id"]
 
 
 def test_changed_attachment_bytes_are_uploaded_again(led, tmp_path):
@@ -517,7 +520,7 @@ def test_changed_attachment_bytes_are_uploaded_again(led, tmp_path):
     att = next(p["part_id"] for p in _spec(r1)["parts"]["manifest"]
                if p["kind"] == "attachment_part")
     _deliver_bodies(led, r1, "msg-1", n=130)
-    _part_receipt(led, r1, att, remote_id="file-msg-1", n=135)
+    assert _part(led, r1["delivery_id"], att)["state"] == "delivered"
     f.write_bytes(b"re-downloaded different bytes")
     led.db.execute("UPDATE attachments SET sha256=?, bytes=? "
                    "WHERE attachment_id=?",
@@ -623,13 +626,15 @@ def _deliver_bodies(led, render, remote_id, n):
     gets its own post id ``<remote_id>/<part_id>``. `n` keeps the
     command ids of successive renders apart."""
     grant = _begin(led, render, n=n)
-    _receipt(led, render, grant["attempt_id"], message_id="m-9", n=n + 1)
+    _receipt(led, render, grant["attempt_id"], message_id="m-9", n=n + 1,
+             files=_surface_file_echo(_spec(render), "card"))
     _part_receipt(led, render, "thread", remote_id="t-1", n=n + 2)
     for p in _parts(led, render["delivery_id"]):
         if p["kind"] == "body_part":
             _part_receipt(led, render, p["part_id"],
                           remote_id=f"{remote_id}/{p['part_id']}",
-                          n=n + 3 + p["idx"])
+                          n=n + 3 + p["idx"],
+                          files=_surface_file_echo(_spec(render), p["part_id"]))
 
 
 def _body_names(render):
@@ -1055,13 +1060,15 @@ def test_unchanged_attachment_updates_old_summary_caption_without_reupload(led, 
     first = _latest_render(led)
     _deliver_bodies(led, first, "original", n=1700)
     attachment = next(p for p in _spec(first)["parts"]["manifest"] if p["kind"] == "attachment_part")
-    _part_receipt(led, first, attachment["part_id"], remote_id="original-file-message", n=1710)
+    delivered = _part(led, first["delivery_id"], attachment["part_id"])
+    assert delivered["state"] == "delivered"
     monkeypatch.setattr(notify_parts, "_attachment_captions", original_captions)
     specs = []
     with led.db:
         notify_cards.issue_render(led.db, 1, CFG, NOW + 1, specs, force=True)
     fresh = next(p for p in specs[0]["parts"]["manifest"] if p["kind"] == "attachment_part")
-    assert fresh["prior_remote_id"] == "original-file-message" and fresh["edit_only"] is True
+    assert fresh["prior_remote_id"] == delivered["remote_id"] and fresh["edit_only"] is True
+    assert fresh["prior_remote_file_id"]
     assert "OLD-GENERATED-SUMMARY" not in fresh["caption"] and "📋 要約" not in fresh["caption"]
 
 

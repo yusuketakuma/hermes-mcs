@@ -27,7 +27,7 @@ from semantic_projection import PROJECTION_VERSION
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from notify_testkit import (
     CFG, CLICKER, NOW, ORIGIN, SCOPE, _begin, _card, _click, _delivered_card,
-    _dispatch, _intent, _latest_render, _llm_extract, _receipt,
+    _dispatch, _intent, _latest_render, _llm_extract, _msg, _receipt,
     _seed_thread, _spec, _token_for, _uuid, led, pinned_clock,
 )
 from slack_testkit import ROOT_TS, SCOPE as SLACK_SCOPE, SLACK, _granted_card, _mkworld
@@ -182,8 +182,11 @@ def _part_receipt(led, render, part_id, **fields):
 
 def test_failed_thread_hands_held_files_to_the_text_followup(led, tmp_path):
     _seed_thread(led)
-    aid = _attachment(led, tmp_path)
-    _dispatch(led, _intent(led))
+    # a long body overflows the face -> the file binds a thread body_part
+    # surface, so a failed thread still holds it for the text followup
+    _msg(led, 102, parent=100, body="あ" * 8000)
+    aid = _attachment(led, tmp_path, mid=102)
+    _dispatch(led, _intent(led, payload={"message_ids": [100, 101, 102]}))
     render = _latest_render(led)
     grant = _begin(led, render)
     _receipt(led, render, grant["attempt_id"], message_id="m-9")

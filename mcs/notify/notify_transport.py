@@ -56,8 +56,232 @@ def _not_sent_state(db, card, render, error_code):
         return "pending", False
     return cur, False
 
+def _wire_name_matches(wire, name) -> bool:
+    """Discord stores image uploads as ``SPOILER_<name>`` and collapses
+    repeated prefixes — the echo's wire name binds to the sealed name
+    modulo that wrapping only."""
+    if not isinstance(wire, str) or not wire:
+        return False
+
+    def bare(s):
+        s = str(s or "")
+        while s.startswith("SPOILER_"):
+            s = s[8:]
+        return s
+    return bare(wire) == bare(name)
+
+
+def _settle_file_group_members(db, render, surface, remote_id,
+                               attempt_id, files, now) -> bool:
+    """Discord file_group fan-out inside the caller's transaction: the
+    surface's factual receipt proves every member file in one HTTP
+    call, so each member — and the group anchor — settles delivered
+    with ``remote_id`` = the surface message id. The echo is
+    re-verified against the sealed manifest: exact member set, order,
+    bytes, wire-name binding and unique file ids; malformed evidence
+    settles the group unknown, never delivered."""
+    try:
+        manifest = json.loads(render["spec_json"])["parts"]["manifest"]
+    except (KeyError, TypeError, ValueError):
+        manifest = []
+    group = next((p for p in manifest
+                  if p.get("kind") == "file_group"
+                  and p.get("surface") == surface), None)
+    if group is None:
+        return False
+    if render["state"] == "cancelled":
+        return False
+    by_id = {p["part_id"]: p for p in manifest}
+    members = [by_id[m] for m in group.get("members") or () if m in by_id]
+    ok = isinstance(files, list) and len(files) == len(members)
+    from adapters.common.spec import discord_file_name
+    seen_files = set()
+    if ok:
+        for m, f in zip(members, files):
+            fid = f.get("remote_file_id") if isinstance(f, dict) else None
+            if (not isinstance(f, dict)
+                    or f.get("part_id") != m["part_id"]
+                    or f.get("bytes") != m.get("bytes")
+                    or f.get("wire_name") != discord_file_name(m)
+                    or not isinstance(fid, str) or not fid
+                    or fid in seen_files):
+                ok = False
+                break
+            seen_files.add(fid)
+    pids = [m["part_id"] for m in members] + [group["part_id"]]
+    if ok:
+        for pid in pids:
+            file_id = next((f["remote_file_id"] for f in files if f["part_id"] == pid), None)
+            db.execute(
+                "UPDATE notification_render_parts SET state='delivered',error_code=NULL,"
+                "remote_id=?,remote_file_id=?,attempt_id=?,updated_at=? "
+                "WHERE delivery_id=? AND part_id=? AND "
+                "(state='pending' OR (state IN ('held','unknown') AND attempt_id=?))",
+                (remote_id, file_id, attempt_id, now, render["delivery_id"], pid, attempt_id))
+        return all(db.execute(
+            "SELECT state='delivered' AND remote_id=? AND attempt_id=? "
+            "FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+            (remote_id, attempt_id, render["delivery_id"], pid)).fetchone()[0] for pid in pids)
+    for pid in pids:
+        db.execute(
+            "UPDATE notification_render_parts SET state='unknown',"
+            "error_code='file_group_unverified',attempt_id=?,updated_at=? "
+            "WHERE delivery_id=? AND part_id=? AND state='pending'",
+            (attempt_id, now, render["delivery_id"], pid))
+    return False
+
+
+def _discord_group_part_error(db, render, part, req) -> str | None:
+    """Operator resolution inside a discord ``file_group``: the spec was
+    already hash-verified at seal, so this re-checks the live binding —
+    for an anchor, the manifest entry plus every member row consistent
+    with it; for a member, its own sealed identity. Both require the
+    group surface part delivered, and ``delivered`` requires the
+    supplied remote id to equal the surface message id. Anything less
+    stays unresolved."""
+    try:
+        from adapters.common import spec as _spec
+        from mcs_util import strict_json
+        spec = _spec.validate(strict_json(render["spec_json"]))
+        manifest = spec["parts"]["manifest"]
+        by_id = {p["part_id"]: p for p in manifest}
+        anchor = next((p for p in manifest
+                       if p.get("kind") == "file_group"
+                       and p.get("part_id") == part["part_id"]), None)
+        member_of = next((p for p in manifest
+                          if p.get("kind") == "file_group"
+                          and part["part_id"] in (p.get("members") or ())),
+                         None)
+        if anchor is not None:
+            if not anchor.get("surface") or not anchor.get("members") \
+                    or anchor.get("sha256") != part["payload_sha256"]:
+                return "file_group_identity_unverified"
+            entry = anchor
+        elif member_of is not None:
+            return "file_group_anchor_required"
+        else:
+            return None
+        if entry is None or entry.get("kind") != "attachment_part" \
+                and anchor is None:
+            return "file_group_dependencies_unverified"
+        surface = db.execute(
+            "SELECT * FROM notification_render_parts WHERE delivery_id=? "
+            "AND part_id=?",
+            (render["delivery_id"], entry.get("surface", "")
+             if anchor is not None else member_of["surface"])
+        ).fetchone()
+        if surface is None or surface["state"] != "delivered" \
+                or not isinstance(surface["remote_id"], str) \
+                or not surface["remote_id"]:
+            return "file_group_identity_unverified"
+        if req["result"] == "delivered" \
+                and req.get("remote_id") != surface["remote_id"]:
+            return "file_group_identity_unverified"
+        if anchor is not None:
+            for mid in anchor["members"]:
+                member = by_id.get(mid)
+                row = db.execute(
+                    "SELECT * FROM notification_render_parts "
+                    "WHERE delivery_id=? AND part_id=?",
+                    (render["delivery_id"], mid)).fetchone() \
+                    if member is not None else None
+                if member is None or row is None \
+                        or member.get("kind") != "attachment_part" \
+                        or row["kind"] != "attachment_part" \
+                        or row["state"] not in ("pending", "unknown",
+                                                "delivered") \
+                        or any(row[column] != member.get(key)
+                               for column, key in (
+                            ("idx", "index"),
+                            ("attachment_id", "attachment_id"),
+                            ("payload_sha256", "sha256"),
+                            ("bytes", "bytes"), ("name", "name"))):
+                    return "file_group_dependencies_unverified"
+        elif any(part[column] != entry.get(key) for column, key in (
+                ("idx", "index"), ("attachment_id", "attachment_id"),
+                ("payload_sha256", "sha256"), ("bytes", "bytes"),
+                ("name", "name"))):
+            return "file_group_dependencies_unverified"
+        if req.get("result") in ("delivered", "mark_delivered"):
+            group = anchor or member_of
+            evidence = req.get("files", (req.get("evidence") or {}).get("files"))
+            if files_echo_error({"files": evidence}):
+                return "file_group_identity_unverified"
+            members = [by_id[mid] for mid in group["members"]]
+            from adapters.common.spec import discord_file_name
+            if len(evidence) != len(members) or any(
+                    f["part_id"] != member["part_id"] or f["bytes"] != member["bytes"]
+                    or f["wire_name"] != discord_file_name(member)
+                    for f, member in zip(evidence, members)):
+                return "file_group_identity_unverified"
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return "file_group_identity_unverified"
+    return None
+
+
+def _settle_group_dependents(db, render, surface, result, attempt_id,
+                             error_code, now):
+    """A body_part surface that did not deliver leaves its group
+    unproven: members and the anchor take the surface's factual state
+    inside this transaction — ``unknown`` stays human-resolvable (the
+    settling attempt id is recorded), ``not_sent`` is honest — instead
+    of pending forever with no wire attempt of their own."""
+    try:
+        manifest = json.loads(render["spec_json"])["parts"]["manifest"]
+    except (KeyError, TypeError, ValueError):
+        return
+    group = next((p for p in manifest
+                  if p.get("kind") == "file_group"
+                  and p.get("surface") == surface), None)
+    if group is None:
+        return
+    if render["state"] == "cancelled":
+        return
+    by_id = {p["part_id"]: p for p in manifest}
+    pids = [m for m in group.get("members") or () if m in by_id]
+    pids.append(group["part_id"])
+    for pid in pids:
+        db.execute(
+            "UPDATE notification_render_parts SET state=?,remote_id=NULL,remote_file_id=NULL,"
+            "error_code=?,attempt_id=?,updated_at=? "
+            "WHERE delivery_id=? AND part_id=? AND (state='pending' "
+            "OR (state IN ('unknown','held') AND attempt_id=?))",
+            (result, error_code, attempt_id, now,
+             render["delivery_id"], pid, attempt_id))
+
+
+def _settle_discord_group_members(db, render, group_part_id, result,
+                                  remote_id, attempt_id, error_code, now):
+    """Fan a resolved discord group anchor out to its members inside the
+    caller's transaction. ``delivered`` requires the surface-verified
+    remote id checked by ``_discord_group_anchor_error``; ``not_sent``
+    marks members honestly unsent so the next render can re-plan."""
+    try:
+        manifest = json.loads(render["spec_json"])["parts"]["manifest"]
+    except (KeyError, TypeError, ValueError):
+        return
+    group = next((p for p in manifest
+                  if p.get("kind") == "file_group"
+                  and p.get("part_id") == group_part_id), None)
+    if group is None:
+        return
+    by_id = {p["part_id"]: p for p in manifest}
+    for mid in group.get("members") or ():
+        if mid not in by_id:
+            continue
+        db.execute(
+            "UPDATE notification_render_parts SET state=?,remote_id=?,"
+            "error_code=?,attempt_id=?,updated_at=? "
+            "WHERE delivery_id=? AND part_id=? "
+            "AND state IN ('pending','unknown','held')",
+            (result, remote_id if result == "delivered" else None,
+             error_code, attempt_id, now,
+             render["delivery_id"], mid))
+
+
 def settle_attempt_tx(db, attempt, render, result, now,
-                      message_id=None, error_code=None) -> dict:
+                      message_id=None, error_code=None,
+                      files=None) -> dict:
     """Settle factual state on borrowed db inside the caller's transaction.
 
     Never begin, commit, close, publish or send; the validated outer receipt
@@ -83,6 +307,8 @@ def settle_attempt_tx(db, attempt, render, result, now,
         (result, message_id, error_code, aid, now,
          render["delivery_id"]))
     if result != "delivered":
+        if render["transport"] == "discord":
+            _settle_group_dependents(db, render, "card", result, aid, error_code, now)
         # dependent parts have nothing to attach to — 'held' honestly
         # marks them planned-but-blocked instead of pending forever
         db.execute(
@@ -90,6 +316,13 @@ def settle_attempt_tx(db, attempt, render, result, now,
             "updated_at=? WHERE delivery_id=? AND state='pending' "
             "AND kind IN ('thread','body_part','attachment_part','file_group')",
             (now, render["delivery_id"]))
+    elif '"file_group"' in (render["spec_json"] or ""):
+        # the card surface's file group fans out from this same
+        # factual receipt — members and the anchor settle with the
+        # card message id, never a second wire attempt; a delivered
+        # surface without a provable echo leaves them unknown
+        _settle_file_group_members(
+            db, render, "card", str(message_id), aid, files, now)
     notify_parts.update_state(db, render["delivery_id"], now)
     if render["state"] != "cancelled":
         db.execute(
@@ -514,6 +747,13 @@ def apply_transport_receipt_tx(ledger, req, cfg, now, specs) -> dict:
             same = prior == result and (
                 result != "delivered"
                 or str(attempt["message_id"]) == str(req["message_id"]))
+            if same and result == "delivered" and render["transport"] == "discord":
+                _settle_file_group_members(db, render, "card", str(req["message_id"]),
+                                          req["attempt_id"], req.get("files"), now)
+                notify_parts.update_state(db, render["delivery_id"], now)
+                for owner in db.execute("SELECT event_id FROM notification_intent_cards WHERE delivery_id=?",
+                                        (render["delivery_id"],)).fetchall():
+                    cards.complete_intent(db, owner["event_id"], now)
             receipt = {"applied": same,
                        "error": None if same else "attempt_conflict",
                        "conflict": not same,
@@ -523,7 +763,8 @@ def apply_transport_receipt_tx(ledger, req, cfg, now, specs) -> dict:
         else:
             settle_attempt_tx(db, attempt, render, result, now,
                             message_id=req.get("message_id"),
-                            error_code=req.get("error_code"))
+                            error_code=req.get("error_code"),
+                            files=req.get("files"))
             receipt = {"applied": True, "attempt_id": attempt["attempt_id"],
                        "delivery_id": attempt["delivery_id"],
                        "attempt_state": result}
@@ -550,6 +791,33 @@ def _sealed_echo(render, req) -> str | None:
     return None if scope_matches(render, req) else "scope_mismatch"
 
 
+def files_echo_error(req) -> str | None:
+    """Validate bounded Discord surface file evidence before receipt ingestion."""
+    if "files" not in req:
+        return None
+    if (req.get("transport", "discord") != "discord"
+            or (req.get("op") == "part_receipt" and req.get("kind") != "body_part")):
+        return "bad_files_echo"
+    files = req["files"]
+    if not isinstance(files, list) or len(files) > 10:
+        return "bad_files_echo"
+    parts, remote_ids = set(), set()
+    for f in files:
+        if (not isinstance(f, dict)
+                or set(f) != {"part_id", "wire_name", "bytes", "remote_file_id"}
+                or not isinstance(f["part_id"], str) or not 0 < len(f["part_id"]) <= 64
+                or not isinstance(f["wire_name"], str) or not 0 < len(f["wire_name"]) <= 1024
+                or type(f["bytes"]) is not int or not 0 <= f["bytes"] <= 20 * 1024 * 1024
+                or not isinstance(f["remote_file_id"], str)
+                or not 0 < len(f["remote_file_id"]) <= 128):
+            return "bad_files_echo"
+        if f["part_id"] in parts or f["remote_file_id"] in remote_ids:
+            return "bad_files_echo"
+        parts.add(f["part_id"])
+        remote_ids.add(f["remote_file_id"])
+    return None
+
+
 def _receipt_check(attempt, render, req) -> str | None:
     if attempt is None or render is None:
         return "unknown_attempt"
@@ -564,6 +832,8 @@ def _receipt_check(attempt, render, req) -> str | None:
     if req["result"] == "not_sent" \
             and not req.get("error_code"):
         return "error_code_required"
+    if files_echo_error(req):
+        return "bad_files_echo"
     return None
 
 
@@ -601,6 +871,11 @@ def settle_part_receipt(db, req, now) -> dict:
         same = prior == req["result"] and (
             req["result"] != "delivered"
             or str(part["remote_id"]) == str(req["remote_id"]))
+        if (same and req["result"] == "delivered" and render["transport"] == "discord"
+                and req.get("attempt_id") == part["attempt_id"]):
+            _settle_file_group_members(db, render, part["part_id"], str(req["remote_id"]),
+                                      req["attempt_id"], req.get("files"), now)
+            notify_parts.update_state(db, render["delivery_id"], now)
         receipt = {"applied": same,
                    "error": None if same else "part_conflict",
                    "delivery_id": render["delivery_id"],
@@ -616,6 +891,33 @@ def settle_part_receipt(db, req, now) -> dict:
             (req["result"], req.get("remote_id"),
              req.get("error_code"), req.get("attempt_id"), now,
              render["delivery_id"], part["part_id"]))
+        if '"file_group"' in (render["spec_json"] or ""):
+            if req["result"] == "delivered":
+                # a body_part surface's file group fans out from this
+                # same receipt — members and the anchor settle with this
+                # message id inside this transaction
+                _settle_file_group_members(
+                    db, render, part["part_id"], str(req.get("remote_id")),
+                    req.get("attempt_id"), req.get("files"), now)
+            elif part["kind"] == "body_part":
+                # a failed surface leaves its group unproven — propagate
+                # the factual state so members resolve or re-plan
+                _settle_group_dependents(
+                    db, render, part["part_id"], req["result"],
+                    req.get("attempt_id"), req.get("error_code"), now)
+        if part["kind"] == "file_group" \
+                and render["transport"] == "discord":
+            # an operator-resolved discord group anchor fans out to its
+            # members in this same transaction — identity was verified
+            # by _discord_group_anchor_error before any write
+            if req["result"] == "delivered":
+                _settle_file_group_members(db, render, part["name"],
+                    req.get("remote_id"), req.get("attempt_id"), req.get("files"), now)
+            else:
+                _settle_discord_group_members(
+                    db, render, part["part_id"], req["result"],
+                    req.get("remote_id"), req.get("attempt_id"),
+                    req.get("error_code"), now)
         if part["kind"] == "thread":
             # the durable path carries the card's thread binding —
             # same contract apply_thread_receipt holds for legacy
@@ -674,7 +976,7 @@ def settle_part_receipt(db, req, now) -> dict:
                    "parts_state": notify_parts.update_state(
                        db, render["delivery_id"], now)}
     if receipt.get("applied") and render is not None and part is not None \
-            and part["kind"] in ("attachment_part", "thread", "file_group"):
+            and part["kind"] in ("attachment_part", "thread", "file_group", "body_part"):
         for owner in db.execute(
                 "SELECT ic.event_id FROM notification_intent_cards ic "
                 "JOIN notify_outbox o ON o.event_id=ic.event_id "
@@ -708,6 +1010,14 @@ def _part_receipt_check(db, render, part, req) -> str | None:
         return "remote_id_required"
     if req["result"] == "not_sent" and not req.get("error_code"):
         return "error_code_required"
+    if files_echo_error(req):
+        return "bad_files_echo"
+    if render["transport"] == "discord" \
+            and '"file_group"' in (render["spec_json"] or ""):
+        if (part["kind"] == "body_part" and part["attempt_id"] is not None
+                and part["attempt_id"] != req.get("attempt_id")):
+            return "attempt_mismatch"
+        return _discord_group_part_error(db, render, part, req)
     return None
 
 

@@ -26,7 +26,7 @@ import self_identity
 from self_identity import is_own_station_message
 from mcs_util import HOME, loads_dict, safe_error_code, search_fold, valid_text, valid_hash
 from mcs_queries import register_search_fold
-from snapshot_access import snapshot_meta
+from snapshot_access import READABLE_SCHEMA_VERSIONS, snapshot_meta
 from read_model import message_patient_context
 from message_metadata import flag_lines, is_self_sender
 from message_observations import get_message_metadata, get_metadata_shadow_status
@@ -76,9 +76,9 @@ class View:
             # v9 adds bounded acquisition job reasons (read-compatible)
             # v10 adds initial-import state and a card kind (read-compatible)
             # v11 widens the render-part kind CHECK for file_group
-            # (read-compatible)
+            # v12 adds nullable remote_file_id; both are read-compatible.
             if self.db.execute("PRAGMA user_version").fetchone()[0] \
-                    not in (5, 6, 7, 8, 9, 10, 11):
+                    not in READABLE_SCHEMA_VERSIONS:
                 raise ValueError("snapshot_upgrade_required")
             if self.db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise ValueError("published_snapshot_required")

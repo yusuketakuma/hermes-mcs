@@ -289,3 +289,29 @@ def test_cli_uses_local_entry_without_altering_existing_view_handler(tmp_path, m
             assert called
         finally:
             ledger.db.set_progress_handler(None, 0)
+
+
+@pytest.mark.parametrize('version', [12, 13])
+def test_published_schema12_is_readable_but_future_schema_stays_closed(tmp_path, monkeypatch, version):
+    ledger, snapshot = _publish(tmp_path, monkeypatch)
+    with closing(ledger):
+        with closing(sqlite3.connect(snapshot)) as db:
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+            db.execute(f'PRAGMA user_version={version}')
+            db.commit()
+        if version == 13:
+            monkeypatch.setattr(measurement_reader, 'patient_scope_valid',
+                lambda *_args: pytest.fail('unknown schema reached clinical reader'))
+            assert measurement_local_view.read_snapshot(snapshot, 1, cfg={}) == {
+                'outcome': 'unknown', 'reason': 'snapshot_unavailable',
+                'items': [], 'source_complete': False}
+            with pytest.raises(ValueError, match='snapshot_upgrade_required'):
+                mcs_view.View(snapshot)
+        else:
+            result = measurement_local_view.read_snapshot(snapshot, 1, cfg={})
+            assert result['outcome'] == 'observed'
+            assert result['items'][0]['name'] == 'Cr'
+            with closing(mcs_view.View(snapshot)) as view:
+                assert view.meta['generation_id'] == result['snapshot']['generation_id']
+                with pytest.raises(sqlite3.OperationalError, match='readonly'):
+                    view.db.execute('DELETE FROM snapshot_meta')

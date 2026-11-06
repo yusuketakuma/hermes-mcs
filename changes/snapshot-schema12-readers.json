@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "添付識別子追加後の通知画面と測定値表示を復旧",
+  "summary": "DB世代12から公開したスナップショットを、チャット操作とローカル測定値表示で読めるようにします。",
+  "upgrade": "DB世代12を読むアダプターと表示コードを同じ候補へ更新してください。公開済みスナップショットだけを読取り専用で使い、未対応の世代13以降は引き続き拒否します。閲覧権限・人承認・送信条件は変更しません。",
+  "refs": [
+    "mcs/core/snapshot_access.py",
+    "mcs/views/mcs_view.py",
+    "mcs/views/measurement_local_view.py"
+  ]
+}

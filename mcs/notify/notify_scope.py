@@ -570,6 +570,83 @@ def body_coverage_witness(db, delivery_id, cache):
     return _body_delivery_coverage(db, render_row(db, delivery_id), cache)[0]
 
 
+def _discord_group_proof(db, delivery_id, group, *, delivered=False):
+    """Read persisted surface and exact file identities, including after spec GC."""
+    surface = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                         (delivery_id, group['name'])).fetchone()
+    if (surface is None or group['kind'] != 'file_group'
+            or group['part_id'] != f"file_group:{surface['part_id']}"
+            or type(surface['idx']) is not int or type(group['idx']) is not int
+            or not 0 <= surface['idx'] < group['idx']
+            or not valid_hash(group['payload_sha256'])):
+        return None
+    if surface['kind'] == 'card' and surface['part_id'] == 'card':
+        source = ('card',)
+    elif (surface['kind'] == 'body_part' and isinstance(surface['name'], str)
+          and _BODY_GROUP.fullmatch(surface['name'])):
+        source = ('body_part', surface['name'])
+    else:
+        return None
+    # An intervening body/group would make the persisted interval ambiguous.
+    if db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND idx>? AND idx<? "
+                  "AND kind IN ('body_part','file_group','card') LIMIT 1",
+                  (delivery_id, surface['idx'], group['idx'])).fetchone():
+        return None
+    members = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? "
+                         "AND kind='attachment_part' AND idx>? AND idx<? ORDER BY idx LIMIT 11",
+                         (delivery_id, surface['idx'], group['idx'])).fetchall()
+    if not 1 <= len(members) <= 10:
+        return None
+    identities, file_ids, indexes = set(), set(), set()
+    for member in members:
+        identity = tuple(member[k] for k in ('attachment_id', 'payload_sha256', 'bytes', 'name'))
+        if (not positive(member['attachment_id']) or not valid_hash(member['payload_sha256'])
+                or type(member['bytes']) is not int or member['bytes'] < 0
+                or not isinstance(member['name'], str) or not member['name'].strip()
+                or identity in identities or member['idx'] in indexes):
+            return None
+        identities.add(identity)
+        indexes.add(member['idx'])
+        if delivered:
+            fid = member['remote_file_id']
+            if not isinstance(fid, str) or not fid.strip() or fid in file_ids:
+                return None
+            file_ids.add(fid)
+    if delivered:
+        if (not isinstance(surface['remote_id'], str) or not surface['remote_id'].strip()
+                or not isinstance(surface['attempt_id'], str) or not surface['attempt_id'].strip()
+                or any(row['state'] != 'delivered' or row['remote_id'] != surface['remote_id']
+                       or row['attempt_id'] != surface['attempt_id']
+                       for row in (surface, group, *members))):
+            return None
+    return source, identities
+
+
+def _discord_group_covered(db, row):
+    old = render_row(db, row['delivery_id'])
+    if old is None or old['transport'] != 'discord':
+        return False
+    fields = (*scope_fields('discord'), 'team_id')
+    if any(not isinstance(old[k], str) or not old[k].strip() for k in scope_fields('discord')):
+        return False
+    group = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                       (row['delivery_id'], row['part_id'])).fetchone()
+    proof = _discord_group_proof(db, old['delivery_id'], group)
+    if proof is None:
+        return False
+    for newer in db.execute("SELECT * FROM notification_renders WHERE card_id=? AND render_rev>? "
+                            "AND transport='discord' AND state='delivered'",
+                            (old['card_id'], old['render_rev'])):
+        if any(newer[k] != old[k] for k in fields):
+            continue
+        for candidate in db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? "
+                                    "AND kind='file_group' AND state='delivered'", (newer['delivery_id'],)):
+            current = _discord_group_proof(db, newer['delivery_id'], candidate, delivered=True)
+            if current is not None and current[0] == proof[0] and proof[1] <= current[1]:
+                return True
+    return False
+
+
 def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
     """Read unfinished parts after applying the shared delivery proofs."""
     retired = retired_transports(cfg)
@@ -633,6 +710,8 @@ def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
         proof_params + retired + tuple(delivery_ids or ()))
     checked, covered, cache = proof_state if proof_state is not None else (set(), set(), {})
     for row in rows:
+        if row['kind'] == 'file_group' and row['transport'] == 'discord' and _discord_group_covered(db, row):
+            continue
         if row['kind'] == 'body_part' and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS:
             if row['card_id'] not in checked:
                 for later in db.execute("SELECT * FROM notification_renders WHERE card_id=? "

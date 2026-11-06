@@ -187,7 +187,7 @@ def complete_intent(db, event_id, now) -> str | None:
                      AND r.transport=c.transport
                      AND r.profile IS c.profile AND r.application_id IS c.application_id
                      AND r.team_id IS c.team_id AND r.channel_id IS c.channel_id
-                     AND c.delivery_state!='revoked' AND c.thread_state='created'
+                     AND c.delivery_state!='revoked'
                      AND m.project_id=c.project_id AND m.message_id=?
                      AND m.body_state IS NOT 'deleted' AND a.state='downloaded'
                      AND a.sha256=? AND p.attachment_id=?
@@ -197,10 +197,21 @@ def complete_intent(db, event_id, now) -> str | None:
                             WHERE g.delivery_id=r.delivery_id AND g.kind='file_group')
                           OR EXISTS(SELECT 1 FROM notification_render_parts g
                             WHERE g.delivery_id=r.delivery_id AND g.kind='file_group'
-                              AND g.state='delivered' AND g.remote_id=c.message_id))
-                     AND EXISTS(SELECT 1 FROM notification_render_parts t
-                         WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
-                           AND t.state='delivered' AND t.remote_id=c.thread_id)
+                              AND g.state='delivered'
+                              AND ((r.transport='slack' AND g.remote_id=c.message_id)
+                                   OR (r.transport='discord' AND g.remote_id=p.remote_id
+                                       AND p.remote_file_id IS NOT NULL
+                                       AND p.remote_file_id!=''))))
+                     AND ((r.transport='discord' AND p.remote_file_id IS NOT NULL
+                           AND p.remote_file_id!='' AND p.remote_id=c.message_id
+                           AND EXISTS(SELECT 1 FROM notification_render_parts g
+                               WHERE g.delivery_id=r.delivery_id AND g.kind='file_group'
+                                 AND g.name='card' AND g.state='delivered'
+                                 AND g.remote_id=p.remote_id))
+                          OR (c.thread_state='created' AND EXISTS(
+                              SELECT 1 FROM notification_render_parts t
+                              WHERE t.delivery_id=r.delivery_id AND t.kind='thread'
+                                AND t.state='delivered' AND t.remote_id=c.thread_id)))
                    LIMIT 1""",
                 (event_id, frozen.get("message_id"), frozen["attachment_sha256"],
                  frozen["attachment_id"], frozen["attachment_sha256"])).fetchone()

@@ -924,3 +924,60 @@ def test_ambiguous_channel_fetch_before_thread_create_is_not_sent(tmp_path):
     row = _sent_parts(_state(tmp_path))["thread"]
     assert row["result"] == "not_sent" and row["error_code"] == "prefetch_failed"
     assert channel.threads == []
+
+
+def test_discord_file_group_members_and_anchor_get_no_wire_attempt(tmp_path):
+    """Grouped Discord members ride their surface's HTTP call; the worker
+    must not open independent attempts for them or the group anchor."""
+    import hashlib
+    chunk = _chunks(1)[0]
+    manifest = [
+        {"part_id": "card", "kind": "card", "index": 0},
+        {"part_id": "thread", "kind": "thread", "index": 1,
+         "name": "テスト スレッド",
+         "sha256": hashlib.sha256("テスト スレッド".encode()).hexdigest()},
+        {"part_id": "body:0001", "kind": "body_part", "index": 2,
+         "sha256": hashlib.sha256(chunk.encode()).hexdigest(),
+         "bytes": len(chunk.encode())},
+        {"part_id": "attach:0001", "kind": "attachment_part", "index": 3,
+         "sha256": "a" * 64, "bytes": 5, "name": "a.pdf",
+         "attachment_id": 1},
+        {"part_id": "file_group:body:0001", "kind": "file_group",
+         "index": 4, "surface": "body:0001",
+         "members": ["attach:0001"], "sha256": "b" * 64},
+    ]
+    w, reg, bot = _mkworker(tmp_path)
+    spec = _spec(_chunks(1), manifest=manifest)
+    claim = _claim(spec)
+
+    async def run():
+        await w._deliver_parts(claim, "9001")
+
+    asyncio.run(run())
+    parts = _sent_parts(_state(tmp_path))
+    assert "attach:0001" not in parts
+    assert "file_group:body:0001" not in parts
+    envs = _receipts(tmp_path / "cmd_int")
+    preceipts = {e["part_id"] for e in envs if e["op"] == "part_receipt"}
+    assert "attach:0001" not in preceipts
+    assert "file_group:body:0001" not in preceipts
+
+
+def test_file_group_echo_rejects_extra_or_repeated_remote_files():
+    from types import SimpleNamespace
+    from adapters.discord.delivery import DeliveryWorker
+    worker = object.__new__(DeliveryWorker)
+    members = [{"part_id": "attach:0001", "name": "one.pdf", "bytes": 11},
+               {"part_id": "attach:0002", "name": "two.pdf", "bytes": 22}]
+    from adapters.common.spec import discord_file_name
+    for member in members:
+        member["sha256"] = "a" * 64
+    first = SimpleNamespace(id=101, filename=discord_file_name(members[0]), size=11)
+    second = SimpleNamespace(id=102, filename=discord_file_name(members[1]), size=22)
+    message = SimpleNamespace(attachments=[first, second])
+    assert len(worker._files_echo(message, members)) == 2
+    message.attachments.append(SimpleNamespace(id=103, filename="extra.pdf", size=33))
+    assert worker._files_echo(message, members) is None
+    message.attachments.pop()
+    second.id = first.id
+    assert worker._files_echo(message, members) is None

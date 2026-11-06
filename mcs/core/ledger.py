@@ -50,7 +50,7 @@ from mcs_queries import iter_artifacts, karte_summary_current, karte_summary_row
 from snapshots import publish_snapshot  # noqa: F401 - retained public ledger API
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 JOB_REASON_CODES = frozenset({
     "invalid_payload", "schema_error", "fetch_error", "network_error",
     "worker_error", "worker_timeout", "deadline_exceeded", "session_expired",

@@ -98,6 +98,18 @@ def _fake_discord():
         def __init__(self, visible=True, spacing=None):
             self.visible, self.spacing = visible, spacing
 
+    class MediaGalleryItem:
+        def __init__(self, media, description=None, spoiler=False):
+            self.media, self.description, self.spoiler = media, description, spoiler
+
+    class MediaGallery:
+        def __init__(self, *items):
+            self.items = list(items)
+
+    class File:
+        def __init__(self, media, spoiler=False):
+            self.media, self.spoiler = media, spoiler
+
     class Label:
         def __init__(self, text=None, component=None, **_):
             self.text, self.component = text, component
@@ -160,11 +172,12 @@ def _fake_discord():
 
     mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View, Section=Section,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
-                             Container=Container,
+                             Container=Container, MediaGallery=MediaGallery, File=File,
                              Button=Button, Modal=Modal,
                              TextInput=TextInput, Select=Select,
                              Separator=Separator,
                              Label=Label)
+    mod.MediaGalleryItem = MediaGalleryItem
     mod.SelectOption = SelectOption
     mod.Embed = Embed
     mod.SeparatorSpacing = SimpleNamespace(small=1, large=2)

@@ -501,12 +501,11 @@ def test_real_failed_thread_then_card_only_delivery_keeps_the_old_plan_incomplet
 
 
 def test_failed_part_replans_on_the_next_render_without_duplicating(led, tmp_path):
-    """The safe retry path for unsent parts: the next update render reposts a
-    proven-unsent part fresh while delivered parts keep prior_remote_id, and
-    the old failed row clears only once the retry's own delivery is proven."""
+    """An unsent surface and its files retry together; proven posts retain their ids."""
     import notify_cards
     from notify_testkit import (CFG, NOW as DELIVERY_NOW, _attach, _begin, _dispatch, _intent,
-                                _latest_render, _part_receipt, _receipt, _seed_thread)
+                                _latest_render, _part_receipt, _receipt, _seed_thread,
+                                _surface_file_echo, _wire_parts)
 
     _seed_thread(led, mids=(100,))
     path = tmp_path / 'synthetic.bin'
@@ -516,46 +515,41 @@ def test_failed_part_replans_on_the_next_render_without_duplicating(led, tmp_pat
             sha256=hashlib.sha256(blob).hexdigest(), nbytes=len(blob))
     assert _dispatch(led, _intent(led, payload={'message_ids': [100]}))['dispatched']
     first = _latest_render(led)
+    spec = json.loads(first['spec_json'])
+    group, = [p for p in spec['parts']['manifest'] if p['kind'] == 'file_group']
+    failed_part = group['surface']
+    assert failed_part != 'card'
     assert _begin(led, first)['granted']
     assert _receipt(led, first, f'{1:016x}', message_id='synthetic-card')['applied']
-    assert _part_receipt(led, first, 'thread', remote_id='synthetic-thread')['applied']
-    non_card = [dict(row) for row in led.db.execute(
-        "SELECT part_id,kind FROM notification_render_parts WHERE delivery_id=? AND kind!='card'",
-        (first['delivery_id'],))]
-    failed_part = None
-    n = 60
-    for part in non_card:
-        if part['kind'] == 'thread':
-            continue
-        n += 1
-        if failed_part is None and part['kind'] == 'attachment_part':
-            failed_part = part['part_id']
+    for n, part in enumerate(_wire_parts(spec)[1:], 60):
+        if part['part_id'] == failed_part:
             assert _part_receipt(led, first, failed_part, result='not_sent',
                                  remote_id=None, error_code='http_400', n=n)['applied']
         else:
             assert _part_receipt(led, first, part['part_id'], remote_id='r-' + part['part_id'],
-                                 n=n)['applied']
-    assert failed_part is not None
+                                 n=n, files=_surface_file_echo(spec, part['part_id']))['applied']
+    owed = {failed_part, group['part_id'], *group['members']}
+    states = {row['part_id']: row['state'] for row in led.db.execute(
+        'SELECT part_id,state FROM notification_render_parts WHERE delivery_id=?',
+        (first['delivery_id'],))}
+    assert {pid for pid, state in states.items() if state == 'not_sent'} == owed
     with led.db:
         assert notify_cards.issue_render(led.db, first['card_id'], CFG, DELIVERY_NOW + 1, [], force=True)
     later = _latest_render(led)
     assert later['delivery_id'] != first['delivery_id'] and later['state'] == 'queued'
-    manifest = {p['part_id']: p for p in json.loads(later['spec_json'])['parts']['manifest']}
-    retry = manifest[failed_part]
-    assert not retry.get('prior_remote_id')          # unsent: reposted, cannot duplicate
+    later_spec = json.loads(later['spec_json'])
+    manifest = {p['part_id']: p for p in later_spec['parts']['manifest']}
+    assert all(not manifest[pid].get('prior_remote_id') for pid in owed)
     assert any(p['kind'] == 'body_part' and p.get('prior_remote_id')
-               for p in manifest.values())           # delivered: never reposted
+               for p in manifest.values())
     report = notify_scope.incomplete_parts_health(led.db, DELIVERY_NOW + 1, CFG)
-    assert report['total'] == 1                      # still owed until the retry lands
-    assert report['by_plan'] == {'current': 1, 'superseded': 0}
+    assert report['total'] == len(owed)
+    assert report['by_plan'] == {'current': len(owed), 'superseded': 0}
     assert _begin(led, later, n=2)['granted']
     assert _receipt(led, later, f'{2:016x}', message_id='synthetic-card-2', n=10)['applied']
-    n = 200
-    for part in led.db.execute(
-            "SELECT part_id FROM notification_render_parts WHERE delivery_id=? AND kind!='card'",
-            (later['delivery_id'],)):
-        n += 1
-        assert _part_receipt(led, later, part['part_id'], remote_id='r2-' + part['part_id'], n=n)['applied']
+    for n, part in enumerate(_wire_parts(later_spec)[1:], 200):
+        assert _part_receipt(led, later, part['part_id'], remote_id='r2-' + part['part_id'],
+                             n=n, files=_surface_file_echo(later_spec, part['part_id']))['applied']
     report = notify_scope.incomplete_parts_health(led.db, DELIVERY_NOW + 2, CFG)
     assert report['total'] == 0
     assert report['by_plan'] == {'current': 0, 'superseded': 0}
@@ -653,3 +647,70 @@ def test_malformed_part_counts_remain_unknown(tmp_path, parts):
                                'notify': {'incomplete_parts': parts}}))
     report = health_watch.classify_health(str(path), NOW + 1, 1800)
     assert report['notify_incomplete_parts'] is None and report['status'] == 'degraded'
+
+
+def _discord_health_groups(db, surface_kind):
+    states = [(surface_kind, 'delivered', None), ('attachment_part', 'delivered', None),
+              ('attachment_part', 'delivered', None), ('file_group', 'unknown', None)]
+    card, old = _render(db, states, transport='discord')
+    _, new = _render(db, states[:-1] + [('file_group', 'delivered', None)],
+                     transport='discord', card=card, revision=2)
+    surface = 'card' if surface_kind == 'card' else 'body:0001'
+    for delivery in (old, new):
+        db.execute("UPDATE notification_render_parts SET part_id=?,name=? WHERE delivery_id=? AND idx=0",
+                   (surface, 'm:100#1' if surface_kind == 'body_part' else None, delivery))
+        db.execute("UPDATE notification_render_parts SET part_id=?,name=?,payload_sha256=? "
+                   "WHERE delivery_id=? AND idx=3",
+                   (f'file_group:{surface}', surface, hashlib.sha256(delivery.encode()).hexdigest(), delivery))
+        db.execute("UPDATE notification_render_parts SET bytes=25,attempt_id=?,remote_id=? "
+                   "WHERE delivery_id=?", (f'attempt-{delivery}', f'remote-{delivery}', delivery))
+        db.execute("UPDATE notification_render_parts SET remote_file_id='file-' || attachment_id "
+                   "WHERE delivery_id=? AND kind='attachment_part'", (delivery,))
+    return old, new, f'file_group:{surface}'
+
+
+@pytest.mark.parametrize('surface_kind', ['card', 'body_part'])
+def test_discord_group_coverage_survives_spec_gc_and_is_read_only(stored, surface_kind):
+    old, new, group = _discord_health_groups(stored, surface_kind)
+    # Both immutable specs have already been collected; only durable part proofs remain.
+    assert all(notify_scope.render_row(stored, d)['spec_json'] is None for d in (old, new))
+    before = stored.total_changes
+    stored.execute('PRAGMA query_only=ON')
+    try:
+        assert notify_scope.incomplete_parts_health(stored, NOW)['total'] == 0
+        assert stored.total_changes == before
+        assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=? AND part_id=?',
+                              (old, group)).fetchone()[0] == 'unknown'
+    finally:
+        stored.execute('PRAGMA query_only=OFF')
+
+
+@pytest.mark.parametrize('difference', ['scope', 'missing', 'hash', 'name', 'bytes', 'file_id',
+                                       'duplicate_file_id', 'group', 'surface', 'attempt', 'remote',
+                                       'source', 'old_hash'])
+def test_discord_group_coverage_requires_all_bound_member_proofs(stored, difference):
+    old, new, group = _discord_health_groups(stored, 'body_part')
+    if difference == 'scope':
+        stored.execute("UPDATE notification_renders SET channel_id='other' WHERE delivery_id=?", (new,))
+    elif difference == 'missing':
+        stored.execute('DELETE FROM notification_render_parts WHERE delivery_id=? AND idx=2', (new,))
+    elif difference == 'group':
+        stored.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND idx=3", (new,))
+    elif difference == 'surface':
+        stored.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND idx=0", (new,))
+    elif difference == 'source':
+        stored.execute("UPDATE notification_render_parts SET name='m:101#1' WHERE delivery_id=? AND idx=0", (new,))
+    else:
+        column, value = {
+            'hash': ('payload_sha256', 'a' * 64), 'name': ('name', 'different.pdf'),
+            'bytes': ('bytes', 26), 'file_id': ('remote_file_id', None),
+            'duplicate_file_id': ('remote_file_id', 'file-3'),
+            'attempt': ('attempt_id', 'different-attempt'), 'remote': ('remote_id', 'different-message'),
+            'old_hash': ('payload_sha256', None),
+        }[difference]
+        stored.execute(f'UPDATE notification_render_parts SET {column}=? WHERE delivery_id=? AND idx=1',
+                       (value, old if difference == 'old_hash' else new))
+    before = stored.total_changes
+    remaining = {(r['delivery_id'], r['part_id']) for r in notify_scope._incomplete_part_rows(stored)}
+    assert (old, group) in remaining
+    assert stored.total_changes == before

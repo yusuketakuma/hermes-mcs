@@ -387,6 +387,20 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
                   and part["attempt_id"] == f"p:{delivery_id.replace('-', '')}:file_group")
     if part["kind"] == "card" or (part["state"] != "unknown" and not dependency) or not part["attempt_id"]:
         return {"error": "part_not_resolvable"}
+    if render["transport"] == "discord" and part["kind"] == "attachment_part":
+        try:
+            group = _discord_recovery_group(db, {"delivery_id": delivery_id, "part_id": part_id,
+                                                 "attempt_id": part["attempt_id"]})
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            return {"error": "file_group_identity_unverified"}
+        if group is not None:
+            anchor = db.execute("SELECT state,attempt_id FROM notification_render_parts "
+                                "WHERE delivery_id=? AND part_id=?",
+                                (delivery_id, group["part_id"])).fetchone()
+            if anchor is None or anchor["state"] != "unknown" or anchor["attempt_id"] != part["attempt_id"]:
+                return {"error": "file_group_identity_unverified"}
+            # Approval covers the entire sealed group; individual member commands cannot match this plan.
+            return card_part_resolve_plan(db, delivery_id, group["part_id"], include_related=include_related)
     plan = {"version": 1, "cmd": "ops.card_part_resolve", **stored_scope(render),
             "transport": render["transport"],
             "delivery_id": delivery_id, "part_id": part_id, "attempt_id": part["attempt_id"],
@@ -426,7 +440,7 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
     available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
-                 and (kind != "file_group" or transport == "slack")
+                 and (kind != "file_group" or transport in ("slack", "discord"))
                  and isinstance(attempt_id, str) and bool(attempt_id.strip()))
     not_sent = {"worker_stopped": True,
                 "proof_any_of": ["no_journal_started", "api_rejected", "remote_absent"],
@@ -515,12 +529,16 @@ def validate_card_part_resolve(req) -> str | None:
     if req.get("expected_state") not in ("unknown", "not_sent") or req.get("result") not in _RESOLVE_RESULTS:
         return "bad_resolution"
     evidence = req.get("evidence")
-    if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted"}:
+    if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted", "files"}:
         return "bad_evidence"
     if not valid_text(evidence.get("method"), 200) or not valid_text(evidence.get("ref"), 500):
         return "bad_evidence"
     if evidence.get("worker_stopped") is not True:
         return "worker_not_proven_stopped"
+    if "files" in evidence and (transport != "discord" or req.get("result") != "mark_delivered"
+            or notify_transport.files_echo_error({"transport": transport, "files": evidence["files"]})):
+        return "bad_evidence"
+
     if req["expected_state"] == "not_sent":
         if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
                 or evidence.get("proof") != _DEPENDENCY_PROOF or "remote_id" in req or "related_plans" in req):
@@ -618,6 +636,46 @@ def _preflight_journal_error(attempts, incomplete, req, render, part, *, result=
     return None
 
 
+def _discord_recovery_group(db, req):
+    # Logical group parts share their surface's wire attempt, not a journal of their own.
+    render = render_row(db, req["delivery_id"])
+    if render is None or render["transport"] != "discord":
+        return None
+    part = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                      (req["delivery_id"], req["part_id"])).fetchone()
+    if part is None:
+        raise ValueError("missing part")
+    if part["kind"] not in ("attachment_part", "file_group"):
+        return None
+    if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
+                      "AND kind='file_group' LIMIT 1", (req["delivery_id"],)).fetchone():
+        return None
+    from adapters.common import spec as wire_spec
+    from mcs_util import strict_json
+    spec = wire_spec.validate(strict_json(render["spec_json"]))
+    card = card_row(db, render["card_id"])
+    if (card is None or not scope_matches(render, stored_scope(card))
+            or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
+            or payload_hash(spec) != render["payload_hash"]
+            or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
+            or not scope_matches(render, spec["delivery"])
+            or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))):
+        raise ValueError("unbound spec")
+    groups = [item for item in spec["parts"]["manifest"]
+              if item["kind"] == "file_group" and
+              (item["part_id"] == req["part_id"] or req["part_id"] in item["members"])]
+    if not groups and part["kind"] != "file_group":
+        return None
+    if len(groups) != 1:
+        raise ValueError("unbound group")
+    surface = groups[0]["surface"]
+    row = db.execute("SELECT attempt_id FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                     (req["delivery_id"], surface)).fetchone()
+    if row is None or row["attempt_id"] != req["attempt_id"] or part["attempt_id"] != req["attempt_id"]:
+        raise ValueError("unbound attempt")
+    return groups[0]
+
+
 def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
     if journal_evidence is None:
         try:
@@ -657,11 +715,20 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
                         continue
                     return "preflight_target_unverified"
         return None
+    try:
+        group = _discord_recovery_group(cards.connection(ledger), req)
+        surface = group["surface"] if group else None
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return "file_group_identity_unverified"
     rows = [row for record in attempts.values() for row in record["rows"]
-            if row.get("delivery_id") == req["delivery_id"] and row.get("part_id") == req["part_id"]]
+            if row.get("delivery_id") == req["delivery_id"]
+            and (row.get("part_id") == req["part_id"] if surface is None else
+                 row.get("attempt_id") == req["attempt_id"] and
+                 (row.get("part_id") == surface or surface == "card" and not row.get("part_id")))]
     delivered = [row for row in rows if row.get("phase") == "result" and row.get("result") == "delivered"]
     if req["result"] == "mark_delivered":
-        if any(row.get("remote_id") not in (None, "", req["remote_id"]) for row in delivered):
+        if any((row.get("message_id", row.get("remote_id")) if surface == "card"
+                else row.get("remote_id")) not in (None, "", req["remote_id"]) for row in delivered):
             return "remote_id_mismatch"
         return None
     if delivered or incomplete:
@@ -936,11 +1003,36 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
     return None
 
 
+def _discord_file_group_resolution_error(db, render, card, group_row, req):
+    """Discord ``file_group:<surface>`` anchors bind to a surface message
+    (card or one body_part), not a slack-style thread file set — re-check
+    the render↔spec↔card identity, then delegate surface/member binding
+    to the transport's shared validator."""
+    from adapters.common import spec as _spec
+    from mcs_util import strict_json
+    try:
+        spec = _spec.validate(strict_json(render["spec_json"]))
+        if (card is None or render["card_id"] != card["card_id"]
+                or not scope_matches(render, stored_scope(card))
+                or payload_hash(spec) != render["payload_hash"]
+                or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
+                or not scope_matches(render, spec["delivery"])
+                or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))
+                or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
+                or card["delivery_state"] != "delivered"):
+            return "file_group_identity_unverified"
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return "file_group_identity_unverified"
+    return notify_transport._discord_group_part_error(db, render, group_row, req)
+
+
 def _file_group_resolution_error(db, render, card, plan, req):
     group_row = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
                            (plan["delivery_id"], plan["part_id"])).fetchone()
     if group_row["kind"] != "file_group":
         return None
+    if render["transport"] == "discord":
+        return _discord_file_group_resolution_error(db, render, card, group_row, req)
     from adapters.slack.cards import validate
     from mcs_util import strict_json
     try:
@@ -1069,7 +1161,8 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
             render = render_row(db, req["delivery_id"])
             card = card_row(db, render["card_id"])
             preflight = req["evidence"].get("proof") == _PREFLIGHT_PROOF
-            group_retry = (req["result"] == "mark_not_sent" and db.execute(
+            group_retry = (req["result"] == "mark_not_sent" and req["transport"] == "slack"
+                           and db.execute(
                 "SELECT kind FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
                 (req["delivery_id"], req["part_id"])).fetchone()[0] == "file_group")
             for plan in plans:
@@ -1088,6 +1181,8 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                         "part_id": plan["part_id"], "attempt_id": plan["attempt_id"],
                         "result": "delivered" if req["result"] == "mark_delivered" else "not_sent",
                         "remote_id": req.get("remote_id"), "error_code": "operator_part_resolve"}
+                if "files" in req["evidence"]:
+                    fact["files"] = req["evidence"]["files"]
                 settled = notify_transport.settle_part_receipt(db, fact, now)
                 if not settled["applied"]:
                     error = "part_settle_rejected"
@@ -1283,6 +1378,7 @@ def validate_attachment_identity_confirm(req) -> str | None:
         return "bad_evidence"
     if evidence.get("worker_stopped") is not True:
         return "worker_not_proven_stopped"
+
     return None
 
 

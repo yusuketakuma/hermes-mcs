@@ -14,7 +14,8 @@ import mcs_util
 from adapters.common import envelopes
 from common_testkit import ledger_fixture
 from notify_lineworks_testkit import LINEWORKS, MID as LW_MID
-from notify_testkit import CFG as DISCORD, NOW, _dispatch, _intent, _latest_render, _seed_thread
+from notify_testkit import (CFG as DISCORD, NOW, _dispatch, _intent, _latest_render,
+                            _seed_thread, _surface_file_echo, _wire_parts)
 
 pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
@@ -44,21 +45,25 @@ def _deliver(led, cfg, card_mid, thread_rid, attachment_result="delivered",
     assert apply(envelopes.transport_begin(claim))["granted"]
     card = spec["parts"]["manifest"][0]
     assert apply(envelopes.transport_receipt(
-        claim, "delivered", message_id=card.get("prior_remote_id") or card_mid))["applied"]
-    for part in spec["parts"]["manifest"][1:]:
+        claim, "delivered", message_id=card.get("prior_remote_id") or card_mid,
+        files=_surface_file_echo(spec, "card")))["applied"]
+    for part in _wire_parts(spec)[1:]:
         if part["kind"] == "thread" and thread_result != "delivered":
             # A rejected thread holds every dependent part without an attempt.
             assert apply(envelopes.part_receipt(
                 claim, part, thread_result, error_code="synthetic_rejection"))["applied"]
             break
-        if part["kind"] == "attachment_part":
+        files = _surface_file_echo(spec, part["part_id"])
+        if files is not None:
+            result, rid = attachment_result, "rid:" + part["part_id"]
+        elif part["kind"] == "attachment_part":
             result, rid = attachment_result, "file:" + part["part_id"]
         else:
             result, rid = "delivered", thread_rid if part["kind"] == "thread" else "rid:" + part["part_id"]
         error = None if result == "delivered" else "synthetic_rejection"
         assert apply(envelopes.part_receipt(
             claim, part, result, remote_id=rid if result == "delivered" else None,
-            error_code=error))["applied"]
+            error_code=error, files=files if result == "delivered" else None))["applied"]
     return spec
 
 

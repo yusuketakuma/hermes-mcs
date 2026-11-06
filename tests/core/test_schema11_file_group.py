@@ -1,25 +1,27 @@
-"""Schema 11 preserves part receipts and rolls interrupted upgrades back."""
+"""Schema 10 part receipts survive the group and remote-file upgrades."""
+from contextlib import closing
 import sqlite3
 
 import ledger
 import ledger_schema
 import pytest
+from test_supported_schema_upgrade import RELEASES, _historical
 
 
 def test_v10_upgrade_preserves_all_part_columns(tmp_path):
-    path = str(tmp_path / "synthetic.db")
-    store = ledger.Ledger(path)
+    origin = next(row for row in RELEASES if row["release"] == "v1.1.0")
+    path = _historical(tmp_path / "released-v110", origin)
     row = ("synthetic-delivery", "attach:0001", "attachment_part", 2,
            "a" * 64, 9, "synthetic.pdf", 1, "unknown", "F_SYNTHETIC",
            "timeout", "synthetic-attempt", 123.0)
-    store.db.execute("INSERT INTO notification_render_parts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
-    store.db.execute("PRAGMA user_version=10")
-    store.db.commit()
-    store.close()
-    upgraded = ledger.Ledger(path)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("INSERT INTO notification_render_parts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        db.commit()
+    upgraded = ledger.Ledger(str(path))
     try:
-        assert tuple(upgraded.db.execute("SELECT * FROM notification_render_parts").fetchone()) == row
-        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert tuple(upgraded.db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=?",
+                                         (row[0],)).fetchone()) == (*row, None)
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION == 12
         assert {r[1] for r in upgraded.db.execute("PRAGMA index_list(notification_render_parts)")} >= {
             "idx_nparts_pending", "idx_nparts_state_delivery"}
     finally:
@@ -41,7 +43,7 @@ def test_interrupted_upgrade_rolls_back_table_and_version(tmp_path):
     db.set_authorizer(authorize)
     try:
         with pytest.raises(sqlite3.DatabaseError):
-            ledger_schema._migrate(db, schema_version=11, fts=False)
+            ledger_schema._migrate(db, schema_version=ledger.SCHEMA_VERSION, fts=False)
     finally:
         db.set_authorizer(None)
     assert db.execute("PRAGMA user_version").fetchone()[0] == 10

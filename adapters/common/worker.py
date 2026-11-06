@@ -702,8 +702,19 @@ class DeliveryWorker:
                     if blocked:
                         foreign_parts.add(part["part_id"])
                 ctx["foreign_prior_part_ids"] = foreign_parts
+        # Discord file groups: member files ride their surface's single
+        # HTTP call and the group part is only the journal/settlement
+        # anchor — neither gets an independent wire attempt here.
+        grouped = set()
+        if self.transport == "discord":
+            for gp in manifest:
+                if gp.get("kind") == "file_group":
+                    grouped.add(gp["part_id"])
+                    grouped.update(gp.get("members") or ())
         for part in manifest:
             kind = part.get("kind")
+            if part["part_id"] in grouped:
+                continue
             if kind == "card" or (part.get("unavailable")
                                   and not part.get("caption")):
                 continue              # card mirrors the primary attempt;
@@ -800,7 +811,8 @@ class DeliveryWorker:
         env = envelopes.part_receipt(
             claim, part, outcome["result"],
             remote_id=outcome.get("remote_id"),
-            error_code=outcome.get("error_code"))
+            error_code=outcome.get("error_code"),
+            files=outcome.get("files"))
         origin = {}
         if (part["kind"] == "attachment_part" and not part.get("unavailable")
                 and outcome["result"] == "delivered"
@@ -989,7 +1001,8 @@ class DeliveryWorker:
             env = envelopes.transport_receipt(
                 claim, outcome["result"],
                 message_id=outcome.get("message_id"),
-                error_code=outcome.get("error_code"))
+                error_code=outcome.get("error_code"),
+                files=outcome.get("files"))
             await asyncio.to_thread(
                 envelopes.publish_command, self._dirs["cmd_int"], env)
             self._journal("receipt",
