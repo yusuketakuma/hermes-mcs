@@ -35,6 +35,10 @@ def contract(cfg, *, code_digest=None):
 
 
 def requirement(cfg, pid):
+    if not cloud_policy.send_route('reextract'):
+        # A closed send route can never require a new send — and a broken
+        # cloud config must not block an unowned page's local completion.
+        return False, None
     if not isinstance(cfg, dict) or not cfg:
         return None, None
     settings, errors = cloud_policy.resolve_settings(cfg)
@@ -51,16 +55,19 @@ def requirement(cfg, pid):
 def _cloud_requirement(db, cfg, pid, key):
     """requirement() extended for recovery: a closed send route retires new sends,
     never the unit a prior reservation created — an owned page still needs its
-    paid answer read or held, not silently replaced by the local result."""
-    needed, provider_contract = requirement(cfg, pid)
-    if needed is not False:
-        return needed, provider_contract
+    paid answer read or held, not silently replaced by the local result.
+    Ownership is decided before settings: an unreadable cloud config cannot
+    release an owned unit to the local path, nor block an unowned one."""
+    if not cloud_policy.owns_unit_request(db, route='reextract',
+            project_id=pid, unit_key=key + ':cloud'):
+        return requirement(cfg, pid)
     settings, errors = cloud_policy.resolve_settings(cfg)
-    if (errors or settings['mode'] != 'on'
-            or not cloud_policy.in_scope(settings, 'reextract', pid)
-            or not cloud_policy.owns_unit_request(db, route='reextract',
-                project_id=pid, unit_key=key + ':cloud')):
-        return needed, provider_contract
+    if errors:
+        # owned, but scope and contract are unverifiable — stay held.
+        return True, None
+    if settings['mode'] != 'on' or not cloud_policy.in_scope(settings, 'reextract', pid):
+        # a proven revocation leaves the orphaned unit out of scope.
+        return False, None
     try:
         return True, cloud_inference.cloud_provider_contract(cfg)
     except cloud_inference.CloudFallback:
