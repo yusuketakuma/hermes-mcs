@@ -125,7 +125,7 @@ def test_uncertain_child_delivery_is_held_without_retry(tmp_path, monkeypatch,
     calls = []
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda cfg, target, config_path: ["hermes"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda cfg, target, config_path, *, kind=None: ["hermes"])
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("synthetic", []))
 
@@ -197,7 +197,7 @@ def test_hold_uses_current_delivery_receipt(tmp_path, monkeypatch, failure):
     db = Ledger(str(tmp_path / "ledger.db"))
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *args: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args: ["hermes"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args, kind=None: ["hermes"])
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *args: ("x" * (notify_flush.TEXT_CHUNK_WIDTH + 1), []))

@@ -28,7 +28,7 @@ def text_world(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *args: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args: ["hermes", "send"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args, kind=None: ["hermes", "send"])
     monkeypatch.setattr(
         notify_flush, "_format_event",
         lambda led, ev: (

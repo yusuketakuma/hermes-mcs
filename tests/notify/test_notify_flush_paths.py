@@ -488,7 +488,7 @@ def test_resealed_pending_intents_do_not_starve_text_events(tmp_path,
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_flush, "_config", lambda: _CARD_CFG)
     monkeypatch.setattr(notify_sender, 'target', lambda *args: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args: ["hermes"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *args, kind=None: ["hermes"])
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *args: ("synthetic", []))
     monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *args: ())

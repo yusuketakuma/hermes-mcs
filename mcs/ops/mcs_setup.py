@@ -409,6 +409,8 @@ def cmd_slack_channels(args):
     import slack_channel_setup
     try:
         cfg, initial = _init_config_snapshot()
+        if not slack_channel_setup.required(cfg):
+            return 0
         if slack_channel_setup.plan(cfg) is None:
             return 0
         args = SimpleNamespace(yes=True, plugin_profile=(cfg.get('notify') or {}).get('slack', {}).get('profile'),

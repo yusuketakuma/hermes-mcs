@@ -802,7 +802,7 @@ def test_unknown_archive_accepts_non_list_history(history):
 def test_healthy_recovery_supersedes_unsent_alert_without_stdout_or_send(
         tmp_path, monkeypatch, capsys, outcome, disk_only):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text) or False)
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text, *, config_path=None: calls.append(text) or False)
     _health_file(tmp_path, {"overall": "ok" if disk_only else "failed", "at": 990,
                             "disk_low": disk_only})
     previous = health_watch.evaluate(str(tmp_path), 1000, cfg={})
@@ -833,7 +833,7 @@ def test_healthy_status_cannot_be_rendered_as_legacy_alert_but_low_disk_remains(
 def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers(
         tmp_path, monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text) or True)
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text, *, config_path=None: calls.append(text) or True)
     _health_file(tmp_path, {"overall": "failed", "at": 990, "disk_low": True})
     health_watch.evaluate(str(tmp_path), 1000, cfg={})
     _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": True, "disk_free_mb": 123})
@@ -844,7 +844,7 @@ def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers
 
 def test_unknown_combined_alert_is_not_retried_when_only_disk_recovers(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text: calls.append(text))
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda cfg, text, *, config_path=None: calls.append(text))
     _health_file(tmp_path, {"overall": "failed", "at": 990, "disk_low": True})
     assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1000), {}) == 0
     path = tmp_path / health_watch.STATE_REL
@@ -856,7 +856,7 @@ def test_unknown_combined_alert_is_not_retried_when_only_disk_recovers(tmp_path,
 
 def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
     sent = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: sent.append(args))
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args, config_path=None: sent.append(args))
     real_publish = safe_io.atomic_publish_text
     state_writes = []
 
@@ -878,7 +878,7 @@ def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
 
 def test_unknown_delivery_is_not_resent_when_a_reason_drops(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args))
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args, config_path=None: calls.append(args))
     args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
     for at in (390, 690, 990):         # transient reasons alert on the third observation
         _health_file(tmp_path, {"overall": "degraded", "at": at,
@@ -894,7 +894,7 @@ def test_unknown_delivery_is_not_resent_when_a_reason_drops(tmp_path, monkeypatc
 def test_watcher_crash_after_send_keeps_unknown_witness(tmp_path, monkeypatch):
     calls = []
 
-    def send(*args):
+    def send(*args, config_path=None):
         calls.append(args)
         raise KeyboardInterrupt
 
@@ -909,7 +909,7 @@ def test_watcher_crash_after_send_keeps_unknown_witness(tmp_path, monkeypatch):
 
 def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args) or True)
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args, config_path=None: calls.append(args) or True)
     real_publish = safe_io.atomic_publish_text
     writes = []
 
@@ -934,7 +934,7 @@ def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_pat
 
 def test_detection_state_write_failure_still_reports_delivery_error(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args))
+    monkeypatch.setattr(health_watch, "deliver_alert", lambda *args, config_path=None: calls.append(args))
     publish = safe_io.atomic_publish_text
 
     def fail_state(path, text):
@@ -955,7 +955,7 @@ def test_overlapping_watchers_do_not_send_twice(tmp_path, monkeypatch):
     calls = []
     args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
 
-    def send(*unused):
+    def send(*unused, config_path=None):
         calls.append(True)
         health_watch.main(args + ["--now", "1001"])
         return True

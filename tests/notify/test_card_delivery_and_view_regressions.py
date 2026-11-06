@@ -268,7 +268,7 @@ def test_long_attachment_name_keeps_its_extension(led, tmp_path):
 def test_health_write_failed_alert_is_sent(led, monkeypatch):
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *a: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: ["hermes"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a, kind=None: ["hermes"])
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     sent = []
     monkeypatch.setattr(notify_sender, 'send',

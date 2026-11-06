@@ -1304,8 +1304,8 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        argv = notify_sender.send_argv(cfg, target, CONF_PATH)
         try:
+            argv = notify_sender.send_argv(cfg, target, CONF_PATH, kind=ev['kind'])
             _send_text(ledger, ev, cfg, argv, target, res, deadline)
         except Exception as exc:
             _fail_event(ledger, ev, cfg, res, exc)

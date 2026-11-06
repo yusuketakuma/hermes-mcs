@@ -121,6 +121,29 @@ def read(root):
     return _validate(root, state)
 
 
+def system_send_profile(root, cfg, destination):
+    """Resolve only a created system channel's verified serving profile."""
+    state = read(root)
+    if state is None:
+        return None
+    if state['state'] != 'applied':
+        raise ValueError('slack_setup_system_profile_unverified')
+    system = state['roles']['system']
+    if not system.get('create_receipt') or destination != 'slack:' + system['id']:
+        return None
+    notify = cfg.get('notify')
+    scope = notify.get('slack') if isinstance(notify, dict) else None
+    binding = ({key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
+               if isinstance(scope, dict) else None)
+    configured = cfg.get('notify_system_target')
+    if (not isinstance(configured, str) or configured.strip() != destination
+            or state['plan']['runtime_mode'] != 'hermes'
+            or binding != state['plan']['binding']
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', binding['profile'])):
+        raise ValueError('slack_setup_system_profile_unverified')
+    return binding['profile']
+
+
 def save(root, state):
     _validate(root, state)
     safe_io.atomic_write(str(path(root)), lambda stream: stream.write(
@@ -136,20 +159,19 @@ def required(cfg):
     notify = cfg.get('notify') or {}
     if not isinstance(notify, dict):
         raise ValueError('slack_setup_unverified')
-    return bool(isinstance(patient, str) and patient.startswith('slack:')
-                or notify.get('interactive') == 'slack')
+    return notify.get('interactive') == 'slack'
 
 
 def plan(cfg, *, users=None):
     """Keep explicit separate system routes and describe only missing Slack destinations."""
+    if not required(cfg):
+        return None
     patient = cfg.get('notify_target')
     system = cfg.get('notify_system_target')
     if system and system != patient and not str(system).startswith('slack:'):
         return None
     if system and str(system).startswith('slack:') and not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system):
         raise ValueError('slack_setup_system_channel_invalid')
-    if not required(cfg):
-        return None
     notify = cfg.get('notify') or {}
     slack_text = isinstance(patient, str) and patient.startswith('slack:')
     scope = notify.get('slack') or {}
@@ -273,6 +295,8 @@ def run_setup(root, cfg, args):
     args.plugin_user_ids = ','.join(state['plan']['users'])
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
+        if state is None:
+            raise ValueError('slack_setup_existing_intent_conflict')
         if state and state['state'] == 'blocked' and state.get('reason') == 'slack_setup_scope_required':
             rejected = [record for record in state['roles'].values()
                         if record['state'] == 'blocked' and not record['id']

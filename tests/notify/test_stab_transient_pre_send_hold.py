@@ -16,7 +16,7 @@ LINEWORKS = [sys.executable, "/synthetic/lineworks_adapter/__main__.py", "send"]
 def _flush_once(tmp_path, monkeypatch, argv, stderr, attempts, returncode=75):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(notify_sender, 'target', lambda *a: "slack:C1")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a: list(argv))
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *a, kind=None: list(argv))
     monkeypatch.setattr(notify_flush, "_format_event", lambda *a: ("合成通知", []))
     monkeypatch.setattr(notify_sender.subprocess, "run", lambda *a, **k: SimpleNamespace(
         returncode=returncode, stdout="", stderr=stderr))

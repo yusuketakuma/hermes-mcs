@@ -21,7 +21,7 @@ def test_corrupt_progress_holds_and_later_event_delivers(tmp_path, monkeypatch, 
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *_args: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args: ["synthetic"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args, kind=None: ["synthetic"])
     monkeypatch.setattr(notify_flush, "_format_event", lambda *_args: ("synthetic", []))
     monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *_args: ())
     monkeypatch.setattr(notify_sender, 'send', lambda *_args, **_kwargs: sent.append(1))
@@ -55,7 +55,7 @@ def test_invalid_id_shape_can_be_held_without_stopping_later_notice(tmp_path, mo
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *_args: "synthetic")
-    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args: ["synthetic"])
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda *_args, kind=None: ["synthetic"])
     monkeypatch.setattr(semantic_send_gate, 'semantic_render_state', lambda *_args: ())
     monkeypatch.setattr(notify_sender, 'send', lambda *_args, **_kwargs: sent.append(1))
     try:
