@@ -12,6 +12,7 @@ from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from extract_testkit import _message
 from test_anthropic_runtime import old, routed
+from test_cloud_response_recovery import legacy_cloud_routes
 from test_drug_context_frame import frame_store, prepare
 
 __all__ = ['routed', 'frame_store']
@@ -54,7 +55,8 @@ def test_limit_one_keeps_unknown_first_source_and_processes_healthy_local_next(r
         return {}
     monkeypatch.setattr(worker, 'llm_extract', extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
+    with legacy_cloud_routes():
+        report = worker.run_pending(ledger, limit=1, workers=1, budget_s=180)
     assert report['done'] == 1 and report['context_blocked'] == 1
     assert len(calls) == 1 and not cloud_calls
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' AND message_id=1 "
@@ -131,16 +133,19 @@ def test_all_held_sources_are_seen_once_then_expiry_only_rechecks_evidence(route
     before = [dict(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()) for aid in aids]
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: pytest.fail('unknown checkpoints cannot infer'))
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        first = worker.run_pending(ledger, limit=1, budget_s=180)
     assert first['selected'] == first['context_blocked'] == 2 and first['done'] == first['failed'] == 0
     claims = [dict(row) for row in ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' ORDER BY message_id")]
     assert len(claims) == 2 and all(worker.time.time() < c['next_try'] <= worker.time.time() + worker._PREPARE_HOLD_S for c in claims)
-    again = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        again = worker.run_pending(ledger, limit=1, budget_s=180)
     assert again['selected'] == again['done'] == 0
     assert [dict(row) for row in ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' ORDER BY message_id")] == claims
     with ledger.db:
         ledger.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
-    expired = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        expired = worker.run_pending(ledger, limit=1, budget_s=180)
     assert expired['context_blocked'] == 2 and expired['done'] == expired['failed'] == 0
     assert not calls and not ledger.artifacts('cloud_usage_reserve')
     assert [dict(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()) for aid in aids] == before
@@ -162,7 +167,8 @@ def test_concurrent_owner_claim_is_untouched_while_refill_advances(routed, monke
     monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert result['done'] == 1 and result['context_blocked'] == 1 and not calls
     assert dict(ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2").fetchone()) == foreign[0]
 
@@ -182,7 +188,8 @@ def test_deadline_after_refusal_never_claims_or_refills(routed, monkeypatch):
     monkeypatch.setattr(extract_llm_runner, '_prepare_jobs', worker._prepare_jobs)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: pytest.fail('deadline expired'))
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(ledger, limit=1, budget_s=180)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180)
     assert result['selected'] == result['context_blocked'] == 1 and result['done'] == 0
     assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone() and not calls
 
@@ -197,7 +204,8 @@ def test_refill_preserves_existing_admission_and_shard(routed, monkeypatch, boun
     options = {'admitted_ids': {good, bad}} if boundary == 'admission' else {'shard': (0, 2)}
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(ledger, limit=1, budget_s=180, **options)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180, **options)
     assert result['done'] == 1 and result['context_blocked'] == 1 and not calls
     current = ledger.db.execute("SELECT message_id FROM artifacts WHERE kind='extract_llm' "
         "AND json_extract(meta,'$.extract_version')=?", (worker.EXTRACT_VERSION,)).fetchall()
@@ -245,7 +253,8 @@ def test_many_refusals_keep_only_candidate_pages_and_healthy_jobs(routed, monkey
     monkeypatch.setattr(extract_llm_runner, '_select_pending', worker._select_pending)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
-    result = worker.run_pending(ledger, limit=1, budget_s=180, prioritize_patients=True)
+    with legacy_cloud_routes():
+        result = worker.run_pending(ledger, limit=1, budget_s=180, prioritize_patients=True)
     assert result['done'] == 1 and result['selected'] == 11 and result['context_blocked'] == 10
     assert len(references) == 11 and max(retained) <= 3, retained
     assert not calls and not ledger.artifacts('cloud_usage_reserve')

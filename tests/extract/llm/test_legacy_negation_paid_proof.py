@@ -10,6 +10,7 @@ import extract_llm as worker
 from extract_testkit import _ledger, _message
 from test_anthropic_runtime import _bound_source, real_record_result, real_usage_reserver, routed as routed
 from test_cloud_repair_final_proof import _repair_run
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def test_retained_paid_origin_with_legacy_default_false_remains_exact(tmp_path, monkeypatch):
@@ -33,8 +34,9 @@ def test_retained_paid_origin_with_legacy_default_false_remains_exact(tmp_path, 
         answer = json.dumps(raw, ensure_ascii=False)
         client = worker.openai_client.OpenAIClient('synthetic', model=selection['model'], effort=selection['effort'])
         request = client.body(prompt, selection['max_tokens'], None)
-        reservation = real_usage_reserver(ledger, cfg, route='reextract', project_id=1, message_id=1,
-            unit_key='1', owner={'lease': 'synthetic-owner'}, selection=selection)(request, 30)
+        with legacy_cloud_routes():
+            reservation = real_usage_reserver(ledger, cfg, route='reextract', project_id=1, message_id=1,
+                unit_key='1', owner={'lease': 'synthetic-owner'}, selection=selection)(request, 30)
         usage = {'input_tokens': 2, 'output_tokens': 1, 'total_tokens': 3,
             'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}
         real_record_result(ledger, reservation, {'model': selection['model'], 'request_fp': reservation['request_fp'],

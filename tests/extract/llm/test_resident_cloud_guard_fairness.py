@@ -10,6 +10,7 @@ import cloud_inference
 import cloud_policy
 import extract_llm
 from test_anthropic_runtime import _current_artifacts, old, real_usage_reserver, routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("reserved", [False, True])
@@ -42,16 +43,18 @@ def test_cloud_guard_resident_refusal_does_not_starve_following_local_source(rou
 
     monkeypatch.setattr(extract_llm, 'llm_extract', extraction)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
-    first = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180,
-                                    allow_cloud=True, background=True)
+    with legacy_cloud_routes():
+        first = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180,
+                                        allow_cloud=True, background=True)
     assert first['defer_reasons'] == {'cloud_guard': 1} and first['done'] == 0
     evidence = [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition')")]
     assert len(evidence) == int(reserved)
     claim = ledger.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' AND message_id=1").fetchone()
     assert claim is not None and time.time() < claim[0] <= time.time() + extract_llm._PREPARE_HOLD_S
-    following = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180,
-                                        allow_cloud=True, background=True)
+    with legacy_cloud_routes():
+        following = extract_llm.run_pending(ledger, limit=1, workers=1, budget_s=180,
+                                            allow_cloud=True, background=True)
     assert calls == reservations == results == []
     assert following['done'] == 1, {'attempted': attempted, 'local': len(local),
                                   'following_defer_reasons': following.get('defer_reasons')}
