@@ -14,7 +14,7 @@ from adapters.common import envelopes, journal, registry
 from adapters.common.spec import token_map
 from adapters.slack import paths as slack_paths
 from adapters.slack.presentation import thread_part_blocks
-import notify_cards as runner_cards
+import notify_card_renders
 import notify_spool
 import notify_cmds as runner_cmds
 import notify_reconcile
@@ -546,7 +546,7 @@ def test_runner_grant_posts_card_and_body_inside_card_thread(led):
 
 @pytest.mark.thread_bodies
 def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
-    monkeypatch.setattr(runner_cards, "drug_search_available", lambda _db: True)
+    monkeypatch.setattr(notify_card_renders, "drug_search_available", lambda _db: True)
     _seed_thread(led)
     _big_body(led)
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
