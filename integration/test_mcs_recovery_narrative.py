@@ -79,7 +79,7 @@ import discord_testkit as TD  # noqa: E402
 import slack_testkit as TS  # noqa: E402
 from notify_testkit import _dispatch, _intent, _latest_render  # noqa: E402
 from ops_testkit import (_git, _make_repo, _mk_schema,  # noqa: E402
-                         _seed_consent)
+                         _seed_consent, lifecycle_lookup_owners)
 from semantic_testkit import (_canonical_cfg, _message, _PassJev,  # noqa: E402
                               _patient, _summary_from_facts)
 from slack_testkit import SLACK  # noqa: E402
@@ -115,11 +115,14 @@ async def _td_thread_send(self, content=None, **kw):
     message.channel = self
     message.view = kw.get("view", TD.MISSING)
     message.attachments = []
-    f = kw.get("file")
-    if f is not None:
+    files = list(kw.get("files") or [])
+    if kw.get("file") is not None:
+        files.append(kw["file"])
+    for index, f in enumerate(files):
         self.files.append({"path": f.path, "filename": f.filename})
         size = f.path.getbuffer().nbytes if hasattr(f.path, "getbuffer") else Path(f.path).stat().st_size
-        message.attachments = [SimpleNamespace(filename=f.filename, size=size)]
+        message.attachments.append(SimpleNamespace(id=message.id * 100 + index + 1,
+                                                   filename=f.filename, size=size))
     self.sent.append(content)
     self.messages.append(message)
     return message
@@ -139,7 +142,8 @@ def isolated_narrative_state(monkeypatch, snapshot_child_clock):
                  "BACKUP_DIR", "MANIFEST_PATH", "quiesce", "_services_reconcile",
                  "_postcheck",
                  "_enqueue_notice", "restart_gateway", "restart_agents", "_git"):
-        monkeypatch.setattr(mcs_update, name, getattr(mcs_update, name))
+        for owner in lifecycle_lookup_owners(mcs_update, name):
+            monkeypatch.setattr(owner, name, getattr(owner, name))
     monkeypatch.setattr(service_management, "retire_to_snapshot", service_management.retire_to_snapshot)
     monkeypatch.setattr(mcs_util, "load_config", mcs_util.load_config)
 
@@ -307,6 +311,11 @@ def _parts(led, did):
         (did,))}
 
 
+def _set_updater(up, name, value):
+    for owner in lifecycle_lookup_owners(up, name):
+        setattr(owner, name, value)
+
+
 def _patch_updater(up, tmp_path):
     """The updater fixture's path rebinding, factored for both pytest
     and the evidence builder."""
@@ -323,18 +332,18 @@ def _patch_updater(up, tmp_path):
             ("BACKUP_DIR", tmp_path / "data" / "backups"),
             ("MANIFEST_PATH",
              tmp_path / "data" / "service_manifest.json")):
-        setattr(up, name, str(path))
+        _set_updater(up, name, str(path))
 
 
 def _stub_updater_boundaries(up, restarts):
-    up.quiesce = lambda: (up._write_marker(), [])[1]
-    up._services_reconcile = lambda: None
+    _set_updater(up, "quiesce", lambda: (up._write_marker(), [])[1])
+    _set_updater(up, "_services_reconcile", lambda: None)
     service_management.retire_to_snapshot = lambda m, **kwargs: []
-    up._postcheck = lambda s, e: []
+    _set_updater(up, "_postcheck", lambda s, e: [])
     mcs_util.load_config = lambda: {}
-    up._enqueue_notice = lambda *a, **k: True
-    up.restart_gateway = lambda c: None
-    up.restart_agents = lambda: restarts.append(1) or []
+    _set_updater(up, "_enqueue_notice", lambda *a, **k: True)
+    _set_updater(up, "restart_gateway", lambda c: None)
+    _set_updater(up, "restart_agents", lambda: restarts.append(1) or [])
 
 
 class _Narrative:
@@ -810,16 +819,15 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         (up_dir / "data").mkdir()
         _patch_updater(mcs_update, up_dir)
         repo, _bare = _make_repo(up_dir)
-        mcs_update.REPO = str(repo)
+        _set_updater(mcs_update, "REPO", str(repo))
         restarts = []
         _stub_updater_boundaries(mcs_update, restarts)
         # restore machinery points at the NARRATIVE db + data dir so
         # the consent marker holds the real delivery boundary
-        mcs_update.LEDGER = str(N.data / "ledger.db")
-        mcs_update.DATA = str(N.data)
-        mcs_update.MARKER_PATH = str(N.data / "marker")
-        mcs_update.RESTORE_REPORT_PATH = str(
-            N.data / "restore_report.json")
+        _set_updater(mcs_update, "LEDGER", str(N.data / "ledger.db"))
+        _set_updater(mcs_update, "DATA", str(N.data))
+        _set_updater(mcs_update, "MARKER_PATH", str(N.data / "marker"))
+        _set_updater(mcs_update, "RESTORE_REPORT_PATH", str(N.data / "restore_report.json"))
         before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
         after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
         original_git = mcs_update._git
@@ -833,7 +841,7 @@ def _run_narrative(tmp_path, *, reply_cards=True):
                     args, 0, f"CARD_LAYOUT = {notify_cards.CARD_LAYOUT}\n", "")
             return original_git(args, timeout)
 
-        mcs_update._git = target_git
+        _set_updater(mcs_update, "_git", target_git)
         state = mcs_update.journal_store.default_state()
         state["applied"] = [{"tag": "v1.1.0", "sha": after,
                              "prev_sha": before, "schema_bump": True,
@@ -1059,7 +1067,7 @@ def test_failure_missing_consent_receipt_stays_held(tmp_path):
     data.mkdir()
     _patch_updater(mcs_update, tmp)
     repo, _bare = _make_repo(tmp)
-    mcs_update.REPO = str(repo)
+    _set_updater(mcs_update, "REPO", str(repo))
     restarts = []
     _stub_updater_boundaries(mcs_update, restarts)
     live = data / "ledger.db"
@@ -1067,7 +1075,7 @@ def test_failure_missing_consent_receipt_stays_held(tmp_path):
     back.parent.mkdir(exist_ok=True)
     _mk_schema(back, 7, messages=2)
     _mk_schema(live, 8, messages=5)
-    mcs_update.LEDGER = str(live)
+    _set_updater(mcs_update, "LEDGER", str(live))
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
     after = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
     state = mcs_update.journal_store.default_state()
