@@ -22,6 +22,7 @@
   "mcs/extract/llm/extract_llm_runner.py",
   "mcs/semantic/semantic_transport.py",
   "mcs/extract/attachment_inference.py",
-  "mcs/extract/attachment_extraction.py"
+  "mcs/extract/attachment_extraction.py",
+  "mcs/semantic/semantic_job_processor.py"
  ]
 }
