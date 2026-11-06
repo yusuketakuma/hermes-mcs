@@ -18,6 +18,7 @@ docs/guides/UPGRADE_AGENT.md.
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
@@ -190,17 +191,33 @@ def _setup_action_supported(repo, action):
             raw = stream.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("setup_unverified")
-        return raw.decode("utf-8")
+        try:
+            return ast.parse(raw.decode("utf-8"))
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            raise ValueError("setup_unverified") from None
 
     cli, setup = source("mcs_cli.py"), source("mcs_setup.py")
-    route = re.search(r'rest\[0\]\s+in\s*\([^)]*["\']' + re.escape(action) + r'["\']', cli)
-    parser = re.search(r'sub\.add_parser\(\s*["\']' + re.escape(action) + r'["\']', setup)
-    if bool(route) != bool(parser):
+    routes, parsers = set(), set()
+    for node in ast.walk(cli):
+        if (isinstance(node, ast.Compare) and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.In)
+                and isinstance(node.left, ast.Subscript)
+                and isinstance(node.left.value, ast.Name) and node.left.value.id == 'rest'
+                and isinstance(node.left.slice, ast.Constant) and node.left.slice.value == 0
+                and isinstance(node.comparators[0], ast.Tuple)):
+            routes.update(item.value for item in node.comparators[0].elts
+                          if isinstance(item, ast.Constant) and isinstance(item.value, str))
+    for node in ast.walk(setup):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'add_parser' and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == 'sub' and node.args
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            parsers.add(node.args[0].value)
+    if (action in routes) != (action in parsers):
         raise ValueError("setup_unverified")
-    if not route and not (re.search(r'rest\[0\]\s+in\s*\([^)]*["\']api-keys["\']', cli)
-                          and re.search(r'sub\.add_parser\(\s*["\']api-keys["\']', setup)):
+    if action not in routes and not ('api-keys' in routes and 'api-keys' in parsers):
         raise ValueError("setup_unverified")
-    return bool(route)
+    return action in routes
 
 
 def _installed_setup_command(repo, action="api-keys"):

@@ -171,6 +171,50 @@ _SLACK_SETUP_SOURCES = {
 }
 
 
+@pytest.mark.parametrize('declarations,expected', [
+    ('code', True), ('old', False), ('comments', False), ('strings', False),
+    ('route_comment', 'unverified'), ('parser_comment', 'unverified'),
+    ('invalid', 'unverified'), ('empty', 'unverified'),
+    ('old_strings', 'unverified'),
+])
+def test_setup_capability_requires_syntax_not_comments_or_strings(tmp_path, declarations, expected):
+    ops = tmp_path / 'mcs' / 'ops'
+    ops.mkdir(parents=True)
+    cli = 'if rest[0] in ("api-keys",):\n    pass\n'
+    parser = 'sub.add_parser("api-keys")\n'
+    route = 'if rest[0] in ("slack-channels",):\n    pass\n'
+    action = 'sub.add_parser("slack-channels")\n'
+    if declarations == 'code':
+        cli += route
+        parser += action
+    elif declarations in ('comments', 'strings', 'route_comment', 'parser_comment'):
+        cli += route if declarations == 'parser_comment' else (
+            '"""' + route + '"""\n' if declarations == 'strings'
+            else '# if rest[0] in ("slack-channels",):\n')
+        parser += action if declarations == 'route_comment' else (
+            '"""' + action + '"""\n' if declarations == 'strings'
+            else '# sub.add_parser("slack-channels")\n')
+    elif declarations == 'invalid':
+        cli += route + 'invalid (\n'
+        parser += action
+    elif declarations == 'empty':
+        cli = parser = ''
+    elif declarations == 'old_strings':
+        cli, parser = '"""' + cli + '"""\n', '"""' + parser + '"""\n'
+    (ops / 'mcs_cli.py').write_text(cli)
+    (ops / 'mcs_setup.py').write_text(parser)
+    if expected == 'unverified':
+        with pytest.raises(ValueError, match='setup_unverified'):
+            _launcher()._setup_action_supported(tmp_path, 'slack-channels')
+    else:
+        assert _launcher()._setup_action_supported(tmp_path, 'slack-channels') is expected
+
+
+@pytest.mark.parametrize('action', ['api-keys', 'slack-channels'])
+def test_setup_capability_matches_current_cli_and_parser(action):
+    assert _launcher()._setup_action_supported(ROOT, action) is True
+
+
 def _slack_setup_shim(monkeypatch, tmp_path, repo, rc=0):
     """Installed-launcher shim whose pinned runtime records the setup call."""
     home = tmp_path / "home"
