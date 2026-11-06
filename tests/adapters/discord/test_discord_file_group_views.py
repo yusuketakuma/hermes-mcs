@@ -142,3 +142,21 @@ def test_group_upload_uses_verified_bytes_and_sdk_file_owner(tmp_path):
         native.close()
     path.write_bytes(b'x' * len(blob))
     assert asyncio.run(instance._member_files([member])) is None
+
+
+@pytest.mark.parametrize(('name', 'spoiler'), [
+    ('synthetic.png', True), ('report.pdf', False),
+    ('SPOILER_report.pdf', True), ('SPOILER_SPOILER_report.pdf', True),
+])
+def test_native_file_name_matches_view_uri_and_sealed_spoiler(name, spoiler):
+    member = _member(1, name)
+    native = cards.attachment_file(b'synthetic', member)
+    try:
+        view = cards.message_payload(_spec([member]))['view']
+        urls = [url for component in _children(view) for url in _urls(component)]
+        assert urls == ['attachment://' + native.filename]
+        assert native.filename == discord_file_name(member)
+        assert native.spoiler is spoiler
+        assert native.filename.count('SPOILER_') == int(spoiler)
+    finally:
+        native.close()
