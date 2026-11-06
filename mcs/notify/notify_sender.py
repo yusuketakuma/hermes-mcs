@@ -35,10 +35,17 @@ def target(cfg: dict, kind: str) -> str | None:
         st = cfg.get("notify_system_target")
         st = st.strip() if isinstance(st, str) else ''
         patient = t.strip() if isinstance(t, str) else ''
-        if patient == 'slack' or patient.startswith('slack:'):
+        patients = [patient] if patient == 'slack' or patient.startswith('slack:') else []
+        notify = cfg.get('notify')
+        if isinstance(notify, dict) and notify.get('interactive') == 'slack':
+            slack = notify.get('slack')
+            channel = slack.get('channel_id') if isinstance(slack, dict) else None
+            patients.append('slack:' + channel.strip() if isinstance(channel, str) else '')
+        if patients:
             # Names and thread aliases cannot prove separation without a lookup.
-            if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', patient)
-                    or not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', st) or st == patient):
+            if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', st)
+                    or any(not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', p)
+                           or st == p for p in patients)):
                 return None
         if st:
             t = st

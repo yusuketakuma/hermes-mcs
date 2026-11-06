@@ -30,6 +30,50 @@ def test_other_transports_keep_existing_system_fallback(patient):
     assert notify_sender.target({'notify_target': patient}, 'run_failed') == patient
 
 
+@pytest.mark.parametrize(('patient', 'slack', 'system', 'expected'), [
+    ('slack:C12345678', {'channel_id': 'C87654321'}, 'slack:C87654321', None),
+    ('local', {'channel_id': 'C87654321'}, 'slack:C87654321', None),
+    ('slack:C12345678', {'channel_id': 'C87654321'}, 'slack:C12345678', None),
+    ('slack:C12345678', {'channel_id': 'C87654321'}, 'slack:C99999999', 'slack:C99999999'),
+    ('local', {'channel_id': 'C87654321'}, 'slack:C99999999', 'slack:C99999999'),
+    ('slack:C12345678', None, 'slack:C99999999', None),
+    ('slack:C12345678', {}, 'slack:C99999999', None),
+    ('slack:C12345678', {'channel_id': 123}, 'slack:C99999999', None),
+    ('slack:C12345678', {'channel_id': '#patient'}, 'slack:C99999999', None),
+    ('local', {'channel_id': 'D87654321'}, 'slack:C99999999', None),
+    ('local', {'channel_id': 'C87654321:123.456'}, 'slack:C99999999', None),
+    ('local', {'channel_id': 'C87654321'}, None, None),
+])
+def test_system_route_checks_both_patient_text_and_active_card_channel(
+        monkeypatch, patient, slack, system, expected):
+    cfg = {'runtime_mode': 'standalone', 'notify_target': patient,
+           'notify_system_target': system, 'notify': {'interactive': 'slack', 'slack': slack}}
+    for kind in notify_sender.SYSTEM_ALERT_KINDS:
+        assert notify_sender.target(cfg, kind) == expected
+    assert notify_sender.target(cfg, 'new_messages') == patient
+
+    from deployment.recovery import mcs_recovery_services as recovery
+    sent = []
+    class Process:
+        def communicate(self, *args, **kwargs):
+            pass
+    def popen(argv, **kwargs):
+        sent.append(argv)
+        return Process()
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_check_recovery_root', lambda: None)
+    monkeypatch.setattr(recovery.mcs_recovery_core, '_runtime_config', lambda: cfg)
+    monkeypatch.setattr(recovery.mcs_recovery_core, 'HOME', '/synthetic/home', raising=False)
+    monkeypatch.setattr(recovery.mcs_recovery_core, 'REPO', '/synthetic/repo', raising=False)
+    monkeypatch.setattr(recovery.os, 'access', lambda *args: True)
+    monkeypatch.setattr(recovery.os.path, 'isfile', lambda *args: True)
+    monkeypatch.setattr(recovery.subprocess, 'Popen', popen)
+    recovery._notify('synthetic')
+    if expected is None:
+        assert not sent
+    else:
+        assert len(sent) == 1 and sent[0][sent[0].index('--to') + 1] == expected
+
+
 @pytest.mark.parametrize('kind', sorted(notify_sender.SYSTEM_ALERT_KINDS))
 def test_system_formatter_never_echoes_patient_or_unknown_payload(kind):
     private = 'synthetic_patient_123_diagnosis'
@@ -47,7 +91,7 @@ def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command():
     text, files = notify_flush._format_event(None, {'kind': 'update_notice', 'payload': json.dumps(payload)})
     assert '候補版: v1.2.3' in text and 'run 7' in text and files == []
     assert 'synthetic_patient' not in text and 'unsafe' not in text
-    command = json.loads(text.split('患者情報チャンネルで実行（適用前の確認）: /mcs ')[1].splitlines()[0])
+    command = json.loads(text.split('/mcsの操作を許可したチャンネルで実行（適用前の確認）: /mcs ')[1].splitlines()[0])
     assert command == {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
                        'tag': 'v1.2.3', 'reason': '<理由>'}
     from adapters.common import human_commands
@@ -60,9 +104,10 @@ def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command():
     actions = object.__new__(Actions)
     actions._active = True
     actions._settings = {'team_id': 'SYNTHETIC_TEAM', 'application_id': 'SYNTHETIC_APP',
-                         'allowed_user_ids': ['SYNTHETIC'], 'channel_id': 'C12345678'}
+                         'allowed_user_ids': ['SYNTHETIC'], 'channel_id': 'C99999999'}
     body = {'team_id': 'SYNTHETIC_TEAM', 'api_app_id': 'SYNTHETIC_APP', 'user_id': 'SYNTHETIC'}
-    assert actions._slash_scope_ok({**body, 'channel_id': 'C12345678'})
+    assert actions._slash_scope_ok({**body, 'channel_id': 'C99999999'})
+    assert not actions._slash_scope_ok({**body, 'channel_id': 'C12345678'})
     assert not actions._slash_scope_ok({**body, 'channel_id': 'C87654321'})
 
 

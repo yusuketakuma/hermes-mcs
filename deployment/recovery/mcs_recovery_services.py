@@ -412,9 +412,16 @@ def _notify(text):
             system = cfg.get("notify_system_target")
             patient = patient.strip() if isinstance(patient, str) else ''
             system = system.strip() if isinstance(system, str) else ''
-            if patient == 'slack' or patient.startswith('slack:'):
-                if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', patient)
-                        or not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system) or system == patient):
+            patients = [patient] if patient == 'slack' or patient.startswith('slack:') else []
+            notify = cfg.get('notify')
+            if isinstance(notify, dict) and notify.get('interactive') == 'slack':
+                slack = notify.get('slack')
+                channel = slack.get('channel_id') if isinstance(slack, dict) else None
+                patients.append('slack:' + channel.strip() if isinstance(channel, str) else '')
+            if patients:
+                if (not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system)
+                        or any(not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', p)
+                               or system == p for p in patients)):
                     return
             target = system or patient
             python = os.path.join(mcs_recovery_core.HOME, "venv", "bin", "python3")
