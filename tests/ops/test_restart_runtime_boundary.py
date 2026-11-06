@@ -57,11 +57,14 @@ def test_nonregular_config_refuses_restart(runtime, tmp_path, kind):
         os.mkfifo(runtime)
         bounded_python(tmp_path, """
 import mcs_update as updater
-updater.DATA = sys.argv[1]
+import update_services
+updater.DATA = update_services.DATA = sys.argv[1]
 def forbidden(*args, **kwargs):
     raise AssertionError('unknown runtime reached service calls')
 updater._run = updater._bootstrap_agent = updater._agent_pid = forbidden
 updater._remove_marker = updater._standalone_drainer_problems = forbidden
+for name in ("_run", "_bootstrap_agent", "_agent_pid", "_remove_marker", "_standalone_drainer_problems"):
+    setattr(update_services, name, forbidden)
 assert updater.restart_agents() == ['runtime_mode_unverifiable']
 """, updater.DATA)
         return
