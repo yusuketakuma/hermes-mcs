@@ -162,23 +162,66 @@ def required(cfg):
     return notify.get('interactive') == 'slack'
 
 
-def plan(cfg, *, users=None):
-    """Keep explicit separate system routes and describe only missing Slack destinations."""
-    if not required(cfg):
-        return None
+def _channel_roles(cfg):
     patient = cfg.get('notify_target')
     system = cfg.get('notify_system_target')
-    if system and system != patient and not str(system).startswith('slack:'):
-        return None
+    if patient not in (None, '') and (not isinstance(patient, str) or not patient.strip()):
+        raise ValueError('slack_setup_patient_channel_invalid')
     if system and str(system).startswith('slack:') and not re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', system):
         raise ValueError('slack_setup_system_channel_invalid')
     notify = cfg.get('notify') or {}
     slack_text = isinstance(patient, str) and patient.startswith('slack:')
     scope = notify.get('slack') or {}
+    if not isinstance(scope, dict):
+        raise ValueError('slack_setup_identity_required')
     card = scope.get('channel_id')
-    if card is not None and (not isinstance(card, str)
+    if card not in (None, '') and (not isinstance(card, str)
             or not re.fullmatch(r'[CG][A-Z0-9]{8,}', card)):
         raise ValueError('slack_setup_card_channel_invalid')
+    text_channel = patient.partition(':')[2] if slack_text else None
+    if slack_text and not re.fullmatch(r'[CG][A-Z0-9]{8,}', text_channel):
+        raise ValueError('slack_setup_patient_channel_invalid')
+    patient_channel = text_channel or card or None
+    surfaces = {channel for channel in (text_channel, card) if channel}
+    system_channel = (system.partition(':')[2]
+                      if system and str(system).startswith('slack:') else None)
+    system_existing = (system_channel
+                       if system_channel and system_channel not in surfaces else None)
+    return {
+        'patient': {'name': 'mcs', 'id': patient_channel,
+                    'state': 'existing' if patient_channel else 'pending'},
+        'system': {'name': 'mcslog', 'id': system_existing,
+                   'state': 'existing' if system_existing else 'pending'}}
+
+
+def _configured_channels(cfg):
+    if not required(cfg):
+        return False
+    roles = _channel_roles(cfg)
+    scope = (cfg.get('notify') or {}).get('slack') or {}
+    return (bool(cfg.get('notify_target')) and bool(scope.get('channel_id'))
+            and all(role['state'] == 'existing' for role in roles.values()))
+
+
+def _post_complete(state):
+    return (state['state'] == 'applied'
+            and (state['plan']['runtime_mode'] != 'hermes'
+                 or state.get('worker_ready') is True
+                 or state.get('worker_ready') is not False
+                    and state['plan']['roles']['patient']['state'] != 'pending'))
+
+
+def creation_unneeded(cfg, state):
+    """Identify a creation-only no-op without approving current routes or grants."""
+    return _configured_channels(cfg) and (state is None or _post_complete(state))
+
+
+def plan(cfg, *, users=None):
+    """Keep explicit separate system routes and describe only missing Slack destinations."""
+    if not required(cfg):
+        return None
+    roles = _channel_roles(cfg)
+    scope = (cfg.get('notify') or {}).get('slack') or {}
     binding = {key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
     binding['profile'] = binding['profile'] or cfg.get('notify_bot_profile') or 'default'
     if any(not isinstance(binding[key], str) or not binding[key].strip()
@@ -200,35 +243,28 @@ def plan(cfg, *, users=None):
     if not isinstance(users, list) or not users or any(
             not isinstance(user, str) or not re.fullmatch(r'[UW][A-Z0-9]{8,}', user) for user in users):
         raise ValueError('slack_setup_operators_required')
-    text_channel = patient.partition(':')[2] if slack_text else None
-    if text_channel and not re.fullmatch(r'[CG][A-Z0-9]{8,}', text_channel):
-        raise ValueError('slack_setup_patient_channel_invalid')
-    patient_channel = text_channel or card
-    surfaces = {channel for channel in (text_channel, card) if channel}
-    system_channel = (system.partition(':')[2]
-                      if system and str(system).startswith('slack:') else None)
-    system_existing = (system_channel
-                       if system_channel and system_channel not in surfaces else None)
-    return {'binding': binding, 'users': sorted(set(users)), 'roles': {
-        'patient': {'name': 'mcs', 'id': patient_channel,
-                    'state': 'existing' if patient_channel else 'pending'},
-        'system': {'name': 'mcslog', 'id': system_existing,
-                   'state': 'existing' if system_existing else 'pending'}},
+    return {'binding': binding, 'users': sorted(set(users)), 'roles': roles,
         'base_hash': _hash(cfg), 'runtime_mode': cfg.get('runtime_mode', 'hermes')}
 
 
 def prepare(root, cfg, *, users=None):
     """Only an explicit installer/setup/update call may create this durable intent."""
+    if not required(cfg) or creation_unneeded(cfg, read(root)):
+        return None
     desired = plan(cfg, users=users)
     if desired is None:
         return None
     path(root).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
+        if creation_unneeded(cfg, state):
+            return None
         key = _hash(desired)
         if state:
             if state.get('state') == 'verified' and state.get('candidate_hash') == _hash(cfg):
                 state.update(state='applied', applied_hash=state['candidate_hash'])
+                if state['plan']['runtime_mode'] == 'hermes':
+                    state['worker_ready'] = False
                 save(root, state)
                 return None
             if state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
@@ -245,7 +281,7 @@ def prepare(root, cfg, *, users=None):
 def candidate(root, cfg):
     """Return a verified route-only candidate; the setup owner performs its existing CAS."""
     state = read(root)
-    if state is None or state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
+    if creation_unneeded(cfg, state) or state is None or state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
         return cfg
     if state.get('state') != 'verified' or state.get('plan', {}).get('base_hash') != _hash(cfg):
         raise ValueError('slack_setup_not_ready_or_config_changed')
@@ -258,13 +294,10 @@ def candidate(root, cfg):
     scope = result.setdefault('notify', {}).setdefault('slack', {})
     if not result.get('notify_target'):
         result['notify_target'] = 'slack:' + patient
-        if scope.get('channel_id') not in (None, patient):
+        if scope.get('channel_id') not in (None, '', patient):
             raise ValueError('slack_setup_patient_scope_conflict')
         scope['channel_id'] = patient
-    elif (state['plan']['roles']['patient']['state'] == 'pending'
-            and not scope.get('channel_id')):
-        # The created patient channel serves the card surface; an explicit
-        # non-Slack text target ('local', discord:…) stays untouched.
+    if not scope.get('channel_id'):
         scope['channel_id'] = patient
     result['notify_system_target'] = 'slack:' + system
     return result
@@ -278,6 +311,13 @@ def run_setup(root, cfg, args):
     import setup_integration
     state = prepare(root, cfg)
     if state is None:
+        if required(cfg) and cfg.get('runtime_mode', 'hermes') == 'hermes':
+            scope = (cfg.get('notify') or {}).get('slack') or {}
+            profile = scope.get('profile') or cfg.get('notify_bot_profile') or 'default'
+            if getattr(args, 'plugin_profile', None) not in (None, profile):
+                raise ValueError('slack_setup_binding_mismatch')
+            args.plugin_profile = profile
+        print('既存の通知先を保持し、チャンネルの新規作成は行いません。')
         return cfg
     binding = state['plan']['binding']
     if getattr(args, 'plugin_profile', None) not in (None, binding['profile']):
@@ -339,10 +379,14 @@ def run_setup(root, cfg, args):
 def preflight_errors(cfg):
     """Defer only absent channel IDs for an explicit new-channel setup candidate."""
     from mcs_config import validate_config
-    desired = plan(cfg)
+    desired = None if _configured_channels(cfg) else plan(cfg)
     errors, warnings = validate_config(cfg)
-    if desired and desired['roles']['patient']['state'] == 'pending':
-        deferred = ('notify_target', 'notify.slack.channel_id')
+    if desired:
+        deferred = []
+        if cfg.get('notify_target') in (None, ''):
+            deferred.append('notify_target')
+        if (cfg.get('notify') or {}).get('slack', {}).get('channel_id') in (None, ''):
+            deferred.append('notify.slack.channel_id')
         # No fictitious ID enters configuration. Full validation is mandatory after receipt.
         errors = [error for error in errors if not any(
             error.startswith(key + ':')
@@ -372,8 +416,12 @@ def stage_config(root, previous, saved):
     """Seal the exact verified config before its owner's config CAS."""
     if not required(previous):
         return
+    if creation_unneeded(previous, read(root)) and saved == previous:
+        return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
+        if creation_unneeded(previous, state) and saved == previous:
+            return
         if state is None or candidate(root, previous) != saved:
             raise ValueError('slack_setup_saved_config_mismatch')
         if state['state'] == 'applied':
@@ -384,8 +432,12 @@ def stage_config(root, previous, saved):
 
 def applied(root, previous, saved):
     """Record successful CAS only when its result matches the verified receipt exactly."""
+    if creation_unneeded(previous, read(root)) and saved == previous:
+        return
     with config_edit._edit_lock(str(path(root))):
         state = read(root)
+        if creation_unneeded(previous, state) and saved == previous:
+            return
         if state is None:
             return
         if state.get('state') == 'applied':
@@ -397,6 +449,10 @@ def applied(root, previous, saved):
         if state.get('candidate_hash') not in (None, _hash(saved)):
             raise ValueError('slack_setup_saved_config_mismatch')
         state.update(state='applied', applied_hash=_hash(saved))
+        if (state['plan']['runtime_mode'] == 'hermes'
+                and (previous.get('notify') or {}).get('slack', {}).get('channel_id')
+                    != saved['notify']['slack']['channel_id']):
+            state['worker_ready'] = False
         save(root, state)
 
 
@@ -430,9 +486,7 @@ def finish_runtime(root, cfg, args):
     import notify_spool
     import setup_integration
     state = read(root)
-    if (state is None or state.get('state') != 'applied' or state.get('worker_ready') is True
-            or state['plan']['roles']['patient']['state'] != 'pending'
-            or state['plan']['runtime_mode'] != 'hermes'):
+    if state is None or state.get('state') != 'applied' or _post_complete(state):
         return
     if state.get('applied_hash') != _hash(cfg):
         raise ValueError('slack_setup_not_ready_or_config_changed')

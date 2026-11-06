@@ -301,7 +301,7 @@ def cmd_init(args) -> int:
     try:
         slack_channel_setup.stage_config(HOME, pre_channel_cfg, cfg)
         _init_save_config(cfg, initial_config, args)
-        if slack_channel_setup.plan(pre_channel_cfg) is not None:
+        if slack_channel_setup.required(pre_channel_cfg):
             slack_channel_setup.applied(HOME, pre_channel_cfg, cfg)
     except config_backup.BackupUncertain as error:
         if error.parent_unchanged:
@@ -410,6 +410,9 @@ def cmd_slack_channels(args):
     try:
         cfg, initial = _init_config_snapshot()
         if not slack_channel_setup.required(cfg):
+            return 0
+        if slack_channel_setup.creation_unneeded(cfg, slack_channel_setup.read(HOME)):
+            print('既存の通知先を保持しました。チャンネルの新規作成はありません。')
             return 0
         if slack_channel_setup.plan(cfg) is None:
             return 0

@@ -49,14 +49,19 @@ def test_legacy_or_existing_explicit_system_channel_keeps_text_profile(tmp_path,
     cfg.update(notify_target='slack:C000000098', notify_system_target='slack:C000000099', notify_bot_profile='legacy')
     cfg['notify']['slack']['channel_id'] = 'C000000098'
     if existing:
+        del cfg['notify']['slack']['channel_id']
         client = Client()
         for channel in ('C000000098', 'C000000099'):
             client.channels[channel] = {'id': channel, 'is_private': True, 'is_member': True, 'is_archived': False}
         setup.prepare(tmp_path, cfg)
         consume(tmp_path, client, cfg)
-        setup.applied(tmp_path, cfg, setup.candidate(tmp_path, cfg))
+        saved = setup.candidate(tmp_path, cfg)
+        setup.applied(tmp_path, cfg, saved)
+        cfg = saved
         record = setup.read(tmp_path)
         record['state'] = state
+        if state != 'applied':
+            record.pop('worker_ready', None)
         setup.save(tmp_path, record)
         assert client.created == []
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: 'synthetic-hermes')
@@ -78,6 +83,7 @@ def test_unfinished_created_receipt_does_not_own_another_system_target(tmp_path,
     cfg = created(tmp_path)
     record = setup.read(tmp_path)
     record['state'] = state
+    record.pop('worker_ready', None)
     setup.save(tmp_path, record)
     cfg['notify_system_target'] = 'slack:C000000099'
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda _: 'synthetic-hermes')
@@ -114,6 +120,7 @@ def test_unverified_setup_record_is_not_treated_as_legacy(tmp_path, damage):
     else:
         state = setup.read(tmp_path)
         state['state'] = damage
+        state.pop('worker_ready', None)
         setup.save(tmp_path, state)
     with pytest.raises(notify_sender.SendFailed):
         notify_sender.send_argv(cfg, cfg['notify_system_target'], str(tmp_path / 'config.json'), kind='run_failed')
