@@ -1,4 +1,6 @@
 """Transform one patient-context scan with caller-owned answers and discovery time."""
+import json
+
 import patient_context_plan as context_plan
 
 
@@ -12,6 +14,8 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
     """Validate one answer through the shared scan and protected-fact rules."""
     chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
     chunk = chunks[cursor]
+    offset = sum(map(len, chunks[:cursor]))
+    summaries = source.get("derived_summaries", []) if cursor == 0 else []
     split = saved.get("split", 0)
     # passed bounded repairs on this source: a health/status count, never content
     repairs = saved.get("repairs", 0) if type(saved.get("repairs")) is int else 0
@@ -22,13 +26,52 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
         items = []  # No unverified seed from the rejected original candidate.
     if not covered:
         payload = {"instruction": context_plan.SCAN_INSTRUCTION,
-            **context_plan.scan_schema(), "already_found": items, "source": chunk}
+            **context_plan.scan_schema(), "already_found": items, "source": chunk,
+            "source_identity": {"key": context_plan.source_key(source),
+                "signature": context_plan.source_signature(source), "span": [offset, offset + len(chunk)],
+                "content_hash": source.get("content_hash")}}
+        if summaries:
+            payload["instruction"] += "derived_summariesは原文から作られた補助要約で、事実の根拠ではありません。引用はsourceだけから選ぶ。"
         if source_repair is not None:
             payload["source_quality_findings"] = source_repair["codes"]
         def asked(body):
             """The answer, or the finer re-plan when it stopped at the answer budget."""
             try:
-                return answer_for(body), None
+                pages = []
+                if summaries:
+                    # Leave envelope room and allow six-character JSON escapes.
+                    room = context_plan.MAX_PROMPT_CHARS - len(json.dumps(body, ensure_ascii=False)) - 512
+                    if room < 6:
+                        raise ValueError("nightly_prompt_capacity")
+                    width = min(context_plan.SCAN_CHUNK, room // 6)
+                    for summary in summaries:
+                        start = 0
+                        for text in context_plan.plan_chunks(summary["text"], width):
+                            pages.append({"kind": summary["kind"], "artifact_id": summary["artifact_id"],
+                                "text": text, "span": [start, start + len(text)], "length": len(summary["text"])})
+                            start += len(text)
+                groups, group = [], []
+                for page in pages:
+                    if group and len(json.dumps({**body, "derived_summaries": group + [page]},
+                                                ensure_ascii=False)) > context_plan.MAX_PROMPT_CHARS:
+                        groups.append(group)
+                        group = []
+                    group.append(page)
+                if group:
+                    groups.append(group)
+                answers = [answer_for({**body, **({"derived_summaries": group} if group else {})})
+                           for group in groups or [None]]
+                if len(answers) == 1:
+                    return answers[0], None
+                merged = []
+                for answer in answers:
+                    if (not isinstance(answer, dict) or set(answer) != {"patient_context"}
+                            or not isinstance(answer["patient_context"], list)):
+                        return answer, None
+                    for item in answer["patient_context"]:
+                        if item not in merged:
+                            merged.append(item)
+                return {"patient_context": merged}, None
             except ValueError as exc:
                 finer = str(exc) == "nightly_length_stop" and context_plan.split_scan(source, saved, cursor)
                 if not finer:
@@ -68,7 +111,6 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
     if metrics is not None:
         metrics.setdefault("rejected", 0)
         metrics["repairs"] = repairs - prior_repairs
-    offset = sum(map(len, chunks[:cursor]))
     facts = {f["id"]: f for f in original if offset <= f["evidence_span"][0] < offset + len(chunk)}
     known = {f["id"] for f in original}
     for fact in context_plan.source_facts(source, items, night_id=night_id, discovery="backfill_found", offset=offset, chunk=chunk, found_at=clock()):

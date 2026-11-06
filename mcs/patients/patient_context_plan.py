@@ -328,7 +328,7 @@ def validated_source_facts(source, facts):
 def source_signature(source):
     fields = {k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
                     "body_length", "body_state", "posted_at", "posted_at_ts", "sender_id",
-                    "sender_name", "parent_id", "extraction_sig", "canonical_context", "source_key", "empty")}
+                    "sender_name", "parent_id", "extraction_sig", "derived_summary_sig", "canonical_context", "source_key", "empty")}
     if source.get("source") == "attachment_ocr":
         fields["source_binding"] = source.get("_source_binding")
     return source_digest(fields)
