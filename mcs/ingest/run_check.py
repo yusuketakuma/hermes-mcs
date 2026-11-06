@@ -35,6 +35,7 @@ import argparse
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 from contextlib import suppress
@@ -50,7 +51,7 @@ import semantic_drain
 import semantic_policy
 from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired, describe_error
-from ledger import Ledger
+from ledger import Ledger, message_write_failure_diagnostic
 from mcs_util import CACHE, CONF_PATH, DB, HOME, load_config
 import writer_lock
 from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_lock
@@ -1266,6 +1267,11 @@ def _main() -> int:
             return 1
         # outermost boundary — non-MCSError crashes (AttributeError, sqlite,
         # ...) must still record a failed run and alert, not die silently
+        if isinstance(e, sqlite3.Error):
+            result["sqlite_failure"] = None
+            with suppress(Exception):
+                result["sqlite_failure"] = message_write_failure_diagnostic(
+                    getattr(e, "_mcs_message_write_failure", None))
         with suppress(Exception):
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
