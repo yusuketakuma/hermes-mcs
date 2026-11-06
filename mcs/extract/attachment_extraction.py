@@ -48,6 +48,25 @@ def requirement(cfg, pid):
         return None, None
 
 
+def _cloud_requirement(db, cfg, pid, key):
+    """requirement() extended for recovery: a closed send route retires new sends,
+    never the unit a prior reservation created — an owned page still needs its
+    paid answer read or held, not silently replaced by the local result."""
+    needed, provider_contract = requirement(cfg, pid)
+    if needed is not False:
+        return needed, provider_contract
+    settings, errors = cloud_policy.resolve_settings(cfg)
+    if (errors or settings['mode'] != 'on'
+            or not cloud_policy.in_scope(settings, 'reextract', pid)
+            or not cloud_policy.owns_unit_request(db, route='reextract',
+                project_id=pid, unit_key=key + ':cloud')):
+        return needed, provider_contract
+    try:
+        return True, cloud_inference.cloud_provider_contract(cfg)
+    except cloud_inference.CloudFallback:
+        return None, None
+
+
 def validated(document, body, quality):
     if not extract_llm._response_has_required_fields(document) or not extract_quality.completeness_resolved({
             'inference_engine_version': inference_version.CURRENT_VERSION, 'integrity': quality}):
@@ -88,7 +107,7 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
         if proof.get('providers') != ['local']:
             return None
     else:
-        needed, provider_contract = requirement(cfg, pid)
+        needed, provider_contract = _cloud_requirement(db, cfg, pid, key)
         local = stored(db, pid, key, 'local', cfg, contract_for=contract_for)
         if (needed is not True or local is None or value.get('provider_contract') != provider_contract
                 or proof.get('providers') != [provider_contract['backend']]
@@ -127,7 +146,7 @@ def current(db, pid, source_key, *, cfg=None):
             local = stored(db, pid, source_key, 'local', cfg)
             if local is None:
                 return None
-            needed, _ = requirement(cfg, pid)
+            needed, _ = _cloud_requirement(db, cfg, pid, source_key)
             cloud = stored(db, pid, source_key, 'cloud', cfg) if needed is True else None
             return {**(cloud or local), 'require_cloud': needed,
                     'ready': needed is False or cloud is not None}

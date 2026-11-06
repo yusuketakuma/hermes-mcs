@@ -16,6 +16,7 @@ from anthropic_client import AnthropicClient
 from mcs_util import payload_hash
 from test_attachment_inference import page_store as page_store, run
 from test_cloud_after_local import local_then_cloud  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 from test_anthropic_runtime import routed  # noqa: F401
 
 
@@ -40,7 +41,8 @@ def test_contract_upgrade_revalidates_paid_answer_without_another_http(page_stor
     with monkeypatch.context() as old:
         if legacy:
             old.setattr(worker, '_input_binding', _legacy)
-        assert run(ledger, cfg, 'cloud')['done'] == 1
+        with legacy_cloud_routes():
+            assert run(ledger, cfg, 'cloud')['done'] == 1
     paid = _financial(ledger)
     previous = worker.current(ledger.db, 1, key, cfg=cfg)
     generation[0] = 'b' * 64
@@ -62,7 +64,8 @@ def test_legacy_success_cannot_be_recovered_without_current_scope_and_original_p
     cfg['cloud_llm']['mode'] = 'on'
     with monkeypatch.context() as old:
         old.setattr(worker, '_input_binding', _legacy)
-        assert run(ledger, cfg, 'cloud')['done'] == 1
+        with legacy_cloud_routes():
+            assert run(ledger, cfg, 'cloud')['done'] == 1
     original = worker.current(ledger.db, 1, key, cfg=cfg)
     if fault == 'scope':
         cfg['cloud_llm']['project_ids'] = [1, 2]
@@ -98,7 +101,8 @@ def test_same_source_unknown_cannot_be_resent_after_generation_change(page_store
     with monkeypatch.context() as old:
         old.setattr(worker, '_input_binding', _legacy)
         with pytest.raises(KeyboardInterrupt):
-            run(ledger, cfg, 'cloud')
+            with legacy_cloud_routes():
+                run(ledger, cfg, 'cloud')
     paid = _financial(ledger)
     generation[0] = 'b' * 64
     assert run(ledger, cfg, 'local')['done'] == 1
@@ -129,7 +133,8 @@ def test_identical_pages_have_distinct_verified_cloud_owners(page_store):
     ledger, cfg, key, local_calls, cloud_calls, _ = page_store
     artifact_id = _two_pages(ledger, cfg, key)
     for _ in range(5):
-        run(ledger, cfg, 'cloud')
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
     assert all(worker.current(ledger.db, 1, f'attachment_ocr:{artifact_id}:{page}', cfg=cfg)['ready'] for page in (1, 2))
     assert len(local_calls) == len(cloud_calls) == 2
 
@@ -147,9 +152,11 @@ def test_unknown_on_one_page_cannot_block_a_proven_different_page(page_store, mo
 
     monkeypatch.setattr(AnthropicClient, 'request', first_unknown)
     with pytest.raises(KeyboardInterrupt):
-        run(ledger, cfg, 'cloud')
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
     for _ in range(6):
-        run(ledger, cfg, 'cloud')
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
     assert len(attempts) == 2 and len(cloud_calls) == 1
     assert not worker.current(ledger.db, 1, key, cfg=cfg)['ready']
     assert worker.current(ledger.db, 1, f'attachment_ocr:{artifact_id}:2', cfg=cfg)['ready']
@@ -158,7 +165,8 @@ def test_unknown_on_one_page_cannot_block_a_proven_different_page(page_store, mo
 def test_a_different_source_key_without_its_local_proof_cannot_bypass_send_guard(page_store):
     ledger, cfg, key, _local_calls, cloud_calls, _ = page_store
     artifact_id = _two_pages(ledger, cfg, key)
-    assert run(ledger, cfg, 'cloud')['done'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
     previous = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
     # A user-supplied different key cannot turn page one's local proof into page two's proof.
     candidate = {**previous, 'unit_key': f'attachment_ocr:{artifact_id}:2:cloud',
@@ -182,7 +190,8 @@ def test_old_and_stable_paid_journals_recover_across_contract_upgrade(page_store
     with monkeypatch.context() as old:
         if legacy:
             old.setattr(worker, '_input_binding', _legacy)
-        assert run(ledger, cfg, 'cloud')['deferred'] == 1
+        with legacy_cloud_routes():
+            assert run(ledger, cfg, 'cloud')['deferred'] == 1
     assert len(journal.pending(attachment_ocr._data_root(ledger))) == 1
     assert len(cloud_calls) == 1 and not ledger.artifacts('cloud_usage_result')
     generation[0] = 'b' * 64
@@ -207,7 +216,8 @@ def test_paid_journal_with_rehashed_unknown_scope_is_not_replayed(page_store, mo
     with monkeypatch.context() as old:
         if legacy:
             old.setattr(worker, '_input_binding', _legacy)
-        assert run(ledger, cfg, 'cloud')['deferred'] == 1
+        with legacy_cloud_routes():
+            assert run(ledger, cfg, 'cloud')['deferred'] == 1
     path, = journal.pending(attachment_ocr._data_root(ledger))
     value = json.loads(path.read_text())
     value['origin']['scope'] = '0' * 64
@@ -228,9 +238,11 @@ def test_corrupt_paid_journal_keeps_cloud_closed_but_allows_local(page_store):
     assert result['done'] == 1 and result['paid_recovery_pending'] is True
     assert len(local_calls) == 1 and not cloud_calls
     cfg['cloud_llm']['mode'] = 'on'
-    assert run(ledger, cfg, 'cloud') == {'done': 0, 'deferred': 1}
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud') == {'done': 0, 'deferred': 1}
     assert (directory / 'invalid-name').read_text() == 'synthetic corrupt journal'
-    assert not worker.current(ledger.db, 1, key, cfg=cfg)['ready']
+    with legacy_cloud_routes():
+        assert not worker.current(ledger.db, 1, key, cfg=cfg)['ready']
 
 
 def test_ocr_local_call_uses_context_background_lane_without_environment_mutation(page_store, monkeypatch):

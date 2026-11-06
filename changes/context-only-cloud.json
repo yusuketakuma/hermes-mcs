@@ -1,25 +1,27 @@
 {
-  "category": "changed",
-  "title": "クラウド解析を患者コンテキストの作成・更新に限定",
-  "summary": "個別の履歴抽出と意味解析バックログの新規クラウド送信を停止し、これらはローカル処理を継続します。クラウドは患者コンテキストの作成・更新とその品質修復に使い、確定済みのクラウド結果と会計記録は従来の対象範囲で読み取り・回復できます。",
-  "upgrade": "追加操作は不要です。`routes` に `reextract`・`semantic_backlog` を残していても新規送信は行われず、確定済み結果の回復範囲として扱われます。個別処理はローカルLLMで継続するため、ローカル推論の設定と処理容量を確認してください。",
-  "details": [
-    "新規クラウド要求は `patient_context` 経路だけに限定し、対象選択・予約の前段で個別経路を除外します。",
-    "個別の履歴抽出（`reextract`）と意味解析バックログ（`semantic_backlog`）はローカル処理を継続し、既存のworkerは未精算の有償結果を決済してから退役します。",
-    "確定済みのクラウド結果・予約・会計は旧経路の対象範囲で読み取りと回復を維持し、結果不明の予約を返金・再送しません。",
-    "品質修復は `patient_context` 経路の既存の修復処理で継続します。"
-  ],
-  "refs": [
-    "mcs/llm/cloud_policy.py",
-    "mcs/llm/cloud_inference.py",
-    "mcs/llm/cloud_backlog.py",
-    "mcs/extract/llm/extract_llm_selection.py",
-    "mcs/extract/llm/extract_llm_prepare.py",
-    "mcs/semantic/semantic_due_selection.py",
-    "mcs/semantic/semantic_drain.py",
-    "mcs/ops/cloud_cli.py",
-    "mcs/notify/processing_route.py",
-    "mcs/extract/llm/extract_llm_runner.py",
-    "mcs/semantic/semantic_transport.py"
-  ]
+ "category": "changed",
+ "title": "クラウド解析を患者コンテキストの作成・更新に限定",
+ "summary": "個別の履歴抽出と意味解析バックログの新規クラウド送信を停止し、これらはローカル処理を継続します。クラウドは患者コンテキストの作成・更新とその品質修復に使い、確定済みのクラウド結果と会計記録は従来の対象範囲で読み取り・回復できます。",
+ "upgrade": "追加操作は不要です。`routes` に `reextract`・`semantic_backlog` を残していても新規送信は行われず、確定済み結果の回復範囲として扱われます。個別処理はローカルLLMで継続するため、ローカル推論の設定と処理容量を確認してください。",
+ "details": [
+  "新規クラウド要求は `patient_context` 経路だけに限定し、対象選択・予約の前段で個別経路を除外します。",
+  "個別の履歴抽出（`reextract`）と意味解析バックログ（`semantic_backlog`）はローカル処理を継続し、既存のworkerは未精算の有償結果を決済してから退役します。",
+  "確定済みのクラウド結果・予約・会計は旧経路の対象範囲で読み取りと回復を維持し、結果不明の予約を返金・再送しません。",
+  "品質修復は `patient_context` 経路の既存の修復処理で継続します。"
+ ],
+ "refs": [
+  "mcs/llm/cloud_policy.py",
+  "mcs/llm/cloud_inference.py",
+  "mcs/llm/cloud_backlog.py",
+  "mcs/extract/llm/extract_llm_selection.py",
+  "mcs/extract/llm/extract_llm_prepare.py",
+  "mcs/semantic/semantic_due_selection.py",
+  "mcs/semantic/semantic_drain.py",
+  "mcs/ops/cloud_cli.py",
+  "mcs/notify/processing_route.py",
+  "mcs/extract/llm/extract_llm_runner.py",
+  "mcs/semantic/semantic_transport.py",
+  "mcs/extract/attachment_inference.py",
+  "mcs/extract/attachment_extraction.py"
+ ]
 }

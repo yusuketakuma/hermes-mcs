@@ -9,6 +9,7 @@ import cloud_policy
 from anthropic_client import AnthropicClient
 from test_attachment_inference import page_store as page_store, run
 from test_cloud_after_local import local_then_cloud  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 from test_anthropic_runtime import routed  # noqa: F401
 
 
@@ -35,7 +36,8 @@ def test_paid_response_survives_config_unavailable_and_recovers_without_resend(p
 
     monkeypatch.setattr(cloud_inference, 'load_config', config)
     monkeypatch.setattr(worker, 'load_config', config)
-    first = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        first = run(ledger, cfg, 'cloud')
     assert first['done'] == 0 and first['deferred'] == 1
     assert len(cloud_calls) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert len(ledger.artifacts('cloud_usage_result')) == 1
@@ -65,7 +67,8 @@ def test_parent_source_change_during_http_settles_cost_but_rejects_adoption(page
         return answer
 
     monkeypatch.setattr(AnthropicClient, 'request', changed)
-    report = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        report = run(ledger, cfg, 'cloud')
     assert report['done'] == 0 and report['deferred'] == 1
     assert len(cloud_calls) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     receipt, = ledger.artifacts('cloud_usage_result')
@@ -85,11 +88,13 @@ def test_quota_refusal_preserves_local_artifact_without_transport(page_store, mo
     local = _local(ledger, key)
     cfg['cloud_llm']['mode'] = 'on'
     monkeypatch.setattr(cloud_policy, 'block_reason', lambda *args, **kwargs: 'monthly_budget')
-    report = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        report = run(ledger, cfg, 'cloud')
     assert report['done'] == 0 and report['deferred'] == 1
     assert not cloud_calls and not _financial(ledger)
     assert _local(ledger, key) == local
-    current = worker.current(ledger.db, 1, key, cfg=cfg)
+    with legacy_cloud_routes():
+        current = worker.current(ledger.db, 1, key, cfg=cfg)
     assert current['stage'] == 'local' and current['ready'] is False
 
 
@@ -106,7 +111,8 @@ def test_unknown_transport_keeps_local_and_never_resends(page_store, monkeypatch
 
     monkeypatch.setattr(AnthropicClient, 'request', unknown)
     with pytest.raises(KeyboardInterrupt):
-        run(ledger, cfg, 'cloud')
+        with legacy_cloud_routes():
+            run(ledger, cfg, 'cloud')
     assert len(sends) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert not ledger.artifacts('cloud_usage_result')
     financial = _financial(ledger)
@@ -145,7 +151,8 @@ def test_known_paid_response_survives_writer_timeout_and_recovers_without_post(p
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
-    report = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        report = run(ledger, cfg, 'cloud')
     assert report['done'] == 0 and report['deferred'] == 1
     assert len(cloud_calls) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert not ledger.artifacts('cloud_usage_result')
@@ -171,7 +178,8 @@ def test_journal_updater_hold_preserves_bytes_and_never_adopts(page_store, monke
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     files = journal.pending(attachment_ocr._data_root(ledger))
     before = files[0].read_bytes()
     unavailable[0] = False
@@ -191,7 +199,8 @@ def test_journal_settles_obsolete_parent_without_adopting_or_resending(page_stor
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     with ledger.db:
         ledger.db.execute("UPDATE attachments SET state='withdrawn' WHERE attachment_id=1")
     unavailable[0] = False
@@ -212,7 +221,8 @@ def test_tampered_journal_is_retained_and_cannot_resend_or_adopt(page_store, mon
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     path, = journal.pending(attachment_ocr._data_root(ledger))
     value = json.loads(path.read_text())
     value['reservation']['max_tokens'] += 1
@@ -237,7 +247,8 @@ def test_journal_replay_is_idempotent_after_accounting_committed_before_cleanup(
         raise OSError('synthetic cleanup interrupted')
 
     monkeypatch.setattr(journal, 'remove', interrupted)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     assert len(ledger.artifacts('cloud_usage_result')) == 1
     financial = _financial(ledger)
     assert len(journal.pending(attachment_ocr._data_root(ledger))) == 1
@@ -255,7 +266,8 @@ def test_journal_scope_revocation_settles_and_discards_before_reenable(page_stor
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
-    assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
     cfg['cloud_llm']['mode'] = 'off'
     unavailable[0] = False
     assert run(ledger, cfg, 'cloud')['done'] == 0

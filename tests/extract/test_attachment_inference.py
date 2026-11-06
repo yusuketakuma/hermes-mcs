@@ -9,6 +9,7 @@ import attachment_ocr
 import original_source_keys
 from test_anthropic_runtime import routed
 from test_cloud_after_local import local_then_cloud
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['routed', 'local_then_cloud']
 
@@ -54,15 +55,18 @@ def test_ocr_local_then_cloud_real_accounting_is_separate_from_chat(page_store):
     local = worker.current(ledger.db, 1, key, cfg=cfg)
     assert local['ready'] and local['stage'] == 'local' and local_calls and not cloud_calls
     cfg['cloud_llm']['mode'] = 'on'
-    assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
-    assert run(ledger, cfg, 'cloud')['done'] == 1
+    with legacy_cloud_routes():
+        assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 1
     cloud = worker.current(ledger.db, 1, key, cfg=cfg)
     assert cloud['ready'] and cloud['stage'] == 'cloud'
     assert cloud['local_artifact_id'] == local['artifact_id']
     assert len(cloud_calls) == len(ledger.artifacts('cloud_usage_reserve')) == 1
     assert not ledger.artifacts(worker.extract_llm.KIND)
     assert tuple(ledger.db.execute('SELECT body_text,content_hash FROM messages WHERE message_id=1').fetchone()) == before
-    assert run(ledger, cfg, 'cloud')['done'] == 0 and len(cloud_calls) == 1
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['done'] == 0 and len(cloud_calls) == 1
 
 
 def test_stale_and_forged_results_never_complete(page_store):

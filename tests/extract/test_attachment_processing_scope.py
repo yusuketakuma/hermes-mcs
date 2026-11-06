@@ -12,6 +12,7 @@ from test_attachment_ocr import setup as _raw_setup
 from test_attachment_inference import page_store as _page_store, run
 from test_cloud_after_local import local_then_cloud  # noqa: F401
 from test_anthropic_runtime import routed  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 
 raw_store = _raw_setup
 page_store = _page_store
@@ -61,7 +62,8 @@ def test_scope_revoked_during_http_keeps_accounting_and_rejects_clinical_adoptio
         return response
 
     monkeypatch.setattr(AnthropicClient, 'request', revoked)
-    result = run(ledger, cfg, 'cloud')
+    with legacy_cloud_routes():
+        result = run(ledger, cfg, 'cloud')
     assert result['done'] == 0 and result['deferred'] == 1
     assert len(cloud_calls) == len(local_calls) == 1
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
