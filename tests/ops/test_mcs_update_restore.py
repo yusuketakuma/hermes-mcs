@@ -533,33 +533,45 @@ def test_restore_consent_expires_when_existing_message_changes(
 
 @pytest.mark.parametrize("independent", [False, True])
 def test_failed_restore_copy_preserves_live_wal(updater, tmp_path, monkeypatch, independent):
-    from ops_testkit import _load
+    from ops_testkit import _load, patch_lifecycle_lookup
     _repo, live, back, _before, _after, _restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
     recovery = _load() if independent else updater
-    monkeypatch.setattr(recovery.mcs_recovery_core, "LEDGER", live)
-    monkeypatch.setattr(recovery.mcs_recovery_core, "DATA", updater.DATA)
+    for name in ("LEDGER", "DATA", "STATE_PATH"):
+        patch_lifecycle_lookup(monkeypatch, recovery, name, getattr(updater, name))
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    state["applying"] = {**state["applied"][-1], "rollback": True}
+    updater.journal_store.save_state(updater.STATE_PATH, state)
     writer = sqlite3.connect(live)
     try:
         writer.execute("PRAGMA journal_mode=WAL")
         writer.execute("UPDATE messages SET body_html='durable synthetic update'")
         writer.commit()
-        _seed_consent(live, back)
+        approved = _seed_consent(live, back)
+        receipts = writer.execute("SELECT * FROM command_receipts").fetchall()
+        database_before = Path(live).read_bytes()
         wal = Path(live + "-wal")
         before = wal.read_bytes()
+        copies = []
 
         def fail_copy(*args):
+            copies.append(True)
             raise OSError("synthetic copy failure")
 
         monkeypatch.setattr(recovery.shutil, "copyfileobj", fail_copy)
         if independent:
-            assert recovery.mcs_recovery_database._restore_db(back).startswith("restore_failed:")
+            assert recovery._restore_db(back).startswith("restore_failed:")
         else:
             with pytest.raises(updater.UpdateError, match="restore_failed"):
-                recovery.mcs_recovery_database._restore_db(back)
+                recovery._restore_db(back)
+        assert copies == [True]
+        assert Path(live).read_bytes() == database_before
         assert wal.read_bytes() == before
         assert writer.execute("SELECT body_html FROM messages LIMIT 1").fetchone()[0] == (
             "durable synthetic update")
+        assert writer.execute("SELECT * FROM command_receipts").fetchall() == receipts
+        hold = updater.notify_spool.restore_pending(updater.DATA)
+        assert hold["phase"] == "awaiting_consent" and hold["report_id"] == approved["report_id"]
     finally:
         writer.close()
 
