@@ -372,8 +372,13 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
-def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
+def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None):
     """Recover only the latest source-bound, reserved empty repair candidate."""
+    def held(reason, reserved=True):
+        if reason_out is not None:
+            reason_out['code'] = reason
+        return None, reserved
+
     try:
         row = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
                          'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
@@ -385,40 +390,49 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
                             'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
                             (KIND_REPAIR, pid, mid)).fetchone()
         if marker is None:
-            return None, candidate_bound
+            return held('empty_repair_marker_missing', candidate_bound)
         marker_content, marker_meta = strict_json(marker['content']), strict_json(marker['meta'])
         if not isinstance(marker_content, dict) or not isinstance(marker_meta, dict):
-            return None, True
+            return held('empty_repair_marker_invalid')
         if not isinstance(marker_meta.get('fingerprint'), str):
-            return None, True
+            return held('empty_repair_marker_invalid')
         if marker_meta.get('fingerprint') != fp or marker_meta.get('empty_repair') is not True:
-            return None, candidate_bound
+            return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
-            return None, True
+            return held('empty_repair_marker_currentness')
         if row is None:
-            return None, True
+            return held('empty_repair_candidate_missing')
         if not isinstance(content, dict) or not isinstance(meta, dict):
-            return None, True
+            return held('empty_repair_candidate_invalid')
         proof = meta.get('provider_provenance')
         producer = _summary_producer({'content': content, 'meta': meta}, fp, policy, revision)
-        if (not is_current(meta) or meta.get('invalidated') or meta.get('stale')
-                or meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
+        # Keep the original predicate order and short-circuiting; these labels
+        # only describe the first failed gate, never weaken a recovery gate.
+        if not is_current(meta) or meta.get('invalidated') or meta.get('stale'):
+            return held('empty_repair_candidate_currentness')
+        if (meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
                 or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
-                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision
-                or type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
+                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision):
+            return held('empty_repair_candidate_binding')
+        if (type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
                 or marker_content != {'target_message_id': mid}
                 or marker_meta.get('policy_fingerprint') != policy
-                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1
-                or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
-                or not isinstance(content.get('claims'), list) or not content['claims']
-                or meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts)
-                or meta.get('prior') != _empty_repair_prior(db, pid, mid)
-                or proof != _summary_provenance(producer, fp, policy, revision, content)
-                or meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}):
-            return None, True
+                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1):
+            return held('empty_repair_marker_link')
+        if (type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
+                or not isinstance(content.get('claims'), list) or not content['claims']):
+            return held('empty_repair_claims_invalid')
+        if meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts):
+            return held('empty_repair_claim_binding')
+        if meta.get('prior') != _empty_repair_prior(db, pid, mid):
+            return held('empty_repair_prior_unverified')
+        if proof != _summary_provenance(producer, fp, policy, revision, content):
+            return held('empty_repair_provenance_unverified')
+        if meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}:
+            return held('empty_repair_audit_not_ready')
         return {'content': content, 'meta': meta, 'producer': producer}, True
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
-        return None, True
+        return held('empty_repair_validation_unavailable')
 
 
 def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,

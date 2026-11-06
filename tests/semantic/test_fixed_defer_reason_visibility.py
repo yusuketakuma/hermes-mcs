@@ -18,7 +18,7 @@ from test_semantic_fairness import _due, _job, _world
     ('code', 'fact_stage_synthetic-private-detail', 'unclassified'),
     ('code', 'summary_synthetic-private-detail', 'unclassified'),
     ('not_sent', 'synthetic-private-detail', 'unclassified'),
-])
+] + [('code', reason, reason) for reason in sorted(cloud_backlog._SEMANTIC_STOP_REASONS)])
 def test_semantic_drain_keeps_only_exact_fixed_reason(field, reason, expected, tmp_path, monkeypatch):
     ledger = _world(tmp_path, [1])
     try:
