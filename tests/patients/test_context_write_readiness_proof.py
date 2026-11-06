@@ -1,6 +1,7 @@
 """Synthetic write-fence replay never replaces source or non-DB readiness checks."""
 
 import patient_context_refresh_readiness
+import patient_context_refresh_sources
 import patient_context_refresh_state
 import copy
 import json
@@ -10,7 +11,6 @@ import time
 import pytest
 
 import drug_map
-import patient_context_refresh as refresh
 import semantic_jev
 from test_patient_context_refresh import CFG, runtime as runtime, seed, step
 from test_anthropic_context_refresh import cloud as cloud
@@ -321,15 +321,18 @@ def test_final_paid_guard_uses_captured_source_scan_occurrence_and_cloud_input(r
             writing[0] = False
 
     led.db.set_trace_callback(transaction)
-    for name in ('_snapshot', '_scan_sig', '_source_occurrence', '_cloud_input_binding'):
-        original = getattr(refresh, name)
+    for module, name in ((patient_context_refresh_sources, '_snapshot'),
+                         (patient_context_refresh_state, '_scan_sig'),
+                         (patient_context_refresh_sources, '_source_occurrence'),
+                         (patient_context_refresh_state, '_cloud_input_binding')):
+        original = getattr(module, name)
 
         def checked(*args, _name=name, _original=original, **kwargs):
             if writing[0] and led.db.total_changes == baseline[0]:
                 violations.append(_name)
             return _original(*args, **kwargs)
 
-        monkeypatch.setattr(refresh, name, checked)
+        monkeypatch.setattr(module, name, checked)
     pending['blocked'][0] = False
     outcome = step(runtime, cfg=pending['cfg'], local_admit=lambda: False)
     assert outcome['status'] == 'progressed' and len(pending['posts']) == before, outcome
