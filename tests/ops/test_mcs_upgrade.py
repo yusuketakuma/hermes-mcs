@@ -90,7 +90,7 @@ def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_p
              'mcs/core/install_options_contract.py', 'mcs/ops/setup/config_edit.py',
              'mcs/ops/install_options.py', 'mcs/ops/update/settings_migration_receipt.py',
              'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update/update_journal.py',
-             'mcs/ops/release_apply_owner.py')
+             'mcs/ops/release_apply_owner.py', 'mcs/ops/release_apply_checks.py')
     _release(tmp_path / 'remote-work', bare, 'v1.2.0', {name: (ROOT / name).read_text() for name in files})
     _git(repo, 'fetch', '-q', '--tags')
     _git(repo, 'remote', 'set-url', 'origin', str(tmp_path / 'missing-remote'))
@@ -253,6 +253,136 @@ def test_launcher_apply_reports_unverified_slack_setup(tmp_path, capfd, monkeypa
     _slack_setup_shim(monkeypatch, tmp_path, repo, rc=3)
     assert _launcher().main(["--repo", str(repo), "--no-fetch", "apply"]) == 1
     assert "Slack運用ログ先の準備は未完了" in capfd.readouterr().out
+
+
+def _lifecycle_plan_stub(report, trace):
+    return ("import json, os, pathlib, subprocess, sys\n"
+            "repo = os.environ['MCS_UPDATE_REPO']\n"
+            "def git(*args):\n"
+            "    return subprocess.check_output(['git', '-C', repo, *args], text=True).strip()\n"
+            "target = git('rev-parse', 'refs/tags/v1.2.0^{commit}')\n"
+            "if sys.argv[1] == 'plan':\n"
+            f"    report = {report!r}\n"
+            "    report['route'] = 'noop' if git('rev-parse', 'HEAD') == target else 'apply'\n"
+            "    print(json.dumps(report))\n"
+            "else:\n"
+            f"    pathlib.Path({str(trace)!r}).write_text('apply')\n"
+            "    subprocess.run(['git', '-C', repo, 'checkout', '-q', target], check=True)\n")
+
+
+@pytest.mark.parametrize('entry,already_current,required,sources,expected', [
+    ('apply', False, False, 'new', 0),
+    ('guide', True, False, 'new', 0),
+    ('guide', False, False, 'new', 0),
+    ('apply', False, True, 'new', 1),
+    ('apply', False, None, 'new', 1),
+    ('apply', False, 'false', 'new', 1),
+    ('apply', False, 'missing', 'new', 1),
+    ('apply', False, 'missing', 'old', 0),
+    ('apply', False, 'missing', 'empty', 1),
+    ('apply', False, 'missing', 'partial', 1),
+])
+def test_launcher_slack_completion_uses_verified_plan_and_target_capability(
+        tmp_path, monkeypatch, capfd, entry, already_current, required, sources, expected):
+    repo, bare = _make_repo(tmp_path)
+    report = {} if required == 'missing' else {'slack_channels_required': required}
+    declarations = dict(_SLACK_SETUP_SOURCES)
+    if sources in ('old', 'partial'):
+        declarations['mcs/ops/mcs_setup.py'] = 'sub.add_parser("api-keys")\n'
+    if sources == 'old':
+        declarations['mcs/ops/mcs_cli.py'] = 'if rest[0] in ("api-keys",):\n    pass\n'
+    if sources == 'empty':
+        declarations = {name: '' for name in declarations}
+    trace = tmp_path / 'apply_trace'
+    _release(tmp_path / 'remote-work', bare, 'v1.2.0',
+             {'mcs/ops/mcs_update.py': _lifecycle_plan_stub(report, trace), **declarations})
+    _git(repo, 'fetch', '-q', '--tags')
+    if already_current:
+        _git(repo, 'checkout', '-q', 'v1.2.0')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    answers = iter(('1', '2'))
+    monkeypatch.setattr('builtins.input', lambda *_: next(answers))
+    launcher = _launcher()
+    monkeypatch.setattr(launcher.sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(launcher, '_offer_api_keys', lambda *_: None)
+    assert launcher.main(['--repo', str(repo), '--no-fetch', entry, '--to', 'v1.2.0']) == expected
+    assert trace.exists() is not already_current
+    output = capfd.readouterr().out
+    if sources == 'old':
+        assert '準備機能がありません' in output and '完了は確認していません' in output
+    elif expected:
+        assert 'Slack運用ログ先の準備は未完了' in output
+
+
+@pytest.mark.parametrize('entry', ['apply', 'guide'])
+@pytest.mark.parametrize('failure', ['timeout', 'oserror', 'json'])
+def test_post_apply_confirmation_failure_reports_hold_without_reapplying(
+        tmp_path, monkeypatch, capfd, entry, failure):
+    repo, bare = _make_repo(tmp_path)
+    trace = tmp_path / 'apply_trace'
+    _release(tmp_path / 'remote-work', bare, 'v1.2.0',
+             {'mcs/ops/mcs_update.py': _lifecycle_plan_stub({'slack_channels_required': False}, trace),
+              **_SLACK_SETUP_SOURCES})
+    _git(repo, 'fetch', '-q', '--tags')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    answers = iter(('1', '2'))
+    monkeypatch.setattr('builtins.input', lambda *_: next(answers))
+    launcher = _launcher()
+    monkeypatch.setattr(launcher.sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(launcher, '_offer_api_keys', lambda *_: None)
+    original = launcher.subprocess.run
+    applied = []
+    def run(command, **kwargs):
+        if len(command) > 2 and str(command[1]).endswith('/mcs_update.py'):
+            if command[2] == 'apply':
+                applied.append(command)
+            elif command[2] == 'plan' and applied:
+                if failure == 'timeout':
+                    raise subprocess.TimeoutExpired(command, 600)
+                if failure == 'oserror':
+                    raise OSError('synthetic private exception must not print')
+                return subprocess.CompletedProcess(command, 0, '{invalid', '')
+        return original(command, **kwargs)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.main(['--repo', str(repo), '--no-fetch', entry, '--to', 'v1.2.0']) == 1
+    assert trace.read_text() == 'apply' and len(applied) == 1
+    output = capfd.readouterr().out
+    assert '再度更新する前に mcs recover と mcs doctor' in output
+    assert 'private exception' not in output
+
+
+def test_candidate_apply_preserves_approved_base_and_verifies_against_applied_head(
+        tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    base = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    trace = tmp_path / 'candidate_trace'
+    entry = repo / 'mcs/ops/mcs_update.py'
+    entry.parent.mkdir(parents=True)
+    entry.write_text(
+        "import json, os, pathlib, subprocess, sys\n"
+        f"trace = pathlib.Path({str(trace)!r})\n"
+        "with trace.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "repo = os.environ['MCS_UPDATE_REPO']\n"
+        "base = sys.argv[sys.argv.index('--base-sha') + 1]\n"
+        "target = sys.argv[sys.argv.index('--candidate-sha') + 1]\n"
+        "if sys.argv[1] == 'apply':\n"
+        f"    assert base == {base!r}\n"
+        "    subprocess.run(['git', '-C', repo, 'checkout', '-q', target], check=True)\n"
+        "else:\n"
+        "    head = subprocess.check_output(['git', '-C', repo, 'rev-parse', 'HEAD'], text=True).strip()\n"
+        "    print(json.dumps({'route': 'noop' if head == base == target else 'blocked',\n"
+        "                      'slack_channels_required': False}))\n")
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'synthetic local candidate')
+    target = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    _git(repo, 'reset', '--hard', base)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    assert _launcher().main(['--repo', str(repo), 'apply', '--candidate-sha', target,
+                             '--base-sha', base, '--confirm-human', '--reason', 'synthetic']) == 0
+    apply, verify = [json.loads(line) for line in trace.read_text().splitlines()]
+    assert apply[apply.index('--base-sha') + 1] == base
+    assert '--confirm-human' in apply and '--reason=synthetic' in apply
+    assert verify == ['plan', '--candidate-sha', target, '--base-sha', target]
 
 
 def test_launcher_extracts_the_exact_local_candidate_without_fetch(tmp_path, monkeypatch, capfd):
@@ -547,6 +677,22 @@ def test_plan_routes_install_change_to_reinstall(updater, monkeypatch, tmp_path)
     assert p["route"] == "reinstall" and p["blockers"] == []
     assert p["reinstall"] == ["install_sh_changed"]
     assert [n["version"] for n in p["notes"]] == ["1.2.0"]
+
+
+@pytest.mark.parametrize('cfg,required', [
+    ({'notify_target': 'local'}, False),
+    ({'notify': {'interactive': 'slack'}}, True),
+    ({'notify_target': 'slack:C000000001', 'notify_system_target': 'discord:1',
+      'notify': {'interactive': 'slack'}}, False),
+])
+def test_plan_reports_only_exact_slack_eligibility_without_external_settings(
+        updater, monkeypatch, tmp_path, cfg, required):
+    _plan_env(updater, monkeypatch, tmp_path, [], cfg=cfg)
+    monkeypatch.setattr(service_management, 'hermes_cli', lambda *_: pytest.fail('read-only plan contacted Hermes'))
+    sha = 'a' * 40
+    report = updater._plan('v1.2.0', cfg, updater.journal_store.default_state(),
+                           {'tag': 'v1.2.0', 'sha': sha}, sha)
+    assert report['slack_channels_required'] is required
 
 
 @pytest.mark.parametrize(('config', 'legacy', 'status', 'route'), [
@@ -1116,6 +1262,14 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
 
     monkeypatch.setattr(launcher, '_git', git)
     launcher.extract('synthetic', 'v1.2.0', str(staged))
+    # The launcher starts fresh Python; mirror that ownership for the two
+    # modules whose import freezes the candidate's restart implementation.
+    for name in ('update_lifecycle_context', 'update_services'):
+        owner_spec = importlib.util.spec_from_file_location(name, staged / f'mcs/ops/{name}.py')
+        owner = importlib.util.module_from_spec(owner_spec)
+        monkeypatch.setitem(sys.modules, name, owner)
+        owner_spec.loader.exec_module(owner)
+    services = sys.modules['update_services']
     spec = importlib.util.spec_from_file_location('synthetic_candidate_update', staged / 'mcs/ops/mcs_update.py')
     candidate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(candidate)
@@ -1127,6 +1281,12 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     assert source_path.parent.parent == staged / 'deployment/recovery'
     assert source_path.parent.name.startswith('runtime-')
     assert captured['__loader__'].raw == files['deployment/recovery/mcs_recovery_gateway.py']
+    child = subprocess.run([sys.executable, '-c',
+        "import pathlib,sys; sys.path.insert(0, sys.argv[1]); import _mcs_path, mcs_update; "
+        "source = pathlib.Path(mcs_update._request_gateway_restart.__globals__['__file__']); "
+        "assert source.parent.parent == pathlib.Path(sys.argv[2]) / 'deployment/recovery'",
+        str(staged / 'mcs'), str(staged)], capture_output=True, text=True)
+    assert child.returncode == 0, child.stderr
 
     (staged / 'install.sh').write_bytes((ROOT / 'install.sh').read_bytes())
     install_dir = staged / 'deployment/install'
@@ -1169,9 +1329,9 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     plist = agents / 'ai.hermes.gateway.plist'
     plist.write_bytes(plistlib.dumps({'Label': 'ai.hermes.gateway',
                                     'ProgramArguments': [str(command), 'gateway', 'run']}))
-    monkeypatch.setattr(candidate, 'DATA', str(restart_data))
-    monkeypatch.setattr(candidate, 'AGENTS_DIR', str(agents))
-    monkeypatch.setattr(candidate, '_uid', lambda: 501)
+    monkeypatch.setattr(services, 'DATA', str(restart_data))
+    monkeypatch.setattr(services, 'AGENTS_DIR', str(agents))
+    monkeypatch.setattr(services, '_uid', lambda: 501)
     children = []
     monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: children.append((argv, kw)))
     candidate.restart_gateway({})
@@ -1358,7 +1518,7 @@ def test_updater_help_explains_actions_in_japanese(capsys):
         mcs_update._build_parser().parse_args(["--help"])
     assert stopped.value.code == 0
     output = capsys.readouterr().out
-    assert "元の版への復帰" in output
+    assert "直近の更新前の版に戻す" in output
     assert "使い方:" in output
     assert "この説明を表示して終了する" in output
     assert "変更せずに更新内容" in output

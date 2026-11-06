@@ -111,6 +111,7 @@ def plan(tag: str | None = None, *, candidate_sha: str | None = None,
 
 
 def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> dict:
+    import slack_channel_setup
     cur_tag, cur_sha = current["tag"], current["sha"]
     local_errors = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
@@ -156,6 +157,7 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         "route": route, "current": current,
         "target": {"tag": tag, "sha": target_sha},
         "runtime_mode": cfg.get("runtime_mode") or "hermes",
+        "slack_channels_required": slack_channel_setup.required(cfg),
         "blockers": sorted(set(blockers)), "reinstall": reinstall,
         "schema_bump": decision["schema_bump"],
         "restarts": restarts,

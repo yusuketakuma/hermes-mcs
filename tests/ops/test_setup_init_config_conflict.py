@@ -4,6 +4,7 @@ import pytest
 import config_edit
 import mcs_setup
 import safe_io
+import setup_config_snapshot
 from test_mcs_setup import _init_env
 
 
@@ -105,6 +106,7 @@ def test_init_interrupt_before_publication_reports_prior_side_effects(monkeypatc
             raise KeyboardInterrupt
         return snapshot()
     monkeypatch.setattr(mcs_setup, '_init_config_snapshot', interrupted)
+    monkeypatch.setattr(setup_config_snapshot, '_init_config_snapshot', interrupted)
     assert mcs_setup.main(['init', '--yes']) == 130
     assert json.loads(path.read_text()) == cfg
     out = capsys.readouterr().out

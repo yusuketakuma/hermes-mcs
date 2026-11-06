@@ -299,6 +299,7 @@ def cmd_init(args) -> int:
         os.makedirs(d, mode=0o700, exist_ok=True)
         os.chmod(d, 0o700)
     try:
+        slack_channel_setup.stage_config(HOME, pre_channel_cfg, cfg)
         _init_save_config(cfg, initial_config, args)
         if slack_channel_setup.plan(pre_channel_cfg) is not None:
             slack_channel_setup.applied(HOME, pre_channel_cfg, cfg)
@@ -416,6 +417,7 @@ def cmd_slack_channels(args):
         candidate = slack_channel_setup.run_setup(HOME, cfg, args)
         if validate_config(candidate)[0]:
             raise ValueError('slack_setup_unverified')
+        slack_channel_setup.stage_config(HOME, cfg, candidate)
         _init_save_config(candidate, initial, args)
         slack_channel_setup.applied(HOME, cfg, candidate)
         slack_channel_setup.finish_runtime(HOME, candidate, args)
