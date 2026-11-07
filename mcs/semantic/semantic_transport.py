@@ -227,10 +227,11 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     try:
         provider = get_provider("backlog")
-    except cloud_inference.CloudFallback:
+    except (cloud_inference.CloudFallback, TypeError, ValueError, KeyError, AttributeError, OSError):
         # A member whose paid unit cannot even build a provider holds at its
         # own call; a member proven to own nothing on a closed route never
-        # needs one — the job's entry must not fail for it.
+        # needs one — the job's entry must not fail for it. Config-shape or
+        # key-read failures count like an unbuildable profile.
         provider = None
 
     switched = False
@@ -265,7 +266,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             return
         try:
             _job_model.set(get_provider(_inference_purpose.get()))
-        except cloud_inference.CloudFallback:
+        except (cloud_inference.CloudFallback, TypeError, ValueError, KeyError, AttributeError, OSError):
             _job_model.set(None)
 
     def call_local(prompt, timeout):
@@ -305,8 +306,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             return local(prompt, timeout)
         try:
             provider = get_provider(_inference_purpose.get())
-        except cloud_inference.CloudFallback:
-            raise runtime.LLMNotSent('cloud_profile_unavailable') from None
+        except (cloud_inference.CloudFallback, TypeError, ValueError, KeyError, AttributeError, OSError) as error:
+            raise runtime.LLMNotSent('cloud_profile_unavailable') from error
         _job_model.set(provider)
         _failed(None)
         target = _inference_target.get()

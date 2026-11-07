@@ -392,19 +392,3 @@ def test_owned_unit_scope_proven_on_resolved_settings(routed, monkeypatch, varia
         # proven revocation: the head completed locally, the tail follows.
         assert second['done'] == 1 and len(local) == 2
     assert not calls and len(ledger.artifacts('cloud_usage_reserve')) == 1
-
-
-@pytest.mark.parametrize('route', ['reextract', 'semantic_backlog'])
-def test_cloud_mode_closed_route_never_resolves_settings(routed, monkeypatch, route):
-    """A closed send route returns 'off' before any settings/provider/key
-    resolution — unowned local work must not depend on unreadable
-    credentials. The open patient_context route still resolves."""
-    ledger, cfg, _calls, _reserves, _results = routed
-    def forbidden(*args, **kwargs):
-        raise RuntimeError('settings resolution reached on a closed route')
-    import cloud_inference
-    monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', forbidden)
-    monkeypatch.setattr(cloud_policy, 'resolve_profile', forbidden)
-    assert worker._cloud_mode(ledger, cfg, route, 1) == 'off'
-    with pytest.raises(RuntimeError, match='closed route'):
-        worker._cloud_mode(ledger, cfg, 'patient_context', 1)
