@@ -629,7 +629,7 @@ class Actions:
                     inputs = {**(projects.view_inputs(self._settings, "digest", "")
                                  or {}), **digest_inputs(fields, clicker)}
                 else:
-                    query = search_query(fields)
+                    query = search_query(fields, action=pending["action"])
                     if query is None:
                         await self._say(origin["channel_id"], user, SEARCH_EMPTY)
                         return

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from adapters.common import envelopes, paths
+from adapters.common import envelopes, forms, paths
 from lineworks_testkit import SCOPE, TOKEN, command_files, event, world
 
 
@@ -82,6 +82,20 @@ def test_repeated_private_view_input_uses_a_fresh_result_id(tmp_path, action, fi
     second = command_files(w)[0]
     assert second["command_id"] == first["command_id"]
     assert second["request_id"] != first["request_id"]
+
+
+@pytest.mark.parametrize("action,length", [("search", 101), ("search", 500),
+                                          ("drugsearch", 100)])
+def test_search_dm_preserves_the_last_filter_at_the_input_limit(tmp_path, action, length):
+    w = world(tmp_path, action=action)
+    actor = "lineworks:40029600:operator"
+    query = "合" * (length - len(" 資料:添付")) + " 資料:添付"
+    w.reg.put_modal("lw-form-" + envelopes.actor_hash(actor), {
+        "actor": actor, "user": "operator", "action": action, "token": TOKEN,
+        "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}, "fields": {}, "index": 0,
+        "definitions": forms.modal_fields(action)})
+    asyncio.run(w.actions._input("operator", actor, query))
+    assert command_files(w)[0]["input"] == {"query": query}
 
 
 
