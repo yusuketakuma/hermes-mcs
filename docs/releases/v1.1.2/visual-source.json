@@ -1,61 +1,77 @@
 {
- "artifacts": [
-  {
-   "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-   "sha256": "b18b93833498a30b6115eaa9cad402daf18a05640429281afe9c0cc3d77aaeb1"
+  "artifacts": [
+    {
+      "path": "docs/releases/v1.1.2/cloud-continuity.svg",
+      "sha256": "3b23bafa4c98b9c4cdbbf7798f9a32ff448a87f410c28ea2856701e46da0d977"
+    },
+    {
+      "path": "docs/releases/v1.1.2/cloud-continuity.png",
+      "sha256": "f9afbe44837fc95350ff9e35d52fd410743d295c0c4901c20151672ea8585c49"
+    }
+  ],
+  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+  "notes": [
+    "図は候補84件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
+    "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
+    "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
+  ],
+  "renderer": {
+    "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
+    "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
+    "tool": "macOS qlmanage + ImageMagick",
+    "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)"
   },
-  {
-   "path": "docs/releases/v1.1.2/cloud-continuity.png",
-   "sha256": "e9ac08cdc15ff4ca662f0817dbca8e4691345f735c1043816d5e49e7ebe3e9f7"
+  "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
+  "source": "docs/releases/v1.1.2/cloud-continuity.svg",
+  "source_checkout_observation": {
+    "dirty": true,
+    "head": "fa73fd89cb5822821229b82d846f9f6ece680e88",
+    "observed_at": "2026-11-07T09:56:17.024345+00:00",
+    "release_sha_fixed": false
+  },
+  "source_file_observations": [
+    {
+      "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。",
+      "path": "mcs/llm/cloud_policy.py",
+      "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100"
+    },
+    {
+      "path": "mcs/llm/cloud_inference.py",
+      "sha256": "3efac7b382a45f0a0c6e6a2f6d28dc6b7fecf4b1acc0804ac2d5b9adee7d3871"
+    },
+    {
+      "path": "mcs/extract/attachment_ocr.py",
+      "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
+    },
+    {
+      "path": "mcs/notify/notify_parts.py",
+      "sha256": "47d3d3cef06507076f63f56e91e2750875574e5b8af4726387e245fd04a0733b"
+    },
+    {
+      "path": "mcs/ops/setup/slack_channel_setup.py",
+      "sha256": "f26e51673b91e50b83cf579d6a0e5e1c4eaf5c2319268484563adaa3b1044528"
+    },
+    {
+      "path": "mcs/core/writer_lock.py",
+      "sha256": "637561fde7379091c22d1f082618645e80427e9a2873c5f8af3c8ce4e7ae1644"
+    },
+    {
+      "path": "mcs/ops/mcs_ocr.py",
+      "sha256": "21c15b92ef4bece4e57c23c116be0a92bd6779cb532980fe27d648b9ee3ec34a"
+    },
+    {
+      "path": "adapters/common/spec.py",
+      "sha256": "560fd096f109cfe7f75926e3e55a979cd751328cf3d55fc8da9b5d3cc9b8886c"
+    },
+    {
+      "path": "mcs/notify/notify_recovery.py",
+      "sha256": "25fb4d6daa32b542433572e4ad659a161869662a42dad6eb8a2454991f2acfcd"
+    }
+  ],
+  "status": "unpublished_preparation",
+  "visual_check": {
+    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補84件へ更新後）",
+    "narrow_width_ok": true,
+    "png_rendered": true
   }
- ],
- "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
- "notes": [
-  "図は候補82件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
-  "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
-  "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
- ],
- "renderer": {
-  "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
-  "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
-  "tool": "macOS qlmanage + ImageMagick",
-  "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)"
- },
- "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
- "source": "docs/releases/v1.1.2/cloud-continuity.svg",
- "source_checkout_observation": {
-  "dirty": false,
-  "head": "277300c9",
-  "observed_at": "2026-11-07T09:11:16.736018+00:00",
-  "release_sha_fixed": false
- },
- "source_file_observations": [
-  {
-   "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。",
-   "path": "mcs/llm/cloud_policy.py",
-   "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100"
-  },
-  {
-   "path": "mcs/llm/cloud_inference.py",
-   "sha256": "3efac7b382a45f0a0c6e6a2f6d28dc6b7fecf4b1acc0804ac2d5b9adee7d3871"
-  },
-  {
-   "path": "mcs/extract/attachment_ocr.py",
-   "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
-  },
-  {
-   "path": "mcs/notify/notify_parts.py",
-   "sha256": "47d3d3cef06507076f63f56e91e2750875574e5b8af4726387e245fd04a0733b"
-  },
-  {
-   "path": "mcs/ops/setup/slack_channel_setup.py",
-   "sha256": "f26e51673b91e50b83cf579d6a0e5e1c4eaf5c2319268484563adaa3b1044528"
-  }
- ],
- "status": "unpublished_preparation",
- "visual_check": {
-  "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補82件へ更新後）",
-  "narrow_width_ok": true,
-  "png_rendered": true
- }
 }

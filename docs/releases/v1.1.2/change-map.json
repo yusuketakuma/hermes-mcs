@@ -1,5 +1,5 @@
 {
-  "fragment_count": 82,
+  "fragment_count": 84,
   "records": [
     {
       "category": "added",
@@ -311,6 +311,13 @@
     },
     {
       "category": "fixed",
+      "id": "ocr-writer-refusal-diagnostics",
+      "path": "changes/archive/1.1.2/ocr-writer-refusal-diagnostics.json",
+      "sha256": "12823c3b0eaec1f60b86e51330490907a0715c441623d1345179a3c2cca7e683",
+      "title": "添付OCRの先送りで保存ロックの拒否理由を記録"
+    },
+    {
+      "category": "fixed",
       "id": "patient-context-cloud-extraction-gate",
       "path": "changes/archive/1.1.2/patient-context-cloud-extraction-gate.json",
       "sha256": "e90ad0956cbf35d4eed1fc3199672200c459036d21e5388cd46d90d09c1641b8",
@@ -458,6 +465,13 @@
     },
     {
       "category": "fixed",
+      "id": "slack-file-group-legacy-seal",
+      "path": "changes/archive/1.1.2/slack-file-group-legacy-seal.json",
+      "sha256": "b032b676c03e8ad3a426e718d0e299bf2d195427ac9b48038c78fd46ff6a95e1",
+      "title": "旧形式で封印されたSlack添付集合の配送計画が検証を通らず保留になる問題を修正"
+    },
+    {
+      "category": "fixed",
       "id": "slack-intent-config-drift-rebase",
       "path": "changes/archive/1.1.2/slack-intent-config-drift-rebase.json",
       "sha256": "c2cec6e9f10efc496ba79419a650110d43c0231cc68a65792a49ec1bcb0f5965",
@@ -576,6 +590,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録82件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加＋恒久fixで3件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録84件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加＋恒久fixで3件追加）。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
