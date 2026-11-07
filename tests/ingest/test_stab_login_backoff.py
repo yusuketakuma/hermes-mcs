@@ -6,6 +6,7 @@ import mcs_contract
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,8 @@ import mcs_adapter
 @pytest.fixture
 def adapter(monkeypatch, tmp_path):
     a = mcs_adapter.MCSAdapter(token_cache=str(tmp_path / "token_cache.json"))
+    monkeypatch.setattr(mcs_authentication, "_login_accounts",
+                        lambda: [SimpleNamespace(pw_uid=os.getuid(), pw_shell="/bin/zsh")])
     secret = {"pw": "synthetic-secret-1", "rev": "mdat-1"}
     calls = {"click": 0, "fill": 0}
 

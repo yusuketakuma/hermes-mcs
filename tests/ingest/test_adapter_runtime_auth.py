@@ -4,6 +4,7 @@ import mcs_contract
 from contextlib import closing
 import errno
 import hashlib
+import os
 import subprocess
 import sys
 import time
@@ -13,6 +14,13 @@ import pytest
 import mcs_adapter
 import mcs_download
 from ingest_testkit import _ledger, _message
+
+
+@pytest.fixture(autouse=True)
+def _single_login_account(monkeypatch):
+    # Exercise authentication without depending on the runner's login accounts.
+    monkeypatch.setattr(mcs_authentication, "_login_accounts",
+                        lambda: [SimpleNamespace(pw_uid=os.getuid(), pw_shell="/bin/zsh")])
 
 
 def test_keychain_password_returns_secret(monkeypatch, tmp_path):
