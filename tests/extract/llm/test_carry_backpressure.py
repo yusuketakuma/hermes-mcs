@@ -154,8 +154,8 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
         def close(self):
             closed.append(True)
     class Pool:
-        def __init__(self, root):
-            pass
+        def __init__(self, root, *, context_only):
+            assert context_only is True
         def sync(self, *args, **kwargs):
             assert not active[0]
         def close(self):
