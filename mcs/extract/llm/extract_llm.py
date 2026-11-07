@@ -7,8 +7,9 @@ one-line summary. Output goes to artifacts kind='extract_llm' alongside
 extract_v1 (provenance kept — rules and model never overwrite each other).
 
 Local endpoint: http://127.0.0.1:8080/v1/chat/completions (OpenAI-compatible,
-enable_thinking=false for clean JSON). Eligible units can use the configured
-cloud route; scope, keys and budgets gate each HTTP attempt.
+enable_thinking=false for clean JSON). New individual generative inference is
+local; stored cloud response recovery retains scope, currentness, accounting
+and unknown-state guards.
 
 Incremental: run_pending() extracts only messages lacking a current
 extract_llm artifact (content_hash tracked in meta). run_check calls it
