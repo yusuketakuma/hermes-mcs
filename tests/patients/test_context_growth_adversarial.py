@@ -10,14 +10,17 @@ attachments completion. Tests assert the documented contract at the real
 call seams; they do not weaken assertions to fit an implementation.
 """
 import hashlib
+import json
 
 import pytest
 
+import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
+import patient_context_refresh_state
 import patient_context_plan as context_plan
 from extract_testkit import _message
-from test_patient_context_refresh import CFG, runtime as runtime, seed
+from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
 
 
 def _scoped_snapshot(led, pid, keys, cfg=CFG):
@@ -187,3 +190,50 @@ def test_scoped_snapshot_requires_every_selected_source(runtime):
     still_mine = _scoped_snapshot(led, 1, [1, 2])
     assert _keys(still_mine) == [1]                  # another patient's key never joins
     assert not _scoped_ready(led, 1, [1, 2], clock)
+
+
+def test_missing_scope_member_is_refused_at_quality_and_publication(runtime):
+    """Snapshot read keeps requested keys in source_scope; the refusal
+    lands at the exact-count checks of the inference/quality/publication
+    side, so a missing member can never narrow the scope quietly."""
+    led, clock, _ = runtime
+    seed(led, mid=1, pid=1)
+    ghost = _scoped_snapshot(led, 1, [1, 4242])
+    assert ghost["source_scope"] == [1, 4242]        # scope keeps the request
+    assert _keys(ghost) == [1]
+    assert ghost["source_coverage"]["included"] == 1
+    assert not _scoped_ready(led, 1, [1, 4242], clock)
+    with led.db:
+        with pytest.raises(ValueError, match="quality_source_incomplete"):
+            patient_context_refresh_sources._quality_capture(
+                led.db, 1, CFG, "2026-10-17", [], {}, {}, source_keys=[1, 4242])
+
+
+def test_qa_failed_source_facts_never_enter_the_generated_context(runtime, monkeypatch):
+    """Acceptance 6 (real A generation): one source passes QA and another
+    fails — the generated context keeps the passed facts and never admits
+    the failed source's content, without pretending full coverage."""
+    led, clock, _ = runtime
+    seed(led, mid=1, pid=1, body='生活環境: 合格側の合成記録。')
+    seed(led, mid=2, pid=1, body='QA不合格側の合成記録。')
+    original = context_refresh.local_llm.admitted_chat
+
+    def poison(owner, text, **kwargs):
+        if json.loads(text).get('source') == 'QA不合格側の合成記録。':
+            return {'status': 200, 'finish_reason': 'length', 'text': '{}'}
+        return original(owner, text, **kwargs)
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', poison)
+    for _ in range(40):
+        result = step(runtime)
+        if document(led) is not None and result['status'] != 'progressed':
+            break
+    doc = document(led)
+    assert doc is not None and doc['facts']
+    assert {fact['message_id'] for fact in doc['facts']} == {1}
+    serialized = json.dumps(doc, ensure_ascii=False)
+    assert 'QA不合格側の合成記録' not in serialized
+    scans = {row['message_id']: json.loads(row['content']) for row in led.db.execute(
+        'SELECT message_id,content FROM artifacts WHERE kind=? AND project_id=1',
+        (patient_context_refresh_state.SCAN,))}
+    assert 2 in scans and not scans[2].get('complete') and not scans[2].get('audited')
+    assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
