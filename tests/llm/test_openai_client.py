@@ -244,21 +244,30 @@ def test_sol_selection_binds_reservation_result_and_budget(tmp_path, monkeypatch
 
 def test_openai_models_share_provider_budget_and_keep_price_versions(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
-    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1],
+                         'profiles': {'patient_context': 'luna-medium',
+                                      'quality_repair': 'sol-medium'}}}
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         costs = []
-        for route, purpose in (('reextract', 'backlog'), ('patient_context', 'patient_context')):
-            selection, errors = policy.resolve_profile(cfg, route=route, purpose=purpose)
+        for purpose in ('patient_context', 'quality_repair'):
+            selection, errors = policy.resolve_profile(cfg, route='patient_context', purpose=purpose)
             assert not errors
             instance = client.OpenAIClient('synthetic', model=selection['model'], effort=selection['effort'])
-            body = instance.body('synthetic ' + route, selection['max_tokens'], None)
-            reservation = policy.usage_reserver(ledger, cfg, route=route, project_id=1,
-                                                unit_key=route, selection=selection)(body, 2)
+            body = instance.body('synthetic ' + purpose, selection['max_tokens'], None)
+            reservation = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
+                                                unit_key=purpose, selection=selection)(body, 2)
             policy.record_result(ledger, reservation, {
                 'model': selection['model'], 'request_fp': reservation['request_fp'],
                 'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
             costs.append(policy.usage_cost(usage(), model=selection['model'],
                                            price_version=reservation['price_version']))
+        reservations = ledger.artifacts('cloud_usage_reserve')
+        assert len(reservations) == 2
+        assert {row['model'] for row in reservations} == {client.MODEL, client.SOL_MODEL}
+        for row in reservations:
+            meta = json.loads(row['meta'])
+            assert meta['route'] == 'patient_context'
+            assert meta['price_version'] == client.CURRENT_PRICE_VERSIONS[row['model']]
         report = policy.usage_report(ledger)
         assert not report['pricing_unverified']
         assert Decimal(report['providers']['openai']['cost_usd']) == sum(costs)

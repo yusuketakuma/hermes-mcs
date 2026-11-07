@@ -1,4 +1,10 @@
-"""Canonical publication does not hide required raw-cloud work from bounded estimates."""
+"""Canonical publication does not hide required raw-cloud work from bounded estimates.
+
+The individual reextract lane is closed to new sends. Each test approves a valid
+canonical config under the real closed policy first — proving zero targets,
+reservations and POSTs on normal canonical input — then re-approves inside a
+bounded legacy_cloud_routes block, since the activation fingerprint is
+regime-dependent, and exercises the dormant lane's estimate contract there."""
 import time
 
 import pytest
@@ -14,6 +20,7 @@ from test_cloud_after_local import (
     local_then_cloud, routed, _local_pass, _cloud_pass, _selected_contract, _financial_rows,
 )
 from test_cloud_followup_estimate import _count
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ['local_then_cloud', 'routed']
 
@@ -54,16 +61,27 @@ def _canonical_source(local_then_cloud, monkeypatch, tmp_path, *, local_raw, att
 @pytest.mark.parametrize('local_raw', [True, False], ids=['local-complete', 'rawless'])
 def test_canonical_source_counts_required_cloud_then_stops_after_proven_completion(
         local_then_cloud, monkeypatch, tmp_path, local_raw):
+    # Closed approval first: a valid canonical input under the real closed policy.
     ledger, cfg, calls, projection, saved = _canonical_source(local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw)
     evidence = _financial_rows(ledger)
-    assert _count(ledger, cfg)['targets'] == 1
+    assert not semantic_policy.runtime_config(cfg)[1]
+    assert _count(ledger, cfg)['targets'] == 0
+    assert _cloud_pass(ledger)['done'] == 0
     assert not calls and _financial_rows(ledger) == evidence
-    assert _cloud_pass(ledger)['done'] == 1
-    source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    assert worker.cloud_completion(ledger.db, source, _selected_contract(cfg)) == 'complete'
-    count, evidence = len(calls), _financial_rows(ledger)
-    assert count > 0 and _count(ledger, cfg)['targets'] == 0
-    assert len(calls) == count and _financial_rows(ledger) == evidence
+    assert not ledger.artifacts('cloud_usage_reserve')
+    with legacy_cloud_routes():
+        approved = approved_config(cfg)  # Re-bind approval to the open-regime fingerprint.
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
+        assert _count(ledger, cfg)['targets'] == 1
+        assert not calls and _financial_rows(ledger) == evidence
+        assert _cloud_pass(ledger)['done'] == 1
+        source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+        assert worker.cloud_completion(ledger.db, source, _selected_contract(cfg)) == 'complete'
+        count, evidence = len(calls), _financial_rows(ledger)
+        assert count > 0 and _count(ledger, cfg)['targets'] == 0
+        assert len(calls) == count and _financial_rows(ledger) == evidence
     assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (projection,)).fetchone()) == saved
 
 
@@ -72,16 +90,27 @@ def test_canonical_attention_does_not_estimate_a_fresh_dispatch_or_publish_compl
         local_then_cloud, monkeypatch, tmp_path, local_raw):
     ledger, cfg, calls, projection, saved = _canonical_source(
         local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw, attention=True)
-    assert _count(ledger, cfg)['targets'] == 1 and not calls
-    assert _cloud_pass(ledger)['done'] == 1
-    source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    contract = _selected_contract(cfg)
-    assert worker.cloud_completion(ledger.db, source, contract) == 'attention'
-    assert worker.progress_for_message(ledger.db, {**dict(source), '_provider_contract': contract},
-                                      model=contract['model'])['state'] != 'complete'
-    count, evidence = len(calls), _financial_rows(ledger)
+    evidence = _financial_rows(ledger)
+    assert not semantic_policy.runtime_config(cfg)[1]
     assert _count(ledger, cfg)['targets'] == 0
-    assert len(calls) == count and _financial_rows(ledger) == evidence
+    assert _cloud_pass(ledger)['done'] == 0
+    assert not calls and _financial_rows(ledger) == evidence
+    assert not ledger.artifacts('cloud_usage_reserve')
+    with legacy_cloud_routes():
+        approved = approved_config(cfg)
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
+        assert _count(ledger, cfg)['targets'] == 1 and not calls
+        assert _cloud_pass(ledger)['done'] == 1
+        source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+        contract = _selected_contract(cfg)
+        assert worker.cloud_completion(ledger.db, source, contract) == 'attention'
+        assert worker.progress_for_message(ledger.db, {**dict(source), '_provider_contract': contract},
+                                          model=contract['model'])['state'] != 'complete'
+        count, evidence = len(calls), _financial_rows(ledger)
+        assert _count(ledger, cfg)['targets'] == 0
+        assert len(calls) == count and _financial_rows(ledger) == evidence
     assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (projection,)).fetchone()) == saved
 
 
@@ -101,5 +130,12 @@ def test_canonical_presence_never_grants_history_permission_or_project_scope(
         assert not semantic_policy.runtime_config(cfg)[1]
     evidence = _financial_rows(ledger)
     assert _count(ledger, cfg)['targets'] == 0
+    with legacy_cloud_routes():
+        approved = approved_config(cfg)  # Re-bind approval to the open-regime fingerprint.
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
+        # The boundary itself, not the route gate, keeps the count at zero.
+        assert _count(ledger, cfg)['targets'] == 0
     assert not calls and _financial_rows(ledger) == evidence
     assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (projection,)).fetchone()) == saved
