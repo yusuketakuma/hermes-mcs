@@ -271,12 +271,14 @@ def test_old_unbound_reason_does_not_hide_unsettled_cloud_send(data):
     from datetime import datetime
     import cloud_policy
     from unittest.mock import patch
+    from test_cloud_response_recovery import legacy_cloud_routes
     now = datetime(2026, 10, 29, 12, tzinfo=cloud_policy.JST).timestamp()
     cloud_cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
-    with patch.object(cloud_policy.time, "time", return_value=now):
+    with legacy_cloud_routes(), patch.object(cloud_policy.time, "time", return_value=now):
         reserve = cloud_policy.usage_reserver(ledger, cloud_cfg, route="semantic_backlog", project_id=1,
             message_id=42, unit_key=f"semantic:{job}:{payload['generation']}")(
                 {"model": cloud_policy.MODEL, "max_tokens": 100}, 2)
+    assert not cloud_policy.eligible(cloud_cfg, "semantic_backlog", 1)
     assert "send_unverified" in _read(ledger, job, cfg)["blockers"]
     cloud_policy.record_result(ledger, reserve, {"model": cloud_policy.MODEL,
         "request_fp": reserve["request_fp"], "usage": None, "http_class": "not_sent", "error_kind": "budget_exceeded"})
