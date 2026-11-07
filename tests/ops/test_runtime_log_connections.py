@@ -16,6 +16,7 @@ from adapters.common import eventlog
 from adapters.lineworks import service as lineworks_service
 import cloud_backlog
 import mcs_util
+from test_cloud_response_recovery import legacy_cloud_routes
 import run_log
 import runtime_inspection
 import service_contract
@@ -151,12 +152,20 @@ def test_cloud_pool_exec_preserves_parent_and_worker_arguments(tmp_path, monkeyp
     monkeypatch.setattr(cloud_backlog.subprocess, "Popen", lambda argv, **kw: seen.append((argv, kw)) or child)
     pool = cloud_backlog.CloudBacklogPool(tmp_path)
     try:
+        # Closed individual routes retire the spawn path: no launch, no lock.
         pool.sync(cfg)
-        argv, kw = seen[0]
-        assert argv[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
-        assert argv[7:] == [sys.executable, str(Path(cloud_backlog.__file__).resolve()),
-                            "--parent", str(os.getpid()), "--index", "0"]
-        assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
+        assert seen == []
+        assert pool.children == [] and pool.indices == {} and pool.lock is None
+        with legacy_cloud_routes():
+            # The first sync armed the real 10s throttle; rewind it so the
+            # open-regime sync actually reaches the spawn arguments.
+            pool.last_sync -= 10
+            pool.sync(cfg)
+            argv, kw = seen[0]
+            assert argv[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
+            assert argv[7:] == [sys.executable, str(Path(cloud_backlog.__file__).resolve()),
+                                "--parent", str(os.getpid()), "--index", "0"]
+            assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
     finally:
         pool.close()
 
