@@ -368,6 +368,24 @@ def _owns_current_source(ledger, r, lease: float) -> bool:
         (r["message_id"], r["content_hash"], lease, time.time(), token)).fetchone() is not None
 
 
+def _source_provably_changed(ledger, r) -> bool:
+    """Negative evidence only: the same project/full row's current valid hash
+    differs from the claim-time hash — enough to clean up OUR old lease via
+    the existing CAS, never a license to use the new body. Any read failure,
+    missing row, invalid or identical hash returns False: unverifiable stays
+    unverifiable."""
+    try:
+        row = ledger.db.execute(
+            "SELECT content_hash FROM messages WHERE project_id=? AND message_id=? "
+            "AND (body_state IS NULL OR body_state='full')",
+            (r["project_id"], r["message_id"])).fetchone()
+    except Exception:
+        return False
+    current = row["content_hash"] if row else None
+    return (mcs_util.valid_hash(current) and mcs_util.valid_hash(r.get("content_hash"))
+            and current != r["content_hash"])
+
+
 def _rule_hints(r):
     """v1/v2 deterministic parse of this exact body — the v3 pass folds
     the rule stage's work into itself: the same dict rides the LLM

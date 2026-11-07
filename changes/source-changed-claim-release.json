@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "確定的に変わった原文の古い抽出予約を解放",
+  "summary": "クラウド再解析がclaim後に原文の有効hashが確定的に変わった場合、古い予約をlease期限まで残さず既存のowner照合解放で掃除し、新しい本文が次の周回で再claimできるようにします。",
+  "upgrade": "設定変更は不要です。適用後の新しい周回から有効です。本番適用は別途承認が必要です。",
+  "details": [
+    "判定は『同project/full行の現行有効hashがclaim時hashと異なる』負の証拠だけです。読取失敗・行欠落・不正hash・同一hash・owner交代・未精算の有料unitは全て従来どおり有限予約を維持します。",
+    "解放は既存のowner_token+next_try一致のCAS削除に委譲し、他者のclaimや置換済みleaseは消しません。新しい本文の使用許可ではありません。",
+    "送信・HTTP・commit・金融・permission・現在性の各guard、unknown保持、借用transaction、診断項目は変更しません。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_source_contract.py", "mcs/extract/llm/extract_llm_runner.py"]
+}

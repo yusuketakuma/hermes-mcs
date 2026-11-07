@@ -23,6 +23,8 @@ import pytest
 import cloud_policy
 import extract_llm
 import cloud_inference
+import mcs_util
+from extract_testkit import _message
 from anthropic_client import AnthropicClient
 from ledger import Ledger
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
@@ -390,7 +392,7 @@ def test_claim_limit_and_after_claim_failure_release_owned_leases(cloud_candidat
     assert _claim_count(led) == 0 and not led.db.in_transaction
 
 
-@pytest.mark.parametrize("change", ["scope", "source", "source_edit", "budget", "unknown_paid"])
+@pytest.mark.parametrize("change", ["scope", "source", "source_edit", "owner_replace", "db_failure", "budget", "unknown_paid"])
 def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_candidates, monkeypatch, change):
     led, cfg, *_ = cloud_candidates
     prior = [dict(row) for row in led.artifacts(extract_llm.KIND)]
@@ -422,11 +424,37 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
                 ledger.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=?",
                                    (row["message_id"],))
         elif change == "source_edit":
-            # A real source edit produces a different valid hash: a provably
-            # changed head must release its claim so the new body re-claims.
+            # A real writer edit: save_messages recomputes the hash and writes
+            # the new revision — no fabricated hash or billing shape is injected.
+            source = ledger.db.execute("SELECT project_id, posted_at FROM messages WHERE message_id=?",
+                                       (row["message_id"],)).fetchone()
+            ledger.save_messages([_message(row["message_id"], body="合成の原文編集です。",
+                                         project_id=source["project_id"],
+                                         posted_at=source["posted_at"])])
+            edited = ledger.db.execute("SELECT content_hash, body_state FROM messages WHERE message_id=?",
+                                       (row["message_id"],)).fetchone()
+            assert mcs_util.valid_hash(edited["content_hash"]) and edited["content_hash"] != row["content_hash"]
+            assert edited["body_state"] == "full"
+            assert ledger.db.execute("SELECT COUNT(*) FROM message_revisions WHERE message_id=?",
+                                     (row["message_id"],)).fetchone()[0] >= 2
+        elif change == "owner_replace":
+            # Another owner takes the row: the claim must survive untouched
+            # and must never read as a provably changed source.
             with ledger.db:
-                ledger.db.execute("UPDATE messages SET content_hash=? WHERE message_id=?",
-                                   ("9" * 64, row["message_id"]))
+                ledger.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.owner_token',?)"
+                                  " WHERE kind='extract_claim'", ("other-owner",))
+        elif change == "db_failure":
+            # A read failure inside the change probe is unverifiable, never
+            # proof of replacement — the bounded claim stays.
+            real_db = ledger.db
+            class _FailProbe:
+                def __getattr__(self, name):
+                    return getattr(real_db, name)
+                def execute(self, sql, params=()):
+                    if "content_hash FROM messages WHERE project_id" in sql:
+                        raise sqlite3.OperationalError("synthetic-read-failure")
+                    return real_db.execute(sql, params)
+            ledger.db = _FailProbe()
         elif change == "budget":
             cfg["cloud_llm"]["daily_request_budget"] = 0
 
@@ -436,9 +464,22 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
     monkeypatch.setattr(extract_llm_prepare, '_ensure_v1', extract_llm._ensure_v1)
     monkeypatch.setattr(extract_llm_runner, '_ensure_v1', extract_llm._ensure_v1)
     assert _cloud_pass(led)["done"] == 0 and len(changed) == 1
-    # An unverifiable head (invalid hash, unresolved paid unit) keeps the
-    # bounded claim; a provably changed source must release via the CAS.
-    assert sent == [] and _claim_count(led) == int(change in ("source", "unknown_paid")) and not _current_artifacts(led)
+    # An unverifiable head (invalid hash, owner swap, probe failure, unresolved
+    # paid unit) keeps the bounded claim; a provably changed source releases.
+    assert sent == [] and _claim_count(led) == int(change in ("source", "owner_replace", "db_failure",
+                                                            "unknown_paid")) and not _current_artifacts(led)
+    if change == "owner_replace":
+        owners = [r[0] for r in led.db.execute(
+            "SELECT json_extract(payload,'$.owner_token') FROM fetch_jobs WHERE kind='extract_claim'")]
+        assert owners == ["other-owner"]
+    if change == "source_edit":
+        # The real writer flags the edited message's prior extraction as
+        # invalidated — the row is retained, not silently rewritten.
+        after = {r["artifact_id"]: dict(r) for r in led.artifacts(extract_llm.KIND)}
+        flagged = [row for row in prior if row["message_id"] == changed[0]]
+        assert flagged and all(json.loads(after[row["artifact_id"]]["meta"]).get("invalidated") is True
+                               for row in flagged)
+        prior = [row for row in prior if row["message_id"] != changed[0]]
     _assert_legacy_retained(led, prior)
     usage = cloud_policy.usage_report(led)
     assert not usage["pricing_unverified"]

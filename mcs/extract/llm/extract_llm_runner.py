@@ -105,6 +105,7 @@ from extract_llm_source_contract import (
     _WRITER_STATE,
     _owns_current_source,
     _rule_hints,
+    _source_provably_changed,
     _writer_current,
 )
 from extract_llm_store import (
@@ -680,9 +681,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_discard"]()
                 deferred += 1
                 _defer_note("currentness_unverified")
-                if cloud_only or r.get("_cloud_owned"):
+                if (cloud_only or r.get("_cloud_owned")) \
+                        and not _source_provably_changed(ledger, r):
                     # An unverifiable currentness keeps the bounded claim:
                     # a head that cannot be proven must not re-head the queue.
+                    # A provably changed source instead follows the exact-owner
+                    # CAS _release in the finally/tail below, so the new body
+                    # can re-claim — owner, lease and paid-unknown holds are
+                    # unchanged.
                     keep_lease = True
                     keep_claims.add(id(r))
                 return
