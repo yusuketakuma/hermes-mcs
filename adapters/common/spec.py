@@ -643,11 +643,14 @@ _STAGE_KEYS = (
     "part_id", "index", "attachment_id", "sha256", "bytes", "name",
     "prior_remote_id", "prior_remote_file_id", "face_at", "operator_verified")
 # Projection bound by seals written before the discord file-identity keys
-# existed. Slack stages can never carry them (bad_discord_file_identity), so
-# for slack specs the two projections bind identical information in different
-# shapes — the era hash stays a strict integrity proof, not a relaxation.
-_LEGACY_STAGE_KEYS = tuple(k for k in _STAGE_KEYS
-                           if k not in ("prior_remote_file_id", "face_at"))
+# existed — pinned literally so a future _STAGE_KEYS change cannot rewrite
+# the legacy format it reads. Slack stages can never carry the two keys
+# (bad_discord_file_identity), so for slack specs the projections bind
+# identical information in different shapes — the era hash stays a strict
+# integrity proof, not a relaxation.
+_LEGACY_STAGE_KEYS = (
+    "part_id", "index", "attachment_id", "sha256", "bytes", "name",
+    "prior_remote_id", "operator_verified")
 
 
 def _file_group_identity(spec, keys):
@@ -669,7 +672,7 @@ def file_group_sha256_matches(spec, sealed) -> bool:
     projection, or the seal-era projection for a slack spec whose stages
     carry no file-identity key at all. Writers always seal the current
     projection; this only decides whether a stored hash still proves the
-    sealed stage set — any tampered field fails both."""
+    sealed stage set — any tampered projected identity field fails both."""
     if sealed == file_group_sha256(spec):
         return True
     if spec.get("delivery", {}).get("transport") != "slack":

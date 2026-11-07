@@ -240,3 +240,11 @@ def test_group_hash_matcher_contrast(led, tmp_path, monkeypatch):
     stage = spec["parts"]["manifest"][-2]
     stage["prior_remote_file_id"] = "F_ANY"
     assert not file_group_sha256_matches(spec, _legacy_group_sha(spec))
+    # The helper's own transport gate — slack_cards.validate already rejects
+    # a discord route upstream, so this branch needs a direct call. The hash
+    # is computed after the route change: an old-projection match on a
+    # non-slack spec must still be refused by the gate alone.
+    del stage["prior_remote_file_id"]
+    spec["delivery"]["transport"] = "discord"
+    legacy = _legacy_group_sha(spec)
+    assert not file_group_sha256_matches(spec, legacy)

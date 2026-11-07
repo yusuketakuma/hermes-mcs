@@ -802,3 +802,49 @@ def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, m
 
 
 
+
+
+def _legacy_group_sha(spec):
+    """Seal-era group hash: the eight-field stage projection bound before
+    the discord file-identity keys joined the projection."""
+    keys = ("part_id", "index", "attachment_id", "sha256", "bytes", "name",
+            "prior_remote_id", "operator_verified")
+    parts = spec["parts"]
+    stages = [{k: p.get(k) for k in keys}
+              for p in parts["manifest"] if p.get("kind") == "attachment_part"
+              and p.get("unavailable") is not True]
+    return hashlib.sha256(canonical(
+        {"card_key": spec["card_key"], "delivery": spec["delivery"],
+         "post_source_id": parts.get("post_source_id"), "stages": stages})).hexdigest()
+
+
+def test_legacy_sealed_group_reselas_to_current_on_identity_confirm(led, uploaded):
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    # a held render sealed before the projection grew: the group entry and
+    # its durable part row carry the era hash, spec payload_hash follows
+    did = latest["delivery_id"]
+    spec = json.loads(latest["spec_json"])
+    group = spec["parts"]["manifest"][-1]
+    assert group["kind"] == "file_group"
+    legacy = _legacy_group_sha(spec)
+    assert legacy != group["sha256"]
+    group["sha256"] = legacy
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? "
+                       "WHERE delivery_id=?", (json.dumps(spec), payload_hash(spec), did))
+        led.db.execute("UPDATE notification_render_parts SET payload_sha256=? "
+                       "WHERE delivery_id=? AND part_id='file_group'", (legacy, did))
+    from notify_recovery import attachment_identity_confirm_plan, apply_attachment_identity_confirm
+    plan = attachment_identity_confirm_plan(led.db, did, held["part_id"])
+    receipt = apply_attachment_identity_confirm(led, _confirm_req(plan, 0xBB))
+    assert receipt["outcome"] == "applied"
+    sealed = json.loads(_latest_render(led)["spec_json"])
+    from adapters.slack.cards import validate
+    validate(sealed)
+    new_group = sealed["parts"]["manifest"][-1]
+    from adapters.common.spec import file_group_sha256
+    assert new_group["sha256"] == file_group_sha256(sealed)
+    assert new_group["sha256"] != legacy
+    assert led.db.execute("SELECT payload_sha256 FROM notification_render_parts "
+                          "WHERE delivery_id=? AND part_id='file_group'",
+                          (did,)).fetchone()[0] == new_group["sha256"]
