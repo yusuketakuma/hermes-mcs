@@ -1,6 +1,6 @@
 {
   "status": "unpublished_preparation",
-  "scope": "v1.1.2 の変更記録78件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで2件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録79件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加）。最終候補SHAの固定・受入証拠ではない。",
   "fragment_count": 79,
   "records": [
     {
@@ -8,14 +8,14 @@
       "id": "attachment-medical-ocr-112",
       "title": "添付資料を本文と分けて文字起こしし、医療項目を整理",
       "category": "added",
-      "sha256": "44c52546a86712c3c0502d2b7f77432ec710f52047fe6d490b6366ca02c05b8a"
+      "sha256": "8c0382d7b8d959c8f224a2e88701958db61323ec277748769008c93a1dd77f0f"
     },
     {
       "path": "changes/archive/1.1.2/attachment-ocr-pipeline-review.json",
       "id": "attachment-ocr-pipeline-review",
       "title": "添付OCRから解析・通知・患者コンテキストまでの処理を接続",
       "category": "fixed",
-      "sha256": "6bfb170a97215286a957bdd31491275e088cb27aa12286db549ccf3caa2a35be"
+      "sha256": "62e6de40c9a4f82fc8c62c398e9e21352a6733c773c69070c63dc89cf9f252b2"
     },
     {
       "path": "changes/archive/1.1.2/attachment-ocr-review-cycle.json",
