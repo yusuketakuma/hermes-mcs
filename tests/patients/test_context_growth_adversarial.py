@@ -151,20 +151,21 @@ def test_pending_ocr_on_another_source_cannot_block_or_leak(runtime):
     """Acceptance 5: an unfinished OCR attachment on an unselected source
     neither blocks the ready scope nor leaks its raw text into it."""
     led, clock, _ = runtime
+    cfg = {**CFG, 'attachment_ocr': {'enabled': True, 'executable': '/synthetic/ocr'}}
     seed(led, mid=1, pid=1)
     seed(led, mid=2, pid=1, body="添付つきの記録")
     with led.db:
         led.db.execute("INSERT INTO attachments(message_id,file_id,state) "
                        "VALUES(2,'synthetic','pending')")
-    scoped = _scoped_snapshot(led, 1, [1])
+    scoped = _scoped_snapshot(led, 1, [1], cfg)
     assert _keys(scoped) == [1]
     assert scoped["attachment_coverage"]["complete"]
-    assert _scoped_ready(led, 1, [1], clock)
-    blocked = _scoped_snapshot(led, 1, [2])
+    assert _scoped_ready(led, 1, [1], clock, cfg=cfg)
+    blocked = _scoped_snapshot(led, 1, [2], cfg)
     assert not blocked["attachment_coverage"]["complete"]
-    assert not _scoped_ready(led, 1, [2], clock)
+    assert not _scoped_ready(led, 1, [2], clock, cfg=cfg)
     assert _keys(blocked) == [2]           # OCR未完の添付は source として現れない
-    assert not _full_ready(led, 1, clock)
+    assert not _full_ready(led, 1, clock, cfg=cfg)
 
 
 def test_scope_covering_only_selected_sources_never_claims_full_coverage(runtime):
