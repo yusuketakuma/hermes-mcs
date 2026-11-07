@@ -5,6 +5,8 @@ import pytest
 
 import cloud_backlog
 import cloud_policy
+import extract_llm
+import extract_llm_provider
 import extract_llm_resident as resident
 import local_llm
 import mcs_util
@@ -13,6 +15,7 @@ from test_context_cloud_update_identity import cloud, real_cloud, runtime
 from test_patient_context_refresh import document
 
 __all__ = ["cloud", "real_cloud", "runtime"]
+_REAL_CLOUD_MODE = extract_llm_provider._cloud_mode
 
 
 @pytest.mark.parametrize("cloud_ready", [True, False])
@@ -21,6 +24,10 @@ def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monke
     cfg, posts = real_cloud
     if not cloud_ready:
         monkeypatch.setattr(cloud_policy, "api_key", lambda *_: None)
+        # The cloud transport fixture pins mode=on for its paid tests. Use the
+        # real key-aware selector to exercise the child caller's local route.
+        monkeypatch.setattr(extract_llm, "_cloud_mode", _REAL_CLOUD_MODE)
+        monkeypatch.setattr(extract_llm_provider, "_cloud_mode", _REAL_CLOUD_MODE)
     events = []
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
