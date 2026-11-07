@@ -18,6 +18,8 @@ def _adapter(monkeypatch, *, lsof_out, lsof_rc=0, chrome_pids=(4242,),
     """An adapter whose CDP peer answers like a browser asking for both fields."""
     a = mcs_adapter.MCSAdapter()
     sent = []
+    monkeypatch.setattr(mcs_authentication, "_login_accounts",
+                        lambda: [_account(os.getuid())])
     monkeypatch.setattr(a, "_ensure_chrome", lambda *a, **k: None)
     monkeypatch.setattr(a, "_recover_session", lambda: False)
     monkeypatch.setattr(a, "_login_page",
