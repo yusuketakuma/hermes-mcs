@@ -7,6 +7,7 @@ import time
 
 import anthropic_client
 import cloud_policy
+import semantic_candidate
 import semantic_drain
 import semantic_store
 import semantic_transport
@@ -48,7 +49,9 @@ print("committed", flush=True)
 def test_semantic_http_wait_allows_local_db_commit_and_retakes_run_lock(cloud, tmp_path, monkeypatch):
     led, cfg, _, calls = cloud
     cfg.clear()
-    cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
+    # The approval and the historical cloud run must describe the same candidate.
+    with legacy_cloud_routes():
+        cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
     led.save_messages([_message(body="アムロジピン5mgを継続します。")])
     led.semantic_seed(1, [1], {"source": "history_import"})
     snapshot(led)
@@ -87,6 +90,7 @@ def test_semantic_http_wait_allows_local_db_commit_and_retakes_run_lock(cloud, t
     result = {"errors": []}
     try:
         with legacy_cloud_routes():
+            assert cfg["semantic"]["fact_source_evidence"]["candidate_fingerprint"] == semantic_candidate.candidate_fingerprint(cfg)
             out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
                 jev_client=_PassJev(), lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert out["done"] == 1 and not result["errors"], (out, result)
