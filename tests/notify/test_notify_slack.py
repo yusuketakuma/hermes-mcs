@@ -228,7 +228,22 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert (root / "slack_state").is_dir()
     assert render["guild_id"] is None
     assert render["team_id"] == SCOPE["team_id"]
-    assert cards.card_content(led.db, _card(led), cfg=SLACK)["containers"] == spec["parts"]["containers"]
+    raw_containers = cards.card_content(led.db, _card(led), cfg=SLACK)["containers"]
+    sealed_containers = spec["parts"]["containers"]
+    assert [c for c in raw_containers if c.get("provider_scope") != "header"] == [
+        c for c in sealed_containers if c.get("provider_scope") != "header"]
+    raw_header = next(c for c in raw_containers if c.get("provider_scope") == "header")
+    header = next(c for c in sealed_containers if c.get("provider_scope") == "header")
+    for key in raw_header.keys() - {"text", "visible_providers", "provider_sequence", "context_progress"}:
+        assert header[key] == raw_header[key]
+    assert header["text"].startswith("09-24〜 · 1投稿 · ")
+    assert header["processing_status"] == "processing"
+    assert spec["parts"]["processing_display_version"] == 3
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"]
+    assert "採用結果の処理順" not in header["text"] and "☁" not in header["text"]
     path.unlink()
     assert notify_spool.recover(led, SLACK, {})["republished"] == 1
     assert path.read_bytes() == raw
