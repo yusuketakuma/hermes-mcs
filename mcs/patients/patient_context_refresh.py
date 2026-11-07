@@ -273,8 +273,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     same = (bool(old) and old.get('facts_sig') == patient_context_refresh_state._facts_sig(facts)
         and meta.get('source_sig') == snapshot['source_sig']
         and patient_context_refresh_state._route_contract(meta) == snapshot['contract'])
-    quality = bool(snapshot['contract'].get('provider')
-        or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
+    quality = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     key = _generation_input(snapshot, facts)
     prior_coverage = meta.get('source_coverage')
     if prior_coverage is not None and not isinstance(prior_coverage, dict):
@@ -359,6 +358,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                             reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
                         scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
                 for candidate, state, due, scope_keys, lanes in scopes:
+                    if ('A' in lanes and due['A']
+                            and (candidate.get('source_coverage', {}).get('unreflected')
+                                 or not candidate['acquisition']['complete'])
+                            and not any(context_plan.source_usable(source) for source in candidate['sources'])):
+                        due['A'] = False
                     if not any(due[lane] for lane in lanes):
                         waiting += int(candidate['unfinished'])
                         continue
@@ -516,7 +520,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     generation_quality = False
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
-    quality_required = cloud_requested or patient_context_quality_receipts._has_prior_quality_failure(ledger.db, pid)
+    quality_required = patient_context_quality_receipts._summary_quality_required(ledger.db, pid, snapshot)
     cloud_settings = cloud_inference.resolve_cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     cloud_selection = None
     if cloud_settings is not None:
@@ -790,7 +794,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             summary_scans = patient_context_refresh_sources._current_scans(
                 ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
-            same_backend = (mode != "on" or old_meta.get("provider") == snapshot["contract"].get("provider")
+            same_backend = (not facts or mode != "on" or old_meta.get("provider") == snapshot["contract"].get("provider")
                             or not cloud_sources_ready and not old_meta.get("provider"))
             same = (old.get("facts_sig") == changed and old_meta.get("source_sig") == snapshot["source_sig"]
                     and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
@@ -857,8 +861,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 else:
                     meta.pop("quality_audit_status", None)
                 meta["quality_schedule_key"] = patient_context_refresh_state._digest([cfg, quality_identity["assessment"]["code"]])
+            if not facts:
+                local_route()
             summary = (repaired["summary"] if same and quality_required and repaired is not None
-                       else old["summary"] if same else infer(
+                       else old["summary"] if same else [] if not facts else infer(
                 lambda backend, reset, metrics=None, comparison=False: patient_context_quality_controller._summary(cfg, facts, deadline,
                     generation_admit if backend else lambda: local_admit() and generation_admit(),
                     source_sig=snapshot["source_sig"], **({"provider": backend} if backend else {}),
