@@ -15,7 +15,6 @@ import pytest
 from adapters.common import envelopes, journal, paths
 from adapters.common.registry import Registry
 from adapters.discord.delivery import DeliveryWorker
-from discord_testkit import _fake_discord
 
 class FakeHTTP(Exception):
     def __init__(self, status):
@@ -149,8 +148,8 @@ def _receipts(cmd_int):
 
 # ---------- part-engine fakes --------------------------------------------
 
-# Reuse the button/view SDK shape when a sealed thread carries drug actions.
-_discord = _fake_discord()
+# cards.send_attachment lazy-imports the SDK inside the function.
+_discord = types.ModuleType("discord")
 
 
 class _FakeFile:
@@ -167,7 +166,10 @@ _discord.AllowedMentions = types.SimpleNamespace(
 def synthetic_discord_sdk(monkeypatch):
     # Collection must see the real package (or its absence), so an SDK
     # serialization test never mistakes this shim for discord.py.
-    monkeypatch.setitem(sys.modules, "discord", _discord)
+    from discord_testkit import _fake_discord
+    sdk = _fake_discord()
+    sdk.File = _FakeFile
+    monkeypatch.setitem(sys.modules, "discord", sdk)
 
 
 FOREIGN_USER = types.SimpleNamespace(id=9999)
