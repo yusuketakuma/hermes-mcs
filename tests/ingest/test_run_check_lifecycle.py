@@ -415,12 +415,70 @@ def test_lock_held_exit_waits_for_scheduled_and_command_runs(
     finally:
         os.close(held)
     assert bool(waited) is waits
-    assert "lock_held" in capsys.readouterr().out
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
+
+
+@pytest.mark.parametrize("mode", ["tick", "commands"])
+@pytest.mark.parametrize("cause, reason, stage", [
+    ("busy", "run_lock_not_acquired", "write_lock"),
+    ("marker", "update_marker_present", "update_restore_fence"),
+    ("source", "source_generation_changed", "generation_fence"),
+])
+def test_entry_reports_only_observed_writer_refusal(
+        tmp_path, monkeypatch, capsys, mode, cause, reason, stage):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(run_check.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(run_check, "_CODE_STAMP", 123)
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 124 if cause == "source" else 123)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+    fd = (None if cause == "busy" else
+          os.open(str(tmp_path / "synthetic-lock"), os.O_CREAT | os.O_RDWR, 0o600))
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: fd)
+    if cause == "marker":
+        (data / writer_lock.UPDATE_MARKER_NAME).write_text("SYNTHETIC_SECRET_MUST_NOT_APPEAR")
+    for name in ("Ledger", "MCSAdapter", "_commands_only", "_entry_code_current"):
+        monkeypatch.setattr(run_check, name, lambda *a, **k: pytest.fail("entry gate crossed"))
+    monkeypatch.setattr(sys, "argv", ["run_check"] + (["--commands-only"] if mode == "commands" else []))
+    try:
+        assert run_check.main() == 3
+        raw = capsys.readouterr().out
+        assert json.loads(raw) == {
+            "ok": False, "error": "lock_held", "writer_reason": reason, "writer_stage": stage}
+        assert "SYNTHETIC_SECRET_MUST_NOT_APPEAR" not in raw and str(tmp_path) not in raw
+        assert not (data / "ledger.db").exists() and not (data / "health.json").exists()
+        if cause == "busy":
+            assert 100 + run_check.LOCK_WAIT_S <= clock[0] < 100 + run_check.LOCK_WAIT_S + 0.3
+        if fd is not None:
+            with pytest.raises(OSError):
+                os.fstat(fd)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+@pytest.mark.parametrize("reason, stage", [
+    ("SYNTHETIC_SECRET_MUST_NOT_APPEAR", "write_lock"),
+    ("run_lock_not_acquired", "SYNTHETIC_SECRET_MUST_NOT_APPEAR"),
+])
+def test_entry_keeps_unclassified_writer_refusal_private(tmp_path, monkeypatch, capsys, reason, stage):
+    _point_run_check_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+    def wait(*args, **kwargs):
+        writer_lock.record_writer_refusal(reason, stage)
+    monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
+    monkeypatch.setattr(sys, "argv", ["run_check"])
+    assert run_check.main() == 3
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
 
 
 @pytest.mark.parametrize("fence", [None, "marker", "code_changed"])
 def test_command_worker_catches_short_lock_window_without_crossing_update(
-        tmp_path, monkeypatch, fence):
+        tmp_path, monkeypatch, capsys, fence):
     data = _point_run_check_at(tmp_path, monkeypatch)
     fd = os.open(str(tmp_path / "synthetic-lock"), os.O_CREAT | os.O_RDWR, 0o600)
     clock, calls = [100.0], []
@@ -448,6 +506,7 @@ def test_command_worker_catches_short_lock_window_without_crossing_update(
             assert len(calls) == 1 and calls[0][0] == fd
             assert calls[0][1] == 100 + run_check.RUN_DEADLINE_S
             assert calls[0][2] > 100  # lock waiting spent this same budget
+            assert capsys.readouterr().out == ""
         else:
             assert calls == []
         with pytest.raises(OSError):

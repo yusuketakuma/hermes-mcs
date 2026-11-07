@@ -20,7 +20,8 @@ Exit codes:
       (relogin failed or the session re-died). The notice carries the
       outcome: 'session_recovered' on success, 'session_expired' with
       auto_login=<state> on failure -> human re-login
-  3 = another instance holds the lock (overlap prevented)
+  3 = run entry refused (writer contention, source/update fence,
+      or entry deadline)
 
 Privacy: stdout/stderr carries ids, counts, states only. Patient names,
 bodies, tokens never leave this process except into the local ledger and
@@ -1056,13 +1057,18 @@ def _main() -> int:
     # their run budget; scheduled collection retains its full work budget.
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
-        lock_fd = writer_lock.wait_run_lock(LOCKFILE, wait_s=(LOCK_WAIT_S if deadline is None else min(
-                                                LOCK_WAIT_S, max(0, deadline - time.monotonic()))),
-                                                expected_code_stamp=_CODE_STAMP,
-                                                marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
-    if lock_fd is None:
-        print(json.dumps({"ok": False, "error": "lock_held"}))
-        return 3
+        with writer_lock.capture_writer_refusal() as diagnostic:
+            lock_fd = writer_lock.wait_run_lock(LOCKFILE, wait_s=(LOCK_WAIT_S if deadline is None else min(
+                                                    LOCK_WAIT_S, max(0, deadline - time.monotonic()))),
+                                                    expected_code_stamp=_CODE_STAMP,
+                                                    marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
+        if lock_fd is None:
+            refusal = {"ok": False, "error": "lock_held"}
+            if diagnostic["writer_reason"] != "writer_refusal_unclassified":
+                refusal.update(writer_reason=diagnostic["writer_reason"],
+                               writer_stage=diagnostic["writer_stage"])
+            print(json.dumps(refusal))
+            return 3
 
     try:
         code_current = _entry_code_current()
