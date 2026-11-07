@@ -5,6 +5,7 @@ import time
 import pytest
 
 from extract_testkit import _message
+import patient_context_quota as quota
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
@@ -84,6 +85,17 @@ def test_current_member_scans_while_other_thread_member_waits(runtime, fact_sour
     assert len(calls) == before + 1
     scan = document(led, state.SCAN)
     assert scan['complete'] and scan['audited']
+    result = step(runtime, cfg=cfg)
+    assert result['status'] == 'progressed' and result['lane'] == 'A' and result['done'] == 1, result
+    assert len(calls) == before + 2 and sum('reports' in call for call in calls) == 1
+    view = readiness.context_view_input(led.db, 1, cfg=cfg)
+    assert view is not None and view['summary']
+    assert view['facts'] and {fact['message_id'] for fact in view['facts']} == {1}
+    assert view['coverage']['partial'] is True and view['coverage']['unreflected'] == 1
+    assert readiness.inference_coverage(led.db, 1, cfg)['complete'] is False
+    _, meta = state._latest(led.db, state.KIND, 1)
+    assert meta['source_scope'] == [1]
+    assert led.db.execute('SELECT COUNT(*) FROM artifacts WHERE kind=?', (quota.KIND,)).fetchone()[0] == 1
     assert not led.artifacts(state.SCAN, project_id=1, message_id=2)
     assert _status(led, cfg, 2) not in ('current', 'current_skipped')
     assert not led.artifacts('cloud_usage_reserve')
