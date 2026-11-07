@@ -1473,8 +1473,16 @@ def test_closed_route_prior_real_source_unit_frees_edited_source_member(cloud):
     old_source = mcs_util.payload_hash([(3, source_binding(led.db, 1, 3))])
     _member_unit_reservation(led, cfg, job, 3, old_source)
     with led.db:
+        # A real post edit: body revision plus a fresh revision row, then the
+        # receipted history scope re-captures the current occurrences.
+        max_seq = led.db.execute(
+            "SELECT COALESCE(MAX(seq),0) FROM message_revisions WHERE message_id=3").fetchone()[0]
+        led.db.execute("INSERT INTO message_revisions(message_id,seq,content_hash,body_state,"
+                       "observed_at) VALUES(3,?,?,?,?)",
+                       (max_seq + 1, 'f' * 64, 'full', time.time() - 601))
         led.db.execute("UPDATE messages SET body_text=? WHERE message_id=3",
                        ('編集済みの合成本文。',))
+    snapshot(led)
     # The edit really moved the derived identity — this is not a label trick.
     assert mcs_util.payload_hash([(3, source_binding(led.db, 1, 3))]) != old_source
     local = []
