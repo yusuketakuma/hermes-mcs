@@ -639,17 +639,48 @@ def _validate_chunks(parts: dict):
     return chunks
 
 
+_STAGE_KEYS = (
+    "part_id", "index", "attachment_id", "sha256", "bytes", "name",
+    "prior_remote_id", "prior_remote_file_id", "face_at", "operator_verified")
+# Projection bound by seals written before the discord file-identity keys
+# existed. Slack stages can never carry them (bad_discord_file_identity), so
+# for slack specs the two projections bind identical information in different
+# shapes — the era hash stays a strict integrity proof, not a relaxation.
+_LEGACY_STAGE_KEYS = tuple(k for k in _STAGE_KEYS
+                           if k not in ("prior_remote_file_id", "face_at"))
+
+
+def _file_group_identity(spec, keys):
+    parts = spec.get("parts", {})
+    stages = [{key: p.get(key) for key in keys}
+              for p in parts.get("manifest", []) if p.get("kind") == "attachment_part"
+              and p.get("unavailable") is not True]
+    return {"card_key": spec.get("card_key"), "delivery": spec.get("delivery"),
+            "post_source_id": parts.get("post_source_id"), "stages": stages}
+
+
 def file_group_sha256(spec):
     """Bind the ordered private stages to this sealed card, source and route."""
-    parts = spec.get("parts", {})
-    stages = [{key: p.get(key) for key in (
-        "part_id", "index", "attachment_id", "sha256", "bytes", "name",
-        "prior_remote_id", "prior_remote_file_id", "face_at", "operator_verified")}
-        for p in parts.get("manifest", []) if p.get("kind") == "attachment_part"
-        and p.get("unavailable") is not True]
-    identity = {"card_key": spec.get("card_key"), "delivery": spec.get("delivery"),
-                "post_source_id": parts.get("post_source_id"), "stages": stages}
-    return hashlib.sha256(canonical(identity)).hexdigest()
+    return hashlib.sha256(canonical(_file_group_identity(spec, _STAGE_KEYS))).hexdigest()
+
+
+def file_group_sha256_matches(spec, sealed) -> bool:
+    """Whether ``sealed`` is a valid group hash for ``spec``: the current
+    projection, or the seal-era projection for a slack spec whose stages
+    carry no file-identity key at all. Writers always seal the current
+    projection; this only decides whether a stored hash still proves the
+    sealed stage set — any tampered field fails both."""
+    if sealed == file_group_sha256(spec):
+        return True
+    if spec.get("delivery", {}).get("transport") != "slack":
+        return False
+    manifest = spec.get("parts", {}).get("manifest")
+    if (isinstance(manifest, list) and any(
+            "prior_remote_file_id" in p or "face_at" in p
+            for p in manifest if isinstance(p, dict))):
+        return False
+    return sealed == hashlib.sha256(
+        canonical(_file_group_identity(spec, _LEGACY_STAGE_KEYS))).hexdigest()
 
 
 def _validate_manifest(manifest, *, spec=None) -> None:
@@ -697,7 +728,7 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                     or (spec.get("parts", {}).get("slack") or {}).get("file_group") is not True
                     or p["part_id"] != "file_group" or i != len(manifest) - 1
                     or set(p) != {"part_id", "kind", "index", "sha256"}
-                    or p.get("sha256") != file_group_sha256(spec)):
+                    or not file_group_sha256_matches(spec, p.get("sha256"))):
                 _err("bad_slack_file_group")
         if "broadcast" in p:
             if (type(p["broadcast"]) is not bool or kind != "body_part"
