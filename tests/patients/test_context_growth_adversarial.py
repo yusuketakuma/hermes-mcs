@@ -217,17 +217,34 @@ def test_missing_scope_member_is_refused_at_quality_and_publication(runtime):
                 led.db, 1, CFG, "2026-10-17", [], {}, {}, source_keys=[1, 4242])
 
 
-def test_qa_failed_source_facts_never_enter_the_generated_context(runtime, monkeypatch):
-    """Acceptance 6 (real A generation): one source passes QA and another
-    fails — the generated context keeps the passed facts and never admits
-    the failed source's content, without pretending full coverage."""
+def test_unfinished_scan_chunks_never_enter_the_generated_context(runtime, monkeypatch):
+    """Audited-only fact adoption: a scan that produced one chunk and then
+    failed permanently is a partial artifact — its chunk-derived facts
+    must never reach the generated context, even though the CHUNK row
+    exists and the source itself stays usable."""
     led, clock, _ = runtime
+    unit = 'チャンク混入判定用の独自本文。'
     seed(led, mid=1, pid=1, body='生活環境: 合格側の合成記録。')
-    seed(led, mid=2, pid=1, body='QA不合格側の合成記録。')
+    # >SCAN_CHUNK body: the seeded item proves only a unique tail sentence,
+    # so the marker inside chunk 0 can only ever arrive through the scan.
+    filler = 'QA不合格側の合成記録。'
+    seed(led, mid=2, pid=1, body=filler * 200 + unit + filler * 200 + '専用の末尾証拠文。',
+         semantic_quote='専用の末尾証拠文。')
     original = context_refresh.local_llm.admitted_chat
+    leaked = [True]
 
     def poison(owner, text, **kwargs):
-        if json.loads(text).get('source') == 'QA不合格側の合成記録。':
+        try:
+            src = json.loads(text).get('source', '')
+        except (ValueError, TypeError):
+            src = ''
+        if isinstance(src, str) and filler in src:
+            if leaked[0]:
+                leaked[0] = False
+                return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(
+                    {'patient_context': [{'category': 'living', 'text': unit,
+                                          'evidence': unit,
+                                          'subject': 'unspecified', 'details': []}]})}
             return {'status': 200, 'finish_reason': 'length', 'text': '{}'}
         return original(owner, text, **kwargs)
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', poison)
@@ -235,11 +252,16 @@ def test_qa_failed_source_facts_never_enter_the_generated_context(runtime, monke
         result = step(runtime)
         if document(led) is not None and result['status'] != 'progressed':
             break
+    chunk = led.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=2",
+        (patient_context_refresh_state.CHUNK,)).fetchone()
+    assert chunk is not None and unit in chunk[0]   # the partial artifact exists
     doc = document(led)
     assert doc is not None and doc['facts']
-    assert {fact['message_id'] for fact in doc['facts']} == {1}
-    serialized = json.dumps(doc, ensure_ascii=False)
-    assert 'QA不合格側の合成記録' not in serialized
+    assert any(fact['message_id'] == 1 for fact in doc['facts'])
+    assert unit not in json.dumps(doc, ensure_ascii=False)
+    serialized_summary = json.dumps(doc.get('summary') or [], ensure_ascii=False)
+    assert 'QA不合格側の合成記録' not in serialized_summary
     scans = {row['message_id']: json.loads(row['content']) for row in led.db.execute(
         'SELECT message_id,content FROM artifacts WHERE kind=? AND project_id=1',
         (patient_context_refresh_state.SCAN,))}
