@@ -134,3 +134,65 @@ def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkey
 
     monkeypatch.setattr(attachment_inference, "run_pending", local)
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 1}
+
+
+@pytest.mark.parametrize("outcome", ["ready", "busy", "updated", "deadline", "cancelled"])
+def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkeypatch, outcome):
+    database = tmp_path / "synthetic.db"
+    database.touch()
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    monkeypatch.setattr(mcs_ocr, "DB", str(database))
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    now = [100.0]
+    generation = [(False, 7)]
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: generation[0])
+    closed, waits, opened, drained = [], [], [], []
+    locks = iter((101, None))
+    monkeypatch.setattr(mcs_ocr, "acquire_run_lock", lambda path: next(locks))
+    monkeypatch.setattr(mcs_ocr.os, "close", closed.append)
+    cancellation = KeyboardInterrupt("synthetic cancellation")
+
+    def wait(path, *, wait_s, expected_code_stamp, marker_path):
+        waits.append(path)
+        assert path == str(tmp_path / "run.lock")
+        assert wait_s == mcs_ocr.DRAIN_BUDGET_S - 5
+        assert expected_code_stamp == 7
+        assert marker_path == str(tmp_path / "update_in_progress.marker")
+        if outcome == "cancelled":
+            raise cancellation
+        if outcome == "busy":
+            return None
+        now[0] += 20 if outcome != "deadline" else mcs_ocr.DRAIN_BUDGET_S
+        if outcome == "updated":
+            generation[0] = (False, 8)
+        return 102
+
+    monkeypatch.setattr(mcs_ocr.writer_lock, "wait_run_lock", wait)
+
+    def ledger(path):
+        assert closed == []
+        opened.append(path)
+        return SimpleNamespace(close=lambda: closed.append("ledger"))
+
+    def drain(ledger, settings, state, deadline, *, live_config):
+        assert closed == [102]
+        assert settings is cfg and state == (False, 7) and live_config is False
+        assert deadline == 100 + mcs_ocr.DRAIN_BUDGET_S
+        drained.append(deadline)
+        return {"local_done": 0, "local_deferred": 0}
+
+    monkeypatch.setattr(mcs_ocr, "Ledger", ledger)
+    monkeypatch.setattr(mcs_ocr, "_drain", drain)
+    if outcome == "cancelled":
+        with pytest.raises(KeyboardInterrupt) as caught:
+            mcs_ocr.run(cfg)
+        assert caught.value is cancellation
+    else:
+        expected = ({"local_done": 0, "local_deferred": 0} if outcome == "ready" else
+                    {"reason": "writer_blocked" if outcome == "updated" else "writer_busy"})
+        assert mcs_ocr.run(cfg) == expected
+    assert waits == [str(tmp_path / "run.lock")]
+    assert len(opened) == len(drained) == int(outcome == "ready")
+    assert closed == ([102, "ledger", 101] if outcome == "ready" else
+                      [102, 101] if outcome in ("updated", "deadline") else [101])

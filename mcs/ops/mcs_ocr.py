@@ -119,10 +119,17 @@ def run(cfg=None):
     try:
         fd = acquire_run_lock(os.path.join(DATA, 'run.lock'))
         if fd is None:
+            remaining = deadline - time.monotonic() - 5
+            fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
+                  expected_code_stamp=generation[1],
+                  marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
+        if fd is None:
             return {'reason': 'writer_busy'}
         try:
             if writer_lock.updater_state() != generation:
                 return {'reason': 'writer_blocked'}
+            if time.monotonic() >= deadline - 5:
+                return {'reason': 'writer_busy'}
             ledger = Ledger(DB)
         finally:
             os.close(fd)
