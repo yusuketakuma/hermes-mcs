@@ -31,7 +31,7 @@
     <text x="34" y="609" font-size="14">未完了部品は状態別の内訳で表示</text>
     <rect x="18" y="652" width="354" height="76" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
     <text x="34" y="683" font-size="16" font-weight="700">この図の対象</text>
-    <text x="34" y="709" font-size="14">候補76件の主要な流れ。受入証拠ではない</text>
+    <text x="34" y="709" font-size="14">候補77件の主要な流れ。受入証拠ではない</text>
     <text x="34" y="732" font-size="13" fill="#4a6076">説明図は実画面や測定結果ではありません</text>
   </g>
 </svg>

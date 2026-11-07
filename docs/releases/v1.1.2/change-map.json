@@ -1,7 +1,7 @@
 {
  "status": "unpublished_preparation",
- "scope": "v1.1.2 の変更記録76件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み）。最終候補SHAの固定・受入証拠ではない。",
- "fragment_count": 76,
+ "scope": "v1.1.2 の変更記録77件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで1件追加）。最終候補SHAの固定・受入証拠ではない。",
+ "fragment_count": 77,
  "records": [
   {
    "path": "changes/archive/1.1.2/attachment-medical-ocr-112.json",
@@ -520,6 +520,13 @@
    "title": "長さ制限で未送信になった本文の復旧用記録を保持",
    "category": "fixed",
    "sha256": "0af86a17e5d5b23b171e96a03291b12b4096daab3b6fc170540c386692d2d6d7"
+  },
+  {
+   "path": "changes/archive/1.1.2/updater-runtime-contract-assets.json",
+   "id": "updater-runtime-contract-assets",
+   "title": "更新候補の設定検証に必要な契約資産を同梱",
+   "category": "fixed",
+   "sha256": "6dd1998ea0ffadcf089269be57cd69ce0bc6d6aeb2c27a80e7a62f04e46deccd"
   },
   {
    "path": "changes/archive/1.1.2/writer-refusal-diagnostics.json",
