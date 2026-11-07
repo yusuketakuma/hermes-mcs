@@ -1,5 +1,17 @@
 """Reuse existing provider images with concise status and no unused inventory."""
-from adapters.slack.presentation import _provider_context, _PROVIDERS
+import sys
+
+from adapters.slack.presentation import _provider_context, _PROVIDERS, render_parts
+
+_JEV_URL = next(url for key, _name, url in _PROVIDERS if key == "jev")
+
+
+def _v3_parts(states, context_progress, text):
+    header = {"type": "text", "provider_scope": "header", "provider_states": states,
+              "visible_providers": ["jev", "local"], "context_progress": context_progress,
+              "text": text}
+    return {"provider_states_version": 4, "processing_display_version": 3,
+            "containers": [header], "footer": [], "action_rows": []}
 
 
 def test_local_indicator_is_compact_without_changing_legacy_text():
@@ -71,6 +83,153 @@ def test_aggregate_used_is_not_shown_as_completed():
     block = _provider_context(states, "✓ 完了", visible, compact=True)
     marks = [element["text"] for element in block["elements"] if element["type"] == "plain_text"]
     assert marks == ["✓ 完了", "●", "●"]
+
+
+def test_v3_header_shows_jev_logo_and_frozen_context_as_text():
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "done", "local": "done"}
+    progress = {"proof_version": 1, "percent": None, "stage": "unknown", "held": False,
+                "source_sig": None, "observed_at": 1.0}
+    parts = _v3_parts(states, progress, "解析完了 · 👤 — · Jev 実行済み · 💻 実行済み")
+    blocks = render_parts(parts, card_kind="thread")
+    assert [block["type"] for block in blocks] == ["context"]
+    elements = blocks[0]["elements"]
+    assert elements[0] == {"type": "plain_text", "text": "✓ 完了 · 👤 —"}
+    images = [e for e in elements if e["type"] == "image"]
+    assert [e["image_url"] for e in images] == [_JEV_URL]
+    assert images[0]["alt_text"] == "Jev 実行済み"
+    assert [e["text"] for e in elements if e["type"] == "plain_text"] == ["✓ 完了 · 👤 —", "✓", "💻 ✓"]
+    assert "Jev" not in " ".join(e.get("text", "") for e in elements if e["type"] == "plain_text")
+    assert not any("Anthropic" in e.get("alt_text", "") or "OpenAI" in e.get("alt_text", "")
+                   for e in elements)
+
+
+def test_v3_header_keeps_frozen_percent_hold_and_filters_states():
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "attention", "local": "unknown"}
+    progress = {"proof_version": 1, "percent": 45, "stage": "sources", "held": True,
+                "source_sig": "a" * 64, "observed_at": 1.0}
+    parts = _v3_parts(states, progress, "解析中 · 👤 45% 保留 · Jev 要確認 · 💻 不明")
+    elements = render_parts(parts, card_kind="thread")[0]["elements"]
+    assert elements[0]["text"] == "◐ 未完了 · 👤 45% 保留"
+    images = [e for e in elements if e["type"] == "image"]
+    assert [e["image_url"] for e in images] == [_JEV_URL]
+    assert images[0]["alt_text"] == "Jev 要確認"
+    assert [e["text"] for e in elements if e["type"] == "plain_text"] == ["◐ 未完了 · 👤 45% 保留", "!"]
+
+
+def test_v3_header_matches_text_compact_header_except_the_jev_name():
+    import processing_route
+
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "partial", "local": "unverified"}
+    progress = {"proof_version": 1, "percent": 10, "stage": "sources", "held": False,
+                "source_sig": "a" * 64, "observed_at": 1.0}
+    header = {"type": "text", "provider_scope": "header", "provider_states": states,
+              "visible_providers": ["jev", "local"], "context_progress": progress,
+              "text": "状況不明 · 👤 10% · Jev 一部実行・一部省略 · 💻 状況未確認"}
+    blocks = render_parts(_v3_parts(states, progress, header["text"]), card_kind="thread")
+    elements = blocks[0]["elements"]
+    text = processing_route.compact_header(header)
+    assert text == "? 状況未取得 · 👤 10% · Jev ◐  💻 ?"
+    assert [e["text"] for e in elements if e["type"] == "plain_text"] == [
+        "? 状況未取得 · 👤 10%", "◐", "💻 ?"]
+    assert elements[0]["text"] + " · " + "  ".join(
+        ["Jev " + elements[2]["text"], elements[3]["text"]]) == text
+    assert elements[1] == {"type": "image", "image_url": _JEV_URL, "alt_text": "Jev 一部実行・一部省略"}
+
+
+def _discord_header_spec(states, context_progress, text):
+    header = {"type": "text", "provider_scope": "header", "provider_states": states,
+              "visible_providers": ["jev", "local"], "context_progress": context_progress,
+              "text": text}
+    return {"schema": "synthetic", "kind": "thread",
+            "delivery": {"transport": "discord"},
+            "parts": {"provider_states_version": 4, "processing_display_version": 3,
+                      "containers": [header], "footer": [], "action_rows": []}}
+
+
+def _discord_children(view):
+    return [item for container in view.items for item in container.children]
+
+
+def test_discord_header_shows_jev_thumbnail_and_keeps_text(monkeypatch):
+    import copy
+
+    from discord_testkit import _fake_discord
+    fake = _fake_discord()
+    monkeypatch.setitem(sys.modules, "discord", fake)
+    from adapters.discord import cards
+
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "done", "local": "done"}
+    progress = {"proof_version": 1, "percent": 45, "stage": "sources", "held": True,
+                "source_sig": "a" * 64, "observed_at": 1.0}
+    spec = _discord_header_spec(states, progress, "解析中 · 👤 45% 保留 · Jev 実行済み · 💻 実行済み")
+    before = copy.deepcopy(spec)
+    children = _discord_children(cards.build_view(spec))
+    sections = [c for c in children if isinstance(c, fake.ui.Section)
+                and isinstance(c.accessory, fake.ui.Thumbnail)]
+    assert len(sections) == 1
+    thumb = sections[0].accessory
+    assert thumb.media == _JEV_URL and thumb.description == "Jev 実行済み"
+    texts = [item.content for child in children
+             for item in (child, *getattr(child, "children", ())) if hasattr(item, "content")]
+    assert "◐ 未完了 · 👤 45% 保留 · Jev ✓  💻 ✓" in texts
+    assert spec == before
+
+
+def test_discord_header_without_compact_jev_state_keeps_plain_text(monkeypatch):
+    from discord_testkit import _fake_discord
+    fake = _fake_discord()
+    monkeypatch.setitem(sys.modules, "discord", fake)
+    from adapters.discord import cards
+
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "unknown", "local": "done"}
+    progress = {"proof_version": 1, "percent": None, "stage": "unknown", "held": False,
+                "source_sig": None, "observed_at": 1.0}
+    spec = _discord_header_spec(states, progress, "状況不明 · 👤 — · Jev 不明 · 💻 実行済み")
+    children = _discord_children(cards.build_view(spec))
+    thumbs = [c for c in children if isinstance(getattr(c, "accessory", None), fake.ui.Thumbnail)]
+    assert thumbs == []
+    texts = [item.content for child in children
+             for item in (child, *getattr(child, "children", ())) if hasattr(item, "content")]
+    assert "? 状況未取得 · 👤 — · 💻 ✓" in texts
+
+
+def test_discord_body_matching_header_text_stays_plain(monkeypatch):
+    from discord_testkit import _fake_discord
+    fake = _fake_discord()
+    monkeypatch.setitem(sys.modules, "discord", fake)
+    from adapters.discord import cards
+
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "done", "local": "done"}
+    progress = {"proof_version": 1, "percent": 45, "stage": "sources", "held": True,
+                "source_sig": "a" * 64, "observed_at": 1.0}
+    spec = _discord_header_spec(states, progress, "解析中 · 👤 45% 保留 · Jev 実行済み · 💻 実行済み")
+    spec["parts"]["containers"].append(
+        {"type": "text", "text": "◐ 未完了 · 👤 45% 保留 · Jev ✓  💻 ✓"})
+    children = _discord_children(cards.build_view(spec))
+    thumbs = [c for c in children
+              if isinstance(getattr(c, "accessory", None), fake.ui.Thumbnail)]
+    assert len(thumbs) == 1
+    texts = [item.content for child in children
+             for item in (child, *getattr(child, "children", ())) if hasattr(item, "content")]
+    assert texts.count("◐ 未完了 · 👤 45% 保留 · Jev ✓  💻 ✓") == 2
+
+
+def test_discord_header_falls_back_to_text_without_thumbnail_support(monkeypatch):
+    from discord_testkit import _fake_discord
+    fake = _fake_discord()
+    del fake.ui.Thumbnail
+    monkeypatch.setitem(sys.modules, "discord", fake)
+    from adapters.discord import cards
+
+    states = {"anthropic": "unknown", "openai": "unknown", "jev": "done", "local": "done"}
+    progress = {"proof_version": 1, "percent": None, "stage": "unknown", "held": False,
+                "source_sig": None, "observed_at": 1.0}
+    spec = _discord_header_spec(states, progress, "解析完了 · 👤 — · Jev 実行済み · 💻 実行済み")
+    children = _discord_children(cards.build_view(spec))
+    assert not any(getattr(c, "accessory", None) is not None for c in children)
+    texts = [item.content for child in children
+             for item in (child, *getattr(child, "children", ())) if hasattr(item, "content")]
+    assert "✓ 完了 · 👤 — · Jev ✓  💻 ✓" in texts
 
 
 def test_partial_mark_matches_for_slack_and_text():
