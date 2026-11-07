@@ -300,7 +300,10 @@ def build_view(spec: dict):
     def face(groups):
         from processing_route import COMPACT_MARKS, STATE_LABELS
         from adapters.common.provider_assets import PROVIDER_ASSETS
-        thumbnail = getattr(discord.ui, "Thumbnail", None)
+        try:
+            thumbnail = discord.ui.Thumbnail
+        except AttributeError:
+            thumbnail = None
         jev_url = next((url for key, _name, url in PROVIDER_ASSETS
                         if key == "jev"), None) if thumbnail else None
         out = []
@@ -316,7 +319,7 @@ def build_view(spec: dict):
                         run = []
                         out.append(discord.ui.Section(
                             discord.ui.TextDisplay(str(line)),
-                            accessory=discord.ui.Thumbnail(
+                            accessory=thumbnail(
                                 jev_url,
                                 description=f"Jev {STATE_LABELS[line.jev_state]}")))
                         continue

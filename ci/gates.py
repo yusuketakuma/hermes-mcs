@@ -189,7 +189,7 @@ def gate_stdlib_only() -> list[str]:
         members = (_STANDALONE_DISCORD_MEMBERS.get(_plugin_path(path), set())
                    if native and _plugin_path(path) in _STANDALONE_SDK else _SDK_MEMBERS)
         if _plugin_path(path) == "mcs_discord/cards.py":
-            members = members | {"Embed"}
+            members = members | {"Embed", "ui.Thumbnail"}
         bad.extend(f"{path.name}:{v}" for v in _module_surface(tree, "discord", members))
     return bad
 

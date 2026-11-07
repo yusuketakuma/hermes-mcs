@@ -16,6 +16,9 @@ def test_lineworks_cli_entry_is_only_the_module_wrapper():
 @pytest.mark.parametrize("relative,source,expected", [
     ("discord/cards.py", "def view():\n    import discord\n    return discord.ui.LayoutView()\n", False),
     ("discord/cards.py", "def view():\n    import discord\n    return discord.ui.MediaGallery()\n", False),
+    ("discord/cards.py", "def view():\n    import discord\n    return discord.ui.Thumbnail('https://example.invalid/logo.png')\n", False),
+    ("discord/actions.py", "def view():\n    import discord\n    return discord.ui.Thumbnail('https://example.invalid/logo.png')\n", True),
+    ("discord/cards.py", "def view():\n    import discord\n    return getattr(discord.ui, 'Client')()\n", True),
     ("discord/cards.py", "def view():\n    import discord\n    return discord.ui.File('attachment://synthetic.pdf')\n", False),
     ("discord/cards.py", "def view():\n    import discord\n    return discord.MediaGalleryItem('attachment://synthetic.png')\n", False),
     ("discord/delivery.py", "def file():\n    import discord\n    return discord.File('synthetic.pdf')\n", True),
