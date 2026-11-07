@@ -3,9 +3,9 @@
   "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
   "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
   "source_checkout_observation": {
-    "head": "7f79444c480696f6e1ea1932816f0cdceaa6fed0",
+    "head": "b34eb4dda0224424ed215b0c6b6cb882e220c1d7",
     "dirty": true,
-    "observed_at": "2026-11-07T07:48:13.000000+00:00",
+    "observed_at": "2026-11-07T08:10:14.000000+00:00",
     "release_sha_fixed": false
   },
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
@@ -17,17 +17,17 @@
   },
   "visual_check": {
     "png_rendered": true,
-    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・ブロック順序改訂後）",
+    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補79件へ更新後）",
     "narrow_width_ok": true
   },
   "artifacts": [
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "4e304f0aae2631c5c776cde33ff00aa705e88de9b09e91377817d510605ef312"
+      "sha256": "9aa1a8d424835873da8f68a9349efe91daa4ca52b0b4dcacb41aa4f1532f7b00"
     },
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "cde79d2d8b4af5b7bcfe981df3461fca3a957570cc9811848b8ec75f41f81c11"
+      "sha256": "86c8d6d53b2a8aed861225b8e36352b13410525d9d5124072e9d17cdf9817fc0"
     }
   ],
   "source_file_observations": [

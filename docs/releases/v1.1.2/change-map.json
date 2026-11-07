@@ -1,553 +1,560 @@
 {
- "status": "unpublished_preparation",
- "scope": "v1.1.2 の変更記録78件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで2件追加）。最終候補SHAの固定・受入証拠ではない。",
- "fragment_count": 78,
- "records": [
-  {
-   "path": "changes/archive/1.1.2/attachment-medical-ocr-112.json",
-   "id": "attachment-medical-ocr-112",
-   "title": "添付資料を本文と分けて文字起こしし、医療項目を整理",
-   "category": "added",
-   "sha256": "44c52546a86712c3c0502d2b7f77432ec710f52047fe6d490b6366ca02c05b8a"
-  },
-  {
-   "path": "changes/archive/1.1.2/attachment-ocr-pipeline-review.json",
-   "id": "attachment-ocr-pipeline-review",
-   "title": "添付OCRから解析・通知・患者コンテキストまでの処理を接続",
-   "category": "fixed",
-   "sha256": "6bfb170a97215286a957bdd31491275e088cb27aa12286db549ccf3caa2a35be"
-  },
-  {
-   "path": "changes/archive/1.1.2/attachment-ocr-review-cycle.json",
-   "id": "attachment-ocr-review-cycle",
-   "title": "添付OCRの表と解析状態を正しく扱う",
-   "category": "fixed",
-   "sha256": "fd2ba9c03f78eeab5f5690d3098d0e894fed42e8d1c7cf8babd0ae67b9e15601"
-  },
-  {
-   "path": "changes/archive/1.1.2/bounded-notification-gc.json",
-   "id": "bounded-notification-gc",
-   "title": "通知の整理で一度に確認する件数を制限",
-   "category": "fixed",
-   "sha256": "fba25c3d0adbca7dd78b628939efd8a929fc77e1fc2c50a914bbcaf7f1fb2140"
-  },
-  {
-   "path": "changes/archive/1.1.2/card-observation-diagnostics.json",
-   "id": "card-observation-diagnostics",
-   "title": "カードの観測が止まった段階と制限を記録",
-   "category": "added",
-   "sha256": "b2e79c639ec085a48a7796073295eb209a134d0be9aaf5f1d555a07e18205b7e"
-  },
-  {
-   "path": "changes/archive/1.1.2/chat-format-parity.json",
-   "id": "chat-format-parity",
-   "title": "Discord・LINE WORKSの通知カードに投稿原文を表示",
-   "category": "added",
-   "sha256": "cf783785fa28ea9166119b1e713a72f735101ee9ff03d659dbd47ea68883bfe8"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-after-canonical-seal.json",
-   "id": "cloud-after-canonical-seal",
-   "title": "正準投影済みでも回収中のクラウド結果を完了扱いしない",
-   "category": "fixed",
-   "sha256": "c11ba580c7e7803b07f1819a041679fc62712231c2b39c8cff41175ee012cf63"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-backlog-lock-fairness.json",
-   "id": "cloud-backlog-lock-fairness",
-   "title": "クラウド抽出がロック待ちで停止し続ける問題を修正",
-   "category": "fixed",
-   "sha256": "d851c563ff89a3d15a81236f42b3cbd6dc10f37b844a1047ae439c065e3bd972"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-followup-estimate.json",
-   "id": "cloud-followup-estimate",
-   "title": "閉じた経路を除いたクラウド概算で後続処理を数える",
-   "category": "fixed",
-   "sha256": "e4c72099ae5a0c7fa0f0e5ab72f131b04360d817ed82af3020c6f5a462902fe5"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-followup-progress-display.json",
-   "id": "cloud-followup-progress-display",
-   "title": "解析状況をJev・ローカルの実行表示と患者背景の進捗に整理",
-   "category": "changed",
-   "sha256": "d0a01d086a1253970ce910222f7ded7b1bf22ac41d970131f64fd332af71702d"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-history-read-diagnostics-20261106.json",
-   "id": "cloud-history-read-diagnostics-20261106",
-   "title": "クラウド履歴の確認失敗をログで区別",
-   "category": "fixed",
-   "sha256": "d49c7c825a0658cc560fa01e64df952cfb7ebc56df169be7401adb2a12197d44"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-llm-observation-coverage.json",
-   "id": "cloud-llm-observation-coverage",
-   "title": "cloud-llm の保持記録が観測上限を超えても原因と観測範囲を返す",
-   "category": "fixed",
-   "sha256": "4b54671c74afbd8db75cf701fb3fd9806432b16384cef39289cd2e354c91ec77"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-observation-defer-extract.json",
-   "id": "cloud-observation-defer-extract",
-   "title": "確認不能なクラウド解析がローカル解析へ退避しないように修正",
-   "category": "fixed",
-   "sha256": "fd0c2fe8de62f4494b9a8b28cbcb51f4ab8747602d956936a4a95f2a84fa3e3a"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-observation-partial-boundary.json",
-   "id": "cloud-observation-partial-boundary",
-   "title": "クラウド診断の部分結果と未確認項目を正しく表示",
-   "category": "fixed",
-   "sha256": "018f4f78bf08b992309c704b5305a992c9811b71aa2df53625d27fc0f06fe849"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-observation-read-gaps.json",
-   "id": "cloud-observation-read-gaps",
-   "title": "クラウド設定を確認できない間の回答破棄を防止",
-   "category": "fixed",
-   "sha256": "80dc361e9124d81a7f19043caaa7d3fe5e6da1fd3c403232bd697453cd1bd596"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-paid-observation-incomplete.json",
-   "id": "cloud-paid-observation-incomplete",
-   "title": "回答受信後の確認不能で有料回答を破棄しない",
-   "category": "fixed",
-   "sha256": "f5fd4f4fcc486c79d6f5e500ce6722195a9895d882b5465a4ca08b55ab77efdb"
-  },
-  {
-   "path": "changes/archive/1.1.2/cloud-progress-permission-evidence.json",
-   "id": "cloud-progress-permission-evidence",
-   "title": "クラウド送信の承認証拠が不明な場合も進捗を推測で隠さない",
-   "category": "fixed",
-   "sha256": "a605538409c02480d644b76d4d87868d0567bd312d01a5c03cf66b9d538fe118"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-cloud-original-resume.json",
-   "id": "context-cloud-original-resume",
-   "title": "クラウド再開時に患者コンテキストの原文を全区間確認",
-   "category": "fixed",
-   "sha256": "20f39c12cb2438a4a50f3da4f6fec3f804c458d3fee46f38795b4b5c8f91f53a"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-current-input-recovery.json",
-   "id": "context-current-input-recovery",
-   "title": "患者コンテキスト更新時の原資料と入力の照合を修正",
-   "category": "fixed",
-   "sha256": "79bf22aebc4cd222539ed12528818f653d17368d0d266da216cae54c64577c7f"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-full-source-inputs.json",
-   "id": "context-full-source-inputs",
-   "title": "患者コンテキストへ原文と補助要約を区別して入力",
-   "category": "changed",
-   "sha256": "800a2dba519ab73877144828e2dfb8d0cbe33eba25528bffc7d87137f2992bc1"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-local-fallback-progress.json",
-   "id": "context-local-fallback-progress",
-   "title": "クラウド停止中もローカルの患者コンテキストを検証・表示",
-   "category": "fixed",
-   "sha256": "762f143bb055837b5d9ae038ff7fa2742dd4efe0ee4d6750ac3cfdc65ff10d49"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-ocr-repair-hydration.json",
-   "id": "context-ocr-repair-hydration",
-   "title": "OCRの修復結果が読取り時に拒否される問題を修正",
-   "category": "fixed",
-   "sha256": "b5a384ca88947489b1fa80d546fa5172e3790fd38a1c1b8fd843a7d2e76e99f3"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-only-cloud.json",
-   "id": "context-only-cloud",
-   "title": "クラウド解析を患者コンテキストの作成・更新に限定",
-   "category": "changed",
-   "sha256": "66cd9fd3c30fb37b74ae99748caf5470fb260ec1dfcb78033b4fdb4ebd6b2e26"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-pending-cloud-coverage.json",
-   "id": "context-pending-cloud-coverage",
-   "title": "患者コンテキストのクラウド処理待ちを見積もりに反映",
-   "category": "fixed",
-   "sha256": "c5c56b9ad3e49206935adc4fda000fba60494cae0b354fb2aa245dc8b833d175"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-progress-percent.json",
-   "id": "context-progress-percent",
-   "title": "チャット作成時の患者コンテキストの進捗を表示",
-   "category": "changed",
-   "sha256": "570a3cca1dd5d6fd91e01a15dda88e0e973dacf11b1e75cfcff25c32364fa302"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-proof-reader-ownership.json",
-   "id": "context-proof-reader-ownership",
-   "title": "患者背景の修復証拠を共通の読取経路へ集約",
-   "category": "changed",
-   "sha256": "61fddfe55773749fd9af1737e495489c2642053ec7d5859d5de80062eb42c828"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-recorded-source-proof.json",
-   "id": "context-recorded-source-proof",
-   "title": "患者背景の保存前検証で読取り証明が無効になる問題を修正",
-   "category": "fixed",
-   "sha256": "fcc9a45ed3418bf60f9cbe79a2be03f80dd7d5cc17c3f4b795f10fcdcfaad4fa"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-repair-origin-validation.json",
-   "id": "context-repair-origin-validation",
-   "title": "不完全な修復記録を決められた検証エラーで拒否",
-   "category": "fixed",
-   "sha256": "8948f49635f33715e32dcea9ded02a7ce8531693e540b7eb447420a0f6d90a18"
-  },
-  {
-   "path": "changes/archive/1.1.2/context-source-proof-aggregate-read.json",
-   "id": "context-source-proof-aggregate-read",
-   "title": "補助要約で重複していた証明照合のための追加JOINを削減",
-   "category": "fixed",
-   "sha256": "2d01f4779ac4dcaa9800db914c238c0d82dc4ce0d6503acba0b828238d230967"
-  },
-  {
-   "path": "changes/archive/1.1.2/deleted-attachment-readiness.json",
-   "id": "deleted-attachment-readiness",
-   "title": "削除済み投稿の添付を誤って完了扱いする問題を修正",
-   "category": "fixed",
-   "sha256": "348967d1d243b984cbfc40ca51678d1bcef10bfef1e7f9c259ed7365afc50943"
-  },
-  {
-   "path": "changes/archive/1.1.2/discord-file-spoiler-name.json",
-   "id": "discord-file-spoiler-name",
-   "title": "Discordの非画像添付で非表示指定を保持",
-   "category": "fixed",
-   "sha256": "fe37a1330a7ab459d3d515fcdd4971b301821bc5eef15465d77aae64ca624260"
-  },
-  {
-   "path": "changes/archive/1.1.2/drug-progress-read-parser.json",
-   "id": "drug-progress-read-parser",
-   "title": "薬剤辞書の進捗検証を読取り専用で再利用",
-   "category": "changed",
-   "sha256": "f760b83cdab71aeb7dcf2f5d818b134b0a9085756963f2c0160fae83a9e3efd1"
-  },
-  {
-   "path": "changes/archive/1.1.2/extract-commit-cloud-observation.json",
-   "id": "extract-commit-cloud-observation",
-   "title": "クラウド解析結果の保存待ちを改善",
-   "category": "fixed",
-   "sha256": "8b836babd19d4b9d714435fd6e66c2bd3a006e0e7fc9288cb232a850eda68196"
-  },
-  {
-   "path": "changes/archive/1.1.2/file-group-positive-dependency-refusal.json",
-   "id": "file-group-positive-dependency-refusal",
-   "title": "添付の準備不足で実行しなかったグループ共有を明示承認で再試行",
-   "category": "fixed",
-   "sha256": "dc305bf8cebd2f0af01b86039c7fe27585201bad3059f69c2f03b2fe68569a24"
-  },
-  {
-   "path": "changes/archive/1.1.2/installer-no-services-init.json",
-   "id": "installer-no-services-init",
-   "title": "サービスを省略した導入で初期設定を延期",
-   "category": "fixed",
-   "sha256": "d3948014e9fad2816ef5b623b1e2bef29769f5b4477a29bf1918cdb1720e98be"
-  },
-  {
-   "path": "changes/archive/1.1.2/late-receipt-dependents.json",
-   "id": "late-receipt-dependents",
-   "title": "依存先の結果不明で保留された本文の後着結果を受け付ける",
-   "category": "fixed",
-   "sha256": "90a13ba7d15153f534e693d119cb195644d3a9a89954292709c5d471a52d0e50"
-  },
-  {
-   "path": "changes/archive/1.1.2/local-then-cloud-completion.json",
-   "id": "local-then-cloud-completion",
-   "title": "個別クラウド経路の完了判定をローカル解析から独立して検証",
-   "category": "fixed",
-   "sha256": "43b937499b6b53030ec670e7b179a3d12ba3791dc969e1a0ca405b99ba702271"
-  },
-  {
-   "path": "changes/archive/1.1.2/mcslog-patient-information-routing.json",
-   "id": "mcslog-patient-information-routing",
-   "title": "Slackの患者情報とMCSLOGの運用通知を分離",
-   "category": "changed",
-   "sha256": "5abf981e10173f7194a0a28c6d7fe8bf3099f320cd3a9243ae96c9956890a5e1"
-  },
-  {
-   "path": "changes/archive/1.1.2/monitor-alert-accuracy.json",
-   "id": "monitor-alert-accuracy",
-   "title": "監視警報の件数と継続理由を明確化",
-   "category": "fixed",
-   "sha256": "463237ed7bc908e2d0750a637adc248c34ddd61420321840f4b296ef8730b7d7"
-  },
-  {
-   "path": "changes/archive/1.1.2/ocr-local-cloud-runtime-20261105.json",
-   "id": "ocr-local-cloud-runtime-20261105",
-   "title": "OCRとローカル・クラウド解析の停止依存を解消",
-   "category": "fixed",
-   "sha256": "3d5dd4455cf2848d5f5afa2e8fc8c061079a31fd0f6959a122ddf44565dc0bbb"
-  },
-  {
-   "path": "changes/archive/1.1.2/ocr-model-revisions.json",
-   "id": "ocr-model-revisions",
-   "title": "OCRモデルの版を導入時と実行時で固定",
-   "category": "fixed",
-   "sha256": "10029ffc7ff63dfaeeec3d4e957e3ff31c2540a1e72d559c19961df8117492ae"
-  },
-  {
-   "path": "changes/archive/1.1.2/ocr-source-links-20261105.json",
-   "id": "ocr-source-links-20261105",
-   "title": "添付OCRの測定値・経過表示と誤り報告を接続",
-   "category": "fixed",
-   "sha256": "a3839b3c4dfafef1ba082dfbfe6b592a50ab56915ce8d98153d8252650e81154"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-context-cloud-extraction-gate.json",
-   "id": "patient-context-cloud-extraction-gate",
-   "title": "患者コンテキストの完了前にクラウド抽出の完了を確認",
-   "category": "fixed",
-   "sha256": "e90ad0956cbf35d4eed1fc3199672200c459036d21e5388cd46d90d09c1641b8"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-context-scan-fairness.json",
-   "id": "patient-context-scan-fairness",
-   "title": "患者背景の確認が一部の患者で止まり続ける問題を修正",
-   "category": "fixed",
-   "sha256": "6276bdd44bd15b5a26cfbaf92c1cd8e4611f9f65da88199176bd07e78551e083"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-context-scan-integration.json",
-   "id": "patient-context-scan-integration",
-   "title": "患者背景の候補確認が期限切れでも後続へ進むよう修正",
-   "category": "fixed",
-   "sha256": "ae8832ed6b3e8460a31656d538242ff57d239c53b628e2f6240914456d1e1f96"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-context-scan-writer-wait.json",
-   "id": "patient-context-scan-writer-wait",
-   "title": "患者背景の候補確定時の書込み待ちを期限内に制限",
-   "category": "fixed",
-   "sha256": "134adf48d1818d6429c1f384df6908f8d1500bcd9d8a5dbd4ecb03ca1e48258a"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-context-write-readiness-proof.json",
-   "id": "patient-context-write-readiness-proof",
-   "title": "患者背景の保存前確認による他患者の保存待ちを軽減",
-   "category": "fixed",
-   "sha256": "0378d75eb59615720cf2c17432b9739f2ca9a0ceb186dc430317f37d8859c062"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-reader-source-fences.json",
-   "id": "patient-reader-source-fences",
-   "title": "患者背景の処理順と保存前判定にも更新検知を適用",
-   "category": "fixed",
-   "sha256": "e7ea980f066d9dc2d30bcd899fa0179f433ce39e3db89779c3ad54d1091e3e5f"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-readiness-drug-generation.json",
-   "id": "patient-readiness-drug-generation",
-   "title": "医薬品辞書の進捗確認を効率化",
-   "category": "changed",
-   "sha256": "2bd1e352537ad044a381a241050ac189e8adf1c5aca855b45219b18abdc9ab48"
-  },
-  {
-   "path": "changes/archive/1.1.2/patient-readiness-witness.json",
-   "id": "patient-readiness-witness",
-   "title": "患者背景の完了判定に使う読取証拠を追加",
-   "category": "changed",
-   "sha256": "58e695e31f93c077be5a6931f210ac21dc56b4960fc5876c5e739e969f75a1b2"
-  },
-  {
-   "path": "changes/archive/1.1.2/postdeploy-rollup-claim-witness.json",
-   "id": "postdeploy-rollup-claim-witness",
-   "title": "解析の占有期限更新による患者集約の不要な保留を解消",
-   "category": "fixed",
-   "sha256": "626e60567c61f93e047cf3a2f5edfdc58f526403deb893539ee9a5f849a2f93a"
-  },
-  {
-   "path": "changes/archive/1.1.2/referral-document-timeline.json",
-   "id": "referral-document-timeline",
-   "title": "紹介状に記載された経過を日付順に表示",
-   "category": "added",
-   "sha256": "99c3069d188056a886883fc7394003350f1488949f43640f619a9ce761695075"
-  },
-  {
-   "path": "changes/archive/1.1.2/resident-cloud-guard-fairness.json",
-   "id": "resident-cloud-guard-fairness",
-   "title": "クラウド確認待ちの先頭対象が後続解析を塞ぐ問題を修正",
-   "category": "fixed",
-   "sha256": "cf9e7376ae626848d849ac9e854dbb43c685df731725602c214a0a058a87dcb1"
-  },
-  {
-   "path": "changes/archive/1.1.2/resident-unresolved-source-fairness.json",
-   "id": "resident-unresolved-source-fairness",
-   "title": "結果確認待ちのクラウド要求で後続解析を妨げない",
-   "category": "fixed",
-   "sha256": "0cd2da073606fdee3b49c63549f614fac28b7c15f54a4532d86e6ea214a15653"
-  },
-  {
-   "path": "changes/archive/1.1.2/responsibility-split-20261105.json",
-   "id": "responsibility-split-20261105",
-   "title": "推論・保存・更新処理を責務別に整理",
-   "category": "changed",
-   "sha256": "f175b7f14ba3f166e496a82d941cd3ec87c959e58c6b2dad41a50997d96a16c8"
-  },
-  {
-   "path": "changes/archive/1.1.2/semantic-closed-contract.json",
-   "id": "semantic-closed-contract",
-   "title": "ローカル解析の候補照合で不要なクラウド認証参照を停止",
-   "category": "fixed",
-   "sha256": "dbd08c1b7e4acdbb10fa899800ee036b192a68179b2e15a23a3f2679c7773130"
-  },
-  {
-   "path": "changes/archive/1.1.2/semantic-reprocess-reader-ownership.json",
-   "id": "semantic-reprocess-reader-ownership",
-   "title": "再処理の完了判定を共通の読取経路へ集約",
-   "category": "changed",
-   "sha256": "163a63848281095004739878701583a196fdcdea5975a85aa1f64ba6154576fb"
-  },
-  {
-   "path": "changes/archive/1.1.2/semantic-source-identity.json",
-   "id": "semantic-source-identity",
-   "title": "編集済み投稿の意味解析が旧クラウド予約で止まり続ける問題を修正",
-   "category": "fixed",
-   "sha256": "f6ee13972a431439dd4e6fa54495a71593cc6102c9432eeacf849dd6d6895857"
-  },
-  {
-   "path": "changes/archive/1.1.2/semantic-stop-diagnostics.json",
-   "id": "semantic-stop-diagnostics",
-   "title": "解析の安全停止理由を固定コードで区別",
-   "category": "added",
-   "sha256": "90aed0b4da5368e4701d4fcba54c59eb4b8aa12004b2e8373b1b8b46c7a3a7dc"
-  },
-  {
-   "path": "changes/archive/1.1.2/setup-capability-syntax-check.json",
-   "id": "setup-capability-syntax-check",
-   "title": "更新先の設定機能をコメントから誤認する問題を修正",
-   "category": "fixed",
-   "sha256": "62deeb857c6c93f06ebaeff0c0ab6cf35999608227f52310f612711bc0cfb5e2"
-  },
-  {
-   "path": "changes/archive/1.1.2/shared-patient-activity-order.json",
-   "id": "shared-patient-activity-order",
-   "title": "背景抽出と意味解析の患者順位を共通化",
-   "category": "changed",
-   "sha256": "029d27175fdb415380bc49b07be060ddadadcc4e2abfafbdb60be55e7adf74fd"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-channel-setup-continuation.json",
-   "id": "slack-channel-setup-continuation",
-   "title": "通知先の準備完了後も通常設定を変更できるよう修正",
-   "category": "fixed",
-   "sha256": "a69020e0acfb4d270f1d9a0f6a4af0e7320bc6097a8ce5493f2219489e29e0e8"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-private-channel-setup.json",
-   "id": "slack-private-channel-setup",
-   "title": "Slackの患者情報と運用ログの通知先を分離",
-   "category": "added",
-   "sha256": "4445a4fe224ee62632a638e214b29941de8bfce925d810251aa3a3446049ff34"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-private-file-verification-reasons.json",
-   "id": "slack-private-file-verification-reasons",
-   "title": "Slack添付ファイルの照合を保留した理由を記録",
-   "category": "fixed",
-   "sha256": "591208b2e7dc10d3ce8a837139d327a6177a9ae156f268fe1ec492aeb2eea632"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-setup-held-no-restart.json",
-   "id": "slack-setup-held-no-restart",
-   "title": "Slack設定の保留時に不要な再起動を防止",
-   "category": "fixed",
-   "sha256": "2928f107ef944297120e73f03441a82dfedba5ff66282afca1e5bee4a1ec27af"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-setup-lifecycle-recovery.json",
-   "id": "slack-setup-lifecycle-recovery",
-   "title": "Slackチャンネル準備の中断復旧と更新後の確認を修正",
-   "category": "fixed",
-   "sha256": "6573292b687ed5ad4b8eac179c9af8f561dd8279fff3b2a18cc9dbca568e641a"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-system-profile-bootstrap-scope.json",
-   "id": "slack-system-profile-bootstrap-scope",
-   "title": "作成した運用通知先の接続設定と自動作成の対象を修正",
-   "category": "fixed",
-   "sha256": "a7b99fb30e8b1154c7f40080fa9916fdfa58fab19103a6a3baa25fa4d51d056e"
-  },
-  {
-   "path": "changes/archive/1.1.2/slack-text-bootstrap.json",
-   "id": "slack-text-bootstrap",
-   "title": "Slackテキスト通知の初回セットアップで専用チャンネルを自動準備",
-   "category": "added",
-   "sha256": "b54eefddb4145b3aef35571ec911bdd961c17d9e21f6a8c8d1167000b560b180"
-  },
-  {
-   "path": "changes/archive/1.1.2/snapshot-health-tail-reserve.json",
-   "id": "snapshot-health-tail-reserve",
-   "title": "snapshot処理後のhealth観測時間を確保",
-   "category": "fixed",
-   "sha256": "42dfb1e03bf6e12be43a1754e7c6be52257d52ee305c8fa67c80aae0bd53a43f"
-  },
-  {
-   "path": "changes/archive/1.1.2/snapshot-schema12-readers.json",
-   "id": "snapshot-schema12-readers",
-   "title": "添付識別子追加後の通知画面と測定値表示を復旧",
-   "category": "fixed",
-   "sha256": "2d82c45deea0031d0d350dc00cb71bab90ea32a82af91406071045f45e865880"
-  },
-  {
-   "path": "changes/archive/1.1.2/source-changed-claim-release.json",
-   "id": "source-changed-claim-release",
-   "title": "確定的に変わった原文の古い抽出予約を解放",
-   "category": "fixed",
-   "sha256": "ffda2ed45f0359120f59e89c22d44618dcece2412a00967691909305beab60a1"
-  },
-  {
-   "path": "changes/archive/1.1.2/sqlite-message-reserve-diagnostics.json",
-   "id": "sqlite-message-reserve-diagnostics",
-   "title": "メッセージ保存のSQLiteエラーを固定項目で診断",
-   "category": "fixed",
-   "sha256": "4d253dda18b733821453aac0daf71114cdaec90a706dc0b620f8272934452777"
-  },
-  {
-   "path": "changes/archive/1.1.2/stale-gc-sql-deadline.json",
-   "id": "stale-gc-sql-deadline",
-   "title": "古い抽出結果の整理でDBの待機期限を守る",
-   "category": "fixed",
-   "sha256": "babd73b84965f0625cef9e53d15b40234926b3e1289c8e18fe77510a58b135a1"
-  },
-  {
-   "path": "changes/archive/1.1.2/stamp-source-independent.json",
-   "id": "stamp-source-independent",
-   "title": "本文や解析の更新後も同じ投稿のスタンプを保持",
-   "category": "changed",
-   "sha256": "c662ccdd3b057ccd19c7eeb44d7327798aa339e695e54694fa28f8652d9c6f03"
-  },
-  {
-   "path": "changes/archive/1.1.2/unresolved-body-spec-retention.json",
-   "id": "unresolved-body-spec-retention",
-   "title": "長さ制限で未送信になった本文の復旧用記録を保持",
-   "category": "fixed",
-   "sha256": "0af86a17e5d5b23b171e96a03291b12b4096daab3b6fc170540c386692d2d6d7"
-  },
-  {
-   "path": "changes/archive/1.1.2/updater-runtime-contract-assets.json",
-   "id": "updater-runtime-contract-assets",
-   "title": "更新候補の設定検証に必要な契約資産を同梱",
-   "category": "fixed",
-   "sha256": "6dd1998ea0ffadcf089269be57cd69ce0bc6d6aeb2c27a80e7a62f04e46deccd"
-  },
-  {
-   "path": "changes/archive/1.1.2/writer-refusal-diagnostics.json",
-   "id": "writer-refusal-diagnostics",
-   "title": "再試行準備と抽出起動の停止理由を区別",
-   "category": "added",
-   "sha256": "c08a48594903cd1c5809963795f58656ad7c9570d9f64913c67d9cce15619c42"
-  },
-  {
-   "path": "changes/archive/1.1.2/yomitoku-0-16-1.json",
-   "id": "yomitoku-0-16-1",
-   "title": "添付OCRをYomitoku 0.16.1へ更新",
-   "category": "changed",
-   "sha256": "d2b2a057222e1cea533ad8d7867c101432fcb6dc9a97aa2ba8d27141495f9510"
-  }
- ]
+  "status": "unpublished_preparation",
+  "scope": "v1.1.2 の変更記録78件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで2件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "fragment_count": 79,
+  "records": [
+    {
+      "path": "changes/archive/1.1.2/attachment-medical-ocr-112.json",
+      "id": "attachment-medical-ocr-112",
+      "title": "添付資料を本文と分けて文字起こしし、医療項目を整理",
+      "category": "added",
+      "sha256": "44c52546a86712c3c0502d2b7f77432ec710f52047fe6d490b6366ca02c05b8a"
+    },
+    {
+      "path": "changes/archive/1.1.2/attachment-ocr-pipeline-review.json",
+      "id": "attachment-ocr-pipeline-review",
+      "title": "添付OCRから解析・通知・患者コンテキストまでの処理を接続",
+      "category": "fixed",
+      "sha256": "6bfb170a97215286a957bdd31491275e088cb27aa12286db549ccf3caa2a35be"
+    },
+    {
+      "path": "changes/archive/1.1.2/attachment-ocr-review-cycle.json",
+      "id": "attachment-ocr-review-cycle",
+      "title": "添付OCRの表と解析状態を正しく扱う",
+      "category": "fixed",
+      "sha256": "fd2ba9c03f78eeab5f5690d3098d0e894fed42e8d1c7cf8babd0ae67b9e15601"
+    },
+    {
+      "path": "changes/archive/1.1.2/bounded-notification-gc.json",
+      "id": "bounded-notification-gc",
+      "title": "通知の整理で一度に確認する件数を制限",
+      "category": "fixed",
+      "sha256": "fba25c3d0adbca7dd78b628939efd8a929fc77e1fc2c50a914bbcaf7f1fb2140"
+    },
+    {
+      "path": "changes/archive/1.1.2/card-observation-diagnostics.json",
+      "id": "card-observation-diagnostics",
+      "title": "カードの観測が止まった段階と制限を記録",
+      "category": "added",
+      "sha256": "b2e79c639ec085a48a7796073295eb209a134d0be9aaf5f1d555a07e18205b7e"
+    },
+    {
+      "path": "changes/archive/1.1.2/chat-format-parity.json",
+      "id": "chat-format-parity",
+      "title": "Discord・LINE WORKSの通知カードに投稿原文を表示",
+      "category": "added",
+      "sha256": "cf783785fa28ea9166119b1e713a72f735101ee9ff03d659dbd47ea68883bfe8"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-after-canonical-seal.json",
+      "id": "cloud-after-canonical-seal",
+      "title": "正準投影済みでも回収中のクラウド結果を完了扱いしない",
+      "category": "fixed",
+      "sha256": "c11ba580c7e7803b07f1819a041679fc62712231c2b39c8cff41175ee012cf63"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-backlog-lock-fairness.json",
+      "id": "cloud-backlog-lock-fairness",
+      "title": "クラウド抽出がロック待ちで停止し続ける問題を修正",
+      "category": "fixed",
+      "sha256": "d851c563ff89a3d15a81236f42b3cbd6dc10f37b844a1047ae439c065e3bd972"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-followup-estimate.json",
+      "id": "cloud-followup-estimate",
+      "title": "閉じた経路を除いたクラウド概算で後続処理を数える",
+      "category": "fixed",
+      "sha256": "e4c72099ae5a0c7fa0f0e5ab72f131b04360d817ed82af3020c6f5a462902fe5"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-followup-progress-display.json",
+      "id": "cloud-followup-progress-display",
+      "title": "解析状況をJev・ローカルの実行表示と患者背景の進捗に整理",
+      "category": "changed",
+      "sha256": "d0a01d086a1253970ce910222f7ded7b1bf22ac41d970131f64fd332af71702d"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-history-read-diagnostics-20261106.json",
+      "id": "cloud-history-read-diagnostics-20261106",
+      "title": "クラウド履歴の確認失敗をログで区別",
+      "category": "fixed",
+      "sha256": "d49c7c825a0658cc560fa01e64df952cfb7ebc56df169be7401adb2a12197d44"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-llm-observation-coverage.json",
+      "id": "cloud-llm-observation-coverage",
+      "title": "cloud-llm の保持記録が観測上限を超えても原因と観測範囲を返す",
+      "category": "fixed",
+      "sha256": "4b54671c74afbd8db75cf701fb3fd9806432b16384cef39289cd2e354c91ec77"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-observation-defer-extract.json",
+      "id": "cloud-observation-defer-extract",
+      "title": "確認不能なクラウド解析がローカル解析へ退避しないように修正",
+      "category": "fixed",
+      "sha256": "fd0c2fe8de62f4494b9a8b28cbcb51f4ab8747602d956936a4a95f2a84fa3e3a"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-observation-partial-boundary.json",
+      "id": "cloud-observation-partial-boundary",
+      "title": "クラウド診断の部分結果と未確認項目を正しく表示",
+      "category": "fixed",
+      "sha256": "018f4f78bf08b992309c704b5305a992c9811b71aa2df53625d27fc0f06fe849"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-observation-read-gaps.json",
+      "id": "cloud-observation-read-gaps",
+      "title": "クラウド設定を確認できない間の回答破棄を防止",
+      "category": "fixed",
+      "sha256": "80dc361e9124d81a7f19043caaa7d3fe5e6da1fd3c403232bd697453cd1bd596"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-paid-observation-incomplete.json",
+      "id": "cloud-paid-observation-incomplete",
+      "title": "回答受信後の確認不能で有料回答を破棄しない",
+      "category": "fixed",
+      "sha256": "f5fd4f4fcc486c79d6f5e500ce6722195a9895d882b5465a4ca08b55ab77efdb"
+    },
+    {
+      "path": "changes/archive/1.1.2/cloud-progress-permission-evidence.json",
+      "id": "cloud-progress-permission-evidence",
+      "title": "クラウド送信の承認証拠が不明な場合も進捗を推測で隠さない",
+      "category": "fixed",
+      "sha256": "a605538409c02480d644b76d4d87868d0567bd312d01a5c03cf66b9d538fe118"
+    },
+    {
+      "path": "changes/archive/1.1.2/config-upgrade-ocr-options.json",
+      "id": "config-upgrade-ocr-options",
+      "title": "OCR導入済み環境の対話更新を修正",
+      "category": "fixed",
+      "sha256": "7c6d5cde4e5520851be9378870cb4fdb99fb2cb71a24eb48eacd786fbdc443da"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-cloud-original-resume.json",
+      "id": "context-cloud-original-resume",
+      "title": "クラウド再開時に患者コンテキストの原文を全区間確認",
+      "category": "fixed",
+      "sha256": "20f39c12cb2438a4a50f3da4f6fec3f804c458d3fee46f38795b4b5c8f91f53a"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-current-input-recovery.json",
+      "id": "context-current-input-recovery",
+      "title": "患者コンテキスト更新時の原資料と入力の照合を修正",
+      "category": "fixed",
+      "sha256": "79bf22aebc4cd222539ed12528818f653d17368d0d266da216cae54c64577c7f"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-full-source-inputs.json",
+      "id": "context-full-source-inputs",
+      "title": "患者コンテキストへ原文と補助要約を区別して入力",
+      "category": "changed",
+      "sha256": "800a2dba519ab73877144828e2dfb8d0cbe33eba25528bffc7d87137f2992bc1"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-local-fallback-progress.json",
+      "id": "context-local-fallback-progress",
+      "title": "クラウド停止中もローカルの患者コンテキストを検証・表示",
+      "category": "fixed",
+      "sha256": "762f143bb055837b5d9ae038ff7fa2742dd4efe0ee4d6750ac3cfdc65ff10d49"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-ocr-repair-hydration.json",
+      "id": "context-ocr-repair-hydration",
+      "title": "OCRの修復結果が読取り時に拒否される問題を修正",
+      "category": "fixed",
+      "sha256": "b5a384ca88947489b1fa80d546fa5172e3790fd38a1c1b8fd843a7d2e76e99f3"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-only-cloud.json",
+      "id": "context-only-cloud",
+      "title": "クラウド解析を患者コンテキストの作成・更新に限定",
+      "category": "changed",
+      "sha256": "66cd9fd3c30fb37b74ae99748caf5470fb260ec1dfcb78033b4fdb4ebd6b2e26"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-pending-cloud-coverage.json",
+      "id": "context-pending-cloud-coverage",
+      "title": "患者コンテキストのクラウド処理待ちを見積もりに反映",
+      "category": "fixed",
+      "sha256": "c5c56b9ad3e49206935adc4fda000fba60494cae0b354fb2aa245dc8b833d175"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-progress-percent.json",
+      "id": "context-progress-percent",
+      "title": "チャット作成時の患者コンテキストの進捗を表示",
+      "category": "changed",
+      "sha256": "570a3cca1dd5d6fd91e01a15dda88e0e973dacf11b1e75cfcff25c32364fa302"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-proof-reader-ownership.json",
+      "id": "context-proof-reader-ownership",
+      "title": "患者背景の修復証拠を共通の読取経路へ集約",
+      "category": "changed",
+      "sha256": "61fddfe55773749fd9af1737e495489c2642053ec7d5859d5de80062eb42c828"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-recorded-source-proof.json",
+      "id": "context-recorded-source-proof",
+      "title": "患者背景の保存前検証で読取り証明が無効になる問題を修正",
+      "category": "fixed",
+      "sha256": "fcc9a45ed3418bf60f9cbe79a2be03f80dd7d5cc17c3f4b795f10fcdcfaad4fa"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-repair-origin-validation.json",
+      "id": "context-repair-origin-validation",
+      "title": "不完全な修復記録を決められた検証エラーで拒否",
+      "category": "fixed",
+      "sha256": "8948f49635f33715e32dcea9ded02a7ce8531693e540b7eb447420a0f6d90a18"
+    },
+    {
+      "path": "changes/archive/1.1.2/context-source-proof-aggregate-read.json",
+      "id": "context-source-proof-aggregate-read",
+      "title": "補助要約で重複していた証明照合のための追加JOINを削減",
+      "category": "fixed",
+      "sha256": "2d01f4779ac4dcaa9800db914c238c0d82dc4ce0d6503acba0b828238d230967"
+    },
+    {
+      "path": "changes/archive/1.1.2/deleted-attachment-readiness.json",
+      "id": "deleted-attachment-readiness",
+      "title": "削除済み投稿の添付を誤って完了扱いする問題を修正",
+      "category": "fixed",
+      "sha256": "348967d1d243b984cbfc40ca51678d1bcef10bfef1e7f9c259ed7365afc50943"
+    },
+    {
+      "path": "changes/archive/1.1.2/discord-file-spoiler-name.json",
+      "id": "discord-file-spoiler-name",
+      "title": "Discordの非画像添付で非表示指定を保持",
+      "category": "fixed",
+      "sha256": "fe37a1330a7ab459d3d515fcdd4971b301821bc5eef15465d77aae64ca624260"
+    },
+    {
+      "path": "changes/archive/1.1.2/drug-progress-read-parser.json",
+      "id": "drug-progress-read-parser",
+      "title": "薬剤辞書の進捗検証を読取り専用で再利用",
+      "category": "changed",
+      "sha256": "f760b83cdab71aeb7dcf2f5d818b134b0a9085756963f2c0160fae83a9e3efd1"
+    },
+    {
+      "path": "changes/archive/1.1.2/extract-commit-cloud-observation.json",
+      "id": "extract-commit-cloud-observation",
+      "title": "クラウド解析結果の保存待ちを改善",
+      "category": "fixed",
+      "sha256": "8b836babd19d4b9d714435fd6e66c2bd3a006e0e7fc9288cb232a850eda68196"
+    },
+    {
+      "path": "changes/archive/1.1.2/file-group-positive-dependency-refusal.json",
+      "id": "file-group-positive-dependency-refusal",
+      "title": "添付の準備不足で実行しなかったグループ共有を明示承認で再試行",
+      "category": "fixed",
+      "sha256": "dc305bf8cebd2f0af01b86039c7fe27585201bad3059f69c2f03b2fe68569a24"
+    },
+    {
+      "path": "changes/archive/1.1.2/installer-no-services-init.json",
+      "id": "installer-no-services-init",
+      "title": "サービスを省略した導入で初期設定を延期",
+      "category": "fixed",
+      "sha256": "d3948014e9fad2816ef5b623b1e2bef29769f5b4477a29bf1918cdb1720e98be"
+    },
+    {
+      "path": "changes/archive/1.1.2/late-receipt-dependents.json",
+      "id": "late-receipt-dependents",
+      "title": "依存先の結果不明で保留された本文の後着結果を受け付ける",
+      "category": "fixed",
+      "sha256": "90a13ba7d15153f534e693d119cb195644d3a9a89954292709c5d471a52d0e50"
+    },
+    {
+      "path": "changes/archive/1.1.2/local-then-cloud-completion.json",
+      "id": "local-then-cloud-completion",
+      "title": "個別クラウド経路の完了判定をローカル解析から独立して検証",
+      "category": "fixed",
+      "sha256": "43b937499b6b53030ec670e7b179a3d12ba3791dc969e1a0ca405b99ba702271"
+    },
+    {
+      "path": "changes/archive/1.1.2/mcslog-patient-information-routing.json",
+      "id": "mcslog-patient-information-routing",
+      "title": "Slackの患者情報とMCSLOGの運用通知を分離",
+      "category": "changed",
+      "sha256": "5abf981e10173f7194a0a28c6d7fe8bf3099f320cd3a9243ae96c9956890a5e1"
+    },
+    {
+      "path": "changes/archive/1.1.2/monitor-alert-accuracy.json",
+      "id": "monitor-alert-accuracy",
+      "title": "監視警報の件数と継続理由を明確化",
+      "category": "fixed",
+      "sha256": "463237ed7bc908e2d0750a637adc248c34ddd61420321840f4b296ef8730b7d7"
+    },
+    {
+      "path": "changes/archive/1.1.2/ocr-local-cloud-runtime-20261105.json",
+      "id": "ocr-local-cloud-runtime-20261105",
+      "title": "OCRとローカル・クラウド解析の停止依存を解消",
+      "category": "fixed",
+      "sha256": "3d5dd4455cf2848d5f5afa2e8fc8c061079a31fd0f6959a122ddf44565dc0bbb"
+    },
+    {
+      "path": "changes/archive/1.1.2/ocr-model-revisions.json",
+      "id": "ocr-model-revisions",
+      "title": "OCRモデルの版を導入時と実行時で固定",
+      "category": "fixed",
+      "sha256": "10029ffc7ff63dfaeeec3d4e957e3ff31c2540a1e72d559c19961df8117492ae"
+    },
+    {
+      "path": "changes/archive/1.1.2/ocr-source-links-20261105.json",
+      "id": "ocr-source-links-20261105",
+      "title": "添付OCRの測定値・経過表示と誤り報告を接続",
+      "category": "fixed",
+      "sha256": "a3839b3c4dfafef1ba082dfbfe6b592a50ab56915ce8d98153d8252650e81154"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-context-cloud-extraction-gate.json",
+      "id": "patient-context-cloud-extraction-gate",
+      "title": "患者コンテキストの完了前にクラウド抽出の完了を確認",
+      "category": "fixed",
+      "sha256": "e90ad0956cbf35d4eed1fc3199672200c459036d21e5388cd46d90d09c1641b8"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-context-scan-fairness.json",
+      "id": "patient-context-scan-fairness",
+      "title": "患者背景の確認が一部の患者で止まり続ける問題を修正",
+      "category": "fixed",
+      "sha256": "6276bdd44bd15b5a26cfbaf92c1cd8e4611f9f65da88199176bd07e78551e083"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-context-scan-integration.json",
+      "id": "patient-context-scan-integration",
+      "title": "患者背景の候補確認が期限切れでも後続へ進むよう修正",
+      "category": "fixed",
+      "sha256": "ae8832ed6b3e8460a31656d538242ff57d239c53b628e2f6240914456d1e1f96"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-context-scan-writer-wait.json",
+      "id": "patient-context-scan-writer-wait",
+      "title": "患者背景の候補確定時の書込み待ちを期限内に制限",
+      "category": "fixed",
+      "sha256": "134adf48d1818d6429c1f384df6908f8d1500bcd9d8a5dbd4ecb03ca1e48258a"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-context-write-readiness-proof.json",
+      "id": "patient-context-write-readiness-proof",
+      "title": "患者背景の保存前確認による他患者の保存待ちを軽減",
+      "category": "fixed",
+      "sha256": "0378d75eb59615720cf2c17432b9739f2ca9a0ceb186dc430317f37d8859c062"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-reader-source-fences.json",
+      "id": "patient-reader-source-fences",
+      "title": "患者背景の処理順と保存前判定にも更新検知を適用",
+      "category": "fixed",
+      "sha256": "e7ea980f066d9dc2d30bcd899fa0179f433ce39e3db89779c3ad54d1091e3e5f"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-readiness-drug-generation.json",
+      "id": "patient-readiness-drug-generation",
+      "title": "医薬品辞書の進捗確認を効率化",
+      "category": "changed",
+      "sha256": "2bd1e352537ad044a381a241050ac189e8adf1c5aca855b45219b18abdc9ab48"
+    },
+    {
+      "path": "changes/archive/1.1.2/patient-readiness-witness.json",
+      "id": "patient-readiness-witness",
+      "title": "患者背景の完了判定に使う読取証拠を追加",
+      "category": "changed",
+      "sha256": "58e695e31f93c077be5a6931f210ac21dc56b4960fc5876c5e739e969f75a1b2"
+    },
+    {
+      "path": "changes/archive/1.1.2/postdeploy-rollup-claim-witness.json",
+      "id": "postdeploy-rollup-claim-witness",
+      "title": "解析の占有期限更新による患者集約の不要な保留を解消",
+      "category": "fixed",
+      "sha256": "626e60567c61f93e047cf3a2f5edfdc58f526403deb893539ee9a5f849a2f93a"
+    },
+    {
+      "path": "changes/archive/1.1.2/referral-document-timeline.json",
+      "id": "referral-document-timeline",
+      "title": "紹介状に記載された経過を日付順に表示",
+      "category": "added",
+      "sha256": "99c3069d188056a886883fc7394003350f1488949f43640f619a9ce761695075"
+    },
+    {
+      "path": "changes/archive/1.1.2/resident-cloud-guard-fairness.json",
+      "id": "resident-cloud-guard-fairness",
+      "title": "クラウド確認待ちの先頭対象が後続解析を塞ぐ問題を修正",
+      "category": "fixed",
+      "sha256": "cf9e7376ae626848d849ac9e854dbb43c685df731725602c214a0a058a87dcb1"
+    },
+    {
+      "path": "changes/archive/1.1.2/resident-unresolved-source-fairness.json",
+      "id": "resident-unresolved-source-fairness",
+      "title": "結果確認待ちのクラウド要求で後続解析を妨げない",
+      "category": "fixed",
+      "sha256": "0cd2da073606fdee3b49c63549f614fac28b7c15f54a4532d86e6ea214a15653"
+    },
+    {
+      "path": "changes/archive/1.1.2/responsibility-split-20261105.json",
+      "id": "responsibility-split-20261105",
+      "title": "推論・保存・更新処理を責務別に整理",
+      "category": "changed",
+      "sha256": "f175b7f14ba3f166e496a82d941cd3ec87c959e58c6b2dad41a50997d96a16c8"
+    },
+    {
+      "path": "changes/archive/1.1.2/semantic-closed-contract.json",
+      "id": "semantic-closed-contract",
+      "title": "ローカル解析の候補照合で不要なクラウド認証参照を停止",
+      "category": "fixed",
+      "sha256": "dbd08c1b7e4acdbb10fa899800ee036b192a68179b2e15a23a3f2679c7773130"
+    },
+    {
+      "path": "changes/archive/1.1.2/semantic-reprocess-reader-ownership.json",
+      "id": "semantic-reprocess-reader-ownership",
+      "title": "再処理の完了判定を共通の読取経路へ集約",
+      "category": "changed",
+      "sha256": "163a63848281095004739878701583a196fdcdea5975a85aa1f64ba6154576fb"
+    },
+    {
+      "path": "changes/archive/1.1.2/semantic-source-identity.json",
+      "id": "semantic-source-identity",
+      "title": "編集済み投稿の意味解析が旧クラウド予約で止まり続ける問題を修正",
+      "category": "fixed",
+      "sha256": "f6ee13972a431439dd4e6fa54495a71593cc6102c9432eeacf849dd6d6895857"
+    },
+    {
+      "path": "changes/archive/1.1.2/semantic-stop-diagnostics.json",
+      "id": "semantic-stop-diagnostics",
+      "title": "解析の安全停止理由を固定コードで区別",
+      "category": "added",
+      "sha256": "90aed0b4da5368e4701d4fcba54c59eb4b8aa12004b2e8373b1b8b46c7a3a7dc"
+    },
+    {
+      "path": "changes/archive/1.1.2/setup-capability-syntax-check.json",
+      "id": "setup-capability-syntax-check",
+      "title": "更新先の設定機能をコメントから誤認する問題を修正",
+      "category": "fixed",
+      "sha256": "62deeb857c6c93f06ebaeff0c0ab6cf35999608227f52310f612711bc0cfb5e2"
+    },
+    {
+      "path": "changes/archive/1.1.2/shared-patient-activity-order.json",
+      "id": "shared-patient-activity-order",
+      "title": "背景抽出と意味解析の患者順位を共通化",
+      "category": "changed",
+      "sha256": "029d27175fdb415380bc49b07be060ddadadcc4e2abfafbdb60be55e7adf74fd"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-channel-setup-continuation.json",
+      "id": "slack-channel-setup-continuation",
+      "title": "通知先の準備完了後も通常設定を変更できるよう修正",
+      "category": "fixed",
+      "sha256": "a69020e0acfb4d270f1d9a0f6a4af0e7320bc6097a8ce5493f2219489e29e0e8"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-private-channel-setup.json",
+      "id": "slack-private-channel-setup",
+      "title": "Slackの患者情報と運用ログの通知先を分離",
+      "category": "added",
+      "sha256": "4445a4fe224ee62632a638e214b29941de8bfce925d810251aa3a3446049ff34"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-private-file-verification-reasons.json",
+      "id": "slack-private-file-verification-reasons",
+      "title": "Slack添付ファイルの照合を保留した理由を記録",
+      "category": "fixed",
+      "sha256": "591208b2e7dc10d3ce8a837139d327a6177a9ae156f268fe1ec492aeb2eea632"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-setup-held-no-restart.json",
+      "id": "slack-setup-held-no-restart",
+      "title": "Slack設定の保留時に不要な再起動を防止",
+      "category": "fixed",
+      "sha256": "2928f107ef944297120e73f03441a82dfedba5ff66282afca1e5bee4a1ec27af"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-setup-lifecycle-recovery.json",
+      "id": "slack-setup-lifecycle-recovery",
+      "title": "Slackチャンネル準備の中断復旧と更新後の確認を修正",
+      "category": "fixed",
+      "sha256": "6573292b687ed5ad4b8eac179c9af8f561dd8279fff3b2a18cc9dbca568e641a"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-system-profile-bootstrap-scope.json",
+      "id": "slack-system-profile-bootstrap-scope",
+      "title": "作成した運用通知先の接続設定と自動作成の対象を修正",
+      "category": "fixed",
+      "sha256": "a7b99fb30e8b1154c7f40080fa9916fdfa58fab19103a6a3baa25fa4d51d056e"
+    },
+    {
+      "path": "changes/archive/1.1.2/slack-text-bootstrap.json",
+      "id": "slack-text-bootstrap",
+      "title": "Slackテキスト通知の初回セットアップで専用チャンネルを自動準備",
+      "category": "added",
+      "sha256": "b54eefddb4145b3aef35571ec911bdd961c17d9e21f6a8c8d1167000b560b180"
+    },
+    {
+      "path": "changes/archive/1.1.2/snapshot-health-tail-reserve.json",
+      "id": "snapshot-health-tail-reserve",
+      "title": "snapshot処理後のhealth観測時間を確保",
+      "category": "fixed",
+      "sha256": "42dfb1e03bf6e12be43a1754e7c6be52257d52ee305c8fa67c80aae0bd53a43f"
+    },
+    {
+      "path": "changes/archive/1.1.2/snapshot-schema12-readers.json",
+      "id": "snapshot-schema12-readers",
+      "title": "添付識別子追加後の通知画面と測定値表示を復旧",
+      "category": "fixed",
+      "sha256": "2d82c45deea0031d0d350dc00cb71bab90ea32a82af91406071045f45e865880"
+    },
+    {
+      "path": "changes/archive/1.1.2/source-changed-claim-release.json",
+      "id": "source-changed-claim-release",
+      "title": "確定的に変わった原文の古い抽出予約を解放",
+      "category": "fixed",
+      "sha256": "ffda2ed45f0359120f59e89c22d44618dcece2412a00967691909305beab60a1"
+    },
+    {
+      "path": "changes/archive/1.1.2/sqlite-message-reserve-diagnostics.json",
+      "id": "sqlite-message-reserve-diagnostics",
+      "title": "メッセージ保存のSQLiteエラーを固定項目で診断",
+      "category": "fixed",
+      "sha256": "4d253dda18b733821453aac0daf71114cdaec90a706dc0b620f8272934452777"
+    },
+    {
+      "path": "changes/archive/1.1.2/stale-gc-sql-deadline.json",
+      "id": "stale-gc-sql-deadline",
+      "title": "古い抽出結果の整理でDBの待機期限を守る",
+      "category": "fixed",
+      "sha256": "babd73b84965f0625cef9e53d15b40234926b3e1289c8e18fe77510a58b135a1"
+    },
+    {
+      "path": "changes/archive/1.1.2/stamp-source-independent.json",
+      "id": "stamp-source-independent",
+      "title": "本文や解析の更新後も同じ投稿のスタンプを保持",
+      "category": "changed",
+      "sha256": "c662ccdd3b057ccd19c7eeb44d7327798aa339e695e54694fa28f8652d9c6f03"
+    },
+    {
+      "path": "changes/archive/1.1.2/unresolved-body-spec-retention.json",
+      "id": "unresolved-body-spec-retention",
+      "title": "長さ制限で未送信になった本文の復旧用記録を保持",
+      "category": "fixed",
+      "sha256": "0af86a17e5d5b23b171e96a03291b12b4096daab3b6fc170540c386692d2d6d7"
+    },
+    {
+      "path": "changes/archive/1.1.2/updater-runtime-contract-assets.json",
+      "id": "updater-runtime-contract-assets",
+      "title": "更新候補の設定検証に必要な契約資産を同梱",
+      "category": "fixed",
+      "sha256": "6dd1998ea0ffadcf089269be57cd69ce0bc6d6aeb2c27a80e7a62f04e46deccd"
+    },
+    {
+      "path": "changes/archive/1.1.2/writer-refusal-diagnostics.json",
+      "id": "writer-refusal-diagnostics",
+      "title": "再試行準備と抽出起動の停止理由を区別",
+      "category": "added",
+      "sha256": "c08a48594903cd1c5809963795f58656ad7c9570d9f64913c67d9cce15619c42"
+    },
+    {
+      "path": "changes/archive/1.1.2/yomitoku-0-16-1.json",
+      "id": "yomitoku-0-16-1",
+      "title": "添付OCRをYomitoku 0.16.1へ更新",
+      "category": "changed",
+      "sha256": "d2b2a057222e1cea533ad8d7867c101432fcb6dc9a97aa2ba8d27141495f9510"
+    }
+  ]
 }
