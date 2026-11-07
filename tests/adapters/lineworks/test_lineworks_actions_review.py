@@ -102,12 +102,75 @@ def test_drug_search_menu_result_starts_the_dm_input(tmp_path):
     w = world(tmp_path, action="drugsearch")
     actor = "lineworks:40029600:operator"
     rec = {"kind": "form", "action": "drugsearch", "actor": actor, "user": "operator",
-           "token": TOKEN, "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}}
+           "token": TOKEN, "request_id": "synthetic-request",
+           "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}}
+    w.reg.put_modal("lw-pending-form-" + envelopes.actor_hash(actor),
+                    {"actor": actor, "token": TOKEN, "request_id": rec["request_id"]})
     asyncio.run(w.actions._deliver_followup(
         "operator", rec, {"outcome": "applied", "action": "drugsearch", "modal": True}))
     session = w.reg.modal("lw-form-" + envelopes.actor_hash(actor))
     assert [d["id"] for d in session["definitions"]] == ["query"]
     assert "薬名" in w.client.calls[-1][1]["text"]
+
+
+def test_another_patient_form_cannot_replace_active_or_pending_input(tmp_path):
+    w = world(tmp_path, action='search')
+    actor = 'lineworks:40029600:operator'
+    other = 'f' * 32
+    w.settings['project_ids'].add(2)
+    w.reg.put_tokens({other: {**w.reg.token(TOKEN), 'project_id': 2}})
+    asyncio.run(w.actions.handle(event(postback='mcs:a:' + TOKEN)))
+    first = command_files(w)[0]
+    asyncio.run(w.actions.handle(event(postback='mcs:a:' + other)))
+    assert len(command_files(w)) == 1 and '入力中' in w.client.calls[-1][1]['text']
+    _result(w, first['request_id'], {'request_id': first['request_id'], 'outcome': 'applied',
+            'action': 'search', 'modal': True, 'form': {'patient_label': '合成患者A'}})
+    asyncio.run(w.actions.sweep_followups())
+    assert '合成患者A' in w.client.calls[-1][1]['text']
+    before = w.reg.modal('lw-form-' + envelopes.actor_hash(actor))
+    asyncio.run(w.actions.handle(event(postback='mcs:a:' + other)))
+    assert w.reg.modal('lw-form-' + envelopes.actor_hash(actor)) == before
+    assert len(command_files(w)) == 1
+
+
+def test_cancelled_late_form_cannot_overwrite_new_patient_request(tmp_path):
+    w = world(tmp_path, action='search')
+    actor = 'lineworks:40029600:operator'
+    other = 'f' * 32
+    w.settings['project_ids'].add(2)
+    w.reg.put_tokens({other: {**w.reg.token(TOKEN), 'project_id': 2}})
+    asyncio.run(w.actions.handle(event(postback='mcs:a:' + TOKEN)))
+    first = command_files(w)[0]
+    asyncio.run(w.actions._input('operator', actor, '取消'))
+    asyncio.run(w.actions.handle(event(postback='mcs:a:' + other)))
+    second = next(c for c in command_files(w) if c['request_id'] != first['request_id'])
+    _result(w, first['request_id'], {'request_id': first['request_id'], 'outcome': 'applied',
+            'action': 'search', 'modal': True, 'form': {'patient_label': '旧患者'}})
+    asyncio.run(w.actions.sweep_followups())
+    assert w.reg.modal('lw-form-' + envelopes.actor_hash(actor)) is None
+    assert not any('旧患者' in call[1].get('text', '') for call in w.client.calls)
+    _result(w, second['request_id'], {'request_id': second['request_id'], 'outcome': 'applied',
+            'action': 'search', 'modal': True, 'form': {'patient_label': '新患者'}})
+    asyncio.run(w.actions.sweep_followups())
+    assert w.reg.modal('lw-form-' + envelopes.actor_hash(actor))['token'] == other
+    assert '新患者' in w.client.calls[-1][1]['text']
+
+
+def test_cancelled_form_can_be_explicitly_reopened_on_the_same_patient(tmp_path):
+    w = world(tmp_path, action='search')
+    actor = 'lineworks:40029600:operator'
+    click = event(postback='mcs:a:' + TOKEN)
+    asyncio.run(w.actions.handle(click))
+    first = command_files(w)[0]
+    asyncio.run(w.actions._input('operator', actor, '取消'))
+    asyncio.run(w.actions.handle(click))
+    assert len(command_files(w)) == 1
+    _result(w, first['request_id'], {'request_id': first['request_id'], 'outcome': 'applied',
+            'action': 'search', 'modal': True, 'form': {'patient_label': '再確認する合成患者'}})
+    asyncio.run(w.actions.sweep_followups())
+    assert w.reg.modal('lw-form-' + envelopes.actor_hash(actor))['token'] == TOKEN
+    assert '再確認する合成患者' in w.client.calls[-1][1]['text']
+
 
 @pytest.mark.parametrize("change", [None, "epoch", "user", "project", "origin"])
 def test_human_receipt_rechecks_scope_after_its_card_token_is_retired(tmp_path, change):

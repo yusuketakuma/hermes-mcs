@@ -698,7 +698,7 @@ def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("kind", ["meds", "drugsearch"])
+@pytest.mark.parametrize("kind", ["meds", "drugsearch", "summary", "search"])
 @pytest.mark.parametrize("thread", [TS, None, "1790000000.999999", "face"])
 def test_drug_answers_use_only_verified_card_thread(tmp_path, kind, thread):
     async def scenario():
@@ -728,7 +728,7 @@ def test_drug_answers_use_only_verified_card_thread(tmp_path, kind, thread):
             assert "スレッドに表示しました" in app.client.messages[-1]["text"]
             assert "合成薬剤詳細" in "".join(m["text"] for m in threaded)
             assert all("<@" not in m["text"] for m in app.client.messages)
-        elif thread == "face":
+        elif thread == "face" or thread is None and kind in ('summary', 'search'):
             # Slack shows a threaded ephemeral only inside an active thread:
             # the answer lands in the channel, with no pointer line
             assert all("thread_ts" not in m for m in app.client.messages)

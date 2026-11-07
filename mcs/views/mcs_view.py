@@ -622,12 +622,21 @@ class View:
         return read_model.read_model(self.db, scope=scope,
                                      project_id=pid, limit=limit)
 
-    def _patient_context(self, pid, view, since, query, role):
+    def _patient_context(self, pid, view, since, query, role, cursor=None):
         """Source-grounded patient context projections over this snapshot."""
         import patient_context_view as pcv
         from mcs_util import load_config
         if view == "search":
-            return pcv.search(self.db, pid, query)
+            import patient_search
+            patient_search.parse_query(query)
+            if cursor is not None:
+                try:
+                    if not isinstance(cursor, str) or len(cursor) > 2048:
+                        raise ValueError
+                    cursor = json.loads(cursor)
+                except (ValueError, TypeError, RecursionError):
+                    raise ValueError('search_cursor_invalid') from None
+            return pcv.search(self.db, pid, query, cfg=load_config(), cursor=cursor)
         if view == "replies":
             return pcv.replies(self.db, pid)
         if view == "care_events":
@@ -847,7 +856,7 @@ class View:
                     "project_id": project, "dataset": dataset, **result}
         if kind == "patient_context":
             return {"snapshot": self.meta, "warnings": WARNINGS,
-                    **self._patient_context(project, view, since, query, role)}
+                    **self._patient_context(project, view, since, query, role, cursor)}
         handlers = {
             **dict.fromkeys(("search", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
@@ -947,6 +956,7 @@ def _parser():
                 "handoff", "search", "transition_course", "participants"))
             sub.add_argument("--since", type=int, help="changes: inclusive epoch seconds (default: 7 days)")
             sub.add_argument("--query", help="search: whitespace-separated terms")
+            sub.add_argument("--cursor", help="search: JSON next_cursor from the previous result")
             from patient_context_view import ROLE_ORDER
             sub.add_argument("--role", choices=tuple(sorted(ROLE_ORDER)),
                              help="background: section order only; access is unchanged")

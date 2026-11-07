@@ -1023,7 +1023,7 @@ def test_search_modal_answers_hits_ephemeral(world):
     asyncio.run(world.interact(act, s))
     out = "\n".join(m["content"] for m in s.followup.sent)
     assert all(m["ephemeral"] for m in s.followup.sent)
-    assert "「本文」の検索結果" in out and "2件（取得済み投稿・新しい順）" in out
+    assert "「本文」の検索結果" in out and "2件（取得済み原資料・新しい投稿順）" in out
     assert "履歴取得:" in out          # the fetched range, no caveat sentence
     # another member cannot submit the clicker's form
     s2 = FakeInteraction(f"mcs:m:{modal_id}", user_id=2002,

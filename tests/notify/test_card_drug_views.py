@@ -118,7 +118,7 @@ def test_drug_search_refuses_a_dictionary_that_is_not_the_active_generation(led,
     assert "drugsearch" not in _ids(spec)
 
 
-@pytest.mark.parametrize("action", ["meds", "drugsearch"])
+@pytest.mark.parametrize("action", ["meds", "drugsearch", "summary", "search"])
 @pytest.mark.parametrize("fault", [None, "wrong_thread", "unknown_post", "pending", "unknown"])
 def test_thread_drug_views_require_this_cards_delivered_body(led, tmp_path, action, fault):
     _seed_thread(led)
@@ -135,12 +135,13 @@ def test_thread_drug_views_require_this_cards_delivered_body(led, tmp_path, acti
                            (fault,))
     origin = dict(ORIGIN, thread_id="other-thread" if fault == "wrong_thread" else "synthetic-thread",
                   message_id="unknown-body" if fault == "unknown_post" else "r-body:0001")
-    answer = _drug_click(led, spec, action, {"query": "キラナ"} if action == "drugsearch" else None,
+    answer = _drug_click(led, spec, action, {"query": "キラナ"} if action in ("drugsearch", "search") else None,
                     cfg=cfg, origin=origin)
     if fault:
         assert answer["error"] == "origin_mismatch"
     else:
-        assert answer["outcome"] == "applied" and answer["action"] == "list"
+        assert answer["outcome"] == "applied"
+        assert answer["action"] == ("summary" if action == "summary" else "list")
 
 
 def test_write_action_cannot_use_thread_drug_view_origin(led):

@@ -12,7 +12,7 @@ ACTIONS = {
     "body":    ("本文表示", "secondary", "view"),
     "tasks":   ("タスク一覧", "secondary", "view"),
     "request": ("タスク作成", "secondary", "write"),
-    "summary": ("患者の記録まとめ", "secondary", "view"),
+    "summary": ("👤 患者情報", "secondary", "view"),
     "report":  ("誤りを報告", "secondary", "write"),
     "meds":    ("薬剤を確認", "secondary", "view"),
     "drugsearch": ("薬剤を検索", "secondary", "view"),
@@ -24,7 +24,7 @@ ACTIONS = {
     "next":    ("次 ▶", "secondary", "view"),
     "mytasks": ("自分のタスク", "secondary", "view"),
     "unacked": ("未確認一覧", "secondary", "view"),
-    "search":  ("この患者を検索", "secondary", "view"),
+    "search":  ("🔎 この患者を検索", "secondary", "view"),
     "digest":  ("全体の新着集計", "secondary", "view"),
     # LINE WORKS only: the adapter answers it locally with a 1:1 menu
     # of the card's other buttons — it never reaches the runner

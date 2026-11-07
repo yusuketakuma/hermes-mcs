@@ -93,8 +93,8 @@ def modal_fields(action: str, form: dict | None = None,
     if action == "stamp":
         return stamp_fields(form)
     if action == "search":
-        return [{"id": "query", "label": "キーワード（空白区切りで AND）",
-                 "required": True, "max": 100, "default": ""}]
+        return [{"id": "query", "label": "検索語（AND）。絞込み: 資料:添付 開始:2026-01-01 分類:薬剤管理",
+                 "required": True, "max": 500, "default": ""}]
     if action == "drugsearch":
         return [{"id": "query", "label": "薬名（一般名・製品名・コードの一部）",
                  "required": True, "max": 100, "default": ""}]
