@@ -111,6 +111,142 @@ def _serve(monkeypatch, outcome):
     return served
 
 
+def _binding_hold_processor(monkeypatch, *, work=None):
+    # Inject only the processor's result contract; selection, accounting and
+    # generation-fenced queue transitions remain real. No QA proof is forged.
+    served = []
+
+    def process(db, scfg, job, jev_client, llm_fn, deadline, **kw):
+        served.append(job['message_id'])
+        if job['message_id'] == 999:
+            assert runtime.transition(db, runtime.JobToken.from_row(job), 'done')
+            return 'done'
+        semantic_drain._why(kw['diagnostics'], 'empty_repair_candidate_binding')
+        if work == 'jev':
+            jev_client.evaluate({}, {'q': {'type': 'noul'}}, deadline)
+        elif work == 'stage':
+            db.artifact_add(semantic_drain.KIND_CANDIDATE, '{}',
+                            project_id=job['project_id'], message_id=job['message_id'])
+        elif work == 'model':
+            llm_fn('synthetic scheduler control')
+        elif work == 'other_reason':
+            kw['diagnostics']['code'] = 'empty_repair_marker_binding'
+        return 'deferred'
+
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
+    return served
+
+
+@pytest.mark.parametrize('prioritize', [False, True])
+@pytest.mark.parametrize('prefix', [1, 12])
+def test_binding_hold_refills_independent_work(jobs_db, monkeypatch, prioritize, prefix):
+    now = time.time() - 10
+    held = [_job(jobs_db, mid, created=now, updated=now, next_try=now)
+            for mid in range(100, 100 + prefix)]
+    _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    served = _binding_hold_processor(monkeypatch)
+    out = _run(jobs_db, None, lane='backlog', max_jobs=1, prioritize_patients=prioritize)
+    assert served == [*range(100, 100 + prefix), 999]
+    assert out['done'] == 1 and out['deferred'] == prefix and out['progressed'] == 0
+    assert out['lanes']['arrival'] == prefix + 1
+    assert [metric['status'] for metric in out['job_metrics']] == ['deferred'] * prefix + ['done']
+    for job_id in held:
+        row = jobs_db.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone()
+        assert row['state'] == 'pending' and row['attempts'] == 0
+        assert row['next_try'] == row['updated_at'] + 60
+    assert semantic_drain._sched_state(jobs_db)['arrival_selected'] == 1
+    assert 'payload_hold_cursors' not in semantic_drain._sched_state(jobs_db)
+
+
+def test_binding_hold_refills_older_activity_lower_job_id(jobs_db, monkeypatch):
+    now = time.time() - 10
+    _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    _patient(jobs_db, pid=2)
+    held_id = _job(jobs_db, 100, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET project_id=2 WHERE job_id=?', (held_id,))
+    older, newer = _message(999), _message(100, pid=2)
+    older.posted_at, newer.posted_at = '2026-01-01T00:00:00+09:00', '2026-10-01T00:00:00+09:00'
+    jobs_db.save_messages([older], project_id=1)
+    jobs_db.save_messages([newer], project_id=2)
+    served = _binding_hold_processor(monkeypatch)
+    out = _run(jobs_db, None, lane='backlog', max_jobs=1, prioritize_patients=True)
+    assert served == [100, 999]
+    assert out['done'] == out['deferred'] == 1
+    assert [metric['project_id'] for metric in out['job_metrics']] == [2, 1]
+
+
+@pytest.mark.parametrize('work', ['jev', 'stage', 'model', 'other_reason'])
+def test_binding_hold_with_work_keeps_single_job_limit(jobs_db, monkeypatch, work):
+    now = time.time() - 10
+    if work in ('jev', 'stage'):
+        jobs_db.save_messages([_message(100), _message(999)], project_id=1)
+    _job(jobs_db, 100, created=now, updated=now, next_try=now)
+    _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    served = _binding_hold_processor(monkeypatch, work=work)
+    out = _run(jobs_db, lambda prompt: '{}', lane='backlog', max_jobs=1, prioritize_patients=True)
+    assert served == [100] and out['done'] == 0 and out['deferred'] == 1
+    assert semantic_drain._sched_state(jobs_db)['arrival_selected'] == 1
+    metric, = out['job_metrics']
+    assert metric['jev_requests'] == (1 if work == 'jev' else 0)
+    assert out['progressed'] == (1 if work == 'stage' else 0)
+    assert (metric['llm_s'] > 0) is (work == 'model')
+
+
+@pytest.mark.parametrize('lane', [None, 'realtime'])
+def test_binding_hold_refund_is_backlog_only(jobs_db, monkeypatch, lane):
+    now = time.time() - 10
+    _job(jobs_db, 100, created=now, updated=now, next_try=now)
+    _job(jobs_db, 999, created=now - 100, updated=now - 100, next_try=now - 100)
+    served = _binding_hold_processor(monkeypatch)
+    out = _run(jobs_db, None, lane=lane, max_jobs=1)
+    assert served == [100] and out['done'] == 0 and out['deferred'] == 1
+
+
+@pytest.mark.parametrize('prioritize,cap', [(False, 16), (True, 64)])
+def test_binding_hold_refill_respects_existing_scan_cap(jobs_db, monkeypatch, prioritize, cap):
+    now = time.time() - 10
+    for mid in range(100, 100 + cap + 5):
+        _job(jobs_db, mid, created=now, updated=now, next_try=now)
+    _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    served = _binding_hold_processor(monkeypatch)
+    out = _run(jobs_db, None, lane='backlog', max_jobs=1, prioritize_patients=prioritize)
+    assert served == list(range(100, 100 + cap))
+    assert out['done'] == 0 and out['deferred'] == len(out['job_metrics']) == cap
+    assert len(set(served)) == cap
+
+
+def test_binding_hold_refill_preserves_qc_kind_turn(jobs_db, monkeypatch):
+    import semantic_qc
+    now = time.time() - 10
+    _job(jobs_db, 100, created=now, updated=now, next_try=now)
+    _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    jobs_db.job_add('extract_qc', 1, 200, payload={VERSION_KEY: CURRENT_VERSION})
+    turn = {'kind': 'extract_qc'}
+    monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', turn)
+    monkeypatch.setattr(semantic_due_selection, '_BACKLOG_TURN', turn)
+    monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *args: 0)
+    served = _binding_hold_processor(monkeypatch)
+    qc_served = []
+
+    def qc_process(db, scfg, job, *args, **kwargs):
+        qc_served.append(job['message_id'])
+        assert runtime.transition(db, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(semantic_qc, '_process_qc_job', qc_process)
+    def run():
+        return semantic_drain.run_due(jobs_db, _cfg('shadow', extract_qc='annotate'), {'errors': []},
+            time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=None, lane='backlog',
+            max_jobs=1, prioritize_patients=True)
+    first = run()
+    assert served == [100, 999] and not qc_served
+    assert first['done_by_kind'] == {'semantic': 1} and turn['kind'] == 'semantic'
+    second = run()
+    assert qc_served == [200] and second['done_by_kind'] == {'extract_qc': 1}
+    assert turn['kind'] == 'extract_qc'
+
+
 def test_realtime_serves_newest_seed_not_newest_defer(jobs_db, monkeypatch):
     now = time.time()
     # seeded (next_try == updated_at) 1000 s ago
