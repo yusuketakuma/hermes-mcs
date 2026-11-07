@@ -872,10 +872,10 @@ def handoff(db, ev) -> dict:
             "unanswered": [r for r in talk["items"] if r["reply_state"] is None and not r["unverified"]]}
 
 
-def search(db, project_id, query) -> dict:
+def search(db, project_id, query, *, cfg=None, cursor=None) -> dict:
     """患者別の質問・検索: stored posts with sources and the coverage line (existing 🔎 rule)."""
     from notify_views import patient_search_view
-    return {"view": "search", **patient_search_view(db, project_id, query)}
+    return {"view": "search", **patient_search_view(db, project_id, query, cfg=cfg, cursor=cursor)}
 
 
 def transition_course(ev) -> dict:

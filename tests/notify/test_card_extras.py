@@ -245,7 +245,7 @@ def test_search_opens_modal_then_answers_hits(led):
     assert first["modal"] is True and first["action"] == "search"
     r = _click(led, spec, "search", {"query": "発熱 解熱"})
     view = r["list"]
-    assert view["head"][0].startswith("1件（取得済み投稿・新しい順）")
+    assert view["head"][0].startswith("1件（取得済み原資料・新しい投稿順）")
     assert view["items"] == [{"project_id": 1, "text":
                               "・09-24 08:42 投稿#102 看護師: 昨日から 発熱 あり。解熱剤を使用"}]
     assert any(n.startswith("履歴取得:") for n in view["notes"])
@@ -257,17 +257,17 @@ def test_search_opens_modal_then_answers_hits(led):
     assert none["items"] == [] and none["head"][0].startswith("0件")
 
 
-def test_search_caps_hits_and_counts_the_rest(led):
+def test_search_caps_hits_and_offers_bounded_continuation(led):
     spec = _delivered_card(led)
     for mid in range(110, 110 + notify_views.SEARCH_HITS + 3):
         _msg(led, mid, parent=100, body="定期訪問")
     view = _click(led, spec, "search", {"query": "訪問"})["list"]
-    assert len(view["items"]) == notify_views.SEARCH_HITS
-    assert view["more"] == 3
+    assert len(view["items"]) == 5
+    assert view["next_cursor"] is not None and not view["range_complete"]
 
 
 @pytest.mark.parametrize("inputs", [
-    {}, {"query": ""}, {"query": "x" * 121}, {"other": "x"}, "x",
+    {}, {"query": ""}, {"query": "x" * 501}, {"other": "x"}, "x",
     {"query": 1}])
 def test_bad_input_is_rejected(inputs):
     req = {"version": 1, "op": "notification",

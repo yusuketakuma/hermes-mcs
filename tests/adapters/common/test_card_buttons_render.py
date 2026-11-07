@@ -189,7 +189,7 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     thread = discord_cards.thread_drug_view(spec)
     assert ([] if thread is None else [tokens[b.custom_id.removeprefix("mcs:a:")]
                                       for b in thread.items]) == [
-        action for action in secondary if action in {"meds", "drugsearch"}]
+        action for action in secondary if action in {"meds", "drugsearch", "summary", "search"}]
 
     spec["parts"]["action_rows"].append([
         {"id": "more", "ui": "button", "label": "その他の操作", "token": "f" * 32}])

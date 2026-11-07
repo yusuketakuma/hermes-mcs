@@ -98,6 +98,13 @@ class Actions:
             origin["message_id"] = context["message_id"]
             kind = context["action"]
             name = self._own_name(user)
+            form_id = "lw-form-" + envelopes.actor_hash(actor)
+            pending_id = "lw-pending-form-" + envelopes.actor_hash(actor)
+            if kind in forms.MODAL_ACTIONS or kind == "mytasks" and not name:
+                active, pending = self.reg.modal(form_id), self.reg.modal(pending_id)
+                if active or pending and pending.get('token') != token:
+                    await self._say(user, "入力中の操作があります。入力を完了するか「取消」と返信してから、別の操作を開いてください。")
+                    return
             if kind == "mytasks" and not name:
                 session = {"action": kind, "actor": actor, "user": user,
                            "token": token, "origin": origin, "fields": {}, "index": 0,
@@ -113,6 +120,8 @@ class Actions:
             previous = self.reg.followup(env["command_id"])
             if previous:
                 env["request_id"] = previous["request_id"]
+                if kind in forms.MODAL_ACTIONS:
+                    self.reg.put_modal(pending_id, {'actor': actor, 'request_id': env['request_id'], 'token': token})
                 if "clicked_at" in previous:
                     env["clicked_at"] = previous["clicked_at"]
                 else:
@@ -126,6 +135,8 @@ class Actions:
                 "clicked_at": env["clicked_at"],
                 "actor": actor, "user": user, "token": token,
                 "context": context.get("context") or {}})
+            if kind in forms.MODAL_ACTIONS:
+                self.reg.put_modal(pending_id, {'actor': actor, 'request_id': env['request_id'], 'token': token})
             await self._publish(env)
             return
         match = CONFIRM.fullmatch(postback)
@@ -168,6 +179,8 @@ class Actions:
     async def _prompt(self, user, session, retry=""):
         field = session["definitions"][session["index"]]
         lines = [retry, field["label"]] if retry else [field["label"]]
+        if session.get('patient_label'):
+            lines.insert(0, '👤 ' + session['patient_label'])
         if field.get("options"):
             lines += [f"{i + 1}. {label}" for i, (_, label) in enumerate(field["options"])]
             lines.append("番号で返信してください。")
@@ -181,7 +194,13 @@ class Actions:
 
     async def _input(self, user, actor, value):
         mid = "lw-form-" + envelopes.actor_hash(actor)
+        pending_id = "lw-pending-form-" + envelopes.actor_hash(actor)
         session = self.reg.modal(mid)
+        if value == "取消" and self.reg.modal(pending_id):
+            self.reg.drop_modal(pending_id)
+            self.reg.drop_modal(mid)
+            await self._say(user, "取り消しました。")
+            return
         if not session or session["actor"] != actor:
             word, *rest = value.split(None, 1) or [""]
             if word == SUMMARY_WORD:
@@ -343,18 +362,31 @@ class Actions:
                 raise
 
     async def _deliver_followup(self, user, rec, result):
+        pending_id = "lw-pending-form-" + envelopes.actor_hash(rec["actor"])
+        pending = self.reg.modal(pending_id)
         if rec["kind"] == "form" and result.get("modal") and result.get("outcome") == "applied":
+            active = self.reg.modal("lw-form-" + envelopes.actor_hash(rec["actor"]))
+            if active and active.get('request_id') == rec.get('request_id'):
+                await self._prompt(user, active)
+                return
+            if pending is None or pending.get('request_id') != rec['request_id']:
+                return  # A cancelled, expired or superseded form never replaces the active patient.
             form = result.get("form")
             if rec["action"] == "stamp" and not isinstance(form, dict):
                 # the stamp target list comes only from the runner — never prompt blind
                 await self._say(user, text.STAMP_FORM_PENDING)
+                self.reg.drop_modal(pending_id)
                 return
             session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
                        "definitions": forms.modal_fields(rec["action"], form, self._own_name(user)),
+                       "patient_label": (form or {}).get('patient_label', ''),
                        **({"form": form} if rec["action"] == "stamp" else {})}
             self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
+            self.reg.drop_modal(pending_id)
             await self._prompt(user, session)
             return
+        if pending and pending.get('request_id') == rec.get('request_id'):
+            self.reg.drop_modal(pending_id)
         answer = text.view_answer(result, lambda p: projects.project_allowed(self.settings, p),
                                   markdown=False, plain=True)
         if answer is None:

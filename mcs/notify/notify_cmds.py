@@ -184,7 +184,8 @@ def _input(v) -> bool:
             isinstance(scope, list) and 0 < len(scope) <= SCOPE_MAX
             and all(type(p) is int and 0 < p < 2 ** 63 for p in scope)):
         return False
-    return all(valid_text(x, 120) for k, x in v.items() if k != "projects")
+    return all(valid_text(x, 500 if k == "query" else 120)
+               for k, x in v.items() if k != "projects")
 
 
 _TRANSPORT_BY_VERSION = {v: t for t, v in notify_scope.TRANSPORT_VERSIONS.items()}

@@ -877,7 +877,9 @@ class Actions:
                 pin = self._pinned(rec["token"],
                                    {**origin, "actor": rec["actor"]}, rec["actor"])
                 thread_ts = None
-                if pin and pin.get("action") in ("meds", "drugsearch"):
+                if pin and (pin.get("action") in ("meds", "drugsearch")
+                            or pin.get("action") in ("summary", "search")
+                            and ('verified_thread_id' in pin or 'verified_card_message_id' in pin)):
                     # verified_thread_id None: a proven card face whose thread has
                     # no reply (Slack shows a threaded ephemeral only inside an
                     # active thread), so the answer goes to the channel instead
@@ -886,7 +888,7 @@ class Actions:
                             or (thread_ts is not None and (not isinstance(thread_ts, str)
                                                            or not _TS.fullmatch(thread_ts)))):
                         await self._say(origin["channel_id"], rec["user"],
-                                        "薬剤詳細を表示するスレッドの本文配信が確認できません。"
+                                        "詳細を表示するスレッドの本文配信が確認できません。"
                                         "配信完了を待つか、管理者にスレッド配信の状態確認を依頼してください。")
                         continue
                 # 📋 transition tokens must land before their buttons
@@ -919,7 +921,7 @@ class Actions:
                 if token_ctx:
                     # the followup is already consumed: its tokens must land even while closing
                     await commands.run_native(self._reg.put_tokens, token_ctx,
-                                              durable=bool(pin) and pin.get("action") in ("meds", "drugsearch", "body"),
+                                              durable=bool(pin) and pin.get("action") in ("meds", "drugsearch", "summary", "search", "body"),
                                               admission=self._native_admission, admitted=True)
                 cards = ((_parts_blocks(result) or (
                     context_list_blocks(result.get("list"), self._allowed_pid)

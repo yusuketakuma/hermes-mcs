@@ -178,10 +178,10 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
                 or (tok_params.get("origin_thread_id") is not None
                     and tok_params["origin_thread_id"] != card["thread_id"])):
             return {**base, "outcome": "rejected", "error": "origin_mismatch"}
-    # Only read-only drug views may start on a proven companion-thread
+    # Read-only patient views may start on a proven companion-thread
     # body post. A thread ID alone is not proof that this card rendered it.
     thread_drug_view = (
-        card["transport"] == "discord" and action in ("meds", "drugsearch")
+        card["transport"] == "discord" and action in ("meds", "drugsearch", "summary", "search")
         and card["thread_id"] is not None
         and card["thread_id"] == origin.get("thread_id")
         and db.execute(
@@ -407,7 +407,9 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         if opened:
             db.execute("RELEASE patient_context")
         return result
-    if action in ("search", "drugsearch") and not inputs.get("query"):
+    if action == "search":
+        return _patient_search(db, base, card, inputs, params or {}, cfg, now)
+    if action == "drugsearch" and not inputs.get("query"):
         # the click opens the keyword modal; its submit carries input
         return {**base, "outcome": "applied", "action": action,
                 "modal": True, "params": {}}
@@ -460,8 +462,77 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         view = drug_search_view(db, cfg or {}, card["project_id"],
                                 inputs["query"])
     else:
-        view = patient_search_view(db, card["project_id"], inputs["query"])
+        raise ValueError("unknown_view_action")
     return {**base, "outcome": "applied", "action": "list", "list": view}
+
+
+def _patient_search(db, base, card, inputs, params, cfg, now):
+    import patient_search
+    from mcs_contract import project_url
+    from notify_render import inline_text, project_display_name, mmdd, posted_hhmm
+    allowed = {'ephemeral', 'actor', 'origin_thread_id', 'query', 'cursor', 'source_ref', 'source_page'}
+    if (set(params) - allowed or not positive(card['project_id'])
+            or 'source_ref' in params and 'cursor' in params
+            or 'source_page' in params and 'source_ref' not in params
+            or inputs and set(inputs) != {'query'}):
+        return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
+    navigation, token_ctx = [], {}
+    query = inputs.get('query', params.get('query'))
+    if 'source_ref' in params:
+        page = params.get('source_page', 0)
+        if inputs or type(page) is not int or page < 0:
+            return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
+        try:
+            source = patient_search.read_source(db, card['project_id'], params['source_ref'], cfg=cfg)
+        except ValueError:
+            source = None
+        _private_button(db, base, card, now, navigation, token_ctx, 'search', '検索結果に戻る',
+                        {'query': query} if query else {})
+        if source is None:
+            return {**base, 'outcome': 'applied', 'action': 'body', 'title': '原資料の再確認',
+                    'body': '原資料が更新されたか、現在の閲覧範囲では確認できません。検索し直してください。',
+                    'navigation': navigation, 'token_ctx': token_ctx}
+        total = max(1, (len(source['body_text']) + patient_search.SOURCE_PAGE_CHARS - 1)
+                    // patient_search.SOURCE_PAGE_CHARS)
+        if page >= total:
+            return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
+        for label, target in (('前の範囲', page - 1), ('次の範囲', page + 1)):
+            if 0 <= target < total:
+                _private_button(db, base, card, now, navigation, token_ctx, 'search', label,
+                    {'query': query, 'source_ref': params['source_ref'], 'source_page': target})
+        label = (f"投稿#{source['message_id']}" if source['source'] == 'chat' else
+                 f"投稿#{source['parent_message_id']}の添付OCR {source['page']}ページ")
+        name = inline_text(project_display_name(db, card['project_id']), 30)
+        label += (f" — {'添付元 ' if source['source'] != 'chat' else ''}"
+                  f"{mmdd(source.get('posted_at'))} {posted_hhmm(source.get('posted_at'))} "
+                  f"{inline_text(source.get('profession'), 20) or '職種不明'}")
+        title = f'👤 {name} — {label}' + (f'（{page + 1}/{total}）' if total > 1 else '')
+        start = page * patient_search.SOURCE_PAGE_CHARS
+        availability = ('\n原本ファイルはローカル未保存です。保存済みOCR本文を表示しています。'
+                        if source.get('original_available') is False else '')
+        return {**base, 'outcome': 'applied', 'action': 'body', 'title': title,
+                'body': source['body_text'][start:start + patient_search.SOURCE_PAGE_CHARS]
+                        + availability + '\n\nMCS: ' + project_url(card['project_id']),
+                'navigation': navigation, 'token_ctx': token_ctx}
+    if not query:
+        return {**base, 'outcome': 'applied', 'action': 'search', 'modal': True,
+                'params': {}, 'form': {'patient_label': inline_text(project_display_name(db, card['project_id']), 60)}}
+    try:
+        view = patient_search_view(db, card['project_id'], query, cfg=cfg, cursor=params.get('cursor'))
+    except ValueError:
+        return {**base, 'outcome': 'applied', 'action': 'body', 'title': '検索条件を確認してください',
+                'body': '検索語を入力してください。絞込みは 資料:投稿 または 資料:添付、'
+                        '開始:YYYY-MM-DD、終了:YYYY-MM-DD、分類:服薬管理 などを指定できます。'}
+    for number, item in enumerate(view['items'], 1):
+        _private_button(db, base, card, now, navigation, token_ctx, 'search', f'{number} 原資料を開く',
+                        {'query': query, 'source_ref': item.pop('source_ref')})
+    if view['next_cursor'] is not None:
+        _private_button(db, base, card, now, navigation, token_ctx, 'search', '続きを検索',
+                        {'query': query, 'cursor': view['next_cursor']})
+    _private_button(db, base, card, now, navigation, token_ctx, 'search', '🔎 条件を変える', {})
+    _private_button(db, base, card, now, navigation, token_ctx, 'summary', '👤 患者情報', {})
+    return {**base, 'outcome': 'applied', 'action': 'list', 'list': view,
+            'navigation': navigation, 'token_ctx': token_ctx}
 
 
 def _attachment_report_buttons(db, base, card, now, navigation, token_ctx, refs):
@@ -543,6 +614,9 @@ def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement
 
     def navigate(label, target=section, target_page=0, target_role=role, action="summary",
                  target_history=False, target_cursor=None, target_measurement_cursor=None):
+        if action == 'search':
+            _private_button(db, base, card, now, navigation, token_ctx, action, label, {})
+            return
         _private_button(db, base, card, now, navigation, token_ctx, action, label,
                         {"section": target, "page": target_page, "role": target_role, "since": since,
                          **({"intervention_history": True, "intervention_cursor": target_cursor}

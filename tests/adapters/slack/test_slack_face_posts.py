@@ -87,7 +87,7 @@ def test_face_drug_thread_binding_requires_proven_same_card_and_thread(led, faul
     asyncio.run(_granted_card(w.worker, led, w.root))
     spec = json.loads(_latest_render(led)["spec_json"])
     assert not spec["parts"]["thread_body_parts"]
-    tokens = [t for t, c in token_map(spec).items() if c["action"] in ("meds", "drugsearch")]
+    tokens = [t for t, c in token_map(spec).items() if c["action"] in ("meds", "drugsearch", "summary", "search")]
     assert tokens
     root = "1790000000.000001"
     # a face with no reply under it: proven card, no thread for the answers

@@ -191,7 +191,7 @@ def _stamp_rows(spec):
 def thread_drug_view(spec, *, private=False):
     """Runner-issued medication actions on the first companion-thread body."""
     import discord
-    drug_actions = {"meds", "drugsearch"}
+    drug_actions = {"meds", "drugsearch", "summary", "search"}
     if private:
         drug_actions |= {"summary", "search", "report", "body"}
     rows = [[button for row in spec["parts"].get("action_rows") or []

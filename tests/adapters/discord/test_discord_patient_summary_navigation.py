@@ -1,15 +1,15 @@
-"""Summary buttons are private-answer controls, never shared-thread controls."""
+"""Summary/search can start in a proven thread and answer privately."""
 import sys
 
 from adapters.discord import cards
 from discord_testkit import _fake_discord
 
 
-def test_summary_controls_are_private_only(monkeypatch):
+def test_summary_controls_are_available_on_the_thread_and_private_answer(monkeypatch):
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     spec = {"parts": {"action_rows": [[{"id": action, "label": action, "token": action}
                                      for action in ("summary", "search")]]}}
-    assert cards.thread_drug_view(spec) is None
+    assert len(cards.thread_drug_view(spec).items) == 2
     view = cards.thread_drug_view(spec, private=True)
     assert view is not None
     assert len(view.items) == 2

@@ -487,7 +487,7 @@ class DeliveryWorker(_BaseWorker):
     # -- durable render parts (T9) ----------------------------------------
 
     def _pin_active_thread(self, claim, ctx, records):
-        """Pin drug answers after a delivered reply or a proven card-face thread."""
+        """Pin patient answers after a delivered reply or a proven card-face thread."""
         spec = claim["spec"]
         message_id = ctx.get("card_message_id")
         root = spec["delivery"].get("thread_id") or message_id
@@ -527,7 +527,7 @@ class DeliveryWorker(_BaseWorker):
         pins = {}
         for token in token_map(spec):
             current = self._reg.token(token)
-            if (current and current.get("action") in ("meds", "drugsearch")
+            if (current and current.get("action") in ("meds", "drugsearch", "summary", "search")
                     and current.get("message_id") == message_id
                     and current.get("team_id") == self._settings["team_id"]
                     and current.get("channel_id") == self._settings["channel_id"]):

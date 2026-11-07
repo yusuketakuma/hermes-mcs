@@ -24,7 +24,6 @@ from patient_context import DETAIL_LABELS, LABELS, context_items, extract_contex
 from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, search_fold
-from mcs_queries import register_search_fold
 from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
@@ -659,49 +658,47 @@ def _question_term(query):
     return term, latest
 
 
-def patient_search_view(db, project_id, query) -> dict:
-    """🔎 stored messages of one project containing every whitespace-
-    separated term, newest first. Substring match over whitespace-
-    stripped text after NFKC + casefold (``mcs_fold``: ﾛｷｿﾆﾝ matches
-    ロキソニン, ＢＳ matches bs) — the same rule as the ``mcs_view``
-    search; the FTS5 index's unicode61 tokenizer cannot split Japanese
-    into words."""
-    if not isinstance(query, str) or not query.strip() or len(query) > 500:
-        raise ValueError("bad_query")
+def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict:
+    """Search all terms across patient originals with resumable, source-bound pages."""
+    import patient_search
+    patient_search.parse_query(query)
     question = _question_term(query)
-    terms = ([question[0]] if question and question[0] else
-             [t for t in str(query or "").split() if search_fold(t)][:5])
+    search_query = question[0] if question and question[0] else query
+    result = patient_search.search(db, project_id, search_query, cfg=cfg, cursor=cursor)
+    terms, _ = patient_search.parse_query(search_query)
     name = inline_text(project_display_name(db, project_id), 30) or f"project {project_id}"
-    sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
-           "WHERE project_id=? AND body_state='full'")
-    args: list = [project_id]
-    if terms:
-        register_search_fold(db)
-    for t in terms:
-        sql += " AND instr(mcs_fold(body_text),?)>0"
-        args.append(search_fold(t))
-    rows, total = [], 0
-    if terms:
-        for row in db.execute(sql + " ORDER BY posted_at_ts DESC, message_id DESC", args):
-            total += 1
-            if len(rows) < SEARCH_HITS:
-                rows.append(row)
-    items = [{"project_id": project_id,
-              "text": f"・{mmdd(r['posted_at'])} {posted_hhmm(r['posted_at'])} 投稿#{r['message_id']} "
-                      f"{inline_text(r['profession'], 20) or '職種不明'}: "
-                      f"{_snippet(r['body_text'], terms[0])}"}
-             for r in rows]
-    head = [f"{total}件（取得済み投稿・新しい順）— MCS: {project_url(project_id)}"]
+    items = []
+    for row in result["items"]:
+        label = (f"投稿#{row['message_id']}" if row['source'] == 'chat'
+                 else f"投稿#{row['message_id']}の添付OCR {row['page']}ページ")
+        prefix = '' if row['source'] == 'chat' else '添付元 '
+        availability = '' if row['original_available'] else '（原本ファイルはローカル未保存）'
+        items.append({"project_id": project_id, "source_ref": row['source_ref'],
+                      "text": f"・{prefix}{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])} {label}{availability} "
+                              f"{inline_text(row['profession'], 20) or '職種不明'}: "
+                              f"{_snippet(row['body_text'], terms[0], width=160)}"})
+    count = f"表示{len(items)}件（続きあり）" if result['next_cursor'] else f"{len(items)}件"
+    head = [f"{count}（取得済み原資料・新しい投稿順）— MCS: {project_url(project_id)}"]
     if question and question[0]:
-        head.insert(0, f"「{inline_text(question[0], 40)}」を含む投稿を検索しました"
-                    + ("（先頭が最も新しい記録）" if question[1] else ""))
+        head.insert(0, f"「{inline_text(question[0], 40)}」を含む原資料を検索しました"
+                    + ("（新しい投稿から順に確認）" if question[1] else ""))
     elif question:
         head.insert(0, "質問を検索語に置き換えられませんでした。調べたい語（例: 残薬）を入力してください")
+    notes = [_coverage_line(db, project_id)]
+    if result['next_cursor']:
+        notes.append('まだ調べていない範囲があります。「続きを検索」で進めます。')
+    if result['pending']:
+        notes.append(f"この範囲にOCR未完了・確認不能の添付が{result['pending']}件あります。")
+    if result['unavailable']:
+        notes.append(f"この範囲に本文未取得・確認不能の原資料が{result['unavailable']}件あります。")
+    if not result['ocr_available']:
+        notes.append('添付OCRは設定で無効、または利用を確認できないため検索していません。')
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
-            "head": head,
-            "items": items, "more": max(0, total - SEARCH_HITS),
-            "empty": "取得済みの投稿に一致するものはありません。",
-            "notes": [_coverage_line(db, project_id)]}
+            "head": head, "items": items, "more": 0,
+            "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
+            "empty": "この範囲には一致する原資料がありません。" if result['next_cursor'] else
+                     "検索した取得済み原資料に一致するものはありません。",
+            "notes": notes}
 
 
 # ---------- 💊 薬剤を確認 / 薬剤を検索 (DM-1 / DM-2) ---------------------

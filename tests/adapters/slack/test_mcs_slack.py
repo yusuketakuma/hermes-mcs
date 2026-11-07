@@ -571,7 +571,7 @@ def test_slack_thread_parts_post_under_bound_root_only(led, monkeypatch):
                for p, part in zip(w.client.thread_posts,
                                   [m for m in spec["parts"]["manifest"] if m["kind"] == "body_part"]))
     drug_tokens = [token for token, context in token_map(spec).items()
-                   if context["action"] in ("meds", "drugsearch")]
+                   if context["action"] in ("meds", "drugsearch", "summary", "search")]
     assert drug_tokens
     assert all(w.reg.token(token)["verified_thread_id"] == "1790000000.000001"
                for token in drug_tokens)
