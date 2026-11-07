@@ -452,6 +452,11 @@ class Broker:
         return (all(type(slot) is int and 0 <= slot < self.slots for slot in slots)
                 and len(set(slots)) == len(slots))
 
+    def _has_bound_permits(self, epoch):
+        return self.db.execute(
+            "SELECT 1 FROM permits WHERE epoch=? AND physical_slot IS NOT NULL AND state IN "
+            f"({','.join('?' * len(OCCUPYING))}) LIMIT 1", (epoch, *OCCUPYING)).fetchone() is not None
+
     @_serialized
     def held_slots(self):
         """Unproven legacy work holds every slot; bound unknown work keeps its slot."""
@@ -508,6 +513,8 @@ class Broker:
                 if rt_wait or rt_occ:
                     return {"admitted": False, "reason": "rt_pending",
                             "epoch": epoch}
+                if self._has_bound_permits(epoch):
+                    return {"admitted": False, "reason": "physical_inflight", "epoch": epoch}
                 # bounded concurrent backlog on measured safe slots —
                 # excess work defers, never silently overflows width
                 if self._occupancy(self.db, epoch, "BACKLOG") \
@@ -536,6 +543,8 @@ class Broker:
                     return {"admitted": False, "reason": "waiting",
                             "permit_id": cur.lastrowid,
                             "epoch": epoch}
+                if self._has_bound_permits(epoch):
+                    return {"admitted": False, "reason": "physical_inflight", "epoch": epoch}
                 # own-class width is capped by the measured slot count
                 if self._occupancy(self.db, epoch, "RT") >= self.slots:
                     return {"admitted": False, "reason": "class_full",
@@ -643,6 +652,7 @@ class Broker:
             if p["state"] == "waiting":
                 if self._occupancy(self.db, meta["epoch"],
                                    "BACKLOG") == 0 \
+                        and not self._has_bound_permits(meta["epoch"]) \
                         and self._occupancy(self.db, meta["epoch"],
                                             "RT") < self.slots:
                     self.db.execute(
@@ -674,13 +684,15 @@ class Broker:
                 return {"sent": False, "reason": "stale_epoch"}
             if p["state"] != "admitted":
                 return {"sent": False, "reason": f"state_{p['state']}"}
-            # re-verify exclusivity inside the same write tx: an RT
-            # token may only exist while no BACKLOG request occupies
+            # Recheck both modes in the send transaction. Legacy callers do
+            # not own a physical slot and cannot overlap a bound permit.
             other = "BACKLOG" if p["cls"] == "RT" else "RT"
             if p["physical_slot"] is not None and not self._physical_permits_valid(meta["epoch"]):
                 return {"sent": False, "reason": "physical_slot_conflict"}
             if p["physical_slot"] is None and self._occupancy(self.db, meta["epoch"], other):
                 return {"sent": False, "reason": "class_overlap"}
+            if p["physical_slot"] is None and self._has_bound_permits(meta["epoch"]):
+                return {"sent": False, "reason": "physical_inflight"}
             nonce = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
             token = f"{meta['epoch']}:{permit_id}:{nonce}"
             self.db.execute(

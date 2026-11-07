@@ -208,6 +208,45 @@ def test_legacy_unknown_holds_all_slots_until_existing_terminal_proof(broker):
     assert broker.acquire("mcs.realtime", "RT", physical_slot=0)["admitted"]
 
 
+@pytest.mark.parametrize("route,work_class", [("mcs.extract", "BACKLOG"), ("mcs.realtime", "RT")])
+def test_bound_work_prevents_legacy_same_class_admission(broker, route, work_class):
+    bound = broker.acquire(route, work_class, physical_slot=0)
+    assert bound["admitted"] and broker.sent(bound["permit_id"])["sent"]
+    legacy = broker.acquire(route, work_class)
+    assert legacy["reason"] == "physical_inflight" and not legacy["admitted"]
+    broker.mark_unknown(bound["permit_id"], "synthetic")
+    assert broker.acquire(route, work_class)["reason"] == "physical_inflight"
+    broker.terminal(bound["permit_id"], "done", proof="synthetic_backend_receipt")
+    legacy = broker.acquire(route, work_class)
+    assert legacy["admitted"] and broker.sent(legacy["permit_id"])["sent"]
+
+
+def test_legacy_rt_waiting_drains_all_bound_work_before_promotion(broker):
+    rt = broker.acquire("mcs.realtime", "RT", physical_slot=0)
+    bg = broker.acquire("mcs.extract", "BACKLOG", physical_slot=1)
+    assert broker.sent(rt["permit_id"])["sent"] and broker.sent(bg["permit_id"])["sent"]
+    waiting = broker.acquire("hermes.interactive", "RT")
+    assert waiting["reason"] == "waiting" and broker.held_slots() == {0, 1, 2}
+    broker.terminal(bg["permit_id"], "done")
+    assert broker.poll(waiting["permit_id"])["state"] == "waiting"
+    assert broker.sent(waiting["permit_id"])["reason"] == "state_waiting"
+    broker.terminal(rt["permit_id"], "done")
+    assert broker.poll(waiting["permit_id"])["state"] == "admitted"
+    assert broker.sent(waiting["permit_id"])["sent"]
+
+
+@pytest.mark.parametrize("route,work_class", [("mcs.extract", "BACKLOG"), ("mcs.realtime", "RT")])
+def test_legacy_send_rechecks_bound_permits_after_admission(broker, route, work_class):
+    legacy = broker.acquire(route, work_class)
+    # Simulate a row from an older or interrupted writer between admission
+    # and send; even this mixed state must never mint a legacy backend token.
+    with broker._write_tx():
+        bound = broker._admit(broker.epoch(), route, work_class, None, None, physical_slot=0)
+    assert broker.sent(legacy["permit_id"])["reason"] == "physical_inflight"
+    assert broker._permit(legacy["permit_id"])["token"] is None
+    assert broker.sent(bound["permit_id"])["reason"] == "physical_slot_conflict"
+
+
 @pytest.mark.parametrize("work_class,route,slot", [("RT", "mcs.realtime", 0),
                                                   ("BACKLOG", "mcs.extract", 1)])
 def test_scheduled_transport_binds_route_permit_and_wire_slot(
