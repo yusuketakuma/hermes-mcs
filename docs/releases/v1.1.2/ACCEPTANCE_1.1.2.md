@@ -116,6 +116,34 @@
 - 親工程から、本番 `5988a774` の適用は111.86秒・終了0・clean、設定と明示OFFの変更0、更新journalに未完了記録なし、直接起動のsetup checkは終了0、gateway再起動とcard worker起動を観測したとの報告を受領した。今回追加した投稿単位の判定修正は本番未適用で、適用後の自然実行・運用受入と公開は未完了。
 - 実機の3患者標本では、採用可能な本文付き資料数は0で、資料のQC・意味解析・OCRの待機が残るとの親報告を受領した。旧empty-repairの1例は旧policyのmarkerにリンクした保存候補が0件で、同じ入力の保存済み修復結果として回収できないため保留を維持する。markerを取り消したり、新しいrepairを送ったりしていない。OCR表の交差は曖昧なgridを拒否する必要があるという分類にとどめ、個別10件の全原因や医学的な精度は未検証。本番回復の成功とは扱わない。
 
+## 最終整理とCI後の再検証の追補
+
+- 文書のソース基準は `18608038a7fc02a454c319dbe45c90d32400b4e0`。既存96件のarchiveをバイト単位で保持し、保守用の未使用処理と到達しない分岐の整理1件を加えて全97件へ集約した。処理の流れは変わらないため、SVG・PNG・visual-sourceの3資産は保持し、再描画していない。
+- 未使用の復旧manifest読取wrapper、通知のwire名比較helper、ログ列挙helper2件と到達しないanchor分岐を削除した。公開CLI、旧更新互換、移行・rollback・witness、旧クラウド予約・課金済み回答・結果不明の回収と保留は保持する。
+- 現行説明との不一致はplist件数9→10・Hermes用5→6、`patient_state_context`から`extraction_context`へのコードリンク、台帳schema 12と削除済み本文状態、個別の新規生成はlocal・保存済みcloud結果は既存の保護条件で回収する説明の4系統を訂正した。台帳の説明訂正によるDB移行はない。
+
+旧GitHub CI run `42399969431`（ソース `77ac031b`）は失敗した実行として保持する。restは27691成功・91失敗・8skipと102 subtests、lifecycleは7983成功・1失敗・12skipと15 subtests、macは6694成功・1失敗と15 subtestsだった。hygieneはshellcheckで失敗した。これらの失敗と、後続の修正後の検証を分けて記録する。
+
+| 修正後の検証範囲 | 実行時の状態と確定修正 | 成功 | 失敗 | skip | 終了コード |
+| --- | --- | ---: | ---: | ---: | ---: |
+| サービス構成 | `7485495b`＋test修正、後に`758cd3d3`へ確定 | 38 | 0 | 0 | 0 |
+| 常駐処理と待機 | `758cd3d3`＋fixture修正、後に`12a75558`へ確定 | 112 | 0 | 0 | 0 |
+| 認証とCDP peer照合 | `81e5e9d4` | 41 | 0 | 0 | 0 |
+| 通知の関連16file | `74aac63d` | 409 | 3 | 0 | 1 |
+| 通知の失敗3node再検証 | `d6f944e3` | 3 | 0 | 0 | 0 |
+| 患者情報・品質・再試行の関連4file | 親工程の試験差分、後に`3fd0442b`へ確定 | 156 | 1 | 0 | 1 |
+| 患者情報の失敗1node再検証 | 修正版を`3fd0442b`へ確定 | 1 | 0 | 0 | 0 |
+| 最終整理とinstallerの合同9file | `18608038`固定 | 429 | 0 | 0 | 0 |
+
+- 文書担当は完全合成のXML・JSONと失敗対応表を読み、サービス38件・常駐112件・認証41件、通知409件と失敗3件の再検証、患者関連156件と失敗1件の再検証を区別した。同じ対象とソースの成功結果を再利用しており、件数を重複なく合計した全体suiteの結果ではない。
+- 認証41件は公式runnerの隔離下で実行したが、実際のPythonは指定のstandalone SDK venvではなく `.mcs/.venv/bin/python` だった。実環境はPython 3.14.10・pytest 9.2.0・SQLite 3.54.1。SDKに依存しない対象であることとpytest固定版の一致を親工程が確認して採用した。他の実行環境と取り違えない。
+- 患者関連4fileの調整はテスト側だけで、製品処理の変更はない。品質確認へ渡す引数、部分監査済み集合から全体集合への拡大、実writerによる原文編集後の拒否、Linuxの共有time.sleepへのスタブ影響を、現在の契約へ合わせた。残った1失敗はAの読取り回数の旧期待値で、当該nodeを修正して再検証した。
+- `failure-resolution-current.json` は旧CIのunique failed 92件を最新PASSへ全件対応付け、未対応0件とした。LinuxとmacOSで異なるUIDは同じparam index・URL・peer ID・相対UIDで厳密に対応付け、表示上のescape差を分けた。意図した契約名の変更も記録している。元の失敗数から再検証件数を単純に差し引いた集計ではない。
+- 親工程は配布証跡524pathの全bytes一致、pathの集合不変、digest `b9ed9df613bea35f544313c0c644b14d9cb101d7f7d897f38fdaa5b410398a83` を確認した。更新対象はprepare_recovery・install.sh・ledger・maintenance・extract_llm・notify_transportの6entryで、DEVELOPMENT生成差分はない。文書担当はこれらのsource manifest・生成表を編集していない。
+- 最終の整理とinstallerの合同batchは、`18608038`固定の9fileで429件成功・失敗0・skip 0・終了0だった。pytest出力の時間は319.96秒、driverは320.3856秒。文書担当は`final-cleanup-batch/batch.json`・XML・logの終端を照合し、実行前後のSHA一致と親工程のclean報告を確認した。対象はinstaller・install companions・recovery bundle・installer config boundary・upgrader・maintenanceの2file・Discord group settlement・card part resolveで、文書担当によるpytest再実行はない。
+- 親工程から、全範囲ruff、gates 10/10、mine、README、gallery、配布ソース524path、同梱masterのoffline検査の7項目と、CI同範囲のshellcheckがすべて終了0との報告を受領した。これらをGitHub CI全ジョブの実測成功とは扱わない。
+- GitHubのartifact storage quotaは未解消。既存Release下書きの再利用は`6baa4654`（親統合`f40e6136`）の合成unittest18件が成功し、本文同期のCASと公開状態の保持を維持するが、lookupからsyncまでの原子性を保証するものではなく、tag差替前の実機での下書き再取得は未確認である。今回の文書追補では本番の再適用・自然実行・tag差替・公開を確認していない。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。

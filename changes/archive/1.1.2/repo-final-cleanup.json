@@ -1,0 +1,25 @@
+{
+  "category": "changed",
+  "title": "保守用の未使用処理と到達しない分岐を整理",
+  "summary": "更新・復旧・通知で使われていない補助関数と到達しない分岐を削除し、配備構成と現行コードの案内を修正しました。利用者の操作、処理の動作、安全条件は変わりません。",
+  "upgrade": "追加の設定変更やDB移行は不要です。通常の更新手順で反映し、復旧ツールやサービスの同期は既存の更新計画と省略オプションに従ってください。復元の承認待ちや送信結果不明の記録は解除しません。",
+  "details": [
+    "復旧配置ツールの未使用support_manifestを削除しました。実際に使う_manifest・prepare・installと、世代を固定する補助ファイル、旧実行ファイルに対応する.prev世代を保持します。",
+    "通知の未使用_wire_name_matchesと到達しない添付anchor分岐を削除しました。添付本文の配信先・構成要素・保存状態・応答証拠を照合する既存の経路と、結果不明時の保留は維持します。",
+    "ログ保守の未使用_default_logs・_fixed_logsを削除しました。実際のログ移行、保持・削除の条件、復旧証跡は変更しません。",
+    "配布するplistを10件、Hermes用を6件とする現行構成と、移動済みextraction_contextへのリンクを説明へ反映しました。台帳の説明を実装済みschema 12とbody_state=deletedへ合わせました。今回の整理でschema自体は変更していません。",
+    "個別の新規生成はローカルで行い、保存済みクラウド回答の回収では対象範囲・原文との一致・会計・結果不明時の保護を維持する現在の条件を、ソースの説明へ反映しました。旧クラウド予約・課金済み回答の回収経路は削除していません。",
+    "CIで残っていた認証・常駐処理・通知・患者コンテキストの合成テストを、現在の処理責務と入力条件へ合わせました。認証情報の非出力、peer照合、期限と待機、品質確認、原文更新時の拒否と旧回答の回収条件は維持しています。"
+  ],
+  "refs": [
+    "deployment/recovery/prepare_recovery.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/core/maintenance.py",
+    "mcs/core/ledger.py",
+    "mcs/extract/llm/extract_llm.py",
+    "deployment/README.md",
+    "docs/ROADMAP.md",
+    "tests/ingest/",
+    "tests/patients/"
+  ]
+}
