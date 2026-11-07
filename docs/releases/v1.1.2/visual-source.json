@@ -2,31 +2,32 @@
   "artifacts": [
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "f0fa1427c16374f07d3f29d21c66caeeb332324296a9ee6389ef9d2b3f10dd10"
+      "sha256": "98f59dbcf90245395b6455665ed149ebd69f2b0288e6544e7a4b82c539987792"
     },
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "6404f22c984b921f130607ffd46b74fa2853722b4b620f1843be7b139db003ba"
+      "sha256": "290b95c1a17c7bb046c15cf45b152f99db023b2eacdfe277617c306a7ca0eb16"
     }
   ],
   "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
   "notes": [
     "図はv1.1.2の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
     "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
-    "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
+    "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。",
+    "今回の部分作成・回数管理・患者内検索・昼夜3枠を反映。原資料検索は解析完了を待たない独立の矢印で表す。"
   ],
   "renderer": {
-    "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
-    "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
+    "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
+    "thumbnail_command": "qlmanage -t -s 1200 -o TEMP TEMP/release.svg",
     "tool": "macOS qlmanage + ImageMagick",
-    "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)"
+    "wrapper": "1200x1200 SVG with source SVG nested inside g transform=translate(405 80)"
   },
-  "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。",
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
   "source_checkout_observation": {
-    "head": "4e30d08497169680ba14e6650fe69d01a29389cf",
+    "head": "b0b5f59b000e447ab0b4184b9b4e97eaa23c35b4",
     "dirty": true,
-    "observed_at": "2026-11-07T12:05:35.586456+00:00",
+    "observed_at": "2026-11-07T14:46:20.402260+00:00",
     "release_sha_fixed": false
   },
   "source_file_observations": [
@@ -66,11 +67,43 @@
     {
       "path": "mcs/notify/notify_recovery.py",
       "sha256": "25fb4d6daa32b542433572e4ad659a161869662a42dad6eb8a2454991f2acfcd"
+    },
+    {
+      "path": "mcs/patients/patient_context_refresh.py",
+      "sha256": "6944608ba4a9c54c8dc06964dbbe4e7d709a5a29cf8547e980dd53c36b14db6f"
+    },
+    {
+      "path": "mcs/patients/patient_context_refresh_readiness.py",
+      "sha256": "dd019656c42a3e2542c0a2158871ce15b62bed1e2e642186fb78a303357af72b"
+    },
+    {
+      "path": "mcs/patients/patient_context_quota.py",
+      "sha256": "fc8984f16d1430cc45330970dfca7ed1524d1c0a0a8d1e7c1df8c13e42ce7dec"
+    },
+    {
+      "path": "mcs/views/patient_search.py",
+      "sha256": "869288b81125b53903c637e2da63a8018c0d5133aa777f8d8740b7501d3d57ec"
+    },
+    {
+      "path": "mcs/notify/notify_actions.py",
+      "sha256": "7aa3cf02066a063503340eb423bfd9f871818e24bde868077bba218068954189"
+    },
+    {
+      "path": "mcs/llm/admission/llm_slot_schedule.py",
+      "sha256": "cb3830af24e6b3b7168d48f174f6c69b659435482172d8fc112d741c15452f72"
+    },
+    {
+      "path": "mcs/extract/llm/extract_llm_resident.py",
+      "sha256": "14292e14a1f1be00170a2991671dcb990c80d8ac3852409cc5110f4d5ee8880c"
+    },
+    {
+      "path": "mcs/llm/cloud_backlog.py",
+      "sha256": "573868275745bbd81f026cd78f056a5018d89b6036381ed1b6e56c4260227b71"
     }
   ],
   "status": "unpublished_preparation",
   "visual_check": {
-    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・件数に依存しない説明へ更新後）",
+    "checked": "2026-11-07、390px幅のPNGで文字欠落・重なり・余白と、検索が解析完了に依存しない矢印を目視確認。",
     "narrow_width_ok": true,
     "png_rendered": true
   }

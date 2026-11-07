@@ -51,7 +51,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | `adapters/common/text.py`の`preview_text`、`adapters/slack/actions.py`の`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
-| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別）、`notify_actions._context_navigation`（最初の5節・各節から10節への循環。終日の患者コンテキスト更新が有効な場合） |
+| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（本人向けの未完了タスク・背景抜粋・取得範囲）、`notify_actions._context_navigation`（患者情報から最初の5節へ進む操作）、`mcs/views/patient_search.py`・`notify_views.patient_search_view`・`notify_actions._patient_search`（同じ患者の別スレッド・添付OCRを検索し、原資料・続きを検索・条件変更へ進む本人向け表示） |
 | `08-urgent-notice` | `mcs/notify/alert_view.py`の`render_parts`を完全合成のメモリDBで実行（患者本人／対象未確認、同投稿の一意な原文引用、投稿日時と緊急度の判定時刻、原本確認、未対応を断定しない記録表示）。`notify_urgent.py`の配送前検証と既存通知スレッドへの追加配送は別の安全条件。 |
 | `09-initial-history` | `mcs/notify/notify_history.py`の`content`・`actions`を完全合成のメモリDBと件数で実行。履歴の保存は完了し、解析中・保留・解析状況未取得が残る例。本文・添付・スタンプの送信は描かず、現行抽出で緊急度が高い投稿と添付は件数とMCSへの案内を表示する。[新しく認識した患者の履歴](../../guides/USER_GUIDE.md#新しく認識した患者の履歴)に対応する。 |
 
@@ -113,3 +113,5 @@ CIはSVGの生成結果、PNGの完結性・サイズ・画像データ、両方
 2026-11-04の添付表示では、01に元投稿と返信それぞれの画像・PDFをまとめた例を描き、01〜03の添付件数を合わせた。既存の生成器とmacOSのsipsでSVG・PNG・ハッシュを更新した。ファイルの検査やプレビュー、厳密な並びは実Slackで未確認であり、合成図の配置とは区別する。
 
 2026-11-06の表示変更では、01〜03のクラウド提供元アイコンを文脈の進捗へ置き換えた。元投稿73%・後から作成した返信5%は架空の値で、各カードの作成時点を示す。既存カードは進捗だけでは更新しない。医療本文・原文・操作・添付の配置を保ち、SVG・PNGとハッシュを既存の生成器とmacOSのsipsで更新した。
+
+2026-11-07の患者情報・検索の追補では、`07-patient-summary`だけを更新した。同じ患者の記録を探し、原資料とMCSへ戻る2画面の合成例で、LLMの解析完了を待たない検索を示す。検索語は500文字まで、結果は最大5件ずつ。図の2件と続きありは、探索予算によって未検索範囲が残る例であり、患者全体の件数ではない。原資料は開くたびに閲覧条件と更新・削除を確認する。

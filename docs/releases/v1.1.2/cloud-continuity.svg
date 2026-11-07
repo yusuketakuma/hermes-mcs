@@ -1,37 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="390" height="860" viewBox="0 0 390 860" role="img" aria-labelledby="title desc">
-  <title id="title">v1.1.2：添付とクラウド経路の流れ</title>
-  <desc id="desc">投稿の原文と添付OCRを保存し、個別解析はローカルで継続し、原文・OCR・補助要約を入力とする新規クラウド送信は患者コンテキストの作成・更新と品質修復だけに限定し、患者背景と通知へ反映する流れを示す説明図です。実画面や測定結果ではありません。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="1040" viewBox="0 0 390 1040" role="img" aria-labelledby="title desc">
+  <title id="title">v1.1.2：確認済み資料から作り、原資料へ戻る</title>
+  <desc id="desc">原文と添付OCRを保存し、個別解析は昼夜で配分したローカル3枠で進めます。品質を確認した資料から患者コンテキストを部分作成し、同じ患者の原資料は解析完了前でも検索できます。実画面や測定結果ではありません。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66829a"/></marker>
   </defs>
-  <rect width="390" height="860" fill="#f4f7fb"/>
+  <rect width="390" height="1040" fill="#f4f7fb"/>
   <g font-family="Hiragino Kaku Gothic ProN, sans-serif" fill="#18324b">
-    <text x="22" y="38" font-size="22" font-weight="700">クラウドは患者コンテキスト専用へ</text>
-    <text x="22" y="64" font-size="15">v1.1.2 · 添付とクラウド経路</text>
-    <rect x="18" y="84" width="354" height="86" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="22" y="38" font-size="20" font-weight="700">確認済み資料から作り、原資料へ戻る</text>
+    <text x="22" y="64" font-size="15">v1.1.2 · 患者背景と検索</text>
+    <rect x="18" y="84" width="354" height="100" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
     <text x="34" y="115" font-size="19" font-weight="700">1　投稿の原文と添付OCRを保存</text>
-    <text x="34" y="143" font-size="15">画像・PDFを本文と分けて文字起こし</text>
-    <text x="34" y="166" font-size="14">出典付きの資料として保存</text>
-    <path d="M195 176V193" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
-    <rect x="18" y="204" width="354" height="110" rx="14" fill="#e8f0fd" stroke="#a4bddc"/>
-    <text x="34" y="235" font-size="19" font-weight="700">2　個別解析はローカルで継続</text>
-    <text x="34" y="265" font-size="15">クラウド送信を待たず他の投稿も処理</text>
-    <text x="34" y="290" font-size="15">停止前の予約と課金済み回答は証跡を照合</text>
-    <text x="34" y="308" font-size="14" font-weight="700">確認不能な結果を成功・失敗へ推測しない</text>
-    <path d="M195 320V337" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
-    <rect x="18" y="348" width="354" height="110" rx="14" fill="#fff6e8" stroke="#d9ba83"/>
-    <text x="34" y="379" font-size="19" font-weight="700">3　新規クラウド送信は患者背景だけ</text>
-    <text x="34" y="409" font-size="15">原文・OCR・補助要約の全区間が入力</text>
-    <text x="34" y="434" font-size="15">作成・更新と品質修復に限定し予算等を確認</text>
-    <path d="M195 464V481" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
-    <rect x="18" y="492" width="354" height="128" rx="14" fill="#eef7ee" stroke="#a9c9a9"/>
-    <text x="34" y="523" font-size="19" font-weight="700">4　患者背景と通知へ反映</text>
-    <text x="34" y="553" font-size="15">Slackは患者情報と運用ログを分離</text>
-    <text x="34" y="578" font-size="15">Discord・LINE WORKSも各投稿の原文を表示</text>
-    <text x="34" y="603" font-size="14">未完了部品は状態別の内訳で表示</text>
-    <rect x="18" y="652" width="354" height="76" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
-    <text x="34" y="683" font-size="16" font-weight="700">この図の対象</text>
-    <text x="34" y="709" font-size="14">v1.1.2の主要な流れ。受入証拠ではない</text>
-    <text x="34" y="732" font-size="13" fill="#4a6076">説明図は実画面や測定結果ではありません</text>
+    <text x="34" y="143" font-size="15">画像・PDFは本文と分けて文字起こし</text>
+    <text x="34" y="169" font-size="15">出典・版・区間を持つ資料として保存</text>
+    <path d="M195 190V209" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M372 134H382V742H374" stroke="#66829a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+    <rect x="18" y="220" width="354" height="158" rx="14" fill="#e8f0fd" stroke="#a4bddc"/>
+    <text x="34" y="251" font-size="19" font-weight="700">2　個別解析はローカルで継続</text>
+    <text x="34" y="280" font-size="15">08〜20時：新着1枠 ＋ 背景処理2枠</text>
+    <text x="34" y="306" font-size="15">20〜08時：背景処理に最大3枠（JST）</text>
+    <text x="34" y="332" font-size="15">夜間の新着は次の空き枠を優先</text>
+    <text x="34" y="358" font-size="14">実行中は中断しない・クラウド待ちは分離</text>
+    <path d="M195 384V403" stroke="#66829a" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="18" y="414" width="354" height="204" rx="14" fill="#fff6e8" stroke="#d9ba83"/>
+    <text x="34" y="445" font-size="19" font-weight="700">3　確認済み資料から患者背景を作成</text>
+    <text x="34" y="474" font-size="15">原文・OCR・補助要約を出典付きで統合</text>
+    <text x="34" y="500" font-size="15">採用範囲と未反映を区別して部分作成</text>
+    <text x="34" y="526" font-size="15">新規クラウド生成は患者コンテキスト専用</text>
+    <text x="34" y="552" font-size="15">1患者・JST1日4回 ／ 原則3時間間隔</text>
+    <text x="34" y="578" font-size="14">初回の全資料追付きは間隔だけ免除</text>
+    <text x="34" y="602" font-size="14">同一入力の回復・有限の品質修復は同じ枠</text>
+    <rect x="18" y="650" width="354" height="184" rx="14" fill="#eef7ee" stroke="#a9c9a9"/>
+    <text x="34" y="681" font-size="19" font-weight="700">解析を待たず、原資料を検索</text>
+    <text x="34" y="710" font-size="15">同じ患者の別スレッド・添付OCRが対象</text>
+    <text x="34" y="736" font-size="15">検索語は500文字まで ／ 結果は5件ずつ</text>
+    <text x="34" y="762" font-size="15">原資料とMCSへ戻り、開くたび再確認</text>
+    <text x="34" y="788" font-size="15">未検索・未取得・OCR未完了を区別</text>
+    <text x="34" y="814" font-size="14">検索にLLM・患者背景の作成回数は使わない</text>
+    <rect x="18" y="864" width="354" height="113" rx="14" fill="#ffffff" stroke="#cbd8e4"/>
+    <text x="34" y="893" font-size="16" font-weight="700">既存の確認条件は維持</text>
+    <text x="34" y="919" font-size="14">閲覧範囲・費用・旧予約・結果不明を照合</text>
+    <text x="34" y="943" font-size="14">3物理枠を前提とし、速度や医療精度は未測定</text>
+    <text x="34" y="966" font-size="14">未処理の資料が残る状態を全体完了にしない</text>
+    <text x="22" y="1011" font-size="13" fill="#4a6076">合成の説明図です。実画面・受入証拠ではありません。</text>
   </g>
 </svg>
