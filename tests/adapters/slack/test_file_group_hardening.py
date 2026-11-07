@@ -1,5 +1,6 @@
 """Synthetic private-stage and visible-group safety boundaries."""
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -7,6 +8,7 @@ import notify_cards
 import notify_parts
 from adapters.common import journal
 from adapters.common import spec as spec_module
+from adapters.slack import cards as slack_cards
 from adapters.slack import delivery
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from slack_testkit import ROOT_TS, SLACK, _attach, _granted_card, _mkworld
@@ -176,3 +178,73 @@ def test_normal_update_reuses_private_stages_and_gc_preserves_kind(led, tmp_path
     assert len(groups) == 2 and groups[0] == groups[1]
     asyncio.run(world.worker._resume_parts(specs[0]))
     assert len([kw for kind, kw in world.client.calls if kind == "update" and "file_ids" in kw]) == 2
+
+
+def _legacy_group_sha(spec):
+    """Recompute the seal-era group hash: the eight-field stage projection
+    that file_group_sha256 bound before the discord file-identity keys."""
+    keys = ("part_id", "index", "attachment_id", "sha256", "bytes", "name",
+            "prior_remote_id", "operator_verified")
+    parts = spec["parts"]
+    stages = [{k: p.get(k) for k in keys}
+              for p in parts["manifest"] if p.get("kind") == "attachment_part"
+              and p.get("unavailable") is not True]
+    from adapters.common.envelopes import canonical
+    return hashlib.sha256(canonical(
+        {"card_key": spec["card_key"], "delivery": spec["delivery"],
+         "post_source_id": parts.get("post_source_id"), "stages": stages})).hexdigest()
+
+
+def _grouped_spec(led, tmp_path, monkeypatch):
+    _world(led, tmp_path, monkeypatch)
+    spec = json.loads(_latest_render(led)["spec_json"])
+    slack_cards.validate(spec)
+    return spec
+
+
+def test_legacy_seal_reads_as_same_identity(led, tmp_path, monkeypatch):
+    spec = _grouped_spec(led, tmp_path, monkeypatch)
+    group = spec["parts"]["manifest"][-1]
+    assert group["sha256"] != _legacy_group_sha(spec)
+    group["sha256"] = _legacy_group_sha(spec)
+    slack_cards.validate(spec)
+
+
+@pytest.mark.parametrize("fault", ["tamper", "new_key", "new_key_none", "transport", "group_missing"])
+def test_legacy_seal_still_fails_closed(led, tmp_path, monkeypatch, fault):
+    spec = _grouped_spec(led, tmp_path, monkeypatch)
+    group = spec["parts"]["manifest"][-1]
+    group["sha256"] = _legacy_group_sha(spec)
+    stage = spec["parts"]["manifest"][-2]
+    if fault == "tamper":
+        stage["name"] = "renamed-after-seal.pdf"
+    elif fault == "new_key":
+        stage["prior_remote_file_id"] = "F_TAMPERED"
+    elif fault == "new_key_none":
+        stage["face_at"] = None
+    elif fault == "transport":
+        spec["delivery"]["transport"] = "discord"
+    else:
+        spec["parts"]["manifest"].pop()
+    with pytest.raises(ValueError):
+        slack_cards.validate(spec)
+
+
+def test_group_hash_matcher_contrast(led, tmp_path, monkeypatch):
+    from adapters.common.spec import file_group_sha256_matches
+    spec = _grouped_spec(led, tmp_path, monkeypatch)
+    group = spec["parts"]["manifest"][-1]
+    assert file_group_sha256_matches(spec, group["sha256"])
+    assert not file_group_sha256_matches(spec, "0" * 64)
+    assert file_group_sha256_matches(spec, _legacy_group_sha(spec))
+    stage = spec["parts"]["manifest"][-2]
+    stage["prior_remote_file_id"] = "F_ANY"
+    assert not file_group_sha256_matches(spec, _legacy_group_sha(spec))
+    # The helper's own transport gate — slack_cards.validate already rejects
+    # a discord route upstream, so this branch needs a direct call. The hash
+    # is computed after the route change: an old-projection match on a
+    # non-slack spec must still be refused by the gate alone.
+    del stage["prior_remote_file_id"]
+    spec["delivery"]["transport"] = "discord"
+    legacy = _legacy_group_sha(spec)
+    assert not file_group_sha256_matches(spec, legacy)

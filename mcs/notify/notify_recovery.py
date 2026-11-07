@@ -957,8 +957,8 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
                            for part in manifest)):
             return "preflight_replan_unsafe"
     if grouped:
-        from adapters.common.spec import file_group_sha256
-        if groups[0].get("sha256") != file_group_sha256(spec):
+        from adapters.common.spec import file_group_sha256_matches
+        if not file_group_sha256_matches(spec, groups[0].get("sha256")):
             return "preflight_replan_unsafe"
     import notify_parts
     identities = notify_parts._same_thread_delivered_parts(db, card)[2] if grouped else {}
@@ -1418,8 +1418,8 @@ def _seal_confirmed_update(db, delivery_id, card) -> dict | None:
     if bool(groups) != grouped or len(groups) > 1:
         return None
     if grouped:
-        from adapters.common.spec import file_group_sha256
-        if groups[0].get("sha256") != file_group_sha256(spec):
+        from adapters.common.spec import file_group_sha256, file_group_sha256_matches
+        if not file_group_sha256_matches(spec, groups[0].get("sha256")):
             return None
     confirmed = {(att_id, sha, size): (remote, name)
                  for _did, _pid, _rev, att_id, sha, size, name, remote in
