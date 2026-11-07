@@ -1,5 +1,5 @@
 {
-  "fragment_count": 102,
+  "fragment_count": 104,
   "records": [
     {
       "category": "added",
@@ -714,8 +714,22 @@
       "path": "changes/archive/1.1.2/notification-completion-query.json",
       "sha256": "2e05ec95d1547532a808b75299f72fca5a33a33f6ca5ba9abf160c6d10a7f836",
       "title": "通知カードの完了集計で同じ配送履歴を繰り返し読む問題を修正"
+    },
+    {
+      "category": "fixed",
+      "id": "notification-completion-join-order",
+      "path": "changes/archive/1.1.2/notification-completion-join-order.json",
+      "sha256": "d01315aee55b76172be5296fd9195e0598d039193260801264e6d77110512077",
+      "title": "通知の完了集計で過去の部品を全走査する問題を修正"
+    },
+    {
+      "category": "fixed",
+      "id": "semantic-binding-hold-refill",
+      "path": "changes/archive/1.1.2/semantic-binding-hold-refill.json",
+      "sha256": "28658087632d35aff10693c5d751f4279253dbe50cee26b25e300c66700857ba",
+      "title": "要約候補の保留が別の解析を妨げる問題を修正"
     }
   ],
-  "scope": "v1.1.2 の変更記録102件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録104件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
