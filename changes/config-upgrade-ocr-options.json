@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "OCR導入済み環境の対話更新を修正",
+  "summary": "OCRの導入選択を保存した環境でも、対話更新で選択を引き継いで再導入できるようにします。導入予定に表示するYomitokuの版を実際の0.16.1に合わせます。",
+  "upgrade": "追加操作は不要です。OCRの導入選択を保持し、OCR利用の有効・無効は変更しません。",
+  "details": ["未知のオプションと不正な形式の拒否は維持します。"],
+  "refs": ["scripts/mcs_upgrade.py", "install.sh"]
+}

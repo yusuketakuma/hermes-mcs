@@ -950,7 +950,7 @@ dry_run_plan() {
         plan_line "" "起動設定 $WATCH_PLIST [$(state "$WATCH_PLIST")]; 変更があるか未起動の場合だけ org.mcs.recovery を起動・再起動"
     fi
     if [ "$WITH_YOMITOKU" -eq 1 ]; then
-        plan_line "追加OCR" "$MCS_ROOT/ocr-venv に Python 3.13・Yomitoku 0.16.0・CPU liteモデルを導入（非商用向け、利用開始は別途設定）"
+        plan_line "追加OCR" "$MCS_ROOT/ocr-venv に Python 3.13・Yomitoku 0.16.1・CPU liteモデルを導入（非商用向け、利用開始は別途設定）"
     fi
     plan_line "省略項目の保存" "$MCS_ROOT/config.json （更新計画の install_args に表示。旧記録は保持）"
 }

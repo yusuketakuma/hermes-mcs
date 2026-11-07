@@ -42,6 +42,8 @@ CANDIDATE_RUNTIME_ASSETS = (
     "resources/inference-contracts/attachment-refactor-20261105.json",
     "evaluation/g6-criteria-v2.json",
 )
+# Self-contained copy of install_options_contract.OPTIONS (pinned by test).
+INSTALL_ARGS = ("--no-llm", "--no-brew", "--no-plugin", "--no-recovery", "--with-yomitoku")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -368,7 +370,7 @@ def interactive_update(cmd, env, repo):
             return 1
         install_args = report.get("install_args")
         if not isinstance(install_args, list) or any(
-                arg not in ("--no-llm", "--no-brew", "--no-plugin", "--no-recovery")
+                arg not in INSTALL_ARGS
                 for arg in install_args):
             print("以前の導入設定を確認できないため、更新を開始しません。担当者に docs/guides/UPGRADE_AGENT.md の再導入手順を依頼してください。")
             return 1
