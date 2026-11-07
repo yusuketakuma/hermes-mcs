@@ -142,5 +142,25 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" --verify-tag --draft \
-            --title "$(cat release-title.txt)" --notes-file release-notes.md
+          gh api --paginate --slurp "repos/$GH_REPO/releases" > release-list.json
+          action=$(python3 - <<'PY'
+          import json, os
+          pages = json.load(open("release-list.json", encoding="utf-8"))
+          if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+              raise ValueError("Invalid release pages")
+          releases = [release for page in pages for release in page]
+          if any(not isinstance(release, dict) or not isinstance(release.get("tag_name"), str)
+                 or not release["tag_name"] or type(release.get("draft")) is not bool for release in releases):
+              raise ValueError("Invalid release identity")
+          matches = [release for release in releases if release["tag_name"] == os.environ["RELEASE_TAG"]]
+          if len(matches) > 1 or matches and matches[0]["draft"] is not True:
+              raise ValueError("Release is ambiguous or already published")
+          print("sync" if matches else "create")
+          PY
+          )
+          if [ "$action" = sync ]; then
+            python3 scripts/development/sync_release_notes.py --repo "$GH_REPO" --tag "$RELEASE_TAG" --apply
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "$(cat release-title.txt)" --notes-file release-notes.md
+          fi
