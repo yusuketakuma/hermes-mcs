@@ -16,6 +16,20 @@ class OriginalQuery:
         self.db = db
 
     def execute(self, sql, *args):
+        if sql.startswith('WITH heads AS MATERIALIZED'):
+            grouped = (
+                'WITH heads AS MATERIALIZED (SELECT card_id,MAX(render_rev) render_rev '
+                'FROM notification_renders WHERE card_id IS NOT NULL GROUP BY card_id), '
+                'latest AS MATERIALIZED (SELECT r.delivery_id,r.state,r.parts_state FROM heads h '
+                'CROSS JOIN notification_renders r ON r.card_id=h.card_id AND r.render_rev=h.render_rev '
+                "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update')")
+            original = (
+                'WITH latest AS (SELECT r.delivery_id,r.state,r.parts_state FROM notification_renders r '
+                "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update') "
+                'AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer '
+                'WHERE newer.card_id=r.card_id)')
+            assert grouped in sql
+            sql = sql.replace(grouped, original, 1)
         sql = sql.replace('WITH latest AS MATERIALIZED (', 'WITH latest AS (')
         sql = sql.replace(
             'FROM latest l CROSS JOIN notification_render_parts p ON p.delivery_id=l.delivery_id',
@@ -105,6 +119,44 @@ def test_completion_history_fits_existing_bounded_reader(stored, monkeypatch, ol
         seconds=health_report.NOTIFICATION_OBSERVATION_S, observation=observation)
     assert report['total'] == report['primary_delivered'] == 160
     assert report['all_parts_delivered'] == 0
+    assert observation['stop'] == 'complete' and observation['budget_s'] == 2.0
+    assert observation['remaining_s'] > 0
+    assert stored.total_changes == before and not stored.in_transaction
+    assert stored.execute('PRAGMA busy_timeout').fetchone()[0] == original_wait
+
+
+@pytest.mark.parametrize('old_renders', [0, 256], ids=['original-renders', 'more-old-renders'])
+def test_completion_old_renders_keep_latest_set_and_fit_bounded_reader(stored, monkeypatch, old_renders):
+    _seed(stored)
+    with stored:
+        # Leave room for older positive revisions without changing the head
+        # deliveries or their part plans while history is extended below.
+        stored.execute('UPDATE notification_renders SET render_rev=render_rev+256')
+    latest_sql = ('SELECT delivery_id,card_id,render_rev FROM notification_renders '
+                  'WHERE render_rev=264 ORDER BY card_id')
+    latest = [tuple(row) for row in stored.execute(latest_sql)]
+    part_count = stored.execute('SELECT COUNT(*) FROM notification_render_parts').fetchone()[0]
+    with stored:
+        stored.executemany(
+            'INSERT INTO notification_renders(delivery_id,card_id,op,render_rev,route_epoch,'
+            'payload_hash,correlation,state,created_at,updated_at) '
+            "VALUES(?,?,'update',?,1,'synthetic-history',?,'queued',0,0)",
+            ((f'synthetic-history-{card}-{rev}', card, rev, f'synthetic-history-{card}-{rev}')
+             for card in range(1, 161) for rev in range(1, old_renders + 1)))
+    assert stored.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 1280 + 160 * old_renders
+    assert [tuple(row) for row in stored.execute(latest_sql)] == latest and len(latest) == 160
+    assert stored.execute('SELECT COUNT(*) FROM notification_render_parts').fetchone()[0] == part_count == 12800
+    expected = notify_scope._delivery_completion(OriginalQuery(stored), None, NOW)
+    before = stored.total_changes
+    original_wait = stored.execute('PRAGMA busy_timeout').fetchone()[0]
+    ticks = count()
+    monkeypatch.setattr(health_report.time, 'monotonic', lambda: next(ticks) * 0.002)
+    observation = {}
+    actual = health_report.bounded_health_read(
+        stored, lambda _check: notify_scope._delivery_completion(stored, None, NOW, observation),
+        seconds=health_report.NOTIFICATION_OBSERVATION_S, observation=observation)
+    assert actual == expected
+    assert actual['total'] == actual['primary_delivered'] == 160
     assert observation['stop'] == 'complete' and observation['budget_s'] == 2.0
     assert observation['remaining_s'] > 0
     assert stored.total_changes == before and not stored.in_transaction
