@@ -670,7 +670,7 @@
       "category": "fixed",
       "id": "context-current-member-readiness",
       "path": "changes/archive/1.1.2/context-current-member-readiness.json",
-      "sha256": "cc3cc76b3ca0087fcd4f3c7a88b880def04c6a8e34433e1be8fa6c8992c56e4c",
+      "sha256": "c4a2b76ae607a8ab1f6d1eb1f96fcede25bf15983c3d3af6fcea3ec9e7cc89a9",
       "title": "検証済みの投稿がスレッド全体の処理待ちで止まる問題を修正"
     }
   ],

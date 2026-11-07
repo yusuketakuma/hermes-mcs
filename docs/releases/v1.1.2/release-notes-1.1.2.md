@@ -762,7 +762,7 @@
 
 - 要約が有効な非空投稿は、既存のreprocess_target_stateが返すcurrentまたはcurrent_skippedだけを受け入れます。current_skippedは既存方針に基づく省略の証拠を確認する状態であり、監査合格への置換ではありません。
 - 原文、添付OCR、抽出QC、取得範囲、権限、原資料との対応に関する検証は維持しました。canonicalは検証済み投影を要求し、legacyの証拠で代用しません。
-- 要約OFF、空本文、削除済み投稿では、スレッド全体の処理完了を待つ従来の条件を維持しています。
+- semanticが有効で、要約OFF・空本文・削除済み投稿のいずれかに当たる場合は、スレッド全体の処理完了を待つ従来の条件を維持しています。
 - 根拠: mcs/patients/patient_context_refresh_readiness.py、tests/patients/test_context_semantic_member_readiness.py、tests/patients/test_patient_context_readiness.py
 
 </details>
