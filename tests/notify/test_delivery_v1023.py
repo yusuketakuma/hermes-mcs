@@ -221,8 +221,14 @@ def test_old_provider_generation_waits_for_a_real_update(led, monkeypatch, layou
         _dispatch(led, _intent(led, payload={"message_ids": [100]}), now=NOW + 2)
         spec = json.loads(_latest_render(led)["spec_json"])
     assert spec["parts"]["provider_states_version"] == 4
-    assert "anthropic" in next(c for c in spec["parts"]["containers"]
-                               if c.get("provider_scope") == "header")["visible_providers"]
+    assert spec["parts"]["processing_display_version"] == 3
+    header = next(c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header")
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"]
+    assert "Anthropic" not in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
     assert _card(led)["content_fp"] == cards._presentation_fp(
         _card(led), notify_render.card_content(led.db, _card(led), cfg=CFG), CFG)
     _deliver(led)
@@ -298,11 +304,22 @@ def test_current_provider_generation_does_not_hide_key_visibility_change(led, mo
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     _deliver(led)
+    before = dict(_card(led))
     monkeypatch.setattr(processing_route, "visible_providers", lambda: ("anthropic", "jev", "local"))
+    # Registration still changes the stored presentation fingerprint; the
+    # sealed compact header intentionally hides individual cloud services.
     assert cards.sweep(led, CFG, now=NOW + 1)["updated"] == 1
+    assert _card(led)["content_fp"] != before["content_fp"]
+    assert _card(led)["source_fp"] == before["source_fp"]
     spec = json.loads(_latest_render(led)["spec_json"])
-    assert "anthropic" in next(c for c in spec["parts"]["containers"]
-                               if c.get("provider_scope") == "header")["visible_providers"]
+    assert spec["parts"]["processing_display_version"] == 3
+    header = next(c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header")
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"]
+    assert "Anthropic" not in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
 
 
 def test_lw_original_write_token_cannot_revive_after_source_aba(led):
