@@ -601,6 +601,37 @@ def worker(parent, *, index=None, context_only=False):
                     _event("cloud_carry_settle_error", **_exception_observation(error))
 
 
+_CONTEXT_PASS_REASONS = frozenset({
+    "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete",
+    "patient_context_readiness_unverified", "patient_context_generation_changed", "run_lock",
+    "nightly_completed_expired", "nightly_capacity_or_deadline", "nightly_admission_deferred",
+    "nightly_turn_busy", "nightly_local_capacity", "nightly_source_changed", "nightly_cloud_budget",
+    "nightly_cloud_not_sent", "nightly_cloud_pending", "nightly_cloud_source_changed",
+    "nightly_length_stop", "nightly_unsupported_items", "nightly_unsupported_summary",
+    "summary_quality_promotion", "summary_quality_unavailable", "source_quality_unavailable",
+    "nightly_source_repair_changed", "nightly_source_repair_lock",
+}) | frozenset(prefix + state for prefix in ("source_quality_", "summary_quality_")
+              for state in ("pending", "deferred", "held", "failed", "budget", "disabled"))
+
+
+def _context_pass_observation(result):
+    """Report bounded context progress and fixed reasons without source or exception values."""
+    status = result.get("status")
+    record = {"status": status if type(status) is str and status in {
+        "off", "complete", "progressed", "deferred", "source_changed", "failed", "error"} else "unclassified"}
+    reason = result.get("reason")
+    if reason is not None or record["status"] in ("deferred", "failed", "error"):
+        record["reason"] = reason if type(reason) is str and reason in _CONTEXT_PASS_REASONS else "unclassified"
+    for key, limit in (("done", 1), ("scanned", 8), ("scan_ms", 900000)):
+        value = result.get(key)
+        if type(value) is int and 0 <= value <= limit:
+            record[key] = value
+    lane = result.get("lane")
+    if type(lane) is str and lane in ("A", "B", "C"):
+        record["lane"] = lane
+    return record
+
+
 def _context_worker(ledger, initial, index):
     import cloud_inference
     import extract_llm_resident
@@ -614,9 +645,13 @@ def _context_worker(ledger, initial, index):
             if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                     or not extract_llm_resident._context_memory_available()):
                 return
-            result = extract_llm_resident._background_context_refresh(
-                ledger, initial, cloud_worker=True)
-            _event("patient_context_pass", status=result.get("status"), done=result.get("done", 0))
+            with writer_lock.capture_writer_refusal() as diagnostic:
+                result = extract_llm_resident._background_context_refresh(
+                    ledger, initial, cloud_worker=True)
+            record = _context_pass_observation(result)
+            if diagnostic["writer_reason"] != "writer_refusal_unclassified":
+                record.update(writer_reason=diagnostic["writer_reason"], writer_stage=diagnostic["writer_stage"])
+            _event("patient_context_pass", **record)
             if result.get("run_lock_lost") == "updated":
                 return
             time.sleep(1 if result.get("done") else 5)
