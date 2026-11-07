@@ -425,7 +425,7 @@ def owns_unit_request(db, *, route, project_id, unit_key):
         "LIMIT 1", (KINDS[0], project_id, unit_key, route)).fetchone() is not None
 
 
-def owns_member_request(db, *, route, project_id, target_id):
+def owns_member_request(db, *, route, project_id, target_id, identity=None):
     """Whether an unresolved reservation forbids member `target_id`'s local
     path — three verdicts, not strict equality. A candidate row already binds
     the target somewhere (row message_id or any member field); inside it:
@@ -440,7 +440,25 @@ def owns_member_request(db, *, route, project_id, target_id):
     - Anything else (unparsable meta, missing unit/message identity):
       unproven — unknown paid state must never release the member to local.
 
-    Only reservations on `route`, or unable to prove a different one, count."""
+    Only reservations on `route`, or unable to prove a different one, count.
+
+    `identity` is the current request's verified unit tuple
+    (target, semantic_source, phase) shared with the send guard. With it, a
+    member-bound row still counts only after its own strict receipt and
+    _reserve_valid checks pass and its _semantic_financial_identity proves
+    the same input — a verified different unit stays a send guard, while an
+    unverifiable or malformed member row still holds. A non-None identity
+    that is malformed itself owns the member outright: an unproven current
+    request never releases local. Generation and model differences inside a
+    valid identity do not make a different input — same (target, source,
+    phase) still owns."""
+    if identity is not None and not (
+            type(identity) is tuple and len(identity) == 3
+            and type(identity[0]) is int and identity[0] > 0 and identity[0] == target_id
+            and isinstance(identity[1], str)
+            and re.fullmatch(r'[0-9a-f]{64}', identity[1]) is not None
+            and identity[2] in ('facts', 'summary')):
+        return True
     rows = db.execute("SELECT message_id, meta FROM artifacts WHERE kind=? AND project_id=? AND ("
         "(message_id=? AND NOT json_valid(meta)) OR "
         "(json_valid(meta) AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
@@ -459,7 +477,17 @@ def owns_member_request(db, *, route, project_id, target_id):
         owner = meta.get("owner")
         if (meta.get("logical_target_id") is not None
                 or isinstance(owner, dict) and owner.get("semantic_target_id") is not None):
-            return True
+            if identity is None:
+                return True
+            try:
+                receipt = _receipt_meta(row["meta"])
+                _reserve_valid(receipt, row)
+                old_identity = _semantic_financial_identity(receipt)
+            except (AnthropicError, ValueError, TypeError, KeyError):
+                return True
+            if old_identity is None or old_identity == identity:
+                return True
+            continue
         if (isinstance(meta.get("unit_key"), str) and meta["unit_key"]
                 and meta.get("message_id") == row["message_id"]):
             continue
@@ -618,12 +646,15 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
     return rows
 
 
-def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, target_id):
+def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, target_id,
+                           identity=None):
     """Prove member `target_id` holds no paid unit on `route`: inside one
     accounting snapshot the fiscal tally is valid, the unit's whole
     reservation/result history verifies, and no reservation provably binds
     the member. A tainted or ambiguous history proves nothing — it never
-    releases the member to a local path."""
+    releases the member to a local path. `identity` scopes the ownership
+    verdict to the current request's verified unit tuple; the history and
+    tally checks are unchanged and run regardless."""
     try:
         with _accounting_snapshot(ledger.db):
             if _tally(ledger).invalid:
@@ -631,7 +662,8 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
             _verified_request_history(ledger, route=route, project_id=project_id,
                                       message_id=message_id, unit_key=unit_key)
             return not owns_member_request(ledger.db, route=route,
-                                           project_id=project_id, target_id=target_id)
+                                           project_id=project_id, target_id=target_id,
+                                           identity=identity)
     except (AnthropicError, sqlite3.Error):
         return False
 

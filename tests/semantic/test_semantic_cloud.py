@@ -1408,3 +1408,160 @@ def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monke
     assert not local and not calls
     assert len(rows(led, 'cloud_usage_reserve')) == 2
     assert len(rows(led, 'cloud_usage_result')) == 2
+
+
+def _member_unit_reservation(led, cfg, job, mid, source, *, generation='other-gen',
+                             phase='facts', rid='e' * 32, **overrides):
+    """A durable member-bound reservation whose verified semantic unit
+    identity is (mid, source, phase) via logical_unit_fp — cloned from a
+    real reservation so every receipt shape field stays valid."""
+    import mcs_util
+    original = dict(rows(led, 'cloud_usage_reserve')[0])
+    meta = json.loads(original['meta'])
+    meta.update(message_id=mid, logical_target_id=mid,
+                owner={'semantic_target_id': mid, 'semantic_thread_root': 1,
+                       'semantic_source': source, 'semantic_generation': generation,
+                       'semantic_phase': phase},
+                logical_unit_fp=mcs_util.payload_hash(
+                    {'target': mid, 'source': source, 'generation': generation,
+                     'phase': phase}),
+                unit_key=f"semantic:{job['job_id']}:{json.loads(job['payload']).get('generation', '')}",
+                reservation_id=rid, **overrides)
+    with led.db:
+        led.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "VALUES('cloud_usage_reserve',1,?,'{}',?,?,?)",
+            (mid, original['model'], json.dumps(meta), time.time()))
+
+
+@pytest.mark.parametrize('order', [[2, 3], [3, 2]])
+def test_closed_route_old_source_unit_does_not_own_new_source_member(cloud, order):
+    """A member-bound reservation for a different verified source is a
+    different paid unit: it stays a send guard but does not own the new
+    source's member — local analysis proceeds while the owned member holds."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, order, bodies={2: 'アムロジピン5mgを継続します。',
+                                            3: 'メトホルミン500mgが出ています'})
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3, 'a' * 64)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            chat('synthetic member prompt')
+            assert local == ['synthetic member prompt']
+            transport.set_inference_target(2)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
+                chat('synthetic member prompt')
+            assert local == ['synthetic member prompt']
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) == 2
+
+
+def test_closed_route_same_source_new_generation_member_still_holds(cloud):
+    """A member-bound reservation for the same verified (target, source,
+    phase) still owns the member — a new job generation or model alone does
+    not release the member's local path."""
+    import mcs_util
+    from inference_dependency_loss import source_binding
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3,
+                             mcs_util.payload_hash([(3, source_binding(led.db, 1, 3))]))
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic member prompt')
+    assert not local and not calls and len(rows(led, 'cloud_usage_reserve')) == 2
+
+
+@pytest.mark.parametrize('mutation', [
+    # Row/meta identity contradiction: receipt validates meta internals but
+    # the row cannot be trusted — never evidence of a different unit.
+    {'message_id': 2},
+    # Member fields present but semantic_source missing: the unit's identity
+    # cannot be proven — unknown paid state still holds.
+    {'owner': {'semantic_target_id': 3, 'semantic_thread_root': 1}},
+    # Fingerprint tampered: identity fields alone cannot prove the unit.
+    {'logical_unit_fp': 'f' * 64},
+    # Contradictory member fields: target itself cannot be established.
+    {'logical_target_id': 4},
+])
+def test_closed_route_unverifiable_member_unit_still_holds(cloud, mutation):
+    """A member-bound row whose identity cannot be verified — contradicting
+    its row, missing or tampered identity fields — still owns the member."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3, 'a' * 64, **mutation)
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic member prompt')
+    assert not local and not calls
+
+
+def test_closed_route_different_source_ambiguous_accounting_holds(cloud):
+    """Even a verified different-source unit cannot release the member when
+    the accounting history is ambiguous — the r69 financial proof still
+    gates every local path."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3, 'a' * 64)
+    with led.db:
+        for _ in range(2):
+            led.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_result',1,3,'{}','synthetic',?,?)",
+                (json.dumps({'reservation_id': 'e' * 32, 'route': 'semantic_backlog',
+                             'unit_key': f"semantic:{job['job_id']}:"
+                             f"{json.loads(job['payload']).get('generation', '')}",
+                             'message_id': 3}),
+                 time.time()))
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic member prompt')
+    assert not local and not calls
+
+
+@pytest.mark.parametrize('identity,owned', [
+    ((3, 'b' * 64, 'facts'), False),   # valid, different source — not owning
+    ((2, 'b' * 64, 'facts'), True),    # binds another member's identity
+    ((0, 'b' * 64, 'facts'), True),    # non-positive target
+    (('3', 'b' * 64, 'facts'), True),  # non-int target
+    ((3, 'nothex', 'facts'), True),    # source not 64-hex
+    ((3, 'b' * 64, 'bogus'), True),    # phase outside enum
+    ((3, 'b' * 64), True),             # wrong arity
+    ('not-a-tuple', True),             # not a tuple at all
+])
+def test_owns_member_request_identity_verdicts(cloud, identity, owned):
+    """A malformed non-None identity owns the member outright — an unproven
+    current request never releases local. A valid different-source identity
+    does not let a verified different unit own the member."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3, 'a' * 64)
+    assert cloud_policy.owns_member_request(
+        led.db, route='semantic_backlog', project_id=1, target_id=3,
+        identity=identity) is owned

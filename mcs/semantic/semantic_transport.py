@@ -242,13 +242,44 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         target = _inference_target.get()
         return target[0] if target else job["message_id"]
 
+    def thread_occurrences():
+        # The thread's (member, source_binding) pairs — the same derivation
+        # chat() uses for provider.owner. None when any binding is unproven.
+        from inference_dependency_loss import source_binding
+        members = ledger.db.execute("SELECT message_id FROM messages WHERE project_id=? "
+            "AND (message_id=? OR parent_id=?) ORDER BY message_id",
+            (job["project_id"], job["message_id"], job["message_id"])).fetchall()
+        occurrences = [(row[0], source_binding(ledger.db, job["project_id"], row[0])) for row in members]
+        if not occurrences or any(binding is None for _, binding in occurrences):
+            return None
+        return occurrences
+
+    def current_unit_identity(mid):
+        # The current request's verified (target, semantic_source, phase)
+        # tuple — the same identity _semantic_financial_identity returns for
+        # reservations, built from the real owner derivation. None when the
+        # member's source cannot be proven: callers then keep the broad hold.
+        target = _inference_target.get()
+        if not target or target[0] != mid or not _inference_generation.get():
+            return None
+        occurrences = thread_occurrences()
+        if occurrences is None:
+            return None
+        selected = ([item for item in occurrences if item[0] == mid]
+                    if target[1] == 'facts' else occurrences)
+        if not selected:
+            return None
+        from mcs_util import payload_hash
+        return (mid, payload_hash(selected), target[1])
+
     def target_owned(mid):
         # Per-actual-target ownership on the strict member binding: a member
         # reservation must never take the job-level local switch — its unit
         # still needs recovery or a hold. An alien reservation on the same
         # thread stays a send guard only and never forbids this target's local.
         return cloud_policy.owns_member_request(ledger.db, route="semantic_backlog",
-                                                project_id=job["project_id"], target_id=mid)
+                                                project_id=job["project_id"], target_id=mid,
+                                                identity=current_unit_identity(mid))
 
     def member_unbound(mid):
         # The closed-route member may take the existing local() only when its
@@ -258,7 +289,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         return cloud_policy.unbound_member_history(
             ledger, route="semantic_backlog", project_id=job["project_id"],
             message_id=job["message_id"],
-            unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}", target_id=mid)
+            unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}", target_id=mid,
+            identity=current_unit_identity(mid))
 
     def member_dispatch(mid):
         if not send_capable and member_unbound(mid):
@@ -317,13 +349,9 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             raise runtime.LLMNotSent('realtime_target')
         provider.owner = {"semantic_target_id": provider.message_id, "semantic_thread_root": job["message_id"]}
         if target and _inference_generation.get():
-            from inference_dependency_loss import source_binding
             from mcs_util import payload_hash
-            members = ledger.db.execute("SELECT message_id FROM messages WHERE project_id=? "
-                "AND (message_id=? OR parent_id=?) ORDER BY message_id",
-                (job["project_id"], job["message_id"], job["message_id"])).fetchall()
-            occurrences = [(row[0], source_binding(ledger.db, job["project_id"], row[0])) for row in members]
-            if not occurrences or any(binding is None for _, binding in occurrences):
+            occurrences = thread_occurrences()
+            if occurrences is None:
                 raise runtime.LLMNotSent('cloud_source_unverified')
             source_occurrences = ([item for item in occurrences if item[0] == provider.message_id]
                                   if target[1] == 'facts' else occurrences)
