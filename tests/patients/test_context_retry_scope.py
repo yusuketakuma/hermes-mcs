@@ -6,7 +6,7 @@ import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
-from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
+from test_patient_context_refresh import CFG, _prepare_summary, document, runtime as runtime, seed, step
 
 
 def _failed_progress(led, clock, *, source_keys=None):
@@ -25,6 +25,7 @@ def _failed_progress(led, clock, *, source_keys=None):
 def test_whole_observer_keeps_scoped_failure_without_changing_snapshot(runtime, monkeypatch, held):
     led, clock, _ = runtime
     seed(led)
+    _prepare_summary(runtime)
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', lambda *a, **k: {
         'status': 200, 'finish_reason': 'length', 'text': '{}'})
     assert step(runtime)['status'] == 'failed'

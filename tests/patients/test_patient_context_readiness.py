@@ -23,7 +23,7 @@ import semantic_store
 from semantic_testkit import _cfg, _FakeJev, _llm
 from test_patient_context_refresh import runtime as runtime
 from test_patient_context_refresh import CFG as CONTEXT_CFG
-from test_patient_context_refresh import _raw_proof, _semantic_proof, seed, step
+from test_patient_context_refresh import _prepare_summary, _raw_proof, _semantic_proof, seed, step
 
 
 def _proof(led, pid, mid, cfg):
@@ -245,6 +245,8 @@ def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatc
 def test_new_post_during_inference_remains_outside_frozen_adoption(runtime, monkeypatch):
     led, _, calls = runtime
     seed(led)
+    _prepare_summary(runtime)
+    before_calls = len(calls)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
     monkeypatch.setattr(extract_llm_carry, '_writer_current', extract_llm._writer_current)
     monkeypatch.setattr(extract_llm_errors, '_writer_current', extract_llm._writer_current)
@@ -261,7 +263,8 @@ def test_new_post_during_inference_remains_outside_frozen_adoption(runtime, monk
 
     monkeypatch.setattr(refresh.local_llm, "admitted_chat", interrupted)
     assert step(runtime)["status"] == "progressed"
-    assert calls
+    assert len(calls) == before_calls + 1
+    assert led.db.execute('SELECT 1 FROM messages WHERE message_id=2').fetchone()
     doc, meta = patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)
     assert doc and meta['source_scope'] == [1]
     assert all(fact['message_id'] == 1 for fact in doc['facts'])

@@ -131,7 +131,6 @@ def test_lock_wait_stays_inside_the_unit_deadline(runtime, monkeypatch):
 def test_lane_b_cursor_survives_short_contention(runtime, monkeypatch):
     led, clock, calls = runtime
     seed(led, body=TWO_CHUNKS)
-    assert step(runtime)['lane'] == 'A'
     del calls[:]
     contended_lock(monkeypatch, clock, grant_after=3)
     result = step(runtime)
@@ -145,7 +144,6 @@ def test_lane_b_cursor_survives_short_contention(runtime, monkeypatch):
 def test_lane_b_result_lost_past_the_cap_is_counted_and_redone(runtime, monkeypatch):
     led, clock, calls = runtime
     seed(led, body=TWO_CHUNKS)
-    assert step(runtime)['lane'] == 'A'
     del calls[:]
     contended_lock(monkeypatch, clock, grant_after=999)
     result = step(runtime)
