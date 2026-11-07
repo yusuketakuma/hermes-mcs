@@ -1,5 +1,5 @@
 {
-  "fragment_count": 88,
+  "fragment_count": 93,
   "records": [
     {
       "category": "added",
@@ -275,11 +275,25 @@
       "title": "依存先の結果不明で保留された本文の後着結果を受け付ける"
     },
     {
+      "category": "changed",
+      "id": "local-llm-physical-slots",
+      "path": "changes/archive/1.1.2/local-llm-physical-slots.json",
+      "sha256": "a9cff108b96197f98ae0255d5c011ea9c1f41d1327258312ae9c5bfd0ea54245",
+      "title": "ローカルLLMの枠を昼夜で配分し、新着を優先"
+    },
+    {
       "category": "fixed",
       "id": "local-then-cloud-completion",
       "path": "changes/archive/1.1.2/local-then-cloud-completion.json",
       "sha256": "43b937499b6b53030ec670e7b179a3d12ba3791dc969e1a0ca405b99ba702271",
       "title": "個別クラウド経路の完了判定をローカル解析から独立して検証"
+    },
+    {
+      "category": "changed",
+      "id": "local-workers-context-isolation",
+      "path": "changes/archive/1.1.2/local-workers-context-isolation.json",
+      "sha256": "a0ecaec06756afb25b7b4f02cd6df002285a71bd884ed5ef21adc8e37ec9ce6d",
+      "title": "夜間用workerと患者コンテキスト用の子処理を追加"
     },
     {
       "category": "changed",
@@ -352,6 +366,20 @@
       "title": "患者コンテキストの完了前にクラウド抽出の完了を確認"
     },
     {
+      "category": "added",
+      "id": "patient-context-generation-quota",
+      "path": "changes/archive/1.1.2/patient-context-generation-quota.json",
+      "sha256": "a9c492d07413247be2c5ef4a770e0470c9cbe9fd1d7b867af22d66ff7f012c6d",
+      "title": "患者コンテキストの作成回数を入力ごとに管理"
+    },
+    {
+      "category": "added",
+      "id": "patient-context-partial-publication",
+      "path": "changes/archive/1.1.2/patient-context-partial-publication.json",
+      "sha256": "210738ea44d5911164b9c93bc2e778c4757ba3755c886cb8bb3210c3d77cc969",
+      "title": "解析済みの資料から患者情報の概況を作成"
+    },
+    {
       "category": "fixed",
       "id": "patient-context-scan-fairness",
       "path": "changes/archive/1.1.2/patient-context-scan-fairness.json",
@@ -371,6 +399,13 @@
       "path": "changes/archive/1.1.2/patient-context-scan-writer-wait.json",
       "sha256": "134adf48d1818d6429c1f384df6908f8d1500bcd9d8a5dbd4ecb03ca1e48258a",
       "title": "患者背景の候補確定時の書込み待ちを期限内に制限"
+    },
+    {
+      "category": "added",
+      "id": "patient-context-search",
+      "path": "changes/archive/1.1.2/patient-context-search.json",
+      "sha256": "865b8bfe16343e5b2967522b87df415b9389b97568126d5ddb35deade2f29ccc",
+      "title": "患者の別スレッドと添付OCRを検索して原資料を開く機能を追加"
     },
     {
       "category": "fixed",
@@ -618,6 +653,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録88件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録93件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
