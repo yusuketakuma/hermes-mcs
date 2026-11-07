@@ -37,6 +37,11 @@ import tempfile
 # an explicit --to may name a prerelease; the default target never does.
 SEMVER_RE = re.compile(
     r"^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+# Self-contained copy of update_policy.CANDIDATE_RUNTIME_ASSETS (pinned by test).
+CANDIDATE_RUNTIME_ASSETS = (
+    "resources/inference-contracts/attachment-refactor-20261105.json",
+    "evaluation/g6-criteria-v2.json",
+)
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -132,7 +137,7 @@ def extract(repo: str, tag: str, dest: str, *, local_candidate: bool = False) ->
     """Exact updater/runtime blobs, including its independent recovery helper."""
     ref = tag if local_candidate else "refs/tags/" + tag
     for rec in _git(repo, "ls-tree", "-rz", ref, "--", "mcs",
-                    "deployment/recovery").split("\0"):
+                    "deployment/recovery", *CANDIDATE_RUNTIME_ASSETS).split("\0"):
         if not rec:
             continue
         meta, _, path = rec.partition("\t")
@@ -142,6 +147,9 @@ def extract(repo: str, tag: str, dest: str, *, local_candidate: bool = False) ->
         parts = path.split("/")
         if path.startswith("/") or any(p in ("", ".", "..") for p in parts):
             raise SystemExit(f"更新先 {tag} に安全でないファイルパスがあります: {path!r}")
+        if not (path.startswith(("mcs/", "deployment/recovery/"))
+                or path in CANDIDATE_RUNTIME_ASSETS):
+            raise SystemExit(f"更新先 {tag} に対象外のファイルがあります: {path!r}")
         out = os.path.join(dest, path)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "wb") as f:

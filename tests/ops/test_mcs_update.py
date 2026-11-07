@@ -1084,3 +1084,67 @@ def test_install_options_snapshot_propagates_transient_read_failure(updater, mon
     with pytest.raises(PermissionError):
         updater._install_options_snapshot()
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('fact_source', ['shadow', 'canonical'])
+def test_precheck_tag_stages_exact_candidate_runtime_assets(tmp_path, monkeypatch, fact_source):
+    import update_policy
+
+    root = Path(__file__).resolve().parents[2]
+    files = {str(p.relative_to(root)): p.read_bytes()
+             for p in (root / 'mcs').rglob('*.py')}
+    files.update({name: (root / name).read_bytes()
+                  for name in update_policy.CANDIDATE_RUNTIME_ASSETS})
+    # A sibling asset must never enter the candidate runtime closure.
+    files['evaluation/unrelated.json'] = b'{"synthetic": true}'
+    entries = [('100644', 'blob', name, name) for name in files]
+    cfg = {'semantic': {'fact_source': fact_source}, 'cloud_llm': {'mode': 'off'}}
+    if fact_source == 'canonical':
+        cfg['semantic']['fact_source_gate'] = 'synthetic'
+    (tmp_path / 'config.json').write_text(json.dumps(cfg))
+    monkeypatch.setattr(update_preflight, 'HOME', str(tmp_path))
+    monkeypatch.setattr(update_preflight.mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(update_preflight, '_precheck_target_tree', lambda *_: ([], entries))
+    monkeypatch.setattr(update_preflight, '_precheck_target_runtime_files', lambda *_: [])
+    run = subprocess.run
+    probes = []
+
+    def candidate_run(argv, **kwargs):
+        if argv[0] == 'git':
+            assert argv[3:5] == ['cat-file', 'blob']
+            return subprocess.CompletedProcess(argv, 0, files[argv[5]], b'')
+        staged = Path(argv[-1]).parent
+        for name in update_policy.CANDIDATE_RUNTIME_ASSETS:
+            assert (staged / name).read_bytes() == files[name]
+        assert not (staged / 'evaluation/unrelated.json').exists()
+        probes.append(argv)
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(update_preflight, '_run_with_lifetime', candidate_run)
+    errors = update_preflight.precheck_tag('v1.2.0')
+    assert len(probes) == 1
+    assert not any(e.startswith('preflight_') for e in errors), errors
+    semantic_errors = [e for e in errors if 'semantic' in e]
+    if fact_source == 'shadow':
+        assert semantic_errors == []
+    else:
+        assert len(semantic_errors) == 1
+        assert 'semantic_fact_source_evidence_mismatch' in semantic_errors[0]
+
+
+@pytest.mark.parametrize('mode,kind', [('120000', 'blob'), ('160000', 'commit')])
+def test_precheck_tag_rejects_nonregular_runtime_asset(monkeypatch, mode, kind):
+    import update_policy
+
+    asset = update_policy.CANDIDATE_RUNTIME_ASSETS[0]
+    entries = [(mode, kind, 'a' * 40, asset)]
+    monkeypatch.setattr(update_preflight.mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(update_preflight, '_precheck_target_tree', lambda *_: ([], entries))
+    monkeypatch.setattr(update_preflight, '_precheck_target_runtime_files', lambda *_: [])
+
+    def no_blob_or_probe(*_args, **_kwargs):
+        pytest.fail('nonregular asset must be rejected before reading or executing it')
+
+    monkeypatch.setattr(update_preflight, '_run_with_lifetime', no_blob_or_probe)
+    errors = update_preflight.precheck_tag('v1.2.0')
+    assert errors == [f'preflight_failed: bad_entry_type: {mode} {asset}']

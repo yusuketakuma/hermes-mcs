@@ -16,6 +16,7 @@ import mcs_config  # noqa: E402
 import install_options  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_discovery  # noqa: E402
+from update_policy import CANDIDATE_RUNTIME_ASSETS  # noqa: E402
 import restore_evidence  # noqa: E402
 import environment_diagnostics  # noqa: E402
 import notify_flush  # noqa: E402,F401 - restore text quarantine
@@ -352,8 +353,10 @@ def precheck_tag(tag: str) -> list[str]:
     tmp = tempfile.mkdtemp(prefix="mcs_preflight_")
     try:
         for mode, otype, bsha, path in entries:
-            if otype != "blob" or not (path == "mcs" or path.startswith("mcs/")):
+            if not (path.startswith("mcs/") or path in CANDIDATE_RUNTIME_ASSETS):
                 continue
+            if otype != "blob" or mode not in ("100644", "100755"):
+                raise UpdateError(f"bad_entry_type: {mode} {path}")
             if not _safe_relpath(path):
                 raise UpdateError("unsafe_path: " + path)
             dst = os.path.join(tmp, path)

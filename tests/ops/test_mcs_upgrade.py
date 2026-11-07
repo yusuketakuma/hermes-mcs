@@ -582,6 +582,9 @@ def test_launcher_uses_the_release_tag_despite_an_ambiguous_ref(tmp_path, capfd)
 
 @pytest.mark.parametrize("mode,kind,path,error", [
     ("120000", "blob", "mcs/link.py", "扱えない種類のファイル"),
+    ("120000", "blob", "resources/inference-contracts/attachment-refactor-20261105.json",
+     "扱えない種類のファイル"),
+    ("100644", "blob", "evaluation/g6-criteria-v2.json/unexpected", "対象外のファイル"),
     ("160000", "commit", "mcs/submodule", "扱えない種類のファイル"),
     ("100644", "blob", "mcs/../escape.py", "安全でないファイルパス"),
     ("100644", "blob", "/escape.py", "安全でないファイルパス"),
@@ -1265,13 +1268,15 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
     launcher = _launcher()
     files = {str(p.relative_to(ROOT)): p.read_bytes()
              for p in (ROOT / "mcs").rglob("*.py")}
+    files.update({name: (ROOT / name).read_bytes()
+                  for name in update_policy.CANDIDATE_RUNTIME_ASSETS})
     helper = "deployment/recovery/mcs_recover.py"
     files.update({str(path.relative_to(ROOT)): path.read_bytes()
                   for path in (ROOT / 'deployment/recovery').glob('*.py')})
 
     def git(repo, *args, binary=False):
         if args[0] == "ls-tree":
-            assert args[4:] == ("mcs", "deployment/recovery")
+            assert args[4:] == ("mcs", "deployment/recovery", *update_policy.CANDIDATE_RUNTIME_ASSETS)
             return "".join(f"100644 blob {name}\t{name}\0" for name in files)
         assert args[:2] == ("cat-file", "blob") and binary
         return files[args[2]]
@@ -1283,6 +1288,20 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
         capture_output=True, text=True, check=True)
     assert "rollback" in out.stdout
     assert (tmp_path / helper).read_bytes() == files[helper]
+    for name in update_policy.CANDIDATE_RUNTIME_ASSETS:
+        assert (tmp_path / name).read_bytes() == files[name]
+    probe = subprocess.run(
+        [sys.executable, '-c',
+         "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
+         "from semantic_policy import semantic_config; "
+         "from semantic_candidate import promotion_problem; "
+         "cfg = {'semantic': {'fact_source': 'shadow'}, 'cloud_llm': {'mode': 'off'}}; "
+         "assert semantic_config(cfg)[1] == []; "
+         "assert promotion_problem(cfg, {}) == 'criteria_mismatch'; "
+         "cfg['semantic'].update(fact_source='canonical', fact_source_gate='synthetic'); "
+         "assert semantic_config(cfg)[1] == ['config: semantic_fact_source_evidence_mismatch']",
+         str(tmp_path / 'mcs')], capture_output=True, text=True)
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tmp_path, monkeypatch):
@@ -1293,13 +1312,15 @@ def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tm
     staged = tmp_path / 'candidate'
     files = {str(p.relative_to(ROOT)): p.read_bytes()
              for p in (ROOT / 'mcs').rglob('*.py')}
+    files.update({name: (ROOT / name).read_bytes()
+                  for name in update_policy.CANDIDATE_RUNTIME_ASSETS})
     helper = 'deployment/recovery/mcs_recover.py'
     files.update({str(path.relative_to(ROOT)): path.read_bytes()
                   for path in (ROOT / 'deployment/recovery').glob('*.py')})
 
     def git(_repo, *args, binary=False):
         if args[0] == 'ls-tree':
-            assert args[4:] == ('mcs', 'deployment/recovery')
+            assert args[4:] == ('mcs', 'deployment/recovery', *update_policy.CANDIDATE_RUNTIME_ASSETS)
             return ''.join(f'100644 blob {name}\t{name}\0' for name in files)
         assert args[:2] == ('cat-file', 'blob') and binary
         return files[args[2]]
@@ -1524,6 +1545,7 @@ def test_apply_requires_a_single_well_formed_tag():
 
 def test_launcher_copy_matches_the_shared_grammar():
     assert _grammar_launcher().SEMVER_RE.pattern == update_policy.RELEASE_TAG_RE.pattern
+    assert _grammar_launcher().CANDIDATE_RUNTIME_ASSETS == update_policy.CANDIDATE_RUNTIME_ASSETS
 
 
 def test_launcher_default_target_is_the_newest_release(monkeypatch):
