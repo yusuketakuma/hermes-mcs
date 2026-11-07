@@ -78,7 +78,9 @@ def test_patient_selection_resolves_once_after_out_of_scope_patient(runtime, mon
     monkeypatch.setattr(state, '_published_version', lambda *args: 0)
     def pending(db, pid, cfg, *, cloud_scan, **kwargs):
         observed.append((pid, cloud_scan))
-        return {'dependencies': {'complete': True}, 'unfinished': False}, {}, {'B': cloud_scan}
+        return {'contract': state._contract(cfg, pid), 'sources': [],
+                'dependencies': {'complete': True}, 'unfinished': False}, {}, {
+                    'A': False, 'B': cloud_scan, 'C': False}
     monkeypatch.setattr(readiness, '_pending', pending)
     monkeypatch.setattr(readiness, '_observe_readiness', lambda *args, **kwargs: (True, None, None))
     _, selected, *_ = refresh._select_patient(led, cfg, clock.wall, clock.mono + 60,

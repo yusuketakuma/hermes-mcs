@@ -147,6 +147,7 @@ def test_changed_input_reaches_full_paid_payload_and_updates_context(runtime, re
     old_sources = {plan.source_key(source): plan.source_signature(source)
                    for source in mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg)}
     same_day = int(clock.wall // 86400)
+    same_jst_day = state.workday_window(clock.wall)[0]
     expected_body = '本人は合成の自宅で生活しています。'
     expected_summary = None
     if changed == 'original':
@@ -179,8 +180,12 @@ def test_changed_input_reaches_full_paid_payload_and_updates_context(runtime, re
     current = {plan.source_key(source): plan.source_signature(source)
                for source in mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg)}
     assert current != old_sources
+    # A distinct input is eligible after the three-hour generation interval.
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime, cfg)
     assert int(clock.wall // 86400) == same_day
+    assert state.workday_window(clock.wall)[0] == same_jst_day
     fresh = [payload for payload in posts[count:] if 'source' in payload]
     matching = [payload for payload in fresh if payload['source'] == expected_body]
     assert matching, fresh
