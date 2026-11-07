@@ -299,3 +299,29 @@ def test_invalid_reservation_identity_is_rejected(db, field, value):
     kwargs[field] = value
     with pytest.raises(ValueError, match="generation_input_invalid"):
         quota.inspect(db, **kwargs)
+
+
+def test_returned_unknown_worker_releases_only_its_live_lease(db):
+    first = reserve(db)['claim']
+    assert finish(db, first, outcome='unknown')
+    held = document(db, first)
+    assert held['state'] == 'unknown' and held['reserved_at'] == held['started_at'] == BASE
+    assert held['finished_at'] is None and held['resumes'] == 0
+    assert not quota.owns(db, 1, first, now=BASE + 1)
+    resumed = reserve(db, now=BASE + 1)
+    assert resumed['allowed'] and resumed['resume'] and resumed['used'] == 1
+    assert resumed['claim']['artifact_id'] == first['artifact_id']
+    assert resumed['claim']['token'] != first['token']
+    assert not finish(db, resumed['claim'], now=BASE + 1, outcome='unsent', proven_unsent=True)
+
+
+def test_returned_unknown_input_cannot_reclaim_another_live_owner(db):
+    first = reserve(db)['claim']
+    assert finish(db, first, outcome='unknown')
+    next_input = reserve(db, 2, now=BASE + 1, catchup=True)
+    assert next_input['allowed'] and next_input['used'] == 1
+    assert reserve(db, now=BASE + 2)['reason'] == 'patient_context_generation_active'
+    db.execute('BEGIN IMMEDIATE')
+    assert not quota.finish_tx(db, 1, first, now=BASE + 2, outcome='complete')
+    db.commit()
+    assert document(db, first)['state'] == 'unknown'

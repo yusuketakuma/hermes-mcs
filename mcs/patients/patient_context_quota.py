@@ -192,7 +192,9 @@ def finish_tx(db, pid, claim, *, now, outcome, proven_unsent=False):
         return False
     row, doc = owned
     if outcome == "unknown":
-        return doc["state"] == "started"
+        # The caller has returned; relinquish only its usable lease. Retain the
+        # count and unresolved input so another owner must recover this record.
+        return doc["state"] == "started" and _replace(db, pid, row, {**doc, "state": "unknown"})
     if outcome == "unsent":
         # A refusal on a recovery attempt says nothing about the earlier attempt.
         if doc["resumes"]:

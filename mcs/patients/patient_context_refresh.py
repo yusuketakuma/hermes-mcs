@@ -20,6 +20,7 @@ from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, str
 from inference_version import VERSION_KEY as VERSION_KEY, current_meta_pred as current_meta_pred, read_version as read_version
 import patient_context_plan as context_plan
 import patient_context_schedule as context_schedule
+import patient_context_quota as context_quota
 import mcs_queries as context_queries
 import patient_context_refresh_state
 import patient_context_quality_receipts
@@ -254,6 +255,51 @@ def _scan_covered(db, seen):
                       (json.dumps(sorted(seen)),)).fetchone() is None
 
 
+def _generation_input(snapshot, facts):
+    return patient_context_refresh_state._digest([
+        "patient_context_generation_v1", snapshot['source_sig'],
+        patient_context_refresh_state._facts_sig(facts), snapshot['contract']])
+
+
+def _generation_plan(db, pid, cfg, snapshot, now):
+    """Observe quota for the same hydrated input used by the overview caller."""
+    hydrated = patient_context_refresh_sources._snapshot(
+        db, pid, cfg, contract=snapshot['contract'], source_keys=snapshot.get('source_scope'))
+    if hydrated['source_sig'] != snapshot['source_sig']:
+        raise ValueError('nightly_source_changed')
+    night_id, _ = patient_context_refresh_state.workday_window(now)
+    facts, _ = patient_context_refresh_sources._all_facts(db, pid, hydrated, night_id, cfg=cfg)
+    old, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
+    same = (bool(old) and old.get('facts_sig') == patient_context_refresh_state._facts_sig(facts)
+        and meta.get('source_sig') == snapshot['source_sig']
+        and patient_context_refresh_state._route_contract(meta) == snapshot['contract'])
+    quality = bool(snapshot['contract'].get('provider')
+        or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
+    key = _generation_input(snapshot, facts)
+    prior_coverage = meta.get('source_coverage')
+    if prior_coverage is not None and not isinstance(prior_coverage, dict):
+        raise ValueError('patient_context_generation_unverified')
+    prior_coverage = prior_coverage or {}
+    partial = bool(prior_coverage and (prior_coverage.get('unreflected')
+        or prior_coverage.get('acquisition_complete') is False))
+    coverage = snapshot.get('source_coverage') or {}
+    full = (snapshot['acquisition']['complete'] and not coverage.get('unreflected')
+        and snapshot['dependencies']['complete'] and snapshot['attachment_coverage']['complete'])
+    catchup = False
+    if partial and full:
+        scans = patient_context_refresh_sources._current_scans(
+            db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        full = all(patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))
+                   for source in snapshot['sources'] if context_plan.source_usable(source))
+        taken = db.execute("SELECT json_extract(content,'$.catchup_generation') FROM artifacts WHERE kind=? "
+            "AND project_id=? AND CASE WHEN json_valid(content) THEN json_extract(content,'$.catchup_generation') "
+            "IS NOT NULL ELSE 0 END ORDER BY artifact_id DESC LIMIT 1", (patient_context_refresh_state.PROGRESS, pid)).fetchone()
+        if taken is not None and not valid_hash(taken[0]):
+            raise ValueError('patient_context_generation_unverified')
+        catchup = bool(full and (taken is None or taken[0] == key))
+    return {'input_key': key, 'catchup': catchup, 'needed': not same or quality}
+
+
 def _select_patient(ledger, cfg, now, deadline, admit, complete):
     """Advance a bounded scan before evaluating each patient's current evidence."""
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
@@ -315,6 +361,21 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                             reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
                         scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
                 for candidate, state, due, scope_keys, lanes in scopes:
+                    if not any(due[lane] for lane in lanes):
+                        continue
+                    if 'A' in lanes and due['A']:
+                        try:
+                            generation = _generation_plan(reader.db, pid, cfg, candidate, now)
+                            quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
+                                now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
+                        except ValueError:
+                            generation, quota = None, {'allowed': False}
+                        candidate['_generation_plan'] = generation
+                        if not quota['allowed']:
+                            due['A'] = False
+                            waiting += 1
+                            if not any(due[lane] for lane in lanes):
+                                continue
                     changes = ledger.db.total_changes
                     ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
                         deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
@@ -375,6 +436,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                    if waiting or not covered else {}), **stats}
     snapshot, progress, frozen_ver = best[lane]
     source_keys = snapshot.get('source_scope')
+    generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
     selected_proof = snapshot.pop("_readiness_proof", None)
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
     try:
@@ -431,6 +493,12 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     failure = None
     deferred_reason = None
     provider = None
+    generation_claim = None
+    generation_decision = None
+    generation_wait = None
+    generation_uncertain = False
+    generation_contacted = False
+    generation_quality = False
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
     quality_required = cloud_requested or patient_context_quality_receipts._has_prior_quality_failure(ledger.db, pid)
@@ -493,7 +561,9 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if ready == 'verified':
                     readiness_state[0] = 'changed'
                 return False
-            if not admit():
+            if (not admit() or generation_claim is not None
+                    and not context_quota.owns(ledger.db, pid, generation_claim,
+                                               now=patient_context_refresh_state.time.time())):
                 readiness_state[0] = 'unknown'
                 return False
             return True
@@ -501,6 +571,69 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 RuntimeError, OverflowError, TimeoutError, patient_context_refresh_sources._ScanInterrupted, cloud_inference.CloudFallback):
             readiness_state[0] = 'unknown'
             return False
+
+    def generation_admit():
+        return admit() and (generation_claim is None or context_quota.owns(
+            ledger.db, pid, generation_claim, now=patient_context_refresh_state.time.time()))
+
+    def begin_generation(*, after_commit=False):
+        nonlocal generation_claim, generation_decision, generation_wait, frozen_ver, progress
+        if generation_plan is None or not generation_plan['needed'] or generation_claim is not None:
+            return
+        with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
+            try:
+                ledger.db.execute('BEGIN IMMEDIATE')
+                if not extract_llm._writer_current(full=True) or not current(after_commit=after_commit):
+                    raise patient_context_refresh_state.Deferred('patient_context_readiness_unverified')
+                stamp = patient_context_refresh_state.time.time()
+                remaining = deadline - patient_context_refresh_state.time.monotonic()
+                if remaining <= patient_context_refresh_state.COMMIT_MARGIN:
+                    raise patient_context_refresh_state.Deferred('nightly_capacity_or_deadline')
+                decision = context_quota.reserve_tx(ledger.db, pid, generation_plan['input_key'], now=stamp,
+                    lease_until=stamp + remaining + patient_context_refresh_state.COMMIT_MARGIN,
+                    catchup=generation_plan['catchup'])
+                if not decision['allowed']:
+                    generation_wait = decision
+                    raise patient_context_refresh_state.Deferred(decision['reason'])
+                if not context_quota.begin_tx(ledger.db, pid, decision['claim'], now=stamp):
+                    raise patient_context_refresh_state.Deferred('patient_context_generation_changed')
+                if generation_plan['catchup']:
+                    progress = {**progress, 'catchup_generation': generation_plan['input_key']}
+                    patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
+                if not extract_llm._writer_current(full=True):
+                    raise patient_context_refresh_state.Deferred('patient_context_generation_changed')
+                ledger.db.commit()
+            except BaseException:
+                ledger.db.rollback()
+                raise
+        generation_claim, generation_decision = decision['claim'], decision
+        frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
+        _, write_proof[0], _ = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg,
+            deadline=deadline, complete=complete, allow_dependency_repair=False, source_keys=source_keys,
+            write_scope={'source_key': None, 'cloud': cloud_input is not None})
+        meta['generation_input_key'] = generation_plan['input_key']
+
+    def return_generation(outcome, *, proven_unsent=False):
+        nonlocal generation_claim
+        if generation_claim is None or ledger.db.in_transaction:
+            return False
+        # A proved-unsent call may have exhausted its inference deadline. A
+        # zero-wait writer CAS can return the unused slot without another send.
+        with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
+            try:
+                ledger.db.execute('BEGIN IMMEDIATE')
+                if not extract_llm._writer_current(full=True):
+                    ledger.db.rollback()
+                    return False
+                changed = context_quota.finish_tx(ledger.db, pid, generation_claim,
+                    now=patient_context_refresh_state.time.time(), outcome=outcome, proven_unsent=proven_unsent)
+                ledger.db.commit()
+                if changed:
+                    generation_claim = None
+                return changed
+            except (sqlite3.Error, OSError, ValueError):
+                ledger.db.rollback()
+                return False
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
         def provider_current():
@@ -547,7 +680,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         meta["model"] = local_llm.resolve(cfg)[1]
 
     def infer(fn, *, unit_key, mid=None, saved=None):
-        nonlocal provider, shadow_call, estimated_unit
+        nonlocal provider, shadow_call, estimated_unit, generation_uncertain, generation_contacted
         # A local cursor cannot stand in for cloud inspection of the original.
         use_cloud = mode == "on"
         local_saved = dict(saved) if saved and not saved.get("_provider_contract") else None
@@ -563,6 +696,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 meta["model"] = provider.model
                 return value
             except cloud_client.CloudNotSent as error:
+                generation_uncertain = True
                 # nothing left the wire: defer the unit — it must not take a
                 # local slot or re-send next tick as if the refusal never ran
                 raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from error
@@ -571,7 +705,9 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             except (cloud_inference.CloudFallback, ValueError) as error:
                 changed = isinstance(error, cloud_inference.CloudFallback) and str(error) == "cloud_unit_changed"
                 paid = provider.possibly_sent
+                generation_contacted = generation_contacted or paid
                 unresolved = getattr(provider, 'unresolved', paid)
+                generation_uncertain = generation_uncertain or bool(unresolved)
                 if changed:
                     provider.discard()
                     if paid:
@@ -622,6 +758,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             facts, total, projected = patient_context_refresh_sources._all_facts(ledger.db, pid, snapshot, night_id, projected=True, cfg=cfg)
             old, old_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
             changed = patient_context_refresh_state._facts_sig(facts)
+            if generation_plan is None or generation_plan['input_key'] != _generation_input(snapshot, facts):
+                raise patient_context_refresh_state.Deferred('nightly_source_changed')
             summary_scans = patient_context_refresh_sources._current_scans(
                 ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
@@ -641,7 +779,11 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     meta["route_contract"] = old_meta["route_contract"]
                 if "quality_repair_ref" in old_meta:
                     meta["quality_repair_ref"] = old_meta["quality_repair_ref"]
+            if not same or quality_required:
+                generation_plan['needed'] = True
+                begin_generation()
             if same and quality_required:
+                generation_quality = True
                 if old_meta.get("provider"):
                     meta["provider"] = old_meta["provider"]
                     meta["model"] = old_meta["provider"]["model"]
@@ -649,7 +791,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     meta['model'] = old_meta['model']
                 try:
                     quality_status, quality_result = patient_context_quality_controller._quality_step(
-                        ledger, pid, cfg, night_id, old, deadline, admit, base_meta=old_meta)
+                        ledger, pid, cfg, night_id, old, deadline, generation_admit, base_meta=old_meta)
                     repaired = None
                     if quality_status == "candidate":
                         if quality_result.get("repair_ref") is not None:
@@ -665,7 +807,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             "facts_total": len(quality_result["facts"]),
                             "truncated": len(quality_result["facts"]) > len(selected_facts)}
                         quality_status, quality_result = patient_context_quality_controller._quality_step(
-                            ledger, pid, cfg, night_id, repaired, deadline, admit, base_doc=old, base_meta=old_meta)
+                            ledger, pid, cfg, night_id, repaired, deadline, generation_admit, base_doc=old, base_meta=old_meta)
                 except (patient_context_refresh_state.Deferred, ValueError, RuntimeError):
                     raise patient_context_refresh_state.Deferred("summary_quality_unavailable") from None
                 if quality_status not in ("passed", "skipped"):
@@ -691,7 +833,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             summary = (repaired["summary"] if same and quality_required and repaired is not None
                        else old["summary"] if same else infer(
                 lambda backend, reset, metrics=None, comparison=False: patient_context_quality_controller._summary(cfg, facts, deadline,
-                    admit if backend else local_admit, source_sig=snapshot["source_sig"], **({"provider": backend} if backend else {}),
+                    generation_admit if backend else lambda: local_admit() and generation_admit(),
+                    source_sig=snapshot["source_sig"], **({"provider": backend} if backend else {}),
                     **({"metrics": metrics} if metrics is not None else {})),
                 unit_key="summary"))
             meta["scan_backends"] = sorted({
@@ -811,8 +954,13 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             result.pop("quality_hold_key", None)
                     break
     except patient_context_refresh_state.Deferred as exc:
-        discard_if_changed()
         deferred_reason = str(exc) or "patient_context_waiting"
+        if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
+                and not generation_uncertain and not generation_contacted and deferred_reason in (
+                    'nightly_capacity_or_deadline', 'nightly_admission_deferred', 'nightly_turn_busy', 'nightly_local_capacity')
+                and (provider is None or not provider.possibly_sent)):
+            return_generation('unsent', proven_unsent=True)
+        discard_if_changed()
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
         code = str(exc)
         failure = code if type(exc) is ValueError and patient_context_refresh_state._FAILURE_CODE.fullmatch(code) else type(exc).__name__
@@ -1007,7 +1155,9 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     provider.discard()
                 return {"status": "source_changed" if changed else "deferred", "done": 0,
                         **({"reason": "patient_context_readiness_unverified"} if not changed else {})}
-            moved = (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+            moved = (generation_claim is not None and not context_quota.owns(
+                         ledger.db, pid, generation_claim, now=patient_context_refresh_state.time.time())
+                     or fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
                      or patient_context_refresh_state._published_version(ledger.db, pid) != frozen_ver
                      or snapshot["contract"].get(VERSION_KEY) != patient_context_refresh_state.CURRENT_VERSION
                      or selected_source[0] is not None and (selected_now is None
@@ -1042,7 +1192,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
-                progress["next_try"] = now if deferred_reason == "summary_quality_pending" else now + 60
+                progress["next_try"] = ((generation_wait.get('next_at') or now + 60) if generation_wait is not None
+                    else now if deferred_reason == "summary_quality_pending" else now + 60)
                 progress["quality_state"] = (deferred_reason[len("summary_quality_"):]
                     if deferred_reason.startswith("summary_quality_") else None)
             elif lane == "A":
@@ -1142,7 +1293,16 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     left = None
                 extract_llm._cloud_compare_tx(ledger, route="patient_context", project_id=pid,
                     left=left, right=None, rejected=None, held=None, repairs=None, unit=shadow_unit, pending=True)
+            if generation_claim is not None:
+                outcome = ('complete' if not failure and deferred_reason is None else
+                    'failed' if (failure in ('nightly_length_stop', 'nightly_invalid_response', 'nightly_unsupported_summary')
+                    or deferred_reason == 'summary_quality_failed') and not generation_uncertain else 'unknown')
+                if not context_quota.finish_tx(ledger.db, pid, generation_claim,
+                        now=patient_context_refresh_state.time.time(), outcome=outcome):
+                    ledger.db.rollback()
+                    return {'status': 'source_changed', 'done': 0}
             ledger.db.commit()
+            generation_claim = None
         except BaseException:
             ledger.db.rollback()
             raise
@@ -1154,6 +1314,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         measured = {}
         comparison = None
         try:
+            if lane == 'A':
+                begin_generation(after_commit=True)
             comparison = cloud_for(unit_key, mid, after_commit=True)
             cloud_value = fn(comparison, False, measured, True)
             guard_provider(comparison)
@@ -1188,6 +1350,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             rejected=measured.get("rejected"), repairs=measured.get("repairs"))
                 finally:
                     os.close(audit_fd)
+        if lane == 'A' and generation_claim is not None:
+            return_generation('complete' if cloud_value is not None else 'unknown')
     return {"status": "failed" if failure else "deferred" if deferred_reason else "progressed",
             "done": int(not failure and deferred_reason is None), "lane": lane,
             **({"reason": failure or deferred_reason} if failure or deferred_reason else {}),
