@@ -136,7 +136,8 @@ def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkey
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 1}
 
 
-def test_drain_reports_captured_writer_refusal_without_changing_counts(tmp_path, monkeypatch):
+@pytest.mark.parametrize('phase', ['local', 'ocr', 'both'])
+def test_drain_reports_captured_writer_phase_without_changing_counts(tmp_path, monkeypatch, phase):
     database = tmp_path / 'synthetic.db'
     database.touch()
     cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
@@ -145,14 +146,26 @@ def test_drain_reports_captured_writer_refusal_without_changing_counts(tmp_path,
     monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(mcs_ocr, 'Ledger', lambda path: SimpleNamespace(close=lambda: None))
 
-    def drain(ledger, settings, generation, deadline, *, live_config):
+    def refuse():
         assert mcs_ocr.writer_lock.wait_run_lock(str(tmp_path / 'run.lock'), wait_s=0,
-            expected_code_stamp=generation[1], marker_path=str(tmp_path / 'marker')) is None
-        return {'complete': 0, 'local_done': 0, 'local_deferred': 1}
+            expected_code_stamp=1, marker_path=str(tmp_path / 'marker')) is None
 
-    monkeypatch.setattr(mcs_ocr, '_drain', drain)
-    assert mcs_ocr.run(cfg) == {'complete': 0, 'local_done': 0, 'local_deferred': 1,
-                              'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock'}
+    def local(*args, **kwargs):
+        if phase in ('local', 'both'):
+            refuse()
+        return {'done': 0, 'deferred': int(phase in ('local', 'both'))}
+
+    def ocr(*args, **kwargs):
+        if phase in ('ocr', 'both'):
+            refuse()
+        return {'complete': 0, 'deferred': int(phase in ('ocr', 'both'))}
+
+    monkeypatch.setattr(attachment_inference, 'run_pending', local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending', ocr)
+    assert mcs_ocr.run(cfg) == {'complete': 0, 'local_done': 0,
+        'local_deferred': int(phase in ('local', 'both')), 'deferred': int(phase in ('ocr', 'both')),
+        'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock',
+        'writer_job_stage': 'local' if phase == 'local' else 'ocr'}
 
 
 @pytest.mark.parametrize("outcome", ["ready", "busy", "updated", "deadline", "cancelled"])

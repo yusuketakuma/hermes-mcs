@@ -61,10 +61,12 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
             if stage == 'ocr' and remaining < raw_budget:
                 active['ocr'], limited = False, True
                 continue
+            diagnostic = None
             try:
                 if stage == 'local':
-                    local = attachment_inference.run_pending(ledger, cfg, stage='local',
-                        deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
+                    with writer_lock.capture_writer_refusal() as diagnostic:
+                        local = attachment_inference.run_pending(ledger, cfg, stage='local',
+                            deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
                     result['local_done'] += local['done']
                     result['local_deferred'] += local['deferred']
                     if local.get('paid_recovery_pending') is True:
@@ -72,9 +74,10 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
                     active['local'] = local['done'] > 0 and local['deferred'] == 0
                     local_blocked |= local['deferred'] > 0
                 else:
-                    raw = attachment_ocr.run_pending(ledger, cfg, limit=1,
-                        deadline=min(deadline - 5, time.monotonic()
-                                     + cfg['attachment_ocr'].get('timeout_seconds', 120) + 5))
+                    with writer_lock.capture_writer_refusal() as diagnostic:
+                        raw = attachment_ocr.run_pending(ledger, cfg, limit=1,
+                            deadline=min(deadline - 5, time.monotonic()
+                                         + cfg['attachment_ocr'].get('timeout_seconds', 120) + 5))
                     for key, value in raw.items():
                         if key == 'reason' and value is None and result.get('reason') is not None:
                             continue
@@ -90,6 +93,8 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
                 active[stage] = False
                 if stage == 'local':
                     local_blocked = True
+            if diagnostic is not None and diagnostic['writer_reason'] != 'writer_refusal_unclassified':
+                result.update(diagnostic, writer_job_stage=stage)
     if limited or any(active.values()):
         result['queue_status'] = 'partial'
     return result
@@ -133,10 +138,7 @@ def run(cfg=None):
             ledger = Ledger(DB)
         finally:
             os.close(fd)
-        with writer_lock.capture_writer_refusal() as diagnostic:
-            result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
-        if diagnostic['writer_reason'] != 'writer_refusal_unclassified':
-            result.update(diagnostic)
+        result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
         if result.get('reason') != 'config_invalid' and (
                 result.get('complete', 0) or result.get('empty', 0) or result['local_done']):
             remaining = min(5, deadline - time.monotonic())
