@@ -514,6 +514,7 @@ def _failed_slack_thread_file(led, tmp_path, monkeypatch, result="not_sent"):
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "hermes_exe", lambda *_: "/bin/sh")
     sent = []
+    monkeypatch.setattr(notify_sender, "send_argv", lambda *args, kind=None: ["hermes"])
     monkeypatch.setattr(notify_sender, "send", lambda argv, text, files=None, **kw:
                         sent.append((text, files)))
     return eid, aid, source, blob, cfg, sent
@@ -585,6 +586,7 @@ def test_slack_attachment_kill_switch_preserves_send_ownership(
     monkeypatch.setattr(notify_flush, "_config", lambda: off)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
     sent = []
+    monkeypatch.setattr(notify_sender, "send_argv", lambda *args, kind=None: ["hermes"])
     monkeypatch.setattr(notify_sender, "send", lambda argv, text, files=None, **kw:
                         sent.append((text, files)))
     notify_flush.flush(led)

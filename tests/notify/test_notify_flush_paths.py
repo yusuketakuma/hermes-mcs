@@ -558,6 +558,7 @@ def test_attachment_followup_keeps_text_file_delivery_without_card_thread(
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "hermes_exe", lambda *_: "/bin/sh")
     monkeypatch.setattr(notify_sender, "target", lambda *_: "slack:C_SYNTHETIC")
+    monkeypatch.setattr(notify_sender, "send_argv", lambda *args, kind=None: ["hermes"])
     monkeypatch.setattr(notify_flush, "_format_event",
                         lambda *_: ("synthetic file notice", [(source.name, str(source))]))
     calls = []
