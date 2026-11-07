@@ -22,6 +22,7 @@
 - 105-file batch（`cb0` 固定・実終了）：exit 1・3016 passed / 24 failed / 0 skip / 2693.81秒・source_stamp_changed=[]・clean。元25 failは全解消（semantic HTTP含む）。当該node `test_view_reads_only_quoted_bodies_without_reextracting_history` と追加5件（marked厳格照合・consumer write失効・rollback・SQLite失敗・制御例外伝播）が実logで PASSED。
 - 既知24 failの末端traceは全て修正 `6129d37a` の原因と整合し、`f7503e5a` 固定の13file統合batch（24failの3file＋通常JOIN境界＋readiness witness/cursor/read境界＋updater2file＋update candidate＋schema/update origin3file）で全解消を確認（exit 0・1072 passed / 0 failed / 0 skip・約602秒・source_stamp_changed=[]・clean、ルート供給値）。lint 0・gates 10/10・mine 0・manifest digest `9726b4c1` 一致もルート確定。
 - SDK別lane42件（standalone13・Hermes29）：実行SHAは `f11384da`。SDK対象bytesは `f113..cb0` で不変とルート確認済みで再利用可（旧 `b963` を実行SHAと記録しない）。
+- 失敗nodeの最終照合：過去suffix65・combined25・followup24の失敗nodeを最新JUnit3本とrename対応で照合し、108 unique failed nodesすべて最新PASSに対応・未対応0（証跡 `observed-failure-resolution-current.json`、ルート供給値）。単一の全体suite全pass・CI成功とは記録せず、ユーザー指示（2026-10-31）の失敗修正＋影響範囲再検証による合格判断の根拠として使用可能。製品・テスト・資産は `6806843a` と `f7503e5a` で差分0をルート確認済み。
 - 公式医薬品マスター：`drug-master-fresh-check.json`（2026-11-07）で同梱 bundle と一致確認済み（`matches_bundle: true`、出典・hash・行数記録済み）。有効化は要オペレーター承認で未実施。
 
 ## この資料では確認していない事項
