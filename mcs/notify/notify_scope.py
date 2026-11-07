@@ -831,10 +831,11 @@ def _delivery_completion(db, cfg, now, observation=None):
     retired = retired_transports(cfg)
     live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
     row = db.execute(
-        "WITH latest AS MATERIALIZED (SELECT r.delivery_id,r.state,r.parts_state FROM notification_renders r "
-        "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update') "
-        "AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer "
-        "WHERE newer.card_id=r.card_id)" + live + "), "
+        "WITH heads AS MATERIALIZED (SELECT card_id,MAX(render_rev) render_rev "
+        "FROM notification_renders WHERE card_id IS NOT NULL GROUP BY card_id), "
+        "latest AS MATERIALIZED (SELECT r.delivery_id,r.state,r.parts_state FROM heads h "
+        "CROSS JOIN notification_renders r ON r.card_id=h.card_id AND r.render_rev=h.render_rev "
+        "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update')" + live + "), "
         "parts AS (SELECT p.delivery_id,COUNT(*) n,SUM(p.state!='delivered') unfinished,"
         "SUM(p.state='unknown') unknown FROM latest l CROSS JOIN notification_render_parts p "
         "ON p.delivery_id=l.delivery_id GROUP BY p.delivery_id) "
