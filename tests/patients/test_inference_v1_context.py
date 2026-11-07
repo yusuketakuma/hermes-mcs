@@ -282,12 +282,12 @@ def test_more_than_128_facts_resume_as_bounded_chunks_without_cumulative_loss(ru
     # not an increase of the production fact or prompt limits.
     monkeypatch.setattr(refresh.context_plan,'plan_chunks',lambda text,size=3000:text.splitlines(keepends=True))
     monkeypatch.setattr(refresh.context_plan,'MAX_FACTS',12)
-    assert step(runtime)['lane'] == 'A'
     for _ in range(64):
         assert step(runtime)['status'] == 'progressed'
     saved = document(led,patient_context_refresh_state.SCAN)
     assert saved['cursor'] == 64 and not saved['complete']
     assert len(saved['facts']) == 1
+    assert document(led) is None
     before_calls = [p['source'] for p in calls if 'source' in p]
     clock.wall += 86400
     finish(runtime,limit=150)
@@ -396,8 +396,13 @@ def test_coverage_distinguishes_unacquired_empty_and_failed_without_publishing_o
     with led.db:
         led.db.execute("UPDATE patients SET fetch_state='failed' WHERE project_id=1")
     coverage = patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)
-    assert not coverage['complete'] and not coverage['publication_eligible']
+    assert not coverage['complete'] and coverage['publication_eligible']
     assert coverage['status'] == 'acquisition_incomplete'
+    partial = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    assert partial and partial['coverage']['partial']
+    assert partial['facts'] == view['facts'] and partial['summary'] == view['summary']
+    with led.db:
+        led.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
@@ -408,9 +413,9 @@ def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_e
     seed(led, body=body)
     item = assertion(body, details=[{'key':'storage_place','value':value,'evidence':body}])
     monkeypatch.setattr(patient_context, 'extract_context', lambda text: [item] if text == body else [])
-    for _ in range(2):
-        result = step(runtime)
-        assert result['status'] == 'failed' and result['reason'] == 'nightly_unsplittable_assertion'
+    result = step(runtime)
+    assert result['status'] == 'failed' and result['lane'] == 'B'
+    assert result['reason'] == 'nightly_unsplittable_assertion'
     waiting = step(runtime)
     assert waiting['status'] == 'deferred' and waiting['reason'] == 'patient_context_waiting'
     assert waiting['done'] == 0 and calls == []
@@ -537,7 +542,7 @@ def _delete_supported_stop(led, mid=2, *, pid=1):
 
 
 def test_durable_loss_is_negative_use_only_and_fresh_independent_source_can_recover(runtime):
-    led, _, calls = runtime
+    led, clock, calls = runtime
     _clinical_source(led,1,'本人は本日薬剤Aを5mg服用中です。','2026-10-01',dose='5mg')
     finish(runtime)
     before = patient_context_refresh_readiness.inference_coverage(led.db,1,CFG)
@@ -551,11 +556,15 @@ def test_durable_loss_is_negative_use_only_and_fresh_independent_source_can_reco
     assert medication['view_bucket'] == 'unknown' and medication['id'] in projected['groups']['unknown']
     assert snapshot['source_sig'] != before['source_sig']
     assert all('origin' not in f and 'dependency_losses' not in f for f in facts)
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime)
     assert len([c for c in calls if 'source' in c]) == scans_before  # Existing raw source is not sent again.
     assert all('losses' not in c and 'dependencies' not in c for c in calls)
     assert patient_context_refresh_readiness.inference_coverage(led.db,1,CFG)['complete']
     _clinical_source(led,3,'本人は本日薬剤Aを10mg服用中です。','2026-10-03',dose='10mg')
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime)
     view = patient_context_refresh_readiness.context_view_input(led.db,1,cfg=CFG)
     assert any(f['message_id']==3 and f['view_bucket']=='current'
@@ -732,7 +741,6 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
 def test_chunk_and_checkpoint_commit_atomically(runtime,monkeypatch):
     led,_,_ = runtime
     seed(led,body='合成の見出しなしの原文です。')
-    assert step(runtime)['lane'] == 'A'
     before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
     original = led.artifact_add_tx
     committed_at_failure = []
@@ -810,7 +818,6 @@ def test_valid_empty_new_generation_has_no_old_nonempty_fallback(runtime,monkeyp
 def test_source_or_generation_change_after_inference_cannot_commit_a_chunk(runtime,monkeypatch,mutation):
     led,_,_ = runtime
     seed(led,body='合成の見出しなしの原文です。')
-    assert step(runtime)['lane'] == 'A'
     original = refresh.local_llm.admitted_chat
     def race(*args,**kwargs):
         result = original(*args,**kwargs)
@@ -833,8 +840,11 @@ def test_null_body_and_archived_sources_progress_after_active_patients(runtime):
     with led.db:
         led.db.execute('UPDATE patients SET is_archived=1 WHERE project_id=2')
         led.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=2')
-    assert step(runtime)['status'] == 'progressed'
-    assert document(led,pid=1) is not None and document(led,pid=2) is None
+    result = step(runtime)
+    assert result['status'] == 'progressed' and result['lane'] == 'B'
+    assert document(led, patient_context_refresh_state.SCAN, pid=1) is not None
+    assert document(led, patient_context_refresh_state.SCAN, pid=2) is None
+    assert document(led,pid=1) is None and document(led,pid=2) is None
     finish(runtime)
     assert patient_context_refresh_readiness.status(led.db,CFG)['complete'] == 2
     assert document(led,pid=2)['coverage']['analyzed'] == 1
@@ -842,7 +852,7 @@ def test_null_body_and_archived_sources_progress_after_active_patients(runtime):
 
 
 def test_all_karte_originals_are_scanned_but_only_latest_enters_current_summary(runtime):
-    led,_,_ = runtime
+    led,clock,_ = runtime
     seed(led)
     with led.db:
         led.db.execute('UPDATE patients SET karte_id=10 WHERE project_id=1')
@@ -857,6 +867,8 @@ def test_all_karte_originals_are_scanned_but_only_latest_enters_current_summary(
     assert any(f['evidence'] == '合成の旧連携記録です。' for f in view['historical_facts'])
     assert view['coverage']['karte_records']['analyzed'] == 2
     led.karte_summary_store(1,10,None)
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime)
     view = patient_context_refresh_readiness.context_view_input(led.db,1,cfg=CFG)
     assert not any(f['source'] == 'karte_summary' for f in view['facts'])
