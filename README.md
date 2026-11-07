@@ -487,6 +487,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 追加設定やデータ移行は不要です。更新後の監視処理から適用されます。
 
+- 追加設定は不要です。更新後に開始する収集とコマンド処理から適用されます。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
