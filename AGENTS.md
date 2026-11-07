@@ -53,13 +53,13 @@ python3 ci/mine_gates.py --check
   `cloud_inference`・`cloud_policy`・`cloud_backlog` は `llm/` 直下に置き、従来のflat import名を維持する。
 - 抽出: `extract/rules/`＝ルール（v1）、`extract/llm/`＝現行LLM（旧配置v4）、`extract/clinical/`＝臨床値の共通処理。`patients/rollup.py` と
   `semantic/` は世代横断。世代番号は配置名と独立し、v2/v3 は git 履歴にだけある。`extract/eval/`・`semantic/eval/` は定期処理から読まない。
-  LLM 枠は新着・対話1、バックログ2。抽出世代・QC・公開条件・モデルの既定は `mcs/extract/`・`mcs/semantic/` と仕様で確かめ、要約から固定しない。
+  LLM 枠は昼間（JST 08〜20時）が新着・対話1と背景2、夜間（20〜08時）は背景3。夜間も新着が次の空き枠を優先し、実行中の処理は中断しない。抽出世代・QC・公開条件・モデルの既定は `mcs/extract/`・`mcs/semantic/` と仕様で確かめ、要約から固定しない。
 - 収集: MCS サーバー負荷のため未読収集は10分間隔。`stage_self_probe` は未保管の最新 id を bounded 履歴取得し、取れない id は `patients.probe_mid` に記録して再取得を抑える。
 - 通知: `adapters/{slack,discord,lineworks,common}/`（独立接続も接続先配下）。`hermes_plugin/` は Hermes 接続・互換入口、`lineworks_adapter/` は独立CLI入口。
   推奨通知先と README 先頭画面は Slack、Discord は対応する選択肢として残す。
 - スタンプ: `mcs/stamps/` が種別・読取り・表示・人承認操作を所有。送信は操作者1人と MCS アカウントの設定時だけ既定ON（`stamps.enabled=false` で無効）。
   `stamp_write` の承認記録・復元用記録を通し、通信は既存の `MCSAdapter` だけ（`docs/specs/stamp-management.md`）。
-- 独立実行: `runtime_mode=standalone` の `mcs_standalone/` が単一host・7定期ジョブ・cmd取込・抽出worker2本を所有（`docs/guides/STANDALONE.md`）。未指定は Hermes 経路。
+- 独立実行: `runtime_mode=standalone` の `mcs_standalone/` が単一host・7定期ジョブ・cmd取込・抽出worker3本を所有（`docs/guides/STANDALONE.md`）。未指定は Hermes 経路。
 - 検証: `tests/` は実行領域に対応、`integration/` は統合、`evaluation/` は完全合成の評価資産。conftest がヘルパー import と socket 遮断を担う。
 - `resources/drug-master/`: 公式公開 master の原本と出典・版・hash の manifest（実患者データでも fixture でもない）。リリース時の更新確認・同梱検証と、私有辞書への変換・承認・有効化を分ける。
 - 文書: 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。第一層ディレクトリを足したら（ブートストラップは自動対応）この節と `deployment/` のパス表記も更新する。

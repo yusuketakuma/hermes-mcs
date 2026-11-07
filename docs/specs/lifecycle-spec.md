@@ -25,7 +25,7 @@ link・scripts・profile config・.env）+ launchd + hermes cron が構成する
 
 `runtime_mode: "standalone"`（[STANDALONE.md](../guides/STANDALONE.md)）では `~/.hermes` を
 使わない。`ai.mcs.standalone`の単一hostが7定期ジョブ（wrapperは`~/.mcs/scripts`、
-3600秒上限）・cmd/cmd_int取込・抽出worker2本を所有する。インタプリタは`~/.mcs/venv`。
+3600秒上限）・cmd/cmd_int取込・抽出worker3本を所有する。インタプリタは`~/.mcs/venv`。
 更新marker中は背景処理を停止し、updater以外の子処理が完了したことをheartbeatで確認する。
 更新後のhost再起動はgeneration付き要求を発行し、updaterを含む処理の完了後に行う。
 復旧ツールは同venvでservicesを再同期し通知を`mcs_standalone send`で送る。
@@ -284,7 +284,7 @@ grace をこの仕様から補わない。`status` は私有ローカル記録�
 | collection=incomplete | 次回 tick で再試行 + `health_watch.py` が degraded 遷移・新しい理由を system 通知（mcs_check.sh の stdout 行はログのみ） | ✅ |
 | health.json stale/missing/corrupt/failed・disk_low | `health_watch.py` が dedup 済みの警報を stdout とともに `notify_system_target`へ直接送信。患者情報にSlackを使う場合は患者情報先へ戻さず、運用先が未確定なら保留。それ以外は未設定時に`notify_target`を使用 | ✅ |
 | notify pending/failed | outbox リトライ + 閾値超過で hold・system 通知 | ✅ |
-| extract drainer 滞留 | 背景2枠の常駐 drain・6時間ごとの bounded retry 登録 | ✅ |
+| extract drainer 滞留 | 昼間2枠・夜間3枠の常駐 drain、新着の次空き枠優先、6時間ごとの bounded retry 登録 | ✅ |
 | llama-server 停滞/異常 | `llamacpp daily restart` 04:00・最大15分 idle を待ち、busy 継続時も再起動 | ✅ |
 | コマンド inbox 滞留 | `local.mcs-cmd`/`local.mcs-int` WatchPaths 常駐 + receipt 冪等で再送安全 | ✅ |
 | apply_failed📋 | tag 単位で記録・自動再試行せず人の再承認待ち | 📋 |

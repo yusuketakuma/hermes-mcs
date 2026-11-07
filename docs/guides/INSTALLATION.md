@@ -543,7 +543,7 @@ installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセス�
 SlackはBot/App token、DiscordはBot tokenをowner-onlyの専用ファイルへ保存します。
 LINE WORKSの秘密情報・HTTPS Callbackは[LINE WORKS手順](LINEWORKS.md)に従います。
 
-独立hostが既存と同じ7定期ジョブ、cmd/cmd_int取込、抽出worker2本を所有します。
+独立hostが既存と同じ7定期ジョブ、cmd/cmd_int取込、抽出worker3本を所有します。昼間（JST 08〜20時）は背景2枠、夜間（20〜08時）は背景3枠を使い、新着が来れば次に空く枠を優先して割り当てます。
 Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないでください。
 既存モードからの切替では`services`が旧manifest所有のMCSジョブだけを停止します。
 手動登録のジョブや別プロセスのLINE WORKSアダプターは、対象を確認して別途停止します。
