@@ -483,6 +483,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 通常の更新手順で適用した後、既存の手順で抽出常駐処理を再起動してください。設定変更は不要です。旧予約・課金済み回答・結果不明の保留を自動解除せず、保存済みの結果と処理途中のcarryを保持します。
 
+- 更新後に起動した処理から適用されます。追加の設定変更は不要です。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)

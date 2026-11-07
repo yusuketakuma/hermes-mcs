@@ -1,5 +1,5 @@
 {
-  "fragment_count": 100,
+  "fragment_count": 101,
   "records": [
     {
       "category": "added",
@@ -700,8 +700,15 @@
       "path": "changes/archive/1.1.2/resident-local-batch-route-scope.json",
       "sha256": "864308ad42a321614283b7fa69f0d655efb21ca823cb27bdc1a44be8902f3bd2",
       "title": "閉鎖済みクラウド設定がローカル抽出の候補上限へ混ざる問題を修正"
+    },
+    {
+      "category": "fixed",
+      "id": "jev-retry-wait-unlock",
+      "path": "changes/archive/1.1.2/jev-retry-wait-unlock.json",
+      "sha256": "fbd1a769b71bb9c8fdaf089a4ed18e56d792fbbb048e76483645b235e4f57109",
+      "title": "Jevの再試行待機中に収集の共有ロックを解放"
     }
   ],
-  "scope": "v1.1.2 の変更記録100件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録101件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
