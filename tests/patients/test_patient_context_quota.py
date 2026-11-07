@@ -123,16 +123,65 @@ def test_unused_expired_reservation_releases_without_erasing_audit(db):
     db.rollback()
 
 
-def test_unknown_dispatch_keeps_active_slot_beyond_expiry_and_midnight(db):
+def test_unknown_dispatch_resumes_without_an_extra_daily_slot(db):
     old = reserve(db)["claim"]
     assert finish(db, old, outcome="unknown")
     later = BASE + 86400
-    assert reserve(db, 2, now=later, catchup=True)["reason"] == "patient_context_generation_active"
     resumed = reserve(db, now=later)
     assert resumed["allowed"] and resumed["resume"]
     assert not quota.owns(db, 1, old, now=later)
     assert not finish(db, resumed["claim"], now=later, outcome="unsent", proven_unsent=True)
     assert document(db, resumed["claim"])["state"] == "started"
+
+
+def test_expired_unknown_source_does_not_block_a_changed_input(db):
+    old = reserve(db)["claim"]
+    assert finish(db, old, outcome="unknown")
+    later = BASE + 61
+    new = reserve(db, 2, now=later, catchup=True)
+    assert new["allowed"] and new["used"] == 1
+    held = document(db, old)
+    assert held["state"] == "unknown" and held["reserved_at"] == BASE
+    assert held["started_at"] == BASE and held["finished_at"] is None
+    assert held["token"] == old["token"]
+    assert not quota.owns(db, 1, old, now=later)
+    assert reserve(db, now=later)["reason"] == "patient_context_generation_active"
+    db.execute("BEGIN IMMEDIATE")
+    assert not quota.finish_tx(db, 1, old, now=later, outcome="complete")
+    assert not quota.finish_tx(db, 1, old, now=later, outcome="unsent", proven_unsent=True)
+    db.commit()
+    assert finish(db, new["claim"], now=later)
+    resumed = reserve(db, now=later + 1)
+    assert resumed["allowed"] and resumed["resume"] and resumed["used"] == 2
+    assert resumed["claim"]["artifact_id"] == old["artifact_id"]
+    assert resumed["claim"]["token"] != old["token"]
+    assert not finish(db, resumed["claim"], now=later + 1, outcome="unsent", proven_unsent=True)
+
+
+def test_multiple_expired_unknown_inputs_remain_counted_and_preserved(db):
+    claims = []
+    for number in range(4):
+        now = BASE + number * 61
+        admitted = reserve(db, number + 1, now=now, catchup=True)
+        assert admitted["allowed"] and admitted["used"] == number
+        claims.append(admitted["claim"])
+        assert finish(db, admitted["claim"], now=now, outcome="unknown")
+    assert reserve(db, 5, now=BASE + 4 * 61, catchup=True)["reason"] == "patient_context_generation_daily_limit"
+    assert all(document(db, claim)["state"] == "unknown" for claim in claims[:-1])
+    tomorrow = reserve(db, 5, now=BASE + 86400, catchup=True)
+    assert tomorrow["allowed"] and tomorrow["used"] == 0
+    assert all(document(db, claim)["state"] == "unknown" for claim in claims)
+    assert db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 5
+
+
+def test_expired_unknown_input_does_not_bypass_normal_interval(db):
+    old = reserve(db)["claim"]
+    assert finish(db, old, outcome="unknown")
+    denied = reserve(db, 2, now=BASE + 61)
+    assert denied["reason"] == "patient_context_generation_interval" and denied["used"] == 1
+    new = reserve(db, 2, now=BASE + quota.INTERVAL)
+    assert new["allowed"] and new["used"] == 1
+    assert document(db, old)["state"] == "unknown"
 
 
 def test_expired_owner_cannot_publish_or_release_after_takeover(db):

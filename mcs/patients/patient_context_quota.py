@@ -11,7 +11,7 @@ KIND = "patient_context_generation_v1"
 DAILY_LIMIT = 4
 INTERVAL = 3 * 60 * 60
 _JST = timezone(timedelta(hours=9))
-_STATES = {"reserved", "started", "complete", "failed", "released"}
+_STATES = {"reserved", "started", "unknown", "complete", "failed", "released"}
 _FIELDS = {"version", "input_key", "token", "state", "reserved_at", "lease_until",
            "started_at", "finished_at", "resumes"}
 
@@ -46,7 +46,7 @@ def _document(row):
         if (started is not None and (not _time(started) or started < doc["reserved_at"])
                 or finished is not None and (not _time(finished) or finished < (started or doc["reserved_at"]))
                 or doc["state"] == "reserved" and (started is not None or finished is not None or doc["resumes"])
-                or doc["state"] == "started" and (started is None or finished is not None)
+                or doc["state"] in ("started", "unknown") and (started is None or finished is not None)
                 or doc["state"] in ("complete", "failed") and (started is None or finished is None)
                 or doc["state"] == "released" and (finished is None or doc["resumes"])):
             raise ValueError
@@ -79,8 +79,9 @@ def _decision(records, input_key, now, catchup):
     result = {"allowed": False, "reason": None, "resume": False, "used": used, "next_at": None}
     if any(max(doc["reserved_at"], doc["started_at"] or 0, doc["finished_at"] or 0) > now for _, doc in records):
         return {**result, "reason": "patient_context_generation_clock_changed"}
-    active = next((doc for _, doc in retained if doc["state"] in ("reserved", "started")), None)
-    if active and (active["input_key"] != input_key or active["lease_until"] > now):
+    active = next((doc for _, doc in retained if doc["state"] in ("reserved", "started")
+                   and doc["lease_until"] > now), None)
+    if active:
         return {**result, "reason": "patient_context_generation_active",
                 "next_at": active["lease_until"] if active["input_key"] == input_key else None}
     prior = next((doc for _, doc in retained if doc["input_key"] == input_key), None)
@@ -124,9 +125,13 @@ def reserve_tx(db, pid, input_key, *, now, lease_until, catchup=False):
         if doc["state"] == "reserved" and doc["lease_until"] <= now:
             if not _replace(db, pid, row, {**doc, "state": "released", "finished_at": now}):
                 raise ValueError("patient_context_generation_changed")
+        elif doc["state"] == "started" and doc["lease_until"] <= now and doc["input_key"] != input_key:
+            # Preserve unresolved attempts without making an obsolete input own every future input.
+            if not _replace(db, pid, row, {**doc, "state": "unknown"}):
+                raise ValueError("patient_context_generation_changed")
     token = os.urandom(16).hex()
     prior = next(((row, doc) for row, doc in records if doc["input_key"] == input_key
-                  and doc["state"] in ("started", "complete", "failed")), None)
+                  and doc["state"] in ("started", "unknown", "complete", "failed")), None)
     if prior:
         row, doc = prior
         updated = {**doc, "token": token, "lease_until": lease_until, "state": "started",
@@ -176,7 +181,7 @@ def begin_tx(db, pid, claim, *, now):
 
 
 def finish_tx(db, pid, claim, *, now, outcome, proven_unsent=False):
-    """Finish known outcomes; unknown work retains its slot and needs the existing recovery evidence."""
+    """Finish known outcomes; unknown work retains its daily count and still requires recovery evidence."""
     _transaction(db)
     if outcome not in ("complete", "failed", "unknown", "unsent") or type(proven_unsent) is not bool:
         raise ValueError("patient_context_generation_outcome_invalid")
