@@ -1,61 +1,61 @@
 {
-  "status": "unpublished_preparation",
-  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
-  "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
-  "source_checkout_observation": {
-    "head": "6977b1954f5c9dfc1a4eedf431a3cc5e5edf01eb",
-    "dirty": true,
-    "observed_at": "2026-11-07T08:24:20.000000+00:00",
-    "release_sha_fixed": false
+ "artifacts": [
+  {
+   "path": "docs/releases/v1.1.2/cloud-continuity.svg",
+   "sha256": "b18b93833498a30b6115eaa9cad402daf18a05640429281afe9c0cc3d77aaeb1"
   },
-  "source": "docs/releases/v1.1.2/cloud-continuity.svg",
-  "renderer": {
-    "tool": "macOS qlmanage + ImageMagick",
-    "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)",
-    "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
-    "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png"
+  {
+   "path": "docs/releases/v1.1.2/cloud-continuity.png",
+   "sha256": "e9ac08cdc15ff4ca662f0817dbca8e4691345f735c1043816d5e49e7ebe3e9f7"
+  }
+ ],
+ "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+ "notes": [
+  "図は候補82件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
+  "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
+  "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
+ ],
+ "renderer": {
+  "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
+  "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
+  "tool": "macOS qlmanage + ImageMagick",
+  "wrapper": "1000x1000 SVG with source SVG nested inside g transform=translate(305 70)"
+ },
+ "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
+ "source": "docs/releases/v1.1.2/cloud-continuity.svg",
+ "source_checkout_observation": {
+  "dirty": false,
+  "head": "277300c9",
+  "observed_at": "2026-11-07T09:11:16.736018+00:00",
+  "release_sha_fixed": false
+ },
+ "source_file_observations": [
+  {
+   "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。",
+   "path": "mcs/llm/cloud_policy.py",
+   "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100"
   },
-  "visual_check": {
-    "png_rendered": true,
-    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補80件へ更新後）",
-    "narrow_width_ok": true
+  {
+   "path": "mcs/llm/cloud_inference.py",
+   "sha256": "3efac7b382a45f0a0c6e6a2f6d28dc6b7fecf4b1acc0804ac2d5b9adee7d3871"
   },
-  "artifacts": [
-    {
-      "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "79dac3d3f069a7a67c5c268f469fa7b9caac48e83aadee481daa5bec3da9ba25"
-    },
-    {
-      "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "b4f0a6e8e0dc2ac9c8b1c19a6bc777dcaa546c8a87bff52847e396223bc22765"
-    }
-  ],
-  "source_file_observations": [
-    {
-      "path": "mcs/llm/cloud_policy.py",
-      "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100",
-      "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。"
-    },
-    {
-      "path": "mcs/llm/cloud_inference.py",
-      "sha256": "3efac7b382a45f0a0c6e6a2f6d28dc6b7fecf4b1acc0804ac2d5b9adee7d3871"
-    },
-    {
-      "path": "mcs/extract/attachment_ocr.py",
-      "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
-    },
-    {
-      "path": "mcs/notify/notify_parts.py",
-      "sha256": "47d3d3cef06507076f63f56e91e2750875574e5b8af4726387e245fd04a0733b"
-    },
-    {
-      "path": "mcs/ops/setup/slack_channel_setup.py",
-      "sha256": "0e9610b5b9cbf22dd18fc1dfe2e147f96af138f05619f5ce8526fed7fd2075fd"
-    }
-  ],
-  "notes": [
-    "図は候補80件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
-    "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
-    "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
-  ]
+  {
+   "path": "mcs/extract/attachment_ocr.py",
+   "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
+  },
+  {
+   "path": "mcs/notify/notify_parts.py",
+   "sha256": "47d3d3cef06507076f63f56e91e2750875574e5b8af4726387e245fd04a0733b"
+  },
+  {
+   "path": "mcs/ops/setup/slack_channel_setup.py",
+   "sha256": "f26e51673b91e50b83cf579d6a0e5e1c4eaf5c2319268484563adaa3b1044528"
+  }
+ ],
+ "status": "unpublished_preparation",
+ "visual_check": {
+  "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補82件へ更新後）",
+  "narrow_width_ok": true,
+  "png_rendered": true
+ }
 }

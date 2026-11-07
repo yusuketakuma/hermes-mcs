@@ -4,14 +4,14 @@
 
 ## 今回の対象
 
-- `changes/` 直下80件（後続mergeで3件追加＋恒久fixで1件追加）の記述を現行実装へ整合させ、`release_notes.py build` で `changes/archive/1.1.2/` へ移動。
+- `changes/` 直下76件（後続mergeで3件追加＋恒久fixで3件追加）の記述を現行実装へ整合させ、`release_notes.py build` で `changes/archive/1.1.2/` へ移動。
 - 個別の履歴抽出・意味解析への新規クラウド送信は停止済みで、新規送信は患者コンテキスト（作成・更新・品質修復）専用という現在の仕様に文言を合わせた。停止前の予約と課金済み回答の回収経路は存続。
 - 説明図のSVG・PNGを現在の仕様で再生成し、描画結果を確認。記録は `visual-source.json`。
 - CHANGELOG の v1.1.2 節を生成。README のリリース案内を同じバージョンへ更新。
 
 ## 検証済み（この作業の範囲）
 
-- 変更記録の形式：`release_notes.py check` が全80件を受理（構造・refs・技術詳細の要件）。
+- 変更記録の形式：`release_notes.py check` が全82件を受理（構造・refs・技術詳細の要件）。
 - 変更記録の内容：閉鎖済み個別クラウド経路・休眠回収・Slack通知先分離など、現在の実装との静的照合。
 - 図版：PNGを描画して文字欠落・重なり・余白を目視確認。細い表示幅（390px想定）で可読。
 - README 生成ブロック：`update_readme.py` による再生成との一致（driftなし）。
@@ -26,6 +26,7 @@
 - 公式医薬品マスター：`drug-master-fresh-check.json`（2026-11-07）で同梱 bundle と一致確認済み（`matches_bundle: true`、出典・hash・行数記録済み）。有効化は要オペレーター承認で未実施。
 - 本番適用中の新たな原因と暫定復旧：`ac2978a8` 適用が `services_failed` exit 1 で postmerge 未完了となり、`mcs/ops/mcs_setup.py` の import 順欠陥（共有部品の読込みが標準起動準備より前）が原因と `_services_reconcile` の直接起動経路で因果一致（ルート供給値）。既存の recover 処理と `_mcs_path` 公式 sys.path を一回限り PYTHONPATH へ渡す補助で暫定復旧し、`current_sha=ac2978a8`・`applying=null`・`last_applied=ac2978a8`・`stages=[]` を実照合（失敗試行は履歴として保持・完了偽装なし）。
 - 恒久 fix：commit `6977b195`（同原因の import 順復旧＋直接起動回帰・限定 batch 77 passed / exit 0）。本番への実適用・実機稼働観測は未実施。
+- 恒久 fix 追加：commit `44f70dc1`（Slackチャンネル準備の保留中に無関係な設定を更新すると再開不能になる問題を修正・限定 batch 115+285+114 passed / exit 0・実行logは端末表示のみでファイル未保存）、`8aca1692`（添付OCRの起動時に保存ロックの解放を待つ・独立レビュー受入・ルート証跡：旧製品+新test赤 1 fail/exit 1・修正版 entry 12 passed/exit 0、`.mcs-audit/20261107/ocr-startup-lock/`）。merge `75c041d6` で統合。本番への実適用・実機稼働観測は未実施。
 
 ## この資料では確認していない事項
 
