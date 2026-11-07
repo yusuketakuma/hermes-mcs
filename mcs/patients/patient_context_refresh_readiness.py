@@ -18,7 +18,7 @@ def inference_coverage(db, pid, cfg):
     """Prove source scan, audit and current summary completion on a borrowed connection."""
     with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
         snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False)
-        return _inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg))
+        return _inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg), proof_for=proof_for)
 
 
 def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract, threshold, *, read_proof=None):
@@ -137,7 +137,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
         return False
 
 
-def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
+def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=None):
     sources = snapshot["sources"]
     scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
     cloud_scanned = (not snapshot["contract"].get("provider") or all(
@@ -167,12 +167,18 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
     source_keys = snapshot.get('source_scope')
     publication = None
+    snapshots = {patient_context_refresh_sources._source_scope(source_keys): snapshot}
     if source_keys is None and meta.get('source_scope') is not None:
         try:
-            publication = _inference_coverage(db, pid, cfg, patient_context_refresh_sources._snapshot(
-                db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=meta['source_scope']))
+            published_snapshot = patient_context_refresh_sources._snapshot(
+                db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=meta['source_scope'])
+            snapshots[patient_context_refresh_sources._source_scope(meta['source_scope'])] = published_snapshot
+            publication = _inference_coverage(db, pid, cfg, published_snapshot,
+                read_proof=proof_for(published_snapshot, cfg) if proof_for is not None else None,
+                proof_for=proof_for)
         except (ValueError, TypeError):
             pass
+    progress_current = _bound_signature_matches(db, pid, cfg, progress, snapshot, snapshots)
     current = (meta.get("summary_checked") is True and meta.get("source_sig") == snapshot["source_sig"]
                and patient_context_refresh_state._route_contract(meta) == snapshot["contract"]
                and (source_keys is None or len(sources) == len(source_keys))
@@ -207,11 +213,11 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
               else "cloud_extraction_pending" if not cloud_extraction_ready
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
-              else "quality_unknown" if (progress.get("source_sig") == snapshot["source_sig"]
+              else "quality_unknown" if (progress_current
                    and progress.get("quality_state") == "unknown"
                    or any(scan.get("quality_state") == "unknown" and not scan.get("audited")
                           for scan in scans.values()))
-              else "quality_held" if progress.get("source_sig") == snapshot["source_sig"]
+              else "quality_held" if progress_current
                    and progress.get("quality_state") == "held"
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
               else "acquisition_incomplete" if not fetch_allowed
@@ -266,7 +272,7 @@ def context_view_read(db, pid, *, cfg=None):
         context = _context_view_input(db, pid, cfg=cfg, proof_for=proof_for)
         current = patient_context_refresh_sources._snapshot(db, pid, cfg or {}, hydrate=False)
         coverage = _inference_coverage(db, pid, cfg or {}, current,
-                                       read_proof=proof_for(current, cfg or {}))
+                                       read_proof=proof_for(current, cfg or {}), proof_for=proof_for)
         return context, coverage
 
 
@@ -292,7 +298,7 @@ def _context_view_input(db, pid, *, cfg, proof_for):
         return None
     # The pinned publication contract can differ from the runtime route.
     proof = proof_for(current, cfg or {})
-    if not _inference_coverage(db, pid, cfg or {}, current, read_proof=proof)["publication_eligible"]:
+    if not _inference_coverage(db, pid, cfg or {}, current, read_proof=proof, proof_for=proof_for)["publication_eligible"]:
         return None
     if patient_context_refresh_state._out_of_scope(current) or current["scope"].get("is_archived"):
         return None
@@ -461,6 +467,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                    and all(patient_context_refresh_sources._scan_ready(scan) for scan in scans))
     cloud_ready = local_ready and all(patient_context_refresh_sources._scan_ready(scan) for scan in required_scans)
     snapshot["unfinished"] = bool(summary_needed or cloud_summary_needed or not snapshot["acquisition"]["complete"]
+        or snapshot.get('source_coverage', {}).get('unreflected')
         or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
         or not snapshot["attachment_coverage"]["complete"] or any(not patient_context_refresh_sources._scan_ready(scan) for scan in required_scans))
     pending = {"A": (summary_needed or cloud_summary_needed and cloud_ready) and local_ready and _ready(progress, now),
@@ -579,7 +586,8 @@ def status(db, cfg):
             counts["history_pending"] += int(pending["B"])
             counts["audit_pending"] += int(pending["C"])
             counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
-            counts["complete"] += int(_inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg))["complete"])
+            counts["complete"] += int(_inference_coverage(db, pid, cfg, snapshot,
+                read_proof=proof_for(snapshot, cfg), proof_for=proof_for)["complete"])
     counts["lanes"] = lane_metrics(db)["lanes"]
     return counts
 
