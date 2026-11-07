@@ -155,8 +155,22 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
     assert current["parts"]["provider_states_version"] == 4
     header = next(item for item in current["parts"]["containers"]
                   if item.get("provider_scope") == "header")
-    assert header["visible_providers"] == ["openai", "jev", "local"]
-    assert "Anthropic" not in header["text"] and "OpenAI" in header["text"]
+    assert current["parts"]["processing_display_version"] == 3
+    assert header["visible_providers"] == ["jev", "local"]
+    assert "Anthropic" not in header["text"] and "OpenAI" not in header["text"]
+    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert header["context_progress"]["observed_at"] == (0 if legacy else NOW)
+    if not legacy:
+        prior_header = next(item for item in original["parts"]["containers"]
+                            if item.get("provider_scope") == "header")
+        assert header["context_progress"] == prior_header["context_progress"]
+        old_posts = original["parts"]["lineworks"]["face_posts"]
+        new_posts = current["parts"]["lineworks"]["face_posts"]
+        assert len(old_posts) == len(new_posts) == 1
+        assert new_posts[0] == {**old_posts[0], "at": old_posts[0]["at"] + 1}
+        assert current["parts"]["containers"][new_posts[0]["at"] - 1]["text"] == "🔄 更新版"
     assert "prior_remote_id" not in current["parts"]["manifest"][0]
     assert validate(current) is current
 
