@@ -283,6 +283,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         if not scoped_current():
             raise runtime.LLMNotSent('cloud_fallback_source_changed')
         if (local_fallback is None or mid in possibly_sent_targets or target_owned(mid)
+                or (not send_capable and not member_unbound(mid))
                 or fallback_current is not None and not fallback_current(mid)):
             raise runtime.LLMNotSent('cloud_fallback_unavailable')
         switched = True

@@ -1337,3 +1337,74 @@ def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, ord
         # Proven revocation: the owned member is released to local too.
         assert any('アムロジピン' in p for p in local_prompts)
         assert any('メトホルミン' in p for p in local_prompts)
+
+
+def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monkeypatch):
+    """A strict non-member unit bound to the member's exact request plus a
+    duplicated result is ambiguous accounting — never a proven-unbound
+    member: recover_response's cloud_unit_unresolved leaves possibly_sent
+    unset, and the CloudNotSent catch must not slip the member to local."""
+    import mcs_util
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    # A complete strict non-member unit on member 3: no member fields, the
+    # row/meta message ids match — provably not member 3's own reservation.
+    # The real reserver's own guard refuses a second unresolved unit, so the
+    # row clones the member-2 receipt with member fields stripped.
+    original = dict(rows(led, 'cloud_usage_reserve')[0])
+    meta = json.loads(original['meta'])
+    meta.update(message_id=3, logical_target_id=None,
+                owner={'semantic_thread_root': 1},
+                unit_key=f"semantic:{job['job_id']}:{json.loads(job['payload']).get('generation', '')}",
+                reservation_id='d' * 32)
+    with led.db:
+        led.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "VALUES('cloud_usage_reserve',1,3,'{}',?,?,?)",
+            (original['model'], json.dumps(meta), time.time()))
+        for _ in range(2):
+            # Two results on one reservation can never settle — the unit's
+            # history is ambiguous, so member 3 is never proven unbound.
+            led.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                "VALUES('cloud_usage_result',1,3,'{}','synthetic',?,?)",
+                (json.dumps({'reservation_id': 'd' * 32, 'route': 'semantic_backlog',
+                             'unit_key': meta['unit_key'], 'message_id': 3}),
+                 time.time()))
+    local = []
+    captured = {}
+    real_reason = cloud_policy.request_send_block_reason
+    def spy(ledger_, cfg_, body, **kw):
+        if kw.get('message_id') == 3 and 'input_binding' not in captured:
+            captured['input_binding'] = kw.get('input_binding')
+            captured['request_fp'] = mcs_util.payload_hash(body)
+        return real_reason(ledger_, cfg_, body, **kw)
+    monkeypatch.setattr(cloud_policy, 'request_send_block_reason', spy)
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic member prompt')
+        assert 'request_fp' in captured
+        with led.db:
+            # Bind the strict non-member unit to member 3's exact request, so
+            # the next pass reaches recover_response and its torn result set.
+            meta.update(input_binding=captured['input_binding'],
+                        request_fp=captured['request_fp'])
+            led.db.execute("UPDATE artifacts SET meta=? "
+                           "WHERE kind='cloud_usage_reserve' AND message_id=3",
+                           (json.dumps(meta),))
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_fallback_unavailable'):
+                chat('synthetic member prompt')
+    assert not local and not calls
+    assert len(rows(led, 'cloud_usage_reserve')) == 2
+    assert len(rows(led, 'cloud_usage_result')) == 2
