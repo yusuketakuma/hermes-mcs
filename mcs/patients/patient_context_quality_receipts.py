@@ -28,6 +28,13 @@ def _has_prior_quality_failure(db, pid, *, purpose=None):
                       + ','.join('?' for _ in kinds) + ') LIMIT 1', (pid, *kinds)).fetchone() is not None
 
 
+def _summary_quality_required(db, pid, snapshot):
+    """Keep substantive zero-fact sources and prior failures subject to summary quality checks."""
+    return bool(snapshot['contract'].get('provider')
+        and any(context_plan.source_usable(source) for source in snapshot['sources'])
+        or _has_prior_quality_failure(db, pid))
+
+
 def _profiled_summary_repair_exists(db, pid, input_key):
     for (raw,) in db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve' AND project_id=?", (pid,)):
         try:

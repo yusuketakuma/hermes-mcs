@@ -185,7 +185,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
                and meta.get("scan_sig") == patient_context_refresh_state._scan_sig(db, pid, source_keys=source_keys)
                and patient_context_refresh_sources._summary_valid(db, pid, doc, {context_plan.source_key(s): s for s in sources},
                                   allow_historical=bool(meta.get("quality_audit_key")))
-               and (not (snapshot["contract"].get("provider") or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
+               and (not patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
                     or _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof)))
     if publication is not None:
         current = publication['summary']['current']
@@ -426,7 +426,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             # Local audits and summaries may advance while raw cloud inspection remains due.
             required_scans.append({} if cloud_scan and not scan.get("_provider_contract") else scan)
     recheck_available = False
-    quality_required = bool(snapshot["contract"].get("provider") or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
+    quality_required = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     if (not estimate and quality_required
             and (meta.get("quality_audit_status") == "SKIPPED"
                  or any(scan.get("_audit_skipped") for scan in scans))):
@@ -460,7 +460,8 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or bool(recheck_available and meta.get("quality_audit_status") == "SKIPPED")
                     or quality_changed
                     or progress.get("summary_pending", False))
-    cloud_summary_needed = cloud_scan and meta.get("provider") != snapshot["contract"].get("provider")
+    cloud_summary_needed = (cloud_scan and bool(old.get('facts'))
+                            and meta.get("provider") != snapshot["contract"].get("provider"))
     local_ready = (not quality_required
                    or (source_keys is not None or snapshot["acquisition"]["complete"]) and snapshot["dependencies"]["complete"]
                    and patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
