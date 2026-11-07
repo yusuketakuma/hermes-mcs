@@ -1436,7 +1436,10 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
     extractions = {}
     seen = set()
     try:
-        proof_state = [_message_read_stamp(db) if db.in_transaction else None]
+        # Recording must observe each proof query; the stamp's schema PRAGMA
+        # is intentionally outside its authorizer contract.
+        proof_state = [_message_read_stamp(db) if db.in_transaction
+                       and getattr(db, "read_witness", None) is None else None]
     except sqlite3.Error:
         proof_state = [None]
     for row in db.execute(
