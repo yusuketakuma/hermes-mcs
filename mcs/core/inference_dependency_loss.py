@@ -595,13 +595,20 @@ def _valid_loss(doc):
             return False
     return True
 
-def read(db, pid):
+def read(db, pid, *, source_keys=None):
     """Read persistent negative-use barriers separately from clinical facts and model inputs."""
     losses, gaps, identities, captured, covered_sources = [], 0, [], set(), set()
     pending_gaps, resolved = {}, set()
     coverage = {'terminal': 0, 'repairable': 0, 'reasons': {}}
-    def mark(reason, *, terminal=True):
+    blocked_sources, unscoped_gap = set(), False
+    selected = None if source_keys is None else set(source_keys)
+    def mark(reason, *, terminal=True, source_key=None):
         nonlocal gaps
+        nonlocal unscoped_gap
+        if source_key is None:
+            unscoped_gap = True
+        elif terminal:
+            blocked_sources.add(source_key)
         gaps += 1
         coverage['terminal' if terminal else 'repairable'] += 1
         coverage['reasons'][reason] = coverage['reasons'].get(reason, 0) + 1
@@ -609,12 +616,15 @@ def read(db, pid):
                for table in ('artifacts', 'messages', 'message_revisions', 'patients')}
     if not {'artifact_id', 'kind', 'project_id', 'content', 'meta'}.issubset(columns['artifacts']):
         return {'losses': [], 'complete': False, 'gaps': 1, 'signature': _digest(['missing_artifact_schema']),
-                'coverage': {'terminal': 1, 'repairable': 0, 'reasons': {'dependency_schema_unavailable': 1}}}
+                'coverage': {'terminal': 1, 'repairable': 0, 'reasons': {'dependency_schema_unavailable': 1}},
+                'blocked_sources': [], 'unscoped_gap': True}
     retained_karte = {'karte:' + str(row[0]) for row in db.execute(
         "SELECT artifact_id FROM artifacts WHERE kind='karte_summary' AND project_id=?", (pid,))}
     retained_originals = {}
 
     def retain(key):
+        if selected is not None and key not in selected:
+            return
         source = original_source_keys.source(db, pid, key)
         if source is not None:
             retained_originals[key] = _digest([pid, key, source['content_hash'],
@@ -645,6 +655,10 @@ def read(db, pid):
             mark('invalid_dependency_proof')
             identities.append(_digest(list(row)))
             continue
+        if (selected is not None and doc['origin'].get('source_key', doc['origin'].get('message_id')) not in selected
+                and (doc['gap'] or doc.get('coverage') is True)):
+            continue
+        # Lost stop/correction evidence can constrain facts from a different included source.
         identities.append(meta.get('identity'))
         origin = doc['origin']
         if type(origin.get('message_id')) is int and type(origin.get('revision')) is int:
@@ -660,7 +674,7 @@ def read(db, pid):
             continue
         elif (not isinstance(doc.get('entity'), str) or len(doc['entity']) != 64
               or not isinstance(doc.get('axis'), str) or doc.get('day') is not None and not isinstance(doc['day'], str)):
-            mark('invalid_dependency_proof')
+            mark('invalid_dependency_proof', source_key=origin.get('source_key', origin.get('message_id')))
         else:
             losses.append(doc)
     for occurrence, origin in pending_gaps.items():
@@ -668,18 +682,21 @@ def read(db, pid):
             continue
         if retained_originals.get(origin.get('source_key')) == occurrence:
             mark('retained_karte_requires_audit' if origin.get('source_key') in retained_karte
-                 else 'retained_attachment_requires_audit', terminal=False)
+                 else 'retained_attachment_requires_audit', terminal=False,
+                 source_key=origin.get('source_key', origin.get('message_id')))
         else:
             mark('historical_original_body_unavailable' if original_source_keys.valid(origin.get('source_key'))
-                 else 'historical_chat_body_unavailable')
+                 else 'historical_chat_body_unavailable', source_key=origin.get('source_key', origin.get('message_id')))
     if ({'message_id', 'project_id'}.issubset(columns['messages'])
             and {'message_id', 'seq', 'content_hash'}.issubset(columns['message_revisions'])):
         for row in db.execute('SELECT r.message_id,r.seq,r.content_hash FROM message_revisions r '
                 'JOIN messages m ON m.message_id=r.message_id WHERE m.project_id=? '
                 'AND r.seq<(SELECT MAX(n.seq) FROM message_revisions n WHERE n.message_id=r.message_id)', (pid,)):
+            if selected is not None and row[0] not in selected:
+                continue
             covered = (row[0], row[1]) in captured
             if not covered:
-                mark('uncaptured_chat_revision')
+                mark('uncaptured_chat_revision', source_key=row[0])
                 identities.append(_digest(['uncaptured_revision', *row]))
     else:
         mark('dependency_schema_unavailable')
@@ -693,10 +710,13 @@ def read(db, pid):
             "AND n.project_id=a.project_id AND CASE WHEN json_valid(n.meta) THEN "
             "json_extract(n.meta,'$.karte_id')=p.karte_id END)", (pid,))
         for row in rows:
+            if selected is not None and 'karte:' + str(row[0]) not in selected:
+                continue
             if 'karte:' + str(row[0]) not in covered_sources:
-                mark('retained_karte_requires_audit', terminal=False)
+                mark('retained_karte_requires_audit', terminal=False, source_key='karte:' + str(row[0]))
                 identities.append(['uncaptured_karte', row[0]])
     else:
         mark('dependency_schema_unavailable')
         identities.append('missing_karte_scope_schema')
-    return {'losses': losses, 'complete': gaps == 0, 'gaps': gaps, 'signature': _digest(identities), 'coverage': coverage}
+    return {'losses': losses, 'complete': gaps == 0, 'gaps': gaps, 'signature': _digest(identities), 'coverage': coverage,
+            'blocked_sources': sorted(blocked_sources, key=str), 'unscoped_gap': unscoped_gap}

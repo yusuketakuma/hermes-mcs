@@ -50,7 +50,8 @@ def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, c
         return False
     original_summary = [{'text': context_plan.summary_text(by_id[fid]), 'fact_ids': [fid]} for fid in ids]
     original = patient_context_refresh_sources._quality_capture(db, pid, cfg, proof.get('night_id'), original_summary, assessment,
-                                doc['temporal_view'], contract=contract, read_proof=read_proof)['identity']
+                                doc['temporal_view'], contract=contract, read_proof=read_proof,
+                                source_keys=meta.get('source_scope'))['identity']
     if not patient_context_quality_receipts._quality_failed(db, pid, original):
         return False
     selected, failures, missing, rejected = set(ids), [], set(), set()
@@ -105,7 +106,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
                 return False
             patient_context_quality_receipts._quality_integrity(db, pid)
             captured = patient_context_refresh_sources._quality_capture(db, pid, cfg, meta.get("night_id"), doc.get("summary"), assessment,
-                                        doc.get("temporal_view"), contract=contract, read_proof=read_proof)
+                                        doc.get("temporal_view"), contract=contract, read_proof=read_proof, source_keys=meta.get('source_scope'))
             if not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy, captured["sources"]):
                 return False
             identity = captured["identity"]
@@ -164,25 +165,42 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                        else "failed" if scan.get("failure") else "pending"] += 1
     doc, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
+    source_keys = snapshot.get('source_scope')
+    publication = None
+    if source_keys is None and meta.get('source_scope') is not None:
+        try:
+            publication = _inference_coverage(db, pid, cfg, patient_context_refresh_sources._snapshot(
+                db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=meta['source_scope']))
+        except (ValueError, TypeError):
+            pass
     current = (meta.get("summary_checked") is True and meta.get("source_sig") == snapshot["source_sig"]
                and patient_context_refresh_state._route_contract(meta) == snapshot["contract"]
-               and meta.get("scan_sig") == patient_context_refresh_state._scan_sig(db, pid)
+               and (source_keys is None or len(sources) == len(source_keys))
+               and meta.get("scan_sig") == patient_context_refresh_state._scan_sig(db, pid, source_keys=source_keys)
                and patient_context_refresh_sources._summary_valid(db, pid, doc, {context_plan.source_key(s): s for s in sources},
                                   allow_historical=bool(meta.get("quality_audit_key")))
                and (not (snapshot["contract"].get("provider") or patient_context_quality_receipts._has_prior_quality_failure(db, pid))
                     or _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof)))
+    if publication is not None:
+        current = publication['summary']['current']
     scope = snapshot.get("scope") or {}
     acquired_empty = bool(counts["total"] or scope.get("fetch_state") == "complete")
     cloud_extraction_ready = _cloud_extraction_ready(db, pid, cfg)
     complete = (not patient_context_refresh_state._out_of_scope(snapshot) and patient_context_refresh_state.options(cfg)["enabled"] and acquired_empty
                 and counts["eligible"] == counts["audited"] + counts["skipped"] and not counts["incomplete"]
-                and not progress.get("held") and not progress.get("failure") and current
-                and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"]
+                and (source_keys is not None and progress.get('source_sig') != snapshot['source_sig']
+                     or not progress.get("held") and not progress.get("failure")) and current
+                and snapshot["dependencies"]["complete"] and (source_keys is not None or snapshot["acquisition"]["complete"])
                 and cloud_extraction_ready and snapshot["attachment_coverage"]["complete"])
     fetch_allowed = snapshot["acquisition"]["complete"]
-    eligible = bool(complete and patient_context_refresh_state.options(cfg)["publication"] and not scope.get("is_archived") and fetch_allowed)
+    eligible = bool(complete and patient_context_refresh_state.options(cfg)["publication"] and not scope.get("is_archived")
+                    and (source_keys is not None or fetch_allowed))
+    if publication is not None:
+        eligible = publication['publication_eligible']
+        complete = complete and publication['complete']
     # A verified local publication remains usable without claiming the pending cloud inspection.
-    complete = complete and cloud_scanned
+    complete = (complete and cloud_scanned and snapshot['acquisition']['complete']
+                and not snapshot.get('source_coverage', {}).get('unreflected'))
     status = ("out_of_scope" if patient_context_refresh_state._out_of_scope(snapshot) else "off" if not patient_context_refresh_state.options(cfg)["enabled"]
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
               else "attachment_extraction_pending" if not snapshot["attachment_coverage"]["complete"]
@@ -265,7 +283,11 @@ def _context_view_input(db, pid, *, cfg, proof_for):
     pinned = _publication_contract(cfg, meta)
     if pinned is None:
         return None
-    current = patient_context_refresh_sources._snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned)
+    try:
+        source_keys = patient_context_refresh_sources._source_scope(meta.get('source_scope'))
+        current = patient_context_refresh_sources._snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned, source_keys=source_keys)
+    except (ValueError, TypeError):
+        return None
     if current["source_sig"] != meta.get("source_sig"):
         return None
     # The pinned publication contract can differ from the runtime route.
@@ -318,7 +340,11 @@ def _context_view_input(db, pid, *, cfg, proof_for):
             "coverage": {**patient_context_refresh_sources._coverage(db, pid, current["sources"], current["contract"], list(by_id.values()),
                 cfg=cfg or {}, read_proof=proof),
             "unreflected_since": as_of,
-            "unreflected": sum((s.get("first_seen") or 0) > as_of for s in sources.values())}}
+            "unreflected": current.get('source_coverage', {}).get('unreflected',
+                sum((s.get("first_seen") or 0) > as_of for s in sources.values())),
+            "source_coverage": current.get('source_coverage'),
+            "partial": bool(current.get('source_coverage', {}).get('unreflected')
+                or not current['acquisition']['complete'])}}
 
 
 def _ready(progress, now):
@@ -347,10 +373,35 @@ def _cloud_scan_for(ledger, cfg):
     return enabled
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False):
-    snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract)
+def _bound_signature_matches(db, pid, cfg, record, snapshot, snapshots):
+    """Compare one source cohort without changing the observer's whole snapshot."""
+    recorded_scope = patient_context_refresh_sources._source_scope(record.get('source_scope'))
+    selected_scope = patient_context_refresh_sources._source_scope(snapshot.get('source_scope'))
+    if not valid_hash(record.get('source_sig')):
+        return False
+    if recorded_scope == selected_scope:
+        return record.get('source_sig') == snapshot['source_sig']
+    keys = tuple(context_plan.source_key(source) for source in snapshot['sources'])
+    if selected_scope is not None and selected_scope != keys:
+        return False
+    if recorded_scope is not None and recorded_scope != keys:
+        return False
+    # A legacy whole signature is equivalent only when every current source is
+    # selected. Its acquisition/dependency/attachment/contract bindings still
+    # have to match; a hash-format change alone never re-arms the same retry.
+    if recorded_scope not in snapshots:
+        snapshots[recorded_scope] = patient_context_refresh_sources._snapshot(
+            db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=recorded_scope)
+    bound = snapshots[recorded_scope]
+    return (tuple(context_plan.source_key(source) for source in bound['sources']) == keys
+            and record.get('source_sig') == bound['source_sig'])
+
+
+def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False, source_keys=None):
+    snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract, source_keys=source_keys)
+    snapshots = {patient_context_refresh_sources._source_scope(snapshot.get('source_scope')): snapshot}
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
-    if progress.get("source_sig") != snapshot["source_sig"]:
+    if not _bound_signature_matches(db, pid, cfg, progress, snapshot, snapshots):
         progress = {**progress, "attempts": 0, "next_try": 0, "failure": None, "held": False,
                     "quality_state": None}
     old, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
@@ -396,7 +447,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
         # Planning may conservatively recheck an unchanged PASS after config edits;
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_code()])
-    summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
+    summary_needed = (not old or not _bound_signature_matches(db, pid, cfg, meta, snapshot, snapshots)
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(quality_required and not meta.get("quality_audit_key"))
@@ -405,7 +456,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or progress.get("summary_pending", False))
     cloud_summary_needed = cloud_scan and meta.get("provider") != snapshot["contract"].get("provider")
     local_ready = (not quality_required
-                   or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
+                   or (source_keys is not None or snapshot["acquisition"]["complete"]) and snapshot["dependencies"]["complete"]
                    and patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
                    and all(patient_context_refresh_sources._scan_ready(scan) for scan in scans))
     cloud_ready = local_ready and all(patient_context_refresh_sources._scan_ready(scan) for scan in required_scans)
@@ -624,10 +675,75 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, obs
     return True
 
 
-def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False, observed_out=None):
+def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode):
+    import semantic_intake_hold
+    import semantic_policy
+    import semantic_store
+    db, pid, mid = ledger.db, row['project_id'], row['message_id']
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+        return False
+    root = row['parent_id'] or mid
+    if semantic_intake_hold.has_held_root(db, pid, root) or semantic_intake_hold.has_unstored_root(db, pid, root):
+        return False
+    if policy['mode'] != 'off' and db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=? AND state!='done' LIMIT 1",
+            (semantic_policy.JOB_KIND, pid, root)).fetchone():
+        return False
+    if row['body_state'] == 'deleted' or row['body_state'] == 'full' and row['body_text'] == '':
+        if (attachment_mode != 'on' and (cfg.get('attachment_ocr') or {}).get('enabled') is not False
+                and db.execute("SELECT 1 FROM attachments WHERE message_id=? AND state IS NOT 'withdrawn' LIMIT 1", (mid,)).fetchone()):
+            return False
+        if row['body_state'] != 'deleted':
+            html = row['body_html']
+            if (not isinstance(html, str) or not valid_hash(row['content_hash'])
+                    or hashlib.sha256(html.encode('utf-8')).hexdigest() != row['content_hash'] or html_to_text(html) != ''):
+                return False
+        return True
+    if policy['mode'] == 'off':
+        return _raw_extraction_current(db, row, cfg)[0]
+    return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
+        **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
+
+
+def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
+    import extract_llm
+    import semantic_policy
+    from mcs_queries import attachment_ocr_coverage, paused
+    db = ledger.db
+    policy, errors = semantic_policy.runtime_config(cfg)
+    if (errors or paused(db, pid) or patient_context_refresh_state._out_of_scope(snapshot)
+            or snapshot['dependencies'].get('unscoped_gap', not snapshot['dependencies']['complete'])):
+        return ()
+    blocked = set(snapshot['dependencies'].get('blocked_sources', ()))
+    rows = {row['message_id']: row for row in db.execute(
+        'SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m '
+        'JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?', (pid,))}
+    pending = {row[0] for row in db.execute(f'SELECT m.message_id FROM messages m WHERE m.project_id=? '
+        f'AND (({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()}))', (pid,))}
+    checked, keys = {}, []
+    for source in snapshot['sources']:
+        patient_context_refresh_sources._scan_check(db)
+        key = context_plan.source_key(source)
+        if key in blocked or source.get('extraction_ready') is False or source.get('body_state') not in (None, 'full', 'deleted'):
+            continue
+        mid = source.get('parent_message_id') or source.get('message_id')
+        if mid:
+            if mid not in checked:
+                attachments = attachment_ocr_coverage(db, pid, cfg, mid=mid)
+                checked[mid] = (mid in rows and mid not in pending and attachments['complete']
+                    and _message_ready(ledger, rows[mid], cfg, policy, deadline=deadline, attachment_mode=attachments['mode'])
+                    and (policy['mode'] == 'off' or policy['extract_qc'] != 'annotate'
+                         or _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=mid)))
+            if not checked[mid]:
+                continue
+        if patient_context_refresh_state._sources_intact([source]):
+            keys.append(key)
+    return tuple(keys)
+
+
+def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False, observed_out=None, source_keys=None):
     """Require current post-level evidence before any context lane runs."""
     import extract_llm
-    import semantic_store
     import semantic_intake_hold
     import semantic_policy
     from mcs_queries import paused
@@ -637,7 +753,7 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
     if owns_read:
         db.execute("BEGIN")
     try:
-        snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False)
+        snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, source_keys=source_keys)
         if observed_out is not None:
             observed_out["snapshot"] = snapshot
         policy, errors = semantic_policy.runtime_config(cfg)
@@ -646,53 +762,34 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                       and coverage.get("repairable", 0) > 0
                       and set(coverage.get("reasons", {})).issubset({"retained_karte_requires_audit", "retained_attachment_requires_audit"}))
         if (errors or patient_context_refresh_state._out_of_scope(snapshot) or paused(db, pid)
-                or not snapshot["acquisition"]["complete"]
+                or source_keys is None and not snapshot["acquisition"]["complete"]
+                or source_keys is not None and len(snapshot['sources']) != len(source_keys)
                 or not patient_context_refresh_state._sources_intact(snapshot["sources"]) or not snapshot["attachment_coverage"]["complete"]
                 or not (snapshot["dependencies"]["complete"] or repairable)
-                or semantic_intake_hold.has_unstored(db, pid)
-                or complete is not None and not complete(pid)
+                or source_keys is None and semantic_intake_hold.has_unstored(db, pid)
+                or source_keys is None and complete is not None and not complete(pid)
                 or not _cloud_extraction_ready(db, pid, cfg, deadline=deadline)):
             return False
-        if db.execute(f"SELECT 1 FROM messages m WHERE m.project_id=? AND "
+        mids = sorted({source.get('parent_message_id') or source['message_id'] for source in snapshot['sources']
+                       if source.get('parent_message_id') or source.get('message_id')})
+        selected_sql = ' AND m.message_id IN (SELECT value FROM json_each(?))' if source_keys is not None else ''
+        params = (pid, json.dumps(mids)) if source_keys is not None else (pid,)
+        if db.execute(f"SELECT 1 FROM messages m WHERE m.project_id=?{selected_sql} AND "
                       f"(({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()})) LIMIT 1",
-                      (pid,)).fetchone():
+                      params).fetchone():
             return False
         rows = db.execute(
             "SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
-            "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?",
-            (pid,)).fetchall()
+            "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?" + selected_sql,
+            params).fetchall()
         for row in rows:
-            if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+            if not _message_ready(ledger, row, cfg, policy, deadline=deadline,
+                                  attachment_mode=snapshot['attachment_coverage']['mode']):
                 return False
-            root = row["parent_id"] or row["message_id"]
-            if semantic_intake_hold.has_held_root(db, pid, root):
+            if (source_keys is not None and policy['mode'] != 'off' and policy['extract_qc'] == 'annotate'
+                    and not _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=row['message_id'])):
                 return False
-            if policy["mode"] != "off" and db.execute(
-                    "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
-                    "AND message_id=? AND state!='done' LIMIT 1",
-                    (semantic_policy.JOB_KIND, pid, root)).fetchone():
-                return False
-            if row["body_state"] == "deleted" or row["body_state"] == "full" and row["body_text"] == "":
-                if (snapshot["attachment_coverage"]["mode"] != "on"
-                        and (cfg.get("attachment_ocr") or {}).get("enabled") is not False
-                        and db.execute("SELECT 1 FROM attachments WHERE message_id=? "
-                                       "AND state IS NOT 'withdrawn' LIMIT 1", (row["message_id"],)).fetchone()):
-                    return False
-                if row["body_state"] != "deleted":
-                    html = row["body_html"]
-                    if (not isinstance(html, str) or not valid_hash(row["content_hash"])
-                            or hashlib.sha256(html.encode("utf-8")).hexdigest() != row["content_hash"]
-                            or html_to_text(html) != ""):
-                        return False
-                continue
-            if policy["mode"] == "off":
-                if not _raw_extraction_current(db, row, cfg)[0]:
-                    return False
-            elif semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
-                       **({'deadline': deadline} if policy['summary_mode'] == 'off'
-                          and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped"):
-                return False
-        if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
+        if (source_keys is None and policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline,
                                               **({"observed_out": observed_out} if observed_out is not None else {}))):
             return False
@@ -728,7 +825,7 @@ def _readiness_environment(cfg, pid, *, dictionary=False, db=None):
     return patient_context_refresh_state._digest(state)
 
 
-def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None):
+def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None, source_keys=None):
     from patient_readiness_witness import Recording
 
     observed, proof = {}, None
@@ -740,12 +837,12 @@ def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency
     # checks; derive/cursor scheduling is outside this observed closure.
     with Recording(reader.db, drug_generation_only=True) as recording:
         ready = _inference_ready(reader, pid, cfg, deadline=deadline, complete=complete,
-            allow_dependency_repair=allow_dependency_repair, observed_out=observed)
+            allow_dependency_repair=allow_dependency_repair, observed_out=observed, source_keys=source_keys)
         if ready and write_scope is not None and observed.get('snapshot') is not None:
             actual = next((row for row in observed['snapshot']['sources']
                 if context_plan.source_key(row) == write_scope['source_key']), None)
             observed['write'] = {
-                'source_key': write_scope['source_key'], 'scan_sig': patient_context_refresh_state._scan_sig(reader.db, pid),
+                'source_key': write_scope['source_key'], 'scan_sig': patient_context_refresh_state._scan_sig(reader.db, pid, source_keys=source_keys),
                 'occurrence': patient_context_refresh_state._digest(patient_context_refresh_sources._source_occurrence(reader.db, pid, actual)) if actual is not None else None,
                 'cloud_input': patient_context_refresh_state._cloud_input_binding(reader.db, pid, observed['snapshot']) if write_scope['cloud'] else None,
                 'cloud': write_scope['cloud']}
@@ -757,18 +854,18 @@ def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency
             proof = {'witness': witness, 'snapshot': observed['snapshot'],
                      'dictionary': dictionary, 'qc_cohort': observed.get('qc_cohort'), 'qc_at': observed.get('qc_at'),
                      'environment': _readiness_environment(cfg, pid, dictionary=dictionary, db=reader.db),
-                     'repair': allow_dependency_repair, 'write': observed.get('write')}
+                     'repair': allow_dependency_repair, 'write': observed.get('write'), 'source_scope': source_keys}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, cloud_inference.CloudFallback):
         proof = None
     return ready, proof, observed.get('snapshot')
 
 
-def _capture_readiness(ledger, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None):
+def _capture_readiness(ledger, pid, cfg, *, deadline, complete, allow_dependency_repair, write_scope=None, source_keys=None):
     try:
         changes = ledger.db.total_changes
         with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
             ready, proof, snapshot = _observe_readiness(reader, pid, cfg, deadline=deadline, complete=complete,
-                                      allow_dependency_repair=allow_dependency_repair, write_scope=write_scope)
+                                      allow_dependency_repair=allow_dependency_repair, write_scope=write_scope, source_keys=source_keys)
             if ledger.db.total_changes != changes:
                 proof = None
             if proof is not None:
@@ -779,12 +876,12 @@ def _capture_readiness(ledger, pid, cfg, *, deadline, complete, allow_dependency
         return False, None, None
 
 
-def _full_write_readiness(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair):
+def _full_write_readiness(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair, source_keys=None):
     observed = {}
     changes = ledger.db.total_changes
     ready = _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-        allow_dependency_repair=allow_dependency_repair, observed_out=observed)
-    snapshot = observed.get('snapshot') or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False)
+        allow_dependency_repair=allow_dependency_repair, observed_out=observed, source_keys=source_keys)
+    snapshot = observed.get('snapshot') or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
     if not ledger.db.in_transaction or ledger.db.total_changes != changes:
         return 'unknown', snapshot, None
     if proof is not None and snapshot['source_sig'] != proof['snapshot']['source_sig']:
@@ -793,16 +890,16 @@ def _full_write_readiness(ledger, pid, cfg, proof, *, deadline, complete, allow_
     return ('verified' if verified else 'unknown'), snapshot, None
 
 
-def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair):
+def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_dependency_repair, source_keys=None):
     """Return verified, changed or unknown without treating read denial as changed input."""
     try:
         if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
             return 'unknown', None, None
         # A separate connection cannot observe writes already made by this TX.
         if (proof is None or proof.get('writer') is not ledger.db
-                or proof.get('writer_changes') != ledger.db.total_changes):
+                or proof.get('writer_changes') != ledger.db.total_changes or proof.get('source_scope') != source_keys):
             return _full_write_readiness(ledger, pid, cfg, proof, deadline=deadline, complete=complete,
-                                        allow_dependency_repair=allow_dependency_repair)
+                                        allow_dependency_repair=allow_dependency_repair, source_keys=source_keys)
         with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
             if ((proof.get('repair') == allow_dependency_repair
                     or not allow_dependency_repair and proof['snapshot']['dependencies']['complete'])
@@ -819,7 +916,7 @@ def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_d
                     if patient_context_refresh_state.time.time() < proof['qc_at'] or not current.issubset(cohort):
                         proof = None
                 if proof is not None:
-                    if complete is not None and not complete(pid):
+                    if source_keys is None and complete is not None and not complete(pid):
                         return 'unknown', proof['snapshot'], proof.get('write')
                     if (ledger.db.total_changes != proof['writer_changes'] or not ledger.db.in_transaction):
                         return 'unknown', None, None
@@ -827,7 +924,7 @@ def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_d
                     return 'verified', proof['snapshot'], proof.get('write')
         # Unsupported or changed observations retain the existing clinical proof.
         return _full_write_readiness(ledger, pid, cfg, proof, deadline=deadline, complete=complete,
-                                    allow_dependency_repair=allow_dependency_repair)
+                                    allow_dependency_repair=allow_dependency_repair, source_keys=source_keys)
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, RuntimeError, OverflowError, TimeoutError, patient_context_refresh_sources._ScanInterrupted,
             cloud_inference.CloudFallback):
         return 'unknown', None, None

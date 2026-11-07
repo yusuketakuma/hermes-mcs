@@ -242,7 +242,7 @@ def test_readiness_change_before_reservation_prevents_writes(runtime, monkeypatc
     assert not calls
 
 
-def test_new_post_during_inference_prevents_adoption(runtime, monkeypatch):
+def test_new_post_during_inference_remains_outside_frozen_adoption(runtime, monkeypatch):
     led, _, calls = runtime
     seed(led)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kw: True)
@@ -260,9 +260,11 @@ def test_new_post_during_inference_prevents_adoption(runtime, monkeypatch):
         return answer
 
     monkeypatch.setattr(refresh.local_llm, "admitted_chat", interrupted)
-    assert step(runtime)["status"] == "source_changed"
+    assert step(runtime)["status"] == "progressed"
     assert calls
-    assert patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)[0] == {}
+    doc, meta = patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)
+    assert doc and meta['source_scope'] == [1]
+    assert all(fact['message_id'] == 1 for fact in doc['facts'])
 
 
 def test_retained_karte_may_be_scanned_but_not_used_for_summary_before_audit(runtime):
