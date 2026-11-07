@@ -11,6 +11,8 @@ from ledger import Ledger
 
 CFG = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"},
        "backup": {"enabled": False}}
+WRITER_DIAGNOSTIC = {'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock',
+                     'writer_job_stage': 'ocr'}
 
 
 def _status(data, **updates):
@@ -168,3 +170,106 @@ def test_memory_admission_hold_is_not_a_processing_failure(tmp_path):
     report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
     assert report['state'] == 'deferred' and report['failed'] == 0
     assert report['reason'] == 'attachment_ocr_memory_deferred'
+
+
+@pytest.mark.parametrize('job_stage', ['local', 'ocr'])
+def test_drain_writer_refusal_remains_valid_after_success(tmp_path, monkeypatch, job_stage):
+    import attachment_inference
+    import mcs_ocr
+    import writer_lock
+
+    generation = (False, 1)
+    calls = {'local': 0, 'ocr': 0}
+
+    def completed(stage):
+        calls[stage] += 1
+        if stage == job_stage and calls[stage] == 1:
+            writer_lock.record_writer_refusal('run_lock_not_acquired', 'write_lock')
+            return 1
+        return 0
+
+    monkeypatch.setattr(writer_lock, 'updater_state', lambda: generation)
+    monkeypatch.setattr(mcs_ocr.time, 'monotonic', lambda: 1000)
+    monkeypatch.setattr(attachment_inference, 'run_pending',
+                        lambda *args, **kwargs: {'done': completed('local'), 'deferred': 0})
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending', lambda *args, **kwargs: {
+        'complete': completed('ocr'), 'empty': 0, 'failed': 0, 'unsupported': 0, 'deferred': 0})
+    result = mcs_ocr._drain(None, CFG, generation, 1600, live_config=False)
+    diagnostic = {'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock',
+                  'writer_job_stage': job_stage}
+    assert calls[job_stage] == 2
+    assert {key: result[key] for key in diagnostic} == diagnostic
+    assert result['local_done'] == (job_stage == 'local')
+    assert result['complete'] == (job_stage == 'ocr')
+    _status(tmp_path, **result)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'ok'
+    assert {key: report[key] for key in diagnostic} == diagnostic
+    assert report['local_done'] == result['local_done']
+    assert report['complete'] == result['complete']
+    assert report['failed'] == report['deferred'] == report['local_deferred'] == 0
+
+
+@pytest.mark.parametrize('fields', [
+    ('writer_reason',), ('writer_stage',), ('writer_job_stage',),
+    ('writer_reason', 'writer_stage'), ('writer_reason', 'writer_job_stage'),
+    ('writer_stage', 'writer_job_stage'),
+])
+def test_partial_writer_diagnostic_is_corrupt(tmp_path, fields):
+    _status(tmp_path, **{key: WRITER_DIAGNOSTIC[key] for key in fields})
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        'state': 'unknown', 'reason': 'attachment_ocr_status_corrupt'}
+
+
+@pytest.mark.parametrize('field', tuple(WRITER_DIAGNOSTIC))
+@pytest.mark.parametrize('invalid', [None, 1, []])
+def test_writer_diagnostic_requires_strings(tmp_path, field, invalid):
+    _status(tmp_path, **{**WRITER_DIAGNOSTIC, field: invalid})
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        'state': 'unknown', 'reason': 'attachment_ocr_status_corrupt'}
+
+
+@pytest.mark.parametrize('updates', [
+    {'writer_reason': 'synthetic-private-reason'},
+    {'writer_stage': 'synthetic-private-stage'},
+    {'writer_job_stage': 'synthetic-private-job'},
+    {'writer_stage': 'generation_fence'},
+    {'writer_reason': 'source_generation_changed'},
+    {'writer_extra': 'synthetic-private-value'},
+])
+def test_unknown_or_mismatched_writer_diagnostic_is_not_exposed(tmp_path, updates):
+    _status(tmp_path, **{**WRITER_DIAGNOSTIC, **updates})
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        'state': 'unknown', 'reason': 'attachment_ocr_status_corrupt'}
+
+
+@pytest.mark.parametrize('reason,stage', [
+    ('run_lock_not_acquired', 'ledger_lock'),
+    ('update_marker_present', 'update_restore_fence'),
+    ('source_generation_changed', 'generation_fence'),
+])
+def test_writer_diagnostic_keeps_canonical_reason_stage_pair(tmp_path, reason, stage):
+    diagnostic = {**WRITER_DIAGNOSTIC, 'writer_reason': reason, 'writer_stage': stage}
+    _status(tmp_path, **diagnostic)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'ok'
+    assert {key: report[key] for key in diagnostic} == diagnostic
+
+
+@pytest.mark.parametrize('updates,now', [
+    ({'failed': 1, 'paid_recovery_pending': True}, 1000),
+    ({'pending_failed': 1}, 1000),
+    ({'paid_recovery_pending': True, 'local_done': 1}, 1000),
+    ({'reason': 'memory_deferred', 'deferred': 1}, 1000),
+    ({'reason': 'snapshot_deferred', 'complete': 1}, 1000),
+    ({'queue_status': 'partial', 'local_deferred': 1}, 1000),
+    ({'local_deferred': 1}, 1000),
+    ({'at': 0, 'failed': 1}, 3000),
+])
+def test_writer_diagnostic_does_not_override_health_outcome(tmp_path, updates, now):
+    _status(tmp_path, **updates)
+    prior = health_report.attachment_ocr_health(str(tmp_path), CFG, now)
+    assert prior['state'] != 'ok'
+    _status(tmp_path, **updates, **WRITER_DIAGNOSTIC)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, now) == {
+        **prior, **WRITER_DIAGNOSTIC}
