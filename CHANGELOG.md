@@ -20,7 +20,7 @@
 
 ![添付と投稿のローカル処理、患者コンテキスト専用のクラウド送信、旧予約の回収、通知への反映を示す説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity.png)
 
-説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](docs/guides/ANTHROPIC.md)を確認してください。
+説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.2/docs/guides/ANTHROPIC.md)を確認してください。
 
 ### 新機能
 
