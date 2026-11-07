@@ -990,7 +990,7 @@ def test_writer_split_header_uses_registered_provider_visibility(led, monkeypatc
     validate(spec)
     assert requested == list(keys)
     assert spec["parts"]["provider_states_version"] == 4
-    assert spec["parts"]["containers"][1]["visible_providers"] == [*cloud, "jev", "local"]
+    assert spec["parts"]["containers"][1]["visible_providers"] == ["jev", "local"]
     part = next(p for p in spec["parts"]["manifest"]
                 if p.get("kind") == "body_part" and p.get("name") == "m:100:header#1")
     text = spec["parts"]["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
@@ -998,11 +998,11 @@ def test_writer_split_header_uses_registered_provider_visibility(led, monkeypatc
     assert blocks is not None
     images = [element["alt_text"].split()[0].lower() for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == [*cloud, "jev"]
+    assert images == ["jev"]
     rendered = json.dumps(blocks, ensure_ascii=False)
-    for provider, name in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
-        assert (name in text) == (provider in cloud)
-        assert (name in rendered) == (provider in cloud)
+    for name in ("Anthropic", "OpenAI"):
+        assert name not in text
+        assert name not in rendered
 
 
 @pytest.mark.parametrize("version,sequence", [(2, None), (3, None), (4, None), (4, ["jev", "local"])])

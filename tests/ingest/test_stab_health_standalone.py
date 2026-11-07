@@ -73,7 +73,11 @@ def test_evaluate_merges_host_reasons_and_uses_standalone_hints(tmp_path):
     assert report["status"] == "degraded" and report["alert"] is True
     assert report["state_reasons"] == ["standalone_child_failing"]
     text = "\n".join(health_watch._alert_lines(report))
-    assert "cmd 3回連続" in text and "mcs_standalone status" in text
+    assert report["host_details"]["standalone_child_failing"] == "cmd 3回連続"
+    assert "cmd 3回連続" not in text
+    assert "hostの子プロセスが異常終了を繰り返しています" in text
+    assert "mcs_standalone status" in text
+    assert "コード: degraded standalone_child_failing" in text
     rows = health_watch._reason_rows({**report, "oldest_age_s": {}},
                                      ["extract_backlog_stalled", "card_delivery_stalled"])
     assert "launchctl list" not in "\n".join(rows) and "hermes gateway" not in "\n".join(rows)

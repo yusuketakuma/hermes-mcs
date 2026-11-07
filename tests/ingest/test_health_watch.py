@@ -648,11 +648,18 @@ def test_alert_delivery_without_target_or_with_failing_sender_is_silent(
         sent.append(a)
         raise notify_sender.SendFailed("sender down")
     monkeypatch.setattr(notify_sender, 'send', boom)
+    import slack_channel_setup
+    monkeypatch.setattr(slack_channel_setup, 'system_send_profile',
+                        lambda root, cfg, target: 'synthetic-mcslog')
     assert health_watch.deliver_alert({}, "x") is False
+    assert not sent
     assert health_watch.deliver_alert(
         {"notify_target": "slack:C12345678",
          "notify_system_target": "slack:C87654321"}, "x") is False
     assert len(sent) == 1
+    argv = sent[0][0]
+    assert argv[argv.index('--to') + 1] == 'slack:C87654321'
+    assert argv[argv.index('-p') + 1] == 'synthetic-mcslog'
 
 
 @pytest.mark.parametrize("disk_only", [False, True])
