@@ -637,7 +637,7 @@ def _raw_extraction_current(db, row, cfg):
     return extract_llm.progress_for_message(db, candidate, model=model)["state"] == "complete", meta
 
 
-def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, observed_out=None):
+def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, message_ids=None, observed_out=None):
     """Check pending and current extraction QC using the shared source proof."""
     import extract_llm
     import semantic_policy
@@ -646,13 +646,19 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, obs
 
     qc_now = patient_context_refresh_state.time.time()
     scope, params = semantic_qc.qc_scope_sql(qc_now)
+    if message_id is not None and message_ids is not None:
+        raise ValueError('patient_context_qc_scope_invalid')
+    targets = tuple(message_ids) if message_ids is not None else (message_id,) if message_id is not None else None
+    if targets is not None and any(type(mid) is not int or mid <= 0 for mid in targets):
+        raise ValueError('patient_context_qc_scope_invalid')
+    target_sql = ' AND m.message_id IN (SELECT value FROM json_each(?))' if targets is not None else ''
+    target_params = (json.dumps(targets),) if targets is not None else ()
     if observed_out is not None:
         observed_out["qc_at"] = qc_now
+        observed_out['qc_targets'] = targets
         observed_out['qc_cohort'] = tuple(row[0] for row in db.execute(
             'SELECT m.message_id FROM messages m WHERE m.project_id=? AND ' + scope
-            + ' ORDER BY m.message_id', (pid, *params)))
-    target_sql = ' AND m.message_id=?' if message_id is not None else ''
-    target_params = (message_id,) if message_id is not None else ()
+            + target_sql + ' ORDER BY m.message_id', (pid, *params, *target_params)))
     version = extract_llm.EXTRACT_VERSION
     if db.execute(f"""SELECT 1 FROM fetch_jobs j JOIN messages m
         ON m.message_id=j.message_id AND m.project_id=j.project_id
@@ -786,12 +792,10 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             if not _message_ready(ledger, row, cfg, policy, deadline=deadline,
                                   attachment_mode=snapshot['attachment_coverage']['mode']):
                 return False
-            if (source_keys is not None and policy['mode'] != 'off' and policy['extract_qc'] == 'annotate'
-                    and not _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=row['message_id'])):
-                return False
-        if (source_keys is None and policy["mode"] != "off" and policy["extract_qc"] == "annotate"
+        if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline,
-                                              **({"observed_out": observed_out} if observed_out is not None else {}))):
+                    **({'message_ids': mids} if source_keys is not None else {}),
+                    **({"observed_out": observed_out} if observed_out is not None else {}))):
             return False
         return patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -853,6 +857,7 @@ def _observe_readiness(reader, pid, cfg, *, deadline, complete, allow_dependency
             dictionary = recording.drug_progress_observed
             proof = {'witness': witness, 'snapshot': observed['snapshot'],
                      'dictionary': dictionary, 'qc_cohort': observed.get('qc_cohort'), 'qc_at': observed.get('qc_at'),
+                     'qc_targets': observed.get('qc_targets'),
                      'environment': _readiness_environment(cfg, pid, dictionary=dictionary, db=reader.db),
                      'repair': allow_dependency_repair, 'write': observed.get('write'), 'source_scope': source_keys}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, cloud_inference.CloudFallback):
@@ -910,9 +915,11 @@ def _readiness_for_write(ledger, pid, cfg, proof, *, deadline, complete, allow_d
                 if cohort is not None:
                     import semantic_qc
                     scope, params = semantic_qc.qc_scope_sql(patient_context_refresh_state.time.time())
+                    targets = proof.get('qc_targets')
+                    target_sql = ' AND m.message_id IN (SELECT value FROM json_each(?))' if targets is not None else ''
                     current = {row[0] for row in reader.db.execute(
-                        'SELECT m.message_id FROM messages m WHERE m.project_id=? AND ' + scope,
-                        (pid, *params))}
+                        'SELECT m.message_id FROM messages m WHERE m.project_id=? AND ' + scope + target_sql,
+                        (pid, *params, *((json.dumps(targets),) if targets is not None else ())))}
                     if patient_context_refresh_state.time.time() < proof['qc_at'] or not current.issubset(cohort):
                         proof = None
                 if proof is not None:
