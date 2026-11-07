@@ -36,6 +36,7 @@ import mcs_setup
 import mcs_util
 from ledger import Ledger
 from extract_testkit import _message, _hash
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.fixture
@@ -138,7 +139,8 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     report = cli.observe(config, root=str(root))
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
     assert report["send_decision"] == "no_api_key"
-    assert report["routes"]["reextract"]["targets"] == 1
+    # The dormant reextract lane reports no targets; the live route still does.
+    assert report["routes"]["reextract"]["targets"] == 0
     assert report["routes"]["patient_context"]["targets"] == 1
     assert report["accounting"]["daily_requests"] == 0
     # log/compare share observe; only plan/estimate pay for the hold scan.
@@ -158,6 +160,9 @@ def test_recent_target_is_excluded_from_background_estimate(world):
     with closing(Ledger(str(path))) as db, db.db:
         db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (cli.time.time(),))
     assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
+    with legacy_cloud_routes():
+        # Even with the dormant route open, a recent target stays excluded.
+        assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
 
 
 def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
@@ -168,7 +173,7 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     monthly = report["patient_context_recurring_estimate"]["monthly_30_days"]
     assert monthly["requests_estimate"] >= daily["requests_estimate"]
     assert Decimal(daily["estimated_cost_low_jpy"]) == Decimal(daily["estimated_cost_low_usd"]) * 150
-    assert report["reextract_backlog_once"]["targets"] == 1
+    assert report["reextract_backlog_once"]["targets"] == 0
     assert report["new_posts_daily_estimate"] > 0
 
 
@@ -183,7 +188,11 @@ def test_reextract_estimate_includes_local_results_of_each_public_generation(wor
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1, meta=meta)
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     report = cli.observe(config, root=str(root))
-    assert report["routes"]["reextract"]["targets"] == 1  # Local completion never proves the required cloud pass.
+    assert report["routes"]["reextract"]["targets"] == 0
+    with legacy_cloud_routes():
+        # Local completion never proves the dormant lane's required cloud pass.
+        report = cli.observe(config, root=str(root))
+        assert report["routes"]["reextract"]["targets"] == 1
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
@@ -193,6 +202,9 @@ def test_reextract_estimate_never_uses_legacy_facts_for_a_changed_source(world):
         db.save_messages([_message(1, body="different wholly synthetic source", project_id=1)])
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
+    with legacy_cloud_routes():
+        # A changed source stays uncounted even under the open regime.
+        assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
@@ -609,7 +621,8 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
             cloud_policy.capture_history_tx(db.db, "synthetic-chunk-estimate", cli.time.time())
     report = cli.observe(config, root=str(root))
     parts = report["estimate_components"]
-    assert parts["current_backlog"]["reextract"]["basic_requests_estimate"] == 1
+    assert parts["current_backlog"]["reextract"]["basic_requests_estimate"] == 0
+    assert parts["current_backlog"]["patient_context"]["targets"] == 1
     assert parts["chunk_repair_retry_additions"]["chunk_requests_current"] > 0
     assert parts["chunk_repair_retry_additions"]["repair_requests_estimate"] is None
     assert parts["chunk_repair_retry_additions"]["retry_requests_estimate"] is None
@@ -626,7 +639,7 @@ def test_usage_calibration_reports_its_measured_denominator_and_output_mean(worl
     with closing(Ledger(str(path))) as db:
         body = {"model": cloud_policy.MODEL, "system": "s" * 12,
                 "messages": [{"role": "user", "content": "c" * 18}], "max_tokens": 1600}
-        reserve = cloud_policy.usage_reserver(db, config, route="reextract", project_id=1,
+        reserve = cloud_policy.usage_reserver(db, config, route="patient_context", project_id=1,
             unit_key="synthetic", message_id=1)(body, 1)
         cloud_policy.record_result(db, reserve, {"model": cloud_policy.MODEL,
             "request_fp": reserve["request_fp"], "usage": {"input_tokens": 60, "output_tokens": 10},
@@ -965,7 +978,8 @@ def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypa
     assert report["state"] == "partial"
     assert report["interrupted_section"] == "source_repair_evidence_holds"
     assert report["incomplete_reason"] == "read_deadline"
-    assert report["routes"]["reextract"]["targets"] == 1
+    assert report["routes"]["reextract"]["targets"] == 0
+    assert report["routes"]["patient_context"]["targets"] == 1
 
 
 def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
@@ -976,7 +990,8 @@ def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
     report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
     # The reader's 2 MiB value limit stops the scan; the estimate is still printed.
     assert report["source_repair_evidence_holds"] == {"unknown": "value_too_large"}
-    assert report["routes"]["reextract"]["targets"] == 1
+    assert report["routes"]["reextract"]["targets"] == 0
+    assert report["routes"]["patient_context"]["targets"] == 1
 
 
 def test_period_spending_is_unknown_once_usage_inside_it_was_pruned(world):
