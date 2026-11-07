@@ -69,9 +69,9 @@
   {
    "path": "changes/archive/1.1.2/cloud-followup-progress-display.json",
    "id": "cloud-followup-progress-display",
-   "title": "ローカル解析と保存済みクラウド実行の結果をコンパクトに表示",
+   "title": "解析状況をJev・ローカルの実行表示と患者背景の進捗に整理",
    "category": "changed",
-   "sha256": "0241485b47b65d631a7228ca6991b81e49e2f535c4b3b3875cb37c10105b494d"
+   "sha256": "d0a01d086a1253970ce910222f7ded7b1bf22ac41d970131f64fd332af71702d"
   },
   {
    "path": "changes/archive/1.1.2/cloud-history-read-diagnostics-20261106.json",

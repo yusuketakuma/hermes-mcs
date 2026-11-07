@@ -18,7 +18,7 @@
 
 ## 上位工程が保持する受入記録（未再実行）
 
-- 全体 suite：9633 pass + 91 subtests / 25 fail / SDK専用 2 skip（`b39697ea` 時点・ルート供給値）。25 fail は別105 file batch が再検証中で、ここでは成功と扱わない。
+- 全体 suite：9633 passed + 91 subtests passed / 25 fail / SDK専用 2 skip（実測 `2220b03808c5bc1068d77b3bed6a4b1601eb3bef`・exit 1・source_stamp_changed=[]、ルート供給値）。25 fail は別105 file batch が再検証中で、ここでは成功と扱わない。
 - 105-file batch（`cb0` 固定・継続中）：`test_view_reads_only_quoted_bodies_without_reextracting_history` と追加5件（marked厳格照合・consumer write失効・rollback・SQLite失敗・制御例外伝播）が実logで PASSED。新sourceの動的根拠として採用可（ルート確認）。
 - SDK別lane42件（standalone13・Hermes29）：実行SHAは `f11384da`。SDK対象bytesは `f113..cb0` で不変とルート確認済みで再利用可（旧 `b963` を実行SHAと記録しない）。
 - 公式医薬品マスター：`drug-master-fresh-check.json`（2026-11-07）で同梱 bundle と一致確認済み（`matches_bundle: true`、出典・hash・行数記録済み）。有効化は要オペレーター承認で未実施。
