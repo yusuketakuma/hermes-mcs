@@ -101,19 +101,26 @@ def test_card_header_and_reply_refresh_after_cloud_completion(led, monkeypatch, 
 
 def test_new_spec_binds_followup_states_and_rejects_them_as_legacy(led, monkeypatch):
     import copy
-    import notify_cards
     from adapters.common.spec import validate
-    from notify_testkit import NOW
+    from notify_testkit import _spec
 
     _seed_thread(led, mids=(100, 101))
     monkeypatch.setattr(processing_route, "cloud_followup", lambda *args: ("openai", "incomplete"))
     _dispatch(led, _intent(led))
-    card = _card(led)
-    content = notify_render.card_content(led.db, card, cfg=CFG, visible_providers=("jev", "local"))
-    spec, _ = notify_cards._build_spec(led.db, card, content, "create", 2, CFG, NOW)
-    assert spec["parts"]["processing_display_version"] == 2
+    spec = _spec(led)
+    assert spec["parts"]["provider_states_version"] == 4
+    assert spec["parts"]["processing_display_version"] == 3
+    header = next(c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header")
+    assert header["provider_states"]["openai"] == "incomplete"
+    assert header["processing_status"] != "complete"
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"]
+    assert "OpenAI" not in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
     assert validate(spec) is spec
     old = copy.deepcopy(spec)
     old["parts"]["processing_display_version"] = 1
-    with pytest.raises(ValueError, match="bad_provider_states"):
+    with pytest.raises(ValueError, match="bad_context_progress"):
         validate(old)
