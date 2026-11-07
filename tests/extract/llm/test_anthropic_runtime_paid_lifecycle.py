@@ -522,8 +522,9 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     carried = [(pending, lease, no_commit)]
 
     class Pool:
-        def __init__(self, root):
+        def __init__(self, root, *, context_only):
             assert root == str(tmp_path)
+            assert context_only is True
         def sync(self, cfg, *, ledger):
             events.append("pool_sync")
         def close(self):

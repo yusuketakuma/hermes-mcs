@@ -481,8 +481,9 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
     clock = [100.0]
 
     class Pool:
-        def __init__(self, root):
+        def __init__(self, root, *, context_only):
             assert root == str(tmp_path)
+            assert context_only is True
         def sync(self, cfg, *, ledger):
             events.append("pool_sync")
         def close(self):

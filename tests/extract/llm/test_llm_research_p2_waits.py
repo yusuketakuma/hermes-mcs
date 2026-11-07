@@ -1,4 +1,4 @@
-"""Resident idle waits follow the earliest future due job (synthetic ledger,
+"""Resident idle backoff wakes for the earliest future due job (synthetic ledger,
 fake clock, every LLM POST path fail-stubbed)."""
 import extract_llm_context
 import extract_llm_errors
@@ -105,19 +105,20 @@ def test_semantic_job_due_soon_shortens_the_empty_pass(tmp_path, monkeypatch, ki
     db = _ledger(tmp_path)
     _seed_job(db, kind, WALL0 + 40)
     sleeps = _loop(db, monkeypatch, ["--lane", "2", "--semantic"])
-    assert sleeps[0] == 40 and sleeps[1] == 120   # past due and unserved: fixed poll, no spin
+    # At t=35 the due job shortens the 30-second cap; once past due, no spin.
+    assert sleeps[:5] == [5, 10, 20, 5, 30]
 
 
 def test_semantic_job_is_ignored_without_the_semantic_flag(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _seed_job(db, "semantic", WALL0 + 40)
-    assert _loop(db, monkeypatch, ["--lane", "2"])[:2] == [120, 120]
+    assert _loop(db, monkeypatch, ["--lane", "2"])[:5] == [5, 10, 20, 30, 30]
 
 
 def test_claim_lease_rows_never_shorten(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _seed_job(db, "extract_claim", WALL0 + 40)
-    assert _loop(db, monkeypatch, ["--lane", "2", "--semantic"])[0] == 120
+    assert _loop(db, monkeypatch, ["--lane", "2", "--semantic"])[:5] == [5, 10, 20, 30, 30]
 
 
 @pytest.mark.parametrize("kind", ["PROGRESS", "SCAN"])
@@ -125,8 +126,8 @@ def test_patient_context_retry_shortens_lane3_only(tmp_path, monkeypatch, kind):
     import patient_context_refresh
     db = _ledger(tmp_path)
     _seed_artifact(db, getattr(patient_context_refresh, kind), {"next_try": WALL0 + 40, "attempts": 1})
-    assert _loop(db, monkeypatch, ["--lane", "3"])[0] == 40
-    assert _loop(db, monkeypatch, ["--lane", "2"])[0] == 120
+    assert _loop(db, monkeypatch, ["--lane", "3"])[:5] == [5, 10, 20, 5, 30]
+    assert _loop(db, monkeypatch, ["--lane", "2"])[:5] == [5, 10, 20, 30, 30]
 
 
 def test_capped_or_malformed_context_rows_do_not_wake(tmp_path, monkeypatch):
@@ -134,20 +135,20 @@ def test_capped_or_malformed_context_rows_do_not_wake(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _seed_artifact(db, patient_context_refresh.SCAN, {"next_try": WALL0 + 40, "attempts": 5})
     _seed_artifact(db, patient_context_refresh.SCAN, {"next_try": "soon", "attempts": 0})
-    assert _loop(db, monkeypatch, ["--lane", "3"])[0] == 120
+    assert _loop(db, monkeypatch, ["--lane", "3"])[:5] == [5, 10, 20, 30, 30]
 
 
 def test_stale_past_due_error_row_keeps_the_poll(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     _seed_artifact(db, "extract_llm", meta={"error": 1, "attempts": 1, "next_try": WALL0 - 10})
-    assert _loop(db, monkeypatch, ["--lane", "2"])[:2] == [120, 120]
+    assert _loop(db, monkeypatch, ["--lane", "2"])[:5] == [5, 10, 20, 30, 30]
 
 
 def test_future_error_retry_shortens_the_empty_pass(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     meta = {"error": 1, "attempts": 1, "next_try": WALL0 + 40}
     _seed_artifact(db, "extract_llm", meta=meta)
-    assert _loop(db, monkeypatch, ["--lane", "2"])[0] == 40
+    assert _loop(db, monkeypatch, ["--lane", "2"])[:5] == [5, 10, 20, 5, 30]
     rows = db.db.execute("SELECT kind, meta FROM artifacts").fetchall()
     expected = {**meta, VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, 1),
                 "extract_version": extract_llm.EXTRACT_VERSION}
@@ -236,10 +237,10 @@ def test_next_due_in_excludes_past_and_picks_earliest(tmp_path):
 
 def test_stale_past_due_row_does_not_hide_a_later_retry(tmp_path, monkeypatch):
     # unconditional MIN(next_try) returned the stale row, the caller dropped
-    # it as past, and the worker fell back to the fixed 120 s poll
+    # it as past, hiding the next retry from the idle backoff.
     db = _ledger(tmp_path)
     _seed_artifact(db, "extract_llm", meta={"error": 1, "attempts": 1, "next_try": WALL0 - 5})
     _seed_artifact(db, "extract_llm", meta={"error": 1, "attempts": 1, "next_try": WALL0 + 40})
     assert extract_llm._next_due_in(db, WALL0, semantic=False, context=False) == 40
     assert extract_llm._next_retry(db) == WALL0 - 5   # default keeps the old contract
-    assert _loop(db, monkeypatch, ["--lane", "2"])[0] == 40
+    assert _loop(db, monkeypatch, ["--lane", "2"])[:5] == [5, 10, 20, 5, 30]
