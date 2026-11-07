@@ -231,15 +231,48 @@ def test_reinstall_missing_or_invalid_previous_settings_stops(monkeypatch, insta
     assert len(calls) == 1
 
 
-def test_reinstall_preserves_previous_optouts(monkeypatch):
+@pytest.mark.parametrize('install_args', [
+    ['--no-llm', '--no-plugin'],
+    ['--with-yomitoku'],
+    ['--no-brew', '--with-yomitoku', '--no-llm', '--no-recovery'],
+])
+def test_reinstall_preserves_previous_optouts(monkeypatch, install_args):
     launcher = _launcher()
     _terminal(monkeypatch, ["2", ""])
     calls = []
-    report = _plan_report("reinstall", install_args=["--no-llm", "--no-plugin"])
-    monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kwargs:
-                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop", blockers=[]) if len(calls) == 3 else report)))
+    environments = []
+    report = _plan_report("reinstall", install_args=install_args)
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        environments.append(kwargs['env'])
+        return SimpleNamespace(returncode=0, stdout=json.dumps(
+            _plan_report('noop', blockers=[]) if len(calls) == 3 else report))
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
-    assert calls[1][-3:] == ["--reinstall", "--install-arg=--no-llm", "--install-arg=--no-plugin"]
+    assert calls[1] == ['python', 'updater', 'apply', '--reinstall',
+                        *(f'--install-arg={arg}' for arg in install_args)]
+    assert json.loads(environments[1]['MCS_UPDATE_OPTIONS_EXPECTED']) == install_args
+    assert 'MCS_UPDATE_OPTIONS_EXPECTED' not in environments[0]
+
+
+def test_launcher_install_options_match_shared_contract():
+    import install_options_contract
+    assert frozenset(_launcher().INSTALL_ARGS) == install_options_contract.OPTIONS
+
+
+@pytest.mark.parametrize('install_args', [
+    None, '--no-llm', {}, 1, ['--unknown'], [1], [[]], [{}],
+])
+def test_reinstall_rejects_unknown_or_malformed_options(monkeypatch, install_args):
+    launcher = _launcher()
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(
+            _plan_report('reinstall', install_args=install_args)))
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 1
+    assert calls == [['python', 'updater', 'plan']]
 
 
 def _api_key_checkout(tmp_path, *, old=False):

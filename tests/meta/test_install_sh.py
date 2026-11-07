@@ -391,14 +391,21 @@ def test_preflight_flags_worktree(tmp_path):
     assert "Git の作業用フォルダ" in r.stdout
 
 
-def test_dry_run_prints_plan_and_writes_nothing(tmp_path):
+@pytest.mark.parametrize('with_ocr', [False, True])
+def test_dry_run_prints_plan_and_writes_nothing(tmp_path, with_ocr):
     home, hermes_home, stub_root, env = _world(tmp_path)
-    r = _run(env, None, "--dry-run", "--no-llm")
+    r = _run(env, None, "--dry-run", "--no-llm", *(["--with-yomitoku"] if with_ocr else []))
     assert r.returncode == 0, r.stdout
     assert "導入予定（--dry-run" in r.stdout
     assert "4/6 ローカルAI 省略" in " ".join(r.stdout.split())
     assert "mcs_setup.py services" in r.stdout
     assert "uv pip install -e hermes-agent[messaging]（Hermes ディレクトリで実行）" in r.stdout
+    if with_ocr:
+        from ocr_model_contract import ENGINE_VERSION
+        assert f'Python 3.13・Yomitoku {ENGINE_VERSION}・CPU lite' in r.stdout
+        assert '0.16.0' not in r.stdout
+    else:
+        assert '追加OCR' not in r.stdout
     assert list(home.iterdir()) == []
 
 
