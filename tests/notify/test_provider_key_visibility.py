@@ -43,11 +43,10 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
     assert header["provider_states"] == states
     validate(spec)
     blocks = render_parts(spec["parts"], card_kind="thread")
-    # The frozen-progress header renders as compact text marks (Jev/💻), not
-    # logo images — provider identity still reaches the Slack render.
+    # Jev keeps its logo beside the frozen progress; cloud logos stay hidden.
     images = [element["alt_text"] for block in blocks for element in block.get("elements", [])
               if element.get("type") == "image"]
-    assert images == []
+    assert images == ["Jev 実行済み"]
     assert "Jev" in str(blocks)
     for name in ("Anthropic", "OpenAI"):
         assert name not in header["text"]
@@ -89,7 +88,7 @@ def test_registered_cloud_logos_stay_hidden_when_cloud_mode_is_off(led, monkeypa
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0] for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == []
+    assert images == ["Jev"]
     assert "Jev" in str(blocks) and "💻" in str(blocks)
 
 
@@ -131,7 +130,7 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0].lower() for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == []
+    assert images == ["jev"]
     assert "Jev" in str(blocks) and "💻" in str(blocks)
 
 

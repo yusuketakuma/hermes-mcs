@@ -46,6 +46,36 @@ def _urls(component):
     return []
 
 
+def test_native_jev_header_thumbnail_keeps_identical_body_plain():
+    from adapters.common.provider_assets import PROVIDER_ASSETS
+    import processing_route
+
+    states = dict.fromkeys(processing_route.PROVIDERS, "done")
+    header = {"type": "text", "provider_scope": "header", "provider_states": states,
+              "visible_providers": ["jev", "local"],
+              "context_progress": {"proof_version": 1, "percent": 45, "stage": "sources",
+                                   "held": True, "source_sig": "a" * 64, "observed_at": 1.0},
+              "text": "解析中 · 👤 45% 保留 · " + processing_route.provider_text(states, ["jev", "local"])}
+    plain = processing_route.compact_header(header)
+    spec = {"kind": "thread", "parts": {"provider_states_version": 4,
+            "processing_display_version": 3, "containers": [header, {"type": "text", "text": plain}],
+            "action_rows": [], "footer": []}}
+    before = copy.deepcopy(spec)
+    view = cards.build_view(spec)
+    children = _children(view)
+    sections = [c for c in children if c["type"] == 9]
+    assert len(sections) == 1
+    thumb = sections[0]["accessory"]
+    assert thumb["type"] == 11
+    assert thumb["media"]["url"] == next(url for key, _, url in PROVIDER_ASSETS if key == "jev")
+    assert thumb["description"] == "Jev 実行済み"
+    assert sections[0]["components"][0]["content"] == plain
+    assert any(c.get("content") == plain for c in children if c["type"] == 10)
+    assert view.total_children_count <= 40 and spec == before
+    from discord.http import handle_message_parameters
+    assert handle_message_parameters(view=view).payload["components"] == view.to_components()
+
+
 @pytest.mark.parametrize("reply", [False, True], ids=["parent", "thread-reply"])
 def test_files_follow_their_own_originals_in_single_native_payload(reply):
     members = [_member(1, "same.jpg"), _member(2, "same.jpg"),
