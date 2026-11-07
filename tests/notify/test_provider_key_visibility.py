@@ -32,16 +32,23 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
     assert requested == list(key_names)
     assert spec["parts"]["provider_states_version"] == 4
     header = spec["parts"]["containers"][1]
-    visible = [*cloud, "jev", "local"]
+    visible = ["jev", "local"]
     assert header["visible_providers"] == visible
+    assert spec["parts"]["processing_display_version"] == 3
+    assert header["provider_sequence"] is None
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
     assert header["provider_states"] == states
     validate(spec)
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"] for block in blocks for element in block.get("elements", [])
               if element.get("type") == "image"]
     assert [item.split()[0].lower() for item in images] == [key for key in visible if key != "local"]
-    for key, name in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
-        assert (name in header["text"]) == (key in cloud)
+    for name in ("Anthropic", "OpenAI"):
+        assert name not in header["text"]
+    assert "💻" in str(blocks)
 
 
 def test_removed_key_hides_provider_despite_used_evidence(led, monkeypatch):
@@ -59,7 +66,7 @@ def test_removed_key_hides_provider_despite_used_evidence(led, monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai"])
-def test_registered_cloud_logos_remain_visible_when_cloud_mode_is_off(led, monkeypatch, provider):
+def test_registered_cloud_logos_stay_hidden_when_cloud_mode_is_off(led, monkeypatch, provider):
     monkeypatch.setattr(mcs_util, "private_env_problem", lambda name, root=None: None)
     monkeypatch.setattr(processing_route, "provider_states",
                         lambda *a, **k: dict.fromkeys(processing_route.PROVIDERS, "done"))
@@ -68,11 +75,20 @@ def test_registered_cloud_logos_remain_visible_when_cloud_mode_is_off(led, monke
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
     spec = _spec(led)
     validate(spec)
-    assert spec["parts"]["containers"][1]["visible_providers"] == list(processing_route.PROVIDERS)
+    header = spec["parts"]["containers"][1]
+    assert header["visible_providers"] == ["jev", "local"]
+    assert spec["parts"]["processing_display_version"] == 3
+    assert header["provider_sequence"] is None
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
+    assert header["provider_states"] == dict.fromkeys(processing_route.PROVIDERS, "done")
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0] for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == ["Anthropic", "OpenAI", "Jev"]
+    assert images == ["Jev"]
+    assert "💻" in str(blocks)
 
 
 @pytest.mark.usefixtures("pinned_clock")
@@ -100,10 +116,16 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     assert spec["op"] == "update" and spec["parts"]["provider_states_version"] == 4
     validate(spec)
     header = spec["parts"]["containers"][1]
-    assert header["visible_providers"] == [key for key in processing_route.PROVIDERS if key != removed]
+    assert header["visible_providers"] == ["jev", "local"]
+    assert spec["parts"]["processing_display_version"] == 3
+    assert header["provider_sequence"] is None
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert "採用結果の処理順" not in header["text"]
     assert header["provider_states"] == states
     assert next(c for c in spec["parts"]["containers"] if c.get("rule"))["provider_states"] == states
-    assert ("Anthropic" if removed == "anthropic" else "OpenAI") not in header["text"]
+    assert "Anthropic" not in header["text"] and "OpenAI" not in header["text"]
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0].lower() for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]

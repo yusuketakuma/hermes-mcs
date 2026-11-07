@@ -95,10 +95,18 @@ def test_writer_displays_only_proven_visible_single_post_sequence(led, monkeypat
     monkeypatch.setattr(processing_route, "provider_states", evidence)
     _seed_thread(led, mids=posts)
     _dispatch(led, _intent(led, payload={"message_ids": list(posts)}), SLACK)
+    import notify_render
+    from notify_testkit import _card
+    raw = notify_render.card_content(led.db, _card(led), cfg=SLACK, visible_providers=visible)
+    assert raw["containers"][1]["provider_sequence"] == expected
     spec = written_spec(led)
     validate(spec)
     header = spec["parts"]["containers"][1]
-    assert header["provider_sequence"] == expected
-    assert "採用結果の処理順: " + (" → ".join(NAMES[key] for key in expected) if expected else "不明") in header["text"]
-    if "openai" not in visible:
-        assert "OpenAI" not in header["text"]
+    assert spec["parts"]["processing_display_version"] == 3
+    assert header["provider_sequence"] is None
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["context_progress"]["stage"] == "unknown"
+    assert header["context_progress"]["percent"] is None
+    assert "👤 —" in header["text"]
+    assert "採用結果の処理順" not in header["text"]
+    assert "OpenAI" not in header["text"] and "Anthropic" not in header["text"]
