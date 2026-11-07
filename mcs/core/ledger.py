@@ -1,11 +1,11 @@
 """SQLite ledger for MCS unread capture + history archive.
 
-Schema v11 (reuse-oriented):
+Schema v12 (reuse-oriented):
   runs          : one row per check run (kind: tick | init)
   patients      : per-project fetch state + history_floor (deepest completed
                   cutoff) + history_page (resume cursor for deep imports)
   messages      : dedup by message_id; body_html + body_text (pre-stripped,
-                  for display/FTS/LLM reuse); body_state snippet|full|unknown;
+                  for display/FTS/LLM reuse); body_state snippet|full|unknown|deleted;
                   posted_at + posted_at_ts (epoch, indexed range queries);
                   is_unread flag preserved; content_hash for edit detection
   messages_fts  : FTS5 index over body_text/sender_name (trigger-maintained)
