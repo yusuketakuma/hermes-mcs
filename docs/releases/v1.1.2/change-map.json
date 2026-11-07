@@ -1,5 +1,5 @@
 {
-  "fragment_count": 85,
+  "fragment_count": 86,
   "records": [
     {
       "category": "added",
@@ -252,6 +252,13 @@
       "path": "changes/archive/1.1.2/installer-no-services-init.json",
       "sha256": "d3948014e9fad2816ef5b623b1e2bef29769f5b4477a29bf1918cdb1720e98be",
       "title": "サービスを省略した導入で初期設定を延期"
+    },
+    {
+      "category": "fixed",
+      "id": "jev-icon-slack-header",
+      "path": "changes/archive/1.1.2/jev-icon-slack-header.json",
+      "sha256": "43ebd9bb313dd34249c4a7c5893690a4ade886177d041de4d9ac5404d53012df",
+      "title": "通知の処理経路ヘッダでJevがアイコンではなく文字になっていた問題を修正"
     },
     {
       "category": "fixed",
@@ -597,6 +604,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録85件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録86件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }

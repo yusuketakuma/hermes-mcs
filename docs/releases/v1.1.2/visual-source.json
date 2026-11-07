@@ -25,8 +25,8 @@
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
   "source_checkout_observation": {
     "dirty": true,
-    "head": "1a2db2754719ee9144640cc02e72fa0a5b32f904",
-    "observed_at": "2026-11-07T10:55:05.359813+00:00",
+    "head": "34955f5031e9207fbaf4a7f4313a1a5616da2ad3",
+    "observed_at": "2026-11-07T11:30:12.261818+00:00",
     "release_sha_fixed": false
   },
   "source_file_observations": [
