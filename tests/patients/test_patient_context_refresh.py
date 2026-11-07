@@ -19,6 +19,7 @@ import mcs_queries
 from datetime import datetime
 import json
 import os
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -697,6 +698,122 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     assert not any('SELECT m.*' in q for q in queries)
     extraction_reads = [q for q in queries if 'FROM artifacts a JOIN messages m' in q]
     assert len(extraction_reads) == 1, 'metadata aggregation must not query each source separately'
+
+
+def test_marked_extract_keeps_exact_proof_check(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    seed(led, mid=2, body='合成の未分類記録その2。')
+    finish(runtime)
+    marked_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='extract_llm' "
+                               "AND message_id=1 ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]
+    with led.db:
+        led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.internal_proof_version',1,"
+                       "'$.internal_proof_hash',?) WHERE artifact_id=?", ('9' * 64, marked_id))
+    calls_to = _proof_spy(monkeypatch)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    # Only the marked row defers to the exact witness check; its invalid
+    # proof drops the summary and the stored signature no longer matches.
+    assert calls_to == [marked_id]
+    assert view is None
+
+
+def _proof_spy(monkeypatch):
+    calls_to = []
+    real = mcs_queries.selected_artifact_proof_valid
+    def spy(db, artifact_id, **kw):
+        calls_to.append(artifact_id)
+        return real(db, artifact_id, **kw)
+    monkeypatch.setattr(mcs_queries, 'selected_artifact_proof_valid', spy)
+    return calls_to
+
+
+def test_source_generator_drops_stale_summary_after_consumer_write(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    seed(led, mid=2, body='合成の未分類記録その2。')
+    calls_to = _proof_spy(monkeypatch)
+    led.db.execute('BEGIN')
+    gen = mcs_queries.patient_context_sources(led.db, 1, hydrate=False)
+    try:
+        first = next(gen)
+        assert led.db.in_transaction
+        # Unchanged: the aggregate's newer-marked exclusion stood in, so no
+        # per-artifact proof query ran and the summary was adopted.
+        assert first['message_id'] == 1 and first['derived_summary_chars'] > 0
+        assert calls_to == []
+        # A same-connection write between yields must not let the second
+        # source reuse the exclusion: the new marker sends its row back
+        # through the exact witness check, which rejects it.
+        led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.internal_proof_version',1,"
+                       "'$.internal_proof_hash',?) WHERE kind='extract_llm' AND message_id=2",
+                       ('9' * 64,))
+        second = next(gen)
+        assert second['message_id'] == 2 and second['derived_summary_chars'] == 0
+        assert calls_to == [led.db.execute("SELECT artifact_id FROM artifacts WHERE "
+                                           "kind='extract_llm' AND message_id=2").fetchone()[0]]
+    finally:
+        gen.close()
+        led.db.rollback()
+
+
+def test_source_generator_rechecks_after_rollback(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    seed(led, mid=2, body='合成の未分類記録その2。')
+    calls_to = _proof_spy(monkeypatch)
+    led.db.execute('BEGIN')
+    gen = mcs_queries.patient_context_sources(led.db, 1, hydrate=False)
+    try:
+        first = next(gen)
+        assert led.db.in_transaction and first['derived_summary_chars'] > 0
+        assert calls_to == []
+        led.db.rollback()
+        # The rolled-back baseline cannot stand in: the next row goes
+        # through the exact per-artifact check and keeps its summary.
+        second = next(gen)
+        assert second['derived_summary_chars'] > 0 and calls_to
+    finally:
+        gen.close()
+        led.db.rollback()
+
+
+def test_source_generator_rechecks_when_stamp_read_fails(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    calls_to = _proof_spy(monkeypatch)
+    def fail_stamp(db):
+        raise sqlite3.OperationalError('synthetic stamp failure')
+    monkeypatch.setattr(mcs_queries, '_message_read_stamp', fail_stamp)
+    led.db.execute('BEGIN')
+    gen = mcs_queries.patient_context_sources(led.db, 1, hydrate=False)
+    try:
+        # A failed coherence read is never treated as fresh: every row
+        # defers to the exact per-artifact check and keeps its summary.
+        first = next(gen)
+        assert first['derived_summary_chars'] > 0 and calls_to
+    finally:
+        gen.close()
+        led.db.rollback()
+
+
+def test_source_generator_propagates_control_exceptions(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    calls_to = _proof_spy(monkeypatch)
+    sentinel = KeyboardInterrupt('synthetic cancel')
+    def cancel(db):
+        raise sentinel
+    monkeypatch.setattr(mcs_queries, '_message_read_stamp', cancel)
+    led.db.execute('BEGIN')
+    gen = mcs_queries.patient_context_sources(led.db, 1)
+    try:
+        with pytest.raises(KeyboardInterrupt) as exc:
+            next(gen)
+        assert exc.value is sentinel and calls_to == []
+    finally:
+        gen.close()
+        led.db.rollback()
 
 
 def test_shadow_can_be_published_without_repeating_inference(runtime):
