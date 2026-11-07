@@ -303,7 +303,8 @@ def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, clo
     class Crossing(original):
         def __call__(self, prompt, **kwargs):
             answer = super().__call__(prompt, **kwargs)
-            clock.wall = stamp("2026-10-18T00:00:01")
+            # Cross once; later answers must not rewind the observed QC clock.
+            clock.wall = max(clock.wall, stamp("2026-10-18T00:00:01"))
             clock.mono += 31
             return answer
     monkeypatch.setattr(cloud_inference, "CloudInferenceUnit", Crossing)
@@ -323,7 +324,7 @@ def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, clo
 
 @pytest.mark.parametrize("mode", ["off", "shadow"])
 def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, mode):
-    led, _, local_calls = runtime
+    led, clock, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     drain(runtime)
     assert not local_calls
@@ -334,6 +335,8 @@ def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, m
     snapshot, _, pending = patient_context_refresh_readiness._pending(led.db, 1, CFG)
     assert pending["A"] and pending["B"]
     assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     drain(runtime)
     assert local_calls and patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     current = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
