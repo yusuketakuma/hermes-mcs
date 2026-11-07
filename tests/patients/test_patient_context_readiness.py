@@ -122,7 +122,7 @@ def test_old_generation_and_intake_hold_block(runtime):
     assert not _ready(runtime, cfg)
 
 
-def test_pending_or_failed_job_and_new_arrival_block(runtime):
+def test_current_member_proof_survives_job_wait_but_missing_proof_and_arrival_block(runtime):
     led, _, _ = runtime
     cfg = _cfg("assist")
     seed(led, 1, proof=False)
@@ -132,7 +132,19 @@ def test_pending_or_failed_job_and_new_arrival_block(runtime):
         led.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state,created_at,updated_at) "
                        "VALUES('semantic',1,1,?,0,0)", (state,))
         led.db.commit()
+        policy, errors = semantic_policy.runtime_config(cfg)
+        assert not errors
+        row = led.db.execute('SELECT m.*,p.project_id AS patient_id,p.fetch_reason '
+            'FROM messages m JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=1').fetchone()
+        assert semantic_store.reprocess_target_state(led, row, policy, cfg=cfg) == 'current'
+        assert _ready(runtime, cfg)
+        led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',1) "
+                       "WHERE kind='semantic_audit' AND message_id=1")
+        led.db.commit()
+        assert semantic_store.reprocess_target_state(led, row, policy, cfg=cfg) not in ('current', 'current_skipped')
         assert not _ready(runtime, cfg)
+        _proof(led, 1, 1, cfg)
+        assert _ready(runtime, cfg)
         led.db.execute("DELETE FROM fetch_jobs WHERE kind='semantic'")
         led.db.commit()
     seed(led, 2, proof=False)

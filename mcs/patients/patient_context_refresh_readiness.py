@@ -700,11 +700,13 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode):
     root = row['parent_id'] or mid
     if semantic_intake_hold.has_held_root(db, pid, root) or semantic_intake_hold.has_unstored_root(db, pid, root):
         return False
-    if policy['mode'] != 'off' and db.execute(
+    empty = row['body_state'] == 'deleted' or row['body_state'] == 'full' and row['body_text'] == ''
+    # Nonempty summary-enabled members carry their own bound audit proof below.
+    if policy['mode'] != 'off' and (policy['summary_mode'] == 'off' or empty) and db.execute(
             "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? AND message_id=? AND state!='done' LIMIT 1",
             (semantic_policy.JOB_KIND, pid, root)).fetchone():
         return False
-    if row['body_state'] == 'deleted' or row['body_state'] == 'full' and row['body_text'] == '':
+    if empty:
         if (attachment_mode != 'on' and (cfg.get('attachment_ocr') or {}).get('enabled') is not False
                 and db.execute("SELECT 1 FROM attachments WHERE message_id=? AND state IS NOT 'withdrawn' LIMIT 1", (mid,)).fetchone()):
             return False
