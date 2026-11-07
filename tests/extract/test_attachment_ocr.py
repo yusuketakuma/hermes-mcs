@@ -236,7 +236,7 @@ def test_document_table_rejects_invalid_indices_and_spans(cell):
 ])
 def test_document_table_rejects_duplicate_or_overlapping_cells(first, second):
     cells = [{"row": 0, "col": 0, **first}, {"row": 0, "col": 0, **second}]
-    with pytest.raises(ValueError, match="output_schema"):
+    with pytest.raises(ValueError, match="^output_schema_table_overlap$"):
         ocr._document_text({"paragraphs": [], "tables": [{"cells": cells}]})
 
 
@@ -310,7 +310,8 @@ def test_bootstrap_is_valid_python_and_has_predecode_limits():
     assert '"infer_onnx": False' in ocr._BOOTSTRAP
 
 
-def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), raster_pages=()):
+def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), raster_pages=(),
+                   failure=None):
     """Execute only the optional runtime's preflight using fully synthetic modules."""
     import importlib.metadata
 
@@ -339,6 +340,8 @@ def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), ras
             return TextPage(self.text)
 
         def render(self, **kwargs):
+            if failure == "decode":
+                raise OSError("synthetic_private_decode")
             assert self.index in (*image_pages, *raster_pages), "preflight rasterized an unexpected synthetic page"
             return Bitmap("")
 
@@ -351,6 +354,8 @@ def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), ras
 
     class Analyzer:
         def __init__(self, **kwargs):
+            if failure == "load":
+                raise RuntimeError("synthetic_private_model")
             configs = kwargs["configs"]
             for section in configs.values():
                 for model in section.values():
@@ -358,6 +363,10 @@ def _bootstrap_pdf(tmp_path, monkeypatch, texts, sizes=None, image_pages=(), ras
                     assert config["hf_hub_repo"].startswith(str(tmp_path / "synthetic-model-hub"))
 
         def __call__(self, image):
+            if failure == "cancel":
+                raise KeyboardInterrupt
+            if failure == "inference":
+                raise RuntimeError("synthetic_private_inference")
             assert image == "synthetic raster"
             return SimpleNamespace(model_dump=lambda: {"paragraphs": [
                 {"order": 0, "contents": "合成画像内文字"}], "tables": []}), None, None
@@ -825,3 +834,57 @@ def test_memory_refusal_never_starts_ocr_or_consumes_an_attempt(setup, monkeypat
     assert ledger.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0] == 0
     cursor = json.loads((Path(ledger.path).parent / 'attachment_ocr_cursor.json').read_text())
     assert cursor['offset'] == cursor['after'] == 0
+
+
+@pytest.mark.parametrize("phase,code", [("load", 24), ("inference", 25), ("decode", 26)])
+def test_bootstrap_failure_reports_only_fixed_phase(tmp_path, monkeypatch, phase, code):
+    with pytest.raises(SystemExit) as failure:
+        _bootstrap_pdf(tmp_path, monkeypatch, [""], image_pages=(0,), failure=phase)
+    assert failure.value.code == code
+    assert not (tmp_path / "result.json").exists()
+
+
+@pytest.mark.parametrize("code,reason", [
+    (24, "engine_load_failed"), (25, "engine_inference_failed"),
+    (26, "input_decode_failed"), (1, "engine_failed"), (-9, "engine_failed"),
+])
+def test_runtime_failure_exit_maps_only_fixed_reason(tmp_path, monkeypatch, code, reason):
+    process = SimpleNamespace(pid=1234, returncode=code, wait=lambda **kwargs: None)
+    def popen(command, **kwargs):
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.DEVNULL
+        assert "(deny network*)" in command[2]
+        return process
+    monkeypatch.setattr(ocr.subprocess, "Popen", popen)
+    monkeypatch.setattr(ocr.os, "killpg", lambda *args: None)
+    with pytest.raises(ValueError, match="^" + reason + "$"):
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1)
+
+
+def test_bootstrap_control_exception_is_not_mislabeled(tmp_path, monkeypatch):
+    with pytest.raises(KeyboardInterrupt):
+        _bootstrap_pdf(tmp_path, monkeypatch, [""], image_pages=(0,), failure="cancel")
+    assert not (tmp_path / "result.json").exists()
+
+
+@pytest.mark.parametrize("pixels,expected", [(1, 26), (40000001, 22)])
+def test_bootstrap_image_decode_phase_checks_bounds_first(tmp_path, monkeypatch, pixels, expected):
+    import importlib.metadata
+    loaded = []
+    class Image:
+        width, height, n_frames = pixels, 1, 1
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def load(self):
+            loaded.append(True)
+            raise OSError("synthetic_private_image_path")
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: ocr.ENGINE_VERSION)
+    monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=SimpleNamespace(open=lambda path: Image())))
+    monkeypatch.setitem(sys.modules, "resource", SimpleNamespace(RLIMIT_FSIZE=1, RLIMIT_CORE=2, setrlimit=lambda *args: None))
+    monkeypatch.setattr(sys, "argv", ["bootstrap", str(tmp_path / "source.jpg"), str(tmp_path / "result.json")])
+    with pytest.raises(SystemExit) as failure:
+        exec(compile(ocr._BOOTSTRAP, "synthetic-image-bootstrap", "exec"), {})
+    assert failure.value.code == expected
+    assert loaded == ([True] if pixels == 1 else [])
+    assert not (tmp_path / "result.json").exists()

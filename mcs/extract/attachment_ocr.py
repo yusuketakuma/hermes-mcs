@@ -33,7 +33,7 @@ EXCLUDED_STATES = frozenset({"unsupported"})
 # Optional packages are imported only in the separate, network-denied runtime.
 _BOOTSTRAP = f'MODELS = {MODELS!r}\nENGINE_VERSION = {ENGINE_VERSION!r}\n' + r'''
 import importlib.metadata, json, math, os, resource, sys
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 resource.setrlimit(resource.RLIMIT_FSIZE, (2097152, 2097152))
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -42,33 +42,41 @@ version = importlib.metadata.version("yomitoku")
 if version != ENGINE_VERSION:
     sys.exit(21)
 analyzer = None
+@contextmanager
+def runtime_phase(code):
+    try:
+        yield
+    except Exception:
+        sys.exit(code)
 def ocr(image):
     global analyzer
-    import cv2
-    import numpy as np
-    import torch
-    cv2.setNumThreads(1)
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1) if analyzer is None else None
-    if analyzer is None:
-        from huggingface_hub import snapshot_download
-        paths = {}
-        for role, (repo, revision) in MODELS.items():
-            snapshot = snapshot_download(repo_id=repo, revision=revision, local_files_only=True)
-            path = source.parent / (role + ".json")
-            with open(path, "x", encoding="utf-8") as stream:
-                os.chmod(path, 0o600)
-                json.dump({"hf_hub_repo": str(snapshot)}, stream)
-            paths[role] = str(path)
-        from yomitoku import DocumentAnalyzer
-        analyzer = DocumentAnalyzer(device="cpu", visualize=False, configs={
-            "ocr": {"text_detector": {"infer_onnx": False, "path_cfg": paths["detector"]}, "text_recognizer": {
-                "model_name": "parseq-tiny-dynw-v5", "source_downscale": True,
-                "num_parallel_batches": 1, "path_cfg": paths["recognizer"]}},
-            "layout_analyzer": {"layout_parser": {"path_cfg": paths["layout"]},
-                "table_structure_recognizer": {"path_cfg": paths["table"]}}})
-    result, _, _ = analyzer(np.array(image.convert("RGB"))[:, :, ::-1])
-    return result.model_dump()
+    with runtime_phase(24):
+        import cv2
+        import numpy as np
+        import torch
+        cv2.setNumThreads(1)
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1) if analyzer is None else None
+        if analyzer is None:
+            from huggingface_hub import snapshot_download
+            paths = {}
+            for role, (repo, revision) in MODELS.items():
+                snapshot = snapshot_download(repo_id=repo, revision=revision, local_files_only=True)
+                path = source.parent / (role + ".json")
+                with open(path, "x", encoding="utf-8") as stream:
+                    os.chmod(path, 0o600)
+                    json.dump({"hf_hub_repo": str(snapshot)}, stream)
+                paths[role] = str(path)
+            from yomitoku import DocumentAnalyzer
+            analyzer = DocumentAnalyzer(device="cpu", visualize=False, configs={
+                "ocr": {"text_detector": {"infer_onnx": False, "path_cfg": paths["detector"]}, "text_recognizer": {
+                    "model_name": "parseq-tiny-dynw-v5", "source_downscale": True,
+                    "num_parallel_batches": 1, "path_cfg": paths["recognizer"]}},
+                "layout_analyzer": {"layout_parser": {"path_cfg": paths["layout"]},
+                    "table_structure_recognizer": {"path_cfg": paths["table"]}}})
+    with runtime_phase(25):
+        result, _, _ = analyzer(np.array(image.convert("RGB"))[:, :, ::-1])
+        return result.model_dump()
 pages, rendered = [], 0
 if source.suffix == ".pdf":
     import pypdfium2
@@ -103,15 +111,16 @@ if source.suffix == ".pdf":
         for entry in pages:
             if entry["text"] is None:
                 with closing(document[entry["page"] - 1]) as page:
-                    with closing(page.render(scale=200 / 72)) as bitmap:
+                    with runtime_phase(26), closing(page.render(scale=200 / 72)) as bitmap:
                         entry["document"] = ocr(bitmap.to_pil())
                 del entry["text"]
 else:
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = 40000000
-    with Image.open(source) as image:
+    with runtime_phase(26), Image.open(source) as image:
         if not 0 < image.width * image.height <= 40000000 or getattr(image, "n_frames", 1) != 1:
             sys.exit(22)
+        image.load()
         pages.append({"page": 1, "engine": "yomitoku", "document": ocr(image)})
 raw = json.dumps({"engine_version": version, "pages": pages}, ensure_ascii=False).encode()
 if len(raw) > 2097152:
@@ -323,7 +332,7 @@ def _document_text(document):
                     end = 0
                     for col, stop, _ in row:
                         if col < end:
-                            raise ValueError("output_schema")
+                            raise ValueError("output_schema_table_overlap")
                         end = stop
                     size += end - 1
                     if size > MAX_OUTPUT:
@@ -456,7 +465,9 @@ def _runtime(executable, source, output, timeout):
             except ProcessLookupError:
                 pass
     if process.returncode:
-        raise ValueError({21: "engine_version", 22: "input_limits", 23: "output_limits"}.get(process.returncode, "engine_failed"))
+        raise ValueError({21: "engine_version", 22: "input_limits", 23: "output_limits",
+                          24: "engine_load_failed", 25: "engine_inference_failed",
+                          26: "input_decode_failed"}.get(process.returncode, "engine_failed"))
     fd = os.open(output, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
@@ -504,6 +515,8 @@ def _settings_current(settings):
 _RUNTIME_REASONS = frozenset({
     "engine_failed", "engine_version", "input_limits",
     "output_limits", "output_schema", "runtime_symlink_loop",
+    "engine_load_failed", "engine_inference_failed", "input_decode_failed",
+    "output_schema_table_overlap",
 })
 
 
