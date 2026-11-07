@@ -13,6 +13,7 @@ import extract_llm_resident as resident
 import extract_llm_source_contract
 import local_llm
 import mcs_util
+import patient_context_refresh
 import writer_lock
 from test_context_cloud_update_identity import cloud, real_cloud, runtime
 from test_patient_context_refresh import document
@@ -119,10 +120,15 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
     assert "synthetic-private" not in json.dumps(events)
 
 
-def test_context_child_observes_a_stable_loop_with_a_stale_import_fence(runtime, real_cloud, monkeypatch, tmp_path):
+def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, real_cloud, monkeypatch, tmp_path):
     ledger, clock, _ = runtime
     cfg, posts = real_cloud
-    events, sleeps = [], []
+    events, sleeps, engine_calls = [], [], []
+    run_due = patient_context_refresh.run_due
+    def spy(*args, **kwargs):
+        engine_calls.append(True)
+        return run_due(*args, **kwargs)
+    monkeypatch.setattr(patient_context_refresh, "run_due", spy)
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
     monkeypatch.setattr(resident, "disk_free_mb", lambda _: 100000)
@@ -135,11 +141,11 @@ def test_context_child_observes_a_stable_loop_with_a_stale_import_fence(runtime,
     monkeypatch.setattr(extract_llm_source_contract, "_WRITER_STATE", (False, "synthetic-prior-generation"))
     cloud_backlog._context_worker(ledger, initial, 0)
     assert writer_lock.updater_state() == initial
-    assert len(events) == 2 and sleeps == [5, 5]
-    assert all(name == "patient_context_pass" and fields == {
-        "status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete",
-        "scanned": 0, "scan_ms": 0, "writer_reason": "source_generation_changed",
-        "writer_stage": "generation_fence"} for name, fields in events)
+    assert engine_calls == []
+    assert sleeps == []
+    assert events == [("patient_context_pass", {
+        "status": "source_changed", "done": 0, "writer_reason": "source_generation_changed",
+        "writer_stage": "generation_fence"})]
     assert not posts and not document(ledger)
     assert not ledger.artifacts("cloud_usage_reserve") and not ledger.artifacts("cloud_usage_result")
     assert "synthetic-prior-generation" not in json.dumps(events)

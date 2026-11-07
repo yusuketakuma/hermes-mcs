@@ -44,6 +44,7 @@ def capacity(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm_source_contract, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(worker, "circuit_open_s", lambda led: 0)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
@@ -130,7 +131,11 @@ def test_capacity_gates(capacity, monkeypatch, gate):
     elif gate == "mid_update":
         state = (True, 123)
         monkeypatch.setattr(writer_lock, "updater_state", lambda: state)
-    assert run(capacity, stop, state)["status"] == "deferred"
+    result = run(capacity, stop, state)
+    if gate in ("update", "mid_update"):
+        assert result == {"status": "source_changed", "done": 0, "run_lock_lost": "updated"}
+    else:
+        assert result["status"] == "deferred"
     assert not capacity[2]
 
 
