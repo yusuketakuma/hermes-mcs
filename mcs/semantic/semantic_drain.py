@@ -862,6 +862,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if _apply_job_status(ledger, token, limit, status,
                                  budget_short, out):
                 break
+            # A binding hold with no new work must not starve independent due jobs.
+            if (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
+                    and status == 'deferred'
+                    and diagnostics.get('code') == 'empty_repair_candidate_binding'
+                    and used == 0 and llm_s == 0 and not job_progressed):
+                selected[cohort_name] -= 1
             if getattr(getattr(jev_client, "last_error", None),
                        "kind", "") == "payment_required":
                 # the service refuses every call until the account is
