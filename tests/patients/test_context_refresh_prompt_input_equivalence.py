@@ -125,9 +125,19 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
             return {"patient_context": []}
         monkeypatch.setattr(patient_context_quality_controller, "_ask", ask)
         result = patient_context_quality_controller._scan({}, source, {}, "2026-10-17", 1000.0, lambda: True)
+        # The normal scan now binds the original and adopted inputs on the wire.
+        # Keep this envelope independent of the production signature/projection helpers.
+        identity_fields = {key: source.get(key) for key in (
+            "project_id", "message_id", "source", "content_hash", "body_length", "body_state",
+            "posted_at", "posted_at_ts", "sender_id", "sender_name", "parent_id", "source_key",
+            "empty", "extraction_sig", "canonical_context", "derived_summary_sig")}
+        signature = hashlib.sha256(json.dumps(identity_fields, sort_keys=True, ensure_ascii=False,
+                                              separators=(",", ":")).encode()).hexdigest()
         prompt = {"instruction": EXPECTED_INSTRUCTION, "categories": EXPECTED_CATEGORIES,
                   "detail_keys": EXPECTED_DETAIL_KEYS,
-                  "already_found": expected_with_reference, "source": body}
+                  "already_found": expected_with_reference, "source": body,
+                  "source_identity": {"key": 1, "signature": signature,
+                                      "span": [0, len(body)], "content_hash": origin["content_hash"]}}
         assert calls == [prompt]
         assert json.dumps(calls[0], ensure_ascii=False).encode() == json.dumps(prompt, ensure_ascii=False).encode()
         assert result["complete"] is True and result["cursor"] == 1
