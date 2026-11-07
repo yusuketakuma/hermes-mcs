@@ -1,5 +1,5 @@
 {
-  "fragment_count": 86,
+  "fragment_count": 87,
   "records": [
     {
       "category": "added",
@@ -287,6 +287,13 @@
       "path": "changes/archive/1.1.2/monitor-alert-accuracy.json",
       "sha256": "463237ed7bc908e2d0750a637adc248c34ddd61420321840f4b296ef8730b7d7",
       "title": "監視警報の件数と継続理由を明確化"
+    },
+    {
+      "category": "fixed",
+      "id": "ocr-fixed-failure-phases",
+      "path": "changes/archive/1.1.2/ocr-fixed-failure-phases.json",
+      "sha256": "e967e960381aaadacf819c857954def3998c3d8ee14c91ff5fb7f2e00b01485f",
+      "title": "添付OCRの内部失敗を固定コードで区別"
     },
     {
       "category": "fixed",
@@ -604,6 +611,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録86件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録87件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
