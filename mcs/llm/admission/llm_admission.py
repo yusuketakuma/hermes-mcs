@@ -1,11 +1,10 @@
 """Cross-client RT/BACKLOG admission boundary for the shared local
 inference backend (T20).
 
-One broker ahead of the shared llama.cpp backend enforces the
-invariant ``O_BACKLOG * O_RT = 0`` at all times, where O counts every
-authorized request from **pre-send reservation through confirmed
-backend terminal retirement** — server-queued, cancel-pending and
-response-unknown requests included.
+Legacy callers retain ``O_BACKLOG * O_RT = 0``. Scheduled MCS callers
+may mix classes only with distinct physical slots held by the transport.
+Every permit counts from pre-send reservation through confirmed backend
+terminal retirement, including queued, cancel-pending and unknown work.
 
 Design contract:
 
@@ -44,6 +43,10 @@ Design contract:
   permit deadline). RT never overlaps; a continuously busy RT stream
   delays backlog and ``status()`` exposes the oldest backlog age as a
   capacity signal — backlog progress is never claimed unconditionally.
+- **MCS physical slots** — only the scheduled transport supplies a slot,
+  after acquiring its flock. Unbound legacy permits block this mode;
+  bound unknown permits keep their slot. Neither expiry nor owner loss
+  retires sent work. The default epoch-opening contract is unchanged.
 - **Default off** — MCS call paths route through the broker only when
   config.json ``local_llm.admission`` is true or, with that key unset,
   ``MCS_LLM_ADMISSION`` is set. Until a staged rollout proves
@@ -69,12 +72,13 @@ CLASSES = ("RT", "BACKLOG")
 # registered routes -> class. A client may only claim the class bound
 # to its route at registration time; the broker rejects anything else.
 DEFAULT_ROUTES = {
-    # MCS background work — new-arrival extraction, semantic drain
-    # (S1/S3/S6), QC probes, backfill: all BACKLOG.
+    # Calls remain BACKLOG unless the explicit MCS new-arrival scope
+    # maps them to mcs.realtime while owning a physical slot.
     "mcs.extract": "BACKLOG",
     "mcs.semantic": "BACKLOG",
     "mcs.qc": "BACKLOG",
     "mcs.bench": "BACKLOG",
+    "mcs.realtime": "RT",
     # Hermes surfaces — interactive is RT; cron/delegated/aux work is
     # background. Auxiliary hooks are observer-only and never an
     # enforcing gate, so they get no route at all.
@@ -317,6 +321,9 @@ class Broker:
                 self.db.execute(
                     "UPDATE permits SET admitted_at=created_at "
                     "WHERE state NOT IN ('waiting')")
+            if "physical_slot" not in cols:
+                # Old permits remain unbound and block physical-slot admission.
+                self.db.execute("ALTER TABLE permits ADD COLUMN physical_slot INTEGER")
             self.db.execute(
                 "CREATE INDEX IF NOT EXISTS permits_epoch_state "
                 "ON permits(epoch,state)")
@@ -436,11 +443,30 @@ class Broker:
         row = self._meta()
         rt = self._occupancy(self.db, row["epoch"], "RT")
         bg = self._occupancy(self.db, row["epoch"], "BACKLOG")
-        return rt > 0 and bg > 0
+        return rt > 0 and bg > 0 and not self._physical_permits_valid(row["epoch"])
+
+    def _physical_permits_valid(self, epoch):
+        slots = [r[0] for r in self.db.execute(
+            "SELECT physical_slot FROM permits WHERE epoch=? AND state IN "
+            f"({','.join('?' * len(OCCUPYING))})", (epoch, *OCCUPYING))]
+        return (all(type(slot) is int and 0 <= slot < self.slots for slot in slots)
+                and len(set(slots)) == len(slots))
+
+    @_serialized
+    def held_slots(self):
+        """Unproven legacy work holds every slot; bound unknown work keeps its slot."""
+        with self._write_tx():
+            self._reclaim_and_prune()
+            meta = self._meta()
+            if meta["state"] != "open" or meta["rt_waiting"] or not self._physical_permits_valid(meta["epoch"]):
+                return set(range(self.slots))
+            return {r[0] for r in self.db.execute(
+                "SELECT physical_slot FROM permits WHERE epoch=? AND state IN "
+                f"({','.join('?' * len(OCCUPYING))})", (meta["epoch"], *OCCUPYING))}
 
     @_serialized
     def acquire(self, client: str, cls: str, job_gen: str | None = None,
-                request_id: str | None = None) -> dict:
+                request_id: str | None = None, *, physical_slot=None) -> dict:
         """Reserve a permit. Returns a verdict dict — denial is data,
         never an exception. ``cls`` must equal the class bound to the
         registered ``client`` route: a client-supplied value cannot
@@ -451,6 +477,8 @@ class Broker:
         if cls != bound:
             return {"admitted": False, "reason": "class_not_bound",
                     "bound_class": bound}
+        if physical_slot is not None and (type(physical_slot) is not int or not 0 <= physical_slot < self.slots):
+            return {"admitted": False, "reason": "physical_slot_invalid"}
         # A failed identity probe is retryable on the next acquisition.
         if self._identity is not None and self._identity[1] is None:
             self._identity = None
@@ -462,6 +490,17 @@ class Broker:
             self._reclaim_and_prune()
             meta = self._meta()
             epoch = meta["epoch"]
+            if physical_slot is not None:
+                if not self._physical_permits_valid(epoch) or meta["rt_waiting"]:
+                    return {"admitted": False, "reason": "legacy_inflight", "epoch": epoch}
+                occupied = self.db.execute("SELECT 1 FROM permits WHERE epoch=? AND physical_slot=? "
+                    f"AND state IN ({','.join('?' * len(OCCUPYING))})",
+                    (epoch, physical_slot, *OCCUPYING)).fetchone()
+                if occupied:
+                    return {"admitted": False, "reason": "slot_occupied", "epoch": epoch}
+                if _identity_scheme(self._owner()[1]) is None:
+                    return {"admitted": False, "reason": "owner_identity_unavailable", "epoch": epoch}
+                return self._admit(epoch, client, cls, job_gen, request_id, physical_slot=physical_slot)
             if cls == "BACKLOG":
                 # an RT waiting or occupying closes BACKLOG admission
                 rt_wait = meta["rt_waiting"]
@@ -569,17 +608,17 @@ class Broker:
             current = probes[pid]
         return _identity_scheme(current) == scheme and current != recorded
 
-    def _admit(self, epoch, client, cls, job_gen, request_id) -> dict:
+    def _admit(self, epoch, client, cls, job_gen, request_id, *, physical_slot=None) -> dict:
         """Insert an 'admitted' permit — created_at == admitted_at since
         the permit never waited."""
         now = time.time()
         cur = self.db.execute(
             "INSERT INTO permits(epoch,client,cls,job_gen,"
             "request_id,state,created_at,admitted_at,owner_pid,"
-            "owner_started)"
-            " VALUES(?,?,?,?,?,'admitted',?,?,?,?)",
+            "owner_started,physical_slot)"
+            " VALUES(?,?,?,?,?,'admitted',?,?,?,?,?)",
             (epoch, client, cls, job_gen, request_id, now, now,
-             *self._owner()))
+             *self._owner(), physical_slot))
         return {"admitted": True, "permit_id": cur.lastrowid,
                 "epoch": epoch}
 
@@ -638,7 +677,9 @@ class Broker:
             # re-verify exclusivity inside the same write tx: an RT
             # token may only exist while no BACKLOG request occupies
             other = "BACKLOG" if p["cls"] == "RT" else "RT"
-            if self._occupancy(self.db, meta["epoch"], other):
+            if p["physical_slot"] is not None and not self._physical_permits_valid(meta["epoch"]):
+                return {"sent": False, "reason": "physical_slot_conflict"}
+            if p["physical_slot"] is None and self._occupancy(self.db, meta["epoch"], other):
                 return {"sent": False, "reason": "class_overlap"}
             nonce = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
             token = f"{meta['epoch']}:{permit_id}:{nonce}"
@@ -823,7 +864,7 @@ class Broker:
                 "oldest_unresolved_age_s": (
                     max(0.0, time.time() - oldest_unresolved)
                     if oldest_unresolved is not None else None),
-                "overlap": bool(occ["RT"] and occ["BACKLOG"]),
+                "overlap": bool(occ["RT"] and occ["BACKLOG"]) and not self._physical_permits_valid(meta["epoch"]),
                 "oldest_backlog_age_s": (
                     max(0.0, time.time() - oldest_bg)
                     if oldest_bg is not None else None)}

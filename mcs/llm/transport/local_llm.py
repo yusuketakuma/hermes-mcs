@@ -70,7 +70,7 @@ def probe_urls(endpoint: str) -> tuple[str, str]:
 # id_slot is lane - 1. Lane 1 (wire 0) is realtime: the 10-min tick's
 # new arrivals and interactive commands. Lanes 2 and 3 (wire 1, 2) are
 # backlog: past posts, semantic/QC and (lane 3 first) patient context.
-# Background workers never borrow realtime. An out-of-range wire value
+# Background workers borrow realtime only through the scheduled slot turn. An out-of-range wire value
 # is UNPINNED on llama.cpp and could land on realtime, so only wire
 # values from this table ever reach a request.
 LANES = {1: 0, 2: 1, 3: 2}
@@ -88,11 +88,12 @@ def lane_slot(lane) -> int:
     return LANES[lane]
 
 
-# Backlog lanes take turns on the shared GPU to avoid prompt/decode
-# contention. A backlog worker sets MCS_LLM_TURN_LOCK to a lock-file path
-# and every chat() of that process holds one flock across the request.
-# Realtime (lane 1) never takes it.
+# Legacy callers keep their shared-GPU exclusive turn. Scheduled MCS
+# callers hold physical slot locks and a shared legacy turn for draining.
 TURN_LOCK_ENV = "MCS_LLM_TURN_LOCK"
+SCHEDULE_ENV = "MCS_LLM_SCHEDULE_DIR"
+WORK_CLASS_ENV = "MCS_LLM_WORK_CLASS"
+_OWNED_TURN = ContextVar('local_llm_owned_turn', default=None)
 _BACKGROUND_SCOPE = ContextVar('local_llm_background_scope', default=None)
 TURN_LOCK_POLL_S = 0.2
 # A probe turn won with less than this left is reported busy, not sent:
@@ -166,14 +167,53 @@ def _turn_path():
     return scoped[1] if scoped is not None else os.environ.get(TURN_LOCK_ENV)
 
 
+def scheduling_enabled():
+    return bool(os.environ.get(SCHEDULE_ENV))
+
+
+@contextmanager
+def scheduling_scope(data_root, *, realtime=False):
+    """Route this MCS process and its extraction threads through physical slot locks."""
+    previous = {key: os.environ.get(key) for key in (SCHEDULE_ENV, WORK_CLASS_ENV)}
+    os.environ[SCHEDULE_ENV] = os.fspath(data_root)
+    os.environ[WORK_CLASS_ENV] = "RT" if realtime else "BACKLOG"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@contextmanager
+def _request_turn(deadline, min_s, slot, *, held_slots=None):
+    owned = _OWNED_TURN.get()
+    if owned is not None:
+        yield owned
+        return
+    directory = os.environ.get(SCHEDULE_ENV)
+    if directory:
+        import llm_slot_schedule
+        with llm_slot_schedule.turn(directory, realtime=os.environ.get(WORK_CLASS_ENV) == "RT",
+                                    preferred=slot, deadline=deadline, min_s=min_s,
+                                    held_slots=held_slots, legacy_path=_turn_path()) as selected:
+            yield selected
+    else:
+        with _turn(deadline, min_s) as acquired:
+            yield slot if acquired else None
+
+
 @contextmanager
 def background_scope(data_root):
-    """Pin this context to a background lane and the existing shared GPU turn lock."""
+    """Schedule this context as background work with the existing legacy-turn drain."""
     slot = request_slot()
     token = _BACKGROUND_SCOPE.set((slot if slot in BACKGROUND_SLOTS else BACKGROUND_SLOT,
                                   _turn_path() or os.path.join(data_root, 'llm_turn.lock')))
     try:
-        yield
+        with scheduling_scope(data_root):
+            yield
     finally:
         _BACKGROUND_SCOPE.reset(token)
 
@@ -312,6 +352,38 @@ def admission_status(broker_path: str | None = None) -> dict | None:
 def admitted_chat(client_route: str, prompt: str, *,
                   broker_path: str | None = None,
                   wait_s: float = 0, deadline: float | None = None,
+                  error_out: dict | None = None, **kw) -> dict | None:
+    """Preserve optional admission while binding scheduled MCS calls to physical slots."""
+    broker = _broker(broker_path)
+    if (scheduling_enabled() and client_route in broker.routes
+            and client_route in ("mcs.extract", "mcs.semantic", "mcs.qc", "mcs.bench", "mcs.realtime")
+            and broker.is_open()):
+        _validate_chat_args(prompt, kw.get("endpoint", ENDPOINT), kw.get("timeout", TIMEOUT),
+                            kw.get("max_tokens", MAX_TOKENS), deadline)
+        _validate_wait(wait_s)
+        if "extra_payload" in kw:
+            kw["extra_payload"] = dict(kw["extra_payload"] or {})
+        if os.environ.get(WORK_CLASS_ENV) == "RT":
+            client_route = "mcs.realtime"
+        slot_deadline = deadline if deadline is not None else time.monotonic() + kw.get("timeout", TIMEOUT)
+        with _request_turn(slot_deadline, 0.0, request_slot(), held_slots=broker.held_slots) as slot:
+            if slot is None:
+                unresolved = broker.status()["unresolved"]
+                return {"text": None, "status": None,
+                        "admission": "completion_unproven" if unresolved else "slot_busy"}
+            token = _OWNED_TURN.set(slot)
+            try:
+                return _admitted_chat(client_route, prompt, broker_path=broker_path, wait_s=wait_s,
+                                      deadline=deadline, error_out=error_out, **kw)
+            finally:
+                _OWNED_TURN.reset(token)
+    return _admitted_chat(client_route, prompt, broker_path=broker_path, wait_s=wait_s,
+                          deadline=deadline, error_out=error_out, **kw)
+
+
+def _admitted_chat(client_route: str, prompt: str, *,
+                  broker_path: str | None = None,
+                  wait_s: float = 0, deadline: float | None = None,
                   error_out: dict | None = None,
                   **kw) -> dict | None:
     """One chat call through the RT/BACKLOG admission boundary.
@@ -335,14 +407,15 @@ def admitted_chat(client_route: str, prompt: str, *,
     _validate_chat_args(prompt, kw.get("endpoint", ENDPOINT),
                         kw.get("timeout", TIMEOUT),
                         kw.get("max_tokens", MAX_TOKENS), deadline)
-    if isinstance(wait_s, bool) or not isinstance(wait_s, int | float) \
-            or not math.isfinite(wait_s) or wait_s < 0:
-        raise ValueError("wait_s_invalid")
+    _validate_wait(wait_s)
     # Building caller input can fail before transport. Do it before a
     # permit exists so a malformed mapping cannot strand a sent slot.
     extra = dict(kw.pop("extra_payload", None) or {})
     extra.setdefault("id_slot", request_slot())
-    acq = broker.acquire(client_route, cls)
+    owned = _OWNED_TURN.get()
+    if owned is not None:
+        extra["id_slot"] = owned
+    acq = broker.acquire(client_route, cls, **({"physical_slot": owned} if owned is not None else {}))
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \
             and wait_s > 0 and pid is not None:
@@ -422,6 +495,31 @@ def admitted_chat(client_route: str, prompt: str, *,
 
 
 def admitted_probe_format(client_route: str, endpoint: str, model: str,
+                          schema: dict | None, *, broker_path: str | None = None,
+                          **kw) -> str | None:
+    """Pin each admitted format-probe ladder to one scheduled physical slot."""
+    broker = _broker(broker_path)
+    if (scheduling_enabled() and client_route in broker.routes
+            and client_route in ("mcs.extract", "mcs.semantic", "mcs.qc", "mcs.bench", "mcs.realtime")
+            and broker.is_open()):
+        deadline = kw.get("deadline")
+        _validate_chat_args('Reply with {"ok": true}', endpoint, kw.get("timeout", 10), 20, deadline)
+        if os.environ.get(WORK_CLASS_ENV) == "RT":
+            client_route = "mcs.realtime"
+        slot_deadline = deadline if deadline is not None else time.monotonic() + kw.get("timeout", 10)
+        with _request_turn(slot_deadline, PROBE_TURN_MIN_S, request_slot(), held_slots=broker.held_slots) as slot:
+            if slot is None:
+                return None
+            token = _OWNED_TURN.set(slot)
+            try:
+                return _admitted_probe_format(client_route, endpoint, model, schema,
+                                              broker_path=broker_path, **kw)
+            finally:
+                _OWNED_TURN.reset(token)
+    return _admitted_probe_format(client_route, endpoint, model, schema, broker_path=broker_path, **kw)
+
+
+def _admitted_probe_format(client_route: str, endpoint: str, model: str,
                           schema: dict | None, *,
                           broker_path: str | None = None,
                           **kw) -> str | None:
@@ -440,7 +538,8 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         return None   # unregistered route: nothing sent — unobserved, not a plain verdict
     _validate_chat_args('Reply with {"ok": true}', endpoint,
                         kw.get("timeout", 10), 20, kw.get("deadline"))
-    acq = broker.acquire(client_route, cls)
+    owned = _OWNED_TURN.get()
+    acq = broker.acquire(client_route, cls, **({"physical_slot": owned} if owned is not None else {}))
     if not acq.get("admitted"):
         if acq.get("reason") == "waiting" and acq.get("permit_id") is not None:
             broker.cancel(acq["permit_id"])
@@ -492,6 +591,12 @@ def _retire_failed_send(broker, pid: int, kind: str | None,
     else:
         # the backend may still be decoding — never assumed free
         broker.mark_unknown(pid, f"{proof_prefix}transport")
+
+
+def _validate_wait(wait_s):
+    if isinstance(wait_s, bool) or not isinstance(wait_s, int | float) \
+            or not math.isfinite(wait_s) or wait_s < 0:
+        raise ValueError("wait_s_invalid")
 
 
 def bounded_request(endpoint: str, method: str, body, timeout: float,
@@ -591,14 +696,21 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
         body.update(extra_payload)
     # a reaped worker, so a slow response cannot extend the deadline
     send = request_fn or bounded_request
-    with _turn(deadline, turn_min_s) as turn:
-        if not turn:
+    selected_slot = body.get("id_slot", request_slot())
+    if type(selected_slot) is not int or not 0 <= selected_slot < SLOT_COUNT:
+        selected_slot = request_slot()
+    slot_deadline = (time.monotonic() + timeout
+                     if scheduling_enabled() and deadline is None else deadline)
+    with _request_turn(slot_deadline, turn_min_s, selected_slot) as turn:
+        if turn is None:
             # the deadline passed while another backlog lane held the
             # GPU: nothing was sent and the server is fine, so callers
             # defer without charging an attempt or the breaker
             if error_out is not None:
                 error_out["kind"] = "busy"
             return None
+        if scheduling_enabled():
+            body["id_slot"] = turn
         try:
             status, _headers, raw = send(endpoint, "POST", body, timeout,
                                          deadline)
@@ -619,7 +731,7 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             # a sent request that died in transport may still be decoding
             # on our slot: keep the turn until the slot reports idle
             if kind == "transport" and isinstance(error, OSError) \
-                    and _turn_path() \
+                    and (_turn_path() or scheduling_enabled()) \
                     and type(body.get("id_slot")) is int:
                 _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
                                 error_out)

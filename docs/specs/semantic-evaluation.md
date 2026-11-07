@@ -414,6 +414,13 @@ v4がPENDING/NEEDS_REVIEW、原文変更中、Jev未評価、旧参照未移行�
 
 ### 実測で選ぶスロット数とバックログ/リアルタイムの厳密な非重複
 
+以下は旧共有クライアントの評価契約である。現行MCSの3物理枠スケジューラーは、
+同一枠の二重送信を防いだうえで新着1件とバックグラウンド2件の並行を認める。
+新着の分類は取込み入口で限定し、すべてのMCS抽出をRTへ昇格させない。
+任意のbrokerを使う場合も、旧形式の枠未記録permitがある間は新方式を保留し、
+旧epochと送信結果不明の扱いを維持する。非MCSクライアントの旧class排他は変えない。
+配分、夜間貸与、適用範囲は[現行3レーン構成](../../deployment/launchagents/README.md#3レーン構成)を参照する。
+
 この設計時点のテンプレートはllama-server `-np 2 -c 65536`だった。現行の配布テンプレートは`-np 3 -c 49152`（16,384token/slot）で、実機の設定・容量検証をこの文書から推定しない。以下の2枠比較は設計時点の条件で、複数枠は同じdecode batchを共有する（`deployment/launchagents/ai.mcs.llamaserver.plist`; [llama.cpp server batching](https://github.com/ggml-org/llama.cpp/blob/d81aef19941e145d04f88fb180ea89a67d052ab5/tools/server/README-dev.md#batching)）。**3枠を必須値にしない**。1枠・設計時点の2枠・3枠をまず同じ入力と排他条件で比較し、4枠以上もコンテキストとメモリが成立する場合に候補とする。総コンテキスト65536を3枠へ均等割りするなら算術上約21,845token/slot、従来の約32,768token/slotを維持するには総量98304と追加KVメモリが必要だが、実際の`n_ctx`/KV配置は稼働するbinaryで確認する。導入端末の機種・搭載メモリ・機種別の公称帯域は環境固有のため公開記録から除去した。
 
 本番には全ての実際の接続元（MCS、Hermes主処理/補助/委譲/cron、GBrainを含めて検出した経路）を分類する**共通の強制受付境界**が先に必要。MCSの自動新着抽出は「新着優先BACKLOG」であり、人が待つ対話RTとは区別する。classは認証済み経路と操作種別で決め、clientの自己申告だけでRTへ昇格させない。backend直結・旧URL・未分類・fallbackを拒否できない場合、MCSだけのslot固定では非重複を保証できずv4の本番切替はNO-GOとする。受付世代epochと要求の終端を耐久記録し、`O_BACKLOG * O_RT = 0`を**送信前予約からbackend終端確認まで**維持する。server内の待機要求、取消し待ち、結果不明、Jev/QC中のjobも反対classへの切替を許さない。RT到着と新規背景受付の停止を原子的に行い、背景の自然完了または旧backend終了の確認**後**にRTを送る。stock serverへcancelを送っただけ、timeout・切断・`/slots`の一瞬の空きでは終了とみなさない。controller/backend再起動・旧epochの要求・結果不明は双方を閉じて照合する。RT継続流入中にも背景progressを保証するには実測で長さを決めた背景保護時間帯が必要だが、その間のRTは待機/延期し、排他を緩めない。滞留年齢・受付待ち・資源不足を明示する。
