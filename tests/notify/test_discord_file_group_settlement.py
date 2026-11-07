@@ -138,8 +138,6 @@ def test_unproven_echo_leaves_group_unknown_never_delivered(led, fault):
         good["body:0016"] = good["body:0016"][:1]
     elif fault == "extra_file":
         good["body:0016"].append(_echo("attach:9999", "x.pdf", 1, "F-9"))
-    elif fault == "dup_fid":
-        good["body:0016"][1]["remote_file_id"] = "F-2"
     elif fault == "wrong_bytes":
         good["body:0016"][0]["bytes"] = 23
     elif fault == "wrong_wire":
@@ -253,6 +251,7 @@ def test_surface_file_echo_passes_command_boundary(led, surface):
         req = envelopes.part_receipt(claim, part, "delivered", remote_id="body-msg", files=files)
     assert notify_cmds.validate_int(req) is None
     for invalid in [None, {}, [None], files * 2,
+                    [files[0], {**files[0], "part_id": "attach:0002"}],
                     [{**files[0], "bytes": True}],
                     [{**files[0], "remote_file_id": ""}],
                     [{**files[0], "extra": "unexpected"}]]:

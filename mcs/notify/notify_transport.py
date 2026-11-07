@@ -56,20 +56,6 @@ def _not_sent_state(db, card, render, error_code):
         return "pending", False
     return cur, False
 
-def _wire_name_matches(wire, name) -> bool:
-    """Discord stores image uploads as ``SPOILER_<name>`` and collapses
-    repeated prefixes — the echo's wire name binds to the sealed name
-    modulo that wrapping only."""
-    if not isinstance(wire, str) or not wire:
-        return False
-
-    def bare(s):
-        s = str(s or "")
-        while s.startswith("SPOILER_"):
-            s = s[8:]
-        return s
-    return bare(wire) == bare(name)
-
 
 def _settle_file_group_members(db, render, surface, remote_id,
                                attempt_id, files, now) -> bool:
@@ -156,19 +142,14 @@ def _discord_group_part_error(db, render, part, req) -> str | None:
             if not anchor.get("surface") or not anchor.get("members") \
                     or anchor.get("sha256") != part["payload_sha256"]:
                 return "file_group_identity_unverified"
-            entry = anchor
         elif member_of is not None:
             return "file_group_anchor_required"
         else:
             return None
-        if entry is None or entry.get("kind") != "attachment_part" \
-                and anchor is None:
-            return "file_group_dependencies_unverified"
         surface = db.execute(
             "SELECT * FROM notification_render_parts WHERE delivery_id=? "
             "AND part_id=?",
-            (render["delivery_id"], entry.get("surface", "")
-             if anchor is not None else member_of["surface"])
+            (render["delivery_id"], anchor["surface"])
         ).fetchone()
         if surface is None or surface["state"] != "delivered" \
                 or not isinstance(surface["remote_id"], str) \
@@ -177,37 +158,30 @@ def _discord_group_part_error(db, render, part, req) -> str | None:
         if req["result"] == "delivered" \
                 and req.get("remote_id") != surface["remote_id"]:
             return "file_group_identity_unverified"
-        if anchor is not None:
-            for mid in anchor["members"]:
-                member = by_id.get(mid)
-                row = db.execute(
-                    "SELECT * FROM notification_render_parts "
-                    "WHERE delivery_id=? AND part_id=?",
-                    (render["delivery_id"], mid)).fetchone() \
-                    if member is not None else None
-                if member is None or row is None \
-                        or member.get("kind") != "attachment_part" \
-                        or row["kind"] != "attachment_part" \
-                        or row["state"] not in ("pending", "unknown",
-                                                "delivered") \
-                        or any(row[column] != member.get(key)
-                               for column, key in (
-                            ("idx", "index"),
-                            ("attachment_id", "attachment_id"),
-                            ("payload_sha256", "sha256"),
-                            ("bytes", "bytes"), ("name", "name"))):
-                    return "file_group_dependencies_unverified"
-        elif any(part[column] != entry.get(key) for column, key in (
-                ("idx", "index"), ("attachment_id", "attachment_id"),
-                ("payload_sha256", "sha256"), ("bytes", "bytes"),
-                ("name", "name"))):
-            return "file_group_dependencies_unverified"
+        for mid in anchor["members"]:
+            member = by_id.get(mid)
+            row = db.execute(
+                "SELECT * FROM notification_render_parts "
+                "WHERE delivery_id=? AND part_id=?",
+                (render["delivery_id"], mid)).fetchone() \
+                if member is not None else None
+            if member is None or row is None \
+                    or member.get("kind") != "attachment_part" \
+                    or row["kind"] != "attachment_part" \
+                    or row["state"] not in ("pending", "unknown",
+                                            "delivered") \
+                    or any(row[column] != member.get(key)
+                           for column, key in (
+                        ("idx", "index"),
+                        ("attachment_id", "attachment_id"),
+                        ("payload_sha256", "sha256"),
+                        ("bytes", "bytes"), ("name", "name"))):
+                return "file_group_dependencies_unverified"
         if req.get("result") in ("delivered", "mark_delivered"):
-            group = anchor or member_of
             evidence = req.get("files", (req.get("evidence") or {}).get("files"))
             if files_echo_error({"files": evidence}):
                 return "file_group_identity_unverified"
-            members = [by_id[mid] for mid in group["members"]]
+            members = [by_id[mid] for mid in anchor["members"]]
             from adapters.common.spec import discord_file_name
             if len(evidence) != len(members) or any(
                     f["part_id"] != member["part_id"] or f["bytes"] != member["bytes"]
