@@ -201,8 +201,8 @@ def _completed_cloud_receipts(ledger, provider):
 def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Advance one fair idle-lane unit, freezing inputs across inference and commit.
 
-    ``complete(project_id)`` may add an extraction gate to the current
-    post-level inference and acquisition evidence required for every patient."""
+    ``complete(project_id)`` gates legacy whole-patient work. Frozen source
+    scopes prove their own post-level inference and acquisition evidence."""
     if ledger.db.in_transaction:
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
     unit = ledger.__dict__.pop("_patient_context_completed", None)
@@ -288,28 +288,50 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 seen.add(pid)
                 scanned += 1
                 published = patient_context_refresh_state._published_version(reader.db, pid)
+                whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
+                keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
+                if not keys and whole['sources']:
+                    waiting += 1
+                    continue
+                source_keys = list(keys) if keys else None
                 snapshot, progress, pending = patient_context_refresh_readiness._pending(
-                    reader.db, pid, cfg, now=now,
-                    cloud_scan=cloud_scan(pid))
-                patient_context_refresh_sources._scan_check(reader.db)
+                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=source_keys)
                 if patient_context_refresh_state._out_of_scope(snapshot):
                     continue
-                changes = ledger.db.total_changes
-                ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg, deadline=deadline, complete=complete,
-                                                    allow_dependency_repair=True)
-                if ledger.db.total_changes != changes:
-                    proof = None
-                if proof is not None:
-                    proof['writer'] = ledger.db
-                    proof['writer_changes'] = ledger.db.total_changes
-                snapshot['_readiness_proof'] = proof
-                patient_context_refresh_sources._scan_check(reader.db)
-                if not snapshot['dependencies']['complete']:
-                    pending['A'] = False
-                waiting += int(snapshot['unfinished'] or not ready)
-                if ready and any(pending.values()):
+                scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
+                quality_required = bool(snapshot['contract'].get('provider')
+                    or patient_context_quality_receipts._has_prior_quality_failure(reader.db, pid))
+                scans = patient_context_refresh_sources._current_scans(reader.db, pid, snapshot['sources'],
+                    snapshot['contract'], cfg=cfg) if quality_required else {}
+                summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
+                    if not quality_required or not context_plan.source_usable(source)
+                    or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
+                if summary_keys or not snapshot['sources']:
+                    summary_keys = summary_keys or None
+                    if summary_keys == source_keys:
+                        scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
+                    else:
+                        summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
+                            reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
+                        scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
+                for candidate, state, due, scope_keys, lanes in scopes:
+                    changes = ledger.db.total_changes
+                    ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
+                        deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
+                    if ledger.db.total_changes != changes:
+                        proof = None
+                    if proof is not None:
+                        proof['writer'] = ledger.db
+                        proof['writer_changes'] = ledger.db.total_changes
+                    candidate['_readiness_proof'] = proof
+                    patient_context_refresh_sources._scan_check(reader.db)
+                    if not candidate['dependencies']['complete']:
+                        due['A'] = False
+                    waiting += int(candidate['unfinished'] or not ready)
+                    if ready:
+                        best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
+                if best:
                     selected = pid
-                    best = {lane: (snapshot, progress, published) for lane, due in pending.items() if due}
                     break
                 if _scan_covered(reader.db, seen):
                     covered = True
@@ -352,13 +374,14 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
                    if waiting or not covered else {}), **stats}
     snapshot, progress, frozen_ver = best[lane]
+    source_keys = snapshot.get('source_scope')
     selected_proof = snapshot.pop("_readiness_proof", None)
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
     try:
         with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
             ledger.db.execute("BEGIN IMMEDIATE")
             ready, actual, _ = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, selected_proof,
-                deadline=deadline, complete=complete, allow_dependency_repair=lane != "A")
+                deadline=deadline, complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
             current = (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline and admit()
                 and extract_llm._writer_current(full=True)
                 and patient_context_refresh_state._published_version(ledger.db, pid) == frozen_ver
@@ -369,9 +392,15 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
                 return {"status": "source_changed" if changed else "deferred", "done": 0,
                         **({"reason": "patient_context_readiness_unverified"} if not changed else {}), **stats}
+            if lane != "A":
+                # B/C may use a wider cohort than the last overview attempt.
+                # Keep that attempt's retry state bound to its original input.
+                progress, _ = patient_context_refresh_state._latest(
+                    ledger.db, patient_context_refresh_state.PROGRESS, pid)
             progress = {**progress, "last_attempt": now,
                         "last_attempt_unit": rotation.get("units", 0) + 1,
-                        "night_id": night_id, "source_sig": snapshot["source_sig"]}
+                        "night_id": night_id,
+                        **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
             patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
             patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
             if not extract_llm._writer_current(full=True):
@@ -389,13 +418,15 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
-        hydrated = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg)
+        hydrated = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, source_keys=source_keys)
         if hydrated["source_sig"] != snapshot["source_sig"]:
             return {"status": "source_changed", "done": 0, **stats}
         snapshot = hydrated
-    frozen_scan_sig = patient_context_refresh_state._scan_sig(ledger.db, pid)
+    frozen_scan_sig = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
             "model": snapshot["contract"]["model"], "night_id": night_id}
+    if lane == 'A' and source_keys is not None:
+        meta.update(source_scope=source_keys, source_coverage=snapshot['source_coverage'])
     result = None
     failure = None
     deferred_reason = None
@@ -430,7 +461,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         try:
             if ledger.db.in_transaction:
                 ready, latest, write_state = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, write_proof[0], deadline=deadline,
-                    complete=complete, allow_dependency_repair=lane != "A")
+                    complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
                 readiness_state[0] = ready
                 if ready != 'verified' or latest is None:
                     if latest is not None and latest['source_sig'] != snapshot['source_sig']:
@@ -438,9 +469,9 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     return False
             else:
                 write_state = None
-                latest = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False)
+                latest = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
                 ready = patient_context_refresh_readiness._inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
-                                         allow_dependency_repair=lane != "A")
+                                         allow_dependency_repair=lane != "A", source_keys=source_keys)
                 readiness_state[0] = 'verified' if ready else 'unknown'
                 if latest['source_sig'] != snapshot['source_sig']:
                     readiness_state[0] = 'changed'
@@ -453,7 +484,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     and (cloud_input is None or (write_state['cloud_input'] if cached
                          else patient_context_refresh_state._cloud_input_binding(ledger.db, pid, latest)) == cloud_input)
                     and ready == "verified"
-                    and (after_commit or (write_state['scan_sig'] if cached else patient_context_refresh_state._scan_sig(ledger.db, pid)) == frozen_scan_sig
+                    and (after_commit or (write_state['scan_sig'] if cached else patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)) == frozen_scan_sig
                          and patient_context_refresh_state._published_version(ledger.db, pid) == frozen_ver)
                     and (selected_source[0] is None or actual is not None
                          and (write_state['occurrence'] if cached else patient_context_refresh_state._digest(patient_context_refresh_sources._source_occurrence(ledger.db, pid, actual)))
@@ -814,7 +845,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         ledger.db.execute("BEGIN")
         try:
             refreshed_quality = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, night_id, result["summary"],
-                                                  quality_identity["assessment"], result["temporal_view"])
+                                                  quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
             if refreshed_quality["identity"] != quality_identity:
                 return {"status": "source_changed", "done": 0}
         except (ValueError, KeyError, TypeError):
@@ -829,11 +860,11 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     if quality_fence is not None and quality_fence != (version, changes):
         return {"status": "source_changed", "done": 0}
     _, write_proof[0], ready_snapshot = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg, deadline=deadline,
-        complete=complete, allow_dependency_repair=lane != "A",
+        complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys,
         write_scope={'source_key': context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None,
                      'cloud': cloud_input is not None})
-    fresh = ready_snapshot or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False)
-    scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid)
+    fresh = ready_snapshot or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
+    scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
     # A finished inference is worth a short wait: the tick and lane 2 hold
     # the run lock for minutes, and dropping the result would send the
     # same prompt again on the next iteration.
@@ -881,8 +912,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     return {"status": "source_changed", "done": 0}
                 version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
                 changes = ledger.db.total_changes
-                fresh = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False)
-                scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid)
+                fresh = patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
+                scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
                 waited = 0
                 continue
             discard_if_changed()
@@ -960,13 +991,13 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             ready, actual, write_state = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, write_proof[0], deadline=deadline,
-                complete=complete, allow_dependency_repair=lane != "A")
+                complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
             if actual is not None:
                 fresh = actual
             if write_state is not None:
                 scans_now = write_state['scan_sig']
             elif ledger.db.execute("PRAGMA data_version").fetchone()[0] != version:
-                scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid)
+                scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
             selected_now = next((row for row in fresh["sources"] if selected_source[0] is not None
                                  and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
             if ready != 'verified':
@@ -1007,7 +1038,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                      "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
                      "next_try": now + min(86400, 300 * 2 ** min(attempts, 8)) if failure else 0}
             progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
-                        "night_id": night_id, "source_sig": snapshot["source_sig"],
+                        "night_id": night_id,
+                        **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
                 progress["next_try"] = now if deferred_reason == "summary_quality_pending" else now + 60
@@ -1043,7 +1075,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         "scan_sig": frozen_scan_sig, "publication_requested": patient_context_refresh_state.options(cfg)["publication"],
                         "published": bool(patient_context_refresh_state.options(cfg)["publication"] and audited and intact
                                           and snapshot["dependencies"]["complete"]
-                                          and snapshot["acquisition"]["complete"] and quality_ok)})
+                                          and (source_keys is not None or snapshot["acquisition"]["complete"]) and quality_ok)})
                     progress["summary_pending"] = bool(quality_required and quality_identity is None)
                 else:
                     if "source_occurrence" in result:

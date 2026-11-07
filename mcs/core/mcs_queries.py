@@ -1323,11 +1323,14 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
         yield record
 
 
-def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
+def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
     """Distinguish excluded attachment formats from unknown or unfinished OCR work."""
     import attachment_ocr
     from snapshot_access import table_exists
     if mid is not None and (type(mid) is not int or mid <= 0):
+        raise ValueError('attachment_message_invalid')
+    if message_ids is not None and (mid is not None or not isinstance(message_ids, (list, tuple))
+            or any(type(value) is not int or value <= 0 for value in message_ids)):
         raise ValueError('attachment_message_invalid')
 
     result = {"complete": True, "mode": "off", "total": 0, "eligible": 0, "excluded": 0,
@@ -1343,8 +1346,10 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
         for row in db.execute("SELECT a.attachment_id,a.state,a.sha256,a.bytes,a.downloaded_at "
                 "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
                 "WHERE m.project_id=? AND a.state IS NOT 'withdrawn' "
-                + ('AND m.message_id=? ' if mid is not None else '') + "ORDER BY a.attachment_id",
-                (pid, mid) if mid is not None else (pid,)):
+                + ('AND m.message_id=? ' if mid is not None else '')
+                + ('AND m.message_id IN (SELECT value FROM json_each(?)) ' if message_ids is not None else '')
+                + "ORDER BY a.attachment_id",
+                (pid, mid) if mid is not None else (pid, json.dumps(message_ids)) if message_ids is not None else (pid,)):
             result["total"] += 1
             document = attachment_ocr.current(db, row["attachment_id"], project_id=pid)
             state = attachment_ocr.view(db, row["attachment_id"], project_id=pid)["state"]

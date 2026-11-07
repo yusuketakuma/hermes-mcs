@@ -18,7 +18,19 @@ import patient_context_quality_receipts
 import patient_context_refresh_state
 
 
-def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
+def _source_scope(value):
+    import original_source_keys
+    if value is None:
+        return None
+    if (not isinstance(value, (list, tuple)) or not value
+            or any(not (type(key) is int and key > 0 or original_source_keys.valid(key)) for key in value)
+            or len(set(value)) != len(value)):
+        raise ValueError('patient_context_source_scope_invalid')
+    return tuple(value)
+
+
+def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None, source_keys=None):
+    source_keys = _source_scope(source_keys)
     owns_read = not db.in_transaction
     if owns_read:
         db.execute("BEGIN")
@@ -29,6 +41,10 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
             for source in context_queries.patient_context_sources(db, pid, hydrate=hydrate, cfg=cfg):
                 _scan_check(db)
                 sources.append(source)
+        observed_count = len(sources)
+        if source_keys is not None:
+            selected = set(source_keys)
+            sources = [source for source in sources if context_plan.source_key(source) in selected]
         signed = []
         for source in sources:
             _scan_check(db)
@@ -36,19 +52,30 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
                 signed.append((context_plan.source_key(source), context_plan.source_signature(source),
                                bool(source.get("historical"))))
         contract = patient_context_refresh_state._contract(cfg, pid) if contract is None else contract
-        dependencies = dependency_loss.read(db, pid)
+        dependencies = dependency_loss.read(db, pid, **({'source_keys': source_keys} if source_keys is not None else {}))
         acquisition = initial_import_state.acquisition_status(db, pid)
-        attachment_coverage = context_queries.attachment_ocr_coverage(db, pid, cfg)
+        if source_keys is None:
+            attachment_coverage = context_queries.attachment_ocr_coverage(db, pid, cfg)
+        else:
+            mids = sorted({source.get('parent_message_id') or source['message_id'] for source in sources
+                           if source.get('parent_message_id') or source.get('message_id')})
+            attachment_coverage = context_queries.attachment_ocr_coverage(db, pid, cfg, message_ids=mids)
         signed_scope = {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")} if scope else None
         if signed_scope is not None:
             signed_scope["permission_refusal"] = scope.get("fetch_reason") if scope.get("fetch_reason") in (
                 "forbidden", "permission_denied", "access_revoked") else None
-        signature_parts = [signed_scope, contract, signed, dependencies["signature"], acquisition["signature"]]
+        signature_parts = [signed_scope, contract, signed, dependencies["signature"],
+                           acquisition["signature"] if source_keys is None else ['source_scope_v1', list(source_keys)]]
         if attachment_coverage["mode"] != "off":
             signature_parts.append(attachment_coverage["signature"])
-        return {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
+        result = {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
                 "acquisition": acquisition, "attachment_coverage": attachment_coverage,
                 "source_sig": patient_context_refresh_state._digest(signature_parts)}
+        if source_keys is not None:
+            result.update(source_scope=list(source_keys), source_coverage={
+                'included': len(sources), 'observed': observed_count,
+                'unreflected': observed_count - len(sources), 'acquisition_complete': acquisition['complete']})
+        return result
     finally:
         if owns_read:
             db.rollback()
@@ -537,14 +564,15 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
                 raw_occurrences])}
 
 
-def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None):
+def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None, source_keys=None):
     """Read and validate quality inputs within an already-open SQLite snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
-    snapshot = _snapshot(db, pid, cfg, hydrate=True, contract=contract)
+    snapshot = _snapshot(db, pid, cfg, hydrate=True, contract=contract, source_keys=source_keys)
     scope = snapshot.get("scope") or {}
     if (patient_context_refresh_state._out_of_scope(snapshot) or scope.get("is_archived")
-            or not snapshot["acquisition"]["complete"]
+            or source_keys is None and not snapshot["acquisition"]["complete"]
+            or source_keys is not None and len(snapshot['sources']) != len(source_keys)
             or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
             or not snapshot["attachment_coverage"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
