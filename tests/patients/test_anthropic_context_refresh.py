@@ -23,7 +23,7 @@ import extract_llm as worker
 import cloud_inference
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
-from test_patient_context_refresh import _semantic_proof, document, seed, stamp
+from test_patient_context_refresh import _prepare_summary, _semantic_proof, document, seed, stamp
 from anthropic_context_testkit import (
     _SOURCE_REPAIR_PROVIDER as _SOURCE_REPAIR_PROVIDER,
     _SOURCE_REPAIR_JEV as _SOURCE_REPAIR_JEV,
@@ -527,14 +527,22 @@ def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime
 
 
 @pytest.mark.parametrize("abort", [False, True])
-def test_dryrun_estimate_is_atomic_with_context_and_progress(runtime, cloud, monkeypatch, abort):
+@pytest.mark.parametrize("lane", ["B", "A"])
+def test_dryrun_estimate_is_atomic_with_context_and_progress(runtime, cloud, monkeypatch, abort, lane):
     led, _, _ = runtime
     seed(led)
     cloud[1][0] = "dry_run"
+    if lane == "A":
+        _prepare_summary(runtime, cfg=CFG)
+    kinds = (patient_context_refresh_state.KIND, patient_context_refresh_state.SCAN,
+             patient_context_refresh_state.CHUNK, "cloud_usage_dryrun")
+    before = {kind: led.artifacts(kind) for kind in kinds}
+    estimated = []
     record = worker.cloud_policy.dryrun_tx
     def estimate(*args, **kwargs):
         assert led.db.in_transaction
         record(*args, **kwargs)
+        estimated.append(kwargs["unit_key"])
         assert led.db.in_transaction
         if abort:
             raise RuntimeError("synthetic_save_failure")
@@ -542,13 +550,18 @@ def test_dryrun_estimate_is_atomic_with_context_and_progress(runtime, cloud, mon
     if abort:
         with pytest.raises(RuntimeError, match="synthetic_save_failure"):
             step(runtime)
-        for kind in (patient_context_refresh_state.KIND, patient_context_refresh_state.SCAN, "cloud_usage_dryrun"):
-            assert not led.artifacts(kind)
+        assert {kind: led.artifacts(kind) for kind in kinds} == before
         assert led.artifacts(patient_context_refresh_state.PROGRESS)  # Selection is a separate preclaim.
     else:
-        assert step(runtime)["status"] == "progressed"
-        assert led.artifacts(patient_context_refresh_state.KIND) and led.artifacts(patient_context_refresh_state.PROGRESS)
-        assert len(led.artifacts("cloud_usage_dryrun")) == 1
+        result = step(runtime)
+        assert result["status"] == "progressed" and result["lane"] == lane
+        kind = patient_context_refresh_state.KIND if lane == "A" else patient_context_refresh_state.SCAN
+        assert led.artifacts(kind) != before[kind] and led.artifacts(patient_context_refresh_state.PROGRESS)
+        untouched = patient_context_refresh_state.SCAN if lane == "A" else patient_context_refresh_state.KIND
+        assert led.artifacts(untouched) == before[untouched]
+        assert len(led.artifacts("cloud_usage_dryrun")) == len(before["cloud_usage_dryrun"]) + 1
+    assert estimated == [lane] and not cloud[0]
+    assert not led.artifacts("cloud_usage_reserve") and not led.artifacts("cloud_usage_result")
     assert not led.db.in_transaction
 
 
@@ -715,7 +728,7 @@ def test_shadow_grounding_sides_remain_independently_measured(runtime, cloud, mo
     led, _, _ = runtime
     cloud[1][0] = 'shadow'
     seed(led,body='完全合成の見出しなし記録です。')
-    assert step(runtime)['lane'] == 'A'
+    # The first eligible unit is the source scan; an empty summary is not run.
     prior_rows = led.artifacts("cloud_compare_v1")
     prior_ids = {row["artifact_id"] for row in prior_rows}
     values = {}
@@ -749,7 +762,7 @@ def test_shadow_audit_is_a_single_short_lock_attempt_and_keeps_pending_when_unav
     led, clock, _ = runtime
     cloud[1][0] = 'shadow'
     seed(led,body='完全合成の見出しなし記録です。')
-    assert step(runtime)['lane'] == 'A'
+    # Install the lock fault before the first source scan commits.
     prior_rows = led.artifacts("cloud_compare_v1")
     prior_ids = {row["artifact_id"] for row in prior_rows}
     attempts, held = [], set()
@@ -794,7 +807,7 @@ def test_shadow_pending_is_atomic_with_local_success_and_replay_does_not_duplica
     led, _, _ = runtime
     cloud[1][0] = "shadow"
     seed(led, body="完全合成の見出しなし記録です。")
-    assert step(runtime)["lane"] == "A"
+    # The first source scan owns both the local result and the pending record.
     prior_rows = led.artifacts("cloud_compare_v1")
     prior_ids = {row["artifact_id"] for row in prior_rows}
     before = [dict(row) for row in led.db.execute("SELECT * FROM artifacts WHERE kind!=? ORDER BY artifact_id", (patient_context_refresh_state.PROGRESS,))]
