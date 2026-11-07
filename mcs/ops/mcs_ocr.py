@@ -75,9 +75,7 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
                     local_blocked |= local['deferred'] > 0
                 else:
                     with writer_lock.capture_writer_refusal() as diagnostic:
-                        raw = attachment_ocr.run_pending(ledger, cfg, limit=1,
-                            deadline=min(deadline - 5, time.monotonic()
-                                         + cfg['attachment_ocr'].get('timeout_seconds', 120) + 5))
+                        raw = attachment_ocr.run_pending(ledger, cfg, limit=1, deadline=deadline - 5)
                     for key, value in raw.items():
                         if key == 'reason' and value is None and result.get('reason') is not None:
                             continue

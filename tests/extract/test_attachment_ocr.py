@@ -513,6 +513,208 @@ def test_busy_settle_waits_without_recomputing_and_marks_snapshot(setup, monkeyp
     assert ledger.db.execute("SELECT notify_dirty FROM notification_meta").fetchone()[0] == 1
 
 
+def test_settle_waits_past_five_seconds_within_deadline_without_recomputing(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    clock = [ocr.time.monotonic()]
+    waits = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls and len(waits) < 3:
+            return None
+        return real_acquire(lock)
+
+    def wait(lock, **kwargs):
+        clock[0] += kwargs["wait_s"]
+        waits.append(kwargs["wait_s"])
+        return None if len(waits) < 3 else real_acquire(lock)
+
+    monkeypatch.setattr(ocr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    start = clock[0]
+    assert ocr.run_pending(ledger, cfg, deadline=start + 30)["complete"] == 1
+    assert len(calls) == 1 and waits == [5, 5, 5] and clock[0] - start > 5
+
+
+def test_settle_stops_at_deadline_and_keeps_result_unsaved(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    clock = [ocr.time.monotonic()]
+    waits = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            return None
+        return real_acquire(lock)
+
+    def wait(lock, **kwargs):
+        clock[0] += kwargs["wait_s"]
+        waits.append(kwargs["wait_s"])
+        return None
+
+    monkeypatch.setattr(ocr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    start = clock[0]
+    result = ocr.run_pending(ledger, cfg, deadline=start + 10)
+    assert result["deferred"] == 1 and result["complete"] == 0 and len(calls) == 1
+    assert waits == [5, 4] and clock[0] <= start + 10
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
+def test_settle_refuses_write_when_deadline_expired_at_acquire(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    clock = [ocr.time.monotonic()]
+    acquires = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            acquires.append(lock)
+        return real_acquire(lock)
+
+    patched = ocr._runtime
+
+    def runtime(*args):
+        pages_out = patched(*args)
+        clock[0] += 5
+        return pages_out
+
+    monkeypatch.setattr(ocr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr, "_runtime", runtime)
+    start = clock[0]
+    result = ocr.run_pending(ledger, cfg, deadline=start + 3)
+    assert result["deferred"] == 1 and len(acquires) == 0
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
+def test_settle_refuses_write_when_deadline_expires_during_wait(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    clock = [ocr.time.monotonic()]
+    waits = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls and not waits:
+            return None
+        return real_acquire(lock)
+
+    def wait(lock, **kwargs):
+        waits.append(kwargs["wait_s"])
+        clock[0] += kwargs["wait_s"] * 2
+        return real_acquire(lock)
+
+    monkeypatch.setattr(ocr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    start = clock[0]
+    result = ocr.run_pending(ledger, cfg, deadline=start + 10)
+    assert result["deferred"] == 1 and waits == [5]
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
+def test_settle_exits_when_update_begins_during_wait(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    clock = [ocr.time.monotonic()]
+    waits = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            return None
+        return real_acquire(lock)
+
+    def wait(lock, **kwargs):
+        waits.append(kwargs["wait_s"])
+        clock[0] += 1
+        return None
+
+    monkeypatch.setattr(ocr.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ocr.writer_lock, "updater_state", lambda: (False, 9 if waits else 1))
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    start = clock[0]
+    result = ocr.run_pending(ledger, cfg, deadline=start + 30)
+    assert result["deferred"] == 1 and waits == [5]
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("fixed", sorted(ocr._RUNTIME_REASONS))
+def test_runtime_failure_keeps_only_fixed_reasons(setup, monkeypatch, fixed):
+    ledger, cfg, _, _, _ = setup
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: (_ for _ in ()).throw(ValueError(fixed)))
+    assert ocr.run_pending(ledger, cfg)["failed"] == 1
+    content = json.loads(ledger.db.execute("SELECT content FROM artifacts").fetchone()[0])
+    assert content["reason"] == fixed
+
+
+@pytest.mark.parametrize("error", [ValueError("synthetic_secret_xyz"), OSError("synthetic_secret_xyz")])
+def test_runtime_unknown_exception_stays_generic_and_leaks_nothing(setup, monkeypatch, error):
+    ledger, cfg, _, _, _ = setup
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: (_ for _ in ()).throw(error))
+    assert ocr.run_pending(ledger, cfg)["failed"] == 1
+    row = ledger.db.execute("SELECT content FROM artifacts").fetchone()[0]
+    assert json.loads(row)["reason"] == "local_processing_failed"
+    assert "synthetic_secret" not in row
+
+
+def test_settle_without_deadline_keeps_single_five_second_wait(setup, monkeypatch):
+    ledger, cfg, _, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    waits = []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            return None
+        return real_acquire(lock)
+
+    def wait(lock, **kwargs):
+        waits.append(kwargs["wait_s"])
+        return None
+
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock", wait)
+    assert ocr.run_pending(ledger, cfg)["deferred"] == 1
+    assert len(calls) == 1 and waits == [5]
+
+
+@pytest.mark.parametrize("case", ["generation", "source", "settings"])
+def test_settle_validation_refusal_never_retries(setup, monkeypatch, case):
+    ledger, cfg, pages, calls, _ = setup
+    real_acquire = ocr.writer_lock.acquire_run_lock
+    acquires, waits = [], []
+
+    def acquire(lock):
+        if str(lock).endswith("run.lock") and calls:
+            acquires.append(lock)
+        return real_acquire(lock)
+
+    if case == "generation":
+        monkeypatch.setattr(ocr.writer_lock, "updater_state", lambda: (False, 9 if calls else 1))
+    elif case == "source":
+        patched = ocr._runtime
+
+        def runtime(*args):
+            pages_out = patched(*args)
+            ledger.db.execute("UPDATE attachments SET sha256='tampered'")
+            ledger.db.commit()
+            return pages_out
+
+        monkeypatch.setattr(ocr, "_runtime", runtime)
+    else:
+        changed = {"attachment_ocr": {**cfg["attachment_ocr"], "executable": "/synthetic/other"}}
+        monkeypatch.setattr(ocr, "load_config", lambda: cfg if not calls else changed)
+
+    monkeypatch.setattr(ocr.writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(ocr.writer_lock, "wait_run_lock",
+                        lambda *args, **kwargs: waits.append(kwargs["wait_s"]))
+    result = ocr.run_pending(ledger, cfg, deadline=ocr.time.monotonic() + 30)
+    assert result["deferred"] == 1 and len(acquires) == (1 if case == "source" else 0) and waits == []
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("number", [ocr.signal.SIGTERM, ocr.signal.SIGHUP])
 def test_parent_signal_kills_runtime_group_and_restores_handler(tmp_path, monkeypatch, number):
     old = ocr.signal.getsignal(number)
