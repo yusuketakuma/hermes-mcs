@@ -48,6 +48,8 @@
 - 本番 `874ad3fc` はコード適用の記録が一致し、applying=null・stages=[]・clean、直接起動のsetup checkはexit 0。ただし更新後のSlackチャンネル準備は `slack_setup_scope_required` で未完了のため、更新wrapper全体はexit 1。全体成功とは扱わない。
 - 同版で自然実行したOCRジョブは保存8件・空資料2件・実行失敗1件・OCR先送り0件・ローカル解析完了1件・先送り1件。解析結果は現行の読取り側がreadyとして採用し、個別の追加クラウド処理を要求しないことを実測した。スナップショット更新待ちと失敗は未解決で、Jevロゴ修正は本番未適用。
 
+- Jevアイコンの統合後、Discordの画像部品だけを該当する表示ファイルで許可し、動的なSDK参照と他のファイルでの使用を拒否する境界を維持した。固定Discord SDKを使う関連20fileは545 passed・0 failed・0 skipped・exit 0。証跡は `jev-icon-codex/gate-fixed-batch.xml` とlogに保存。利用上限に伴う引継ぎ後の追加修正はCodexの自己確認であり、独立レビューとは区別する。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須ゲートと失敗項目の再検証とは区別する。
