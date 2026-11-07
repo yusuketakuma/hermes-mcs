@@ -212,10 +212,13 @@ def test_missing_scope_member_is_refused_at_quality_and_publication(runtime):
     assert _keys(ghost) == [1]
     assert ghost["source_coverage"]["included"] == 1
     assert not _scoped_ready(led, 1, [1, 4242], clock)
-    with led.db:
+    led.db.execute("BEGIN")
+    try:
         with pytest.raises(ValueError, match="quality_source_incomplete"):
             patient_context_refresh_sources._quality_capture(
                 led.db, 1, CFG, "2026-10-17", [], {}, {}, source_keys=[1, 4242])
+    finally:
+        led.db.rollback()
 
 
 def test_unfinished_scan_chunks_never_enter_the_generated_context(runtime, monkeypatch):
@@ -283,7 +286,8 @@ def test_unselected_source_loss_still_limits_selected_facts(runtime):
     assert scoped['losses'] == full['losses'] and scoped['losses']
     assert scoped['signature'] == full['signature']
     assert scoped['complete']
-    snapshot = _scoped_snapshot(led, 1, [1])
+    snapshot = patient_context_refresh_sources._snapshot(
+        led.db, 1, CFG, hydrate=True, source_keys=[1])
     assert snapshot['dependencies']['losses'] == full['losses']
     facts, _, projected = patient_context_refresh_sources._all_facts(
         led.db, 1, snapshot, 'synthetic', projected=True)
