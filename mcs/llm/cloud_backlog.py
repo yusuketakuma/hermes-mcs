@@ -220,23 +220,26 @@ class CloudBacklogPool:
         if settings["mode"] != "on":
             # Workers retire at the idle boundary after paid carry is settled.
             return
-        routes_open = (cloud_policy.send_route("patient_context") if self.context_only else
-                       cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog"))
-        if not routes_open:
-            # Individual cloud routes are closed to new sends; running workers
-            # still settle paid carry before retiring on their own fence.
-            return
-        if not cloud_policy.selected_key(self.root):
-            return
-        selection, errors = cloud_policy.resolve_profile(
-            cfg, route="patient_context" if self.context_only else "reextract",
-            purpose="patient_context" if self.context_only else "backlog", root=self.root)
-        if errors or selection is None:
-            return
-        limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
-        if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
-                or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
-            return
+        if self.context_only:
+            import patient_context_refresh
+            if not patient_context_refresh.options(cfg)["enabled"]:
+                return
+            # Cloud availability is decided inside run_due. A missing key or
+            # a spend hold must not hide its existing local fallback/recovery.
+        else:
+            if not (cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog")):
+                # Existing workers settle paid carry before retiring.
+                return
+            if not cloud_policy.selected_key(self.root):
+                return
+            selection, errors = cloud_policy.resolve_profile(
+                cfg, route="reextract", purpose="backlog", root=self.root)
+            if errors or selection is None:
+                return
+            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
+            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
+                return
         directory = self.root / "data"
         if self.lock is None:
             self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))

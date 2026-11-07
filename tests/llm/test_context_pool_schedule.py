@@ -1,7 +1,10 @@
 """The context child reaches the real context engine without occupying a local turn."""
 from types import SimpleNamespace
 
+import pytest
+
 import cloud_backlog
+import cloud_policy
 import extract_llm_resident as resident
 import local_llm
 import mcs_util
@@ -12,9 +15,12 @@ from test_patient_context_refresh import document
 __all__ = ["cloud", "real_cloud", "runtime"]
 
 
-def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monkeypatch, tmp_path):
+@pytest.mark.parametrize("cloud_ready", [True, False])
+def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monkeypatch, tmp_path, cloud_ready):
     ledger, clock, local_calls = runtime
     cfg, posts = real_cloud
+    if not cloud_ready:
+        monkeypatch.setattr(cloud_policy, "api_key", lambda *_: None)
     events = []
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
@@ -38,7 +44,8 @@ def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monke
     assert resident._background_context_refresh(ledger, initial) == {"status": "off", "done": 0}
     assert not posts
     cloud_backlog._context_worker(ledger, initial, 0)
-    assert document(ledger) is not None and posts and not local_calls
+    assert document(ledger) is not None
+    assert bool(posts) is cloud_ready and bool(local_calls) is not cloud_ready
     assert len(ledger.artifacts("cloud_usage_reserve")) == len(posts)
     assert len(ledger.artifacts("cloud_usage_result")) == len(posts)
     assert all(name == "patient_context_pass" for name, _ in events)
