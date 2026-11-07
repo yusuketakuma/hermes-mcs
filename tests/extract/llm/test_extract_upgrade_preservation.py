@@ -64,12 +64,8 @@ def seed(tmp_path, *, version=None, body=BODY):
     return db, aid, row
 
 
-@pytest.mark.parametrize(("provider", "model", "price_version"), [
-    ("anthropic", llm.anthropic_client.MODEL, llm.cloud_policy.PRICE_VERSION),
-    ("openai", llm.openai_client.MODEL, llm.cloud_policy.OPENAI_PRICE_VERSION),
-])
-def test_dryrun_saves_selected_provider_model_after_job_preparation(
-        tmp_path, monkeypatch, provider, model, price_version):
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_closed_individual_dryrun_stays_local_without_usage_estimate(tmp_path, monkeypatch, provider):
     db, _, _ = seed(tmp_path)
     try:
         cfg = {"cloud_llm": {"mode": "dry_run", "provider": provider, "project_ids": [1]}}
@@ -90,16 +86,11 @@ def test_dryrun_saves_selected_provider_model_after_job_preparation(
         jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
         assert len(jobs) == 1 and skipped == blocked == 0
         row = jobs[0][0]
-        assert row["_cloud_mode"] == "dry_run"
+        assert row["_cloud_mode"] == "off"
         assert row["_target"][1] == "synthetic-local"
         assert not db.artifacts("cloud_usage_dryrun")
         assert llm._replace_current(db, row, json.dumps(PRIOR, ensure_ascii=False))
-        estimates = db.artifacts("cloud_usage_dryrun")
-        assert len(estimates) == 1
-        assert estimates[0]["model"] == model
-        meta = json.loads(estimates[0]["meta"])
-        assert meta["route"] == "reextract"
-        assert meta["price_version"] == price_version
+        assert not db.artifacts("cloud_usage_dryrun")
     finally:
         db.close()
 

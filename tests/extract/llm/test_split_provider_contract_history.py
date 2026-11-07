@@ -14,6 +14,7 @@ import openai_client
 from extract_testkit import _ledger, _message
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 def contracts():
@@ -160,7 +161,8 @@ def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, 
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     try:
         row, frame, attempt, _aid = history(ledger)
-        old = _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='old')
+        with legacy_cloud_routes():
+            old = _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='old')
         metadata = _result(old, 'timeout' if outcome == 'unknown' else 'http_200',
                            'timeout' if outcome == 'unknown' else None)
         if outcome == 'settled':
@@ -172,16 +174,14 @@ def test_recognizing_prior_split_never_relaxes_financial_resend_proof(tmp_path, 
         assert [tuple(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
             "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == before
         selected = _medium_selection('reextract')
-        if outcome == 'unknown':
-            with pytest.raises(anthropic_client.AnthropicError) as denied:
-                _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='new',
-                         selection=selected, max_tokens=selected['max_tokens'])
-            assert denied.value.detail == 'cloud_unit_unresolved'
-            assert len(ledger.artifacts('cloud_usage_reserve')) == 1
-        else:
+        assert not cloud_policy.send_route('reextract')
+        with pytest.raises(anthropic_client.AnthropicError) as denied:
             _reserve(ledger, 'synthetic prompt', 'openai', route='reextract', unit='new',
                      selection=selected, max_tokens=selected['max_tokens'])
-            assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        assert denied.value.detail == ('cloud_unit_unresolved' if outcome == 'unknown' else 'scope')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert [tuple(r) for r in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
+            "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == before
     finally:
         ledger.close()
 
