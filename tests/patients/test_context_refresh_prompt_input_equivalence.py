@@ -201,6 +201,9 @@ def test_detail_key_prompt_invalidates_prior_success_via_existing_checks(runtime
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
     assert patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2]['B'] is True
     assert document(led) == old_document
+    # Changed prompt checks are a new generation, not recovery of the old input.
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime)
     source_calls = [call for call in calls if 'source' in call]
     assert len(source_calls) == 2

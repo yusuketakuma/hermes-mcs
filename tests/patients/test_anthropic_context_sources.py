@@ -434,7 +434,7 @@ def test_source_quality_unknown_clears_only_after_existing_pass_is_reverified(ru
 
 def test_source_question_reuses_original_receipts_when_an_unrelated_fact_is_added(runtime, cloud):
     import semantic_policy
-    led, _, _ = runtime
+    led, clock, _ = runtime
     seed(led, body='合成の居住記録です。介護ベッドを使用しています。')
     drain(runtime)
     assessment = patient_context_refresh_state._quality_assessment(semantic_policy.runtime_config(CFG)[0])
@@ -455,6 +455,9 @@ def test_source_question_reuses_original_receipts_when_an_unrelated_fact_is_adde
     assert changed['identity']['source_input_key'] == initial['identity']['source_input_key']
     for fid in initial['identity']['fact_ids'][:-1]:
         assert changed['identity']['question_keys'][fid] == initial['identity']['question_keys'][fid]
+    # The added fact changes the overview input, while source receipts stay reusable.
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     drain(runtime)
     requested = set()
     for body in led.synthetic_jev_requests[before:]:
