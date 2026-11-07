@@ -491,7 +491,8 @@ def repair(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: repair_cfg)
-    def capture(db, pid, cfg, night_id, repaired, contract, projection):
+    def capture(db, pid, cfg, night_id, repaired, contract, projection, *, source_keys=None):
+        assert source_keys is None
         assert db.in_transaction and pid == 1 and contract == assessment
         key = patient_context_refresh_state._digest(sorted((row['fact_ids'][0], row['text']) for row in repaired))
         return {'identity': {**identity, 'candidate_key': key,
