@@ -20,14 +20,13 @@
 
 - 全体 suite：9633 passed + 91 subtests passed / 25 fail / SDK専用 2 skip（実測 `2220b03808c5bc1068d77b3bed6a4b1601eb3bef`・exit 1・source_stamp_changed=[]、ルート供給値）。
 - 105-file batch（`cb0` 固定・実終了）：exit 1・3016 passed / 24 failed / 0 skip / 2693.81秒・source_stamp_changed=[]・clean。元25 failは全解消（semantic HTTP含む）。当該node `test_view_reads_only_quoted_bodies_without_reextracting_history` と追加5件（marked厳格照合・consumer write失効・rollback・SQLite失敗・制御例外伝播）が実logで PASSED。
-- 既知24 failの末端traceは全て修正 `6129d37a` の原因と整合（capture ready=True/proof=None、Python proofがwriter内へfallback、snapshot A6vs4/B5vs3、表示Nonevs10）。`f7503e5a` 固定の13file統合batch（24failの3file＋通常JOIN境界＋readiness witness/cursor/read境界＋updater2file＋update candidate＋schema/update origin3file）をルートが開始。
+- 既知24 failの末端traceは全て修正 `6129d37a` の原因と整合し、`f7503e5a` 固定の13file統合batch（24failの3file＋通常JOIN境界＋readiness witness/cursor/read境界＋updater2file＋update candidate＋schema/update origin3file）で全解消を確認（exit 0・1072 passed / 0 failed / 0 skip・約602秒・source_stamp_changed=[]・clean、ルート供給値）。lint 0・gates 10/10・mine 0・manifest digest `9726b4c1` 一致もルート確定。
 - SDK別lane42件（standalone13・Hermes29）：実行SHAは `f11384da`。SDK対象bytesは `f113..cb0` で不変とルート確認済みで再利用可（旧 `b963` を実行SHAと記録しない）。
 - 公式医薬品マスター：`drug-master-fresh-check.json`（2026-11-07）で同梱 bundle と一致確認済み（`matches_bundle: true`、出典・hash・行数記録済み）。有効化は要オペレーター承認で未実施。
 
 ## この資料では確認していない事項
 
-- 既知24 failの最終結果：修正 `6129d37a`（読取り記録中は補助要約を個別照合）はこの候補へ統合済みだが、13file統合batchの結果が未確定で、成功とは記載しない。
-- 必須ゲート・CI全ジョブの成功。
+- 必須ゲート・CI全ジョブの成功（既知24 failは13file統合batchで解消確認済み）。
 - 最終候補SHAの固定と、統合済みソースに対する source manifest の検証。
 - 本番適用・実機稼働・適用後のエラー観測。
 - GitHub 上での画像表示、Release本文・asset・tag・公開。画像はリポジトリ内相対参照で保持し、外部表示は未検証。
