@@ -1,17 +1,136 @@
 """Per-evaluation Jev guards and explicit deadlines stay isolated on one reused client."""
 import json
+import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
 import semantic_jev as jev
 import semantic_runtime as runtime
+import writer_lock
 
 
 def answer(body):
     return 200, {}, json.dumps({"model": jev.JEV_MODEL,
         "answers": {key: {"type": "noul", "noul": .9} for key in body["questions"]},
         "usage": {"input_tokens": 1, "output_tokens": 1}}).encode()
+
+
+def _run_lock_available(path):
+    other = writer_lock.acquire_run_lock(str(path))
+    if other is None:
+        return False
+    os.close(other)
+    return True
+
+
+@pytest.fixture
+def retry_lock(tmp_path, monkeypatch):
+    from contextlib import closing
+    from semantic_testkit import _seeded
+
+    monkeypatch.setattr(writer_lock, "HOME", str(tmp_path))
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
+    (tmp_path / "data").mkdir(exist_ok=True)
+    path = tmp_path / "run.lock"
+    fd = writer_lock.acquire_run_lock(str(path))
+    assert fd is not None
+    try:
+        with closing(_seeded(tmp_path)) as ledger:
+            yield ledger, path, fd
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("failure", ["retry_after", "transport"])
+@pytest.mark.parametrize("unlocked", [True, False])
+def test_retry_wait_releases_run_lock_but_hooks_keep_it(retry_lock, monkeypatch, failure, unlocked):
+    ledger, path, fd = retry_lock
+    clock, waits, sent, reserved, guards, results = [1000.0], [], [], [], [], []
+    deadline = clock[0] + 100
+
+    def sleep(seconds):
+        assert _run_lock_available(path) is unlocked
+        waits.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(jev, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
+    monkeypatch.setattr(jev.random, "uniform", lambda *args: .25)
+    client = jev.JevClient(api_key="synthetic", max_attempts=2)
+
+    def request(method, body, timeout, *, deadline):
+        assert method == "POST"
+        assert _run_lock_available(path) is unlocked
+        sent.append(body)
+        if len(sent) == 1:
+            if failure == "transport":
+                raise OSError("synthetic transport failure")
+            return 429, {"Retry-After": "7"}, b"{}"
+        return answer(body)
+
+    monkeypatch.setattr(client, "request", request)
+
+    def transport(call, *args, **kwargs):
+        with writer_lock.unlocked_transport(ledger.db, fd, deadline=time.monotonic() + 5):
+            return call(*args, **kwargs)
+
+    def held_hook(events):
+        assert not _run_lock_available(path)
+        events.append(True)
+
+    value = client.evaluate({}, {"q": jev.noul_question("synthetic", "yes", "no")}, deadline,
+        transport=transport if unlocked else None,
+        reserve_fn=lambda *args: held_hook(reserved),
+        before_attempt=lambda: held_hook(guards), after_result=lambda: held_hook(results))
+    assert value["answers"]["q"] == {"type": "noul", "noul": .9}
+    assert waits == ([7.0, 1.25] if failure == "retry_after" else [1.25])
+    assert len(sent) == client.requests_made == len(reserved) == 2
+    assert guards == [True] * 4 and results == [True]
+    assert client.usage_totals == {"input_tokens": 1, "output_tokens": 1, "reported_requests": 1}
+    assert not _run_lock_available(path)
+
+
+@pytest.mark.parametrize("failure", ["retry_after", "transport"])
+def test_update_during_retry_wait_refuses_reacquire_without_another_post(retry_lock, monkeypatch, failure):
+    ledger, path, fd = retry_lock
+    sent, reserved, waits = [], [], []
+
+    def sleep(seconds):
+        assert _run_lock_available(path)
+        waits.append(seconds)
+        (path.parent / "data" / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic update")
+
+    monkeypatch.setattr(jev, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleep))
+    monkeypatch.setattr(jev.random, "uniform", lambda *args: .25)
+    client = jev.JevClient(api_key="synthetic", max_attempts=2)
+
+    def request(*args, **kwargs):
+        assert _run_lock_available(path)
+        sent.append(True)
+        if failure == "transport":
+            raise OSError("synthetic unknown send")
+        return 429, {"Retry-After": "7"}, b"{}"
+
+    monkeypatch.setattr(client, "request", request)
+
+    def transport(call, *args, **kwargs):
+        with writer_lock.unlocked_transport(ledger.db, fd, deadline=time.monotonic() + 5):
+            return call(*args, **kwargs)
+
+    def reserve(*args):
+        assert not _run_lock_available(path)
+        reserved.append(True)
+
+    with pytest.raises(writer_lock.RunLockLost) as error:
+        client.evaluate({}, {"q": jev.noul_question("synthetic", "yes", "no")}, time.monotonic() + 100,
+            transport=transport, reserve_fn=reserve, after_result=lambda: pytest.fail("no accepted result"))
+    assert error.value.held is True and error.value.updated is False
+    assert (path.parent / "data" / writer_lock.UPDATE_MARKER_NAME).exists()
+    assert waits == ([7.0] if failure == "retry_after" else [1.25])
+    assert sent == reserved == [True] and client.requests_made == 1
+    assert client.usage_totals == {"input_tokens": 0, "output_tokens": 0, "reported_requests": 0}
+    assert not _run_lock_available(path)
 
 
 def test_nested_same_client_keeps_hooks_deadlines_and_reservations_per_evaluation(monkeypatch):

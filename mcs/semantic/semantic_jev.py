@@ -660,7 +660,10 @@ class JevClient:
                         if wait is not None:
                             wait = min(wait, max(0.0, deadline - time.monotonic()))
                             if wait > 0:
-                                time.sleep(wait)
+                                if transport is None:
+                                    time.sleep(wait)
+                                else:
+                                    transport(time.sleep, wait)
                 else:
                     try:
                         parsed = _decode_response(raw, retryable=True)
@@ -690,7 +693,10 @@ class JevClient:
                 backoff = min(2.0 ** attempt + random.uniform(0, 0.5),
                               max(0.0, deadline - time.monotonic()))
                 if backoff > 0:
-                    time.sleep(backoff)
+                    if transport is None:
+                        time.sleep(backoff)
+                    else:
+                        transport(time.sleep, backoff)
         if last is not None:
             self.last_error = last
             raise last
