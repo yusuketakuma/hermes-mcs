@@ -470,10 +470,15 @@ def owns_member_request(db, *, route, project_id, target_id, identity=None):
         (KINDS[0], project_id, target_id, route,
          target_id, target_id, target_id, target_id)).fetchall()
     for row in rows:
+        # With an identity every candidate is receipt-parsed before any
+        # member/nonmember classification: json_extract reads the first of
+        # duplicate keys while json.loads keeps the last, so a row that hides
+        # member fields behind "owner":{...},"owner":null would otherwise skip
+        # strict validation entirely via the non-member branch.
         try:
-            meta = json.loads(row["meta"])
+            meta = _receipt_meta(row["meta"]) if identity is not None else json.loads(row["meta"])
         except (TypeError, ValueError):
-            meta = None
+            return True
         if not isinstance(meta, dict):
             return True
         owner = meta.get("owner")
@@ -482,9 +487,8 @@ def owns_member_request(db, *, route, project_id, target_id, identity=None):
             if identity is None:
                 return True
             try:
-                receipt = _receipt_meta(row["meta"])
-                _reserve_valid(receipt, row)
-                old_identity = _semantic_financial_identity(receipt)
+                _reserve_valid(meta, row)
+                old_identity = _semantic_financial_identity(meta)
             except (AnthropicError, ValueError, TypeError, KeyError):
                 return True
             if old_identity is None or old_identity == identity:

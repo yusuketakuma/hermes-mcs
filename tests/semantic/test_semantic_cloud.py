@@ -1509,6 +1509,38 @@ def test_closed_route_phase_different_unit_keeps_prefix_current_hold(cloud):
     assert not local and not calls
 
 
+def test_closed_route_duplicate_member_key_smuggled_row_still_holds(cloud):
+    """A row hiding member fields behind a duplicate owner key stays a
+    candidate via json_extract (first key) — the strict receipt parse must
+    reject it before the member/nonmember classification, never skipped as
+    a proven non-member unit."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    original = dict(rows(led, 'cloud_usage_reserve')[0])
+    meta = json.loads(original['meta'])
+    meta.pop('owner', None)
+    # json_extract sees the first owner key, json.loads the last — the member
+    # fields disappear before classification while the row stays a candidate.
+    smuggled = ('{"owner":{"semantic_target_id":3},"owner":null,'
+                + json.dumps(meta, separators=(',', ':'))[1:])
+    with led.db:
+        led.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "VALUES('cloud_usage_reserve',1,3,'{}',?,?,?)",
+            (original['model'], smuggled, time.time()))
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic member prompt')
+    assert not local and not calls
+
+
 def test_owns_member_request_malformed_identity_owns_on_empty_history(cloud):
     """With no reservation history at all a malformed current identity still
     owns the member — an unproven request never releases the local path."""
