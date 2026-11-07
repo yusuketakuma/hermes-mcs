@@ -11,6 +11,7 @@ import time
 import pytest
 
 import drug_map
+import mcs_queries
 import semantic_jev
 from test_patient_context_refresh import CFG, runtime as runtime, seed, step
 from test_anthropic_context_refresh import cloud as cloud
@@ -65,7 +66,23 @@ def test_expensive_proof_runs_without_blocking_other_local_saves(runtime, monkey
 def test_valid_sql_replay_does_not_repeat_python_proof(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led)
+    stamp = mcs_queries._message_read_stamp
+    selected = mcs_queries.selected_artifact_proof_valid
+    recorded_checks = []
+
+    def outside_recording(db):
+        assert getattr(db, 'read_witness', None) is None, 'stamp must not invalidate the SQL witness'
+        return stamp(db)
+
+    def exact_proof(db, artifact_id, **kwargs):
+        if getattr(db, 'read_witness', None) is not None:
+            recorded_checks.append(artifact_id)
+        return selected(db, artifact_id, **kwargs)
+
+    monkeypatch.setattr(mcs_queries, '_message_read_stamp', outside_recording)
+    monkeypatch.setattr(mcs_queries, 'selected_artifact_proof_valid', exact_proof)
     proof = capture(runtime)
+    assert recorded_checks, 'recorded snapshots must retain the exact extraction proof queries'
     monkeypatch.setattr(patient_context_refresh_readiness, '_inference_ready', lambda *args, **kwargs: pytest.fail('unexpected full proof'))
     assert replay(runtime, proof)[0] == 'verified'
 
