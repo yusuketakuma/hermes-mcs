@@ -1,31 +1,32 @@
 {
- "category": "changed",
- "title": "クラウド解析を患者コンテキストの作成・更新に限定",
- "summary": "個別の履歴抽出と意味解析バックログの新規クラウド送信を停止し、これらはローカル処理を継続します。クラウドは患者コンテキストの作成・更新とその品質修復に使い、確定済みのクラウド結果と会計記録は従来の対象範囲で読み取り・回復できます。",
- "upgrade": "追加操作は不要です。`routes` に `reextract`・`semantic_backlog` を残していても新規送信は行われず、確定済み結果の回復範囲として扱われます。個別処理はローカルLLMで継続するため、ローカル推論の設定と処理容量を確認してください。",
- "details": [
-  "新規クラウド要求は `patient_context` 経路だけに限定し、対象選択・予約の前段で個別経路を除外します。",
-  "個別の履歴抽出（`reextract`）と意味解析バックログ（`semantic_backlog`）はローカル処理を継続し、既存のworkerは未精算の有償結果を決済してから退役します。",
-  "確定済みのクラウド結果・予約・会計は旧経路の対象範囲で読み取りと回復を維持し、結果不明の予約を返金・再送しません。",
- "クラウド設定が無効・未設定でも、予約を持たない添付OCRページのローカル結果は確定・参照でき、旧予約を持つページは復旧待ちのまま保持します。",
- "旧予約を持つ抽出対象がクラウド履歴・現況を確認できないときは、一定時間だけ処理を保留して次の対象へ進むため、確認不能な先頭が後続のローカル処理を繰り返し阻害しません。保留中も予約・支払記録は破棄しません。",
- "旧予約を持つ処理単位は、設定が明示的な停止・ドライラン・対象外指定で解除を証明した場合にだけローカルへ移行します。mode 未指定や鍵の読み取り不可による計算上の停止では解除せず、契約情報の欠けた旧クラウド結果は読み取り不能として保留して処理ワーカーを止めません。",
-  "品質修復は `patient_context` 経路の既存の修復処理で継続します。"
- ],
- "refs": [
-  "mcs/llm/cloud_policy.py",
-  "mcs/llm/cloud_inference.py",
-  "mcs/llm/cloud_backlog.py",
-  "mcs/extract/llm/extract_llm_selection.py",
-  "mcs/extract/llm/extract_llm_prepare.py",
-  "mcs/semantic/semantic_due_selection.py",
-  "mcs/semantic/semantic_drain.py",
-  "mcs/ops/cloud_cli.py",
-  "mcs/notify/processing_route.py",
-  "mcs/extract/llm/extract_llm_runner.py",
-  "mcs/semantic/semantic_transport.py",
-  "mcs/extract/attachment_inference.py",
-  "mcs/extract/attachment_extraction.py",
-  "mcs/semantic/semantic_job_processor.py"
- ]
+  "category": "changed",
+  "title": "クラウド解析を患者コンテキストの作成・更新に限定",
+  "summary": "個別の履歴抽出と意味解析バックログの新規クラウド送信を停止し、これらはローカル処理を継続します。クラウドは患者コンテキストの作成・更新とその品質修復に使い、確定済みのクラウド結果と会計記録は従来の対象範囲で読み取り・回復できます。",
+  "upgrade": "追加操作は不要です。`routes` に `reextract`・`semantic_backlog` を残していても新規送信は行われず、確定済み結果の回復範囲として扱われます。個別処理はローカルLLMで継続するため、ローカル推論の設定と処理容量を確認してください。",
+  "details": [
+    "新規クラウド要求は `patient_context` 経路だけに限定し、対象選択・予約の前段で個別経路を除外します。",
+    "個別の履歴抽出（`reextract`）と意味解析バックログ（`semantic_backlog`）はローカル処理を継続し、既存のworkerは未精算の有償結果を決済してから退役します。",
+    "確定済みのクラウド結果・予約・会計は旧経路の対象範囲で読み取りと回復を維持し、結果不明の予約を返金・再送しません。",
+    "クラウド設定が無効・未設定でも、予約を持たない添付OCRページのローカル結果は確定・参照でき、旧予約を持つページは復旧待ちのまま保持します。",
+    "旧予約を持つ抽出対象がクラウド履歴・現況を確認できないときは、一定時間だけ処理を保留して次の対象へ進むため、確認不能な先頭が後続のローカル処理を繰り返し阻害しません。保留中も予約・支払記録は破棄しません。",
+    "旧予約を持つ処理単位は、設定が明示的な停止・ドライラン・対象外指定で解除を証明した場合にだけローカルへ移行します。mode 未指定や鍵の読み取り不可による計算上の停止では解除せず、契約情報の欠けた旧クラウド結果は読み取り不能として保留して処理ワーカーを止めません。",
+    "semantic 解析の複数対象ジョブでは、予約を持たない対象が会計記録の検証を通れば、クラウド設定の破損や鍵の消失があってもローカル推論へ進みます。予約を持つ対象だけが個別に保留され、閉鎖経路では資格情報を読みません。",
+    "品質修復は `patient_context` 経路の既存の修復処理で継続します。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_inference.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/extract/llm/extract_llm_prepare.py",
+    "mcs/semantic/semantic_due_selection.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/ops/cloud_cli.py",
+    "mcs/notify/processing_route.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/extract/attachment_inference.py",
+    "mcs/extract/attachment_extraction.py",
+    "mcs/semantic/semantic_job_processor.py"
+  ]
 }

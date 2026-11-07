@@ -8,6 +8,7 @@ from itertools import chain
 import json
 import math
 import re
+import sqlite3
 import time
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -565,8 +566,11 @@ def _selection_differs(previous, candidate, current_body):
     return isinstance(old_effort, str) and old_effort != new_effort
 
 
-def _guard_repeated_request(ledger, candidate, *, current_body=None):
-    """Keep an unresolved or already answered logical request from being sent again."""
+def _verified_request_history(ledger, *, route, project_id, message_id, unit_key):
+    """Enumerate the unit's reservation/result history and prove it well-formed:
+    every receipt parses, every reservation validates, and each result settles
+    against exactly one reservation. Unverifiable rows raise — they never
+    pass silently. Returns the reservation rows for the caller's own scan."""
     records = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
         "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
@@ -575,8 +579,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
         "(json_extract(meta,'$.unit_key')=? OR ? IN ('semantic_backlog','patient_context','reextract')) THEN 1 "
         "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
         "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",
-        (KINDS[0], KINDS[1], candidate['project_id'], candidate['message_id'], candidate['route'],
-         candidate['route'], candidate['unit_key'], candidate['route'])).fetchall()
+        (KINDS[0], KINDS[1], project_id, message_id, route,
+         route, unit_key, route)).fetchall()
     rows = [row for row in records if row['kind'] == KINDS[0]]
     # Fiscal totals have a month window; same-input evidence does not. A
     # retained result without its exact reservation cannot prove a fresh input.
@@ -611,7 +615,32 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
             _settled(previous, maximum, results)
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
             raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
-    del checked_results
+    return rows
+
+
+def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, target_id):
+    """Prove member `target_id` holds no paid unit on `route`: inside one
+    accounting snapshot the fiscal tally is valid, the unit's whole
+    reservation/result history verifies, and no reservation provably binds
+    the member. A tainted or ambiguous history proves nothing — it never
+    releases the member to a local path."""
+    try:
+        with _accounting_snapshot(ledger.db):
+            if _tally(ledger).invalid:
+                return False
+            _verified_request_history(ledger, route=route, project_id=project_id,
+                                      message_id=message_id, unit_key=unit_key)
+            return not owns_member_request(ledger.db, route=route,
+                                           project_id=project_id, target_id=target_id)
+    except (AnthropicError, sqlite3.Error):
+        return False
+
+
+def _guard_repeated_request(ledger, candidate, *, current_body=None):
+    """Keep an unresolved or already answered logical request from being sent again."""
+    rows = _verified_request_history(ledger, route=candidate['route'],
+        project_id=candidate['project_id'], message_id=candidate['message_id'],
+        unit_key=candidate['unit_key'])
     result_map = None
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False

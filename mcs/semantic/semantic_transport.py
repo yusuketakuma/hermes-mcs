@@ -21,6 +21,7 @@ _inference_target = ContextVar("semantic_inference_target", default=None)
 _inference_generation = ContextVar("semantic_inference_generation", default=None)
 _inference_purpose = ContextVar("semantic_inference_purpose", default="backlog")
 _job_providers = ContextVar("semantic_job_providers", default=None)
+_member_dispatch = ContextVar("semantic_member_dispatch", default=None)
 
 
 @contextmanager
@@ -48,6 +49,12 @@ def inference_targets(generation=None):
 
 def set_inference_target(message_id, phase="facts"):
     _inference_target.set((message_id, phase))
+    dispatch = _member_dispatch.get()
+    if dispatch is not None:
+        # The local/owned route is fixed at member selection — before any
+        # persisted-chunk read — so expected_provider/contract reflect the
+        # producer the member will actually use.
+        dispatch(message_id)
 
 
 @contextmanager
@@ -143,7 +150,8 @@ _NON_DISCARD_STAGES = _PRESEND_REFUSAL_STAGES | {'cloud_guard'}
 # the other members' pass: the held member waits, the rest still run.
 MEMBER_HOLD_STAGES = frozenset({
     "cloud_unit_unresolved", "cloud_target_unverified", "realtime_target",
-    "cloud_fallback_unavailable", "cloud_capacity", "cloud_guard"})
+    "cloud_fallback_unavailable", "cloud_capacity", "cloud_guard",
+    "cloud_profile_unavailable"})
 
 
 @contextmanager
@@ -220,10 +228,14 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     try:
         provider = get_provider("backlog")
     except cloud_inference.CloudFallback:
-        raise runtime.LLMNotSent('cloud_profile_unavailable') from None
+        # A member whose paid unit cannot even build a provider holds at its
+        # own call; a member proven to own nothing on a closed route never
+        # needs one — the job's entry must not fail for it.
+        provider = None
 
     switched = False
     possibly_sent_targets = set()
+    send_capable = cloud_policy.send_route("semantic_backlog")
 
     def target_id():
         target = _inference_target.get()
@@ -236,6 +248,25 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         # thread stays a send guard only and never forbids this target's local.
         return cloud_policy.owns_member_request(ledger.db, route="semantic_backlog",
                                                 project_id=job["project_id"], target_id=mid)
+
+    def member_unbound(mid):
+        # The closed-route member may take the existing local() only when its
+        # non-ownership is proven in one snapshot: a valid tally, the unit's
+        # whole reservation/result history verified, and no reservation
+        # provably bound to it. Unverifiable accounting never releases it.
+        return cloud_policy.unbound_member_history(
+            ledger, route="semantic_backlog", project_id=job["project_id"],
+            message_id=job["message_id"],
+            unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}", target_id=mid)
+
+    def member_dispatch(mid):
+        if not send_capable and member_unbound(mid):
+            _job_model.set(None)
+            return
+        try:
+            _job_model.set(get_provider(_inference_purpose.get()))
+        except cloud_inference.CloudFallback:
+            _job_model.set(None)
 
     def call_local(prompt, timeout):
         if not scoped_current():
@@ -261,10 +292,17 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         mid = target_id()
         if switched and not target_owned(mid):
             if (mid in possibly_sent_targets
+                    or (not send_capable and not member_unbound(mid))
                     or fallback_current is not None and not fallback_current(mid)):
                 raise runtime.LLMNotSent('cloud_fallback_unavailable')
             _job_model.set(None)
             return call_local(prompt, timeout)
+        if not send_capable and member_unbound(mid):
+            # A member proven unbound on a closed route never builds a
+            # CloudInferenceUnit: a missing key or unverifiable config cannot
+            # hold its local path. local() re-checks the member binding,
+            # persisted-chunk provenance and the source snapshot per call.
+            return local(prompt, timeout)
         try:
             provider = get_provider(_inference_purpose.get())
         except cloud_inference.CloudFallback:
@@ -347,6 +385,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     token = _job_model.set(provider)
     providers_token = _job_providers.set(providers.values())
+    dispatch_token = _member_dispatch.set(member_dispatch)
     try:
         yield chat
     except runtime.RuntimeBudgetShort:
@@ -368,6 +407,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                     pass
         raise
     finally:
+        _member_dispatch.reset(dispatch_token)
         _job_providers.reset(providers_token)
         _job_model.reset(token)
 # The per-call timeout allows bounded fact documents to finish under

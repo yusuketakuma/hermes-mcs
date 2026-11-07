@@ -1280,17 +1280,20 @@ def test_process_job_unproven_chunk_holds_its_member_only(cloud, order):
     assert not any('メトホルミン' in p for p in local_prompts)
 
 
+@pytest.mark.parametrize('order', [[2, 3], [3, 2]])
 @pytest.mark.parametrize('variant', ['unverifiable_cfg', 'mode_omitted', 'key_gone',
                                      'explicit_off', 'dry_run', 'out_of_scope'])
-def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, monkeypatch):
+def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, order, monkeypatch):
     """Ownership precedes settings: a config that cannot prove scope keeps
     the owned member held (unverifiable), a mode-omitted block resolves on
     via the key, a vanished key only computes 'off' — never a revocation —
     and only a declared retirement (explicit off / out of scope) releases
-    the unit to local."""
+    the unit to local. In every held variant the independently provable
+    unowned member completes locally without touching a CloudInferenceUnit
+    or a credential — in either member order."""
     from semantic_testkit import _PassJev, _llm_v2
     led, cfg, job, calls = cloud
-    _mixed_targets(led, job, [2, 3], bodies={2: 'アムロジピン5mgを継続します。',
+    _mixed_targets(led, job, order, bodies={2: 'アムロジピン5mgを継続します。',
                                             3: 'メトホルミン500mgが出ています'})
     _member_reservation(led, cfg, job, 2)
     # The reservation was made under the working config; mutate it after,
@@ -1312,23 +1315,24 @@ def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, mon
     local_prompts = []
     def local(prompt, **kwargs):
         local_prompts.append(prompt)
+        transport._record_inference('local')   # the same trace llm_chat leaves
         return _llm_v2(prompt)
     status = semantic_drain._process_job(
         led, semantic_drain.runtime_config(cfg)[0], job, _PassJev(), local,
         time.monotonic() + 900, lane="backlog", diagnostics=semantic_drain._job_diagnostics(),
         cloud_transport=direct)
     assert not calls and len(rows(led, 'cloud_usage_reserve')) == 1
-    if variant in ('unverifiable_cfg', 'key_gone'):
-        # Unverifiable state holds every member on its own guard — nothing
-        # local, nothing sent, the reservation stays.  A vanished key only
-        # computes 'off': the owned member is never released to local.
-        assert status == 'deferred' and not local_prompts
-    elif variant == 'mode_omitted':
-        # Resolved on via the key: the owned member holds, the independent
-        # member still completes locally.
+    facts_v2 = {row['message_id']: json.loads(row['meta']).get('provider_provenance')
+                for row in rows(led, semantic_drain.KIND_FACTS_V2)}
+    if variant in ('unverifiable_cfg', 'key_gone', 'mode_omitted'):
+        # Held member: nothing local, nothing sent, the reservation stays,
+        # and no terminal completed artifact exists for it.  The independent
+        # member completes locally and its persisted result is local-derived.
         assert status == 'deferred'
         assert any('メトホルミン' in p for p in local_prompts)
         assert not any('アムロジピン' in p for p in local_prompts)
+        assert facts_v2.get(3, {}).get('providers') == ['local']
+        assert 2 not in facts_v2
     else:
         # Proven revocation: the owned member is released to local too.
         assert any('アムロジピン' in p for p in local_prompts)
