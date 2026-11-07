@@ -76,31 +76,18 @@ def _provider_context(states, prefix=None, visible=None, sequence=None, *, compa
 
 def _compact_header_context(header):
     """The sealed compact header as context blocks: the Jev logo image
-    plus each provider's state mark. Other providers keep their text
-    names, and the frozen 👤 context stays inside the text prefix."""
-    from processing_route import COMPACT_MARKS, PROVIDER_NAMES, compact_header_parts
-    states = header["provider_states"]
+    plus the local 💻 mark. The frozen 👤 context stays inside the text
+    prefix, split into plain context blocks when it overflows."""
+    from processing_route import compact_header_parts
     prefix, ordered = compact_header_parts(header)
     blocks = []
     if len(prefix) > CONTEXT_MAX:
         blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
         prefix = prefix[-CONTEXT_MAX:]
-    elements = [{"type": "plain_text", "text": prefix}] if prefix else []
-    providers = {key: (name, url) for key, name, url in _PROVIDERS}
-    for key in ordered:
-        if states[key] not in COMPACT_MARKS:
-            continue
-        mark = COMPACT_MARKS[states[key]]
-        if key == "jev":
-            name, url = providers[key]
-            elements.append({"type": "image", "image_url": url,
-                             "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
-            elements.append({"type": "plain_text", "text": mark})
-        else:
-            elements.append({"type": "plain_text",
-                             "text": f"{PROVIDER_NAMES[key]} {mark}"})
-    if elements:
-        blocks.append({"type": "context", "elements": elements})
+    context = _provider_context(header["provider_states"], prefix,
+                                visible=ordered, compact=True)
+    if context["elements"]:
+        blocks.append(context)
     return blocks
 
 
