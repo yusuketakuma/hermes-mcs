@@ -16,7 +16,11 @@ class OriginalQuery:
         self.db = db
 
     def execute(self, sql, *args):
-        return self.db.execute(sql.replace('WITH latest AS MATERIALIZED (', 'WITH latest AS ('), *args)
+        sql = sql.replace('WITH latest AS MATERIALIZED (', 'WITH latest AS (')
+        sql = sql.replace(
+            'FROM latest l CROSS JOIN notification_render_parts p ON p.delivery_id=l.delivery_id',
+            'FROM notification_render_parts p JOIN latest l ON l.delivery_id=p.delivery_id')
+        return self.db.execute(sql, *args)
 
 
 def _complete(db, states, **kwargs):
@@ -70,8 +74,25 @@ def test_completion_keeps_original_counts_and_latest_revision_boundaries(stored,
     assert stored.total_changes == before and not stored.in_transaction
 
 
-def test_completion_history_fits_existing_bounded_reader(stored, monkeypatch):
+@pytest.mark.parametrize('old_parts', [0, 80], ids=['original-history', 'more-old-parts'])
+def test_completion_history_fits_existing_bounded_reader(stored, monkeypatch, old_parts):
     _seed(stored)  # 160 cards, 8 revisions each, 12,800 fully synthetic parts
+    latest_parts = ("SELECT COUNT(*) FROM notification_render_parts WHERE delivery_id IN "
+                    "(SELECT delivery_id FROM notification_renders WHERE render_rev=8)")
+    assert stored.execute(latest_parts).fetchone()[0] == 1600
+    prior = [r[0] for r in stored.execute(
+        'SELECT delivery_id FROM notification_renders WHERE render_rev<8')]
+    with stored:
+        stored.executemany(
+            'INSERT INTO notification_render_parts(delivery_id,part_id,kind,idx,state,name,updated_at) '
+            "VALUES(?,?,'body_part',?,'delivered',?,1)",
+            ((delivery, f'old-part-{i}', i + 10, f'synthetic-old-{i}')
+             for delivery in prior for i in range(old_parts)))
+    # Only historical parts grow: the population and current part plans are fixed.
+    assert stored.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 1280
+    assert stored.execute(latest_parts).fetchone()[0] == 1600
+    assert stored.execute('SELECT COUNT(*) FROM notification_render_parts').fetchone()[0] == (
+        12800 + 1120 * old_parts)
     before = stored.total_changes
     original_wait = stored.execute('PRAGMA busy_timeout').fetchone()[0]
     # The reader polls this clock every 1,000 SQLite VM operations. A fixed
