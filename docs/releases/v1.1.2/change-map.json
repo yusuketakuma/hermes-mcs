@@ -1,5 +1,5 @@
 {
-  "fragment_count": 93,
+  "fragment_count": 95,
   "records": [
     {
       "category": "added",
@@ -651,8 +651,22 @@
       "path": "changes/archive/1.1.2/yomitoku-0-16-1.json",
       "sha256": "d2b2a057222e1cea533ad8d7867c101432fcb6dc9a97aa2ba8d27141495f9510",
       "title": "添付OCRをYomitoku 0.16.1へ更新"
+    },
+    {
+      "category": "fixed",
+      "id": "context-empty-overview-checkpoint",
+      "path": "changes/archive/1.1.2/context-empty-overview-checkpoint.json",
+      "sha256": "7a5ff1a75ce493aaedc6a7614f36509ef7dd57bfb690aa842b8742d555639608",
+      "title": "空の部分概況による生成枠の消費を防止"
+    },
+    {
+      "category": "fixed",
+      "id": "context-scan-bookmark-competition",
+      "path": "changes/archive/1.1.2/context-scan-bookmark-competition.json",
+      "sha256": "336043ef27aac9d9b65b2ae58e07d661f1ba0537f9599e13c6258c29ea8f8e39",
+      "title": "別患者の走査位置更新による解析の先送りを防止"
     }
   ],
-  "scope": "v1.1.2 の変更記録93件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録95件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
