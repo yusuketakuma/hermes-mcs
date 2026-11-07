@@ -17,6 +17,7 @@ import writer_lock
 import inference_version as inference
 import cloud_backlog
 import cloud_inference
+import cloud_policy
 import extract_validation
 import local_llm
 from ledger import Ledger, LedgerReader
@@ -546,7 +547,8 @@ def _main() -> int:
                     cloud_turn = oldest_turn or not args.semantic
                     cloud_cfg = cloud_inference.resolve_cloud_settings(load_config())
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
-                                     and cloud_cfg["mode"] == "on" else 1)
+                                     and cloud_cfg["mode"] == "on"
+                                     and cloud_policy.send_route("reextract") else 1)
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
