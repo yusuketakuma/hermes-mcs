@@ -25,7 +25,7 @@ def test_runtime_stage_is_pinned_and_companions_precede_entrypoint_publication()
     assert '_rchanged="$("$MCS_PY"' in stages
     assert '. "$INSTALL_RUNTIME_FIXED"' in source
     assert '256 "$INSTALL_RUNTIME_FIXED"' in source
-    assert 'if [ "$MODE" = install ]; then\n    [ -f "$INSTALL_RUNTIME_STAGE" ]' in source
+    assert 'if [ "$MODE" = install ]; then\n    if [ ! -f "$INSTALL_RUNTIME_STAGE" ]' in source
     assert source.index('INSTALL_RUNTIME_SHA256=') < source.index('_fresh_marker=')
 
 

@@ -139,15 +139,16 @@ REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
 INSTALL_RUNTIME_SHA256="c9bd834ff3c0ab28180815b2a4f7f47c4a833d80c9c3e6e440742849ad98d9c0"
 _install_stage_private_dir=""
-# shellcheck disable=SC2329  # Invoked by EXIT after the sourced stage exits.
+# shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
     if [ -n "$_install_stage_private_dir" ]; then
         rm -rf -- "$_install_stage_private_dir"
     fi
 }
 if [ "$MODE" = install ]; then
-    [ -f "$INSTALL_RUNTIME_STAGE" ] && [ ! -L "$INSTALL_RUNTIME_STAGE" ] \
-        || die "導入処理の補助ファイルがありません。完全な配布版から再実行してください"
+    if [ ! -f "$INSTALL_RUNTIME_STAGE" ] || [ -L "$INSTALL_RUNTIME_STAGE" ]; then
+        die "導入処理の補助ファイルがありません。完全な配布版から再実行してください"
+    fi
     trap '_install_stage_cleanup' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
