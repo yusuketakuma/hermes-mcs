@@ -524,6 +524,7 @@ def test_patient_context_retry_wait_releases_writer_lock_after_settlement(cloud,
     import extract_llm
     import openai_client
     import writer_lock
+    from types import SimpleNamespace
     from test_openai_client import response
     from test_semantic_cloud import rows
 
@@ -590,7 +591,8 @@ finally:
     cls = a.AnthropicClient if provider == "anthropic" else openai_client.OpenAIClient
     monkeypatch.setattr(cls, "request", request)
     monkeypatch.setattr(cloud_policy, "record_result", settle)
-    monkeypatch.setattr(extract_llm.time, "sleep", wait)
+    monkeypatch.setattr(cloud_inference, "time", SimpleNamespace(
+        monotonic=time.monotonic, time=time.time, sleep=wait))
     try:
         unit = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
             unit_key="synthetic-retry", deadline=deadline, current=lambda: True,

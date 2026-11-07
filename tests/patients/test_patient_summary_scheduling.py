@@ -58,7 +58,7 @@ def cloud_schedule(runtime, monkeypatch):
     return runtime, cfg
 
 
-def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_schedule, monkeypatch):
+def test_partial_cloud_draft_uses_only_audited_sources_then_expands(cloud_schedule, monkeypatch):
     rt, cfg = cloud_schedule
     led, clock, _ = rt
     import semantic_jev
@@ -108,10 +108,11 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     def quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs):
         if kwargs.get('source') is not None:
             return original_quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs)
-        snapshot = patient_context_refresh_sources._snapshot(led.db, pid, cfg)
+        scope = kwargs['base_meta']['source_scope']
+        snapshot = patient_context_refresh_sources._snapshot(led.db, pid, cfg, source_keys=scope)
         scans = patient_context_refresh_sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
-        quality_inputs.append({mid: (scans.get(mid, {}).get('complete'), scans.get(mid, {}).get('audited'))
-                               for mid in (1, 2)})
+        quality_inputs.append((scope, {mid: (scans.get(mid, {}).get('complete'), scans.get(mid, {}).get('audited'))
+                                      for mid in scope}, snapshot['source_coverage']))
         return 'pending', None
     monkeypatch.setattr(patient_context_quality_controller, '_quality_step', quality)
     lanes = []
@@ -119,10 +120,15 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
         result = step(rt, cfg=cfg)
         if result.get('lane'):
             lanes.append(result['lane'])
-        if quality_inputs:
+        if any(set(scope) == {1, 2} for scope, _, _ in quality_inputs):
             break
     assert quality_inputs, 'finite source work must reach quality evaluation'
-    assert quality_inputs[0] == {1: (True, True), 2: (True, True)}
+    assert quality_inputs[0][0] == [1]
+    assert quality_inputs[0][1] == {1: (True, True)}
+    assert quality_inputs[0][2]['unreflected'] == 1
+    assert any(set(scope) == {1, 2} for scope, _, _ in quality_inputs)
+    assert all(all(state == (True, True) for state in states.values())
+               for _, states, _ in quality_inputs)
     assert lanes.count('B') >= 2 and lanes.count('C') >= 2
     assert [request['state']['target']['id'] for request in requests].count('source_facts') == 2
     assert [request['state']['target']['id'] for request in requests].count('source_coverage') == 2

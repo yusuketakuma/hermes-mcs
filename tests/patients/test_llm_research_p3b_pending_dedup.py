@@ -4,7 +4,6 @@ import patient_context_quality_controller
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
-import hashlib
 import json
 import sqlite3
 
@@ -12,7 +11,9 @@ import pytest
 
 import inference_version as inference
 import patient_context_refresh as context_refresh
-from test_patient_context_refresh import _raw_proof, _semantic_proof, document, finish, runtime, seed, step
+from test_patient_context_refresh import (
+    _message, _prepare_summary, _raw_proof, _semantic_proof, document, finish, runtime, seed, step,
+)
 
 __all__ = ["runtime"]   # the shared fixture is used by name below
 
@@ -41,36 +42,35 @@ def seed_three(led):
 
 def test_lane_a_reads_selection_snapshot_once(runtime, monkeypatch):
     led, _, _ = runtime
-    seed_three(led)
+    seed(led)
+    _prepare_summary(runtime)
     counts = counted(monkeypatch, led)
     result = step(runtime)
     led.db.set_trace_callback(None)
     assert result['status'] == 'progressed' and result['lane'] == 'A' and document(led)
-    assert counts == {'_pending': 1, '_snapshot': 4, 'messages': 1}
+    # Include whole eligibility, quota input and fresh pre-reserve/save authority checks.
+    assert counts == {'_pending': 1, '_snapshot': 8, 'messages': 1}
 
 
 def test_lane_b_reuses_selection_snapshot(runtime, monkeypatch):
     led, _, _ = runtime
     seed_three(led)
-    # Every patient receives one fair unit before the first patient resumes.
-    for _ in range(3):
-        assert step(runtime)['lane'] == 'A'
+    # Source scanning precedes the first nonempty overview.
     counts = counted(monkeypatch, led)
     result = step(runtime)
     led.db.set_trace_callback(None)
     assert result['status'] == 'progressed' and result['lane'] == 'B'
-    assert counts == {'_pending': 1, '_snapshot': 3, 'messages': 0}
+    assert counts == {'_pending': 1, '_snapshot': 4, 'messages': 0}
     assert led.db.execute('SELECT count(*) FROM artifacts WHERE kind=?', (patient_context_refresh_state.SCAN,)).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize('lane', ['A', 'B'])
 def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
     led, _, calls = runtime
-    seed_three(led)
-    if lane == 'B':
-        for _ in range(3):
-            assert step(runtime)['lane'] == 'A'
-        del calls[:]
+    seed(led)
+    if lane == 'A':
+        _prepare_summary(runtime)
+    calls.clear()
     original = context_refresh._select_patient
     edited = []
     def select_then_edit(*args, **kwargs):
@@ -79,9 +79,8 @@ def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
         if not edited:
             edited.append(1)
             body = '変更後の完全合成の居住記録。'
-            led.db.execute("UPDATE messages SET body_html=?,body_text=?,content_hash=? WHERE message_id=1",
-                           (body, body, hashlib.sha256(body.encode()).hexdigest()))
-            led.db.commit()
+            led.save_messages([_message(1, body, 'full', project_id=1)])
+            assert led.db.execute('SELECT count(*) FROM message_revisions WHERE message_id=1').fetchone()[0] >= 2
         return selected
     monkeypatch.setattr(context_refresh, '_select_patient', select_then_edit)
     result = step(runtime)
@@ -102,8 +101,11 @@ def test_result_reports_scan_size(runtime):
     seed_three(led)
     result = step(runtime)
     assert result['scanned'] == 1 and type(result['scan_ms']) is int and result['scan_ms'] >= 0
-    # Patient 1 has just run; the next walk starts with patients 2, then 3.
-    assert step(runtime, complete=lambda pid: pid == 3)['scanned'] == 2
+    # A real unprocessed edit excludes patient 2; scoped work ignores the legacy whole-patient callback.
+    led.save_messages([_message(2, '生活環境: 合成の編集後記録。', 'full', project_id=2)])
+    assert step(runtime)['scanned'] == 2
+    _raw_proof(led, 2, 2)
+    _semantic_proof(led, 2, 2)
     finish(runtime)
     result = step(runtime)
     assert result['status'] == 'complete' and result['scanned'] == 3
