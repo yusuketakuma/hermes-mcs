@@ -333,3 +333,16 @@ def test_fact_source_refuses_when_the_semantic_validator_crashes(monkeypatch, tm
     monkeypatch.setattr(semantic_policy, "semantic_config", crash)
     assert mcs_setup.cmd_fact_source(SimpleNamespace(fact_source="shadow", gate_evidence=None)) == 1
     assert conf.read_bytes() == before
+
+
+def test_direct_script_help_bootstraps_before_flat_imports():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    script = Path(mcs_setup.__file__).resolve()
+    for argv in (["--help"], ["services", "--help"]):
+        proc = subprocess.run([sys.executable, str(script), *argv],
+                              capture_output=True, text=True, env=env, timeout=30)
+        assert proc.returncode == 0, proc.stderr

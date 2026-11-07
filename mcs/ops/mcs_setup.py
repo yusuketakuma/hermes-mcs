@@ -32,11 +32,8 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy as deepcopy
-from mcs_util import env_value as env_value
 import stat as stat
 from contextlib import suppress as suppress
-from mcs_config import transport_enabled as transport_enabled
-from lifecycle_io import KEYCHAIN_SERVICE as KEYCHAIN_SERVICE
 import getpass as getpass
 import subprocess as subprocess
 import hashlib
@@ -108,6 +105,9 @@ from setup_config_snapshot import (
 )
 import service_management
 import mcs_util
+from mcs_util import env_value as env_value
+from mcs_config import transport_enabled as transport_enabled
+from lifecycle_io import KEYCHAIN_SERVICE as KEYCHAIN_SERVICE
 import service_contract
 import lifecycle_io
 from cli_args import JapaneseArgumentParser

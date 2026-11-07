@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "設定ツールの直接起動を修正",
+  "summary": "python3 mcs/ops/mcs_setup.py --help や services --help を直接実行すると内部モジュールを読めず停止する問題を修正します。",
+  "upgrade": "追加操作は不要です。設定ツールのコマンドと変更内容は変わりません。",
+  "details": ["他モジュールへ再公開する共有部品の読込みを、標準の起動準備の後へ戻します。再公開する名前と利用手順は変わりません。"],
+  "refs": ["mcs/ops/mcs_setup.py", "tests/ops/test_mcs_setup.py"]
+}
