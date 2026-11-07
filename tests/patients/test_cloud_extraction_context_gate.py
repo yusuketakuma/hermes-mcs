@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+import mcs_util
 import patient_context_refresh as refresh
 from extract_testkit import _message
 from test_cloud_after_local import local_then_cloud, routed, _local_pass, _cloud_pass
@@ -44,13 +45,20 @@ def test_patient_readiness_accepts_local_final_extraction(local_then_cloud):
     assert not ledger.artifacts('cloud_usage_reserve') and not ledger.artifacts('cloud_usage_result')
 
 
-def test_local_final_context_gate_uses_real_saved_proofs(local_then_cloud):
+@pytest.mark.parametrize('fault', ['source_edit', 'stale_version'])
+def test_local_final_context_gate_uses_real_saved_proofs(local_then_cloud, fault):
     ledger, cfg, _, calls, _ = local_then_cloud
+    cfg['semantic'] = {'mode': 'off'}
+    with ledger.db:
+        ledger.db.execute("INSERT INTO patients(project_id,patient_name,fetch_state,history_floor) "
+                          "VALUES(1,'synthetic-patient','complete',-1)")
     assert _local_pass(ledger)['done'] == 1
     source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
     assert refresh._raw_extraction_current(ledger.db, source, cfg)[0]
     cfg['cloud_llm']['mode'] = 'on'
     before = ledger.db.total_changes
+    deadline = time.monotonic() + 600
+    assert refresh._inference_ready(ledger, 1, cfg, deadline=deadline)
     assert refresh._raw_extraction_current(ledger.db, source, cfg)[0]
     assert refresh._cloud_extraction_ready(ledger.db, 1, cfg)
     assert ledger.db.total_changes == before and not calls
@@ -59,14 +67,23 @@ def test_local_final_context_gate_uses_real_saved_proofs(local_then_cloud):
     assert refresh._cloud_extraction_ready(ledger.db, 1, cfg)
     assert not calls
     assert not ledger.artifacts('cloud_usage_reserve') and not ledger.artifacts('cloud_usage_result')
-    # A real source edit breaks the saved proof's binding: stale is never ready.
-    ledger.save_messages([_message(1, body='合成の経過記録を追記します。',
-                                   project_id=source['project_id'],
-                                   posted_at=source['posted_at'])])
-    source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+    # Tampered evidence must never read as current: a real source edit or a
+    # stale stored proof breaks the binding and the gate closes again.
+    if fault == 'source_edit':
+        old_hash = source['content_hash']
+        ledger.save_messages([_message(1, body='合成の経過記録を追記します。',
+                                       project_id=source['project_id'],
+                                       posted_at=source['posted_at'])])
+        source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+        assert (mcs_util.valid_hash(source['content_hash']) and source['content_hash'] != old_hash
+                and source['body_state'] == 'full')
+        assert ledger.db.execute("SELECT COUNT(*) FROM message_revisions WHERE message_id=1").fetchone()[0] >= 2
+    else:
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.extract_version','old') "
+                              "WHERE kind='extract_llm' AND message_id=1")
     assert not refresh._raw_extraction_current(ledger.db, source, cfg)[0]
-    assert not refresh._inference_ready(ledger, 1, cfg,
-                                        deadline=time.monotonic() + 600)
+    assert not refresh._inference_ready(ledger, 1, cfg, deadline=deadline)
 
 
 @pytest.mark.parametrize('scope', ['off', 'excluded', 'other_route'])
