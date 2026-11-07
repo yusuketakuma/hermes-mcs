@@ -14,12 +14,14 @@ import json
 
 import pytest
 
+import inference_dependency_loss as dependency_loss
 import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
 import patient_context_plan as context_plan
 from extract_testkit import _message
+from test_inference_v1_context import _clinical_source, _delete_supported_stop
 from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
 
 
@@ -237,3 +239,25 @@ def test_qa_failed_source_facts_never_enter_the_generated_context(runtime, monke
         (patient_context_refresh_state.SCAN,))}
     assert 2 in scans and not scans[2].get('complete') and not scans[2].get('audited')
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
+
+
+def test_unselected_source_loss_still_limits_selected_facts(runtime):
+    """P1 boundary: a deleted stop/correction record in source2 limits
+    source1's current fact at the clinical entity/axis level. A scoped
+    read must keep cross-source losses and their signature contribution —
+    only gap/coverage are filtered per source."""
+    led, _, _ = runtime
+    _clinical_source(led, 1, '本人は本日薬剤Aを5mg服用中です。', '2026-10-01', dose='5mg')
+    _delete_supported_stop(led)
+    full = dependency_loss.read(led.db, 1)
+    scoped = dependency_loss.read(led.db, 1, source_keys=[1])
+    assert scoped['losses'] == full['losses'] and scoped['losses']
+    assert scoped['signature'] == full['signature']
+    assert scoped['complete']
+    snapshot = _scoped_snapshot(led, 1, [1])
+    assert snapshot['dependencies']['losses'] == full['losses']
+    facts, _, projected = patient_context_refresh_sources._all_facts(
+        led.db, 1, snapshot, 'synthetic', projected=True)
+    medication = next(f for f in facts if any(d['key'] == 'drug_name' for d in f['details']))
+    assert medication['view_bucket'] == 'unknown'
+    assert medication['id'] in projected['groups']['unknown']
