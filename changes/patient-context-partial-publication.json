@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "解析済みの資料から患者情報の概況を作成",
+  "summary": "患者内の解析がすべて終わる前でも、原資料と解析結果を確認できた資料から概況を作成します。採用済み資料が変わらない限り、新着が追加されても概況を閲覧できます。",
+  "upgrade": "更新後に作成する概況から適用します。個別投稿はローカルLLMで処理し、クラウド生成は患者コンテキストに限定する設定を維持します。未解析・未取得の資料が残る場合は全体完了として扱いません。",
+  "details": [
+    "作成対象の資料を固定し、選択、品質監査、保存、表示で同じ出典を照合します。採用済み資料の訂正・削除や権限の失効を検知した場合は、以前の概況を採用しません。 対象外の資料に由来する中止・訂正情報の喪失も、同じ臨床項目への採用制限として残します。",
+    "新着と対象外の未解析資料を未反映件数で区別します。添付内容の処理が未完了の投稿や、出典・必要な品質確認が未確定の資料は概況へ混ぜません。",
+    "概況の選択には短い入力IDを使い、返答を元の根拠IDへ厳密に対応付けます。原文にない文章や、提示していないIDは採用しません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_refresh_sources.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/core/inference_dependency_loss.py"
+  ]
+}

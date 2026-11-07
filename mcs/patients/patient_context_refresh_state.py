@@ -308,12 +308,16 @@ def _comparison_context(value, sources, *, facts=None, prefix_ids=()):
     return result
 
 
-def _scan_sig(db, pid) -> str:
+def _scan_sig(db, pid, *, source_keys=None) -> str:
     """Digest of the patient's per-source scan rows, read at the caller's observation point."""
     rows = [tuple(r) for r in db.execute(
         "SELECT message_id,content,meta FROM artifacts WHERE kind IN (?,?) AND project_id=? AND "
         + current_meta_pred("meta", target=CURRENT_VERSION) + " ORDER BY artifact_id",
         (SCAN, CHUNK, pid))]
+    if source_keys is not None:
+        selected = set(source_keys)
+        rows = [row for row in rows if loads_dict(row[2]) is None
+                or (loads_dict(row[2]) or {}).get('source_key', row[0]) in selected]
     keys = {(loads_dict(content) or {}).get("accepted_candidate_ref", {}).get("repair_input_key")
             for mid, content, meta in rows if isinstance((loads_dict(content) or {}).get("accepted_candidate_ref"), dict)
             and valid_hash((loads_dict(content) or {})["accepted_candidate_ref"].get("repair_input_key"))}

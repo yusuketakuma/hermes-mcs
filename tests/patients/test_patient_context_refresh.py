@@ -448,30 +448,31 @@ def test_full_source_quote_retains_family_negation_plan_and_date(runtime, monkey
     assert view['facts'][0]['subject'] == 'unspecified'
 
 
-def test_incomplete_patient_waits_while_ready_patient_proceeds(runtime):
+def test_partial_patient_and_ready_patient_both_proceed(runtime):
     led, _, _ = runtime
     seed(led, pid=1)
     seed(led, mid=2, pid=2)
     seed(led, mid=3, pid=1, body='', state='missing')
-    assert step(runtime)['lane'] == 'A'
-    assert document(led, pid=1) is None and document(led, pid=2)
     finish(runtime, waiting=True)
-    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
+    partial = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    assert partial and document(led, pid=2)
+    assert {fact['message_id'] for fact in partial['facts']} == {1}
+    assert partial['coverage']['unreflected'] == 1 and partial['coverage']['partial']
     proof = patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)
     assert not proof['complete'] and proof['sources']['incomplete'] == 1
 
 
-def test_incomplete_patient_is_skipped_until_extraction_catches_up(runtime):
-    """complete() gates candidates: a patient with posts still pending
-    the current LLM generation is passed over, a complete one proceeds."""
+def test_scoped_sources_use_actual_extraction_proof_instead_of_whole_patient_callback(runtime):
     led, _, calls = runtime
     seed(led, pid=1)
     seed(led, mid=2, pid=2)
-    assert step(runtime, complete=lambda pid: pid == 2)['status'] == 'progressed'
-    assert document(led, pid=1) is None and document(led, pid=2)
-    assert len(calls) == 1
-    assert step(runtime, complete=lambda pid: False)['status'] == 'deferred'
-    assert document(led, pid=1) is None
+    seed(led, mid=3, pid=1, proof=False)
+    assert step(runtime, complete=lambda _pid: False)['status'] == 'progressed'
+    assert document(led, pid=1) and len(calls) == 1
+    finish(runtime, waiting=True)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    assert view and {fact['message_id'] for fact in view['facts']} == {1}
+    assert view['coverage']['unreflected'] == 1 and document(led, pid=2)
 
 
 def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
@@ -600,9 +601,10 @@ def test_new_addition_is_unreflected_not_silently_part_of_old_summary(runtime):
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (clock.wall,))
     led.db.commit()
     view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
-    assert view is None
+    assert view is not None and view['coverage']['unreflected'] == 1
+    assert view['summary'] == stored['summary']
     assert patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['sources']['pending'] == 1
-    assert document(led) == stored  # Previous generation remains stored, never passed off as current.
+    assert document(led) == stored  # Additions do not become part of the frozen publication.
 
 
 def test_model_timeout_is_checkpointed_so_other_patients_can_advance(runtime, monkeypatch):
@@ -1178,10 +1180,11 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     finish(runtime, waiting=True)
     assert calls
     assert {r[0] for r in led.db.execute('SELECT DISTINCT project_id FROM artifacts WHERE kind=?',
-                                       (patient_context_refresh_state.SCAN,))} == {1}
-    assert document(led, pid=2) is None and document(led, pid=3) is None
+                                       (patient_context_refresh_state.SCAN,))} == {1, 3}
+    assert document(led, pid=2) is None and document(led, pid=3)
+    assert patient_context_refresh_readiness.context_view_input(led.db, 3, cfg=CFG)['coverage']['partial']
     counts = patient_context_refresh_readiness.status(led.db, CFG)
-    assert counts['initial_pending'] == 1 and counts['complete'] == 1
+    assert counts['initial_pending'] == 0 and counts['complete'] == 1
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 3, CFG)['complete']
 
 
