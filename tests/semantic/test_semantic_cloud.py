@@ -18,7 +18,7 @@ import json
 import os
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import pytest
 import anthropic_client
 import cloud_history_scope
@@ -826,9 +826,10 @@ def test_cached_chunks_are_not_mixed_across_backends(cloud, monkeypatch, first):
     assert rebuilt is None and reason == 'producer_unverified'
 
 
-def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(monkeypatch):
+@pytest.mark.parametrize('legacy_open', [False, True], ids=['closed', 'legacy_open'])
+def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(monkeypatch, legacy_open):
     now = [0.0]
-    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 12}}
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: cfg)
@@ -875,10 +876,17 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
     monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
-    assert extract_llm.main() == 0
+    # Only the legacy mechanics case opens retired routes, for this call alone.
+    with legacy_cloud_routes() if legacy_open else nullcontext():
+        assert cloud_policy.send_route('reextract') is legacy_open
+        assert extract_llm.main() == 0
+    assert cloud_policy.send_route('reextract') is False
     history = [r for r in seen if r["oldest_first"]]
-    assert history and history[0]["limit"] == 4
-    assert history[0]["allow_cloud"] and history[0]["background"]
+    assert len(seen) == 5 and history == [seen[4]]
+    assert history[0]["limit"] == (12 if legacy_open else 1)
+    assert all(r["allow_cloud"] and r["background"] and r["per_write_lock"] for r in seen)
+    assert all(r["prioritize_patients"] == r["oldest_first"] for r in seen)
+    assert all(r["workers"] == 1 and 0 < r["budget_s"] <= 900 for r in seen)
     assert all(r["limit"] == 1 and r["allow_cloud"] and r["background"]
                for r in seen if not r["oldest_first"])
 
