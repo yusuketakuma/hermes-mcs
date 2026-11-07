@@ -473,6 +473,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 空資料と走査位置競合の修正に追加設定は不要です。本文がある資料の抽出項目が0件の場合や、過去の品質不合格に必要な確認は維持します。過去に使用した生成枠と会計履歴は自動で取り消さず、既に消費した枠による原則3時間・日本時間1日4回の制限を保持します。
 
+- 設定変更は不要です。更新後の抽出workerから適用されます。結果が未確定、または原資料との対応を確認できない投稿は引き続き保留です。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
