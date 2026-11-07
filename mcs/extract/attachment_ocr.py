@@ -501,37 +501,54 @@ def _settings_current(settings):
             and current.get('timeout_seconds', 120) == settings.get('timeout_seconds', 120))
 
 
-def _settle(ledger, source, doc, root, generation, settings):
-    fd = writer_lock.acquire_run_lock(str(root / "run.lock"))
-    if fd is None:
-        fd = writer_lock.wait_run_lock(str(root / "run.lock"), wait_s=5,
-                                      expected_code_stamp=generation[1],
-                                      marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
-    if fd is None:
-        return False
-    try:
-        if (writer_lock.updater_state() != generation or generation[0]
+_RUNTIME_REASONS = frozenset({
+    "engine_failed", "engine_version", "input_limits",
+    "output_limits", "output_schema", "runtime_symlink_loop",
+})
+
+
+def _settle(ledger, source, doc, root, generation, settings, deadline=None):
+    while True:
+        if (deadline is not None and deadline - time.monotonic() <= 1
+                or writer_lock.updater_state() != generation or generation[0]
                 or not _settings_current(settings)):
             return False
-        with ledger.db:
-            ledger.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
-            latest = _source(ledger.db, source["attachment_id"], source["project_id"])
-            if (latest is None or latest["state"] != "downloaded"
-                    or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
-                    or not _due(_latest(ledger.db, latest), latest)):
+        fd = writer_lock.acquire_run_lock(str(root / "run.lock"))
+        if fd is None:
+            wait_s = 5 if deadline is None else min(5, max(deadline - time.monotonic() - 1, 0.0))
+            fd = writer_lock.wait_run_lock(str(root / "run.lock"), wait_s=wait_s,
+                                          expected_code_stamp=generation[1],
+                                          marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
+            if fd is None:
+                if deadline is None:
+                    return False
+                continue
+        if deadline is not None and deadline - time.monotonic() <= 1:
+            os.close(fd)
+            return False
+        try:
+            if (writer_lock.updater_state() != generation or generation[0]
+                    or not _settings_current(settings)):
                 return False
-            dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
-            ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
-                              "VALUES(?,?,?,?,?,?,?)", (KIND, source["project_id"], source["message_id"],
-                              json.dumps(doc, ensure_ascii=False), "yomitoku", json.dumps({
-                                  "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
-                                  "runtime_contract": RUNTIME_CONTRACT}), time.time()))
-            record_dependencies_tx(ledger.db, dependencies)
-            import notify_cards
-            notify_cards.mark_snapshot_dirty(ledger.db)
-        return True
-    finally:
-        os.close(fd)
+            with ledger.db:
+                ledger.db.execute("UPDATE attachments SET attachment_id=attachment_id WHERE 0")
+                latest = _source(ledger.db, source["attachment_id"], source["project_id"])
+                if (latest is None or latest["state"] != "downloaded"
+                        or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
+                        or not _due(_latest(ledger.db, latest), latest)):
+                    return False
+                dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
+                ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                                  "VALUES(?,?,?,?,?,?,?)", (KIND, source["project_id"], source["message_id"],
+                                  json.dumps(doc, ensure_ascii=False), "yomitoku", json.dumps({
+                                      "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
+                                      "runtime_contract": RUNTIME_CONTRACT}), time.time()))
+                record_dependencies_tx(ledger.db, dependencies)
+                import notify_cards
+                notify_cards.mark_snapshot_dirty(ledger.db)
+            return True
+        finally:
+            os.close(fd)
 
 
 def run_pending(ledger, cfg, *, deadline=None, limit=1):
@@ -632,8 +649,9 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                     state, reason = ("complete" if any(page["text"].strip() for page in pages) else "empty"), ""
             except subprocess.TimeoutExpired:
                 reason = "timeout"
-            except (OSError, ValueError, ImportError):
-                reason = "local_processing_failed"
+            except (OSError, ValueError, ImportError) as error:
+                reason = (str(error) if isinstance(error, ValueError) and str(error) in _RUNTIME_REASONS
+                          else "local_processing_failed")
             attempts = prior.get("attempts", 0) if _matching(prior, source) else 0
             attempts = attempts + 1 if type(attempts) is int and 0 <= attempts < 3 else 1
             methods = {page["engine"] for page in pages}
@@ -643,7 +661,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                    "runtime_contract": RUNTIME_CONTRACT, "state": state, "pages": pages,
                    "text_hash": _hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)),
                    "attempts": attempts, "next_try": time.time() + 3600, "reason": reason}
-            if _settle(ledger, source, doc, root, generation, settings):
+            if _settle(ledger, source, doc, root, generation, settings, deadline=deadline):
                 counts[state] += 1
             else:
                 counts["deferred"] += 1

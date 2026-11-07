@@ -168,6 +168,24 @@ def test_drain_reports_captured_writer_phase_without_changing_counts(tmp_path, m
         'writer_job_stage': 'local' if phase == 'local' else 'ocr'}
 
 
+def test_ocr_call_deadline_is_the_job_residual_not_runtime_window(tmp_path, monkeypatch):
+    database = tmp_path / 'synthetic.db'
+    database.touch()
+    cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
+    monkeypatch.setattr(mcs_ocr, 'DB', str(database))
+    monkeypatch.setattr(mcs_ocr, 'DATA', str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr, 'Ledger', lambda path: SimpleNamespace(close=lambda: None))
+    received = []
+    monkeypatch.setattr(attachment_inference, 'run_pending',
+                        lambda *args, **kwargs: {'done': 0, 'deferred': 0})
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
+                        lambda *args, **kwargs: received.append(kwargs['deadline']) or {'complete': 0})
+    mcs_ocr.run(cfg)
+    assert len(received) == 1
+    assert received[0] - mcs_ocr.time.monotonic() > mcs_ocr.DRAIN_BUDGET_S - 6
+
+
 @pytest.mark.parametrize("outcome", ["ready", "busy", "updated", "deadline", "cancelled"])
 def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkeypatch, outcome):
     database = tmp_path / "synthetic.db"
