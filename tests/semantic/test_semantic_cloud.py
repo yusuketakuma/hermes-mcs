@@ -442,12 +442,6 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
     from candidate_testkit import approved_config
     from semantic_testkit import _canonical_cfg, _llm_v2, _PassJev
     led, cfg, _, calls = cloud
-    cfg.clear()
-    cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
-    led.save_messages([_message(body="アムロジピン5mgを継続します。")])
-    led.semantic_seed(1, [1], {"source": "history_import"})
-    snapshot(led)
-
     def request(self, method, body, timeout, **kw):
         calls.append(body)
         return 200, {}, json.dumps({
@@ -462,24 +456,34 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
         monkeypatch.setattr(semantic_publication, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
         monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda *a: 60)
     result = {"errors": []}
+    # Dormant-compat only: approval creation, the seeded send and the reader
+    # checks stay inside one bounded legacy-route regime so the candidate
+    # fingerprint agrees with runtime_config's re-validation. This proves old
+    # cloud stages stay current for normal readers after the provider context
+    # exits — it is not proof the real closed policy would permit the send.
     with legacy_cloud_routes():
+        cfg.clear()
+        cfg.update(approved_config({**_canonical_cfg(), "cloud_llm": {"mode": "on", "project_ids": [1]}}))
+        led.save_messages([_message(body="アムロジピン5mgを継続します。")])
+        led.semantic_seed(1, [1], {"source": "history_import"})
+        snapshot(led)
         out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
                                     jev_client=_PassJev(), lane="backlog", max_jobs=1,
                                     cloud_only=cloud_only)
-    assert out["done"] == 1 and not result["errors"], (out, result)
-    assert calls
-    fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
-    for kind in ("semantic_summary", "semantic_audit"):
-        assert semantic_store.current_artifact(led.db, kind, 1, fp) is not None
-    published = rows(led, semantic_publication.KIND_V4)
-    assert published and json.loads(published[-1]["meta"])["fingerprint"] == fp
-    assert published[-1]["model"] == transport.llm_model()
-    assert json.loads(published[-1]["meta"])["inference_requests"]
-    semantic_publication.invalidate_projections(led.db, semantic_drain.runtime_config(cfg)[0])
-    assert semantic_store.current_artifact(led.db, semantic_publication.KIND_V4, 1, fp) is not None
-    from extraction_progress import message_progress
-    row = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-    assert message_progress(led.db, row, cfg=cfg)["state"] == "complete"
+        assert out["done"] == 1 and not result["errors"], (out, result)
+        assert calls
+        fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
+        for kind in ("semantic_summary", "semantic_audit"):
+            assert semantic_store.current_artifact(led.db, kind, 1, fp) is not None
+        published = rows(led, semantic_publication.KIND_V4)
+        assert published and json.loads(published[-1]["meta"])["fingerprint"] == fp
+        assert published[-1]["model"] == transport.llm_model()
+        assert json.loads(published[-1]["meta"])["inference_requests"]
+        semantic_publication.invalidate_projections(led.db, semantic_drain.runtime_config(cfg)[0])
+        assert semantic_store.current_artifact(led.db, semantic_publication.KIND_V4, 1, fp) is not None
+        from extraction_progress import message_progress
+        row = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert message_progress(led.db, row, cfg=cfg)["state"] == "complete"
 
 
 def test_full_cloud_capacity_defers_without_usage_or_local_fallback(cloud):
