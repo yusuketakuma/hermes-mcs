@@ -198,7 +198,8 @@ def _search(db, pid, query, *, cfg=None, cursor=None, limit=PAGE_SIZE):
             rows = db.execute('SELECT attachment_id FROM attachments WHERE message_id=? '
                               "AND state IN ('downloaded','pruned') AND attachment_id>=? "
                               'ORDER BY attachment_id LIMIT ?',
-                              (mid, boundary[2] if same else 0, SCAN_LIMIT + 1))
+                              # The resumed attachment can be skipped without consuming a scan.
+                              (mid, boundary[2] if same else 0, SCAN_LIMIT + 1 + int(same)))
             for attachment in rows:
                 aid = attachment[0]
                 if same and aid == boundary[2] and boundary[3] == attachment_ocr.MAX_PAGES:

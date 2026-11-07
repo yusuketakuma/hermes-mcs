@@ -561,7 +561,7 @@ class Actions:
                          or {}),
                       **forms.digest_inputs(fields, _display_name(interaction))}
         else:
-            query = forms.search_query(fields)
+            query = forms.search_query(fields, action=pending["action"])
             if query is None:
                 await self._followup(interaction, text.SEARCH_EMPTY)
                 return

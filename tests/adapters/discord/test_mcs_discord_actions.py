@@ -1032,6 +1032,27 @@ def test_search_modal_answers_hits_ephemeral(world):
     assert "検索結果" not in (s2.response.message or {}).get("content", "")
 
 
+@pytest.mark.parametrize("length", [101, 500])
+def test_search_modal_preserves_the_last_filter_in_the_published_command(world, monkeypatch, length):
+    world.seed()
+    world.dispatch()
+    worker, reg, bot, spec = _delivered(world)
+    msg = bot.channels[42].sent[0]
+    act = world.mkactions(reg, bot)
+    token = world.token(spec, "search")
+    click = FakeInteraction(f"mcs:a:{token}", message_id=msg.id)
+    asyncio.run(world.interact(act, click))
+    query = "合" * (length - len(" 資料:添付")) + " 資料:添付"
+    submit = FakeInteraction(click.response.modal.custom_id, message_id=msg.id, components=[
+        {"components": [{"custom_id": "query", "value": query}]}])
+    monkeypatch.setattr(actions_mod, "RESULT_WAIT_S", 0)
+    asyncio.run(act.on_interaction(submit))
+    commands = [json.loads(path.read_text()) for path in (world.data / "cmd_int").glob("*.json")]
+    commands = [command for command in commands if command.get("input", {}).get("query")]
+    assert len(commands) == 1 and commands[0]["input"] == {"query": query}
+    assert commands[0]["token"] == token
+
+
 def test_late_search_result_reaches_the_sweep_without_pings(world,
                                                              monkeypatch):
     """🔎 hits that outlive the 20 s wait are delivered by the followup

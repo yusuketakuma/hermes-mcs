@@ -134,18 +134,35 @@ def test_ocr_page_cursor_keeps_remaining_pages(tmp_path):
         ledger.close()
 
 
-def test_unavailable_attachment_cursor_always_advances(tmp_path, monkeypatch):
-    ledger, _ = seeded(tmp_path)
+@pytest.mark.parametrize('available', [False, True])
+def test_attachment_cursor_keeps_lookahead_after_skipping_the_completed_attachment(tmp_path, monkeypatch,
+                                                                                  available):
+    ledger, key = seeded(tmp_path)
     cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
     try:
-        ledger.db.execute("UPDATE attachments SET sha256=? WHERE attachment_id=1", ('b' * 64,))
-        ledger.db.execute("INSERT INTO attachments(attachment_id,message_id,state,sha256,bytes) "
-                          "VALUES(2,10,'downloaded',?,32)", ('c' * 64,))
+        artifact_id = int(key.split(':')[1])
+        doc = json.loads(ledger.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                                          (artifact_id,)).fetchone()[0])
+        expected_keys = [key]
+        for aid in (2, 3):
+            ledger.db.execute("INSERT INTO attachments(attachment_id,message_id,state,sha256,bytes) "
+                              "VALUES(?,10,'downloaded',?,32)", (aid, 'a' * 64))
+            artifact_id = ledger.artifact_add(attachment_ocr.KIND, json.dumps({**doc, 'attachment_id': aid}),
+                project_id=1, message_id=10, meta={'attachment_id': aid})
+            expected_keys.append(f'attachment_ocr:{artifact_id}:1')
+        if not available:
+            ledger.db.execute('UPDATE attachments SET sha256=?', ('b' * 64,))
         monkeypatch.setattr(patient_search, 'SCAN_LIMIT', 1)
-        first = patient_search.search(ledger.db, 1, '語 資料:添付', cfg=cfg)
-        second = patient_search.search(ledger.db, 1, '語 資料:添付', cfg=cfg, cursor=first['next_cursor'])
-        assert first['pending'] == second['pending'] == 1
-        assert first['next_cursor'] is not None and second['next_cursor'] is None
+        pages, cursor = [], None
+        for index in range(3):
+            page = patient_search.search(ledger.db, 1, '中止 資料:添付', cfg=cfg, cursor=cursor)
+            assert page['scanned'] == 1 and page['pending'] == (0 if available else 1)
+            cursor = page['next_cursor']
+            assert (cursor is not None) == (index < 2)
+            pages.append(page)
+        keys = [item['source_ref']['key'] for page in pages for item in page['items']]
+        assert keys == (expected_keys if available else [])
+        assert pages[0]['next_cursor'] != pages[1]['next_cursor']
     finally:
         ledger.close()
 

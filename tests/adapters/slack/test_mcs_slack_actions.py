@@ -665,24 +665,29 @@ def test_my_tasks_prefers_users_info_display_name(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("kind,title", [("search", "この患者を検索"),
-                                        ("drugsearch", "薬剤を検索")])
-def test_search_modal_submits_query_as_view_click(tmp_path, kind, title):
+@pytest.mark.parametrize("kind,query,expected", [
+    ("search", " 発熱  咳 ", "発熱 咳"),
+    ("drugsearch", " 発熱  咳 ", "発熱 咳"),
+    ("search", "合" * 95 + " 資料:添付", "合" * 95 + " 資料:添付"),
+    ("search", "合" * 494 + " 資料:添付", "合" * 494 + " 資料:添付"),
+    ("drugsearch", "合" * 101, "合" * 100),
+])
+def test_search_modal_submits_query_as_view_click(tmp_path, kind, query, expected):
     async def scenario():
         actions, app, reg, dirs = fixture(tmp_path, kind=kind)
         if kind == "drugsearch":
             reg.put_tokens({TOKEN: {**reg.token(TOKEN), "verified_thread_id": TS}})
         await actions._action(ack, *click())
         view = app.client.views[0]["view"]
-        assert view["title"]["text"] == title
+        assert view["title"]["text"] == ("この患者を検索" if kind == "search" else "薬剤を検索")
         first = command(dirs)
         Path(dirs["cmd_int"], shared_paths.safe_name(first["command_id"])
              + ".json").unlink()
         view_body, submitted_view = submitted(view["private_metadata"],
-                                              query=" 発熱  咳 ")
+                                              query=query)
         await actions._modal(ack, view_body, submitted_view)
         env = command(dirs)
-        assert env["input"] == {"query": "発熱 咳"}
+        assert env["input"] == {"query": expected}
         assert env["token"] == TOKEN and validate_int(env) is None
         assert env["command_id"] != first["command_id"]
         result(dirs, env["request_id"], request_id=env["request_id"],

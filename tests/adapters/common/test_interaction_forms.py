@@ -86,3 +86,11 @@ def test_search_query_normalizes():
     assert [f["id"] for f in forms.modal_fields("search")] == ["query"]
     assert [f["id"] for f in forms.modal_fields("drugsearch")] == ["query"]
     assert set(forms.QUERY_FORMS) <= set(forms.VIEW_FORMS) <= set(forms.MODAL_ACTIONS)
+
+
+@pytest.mark.parametrize("action,maximum", [("search", 500), ("drugsearch", 100)])
+def test_search_query_preserves_the_modal_limit(action, maximum):
+    query = "合" * (maximum - len(" 資料:添付")) + " 資料:添付"
+    assert forms.modal_fields(action)[0]["max"] == maximum
+    assert forms.search_query({"query": query}, action=action) == query
+    assert forms.search_query({"query": query + "余分"}, action=action) == query

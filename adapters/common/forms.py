@@ -256,6 +256,6 @@ def dismiss_attrs(fields: dict):
     return (note, None) if note else "理由の入力が必要です。"
 
 
-def search_query(fields: dict) -> str | None:
+def search_query(fields: dict, *, action: str = "search") -> str | None:
     """🔎 modal value -> normalized keyword, or None when blank."""
-    return " ".join((fields.get("query") or "").split())[:100] or None
+    return " ".join((fields.get("query") or "").split())[:modal_fields(action)[0]["max"]] or None

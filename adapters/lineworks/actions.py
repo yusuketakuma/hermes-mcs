@@ -253,7 +253,7 @@ class Actions:
                 inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
                           **forms.digest_inputs(session["fields"], self._own_name(user))}
             elif session["action"] in forms.QUERY_FORMS:
-                inputs = {"query": forms.search_query(session["fields"])}
+                inputs = {"query": forms.search_query(session["fields"], action=session["action"])}
                 if not inputs["query"]:
                     await self._say(user, text.SEARCH_EMPTY)
                     return
