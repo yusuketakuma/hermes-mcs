@@ -489,16 +489,6 @@ def _plain_file(path: str) -> bool:
         return False
 
 
-def _default_logs() -> list:
-    """The canonical log only; legacy sources belong to verified update migration."""
-    return list(_fixed_logs())
-
-
-def _fixed_logs() -> tuple:
-    """Known log targets; evaluated per call (HOME may be patched)."""
-    return (os.path.join(HOME, "data", "mcs.log"),)
-
-
 def prune_attachments(db_path: str) -> int:
     """Delete downloaded attachment payloads older than 14 days —
     retention-bound the attachments/ directory. The row survives as state='pruned' with name/bytes/sha256/url
