@@ -19,12 +19,14 @@
 ## 上位工程が保持する受入記録（未再実行）
 
 - 全体 suite：9633 pass + 91 subtests / 25 fail / SDK専用 2 skip（`b39697ea` 時点・ルート供給値）。25 fail は別105 file batch が再検証中で、ここでは成功と扱わない。
+- 105-file batch（`cb0` 固定・継続中）：`test_view_reads_only_quoted_bodies_without_reextracting_history` と追加5件（marked厳格照合・consumer write失効・rollback・SQLite失敗・制御例外伝播）が実logで PASSED。新sourceの動的根拠として採用可（ルート確認）。
+- SDK別lane42件（standalone13・Hermes29）：実行SHAは `f11384da`。SDK対象bytesは `f113..cb0` で不変とルート確認済みで再利用可（旧 `b963` を実行SHAと記録しない）。
 - 公式医薬品マスター：`drug-master-fresh-check.json`（2026-11-07）で同梱 bundle と一致確認済み（`matches_bundle: true`、出典・hash・行数記録済み）。有効化は要オペレーター承認で未実施。
 
 ## この資料では確認していない事項
 
-- 全体 suite の最新状況：root 105-file batch 継続中に読取り証明関連の失敗が検出され、修正 `6129d37a`（読取り記録中は補助要約を個別照合）をこの候補へ統合済みだが動的未検証。失敗数は21件（前19＋lane A/B各1）として追跡中で、成功とは記載しない。
-- 25 fail 項目の最終結果、必須ゲート・CI全ジョブの成功。
+- 全体 suite の最新状況：root 105-file batch（`cb0` 固定・継続中）の既知失敗は24件（readiness witness19＋selection snapshot2＋progress.read directRecording3）。修正 `6129d37a`（読取り記録中は補助要約を個別照合）はこの候補へ統合済みだが動的未検証で、成功とは記載しない。
+- 既知失敗の最終結果と105-file batchの完了、必須ゲート・CI全ジョブの成功。
 - 最終候補SHAの固定と、統合済みソースに対する source manifest の検証。
 - 本番適用・実機稼働・適用後のエラー観測。
 - GitHub 上での画像表示、Release本文・asset・tag・公開。画像はリポジトリ内相対参照で保持し、外部表示は未検証。
