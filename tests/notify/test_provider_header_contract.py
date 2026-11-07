@@ -105,8 +105,8 @@ def test_writer_displays_only_proven_visible_single_post_sequence(led, monkeypat
     assert spec["parts"]["processing_display_version"] == 3
     assert header["provider_sequence"] is None
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert "OpenAI" not in header["text"] and "Anthropic" not in header["text"]

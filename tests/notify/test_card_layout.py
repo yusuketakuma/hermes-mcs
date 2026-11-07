@@ -54,10 +54,10 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     assert header["provider_scope"] == "header" and header["provider_states"] == states
     assert header["visible_providers"] == ["jev", "local"]
     assert texts[1] == ("09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · "
-                        + "解析中 · 👤 — · Jev 不明 · 💻 不明")
+                        + "解析中 · 👤 0% · Jev 不明 · 💻 不明")
     assert header["processing_status"] == "processing"
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
     assert "採用結果の処理順" not in header["text"] and "☁" not in header["text"]
     assert spec["parts"]["provider_states_version"] == 4
     # each post is its own zone: rule before it, its 要約 state after it
@@ -105,10 +105,10 @@ def test_failed_extraction_is_named_on_the_post(led):
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_scope"] == "header" and header["provider_states"] == states
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["text"] == "09-24〜 · 1投稿 · 解析未完了・要確認 · 👤 — · Jev 不明 · 💻 不明"
+    assert header["text"] == "09-24〜 · 1投稿 · 解析未完了・要確認 · 👤 0% · Jev 不明 · 💻 不明"
     assert header["processing_status"] == "attention"
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
     assert "採用結果の処理順" not in header["text"] and "☁" not in header["text"]
     assert spec["parts"]["provider_states_version"] == 4
 

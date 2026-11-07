@@ -224,9 +224,9 @@ def test_old_provider_generation_waits_for_a_real_update(led, monkeypatch, layou
     assert spec["parts"]["processing_display_version"] == 3
     header = next(c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header")
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "Anthropic" not in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert _card(led)["content_fp"] == cards._presentation_fp(
@@ -315,9 +315,9 @@ def test_current_provider_generation_does_not_hide_key_visibility_change(led, mo
     assert spec["parts"]["processing_display_version"] == 3
     header = next(c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header")
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "Anthropic" not in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
 

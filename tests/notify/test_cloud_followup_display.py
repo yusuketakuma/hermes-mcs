@@ -114,9 +114,9 @@ def test_new_spec_binds_followup_states_and_rejects_them_as_legacy(led, monkeypa
     assert header["provider_states"]["openai"] == "incomplete"
     assert header["processing_status"] != "complete"
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "OpenAI" not in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert validate(spec) is spec
