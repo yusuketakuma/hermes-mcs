@@ -1,5 +1,5 @@
 {
-  "fragment_count": 96,
+  "fragment_count": 97,
   "records": [
     {
       "category": "added",
@@ -672,8 +672,15 @@
       "path": "changes/archive/1.1.2/context-current-member-readiness.json",
       "sha256": "c4a2b76ae607a8ab1f6d1eb1f96fcede25bf15983c3d3af6fcea3ec9e7cc89a9",
       "title": "検証済みの投稿がスレッド全体の処理待ちで止まる問題を修正"
+    },
+    {
+      "category": "changed",
+      "id": "repo-final-cleanup",
+      "path": "changes/archive/1.1.2/repo-final-cleanup.json",
+      "sha256": "76ba8e78e904b92a3277606df370a9d39f78e054a12c0cbd7b21bab68d78de4a",
+      "title": "保守用の未使用処理と到達しない分岐を整理"
     }
   ],
-  "scope": "v1.1.2 の変更記録96件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録97件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }

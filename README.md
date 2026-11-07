@@ -475,6 +475,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 設定変更は不要です。更新後の抽出workerから適用されます。結果が未確定、または原資料との対応を確認できない投稿は引き続き保留です。
 
+- 追加の設定変更やDB移行は不要です。通常の更新手順で反映し、復旧ツールやサービスの同期は既存の更新計画と省略オプションに従ってください。復元の承認待ちや送信結果不明の記録は解除しません。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
