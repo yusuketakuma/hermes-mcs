@@ -402,7 +402,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     async def run():
         original = FakeThread.send
 
-        async def boom(self, content, allowed_mentions=None):
+        async def boom(self, content, allowed_mentions=None, view=None):
             raise FakeHTTP(400)
         monkeypatch.setattr(FakeThread, "send", boom)
         sent = await _deliver(world, worker)
@@ -467,8 +467,13 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
         world.drain()
         assert len(thread.sent) == n
         assert "さらに追記" in "\n".join(thread.sent)
-        # The unchanged first chunk also reconciles its current empty drug view.
-        assert thread.messages[0].edits == 1 and thread.messages[0].view is None
+        # The unchanged first chunk reconciles the current patient-action tokens.
+        _, latest_spec = world.spec()
+        expected = {"mcs:a:" + button["token"] for row in latest_spec["parts"]["action_rows"]
+                    for button in row if button["id"] in {"meds", "drugsearch", "summary", "search"}}
+        assert expected
+        assert thread.messages[0].edits == 1
+        assert {button.custom_id for button in thread.messages[0].view.items} == expected
         assert sum(message.edits for message in thread.messages[1:]) == 1
 
     asyncio.run(run())

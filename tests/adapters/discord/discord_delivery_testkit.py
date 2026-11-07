@@ -148,8 +148,7 @@ def _receipts(cmd_int):
 
 # ---------- part-engine fakes --------------------------------------------
 
-# cards.send_attachment lazy-imports the SDK inside the function —
-# a File shim is enough for the synthetic thread to record uploads
+# cards.send_attachment lazy-imports the SDK inside the function.
 _discord = types.ModuleType("discord")
 
 
@@ -167,7 +166,10 @@ _discord.AllowedMentions = types.SimpleNamespace(
 def synthetic_discord_sdk(monkeypatch):
     # Collection must see the real package (or its absence), so an SDK
     # serialization test never mistakes this shim for discord.py.
-    monkeypatch.setitem(sys.modules, "discord", _discord)
+    from discord_testkit import _fake_discord
+    sdk = _fake_discord()
+    sdk.File = _FakeFile
+    monkeypatch.setitem(sys.modules, "discord", sdk)
 
 
 FOREIGN_USER = types.SimpleNamespace(id=9999)

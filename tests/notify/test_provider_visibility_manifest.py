@@ -158,9 +158,9 @@ def test_lineworks_writer_rebuilds_card_when_registered_keys_change(led, monkeyp
     assert current["parts"]["processing_display_version"] == 3
     assert header["visible_providers"] == ["jev", "local"]
     assert "Anthropic" not in header["text"] and "OpenAI" not in header["text"]
-    assert "👤 —" in header["text"] and "☁" not in header["text"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
+    assert ("👤 —" if legacy else "👤 0%") in header["text"] and "☁" not in header["text"]
+    assert header["context_progress"]["stage"] == ("unknown" if legacy else "inputs")
+    assert header["context_progress"]["percent"] == (None if legacy else 0)
     assert header["context_progress"]["observed_at"] == (0 if legacy else NOW)
     if not legacy:
         prior_header = next(item for item in original["parts"]["containers"]

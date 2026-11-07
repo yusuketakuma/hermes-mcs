@@ -1,4 +1,7 @@
-"""Display required cloud completion independently of the adopted local result."""
+"""Closed cloud routes stay unread; explicit legacy readers preserve completion evidence."""
+from unittest.mock import Mock
+
+import cloud_client
 import extract_llm_errors
 import extract_llm_selection
 import extract_llm_store
@@ -15,7 +18,7 @@ from notify_testkit import CFG, _card, _dispatch, _intent, _seed_thread, led as 
 
 @pytest.mark.parametrize("completion,expected", [(None, "incomplete"), ("complete", "done"),
                                                 ("attention", "attention"), ("invalid", "unverified")])
-def test_selected_cloud_has_no_invented_transport_status(led, monkeypatch, completion, expected):
+def test_legacy_cloud_reader_has_no_invented_transport_status(led, monkeypatch, completion, expected):
     _seed_thread(led, mids=(100,))
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
@@ -29,8 +32,20 @@ def test_selected_cloud_has_no_invented_transport_status(led, monkeypatch, compl
     monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
     monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
     monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
-    assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", expected)
+    reserve, post = Mock(side_effect=AssertionError("display reserved cloud")), Mock(side_effect=AssertionError("display sent cloud"))
+    monkeypatch.setattr(cloud_policy, "usage_reserver", reserve)
+    monkeypatch.setattr(cloud_client.CloudClient, "complete", post)
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    assert calls == []
+    with monkeypatch.context() as legacy:
+        legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
+        assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", expected)
     assert calls == [(1, 100, contract)]
+    calls.clear()
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    assert calls == []
+    reserve.assert_not_called()
+    post.assert_not_called()
 
 
 @pytest.mark.parametrize("mode,eligible,scope", [("off", True, True), ("shadow", True, True),
@@ -40,9 +55,13 @@ def test_disabled_or_out_of_scope_cloud_is_not_pending(led, monkeypatch, mode, e
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: eligible)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: scope)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    with monkeypatch.context() as legacy:
+        legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
+        assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
 
 
-def test_unverified_history_permission_does_not_hide_required_cloud(led, monkeypatch):
+def test_legacy_cloud_reader_respects_history_permission(led, monkeypatch):
     _seed_thread(led, mids=(100,))
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
@@ -51,16 +70,24 @@ def test_unverified_history_permission_does_not_hide_required_cloud(led, monkeyp
     monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
     monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
     monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
-    assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    with monkeypatch.context() as legacy:
+        legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
+        assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
 
 
-def test_unresolved_contract_is_visible_without_reading_key(led, monkeypatch):
+def test_legacy_cloud_reader_keeps_unresolved_contract_unverified(led, monkeypatch):
     _seed_thread(led, mids=(100,))
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "resolve_profile", lambda *args, **kw: (None, ["unverified"]))
-    assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
+    with monkeypatch.context() as legacy:
+        legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
+        assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
+    assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
 
 
 @pytest.mark.parametrize("state,mark", [("incomplete", "…"), ("attention", "!"), ("unverified", "?")])
@@ -114,9 +141,9 @@ def test_new_spec_binds_followup_states_and_rejects_them_as_legacy(led, monkeypa
     assert header["provider_states"]["openai"] == "incomplete"
     assert header["processing_status"] != "complete"
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "OpenAI" not in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert validate(spec) is spec

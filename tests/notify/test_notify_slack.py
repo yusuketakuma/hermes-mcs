@@ -240,9 +240,9 @@ def test_slack_flush_grant_receipt_action_and_recovery(led, tmp_path, monkeypatc
     assert header["processing_status"] == "processing"
     assert spec["parts"]["processing_display_version"] == 3
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert "👤 0%" in header["text"]
     assert "採用結果の処理順" not in header["text"] and "☁" not in header["text"]
     path.unlink()
     assert notify_spool.recover(led, SLACK, {})["republished"] == 1
