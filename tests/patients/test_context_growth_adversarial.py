@@ -11,16 +11,22 @@ call seams; they do not weaken assertions to fit an implementation.
 """
 import hashlib
 import json
+import uuid
 
 import pytest
 
+import extract_llm
+import extract_llm_runner
 import inference_dependency_loss as dependency_loss
+import mcs_requests
 import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
 import patient_context_plan as context_plan
-from extract_testkit import _message
+from adapters.common import envelopes
+from extract_testkit import _hash, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from test_inference_v1_context import _clinical_source, _delete_supported_stop
 from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
 
@@ -261,3 +267,38 @@ def test_unselected_source_loss_still_limits_selected_facts(runtime):
     medication = next(f for f in facts if any(d['key'] == 'drug_name' for d in f['details']))
     assert medication['view_bucket'] == 'unknown'
     assert medication['id'] in projected['groups']['unknown']
+
+
+def test_human_feedback_drops_the_source_until_a_new_bound_proof(runtime, monkeypatch):
+    """A human ⚠ report on the CURRENT patient_context extraction re-pends
+    the message once: the scoped source leaves eligibility, a stale report
+    on the old artifact is refused, and only the existing re-extract/QA
+    path's newly bound artifact lets it rejoin. The report note is never
+    transcribed into the source material or the re-extract input."""
+    led, clock, _ = runtime
+    body = '服薬管理: 家族が薬を保管しています。咳あり。'
+    seed(led, mid=1, pid=1, body=body)
+    aid = led.artifact_add('extract_llm', json.dumps({'summary': '咳あり'}),
+                           project_id=1, message_id=1,
+                           meta={VERSION_KEY: CURRENT_VERSION, 'hash': _hash(led),
+                                 'extract_version': extract_llm.EXTRACT_VERSION})
+    assert _scoped_ready(led, 1, [1], clock)
+    req = envelopes.extract_feedback(
+        'synthetic-operator', {'project_id': 1, 'extract_ref': {
+            'message_id': 1, 'artifact_id': aid}}, 'patient_context', '合成の確認結果')
+    assert mcs_requests.apply_command(led, req)['outcome'] == 'applied'
+    assert not _scoped_ready(led, 1, [1], clock)
+    snapshot = _whole_snapshot(led, 1)
+    assert 1 not in patient_context_refresh_readiness._eligible_source_keys(
+        led, 1, CFG, snapshot, deadline=clock.mono + 60)
+    calls = []
+    monkeypatch.setattr(extract_llm, 'llm_extract', lambda text, **kw:
+                        calls.append(text) or {'summary': '服薬管理の報告'})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
+    assert extract_llm.run_pending(led, limit=5, budget_s=30)['done'] == 1
+    assert calls == [body]                          # the note never becomes model input
+    assert led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == body
+    assert _scoped_ready(led, 1, [1], clock)        # new bound artifact readmits the source
+    assert extract_llm.run_pending(led, limit=5, budget_s=30)['selected'] == 0
+    stale = {**req, 'command_id': str(uuid.uuid4())}
+    assert mcs_requests.apply_command(led, stale)['error'] == 'extraction_changed'
