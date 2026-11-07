@@ -102,7 +102,7 @@ def _existing_slack_settings():
             "notify_system_target": "slack:C87654321", "trickle_pages": 7,
             "notify": {"interactive": "off", "slack": {
                 "profile": "synthetic", "application_id": "A12345678", "team_id": "T12345678",
-                "allowed_user_ids": ["U12345678"]}}}
+                "channel_id": "C12345678", "allowed_user_ids": ["U12345678"]}}}
 
 
 def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, tmp_path):
