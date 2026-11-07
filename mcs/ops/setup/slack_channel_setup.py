@@ -44,7 +44,7 @@ def _validate(root, state):
             raise ValueError
         if set(state) - {'version', 'root', 'request_id', 'plan_hash', 'plan', 'roles',
                          'state', 'reason', 'candidate_hash', 'applied_hash', 'worker_ready',
-                         'flags_ready'}:
+                         'flags_ready', 'rebase'}:
             raise ValueError
         if 'candidate_hash' in state and (state['state'] not in ('verified', 'applied')
                 or not re.fullmatch(r'[0-9a-f]{64}', state['candidate_hash'])
@@ -68,6 +68,14 @@ def _validate(root, state):
         elif set(planned) != plan_keys:
             raise ValueError
         if state['plan_hash'] != _hash(planned) or not re.fullmatch(r'[0-9a-f]{64}', planned['base_hash']):
+            raise ValueError
+        history = state.get('rebase', [])
+        if (not isinstance(history, list)
+                or any(not isinstance(entry, dict) or set(entry) != {'plan_hash', 'base_hash'}
+                       or not re.fullmatch(r'[0-9a-f]{64}', entry['plan_hash'])
+                       or not re.fullmatch(r'[0-9a-f]{64}', entry['base_hash'])
+                       or _hash({**planned, 'base_hash': entry['base_hash']}) != entry['plan_hash']
+                       for entry in history)):
             raise ValueError
         binding = planned['binding']
         if (set(binding) != {'team_id', 'application_id', 'profile'}
@@ -162,6 +170,36 @@ def _legacy_plan_match(planned, desired, cfg):
         return (isinstance(target, str)
                 and re.fullmatch(r'slack:[CG][A-Z0-9]{8,}', target) is not None)
     return True
+
+
+def _rebase_allowed(state, desired, cfg):
+    """A scope-blocked intent may rebind only to a verifiably identical request.
+
+    Every declared requirement must match exactly except base_hash, no
+    role record may carry a receipt, a sending invite or unresolved
+    work, and the drifted config must still pass the settings checks."""
+    if (state.get('state') != 'blocked'
+            or state.get('reason') != 'slack_setup_scope_required'):
+        return False
+    planned = state['plan']
+    if (set(planned) != set(desired)
+            or any(planned[key] != desired[key] for key in desired if key != 'base_hash')):
+        return False
+    for role, record in state['roles'].items():
+        record_state = record['state']
+        if (record.get('create_receipt') is not None
+                or record.get('invite_state') == 'sending'
+                or record_state in ('unknown', 'creating', 'created')):
+            return False
+        if record_state == 'verified':
+            original_id = planned['roles'][role].get('id')
+            if not original_id or record['id'] != original_id:
+                return False
+        if (record_state == 'blocked'
+                and (record['id'] is not None or record.get('create_error') != 'missing_scope')):
+            return False
+    errors, _ = preflight_errors(cfg)
+    return not errors
 
 
 def _created_channel_profile(root, cfg, destination, role, configured_key):
@@ -364,9 +402,15 @@ def prepare(root, cfg, *, users=None):
                 return None
             if state.get('state') == 'applied' and state.get('applied_hash') == _hash(cfg):
                 return None
-            if (state.get('plan_hash') != key
-                    and not _legacy_plan_match(state.get('plan'), desired, cfg)):
-                raise ValueError('slack_setup_existing_intent_conflict')
+            if state.get('plan_hash') != key:
+                if _rebase_allowed(state, desired, cfg):
+                    state.setdefault('rebase', []).append({
+                        'plan_hash': state['plan_hash'],
+                        'base_hash': state['plan']['base_hash']})
+                    state['plan'], state['plan_hash'] = desired, key
+                    save(root, state)
+                elif not _legacy_plan_match(state.get('plan'), desired, cfg):
+                    raise ValueError('slack_setup_existing_intent_conflict')
             return state
         state = {'version': 1, 'root': str(Path(root).absolute()), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
                  'plan': desired, 'roles': deepcopy(desired['roles']), 'state': 'pending'}

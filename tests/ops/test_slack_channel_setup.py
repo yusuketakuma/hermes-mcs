@@ -1003,3 +1003,135 @@ def test_text_bootstrap_uses_common_token_store_without_card_grants(tmp_path, mo
                         prefix + 'slack_profile': 'synthetic'}
     assert stores == [('/synthetic/hermes', 'synthetic', ('SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'), args)]
     assert cfg == before and cfg['notify']['interactive'] == 'off'
+
+
+def _scope_blocked(tmp_path):
+    """A scope-blocked intent: a verified existing patient channel and a
+    system channel whose creation Slack refused with missing_scope."""
+    cfg, client = config(), Client()
+    cfg['notify_target'] = 'slack:C000000099'
+    cfg['notify']['slack']['channel_id'] = 'C000000099'
+    client.channels['C000000099'] = {'id': 'C000000099', 'is_private': True, 'is_member': True,
+                                     'is_archived': False}
+    client.members['C000000099'] = ['U000000009', 'U000000001']
+    client.failure = 'missing_scope'
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    state = setup.read(tmp_path)
+    assert (state['state'], state['reason']) == ('blocked', 'slack_setup_scope_required')
+    assert state['roles']['patient']['state'] == 'verified'
+    assert state['roles']['system']['create_error'] == 'missing_scope'
+    return cfg, client
+
+
+def _drift(cfg):
+    """An unrelated settings change that leaves every declared requirement equal."""
+    drifted = deepcopy(cfg)
+    drifted['job_budget_seconds'] = 60
+    return drifted
+
+
+def test_scope_blocked_intent_rebases_to_drifted_config_and_resumes(tmp_path, monkeypatch):
+    cfg, client = _scope_blocked(tmp_path)
+    before = setup.read(tmp_path)
+    old_hash, old_base = before['plan_hash'], before['plan']['base_hash']
+    drifted = _drift(cfg)
+
+    resumed = setup.prepare(tmp_path, drifted)
+    assert resumed['roles'] == before['roles']
+    assert resumed['rebase'] == [{'plan_hash': old_hash, 'base_hash': old_base}]
+    assert resumed['plan'] == {**before['plan'], 'base_hash': setup._hash(drifted)}
+    assert resumed['plan_hash'] == setup._hash(resumed['plan'])
+
+    # The consumer alone still cannot retry the scope-blocked record.
+    attempts = list(client.created)
+    assert consume(tmp_path, client, drifted)['state'] == 'blocked'
+    assert client.created == attempts == ['mcslog']
+
+    # An explicit setup rerun performs the existing blocked-retry path.
+    client.failure = None
+    import service_management
+    import setup_integration
+    monkeypatch.setattr(setup_integration, '_apply_plugin_integration', lambda *args: True)
+    def cli(_exe, _profile, *command):
+        if command == ('gateway', 'status'):
+            return SimpleNamespace(returncode=0)
+        assert command == ('gateway', 'restart')
+        consume(tmp_path, client, drifted)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(service_management, 'hermes_cli', cli)
+    saved = setup.run_setup(tmp_path, drifted, SimpleNamespace(yes=True))
+    assert setup.read(tmp_path)['state'] == 'verified'
+    assert client.created == ['mcslog', 'mcslog']
+    assert saved['notify_target'] == 'slack:C000000099'
+    assert saved['notify_system_target'] == 'slack:C000000002'
+
+    # Reruns are idempotent: no second rebase entry, no second creation.
+    assert setup.prepare(tmp_path, drifted)['rebase'] == resumed['rebase']
+    assert setup.run_setup(tmp_path, drifted, SimpleNamespace(yes=True)) == saved
+    assert client.created == ['mcslog', 'mcslog']
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda s: s['roles']['patient'].update(invite_state='sending'),
+    lambda s: s['roles']['system'].update(state='unknown'),
+    lambda s: s['roles']['system'].update(state='creating'),
+    lambda s: s['roles']['system'].update(create_error='name_taken'),
+    lambda s: s.update(reason='slack_setup_name_conflict'),
+    lambda s: s.update(state='pending', reason=None),
+    lambda s: (s.update(state='verified'),
+               s['roles']['system'].update(
+                   id='C000000111', state='verified', invite_state='confirmed',
+                   create_receipt={'request_id': s['request_id'], 'channel_id': 'C000000111',
+                                   'team_id': 'T000000001', 'bot_id': 'B000000001'})),
+    lambda s: s['roles']['system'].update(
+        id='C000000111', state='created', invite_state='confirmed',
+        create_receipt={'request_id': s['request_id'], 'channel_id': 'C000000111',
+                        'team_id': 'T000000001', 'bot_id': 'B000000001'}),
+])
+def test_drifted_config_rebase_refuses_unfinished_or_unverifiable_roles(tmp_path, mutate):
+    cfg, client = _scope_blocked(tmp_path)
+    state = setup.read(tmp_path)
+    mutate(state)
+    setup.save(tmp_path, state)
+    before = setup.path(tmp_path).read_bytes()
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.prepare(tmp_path, _drift(cfg))
+    assert setup.path(tmp_path).read_bytes() == before
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda c: c['notify']['slack'].update(profile='other'),
+    lambda c: c['notify']['slack'].update(allowed_user_ids=['U000000002']),
+    lambda c: c.update(notify_system_target='slack:C000000007'),
+    lambda c: c['notify'].update(interactive='off'),
+    lambda c: c.update(runtime_mode='standalone'),
+    lambda c: c.update(job_budget_seconds='invalid'),
+])
+def test_drifted_config_rebase_refuses_any_request_or_config_change(tmp_path, mutate):
+    cfg, client = _scope_blocked(tmp_path)
+    drifted = _drift(cfg)
+    mutate(drifted)
+    before = setup.path(tmp_path).read_bytes()
+    with pytest.raises(ValueError, match='slack_setup_existing_intent_conflict'):
+        setup.prepare(tmp_path, drifted)
+    assert setup.path(tmp_path).read_bytes() == before
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda s: s['rebase'][0].update(base_hash='0' * 64),
+    lambda s: s['rebase'][0].update(plan_hash='0' * 64),
+    lambda s: s['rebase'].append({'plan_hash': '0' * 64, 'base_hash': '0' * 64}),
+    lambda s: s.update(rebase='forged'),
+])
+def test_rebase_history_is_hash_chained_to_the_current_plan(tmp_path, mutate):
+    cfg, client = _scope_blocked(tmp_path)
+    drifted = _drift(cfg)
+    setup.prepare(tmp_path, drifted)
+    state = json.loads(setup.path(tmp_path).read_text())
+    mutate(state)
+    setup.path(tmp_path).write_text(json.dumps(state, sort_keys=True) + '\n')
+    with pytest.raises(ValueError, match='slack_setup_state_unverified'):
+        setup.read(tmp_path)
+    with pytest.raises(ValueError):
+        setup.prepare(tmp_path, drifted)
