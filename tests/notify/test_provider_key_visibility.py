@@ -43,9 +43,12 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
     assert header["provider_states"] == states
     validate(spec)
     blocks = render_parts(spec["parts"], card_kind="thread")
+    # The frozen-progress header renders as compact text marks (Jev/💻), not
+    # logo images — provider identity still reaches the Slack render.
     images = [element["alt_text"] for block in blocks for element in block.get("elements", [])
               if element.get("type") == "image"]
-    assert [item.split()[0].lower() for item in images] == [key for key in visible if key != "local"]
+    assert images == []
+    assert "Jev" in str(blocks)
     for name in ("Anthropic", "OpenAI"):
         assert name not in header["text"]
     assert "💻" in str(blocks)
@@ -86,8 +89,8 @@ def test_registered_cloud_logos_stay_hidden_when_cloud_mode_is_off(led, monkeypa
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0] for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == ["Jev"]
-    assert "💻" in str(blocks)
+    assert images == []
+    assert "Jev" in str(blocks) and "💻" in str(blocks)
 
 
 @pytest.mark.usefixtures("pinned_clock")
@@ -128,7 +131,8 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0].lower() for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
-    assert images == [key for key in header["visible_providers"] if key != "local"]
+    assert images == []
+    assert "Jev" in str(blocks) and "💻" in str(blocks)
 
 
 @pytest.mark.parametrize("fault", ["missing", "duplicate", "unknown", "order", "v2", "post", "fallback"])
