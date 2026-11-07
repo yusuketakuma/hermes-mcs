@@ -16,7 +16,7 @@ import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
 from test_context_cloud_update_identity import cloud as cloud, real_cloud as real_cloud, runtime as runtime
-from test_patient_context_refresh import _prepare_summary, document, seed, step
+from test_patient_context_refresh import document, seed, step
 
 
 _REAL_MODE = extract_llm_provider._cloud_mode
@@ -79,7 +79,16 @@ def test_known_cloud_backfill_does_not_rearm_same_scope_overview_retry(
 
     monkeypatch.setattr(refresh.local_llm, 'admitted_chat', local)
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', cloud_wire)
-    _prepare_summary(runtime, cfg=cfg)
+    for _ in range(60):
+        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        if sources._scan_ready(scans.get(1, {})):
+            break
+        result = step(runtime, cfg=cfg)
+        assert (result['status'] == 'progressed' and result['lane'] in ('B', 'C')
+                or (result['status'], result['lane'], result.get('reason'))
+                == ('deferred', 'C', 'source_quality_pending')), result
+    else:
+        pytest.fail('real source scan and quotation audit did not become ready')
     scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
     assert sources._scan_ready(scans[1]) and not scans[1].get('_provider_contract')
     assert led.synthetic_jev_requests and not posts
