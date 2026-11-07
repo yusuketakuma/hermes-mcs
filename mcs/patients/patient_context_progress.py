@@ -132,7 +132,7 @@ def _read(db, pid, cfg):
             return result(10 + 70 * covered // total, 'sources')
         if audited < len(targets):
             return result(80 + 10 * audited // len(targets), 'audit')
-        coverage = readiness._inference_coverage(db, pid, cfg, snapshot, read_proof=proof)
+        coverage = readiness._inference_coverage(db, pid, cfg, snapshot, read_proof=proof, proof_for=proof_for)
         if coverage['complete'] and readiness._context_view_input(db, pid, cfg=cfg, proof_for=proof_for) is not None:
             return result(100, 'complete')
         return result(99 if coverage['summary']['current'] else 90, 'summary')

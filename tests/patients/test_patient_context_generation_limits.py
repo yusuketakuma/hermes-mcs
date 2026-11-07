@@ -1,5 +1,6 @@
 """Exercise overview generation limits through synthetic selection and dispatch."""
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -22,8 +23,27 @@ def _records(led, pid=1):
 
 def _only_a(monkeypatch):
     original = plan.lane_rotation
-    monkeypatch.setattr(plan, 'lane_rotation',
-        lambda best, rotation: original({'A': best['A']} if 'A' in best else {}, rotation))
+    def only_a(best, rotation):
+        return original({'A': best['A']} if 'A' in best else {}, rotation)
+    only_a._source_rotation = original
+    monkeypatch.setattr(plan, 'lane_rotation', only_a)
+
+
+
+def _ready_sources(runtime, *, cfg=CFG, pid=1, keys=None):
+    """Reach overview eligibility through the real source and audit lanes."""
+    led, _, _ = runtime
+    rotation = getattr(plan.lane_rotation, '_source_rotation', plan.lane_rotation)
+    with patch.object(plan, 'lane_rotation',
+            lambda best, state: rotation({key: value for key, value in best.items() if key != 'A'}, state)):
+        for _ in range(20):
+            snapshot = sources._snapshot(led.db, pid, cfg, hydrate=False, source_keys=keys)
+            scans = sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            if all(sources._scan_ready(scans.get(plan.source_key(source), {}))
+                   for source in snapshot['sources'] if plan.source_usable(source)):
+                return
+            assert step(runtime, cfg=cfg)['status'] == 'progressed'
+    pytest.fail('source and audit lanes did not finish')
 
 
 def _claim(record):
@@ -34,6 +54,7 @@ def _claim(record):
 def test_generation_is_committed_before_dispatch_and_finished_with_overview(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     original, observed = refresh.local_llm.admitted_chat, []
     def chat(*args, **kwargs):
         assert not led.db.in_transaction
@@ -53,6 +74,7 @@ def test_generation_is_committed_before_dispatch_and_finished_with_overview(runt
 def test_identical_read_only_republication_does_not_reserve_again(runtime, monkeypatch):
     led, _, calls = runtime
     seed(led)
+    _ready_sources(runtime)
     _only_a(monkeypatch)
     assert step(runtime)['status'] == 'progressed'
     original = _records(led)
@@ -65,8 +87,11 @@ def test_identical_read_only_republication_does_not_reserve_again(runtime, monke
 def test_interval_waiting_patient_keeps_other_patients_and_source_lanes_runnable(runtime):
     led, _, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     assert step(runtime)['lane'] == 'A'
     seed(led, mid=2, body='生活環境: 合成の追加情報。')
+    # Keep the patient partial: first-full catchup has a separate acceptance case.
+    seed(led, mid=4, body='生活環境: 合成の未解析記録。', proof=False)
     seed(led, mid=3, pid=2)
     results = [step(runtime) for _ in range(8)]
     assert document(led, pid=2) is not None and any(row.get('lane') == 'B' for row in results)
@@ -80,9 +105,11 @@ def test_four_new_overviews_per_jst_day_and_new_day_reopens_new_input(runtime, m
     for index in range(4):
         clock.wall = start + index * quota.INTERVAL
         seed(led, body=f'生活環境: 合成の更新記録 {index}。')
+        _ready_sources(runtime)
         assert step(runtime)['status'] == 'progressed'
     clock.wall = start + 4 * quota.INTERVAL
     seed(led, body='生活環境: 合成の翌日待ち更新。')
+    _ready_sources(runtime)
     before = len(calls)
     assert step(runtime)['status'] == 'deferred'
     assert len(calls) == before and len(_records(led)) == 4
@@ -95,6 +122,7 @@ def test_four_new_overviews_per_jst_day_and_new_day_reopens_new_input(runtime, m
 def test_proved_unsent_summary_refusals_return_the_slot(runtime, monkeypatch, refusal):
     led, clock, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     def refused(*args, **kwargs):
         if refusal == 'turn':
             kwargs['error_out']['kind'] = 'busy'
@@ -116,6 +144,7 @@ def test_proved_unsent_summary_refusals_return_the_slot(runtime, monkeypatch, re
 def test_unsent_recovery_does_not_release_a_preexisting_unknown_generation(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=[1])
     key = refresh._generation_plan(led.db, 1, CFG, snapshot, clock.wall)['input_key']
     with led.db:
@@ -135,6 +164,7 @@ def test_unsent_recovery_does_not_release_a_preexisting_unknown_generation(runti
 def test_late_generation_owner_cannot_publish_after_token_replacement(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     original, newer = refresh.local_llm.admitted_chat, []
     def change_owner(*args, **kwargs):
         _, previous = _records(led)[0]
@@ -154,6 +184,7 @@ def test_late_generation_owner_cannot_publish_after_token_replacement(runtime, m
 def test_first_full_catchup_is_identified_once_for_the_patient(runtime):
     led, clock, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     assert step(runtime)['lane'] == 'A'
     for _ in range(8):
         snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=[1])
@@ -198,6 +229,7 @@ def test_shadow_uses_new_token_on_the_same_generation_after_local_publication(ru
     led, clock, _ = runtime
     seed(led)
     cloud[1][0] = 'shadow'
+    _ready_sources(runtime, cfg=CLOUD_CFG)
     original_chat, first, shadow = refresh.local_llm.admitted_chat, [], []
     def local(*args, **kwargs):
         if 'reports' in json.loads(args[1]):
@@ -225,6 +257,7 @@ def test_shadow_uses_new_token_on_the_same_generation_after_local_publication(ru
 def test_overview_and_quota_completion_roll_back_together(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led)
+    _ready_sources(runtime)
     original = quota.finish_tx
     def fail_after_finish(*args, **kwargs):
         result = original(*args, **kwargs)
@@ -244,6 +277,7 @@ def test_partial_overview_first_full_catchup_can_run_before_three_hours(runtime)
     led, clock, _ = runtime
     seed(led)
     seed(led, mid=2, proof=False, body='生活環境: 合成の未解析記録。')
+    _ready_sources(runtime, keys=[1])
     assert step(runtime)['status'] == 'progressed'
     first, = _records(led)
     before_meta = json.loads(led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1',

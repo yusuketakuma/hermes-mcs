@@ -297,7 +297,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
         if taken is not None and not valid_hash(taken[0]):
             raise ValueError('patient_context_generation_unverified')
         catchup = bool(full and (taken is None or taken[0] == key))
-    return {'input_key': key, 'catchup': catchup, 'needed': not same or quality}
+    return {'input_key': key, 'catchup': catchup, 'needed': bool(facts) and not same or quality}
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete):
@@ -345,12 +345,10 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 if patient_context_refresh_state._out_of_scope(snapshot):
                     continue
                 scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
-                quality_required = bool(snapshot['contract'].get('provider')
-                    or patient_context_quality_receipts._has_prior_quality_failure(reader.db, pid))
                 scans = patient_context_refresh_sources._current_scans(reader.db, pid, snapshot['sources'],
-                    snapshot['contract'], cfg=cfg) if quality_required else {}
+                    snapshot['contract'], cfg=cfg)
                 summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
-                    if not quality_required or not context_plan.source_usable(source)
+                    if not context_plan.source_usable(source)
                     or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
                 if summary_keys or not snapshot['sources']:
                     summary_keys = summary_keys or None
@@ -362,6 +360,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                         scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
                 for candidate, state, due, scope_keys, lanes in scopes:
                     if not any(due[lane] for lane in lanes):
+                        waiting += int(candidate['unfinished'])
                         continue
                     if 'A' in lanes and due['A']:
                         try:
@@ -408,6 +407,22 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Keep one completed unit's existing save path resumable within its deadline."""
+    returned = []
+    result = yield from _run_due_unit(ledger, cfg, deadline=deadline, admit=admit,
+        complete=complete, local_admit=local_admit, returned=returned)
+    # A normal return relinquishes only the usable quota lease. Suspended paid
+    # work, exceptions and generator close retain their existing ownership.
+    if returned:
+        try:
+            returned[0]('unknown')
+        except Exception:
+            # Unknown ownership remains reserved when its best-effort CAS
+            # cannot be proved. Preserve the unit's existing return value.
+            pass
+    return result
+
+
+def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned):
     import extract_llm
     import cloud_inference
     import cloud_client
@@ -580,6 +595,13 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         nonlocal generation_claim, generation_decision, generation_wait, frozen_ver, progress
         if generation_plan is None or not generation_plan['needed'] or generation_claim is not None:
             return
+        # Scheduling wrote progress after selection. Capture its clinical
+        # observation outside the new quota writer fence, then replay the SQL.
+        ready, write_proof[0], _ = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg,
+            deadline=deadline, complete=complete, allow_dependency_repair=False, source_keys=source_keys,
+            write_scope={'source_key': None, 'cloud': cloud_input is not None})
+        if not ready or write_proof[0] is None:
+            raise patient_context_refresh_state.Deferred('patient_context_readiness_unverified')
         with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
             try:
                 ledger.db.execute('BEGIN IMMEDIATE')
@@ -634,6 +656,11 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             except (sqlite3.Error, OSError, ValueError):
                 ledger.db.rollback()
                 return False
+            except BaseException:
+                ledger.db.rollback()
+                raise
+
+    returned.append(return_generation)
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
         def provider_current():
@@ -779,7 +806,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     meta["route_contract"] = old_meta["route_contract"]
                 if "quality_repair_ref" in old_meta:
                     meta["quality_repair_ref"] = old_meta["quality_repair_ref"]
-            if not same or quality_required:
+            if facts and not same or quality_required:
                 generation_plan['needed'] = True
                 begin_generation()
             if same and quality_required:
