@@ -25,8 +25,8 @@
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
   "source_checkout_observation": {
     "dirty": true,
-    "head": "fa73fd89cb5822821229b82d846f9f6ece680e88",
-    "observed_at": "2026-11-07T09:56:17.024345+00:00",
+    "head": "35e5630d901642905f29690958bd9cb438136b36",
+    "observed_at": "2026-11-07T10:10:43.558230+00:00",
     "release_sha_fixed": false
   },
   "source_file_observations": [
@@ -57,11 +57,11 @@
     },
     {
       "path": "mcs/ops/mcs_ocr.py",
-      "sha256": "21c15b92ef4bece4e57c23c116be0a92bd6779cb532980fe27d648b9ee3ec34a"
+      "sha256": "b149444d7094f5b46987555ae1ed225c58502ca59942137492d9b2f3f6c474cd"
     },
     {
       "path": "adapters/common/spec.py",
-      "sha256": "560fd096f109cfe7f75926e3e55a979cd751328cf3d55fc8da9b5d3cc9b8886c"
+      "sha256": "8705d9434ae03c32ae6f6c1bf33566de53007c7585681a3718986ab7a8354083"
     },
     {
       "path": "mcs/notify/notify_recovery.py",

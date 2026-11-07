@@ -313,7 +313,7 @@
       "category": "fixed",
       "id": "ocr-writer-refusal-diagnostics",
       "path": "changes/archive/1.1.2/ocr-writer-refusal-diagnostics.json",
-      "sha256": "12823c3b0eaec1f60b86e51330490907a0715c441623d1345179a3c2cca7e683",
+      "sha256": "319061ccc6b66c53f1fab5136c60b655a346def468bc95b17e82686d0a00f53f",
       "title": "添付OCRの先送りで保存ロックの拒否理由を記録"
     },
     {
