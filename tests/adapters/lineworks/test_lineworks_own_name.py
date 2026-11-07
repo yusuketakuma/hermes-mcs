@@ -42,25 +42,30 @@ def _digest_session(w):
     paths.atomic_write(f"{w.dirs['cmd_results']}/{paths.safe_name(request['request_id'])}.json",
                        json.dumps(result).encode())
     asyncio.run(w.actions.sweep_followups())
+    return request
 
 
 def test_digest_name_defaults_to_the_configured_name(tmp_path):
     w = _named(tmp_path, "digest", {"operator": "合成 花子"})
-    _digest_session(w)
+    request = _digest_session(w)
     asyncio.run(w.actions._input("operator", ACTOR, "担当"))
     assert "候補: 合成 花子" in w.client.calls[-1][1]["text"]
     asyncio.run(w.actions._input("operator", ACTOR, "なし"))
-    [env] = command_files(w)
+    commands = command_files(w)
+    assert request in commands
+    [env] = [item for item in commands if item != request]
     assert env["input"]["query"] == "担当" and env["input"]["name"] == "合成 花子"
 
 
 def test_digest_without_a_configured_name_sends_no_name(tmp_path):
     w = _named(tmp_path, "digest", None)
-    _digest_session(w)
+    request = _digest_session(w)
     asyncio.run(w.actions._input("operator", ACTOR, "担当"))
     assert "候補:" not in w.client.calls[-1][1]["text"]
     asyncio.run(w.actions._input("operator", ACTOR, "なし"))
-    [env] = command_files(w)
+    commands = command_files(w)
+    assert request in commands
+    [env] = [item for item in commands if item != request]
     assert "name" not in env["input"]
 
 
