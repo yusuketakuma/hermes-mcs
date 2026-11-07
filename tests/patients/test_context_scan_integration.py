@@ -146,8 +146,17 @@ def test_reader_cancels_rows_and_keeps_complete_callback(runtime):
         with pytest.raises(patient_context_refresh_sources._ScanInterrupted):
             cursor.fetchone()
     callbacks = []
-    assert step(runtime, complete=lambda pid: callbacks.append(pid) or False)['status'] == 'deferred'
-    assert callbacks and set(callbacks) == {1}
+    def complete(pid):
+        callbacks.append(pid)
+        return False
+    # Whole-patient work still honors the callback; a proven source scope does not need it.
+    assert not patient_context_refresh_readiness._inference_ready(
+        led, 1, CFG, deadline=clock.mono + 600, complete=complete)
+    assert callbacks == [1]
+    assert patient_context_refresh_readiness._inference_ready(
+        led, 1, CFG, deadline=clock.mono + 600, complete=lambda pid: True)
+    assert step(runtime, complete=complete)['status'] == 'progressed'
+    assert callbacks == [1]
 
 
 def test_source_edit_after_candidate_read_is_rejected_before_inference(runtime, monkeypatch):
