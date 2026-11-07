@@ -33,6 +33,9 @@ def test_generation_change_rejects_completed_scan_and_rescans(runtime, monkeypat
     assert pending["A"] and pending["B"]
     if module is extract_llm:
         _raw_proof(led, 1, 1)
+    # The new extraction contract consumes a new context generation.
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     finish(runtime)
     after = context_refresh._latest(led.db, context_refresh.SCAN, 1, 1)
     scan, meta = after

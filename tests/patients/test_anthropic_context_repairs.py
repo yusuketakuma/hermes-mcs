@@ -718,6 +718,10 @@ def test_new_raw_occurrence_restarts_b_without_deleting_prior_original_chunks(ru
                 'SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
                 (patient_context_refresh_state.CHUNK,))] == old
             return
+        if changed == 'scope':
+            # A different patient scope is a new context generation.
+            clock.wall += 3 * 60 * 60
+            clock.mono += 3 * 60 * 60
         drain(runtime)
         current = {row[0]:tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=?',
                                                              (patient_context_refresh_state.CHUNK,))}
@@ -729,11 +733,14 @@ def test_new_raw_occurrence_restarts_b_without_deleting_prior_original_chunks(ru
 
 
 def test_scope_aba_holds_an_unproven_original_cursor_without_reposting_or_overwriting(runtime, cloud):
-    led, _, _ = runtime
+    led, clock, _ = runtime
     seed(led, body='見出しのない完全合成の居住記録。')
     drain(runtime)
     with led.db:
         led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+    # Rebuild the new scope; the later return to the old scope stays immediate.
+    clock.wall += 3 * 60 * 60
+    clock.mono += 3 * 60 * 60
     drain(runtime)
     originals = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
                                                      (patient_context_refresh_state.CHUNK,))]
