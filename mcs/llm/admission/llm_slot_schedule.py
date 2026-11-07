@@ -116,12 +116,14 @@ def turn(directory, *, realtime, preferred, deadline=None, min_s=0.0, held_slots
         # Recheck after allocation; an expired caller never sends.
         yield chosen if deadline is None or time.monotonic() + min_s < deadline else None
     finally:
+        # Drop active RT before freeing its slot. Waiting RT intent remains
+        # held, so BG cannot mistake the newly free slot for an active RT's spare.
+        if active is not None:
+            os.close(active)
         if slot_fd is not None:
             os.close(slot_fd)
         if legacy is not None:
             os.close(legacy)
-        if active is not None:
-            os.close(active)
         if intent is not None:
             os.close(intent)
         os.close(gate)
