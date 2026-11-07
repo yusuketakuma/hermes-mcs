@@ -36,11 +36,13 @@ def _local_card(local_then_cloud):
 
 def _closed_cloud_is_silent(ledger):
     financial = [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result',"
+        "'cloud_usage_disposition','cloud_usage_dryrun') ORDER BY artifact_id")]
     renders = [tuple(row) for row in ledger.db.execute('SELECT * FROM notification_renders ORDER BY render_rev')]
     assert _cloud_pass(ledger)['done'] == 0
     assert [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")] == financial
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result',"
+        "'cloud_usage_disposition','cloud_usage_dryrun') ORDER BY artifact_id")] == financial
     assert [tuple(row) for row in ledger.db.execute('SELECT * FROM notification_renders ORDER BY render_rev')] == renders
 
 
