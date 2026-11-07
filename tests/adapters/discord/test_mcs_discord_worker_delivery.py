@@ -944,7 +944,7 @@ def test_thread_body_send_failure_only_logs(world, monkeypatch):
     async def run():
         original = FakeThread.send
 
-        async def boom(self, content, allowed_mentions=None):
+        async def boom(self, content, allowed_mentions=None, view=None):
             raise FakeHTTP(500)
         monkeypatch.setattr(FakeThread, "send", boom)
         sent = await _deliver(world, worker)

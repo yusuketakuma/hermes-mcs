@@ -15,6 +15,7 @@ import pytest
 from adapters.common import envelopes, journal, paths
 from adapters.common.registry import Registry
 from adapters.discord.delivery import DeliveryWorker
+from discord_testkit import _fake_discord
 
 class FakeHTTP(Exception):
     def __init__(self, status):
@@ -148,9 +149,8 @@ def _receipts(cmd_int):
 
 # ---------- part-engine fakes --------------------------------------------
 
-# cards.send_attachment lazy-imports the SDK inside the function —
-# a File shim is enough for the synthetic thread to record uploads
-_discord = types.ModuleType("discord")
+# Reuse the button/view SDK shape when a sealed thread carries drug actions.
+_discord = _fake_discord()
 
 
 class _FakeFile:

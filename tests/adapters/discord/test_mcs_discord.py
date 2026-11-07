@@ -402,7 +402,7 @@ def test_update_backfills_body_into_existing_thread(world, monkeypatch):
     async def run():
         original = FakeThread.send
 
-        async def boom(self, content, allowed_mentions=None):
+        async def boom(self, content, allowed_mentions=None, view=None):
             raise FakeHTTP(400)
         monkeypatch.setattr(FakeThread, "send", boom)
         sent = await _deliver(world, worker)

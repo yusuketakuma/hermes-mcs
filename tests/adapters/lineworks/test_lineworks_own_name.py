@@ -1,8 +1,9 @@
 """LINE WORKS fills the clicker's own name from notify.lineworks.user_names (synthetic)."""
 import asyncio
+import json
 
-from adapters.common import envelopes
-from lineworks_testkit import SCOPE, TOKEN, command_files, event, world
+from adapters.common import envelopes, paths
+from lineworks_testkit import TOKEN, command_files, event, world
 
 ACTOR = "lineworks:40029600:operator"
 
@@ -35,9 +36,12 @@ def test_my_tasks_click_without_a_configured_name_keeps_the_prompt(tmp_path):
 
 def _digest_session(w):
     """The runner's 📊 modal answer opens the DM dialogue (query, then name)."""
-    rec = {"kind": "form", "action": "digest", "actor": ACTOR, "user": "operator", "token": TOKEN,
-           "origin": {**SCOPE, "message_id": "lw:" + "c" * 32}}
-    asyncio.run(w.actions._deliver_followup("operator", rec, {"modal": True, "outcome": "applied"}))
+    asyncio.run(w.actions.handle(event(postback="mcs:a:" + TOKEN)))
+    [request] = command_files(w)
+    result = {"request_id": request["request_id"], "modal": True, "outcome": "applied"}
+    paths.atomic_write(f"{w.dirs['cmd_results']}/{paths.safe_name(request['request_id'])}.json",
+                       json.dumps(result).encode())
+    asyncio.run(w.actions.sweep_followups())
 
 
 def test_digest_name_defaults_to_the_configured_name(tmp_path):
