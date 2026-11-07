@@ -16,6 +16,7 @@ import writer_lock
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -408,7 +409,7 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
     assert extract_llm._SLOT_OVERRIDE is None
 
 
-@pytest.mark.parametrize("lane", ["1", "4"])
+@pytest.mark.parametrize("lane", ["0", "4"])
 def test_unknown_lane_is_rejected(monkeypatch, capsys, lane):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
@@ -425,6 +426,36 @@ def test_unknown_lane_is_rejected(monkeypatch, capsys, lane):
     assert extract_llm.main() == 2
     assert '"bad_lane"' in capsys.readouterr().out
     assert "MCS_LLM_SLOT" not in os.environ
+
+
+@pytest.mark.parametrize("night", [False, True])
+def test_night_resident_keeps_carry_guard_and_only_claims_at_night(monkeypatch, tmp_path, night):
+    import llm_slot_schedule
+    module = extract_llm_resident
+    now, calls, settlements = [0.0], [], []
+    clock = SimpleNamespace(monotonic=lambda: now[0], time=lambda: now[0],
+                            sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(module, "time", clock)
+    monkeypatch.setattr(module, "HOME", str(tmp_path))
+    monkeypatch.setattr(module, "_writer_current", lambda **kw: True)
+    monkeypatch.setattr(module, "_open_resident_ledger", lambda _: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(module, "load_config", lambda: {})
+    monkeypatch.setattr(module, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(module, "_recent_arrivals", lambda _: set())
+    monkeypatch.setattr(module, "_next_due_in", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "_settle_carry", lambda *a, **kw: settlements.append(kw))
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: night)
+    monkeypatch.setattr(module.sys, "argv", ["extract", "--all", "--lane", "1", "--stop-after", "11"])
+
+    def run(*args, **kwargs):
+        calls.append((module.local_llm.request_slot(), module.local_llm.scheduling_enabled()))
+        return {"done": 0, "failed": 0, "left": 0, "selected": 0, "carry": []}
+
+    monkeypatch.setattr(module, "run_pending", run)
+    assert module.main() == 0
+    assert bool(calls) is night
+    assert all(item == (0, True) for item in calls)
+    assert settlements and now[0] == 11
 
 
 def test_old_slot_option_is_gone(monkeypatch):

@@ -139,12 +139,10 @@ def _same_but_operating_limits(current, cfg):
     return strip(current) == strip(cfg)
 
 
-def _background_context_refresh(ledger, initial_state, stop=None):
-    """Lane 3's first priority: one patient-context unit (up to 15 min)
-    per call, any hour. ``admit`` is re-checked at every unit boundary;
-    the per-patient extraction-complete rule lives in run_due."""
+def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worker=False):
+    """Refresh one patient context in its cloud child or the local lane, with shared guards."""
 
-    if extract_llm_call_context._SLOT_OVERRIDE != local_llm.LANES[3]:
+    if not cloud_worker and extract_llm_call_context._SLOT_OVERRIDE != local_llm.LANES[3]:
         return {"status": "off", "done": 0}
     try:
         cfg = load_config()
@@ -162,6 +160,8 @@ def _background_context_refresh(ledger, initial_state, stop=None):
         # and an unchanged config all have to be proven.
         if (writer_lock.updater_state() != initial_state or initial_state[0]):
             return False
+        if cloud_worker and not cloud_backlog.owner_alive():
+            return False
         if not _same_but_operating_limits(load_config(), cfg):
             return False
         free = disk_free_mb(ledger.db)
@@ -173,6 +173,8 @@ def _background_context_refresh(ledger, initial_state, stop=None):
     try:
         cloud_cfg = cloud_inference.resolve_cloud_settings(cfg)
         cloud_enabled = cloud_cfg["mode"] != "off"
+        if (cloud_cfg["mode"] == "on") != cloud_worker:
+            return {"status": "off", "done": 0}
         if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
         else:
@@ -193,7 +195,8 @@ def main() -> int:
     previous = extract_llm_call_context._SLOT_OVERRIDE
     turn = os.environ.get(local_llm.TURN_LOCK_ENV)
     try:
-        with local_llm.pinned_slot(local_llm.BACKGROUND_SLOT):
+        with local_llm.pinned_slot(local_llm.BACKGROUND_SLOT), local_llm.scheduling_scope(
+                os.path.join(HOME, "data")):
             return _main()
     finally:
         extract_llm_call_context._SLOT_OVERRIDE = previous
@@ -316,9 +319,8 @@ def _main() -> int:
     ap.add_argument("--stop-after", type=float, default=0,
                     help="with --all: stop after N seconds (bounded run)")
     ap.add_argument("--lane", type=int, default=None,
-                    help="with --all: this drainer's backlog lane, 2 or 3 "
-                         "(lane 1 is realtime; lane 3 serves patient "
-                         "context first). Wire id_slot is lane - 1")
+                    help="with --all: preferred backlog lane 1/2/3; lane 1 works "
+                         "only 20:00–08:00 JST, yielding to realtime requests")
     ap.add_argument("--shard", default=None, metavar="I/N",
                     help="with --all: process only message_id %% N == I "
                          "— disjoint shards let two drainers share the "
@@ -374,14 +376,11 @@ def _main() -> int:
     if args.all and args.lane is None:
         args.lane = 2
     if args.lane is not None:
-        # T19: an unknown lane would reach the wire out of range and go
-        # UNPINNED — only the two backlog lanes map to a wire slot here
-        if args.lane not in (2, 3):
+        if args.lane not in local_llm.LANES:
             print(json.dumps({"ok": False, "error": "bad_lane"}))
             return 2
         extract_llm_call_context._SLOT_OVERRIDE = local_llm.lane_slot(args.lane)
         os.environ["MCS_LLM_SLOT"] = str(extract_llm_call_context._SLOT_OVERRIDE)
-        # lanes 2 and 3 take turns on the GPU (local_llm._turn)
         os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
         os.environ[local_llm.TURN_LOCK_ENV] = os.path.join(
             HOME, "data", "llm_turn.lock")
@@ -418,7 +417,7 @@ def _main() -> int:
             return legacy_admissions(led, cfg), extract_validation.vital_threshold_policy(cfg)
         except Exception:
             return set(), None
-    cloud_pool = cloud_backlog.CloudBacklogPool(HOME) if args.all and args.lane == 2 else None
+    cloud_pool = cloud_backlog.CloudBacklogPool(HOME, context_only=True) if args.all and args.lane == 2 else None
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -450,6 +449,7 @@ def _main() -> int:
             semantic_archive_turn = False
             context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
+            idle_delay = _IDLE_FLOOR_S
 
             def retire():
                 try:
@@ -467,6 +467,12 @@ def _main() -> int:
                 if stop is not None and time.monotonic() >= stop:
                     total["stopped"] = "stop_after"
                     break
+                if args.lane == 1:
+                    import llm_slot_schedule
+                    if not llm_slot_schedule.night():
+                        _settle_carry(led, carry, final=False, fence=context_state)
+                        pause(_IDLE_FLOOR_S)
+                        continue
                 try:
                     if carry and not context_lane:
                         resume_budget = _RESIDENT_WRITE_WAIT_S + 1
@@ -618,8 +624,10 @@ def _main() -> int:
                     # under launchd KeepAlive an exit just means a respawn
                     # every 30 s re-running the full scan forever, and the
                     # poll interval still beats the 10-min tick for picking up newly fetched messages.
-                    idle(120)
+                    idle(idle_delay)
+                    idle_delay = min(30, idle_delay * 2)
                     continue
+                idle_delay = _IDLE_FLOOR_S
                 if r["done"] == 0 and (r.get("circuit_open_s")
                                        or r.get("disk_low")):
                     # the LLM lane is gated: re-scanning every few seconds

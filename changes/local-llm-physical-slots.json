@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "ローカルLLMの枠を昼夜で配分し、新着を優先",
+  "summary": "昼間は新着用1枠とバックグラウンド用2枠、夜間は最大3枠で処理します。夜間の新着は次の空き枠を優先し、処理中の要求は中断しません。",
+  "upgrade": "通常の更新で抽出workerと取込み処理を同じ候補へ更新してください。3物理枠を前提とし、モデルやbackendの起動設定は自動変更しません。任意のadmission brokerは既定OFFのままで、既存epochの開放条件も変えません。",
+  "details": [
+    "配分の境界はJSTの08:00と20:00。MCSの各要求は物理枠ごとのflockを保持し、同じMCS root内で同一枠への同時送信を防ぐ。新着待機の登録は枠の割当前に行い、新着の実行中も他の2枠で背景処理を進める。",
+    "旧workerの排他turnが終わるまでは新方式を開始しない。新方式同士は旧turnを共有保持するため、異なる物理枠で並行できる。",
+    "brokerを使う場合は物理枠を新permitへ記録する。旧形式の枠未記録permitがある間は全枠を保留し、枠を記録した送信結果不明のpermitはその枠を保留する。期限やPID消失を送信終了の証拠にしない。",
+    "非MCSクライアントのclass排他、既存の会計・世代・結果不明の判定は保持する。broker OFF時の通信失敗後の確認は従来どおりで、backendに残る要求の終了証明は追加しない。別rootや外部の直接送信はこの枠制御の対象外。"
+  ],
+  "refs": [
+    "mcs/llm/admission/llm_slot_schedule.py",
+    "mcs/llm/admission/llm_admission.py",
+    "mcs/llm/transport/local_llm.py"
+  ]
+}

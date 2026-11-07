@@ -63,7 +63,7 @@ STANDALONE_CONNECTOR_DOWN_S = 600
 STANDALONE_UPDATE_STUCK_S = 2 * 3600
 # jobs whose non-zero exit is a real failure (calendar helpers such as
 # the daily LLM restart may exit non-zero by design on some hosts)
-STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "lineworks", "cmd",
+STANDALONE_WATCHED_JOBS = ("extract-0", "extract-2", "extract-night", "lineworks", "cmd",
                            "cmd_int", "mcs_check", "mcs_deep")
 
 
@@ -832,7 +832,7 @@ _STANDALONE_ACTION = {
                            f"（{_STANDALONE_STATUS}）",
     "notification_pending": f"doctor で待ちの理由と {_STANDALONE_STATUS} を確認",
     "card_delivery_stalled": _STANDALONE_RESTART,
-    "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2 を確認",
+    "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2・extract-night を確認",
 }
 # notify.interactive=lineworks (Hermes mode): the separate LINE WORKS adapter
 # delivers, so the gateway/profile hints do not apply

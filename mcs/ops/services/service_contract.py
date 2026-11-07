@@ -13,7 +13,7 @@ import scheduled_jobs
 
 GATEWAY_LIFECYCLE_VERBS = frozenset({"install", "uninstall", "restart", "start", "stop"})
 
-RESIDENT_LABELS = ('ai.mcs.extract-drainer', 'ai.mcs.extract-drainer-2')
+RESIDENT_LABELS = ('ai.mcs.extract-drainer', 'ai.mcs.extract-drainer-2', 'ai.mcs.extract-drainer-night')
 
 WATCHER_LABELS = ('local.mcs-cmd', 'local.mcs-int', 'local.mcs-health')
 

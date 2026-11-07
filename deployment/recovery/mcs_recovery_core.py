@@ -26,7 +26,7 @@ def _installed_repo():
     return path if os.path.isabs(path) else HOME
 
 
-RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2")
+RESIDENT_LABELS = ("ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2", "ai.mcs.extract-drainer-night")
 
 
 WATCHER_LABELS = ("local.mcs-cmd", "local.mcs-int", "local.mcs-health")

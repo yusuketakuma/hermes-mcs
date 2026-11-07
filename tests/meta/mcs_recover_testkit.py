@@ -183,7 +183,7 @@ def _standalone_recovery(rec):
     Path(rec.mcs_recovery_core.DATA).parent.joinpath("config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     value = {"pid": os.getpid(), "generation": "b" * 32, "updated_at": time.time(),
              "children": {name: {"pid": os.getpid(), "kind": "background"}
-                          for name in ("extract-0", "extract-2")}}
+                          for name in ("extract-0", "extract-2", "extract-night")}}
     path = Path(rec.mcs_recovery_core.DATA, "standalone-status.json")
     path.write_text(json.dumps(value))
     path.chmod(0o600)

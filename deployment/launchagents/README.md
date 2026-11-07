@@ -1,7 +1,7 @@
 # スケジューリング構成
 
 `runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ7定期ジョブ、
-cmd/cmd_int取込、抽出worker2本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
+cmd/cmd_int取込、抽出worker3本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
 併用しない。LLMとrepo外復旧watchdogは別のnative serviceを維持する。
 導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
 以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
@@ -128,38 +128,44 @@ install.sh が作る venv インタプリタを使う）
 
 ## 3レーン構成
 
-llama-server は `-c 49152 -np 3`（各枠16384 tokens）。枠はレーン1/2/3と
-呼び、wire の `id_slot` はレーン−1（`local_llm.LANES`）。レーン1（wire 0）
-は新着MCS解析のリアルタイム用、レーン2/3（wire 1/2）はバックログ専用。
-ローカルLLMはMCS専用で、Hermesのローカル対話はもう使わない。
+llama-server は `-c 49152 -np 3`（各枠16384 tokens）。`id_slot` は0〜2の
+物理枠を示す。JST 08:00〜20:00は新着用に1枠を空け、バックグラウンド処理は
+残り2枠を使う。20:00〜08:00は3枠をバックグラウンド処理に使える。
+夜間に新着が待ち始めたら、次に空いた枠を優先して割り当てる。実行中の処理は
+中断せず、新着の処理中も残り2枠ではバックグラウンド処理を継続する。
 全枠でGPUを共有するため、3枠は3倍の処理速度を意味しない。
 
 - `ai.mcs.extract-drainer`: `--all --workers 1 --lane 2 --semantic`
 - `ai.mcs.extract-drainer-2`: `--all --workers 1 --lane 3 --semantic`
+- `ai.mcs.extract-drainer-night`: `--all --workers 1 --lane 1 --semantic`
 
-両workerは24時間動く。レーン3は各周回の最初に患者コンテキスト作成
-（`patient_context_refresh.run_due`。保存済み投稿がすべて現行LLM世代で解析済みの
-患者だけ）を進め、進める対象がなければ抽出1件とsemantic/QC 1件を交互に
-処理する。レーン2は抽出とsemantic/QCの交互処理のみ。
-アクティブ患者を優先しつつ、一定の処理回数ごとにアーカイブ済み患者へ交代する。
-抽出は各区分内で未抽出を優先して新しい投稿から、semantic/QCは種類を
-交互にして各種類の古い待機分から処理する。
-レーン2/3は1つのflock（`MCS_LLM_TURN_LOCK`、`data/llm_turn.lock`。
-`extract_llm` が起動時に設定）でGPUを交互に使い、HTTP要求中だけ保持する。
-旧可変枠（`_ELASTIC_*`、`elastic_hold`/`elastic_resume`）は削除した。
-バックログの通信をターンロックで直列化し、共有GPU上のprompt/decodeの競合を避ける。
-端末固有の処理速度の実測値は公開記録から除去した。性能は各環境で確認する。
-抽出は既存のclaim lease、semantic/QC はジョブ別flockで
-重複実行を防ぐ。DB更新時は run.lock を保持し、LLM・Jev の実際の通信中
-だけ解放する。通信後はロックを再取得し、既存の世代・source・config
-ゲートで結果を照合する。常駐workerの再取得待ちは3秒で、間に合わない
-完了結果は捨てずに次の周回へ持ち越して保存する（原文が変わった分と
-claim lease の残りが2分を切った分は解放して破棄）。長い推論中も10分取込みが進む。
+前の2本は24時間動き、夜間用workerは昼間に新しい処理を始めない。
+抽出とsemantic/QCの交互処理、アクティブ患者とアーカイブ済み患者の公平な選択は
+既存の経路を使う。空のキューは5秒から最大30秒まで待機間隔を延ばし、既存の
+再試行予定時刻が近ければ短縮する。処理できる項目があればこの待機を入れない。
+クラウドによる患者コンテキスト作成はレーン2が所有する別の子プロセスで進める。
+クラウドの応答待ちはローカル枠を占有しない。クラウドがoffのときの患者コンテキスト
+作成はレーン3で継続し、対象判定は`patient_context_refresh.run_due`に従う。
 
-新着取込みはレーン1（`mcs_check.sh` が `MCS_LLM_SLOT=0` を固定）で処理し、
-今回取り込んだ投稿の抽出とarrival-seeded semantic jobを新しい順に処理する。
-間に合わない新着解析は保管済みキューに残り、後続workerが処理する。夜間間引き・時間帯制限・
-RT枠の貸与・tickによる背景worker休止は廃止した。
+各要求は`data/llm_slot_0.lock`〜`llm_slot_2.lock`のうち1つを保持する。
+新着の待機は`llm_realtime.lock`、短い割当処理は`llm_schedule.lock`で調整する。
+既存の`llm_turn.lock`は共有保持し、旧workerの排他保持が終わるまで新方式を開始しない。
+同じMCS rootを使う新方式の要求同士では、同一物理枠へ同時送信しない。
+任意の外部クライアントや別rootまでこの排他で制御できるとはみなさない。
+
+任意のadmission brokerは既定OFFのまま。ONで有効なepochを持つ場合は、
+要求の物理枠をpermitへ記録する。旧形式の枠未記録permitが残る間は全枠を保留し、
+新形式の送信結果が不明なpermitはその枠を保留する。期限やPID消失だけでは解放しない。
+brokerがOFFのときの通信失敗後の確認・終了判定は従来どおりで、backendに残った要求の
+終了証明を新たに得る仕組みではない。実機容量と処理速度は各環境で確認する。
+
+抽出は既存のclaim lease、semantic/QCはジョブ別flockで重複実行を防ぐ。
+DB更新時はrun.lockを保持し、LLM・Jevの通信中だけ解放する。通信後はロックを
+再取得し、世代・原資料・設定を再検証する。常駐workerの再取得待ちは3秒で、
+間に合わない完了結果は次の周回へ持ち越して保存する。原文が変わった分と
+claim leaseの残りが2分を切った分は解放して破棄する。長い推論中も10分取込みを継続する。
+新着取込みは今回の投稿とarrival-seeded semantic jobを優先する。全抽出を新着扱いにはせず、
+時間内に処理できない投稿は既存の保存済みキューへ残す。
 
 `mcs_llm_catchup.sh` は6時間ごとの再試行登録のみ。失敗後6時間、同じ入力
 最大3回、1回の登録で抽出30件・semantic20件という既存の上限は維持する。
@@ -167,7 +173,7 @@ LLMの処理をこのcronで起動したりRTへ貸与したりしない。
 
 `local_llm.SLOT_COUNT=3`、`ROLLBACK_SLOT_COUNT=2`。範囲外のid_slotを
 送るとunpinned扱いになるため、既存の範囲チェックは維持する。
-背景CLIは `--lane 2|3` だけを許可し、旧 `--slot` 指定のworkerは引数エラーで起動しない。サービス同期で旧
+背景CLIは `--lane 1|2|3` を許可し、旧 `--slot` 指定のworkerは引数エラーで起動しない。サービス同期で旧
 `ai.mcs.extract-drainer-rt` を停止・削除し、新ラベルへ置き換える。
 サーバの正本は `ai.mcs.llamaserver.plist`。既存の実機ラベルが
 `ai.hermes.llamacpp` の場合は、明示適用時にこのテンプレートのLabelを

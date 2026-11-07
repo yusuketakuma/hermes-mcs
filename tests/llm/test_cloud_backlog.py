@@ -117,7 +117,8 @@ def test_unknown_and_low_memory_do_not_spawn(monkeypatch):
     assert backlog.memory_workers(32) == 0
 
 
-def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
+@pytest.mark.parametrize("context_only", [False, True])
+def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch, context_only):
     import extract_llm
     (tmp_path / "data").mkdir()
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
@@ -130,7 +131,8 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
             helper = backlog.helper_path(tmp_path, require_installed=True)
             assert command[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
             assert command[7:11] == [sys.executable, str(Path(backlog.__file__).resolve()), "--parent", str(os.getpid())]
-            assert command[11:] == ["--index", str(len(children) % 2)]
+            assert command[11:] == ["--index", str(len(children) % 2),
+                                    *(["--context-only"] if context_only else [])]
             assert kw["stdin"] == subprocess.DEVNULL and kw["close_fds"]
             assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
             self.stopped = False
@@ -147,10 +149,10 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(backlog.subprocess, "Popen", Child)
-    first, second = backlog.CloudBacklogPool(tmp_path), backlog.CloudBacklogPool(tmp_path)
+    first, second = (backlog.CloudBacklogPool(tmp_path, context_only=context_only) for _ in range(2))
     try:
         # Individual cloud routes are closed; spawn mechanics are dormant-path.
-        with legacy_cloud_routes():
+        with nullcontext() if context_only else legacy_cloud_routes():
             first.sync(cfg)
             assert len(children) == 2
             second.sync(cfg)
@@ -164,12 +166,69 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
         first.close()
         assert all(p.stopped for p in children)
         second.last_sync -= 11
-        with legacy_cloud_routes():
+        with nullcontext() if context_only else legacy_cloud_routes():
             second.sync(cfg)
             assert len(second.children) == 2
     finally:
         first.close()
         second.close()
+
+
+@pytest.mark.parametrize("blocked", ["key", "profile", "accounting", "budget"])
+def test_context_pool_defers_cloud_decisions_to_engine(tmp_path, monkeypatch, blocked):
+    import cloud_policy
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 1)
+    monkeypatch.setattr(cloud_policy, "api_key", lambda *_: None if blocked == "key" else "synthetic-key")
+    if blocked == "profile":
+        monkeypatch.setattr(cloud_policy, "resolve_profile", lambda *a, **kw: (None, ["profile_invalid"]))
+    monkeypatch.setattr(cloud_policy, "global_block_reason",
+                        lambda *a, **kw: "pricing_unverified" if blocked == "accounting" else None)
+    monkeypatch.setattr(cloud_policy, "budget_block_reason",
+                        lambda *a, **kw: "daily_cap" if blocked == "budget" else None)
+    children = []
+
+    class Child:
+        def __init__(self, command, **kwargs):
+            assert command[-1] == "--context-only"
+            children.append(self)
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, **kwargs):
+            return 0
+
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    legacy, context = backlog.CloudBacklogPool(tmp_path), backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        with legacy_cloud_routes():
+            legacy.sync(cfg, ledger=object())
+        assert not children and not legacy.children
+        context.sync(cfg, ledger=object())
+        assert len(children) == len(context.children) == 1
+    finally:
+        legacy.close()
+        context.close()
+
+
+@pytest.mark.parametrize("blocked", ["off", "disabled", "memory"])
+def test_context_pool_keeps_enable_mode_and_memory_gates(tmp_path, monkeypatch, blocked):
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "off" if blocked == "off" else "on", "project_ids": [1]},
+           "extract": {"patient_context_nightly": {"enabled": blocked != "disabled"}}}
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 0 if blocked == "memory" else 1)
+    monkeypatch.setattr(backlog.subprocess, "Popen", lambda *a, **kw: pytest.fail("context child started"))
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        pool.sync(cfg)
+        assert not pool.children
+    finally:
+        pool.close()
 
 
 @pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])

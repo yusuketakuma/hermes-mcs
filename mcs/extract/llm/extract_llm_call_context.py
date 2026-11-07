@@ -30,8 +30,9 @@ _SLOT_OVERRIDE = None  # --lane: this process's backlog wire id_slot
 
 
 def _choose_slot() -> int:
-    """Pin each process to its configured lane; never borrow realtime."""
-    if _SLOT_OVERRIDE in local_llm.BACKGROUND_SLOTS \
+    """Keep a preferred physical slot; scheduled calls select their actual free slot."""
+    slots = tuple(local_llm.LANES.values()) if local_llm.scheduling_enabled() else local_llm.BACKGROUND_SLOTS
+    if _SLOT_OVERRIDE in slots \
             and type(_SLOT_OVERRIDE) is int:
         return _SLOT_OVERRIDE
     if _SLOT_OVERRIDE is not None:

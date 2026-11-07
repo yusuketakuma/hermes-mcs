@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "夜間用workerと患者コンテキスト用の子処理を追加",
+  "summary": "夜間用の抽出workerを加え、クラウドの患者コンテキスト作成を別の子処理へ分離しました。クラウドの応答待ちでローカル解析枠を占有せず、保存済みの待機項目を継続して処理します。",
+  "upgrade": "通常の更新で常駐サービスを同期してください。Hermesでは夜間用LaunchAgent、独立実行ではhostが3本目のworkerを起動します。患者コンテキストの子処理は既存の設定・予算・同時実行数に従います。追加の認証情報や個別投稿のクラウド送信は不要です。",
+  "details": [
+    "夜間用workerはJST 20:00〜08:00だけ新規処理を始め、昼間も保存待ち結果の既存処理を維持する。通常の2本は24時間動作し、抽出・semantic/QCの既存選択とclaim leaseを再利用する。",
+    "空のキューは5秒から最大30秒まで待機間隔を延ばし、既存の再試行予定時刻が近ければ短縮する。処理できる対象がある間は空キュー用の待機を入れない。",
+    "患者コンテキストのcloud mode=onは既存CloudBacklogPoolの専用子処理から同じrun_dueを呼ぶ。所有controller・source世代・設定・予算・原資料の確認は維持し、旧予約や保存済み回答を削除しない。offとdry_runの既存local経路は維持する。 キーやクラウド予算の制約だけでは子処理の起動を止めず、送信可否とlocal代替の可否はrun_dueで判定する。",
+    "新着優先は取込み入口の今回の投稿とarrival-seeded semantic jobに限定する。全MCS抽出を新着扱いにはせず、間に合わない対象は既存キューへ残す。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_resident.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/ingest/run_check.py",
+    "deployment/launchagents/ai.mcs.extract-drainer-night.plist",
+    "mcs_standalone/runtime.py"
+  ]
+}

@@ -79,7 +79,7 @@ def test_runtime_selection_validation_and_rendering_use_supplied_facts(monkeypat
     assert standalone["PYTHON"] == "/synthetic/standalone/venv/bin/python3"
     assert standalone["WATCHDOG_GRACE"] == "0"
     assert contract.desired_agent_labels({"runtime_mode": "standalone"}) == ["ai.mcs.standalone", "local.mcs-health"]
-    assert contract.desired_agent_labels({}) == ["local.mcs-cmd", "local.mcs-int", "local.mcs-health", "ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2"]
+    assert contract.desired_agent_labels({}) == ["local.mcs-cmd", "local.mcs-int", "local.mcs-health", "ai.mcs.extract-drainer", "ai.mcs.extract-drainer-2", "ai.mcs.extract-drainer-night"]
     for cfg in ({"runtime_mode": "invalid"}, {"watchdog_grace_s": True},
                 {"watchdog_grace_s": 3601}, {"backup": {"enabled": "yes"}}):
         with pytest.raises(ValueError):

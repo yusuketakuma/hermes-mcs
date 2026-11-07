@@ -198,8 +198,9 @@ def memory_workers(limit):
 
 class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
-    def __init__(self, root):
+    def __init__(self, root, *, context_only=False):
         self.root = Path(root)
+        self.context_only = context_only
         self.children = []
         self.indices = {}
         self.lock = None
@@ -219,24 +220,29 @@ class CloudBacklogPool:
         if settings["mode"] != "on":
             # Workers retire at the idle boundary after paid carry is settled.
             return
-        if not (cloud_policy.send_route("reextract")
-                and cloud_policy.send_route("semantic_backlog")):
-            # Individual cloud routes are closed to new sends; running workers
-            # still settle paid carry before retiring on their own fence.
-            return
-        if not cloud_policy.selected_key(self.root):
-            return
-        selection, errors = cloud_policy.resolve_profile(
-            cfg, route="reextract", purpose="backlog", root=self.root)
-        if errors or selection is None:
-            return
-        limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
-        if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
-                or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
-            return
+        if self.context_only:
+            import patient_context_refresh
+            if not patient_context_refresh.options(cfg)["enabled"]:
+                return
+            # Cloud availability is decided inside run_due. A missing key or
+            # a spend hold must not hide its existing local fallback/recovery.
+        else:
+            if not (cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog")):
+                # Existing workers settle paid carry before retiring.
+                return
+            if not cloud_policy.selected_key(self.root):
+                return
+            selection, errors = cloud_policy.resolve_profile(
+                cfg, route="reextract", purpose="backlog", root=self.root)
+            if errors or selection is None:
+                return
+            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
+            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
+                return
         directory = self.root / "data"
         if self.lock is None:
-            self.lock = _lock(directory / "cloud_pool.lock")
+            self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))
             if self.lock is None:
                 return
         self.children = [p for p in self.children if p.poll() is None]
@@ -255,7 +261,7 @@ class CloudBacklogPool:
             child = subprocess.Popen(
                 [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
                  sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid()),
-                 "--index", str(index)],
+                 "--index", str(index), *(["--context-only"] if self.context_only else [])],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 close_fds=True)
             self.children.append(child)
@@ -348,7 +354,7 @@ _HOLD_DEFER_REASONS = frozenset(
      "prepare_profile_unavailable"})
 
 
-def worker(parent, *, index=None):
+def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
     _parent = parent
@@ -381,6 +387,9 @@ def worker(parent, *, index=None):
     finally:
         os.close(startup_lock)
     with closing(ledger):
+        if context_only:
+            _context_worker(ledger, initial, index)
+            return
         carry = []
         allow_exit_settle = True
         waiting = {"code": None, "at": 0.0}
@@ -592,15 +601,37 @@ def worker(parent, *, index=None):
                     _event("cloud_carry_settle_error", **_exception_observation(error))
 
 
+def _context_worker(ledger, initial, index):
+    import cloud_inference
+    import extract_llm_resident
+    import local_llm
+    import writer_lock
+    from mcs_util import HOME, load_config
+
+    with local_llm.scheduling_scope(os.path.join(HOME, "data")):
+        while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
+            settings = cloud_inference.resolve_cloud_settings(load_config())
+            if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
+                    or not extract_llm_resident._context_memory_available()):
+                return
+            result = extract_llm_resident._background_context_refresh(
+                ledger, initial, cloud_worker=True)
+            _event("patient_context_pass", status=result.get("status"), done=result.get("done", 0))
+            if result.get("run_lock_lost") == "updated":
+                return
+            time.sleep(1 if result.get("done") else 5)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parent", type=int, required=True)
     parser.add_argument("--index", type=int, choices=range(32))
+    parser.add_argument("--context-only", action="store_true")
     args = parser.parse_args()
     if args.parent != os.getppid():
         return 2
-    worker(args.parent, index=args.index)
+    worker(args.parent, index=args.index, context_only=args.context_only)
     return 0
 
 

@@ -35,7 +35,7 @@ _HANG_EXCS = [subprocess.TimeoutExpired(["launchctl"], 30),
 def _standalone_heartbeat(updater, **updates):
     value = {"pid": os.getpid(), "generation": "a" * 32, "updated_at": time.time(),
              "update_in_progress": False, "children": {
-                 name: {"pid": os.getpid(), "kind": "background"} for name in ("extract-0", "extract-2")}}
+                 name: {"pid": os.getpid(), "kind": "background"} for name in ("extract-0", "extract-2", "extract-night")}}
     value.update(updates)
     path = Path(updater.DATA, "standalone-status.json")
     path.write_text(json.dumps(value))
