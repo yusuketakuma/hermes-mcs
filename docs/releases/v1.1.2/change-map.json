@@ -1,5 +1,5 @@
 {
-  "fragment_count": 97,
+  "fragment_count": 100,
   "records": [
     {
       "category": "added",
@@ -679,8 +679,29 @@
       "path": "changes/archive/1.1.2/repo-final-cleanup.json",
       "sha256": "76ba8e78e904b92a3277606df370a9d39f78e054a12c0cbd7b21bab68d78de4a",
       "title": "保守用の未使用処理と到達しない分岐を整理"
+    },
+    {
+      "category": "fixed",
+      "id": "ocr-health-writer-diagnostic",
+      "path": "changes/archive/1.1.2/ocr-health-writer-diagnostic.json",
+      "sha256": "35fe76034924f8aa36a8c8989aa90a915bf190eb23889d7c776848565a6409f4",
+      "title": "OCRの正常な診断記録を破損と誤判定する問題を修正"
+    },
+    {
+      "category": "fixed",
+      "id": "context-pass-diagnostics",
+      "path": "changes/archive/1.1.2/context-pass-diagnostics.json",
+      "sha256": "5b15d42b7a4ccac4f2dc6a1a9a3d4403c0b09b619712ff9f91971a2450586e11",
+      "title": "患者情報処理の診断と古いwriter世代の子終了"
+    },
+    {
+      "category": "fixed",
+      "id": "resident-local-batch-route-scope",
+      "path": "changes/archive/1.1.2/resident-local-batch-route-scope.json",
+      "sha256": "864308ad42a321614283b7fa69f0d655efb21ca823cb27bdc1a44be8902f3bd2",
+      "title": "閉鎖済みクラウド設定がローカル抽出の候補上限へ混ざる問題を修正"
     }
   ],
-  "scope": "v1.1.2 の変更記録97件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録100件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
