@@ -167,7 +167,7 @@ def test_attachment_summary_uses_real_current_validator_and_stable_source_bindin
 
 
 @pytest.mark.parametrize("fault", ["contract", "proof", "unready"])
-def test_attachment_summary_excludes_stale_unverified_or_unready_analysis(tmp_path, fault):
+def test_attachment_summary_excludes_stale_unverified_or_unready_analysis(tmp_path, fault, monkeypatch):
     import attachment_extraction
     from test_ocr_original_sources import seeded
 
@@ -177,7 +177,28 @@ def test_attachment_summary_excludes_stale_unverified_or_unready_analysis(tmp_pa
     try:
         aid = _ocr_local(led, key, cfg, "合成薬Aの中止を記録。")
         if fault == "unready":
-            cfg["cloud_llm"]["mode"] = "on"
+            import cloud_policy
+            from anthropic_client import AnthropicClient
+            from test_cloud_response_recovery import legacy_cloud_routes
+
+            cfg["cloud_llm"].update(mode="on", provider="anthropic", project_ids=[1])
+            # The closed route leaves an unowned local page ready, even with cloud enabled.
+            assert attachment_extraction.current(led.db, 1, key, cfg=cfg)["ready"] is True
+            available = next(mcs_queries.attachment_ocr_sources(led.db, 1, mid=key, cfg=cfg))
+            assert available["extraction_ready"] is True and available["derived_summaries"]
+            monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+            reserve = cloud_policy.usage_reserver(led, cfg, route="reextract", project_id=1,
+                unit_key=key + ":cloud", owner={"source_type": "attachment_ocr", "source_key": key,
+                                             "local_artifact_id": aid})
+            # Seed only the historical reservation: no response proves this unit completed.
+            with legacy_cloud_routes():
+                reservation = reserve(AnthropicClient("synthetic-unused").body(
+                    "synthetic unresolved OCR input", 100, None), 1)
+            assert not cloud_policy.send_route("reextract")
+            assert reservation["unit_key"] == key + ":cloud"
+            assert len(led.artifacts("cloud_usage_reserve")) == 1
+            assert not led.artifacts("cloud_usage_result")
+            assert attachment_extraction.stored(led.db, 1, key, "local", cfg)["artifact_id"] == aid
         else:
             saved = json.loads(led.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
             if fault == "contract":
