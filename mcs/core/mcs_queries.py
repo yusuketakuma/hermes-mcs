@@ -1390,7 +1390,7 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None):
     if proof_state is not None and proof_state[0] is not None:
         try:
             fresh = _message_read_stamp(db) == proof_state[0]
-        except BaseException:
+        except sqlite3.Error:
             fresh = False
         if not fresh:
             # A changed, rolled-back or failed read disables the aggregate's
@@ -1437,7 +1437,7 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
     seen = set()
     try:
         proof_state = [_message_read_stamp(db) if db.in_transaction else None]
-    except BaseException:
+    except sqlite3.Error:
         proof_state = [None]
     for row in db.execute(
             "SELECT a.message_id,a.artifact_id,a.kind,a.content,a.model,a.meta FROM artifacts a "
@@ -1459,7 +1459,7 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
         try:
             if _message_read_stamp(db) != proof_state[0]:
                 proof_state[0] = None
-        except BaseException:
+        except sqlite3.Error:
             proof_state[0] = None
     columns = ("m.*" if hydrate else "m.message_id,m.project_id,m.content_hash,m.body_state,"
                "m.posted_at,m.posted_at_ts,m.sender_id,m.sender_name,m.parent_id,m.first_seen")
