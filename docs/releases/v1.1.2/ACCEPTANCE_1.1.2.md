@@ -91,7 +91,7 @@
 - 親工程から、旧製品で最小2ケースが失敗し、修正後の限定検証は28 passed / 0 failed / 0 skipped・終了0・33.43秒・`source_stamp_changed=[]` との結果を受領した。証跡は私有の `context-empty-overview/`。文書担当はpytestを再実行していない。
 - 走査位置の競合は、最新のbookmarkの形式を検証し、走査位置以外の全内容とメタ情報が一致する場合だけ処理を続ける。最新位置を保持し、cursor・units・原資料・品質確認・処理世代・書込み権限と6:3:1の配分は維持する。親工程から、旧 `c9d93baa` は2 failed / 6 passed、修正後は8 passed / 0 failed・終了0・7.44秒、同じテスト内容で処理中のソース変更なしとの結果を受領した。証跡は私有の `context-runtime-followup/`。
 - 親工程から、`be539f2a` の生成表・配布証跡を別のCodex担当がGit objectから独立照合し、524件すべてのpath・hash・modeとtopが一致したとの報告を受領した。公式digestは `ab3f618ee9bf8565bf4905407e441da917b7392c5857da7519e2eda6f276a4a7` と再現し、生成表は335 modules / 1379 test files。full ruffは終了0、ci/gatesは10/10、mineとrelease owner checkも終了0。走査位置競合の製品差分13行も独立レビューで受け入れられ、旧・新の検証対象hashは2/2でcommit blobと一致した。
-- 親工程は、同じ製品ソースへ生成表と配布証跡を反映した `be539f2acc212b072e3777a9cf46d47997371ffc` で66fileの統合検証を開始した。この追補では実行中で、終端結果は未確認。限定検証の成功を統合検証の成功とは記録しない。
+- 前回追補で実行中だった `be539f2acc212b072e3777a9cf46d47997371ffc` の66file統合検証は、1199 passed / 0 failed / 0 skipped・終了0で完了した。pytest出力の実行時間は1019.41秒、実行driverは1020.44秒。実行前後のSHAは同じ `be539f2a` で、前後の作業ツリーはclean、`source_stamp_changed=[]`。文書担当は私有の `context-runtime-followup/batch-final.log`・XML・JSONの終端を照合し、pytestは再実行していない。追加2修正を含む66fileの成功であり、過去の全体suite約1万件やGitHub CI全ジョブの成功とは記録しない。
 - 親工程から、本番 `bcf3343d` の実機適用は終了0、checkout外の復旧ツールの同期は `./install.sh --no-brew --no-llm --no-services` で終了0、設定・opt-out・復旧用plistのハッシュは不変との報告を受領した。直接起動のsetup checkは終了0、doctorではサービス正常とcard worker起動を観測し、gatewayは `supervisor_restart_verified`。gatewayが読み込んだSHAはunknownのまま区別する。
 - 同じ実機観測で常駐処理3本の稼働と、`/slots` の全3枠がprocessingになった瞬間を確認したとの報告を受領した。持続的な枠利用、処理速度、本番の回復や医学的な品質向上の証拠にはしない。今回追加した2修正は本番未適用で、適用後の自然実行・運用受入と公開は未完了。
 
