@@ -1,6 +1,6 @@
 {
   "status": "unpublished_preparation",
-  "scope": "v1.1.2 の変更記録78件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで2件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録79件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加）。最終候補SHAの固定・受入証拠ではない。",
   "fragment_count": 79,
   "records": [
     {
