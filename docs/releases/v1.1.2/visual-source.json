@@ -24,16 +24,16 @@
   "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
   "source_checkout_observation": {
-    "head": "a9275e32523e352c150055c392fa5a3d088b67bd",
+    "head": "4e30d08497169680ba14e6650fe69d01a29389cf",
     "dirty": true,
-    "observed_at": "2026-11-07T11:51:02.028584+00:00",
+    "observed_at": "2026-11-07T12:05:35.586456+00:00",
     "release_sha_fixed": false
   },
   "source_file_observations": [
     {
       "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。",
       "path": "mcs/llm/cloud_policy.py",
-      "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100"
+      "sha256": "fd367143db0fbc371d78cb0469e3952da328fa275eb4648d0f0a44580e75dd30"
     },
     {
       "path": "mcs/llm/cloud_inference.py",

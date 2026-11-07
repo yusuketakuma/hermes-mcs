@@ -16,6 +16,7 @@
     "tests/patients/test_patient_context_progress.py",
     "mcs/notify/processing_route.py",
     "tests/notify/test_processing_route.py",
-    "tests/notify/test_provider_key_visibility.py"
+    "tests/notify/test_provider_key_visibility.py",
+    "docs/guides/USER_GUIDE.md"
   ]
 }

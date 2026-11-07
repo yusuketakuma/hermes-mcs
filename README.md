@@ -459,6 +459,8 @@ docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入して�
 
 - 追加設定は不要です。適用後の通常OCRから記録に反映されます。保存済み結果を削除せず、既存の失敗を強制再試行しません。
 
+- 追加設定は不要です。適用後に新しく作成するカードへ反映します。既存カードの凍結済み進捗と、過去に観測できなかった表示は保持します。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)

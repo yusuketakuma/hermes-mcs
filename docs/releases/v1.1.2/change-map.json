@@ -1,5 +1,5 @@
 {
-  "fragment_count": 87,
+  "fragment_count": 88,
   "records": [
     {
       "category": "added",
@@ -175,6 +175,13 @@
       "path": "changes/archive/1.1.2/context-pending-cloud-coverage.json",
       "sha256": "c5c56b9ad3e49206935adc4fda000fba60494cae0b354fb2aa245dc8b833d175",
       "title": "患者コンテキストのクラウド処理待ちを見積もりに反映"
+    },
+    {
+      "category": "fixed",
+      "id": "context-progress-implicit-mode",
+      "path": "changes/archive/1.1.2/context-progress-implicit-mode.json",
+      "sha256": "def2272117dabc2da1d6ad79197720040f5cfa35dacfa1dd0bb58ee99c4590b9",
+      "title": "クラウド動作モードを省略した設定でも患者背景の進捗を観測"
     },
     {
       "category": "changed",
@@ -611,6 +618,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録87件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録88件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
