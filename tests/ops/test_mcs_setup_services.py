@@ -26,7 +26,7 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
         body = (tmp_path / "agents" / f"{label}.plist").read_text()
         assert "__REPO__" not in body
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
-    assert len(boots) == len(service_contract.AGENT_LABELS) == 5
+    assert len(boots) == len(service_contract.AGENT_LABELS) == 6
     # cron: the job whose script is already registered is skipped;
     # the other 6 (incl. OCR and the update check) are created
     creates = [" ".join(a) for a in calls
