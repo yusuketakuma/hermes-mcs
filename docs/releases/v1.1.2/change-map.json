@@ -1,7 +1,7 @@
 {
  "status": "unpublished_preparation",
- "scope": "v1.1.2 の変更記録77件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで1件追加）。最終候補SHAの固定・受入証拠ではない。",
- "fragment_count": 77,
+ "scope": "v1.1.2 の変更記録78件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで2件追加）。最終候補SHAの固定・受入証拠ではない。",
+ "fragment_count": 78,
  "records": [
   {
    "path": "changes/archive/1.1.2/attachment-medical-ocr-112.json",
@@ -184,6 +184,13 @@
    "title": "患者背景の修復証拠を共通の読取経路へ集約",
    "category": "changed",
    "sha256": "61fddfe55773749fd9af1737e495489c2642053ec7d5859d5de80062eb42c828"
+  },
+  {
+   "path": "changes/archive/1.1.2/context-recorded-source-proof.json",
+   "id": "context-recorded-source-proof",
+   "title": "患者背景の保存前検証で読取り証明が無効になる問題を修正",
+   "category": "fixed",
+   "sha256": "fcc9a45ed3418bf60f9cbe79a2be03f80dd7d5cc17c3f4b795f10fcdcfaad4fa"
   },
   {
    "path": "changes/archive/1.1.2/context-repair-origin-validation.json",
