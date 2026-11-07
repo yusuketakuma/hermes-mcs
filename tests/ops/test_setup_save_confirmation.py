@@ -96,11 +96,17 @@ def test_save_confirmation_shows_effective_provider_defaults_without_pinning(mon
     assert cfg == before
 
 
+def _existing_slack_settings():
+    # Already-separated text destinations need no provisioning or credential lookup.
+    return {"mcs_login_id": "synthetic", "notify_target": "slack:C12345678",
+            "notify_system_target": "slack:C87654321", "trickle_pages": 7,
+            "notify": {"interactive": "off", "slack": {
+                "profile": "synthetic", "application_id": "A12345678", "team_id": "T12345678",
+                "allowed_user_ids": ["U12345678"]}}}
+
+
 def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, tmp_path):
-    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C12345678",
-           "notify_system_target": "slack:C87654321", "trickle_pages": 7,
-           "notify": {"interactive": "off", "slack": {
-               "profile": "synthetic", "application_id": "A12345678", "team_id": "T12345678"}}}
+    cfg = _existing_slack_settings()
     prompts = set()
 
     def keep_once(prompt):
@@ -118,7 +124,7 @@ def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, 
 
 @pytest.mark.parametrize("answer", ["", "2", "q", EOFError, KeyboardInterrupt])
 def test_decline_or_interrupt_precedes_all_writers(monkeypatch, tmp_path, answer):
-    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "trickle_pages": 7}
+    cfg = _existing_slack_settings()
     _init_env(monkeypatch, tmp_path, cfg)
     original = json.dumps(cfg).encode()
     config = tmp_path / "c.json"
@@ -146,7 +152,7 @@ def test_decline_or_interrupt_precedes_all_writers(monkeypatch, tmp_path, answer
 
 
 def test_consent_precedes_dictionary_secrets_config_and_integration(monkeypatch, tmp_path):
-    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "trickle_pages": 7}
+    cfg = _existing_slack_settings()
     _init_env(monkeypatch, tmp_path, cfg)
     order = []
     monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: 4)
@@ -167,7 +173,7 @@ def test_consent_precedes_dictionary_secrets_config_and_integration(monkeypatch,
 
 
 def test_yes_preserves_no_new_questions_contract(monkeypatch, tmp_path):
-    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "synthetic", "notify_target": "slack:C123"})
+    _init_env(monkeypatch, tmp_path, _existing_slack_settings())
     monkeypatch.setattr(setup_wizard, "wizard", lambda *a, **k: pytest.fail("wizard question"))
     monkeypatch.setattr(setup_wizard, "confirm_save", lambda *a, **k: pytest.fail("new consent question"))
     monkeypatch.setattr(setup_wizard, "wizard_drug_map", lambda *a, **k: pytest.fail("dictionary question"))
@@ -177,8 +183,7 @@ def test_yes_preserves_no_new_questions_contract(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("interruption", [EOFError, KeyboardInterrupt])
 def test_after_save_interruption_keeps_partial_configuration(monkeypatch, tmp_path, capsys, interruption):
-    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "synthetic", "notify_target": "slack:C123",
-                                    "trickle_pages": 7})
+    _init_env(monkeypatch, tmp_path, _existing_slack_settings())
     monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: cfg.update(trickle_pages=2) or 4)
     monkeypatch.setattr(setup_wizard, "confirm_save", lambda *a, **k: True)
     monkeypatch.setattr(setup_wizard, "wizard_drug_map", lambda *a, **k: None)
