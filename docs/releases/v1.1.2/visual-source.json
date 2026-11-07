@@ -1,13 +1,11 @@
 {
-  "status": "unpublished_preparation_subset",
+  "status": "unpublished_preparation",
   "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
-  "scope": "旧28件のクラウド処理説明。OCR・Discord・schema 12を含む候補全体の受入証拠ではない。",
-  "origin_commit": "b07790e1a7008aa563189648d25d1e8a819781e2",
-  "historical_source_head": "4c6727e272afda7c4c8f2c5e6e82c592f3960bbc",
+  "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
   "source_checkout_observation": {
-    "head": "f6ff162cf50c84968884481e06624ab5a033b518",
+    "head": "cb0c6fa847e4a64a69e89afde814bcd308be72e1",
     "dirty": true,
-    "observed_at": "2026-11-06T00:54:44.052169+00:00",
+    "observed_at": "2026-11-07T07:08:51.000000+00:00",
     "release_sha_fixed": false
   },
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
@@ -17,49 +15,47 @@
     "thumbnail_command": "qlmanage -t -s 1000 -o TEMP TEMP/wrapper.svg",
     "crop_command": "magick TEMP/wrapper.svg.png -crop 390x860+305+70 +repage -strip docs/releases/v1.1.2/cloud-continuity.png"
   },
+  "visual_check": {
+    "png_rendered": true,
+    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07）",
+    "narrow_width_ok": true
+  },
   "artifacts": [
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "feb115f3fce9937530a5b87dc3dcae1b97fce523eed6b58abc4567498e2a4da0"
+      "sha256": "1ef00d1346f2fa76b8a9cc1d1dfb38199fa88550788c393e8afe7a2152d7a116"
     },
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "4d191d0ec4ad3af5f593065313f25f1a4e6642a8c37dcb6a61ec9b3d5a87bfe5"
+      "sha256": "83bbc87b85389ae6da9f284223402c6ecd583daaed0e2b522284d4d24835d231"
     }
   ],
   "source_file_observations": [
     {
+      "path": "mcs/llm/cloud_policy.py",
+      "sha256": "295fcad26c202720a99b933a698c97e569a405592c128a435ccf6d40f2173100",
+      "note": "send_route は patient_context のみ。個別 reextract / semantic_backlog の新規送信は閉鎖。"
+    },
+    {
       "path": "mcs/llm/cloud_inference.py",
-      "sha256": "31bfb86391775411135b90cf2a1f2ca74d23065df5d1ec8a25238699cb9e8f49"
+      "sha256": "3efac7b382a45f0a0c6e6a2f6d28dc6b7fecf4b1acc0804ac2d5b9adee7d3871"
     },
     {
-      "path": "mcs/llm/cloud_backlog.py",
-      "sha256": "e3d0b1cfbeebe2eac3e7956b0e5509f003198e8f6146512056c3ef771d45f57d"
+      "path": "mcs/extract/attachment_ocr.py",
+      "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
     },
     {
-      "path": "mcs/ingest/health_report.py",
-      "sha256": "62dae82b247d9df4fa9662b84245089eeadfaa5b7e808cbee09b09544f9a82c4"
+      "path": "mcs/notify/notify_parts.py",
+      "sha256": "47d3d3cef06507076f63f56e91e2750875574e5b8af4726387e245fd04a0733b"
     },
     {
-      "path": "mcs/notify/notify_cards.py",
-      "sha256": "d4d512ebe361327a0edb2ca87cbaffe5498c4445a62c36ad082e25af253e9824"
-    },
-    {
-      "path": "mcs/patients/patient_context_refresh.py",
-      "sha256": "d859e31e961f1f5bf995b46a48a93b874ed1d8fb7fa483c2a6265605b67bbcfb"
+      "path": "mcs/ops/setup/slack_channel_setup.py",
+      "sha256": "0e9610b5b9cbf22dd18fc1dfe2e147f96af138f05619f5ce8526fed7fd2075fd"
     }
   ],
-  "verification": {
-    "local_png_dimensions": [
-      390,
-      860
-    ],
-    "local_png_view": "view_imageで文字欠け・重なりがないことを確認。未公開準備資料と対象範囲の表示を確認。",
-    "svg_png_same_generation": true,
-    "github_rendering": "not_checked",
-    "runtime_acceptance": "not_checked",
-    "drug_master_freshness": "not_checked",
-    "publication": "not_performed",
-    "production_apply": "not_performed"
-  }
+  "notes": [
+    "図は候補76件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
+    "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
+    "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
+  ]
 }

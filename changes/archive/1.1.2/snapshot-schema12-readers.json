@@ -7,5 +7,8 @@
     "mcs/core/snapshot_access.py",
     "mcs/views/mcs_view.py",
     "mcs/views/measurement_local_view.py"
+  ],
+  "details": [
+    "添付識別子の列を持つDB世代12のスナップショットを、チャット操作とローカル測定値表示が読取り専用で開きます。"
   ]
 }

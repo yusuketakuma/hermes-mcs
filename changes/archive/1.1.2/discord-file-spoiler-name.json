@@ -6,5 +6,8 @@
   "refs": [
     "adapters/discord/cards.py",
     "tests/adapters/discord/test_discord_file_group_views.py"
+  ],
+  "details": [
+    "SPOILER_で始まる添付名をそのまま送信し、ファイル表示と送信記録の照合で同じ名前を使います。"
   ]
 }

@@ -6,5 +6,8 @@
   "refs": [
     "mcs/ops/setup/slack_channel_setup.py",
     "tests/ops/test_slack_channel_setup.py"
+  ],
+  "details": [
+    "停止中の記録を読んで理由を表示し、missing_scopeの明示的な再設定による再試行だけを許可します。"
   ]
 }

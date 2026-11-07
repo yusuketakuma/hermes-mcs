@@ -3,5 +3,13 @@
   "title": "Slackの患者情報と運用ログの通知先を分離",
   "summary": "新規導入では非公開のmcsとmcslogを準備します。更新時は既存の患者情報先を保持し、運用ログ先が未設定または同じ場合にmcslogを補います。別の通知先を明示済みなら変更しません。",
   "upgrade": "Slackアプリには非公開チャンネルの作成・照合に必要なgroups:writeとgroups:readを許可してください。権限追加後はアプリの再インストールが必要です。作成したチャンネルには設定済みの操作者だけを招待します。Hermesでは既存接続を再起動して準備し、患者情報先を変更した場合は通常workerの起動も確認します。作成結果が不明な場合は再作成せず保留します。",
-  "refs": ["mcs/ops/setup/slack_channel_setup.py", "adapters/slack/provision.py", "mcs/ops/mcs_setup.py", "scripts/mcs_upgrade.py"]
+  "refs": [
+    "mcs/ops/setup/slack_channel_setup.py",
+    "adapters/slack/provision.py",
+    "mcs/ops/mcs_setup.py",
+    "scripts/mcs_upgrade.py"
+  ],
+  "details": [
+    "非公開のmcs・mcslogを作成し、作成記録と接続設定を保存して後の照合に使います。"
+  ]
 }

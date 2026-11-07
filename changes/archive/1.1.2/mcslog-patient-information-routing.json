@@ -8,5 +8,8 @@
     "mcs/notify/notify_flush.py",
     "mcs/ingest/health_watch.py",
     "deployment/recovery/mcs_recovery_services.py"
+  ],
+  "details": [
+    "運用通知はnotify_system_targetで分離を確認できた宛先だけへ送り、分離を確認できない場合は送信を保留します。"
   ]
 }

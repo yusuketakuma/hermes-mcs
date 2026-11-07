@@ -2,10 +2,10 @@
 
 Hermes経由の導入・更新にはuvが必要です。Hermesのディレクトリで依存を解決し、安全性のための依存設定を適用します。uvがない場合は変更前に停止し、pipへ切り替えません。`--no-brew`を使う場合はuvを事前に導入してください。
 
-1.0.25〜1.1.1の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
+1.0.25〜1.1.2の推奨Hermes agentはv0.22.2ベースのMCS companion（固定commit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0`）です。新規導入・CI・更新の固定値をそろえています。以前の固定版 `b7758d8`・`f36c1da` と、それ以前の認識済み固定版は再導入経路の移行対象です。変更中・未知のcheckoutは自動で置き換えません。Hermes経由の環境は再導入（`--reinstall`）で固定版を移行し、gatewayを再起動します。独立動作（Hermesなし）の環境はHermesの移行対象ではありません。
 
 
-このガイドはv1.1.1候補のinstall/update/setup/doctorと復旧手順に対応します。公開前の未受入事項は[1.1.1の受入票](../releases/v1.1.1/ACCEPTANCE_1.1.1.md)で確認してください。1.1.0の準備・受入の経緯は[1.1.0の受入票](../releases/v1.1.0/ACCEPTANCE_1.1.0.md)に残します。1.0.29の状況は[1.0.29の受入票](../releases/v1.0.29/ACCEPTANCE_1.0.29.md)に残します。1.0.28の状況は[1.0.28の受入票](../releases/v1.0.28/ACCEPTANCE_1.0.28.md)に残します。
+このガイドはv1.1.2候補のinstall/update/setup/doctorと復旧手順に対応します。公開前の未受入事項は[1.1.2の受入票](../releases/v1.1.2/ACCEPTANCE_1.1.2.md)で確認してください。1.1.1の準備・受入の経緯は[1.1.1の受入票](../releases/v1.1.1/ACCEPTANCE_1.1.1.md)に残します。1.1.0の準備・受入の経緯は[1.1.0の受入票](../releases/v1.1.0/ACCEPTANCE_1.1.0.md)に残します。1.0.29の状況は[1.0.29の受入票](../releases/v1.0.29/ACCEPTANCE_1.0.29.md)に残します。1.0.28の状況は[1.0.28の受入票](../releases/v1.0.28/ACCEPTANCE_1.0.28.md)に残します。
 1.0.22の合成検証・公開・実機反映の状況は[リリース受入票](../releases/v1.0.22/ACCEPTANCE_1.0.22.md)、
 1.0.21は[1.0.21の受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)で追跡する。
 過去の1.0.13実機受入計画は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)に残す。
