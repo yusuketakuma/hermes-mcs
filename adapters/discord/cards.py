@@ -36,6 +36,18 @@ _MENU_MAX = 25                    # options per select
 
 
 
+class _HeaderLine(str):
+    """An escaped compact provider-header line marked by _zones() so
+    face() can attach the Jev thumbnail only to genuine header lines;
+    identical body text stays plain."""
+    __slots__ = ("jev_state",)
+
+    def __new__(cls, text, jev_state):
+        line = str.__new__(cls, text)
+        line.jev_state = jev_state
+        return line
+
+
 def _text_chunks(lines, limit=MAX_TEXT):
     """Pack rendered lines into TextDisplay-sized chunks — a Container
     caps at 10 children and each display at ``limit`` chars, so a zone
@@ -85,7 +97,8 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
             continue                       # correlation — not displayed
         if spec["parts"].get("processing_display_version") in (1, 2, 3) and c.get("provider_scope") == "header":
             from processing_route import compact_header
-            c = {**c, "text": compact_header(c)}
+            c = {**c, "text": compact_header(c),
+                 "header_jev": c["provider_states"].get("jev")}
         if c.get("rule") and cur:
             zones.append(cur + rows)
             cur = []
@@ -115,7 +128,10 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
             # lines must use the per-line '>' form
             cur.extend(f"> {esc(ln)}" for ln in c["text"].splitlines())
         else:
-            cur.append(esc(c["text"]))
+            text = esc(c["text"])
+            jev_state = c.get("header_jev")
+            cur.append(_HeaderLine(text, jev_state)
+                       if jev_state is not None else text)
     if cur:
         zones.append(cur + rows)
     # every footer line gets the subtext prefix — one footer item may
@@ -282,12 +298,29 @@ def build_view(spec: dict):
             rows.append(row)
 
     def face(groups):
+        from processing_route import COMPACT_MARKS, STATE_LABELS
+        from adapters.common.provider_assets import PROVIDER_ASSETS
+        thumbnail = getattr(discord.ui, "Thumbnail", None)
+        jev_url = next((url for key, _name, url in PROVIDER_ASSETS
+                        if key == "jev"), None) if thumbnail else None
         out = []
         for lines in groups:
             if out:
                 out.append(separator())
             run = []
             for line in lines + [None]:
+                if isinstance(line, _HeaderLine):
+                    if jev_url and line.jev_state in COMPACT_MARKS:
+                        out.extend(discord.ui.TextDisplay(chunk)
+                                   for chunk in _text_chunks(run))
+                        run = []
+                        out.append(discord.ui.Section(
+                            discord.ui.TextDisplay(str(line)),
+                            accessory=discord.ui.Thumbnail(
+                                jev_url,
+                                description=f"Jev {STATE_LABELS[line.jev_state]}")))
+                        continue
+                    line = str(line)  # no thumbnail support — keep the text
                 if isinstance(line, str):
                     run.append(line)
                     continue

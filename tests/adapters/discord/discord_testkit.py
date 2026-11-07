@@ -170,7 +170,12 @@ def _fake_discord():
         def __init__(self, *children, accessory=None):
             self.children, self.accessory = list(children), accessory
 
+    class Thumbnail:
+        def __init__(self, media, description=None, spoiler=False, **_):
+            self.media, self.description, self.spoiler = media, description, spoiler
+
     mod.ui = SimpleNamespace(LayoutView=LayoutView, View=View, Section=Section,
+                             Thumbnail=Thumbnail,
                              TextDisplay=TextDisplay, ActionRow=ActionRow,
                              Container=Container, MediaGallery=MediaGallery, File=File,
                              Button=Button, Modal=Modal,
