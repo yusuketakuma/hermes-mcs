@@ -5,6 +5,12 @@ import re
 
 import mcs_runtime
 
+# Exact non-Python files read by candidate validation; no directory expansion.
+CANDIDATE_RUNTIME_ASSETS = (
+    "resources/inference-contracts/attachment-refactor-20261105.json",
+    "evaluation/g6-criteria-v2.json",
+)
+
 REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed", "ocr_requirements_changed")
 _MENTION_RE = re.compile(r"<@[!&]?\d+>|<#\d+>|@everyone|@here")
 
