@@ -699,6 +699,29 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     assert len(extraction_reads) == 1, 'metadata aggregation must not query each source separately'
 
 
+def test_marked_extract_keeps_exact_proof_check(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led)
+    seed(led, mid=2, body='合成の未分類記録その2。')
+    finish(runtime)
+    marked_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='extract_llm' "
+                               "AND message_id=1 ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]
+    with led.db:
+        led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.internal_proof_version',1,"
+                       "'$.internal_proof_hash',?) WHERE artifact_id=?", ('9' * 64, marked_id))
+    calls_to = []
+    real = mcs_queries.selected_artifact_proof_valid
+    def spy(db, artifact_id, **kw):
+        calls_to.append(artifact_id)
+        return real(db, artifact_id, **kw)
+    monkeypatch.setattr(mcs_queries, 'selected_artifact_proof_valid', spy)
+    view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+    # Only the marked row defers to the exact witness check; its invalid
+    # proof drops the summary and the stored signature no longer matches.
+    assert calls_to == [marked_id]
+    assert view is None
+
+
 def test_shadow_can_be_published_without_repeating_inference(runtime):
     led, _, calls = runtime
     seed(led)

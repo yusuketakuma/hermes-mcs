@@ -1373,12 +1373,26 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None):
     return result
 
 
-def _context_derived_summaries(db, message, rows, cfg):
+def _derived_summary_proof_valid(db, row, fresh):
+    content, meta = (loads_dict(row[3]), loads_dict(row[5])) if fresh else (None, None)
+    if (isinstance(content, dict) and isinstance(meta, dict)
+            and _INTERNAL_PROOF not in content
+            and "internal_proof_version" not in meta
+            and "internal_proof_hash" not in meta):
+        # The aggregate's newer-marked exclusion already proved this unmarked row.
+        return True
+    return selected_artifact_proof_valid(db, row[1])
+
+
+def _context_derived_summaries(db, message, rows, cfg, *, proof_baseline=None):
     summaries, identities = [], []
+    fresh = (proof_baseline is not None and db.in_transaction
+             and db.total_changes == proof_baseline[0]
+             and db.execute("PRAGMA data_version").fetchone()[0] == proof_baseline[1])
     for row in sorted(rows, key=lambda row: (row[2], row[1])):
         if row[2] not in ("extract_v1", "extract_llm"):
             continue
-        if row[2] == "extract_llm" and not selected_artifact_proof_valid(db, row[1]):
+        if row[2] == "extract_llm" and not _derived_summary_proof_valid(db, row, fresh):
             continue
         text = (loads_dict(row[3]) or {}).get("summary")
         if not isinstance(text, str) or not text.strip():
@@ -1427,6 +1441,12 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
             continue
         seen.add((row[0], row[2]))
         extractions.setdefault(row[0], []).append(row)
+    # The aggregate already applied current_extract_pred's newer-marked
+    # exclusion; reuse it only while this connection provably sees the
+    # same committed state. Outside a transaction every row defers to
+    # the exact per-artifact check.
+    proof_baseline = ((db.total_changes, db.execute("PRAGMA data_version").fetchone()[0])
+                      if db.in_transaction else None)
     columns = ("m.*" if hydrate else "m.message_id,m.project_id,m.content_hash,m.body_state,"
                "m.posted_at,m.posted_at_ts,m.sender_id,m.sender_name,m.parent_id,m.first_seen")
     for row in db.execute(f"SELECT {columns},length(m.body_text) AS body_length FROM messages m "
@@ -1435,7 +1455,8 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
         message = dict(row)
         rows = extractions.get(message["message_id"], [])
         message["extraction_sig"] = source_digest(sorted((r[2], extraction_input_signature(r[3], r[5], r[4])) for r in rows))
-        derived, derived_sig = _context_derived_summaries(db, message, rows, cfg)
+        derived, derived_sig = _context_derived_summaries(db, message, rows, cfg,
+                                                          proof_baseline=proof_baseline)
         message["derived_summaries"] = derived if hydrate else []
         message["derived_summary_sig"] = derived_sig
         message["derived_summary_chars"] = sum(len(summary["text"]) for summary in derived)
