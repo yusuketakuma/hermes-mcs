@@ -10,7 +10,7 @@ repo との drift になる。
 
 | パス | 内容 |
 |---|---|
-| `launchagents/` | launchd plist テンプレート9件。Hermes用5件、独立host、CSDC、LLMサーバ、復旧watchdog。CSDCはコードのみ同梱し、1.1.0では未提供。ジョブ構成・プレースホルダ規則は [launchagents/README.md](launchagents/README.md) |
+| `launchagents/` | launchd plist テンプレート10件。Hermes用6件、独立host、CSDC、LLMサーバ、復旧watchdog。CSDCはコードのみ同梱し、1.1.0では未提供。ジョブ構成・プレースホルダ規則は [launchagents/README.md](launchagents/README.md) |
 | `scripts/` | 定期ジョブ用wrapper 7件と、明示有効化するoffsite backup用1件。Hermesは`~/.hermes/scripts/`、独立実行は`~/.mcs/scripts/`へレンダリング |
 | `install/` | `runtime.sh`による実導入処理。`install.sh`がhashを確認した私有コピーから読み込む。入口と一緒に同梱する |
 | `recovery/` | `mcs_recover.py`と補助4ファイルの独立watchdog。`prepare_recovery.py`が同じ世代を`~/.mcs-recovery/`へ配置し、`org.mcs.recovery`で定期起動する |
