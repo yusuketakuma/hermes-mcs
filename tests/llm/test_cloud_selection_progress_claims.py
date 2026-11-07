@@ -390,7 +390,7 @@ def test_claim_limit_and_after_claim_failure_release_owned_leases(cloud_candidat
     assert _claim_count(led) == 0 and not led.db.in_transaction
 
 
-@pytest.mark.parametrize("change", ["scope", "source", "budget", "unknown_paid"])
+@pytest.mark.parametrize("change", ["scope", "source", "source_edit", "budget", "unknown_paid"])
 def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_candidates, monkeypatch, change):
     led, cfg, *_ = cloud_candidates
     prior = [dict(row) for row in led.artifacts(extract_llm.KIND)]
@@ -421,6 +421,12 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
             with ledger.db:
                 ledger.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=?",
                                    (row["message_id"],))
+        elif change == "source_edit":
+            # A real source edit produces a different valid hash: a provably
+            # changed head must release its claim so the new body re-claims.
+            with ledger.db:
+                ledger.db.execute("UPDATE messages SET content_hash=? WHERE message_id=?",
+                                   ("9" * 64, row["message_id"]))
         elif change == "budget":
             cfg["cloud_llm"]["daily_request_budget"] = 0
 
@@ -430,7 +436,9 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
     monkeypatch.setattr(extract_llm_prepare, '_ensure_v1', extract_llm._ensure_v1)
     monkeypatch.setattr(extract_llm_runner, '_ensure_v1', extract_llm._ensure_v1)
     assert _cloud_pass(led)["done"] == 0 and len(changed) == 1
-    assert sent == [] and _claim_count(led) == int(change == "unknown_paid") and not _current_artifacts(led)
+    # An unverifiable head (invalid hash, unresolved paid unit) keeps the
+    # bounded claim; a provably changed source must release via the CAS.
+    assert sent == [] and _claim_count(led) == int(change in ("source", "unknown_paid")) and not _current_artifacts(led)
     _assert_legacy_retained(led, prior)
     usage = cloud_policy.usage_report(led)
     assert not usage["pricing_unverified"]
