@@ -463,16 +463,27 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             ledger.db.execute("BEGIN IMMEDIATE")
             ready, actual, _ = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, selected_proof,
                 deadline=deadline, complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
+            latest_rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+            try:
+                context_schedule._bookmark(latest_rotation[0].get('patient_scan'))
+            except ValueError:
+                ledger.db.rollback()
+                return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+            # Another patient's scan may advance without consuming this lane's turn.
+            same_rotation = (latest_rotation[1] == scan_rotation[1]
+                and {k: v for k, v in latest_rotation[0].items() if k != 'patient_scan'}
+                    == {k: v for k, v in scan_rotation[0].items() if k != 'patient_scan'})
             current = (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline and admit()
                 and extract_llm._writer_current(full=True)
                 and patient_context_refresh_state._published_version(ledger.db, pid) == frozen_ver
-                and patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0) == scan_rotation
+                and same_rotation
                 and ready == "verified" and actual is not None and actual['source_sig'] == snapshot['source_sig'])
             if not current:
                 ledger.db.rollback()
                 changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
                 return {"status": "source_changed" if changed else "deferred", "done": 0,
                         **({"reason": "patient_context_readiness_unverified"} if not changed else {}), **stats}
+            rotation = latest_rotation[0]
             if lane != "A":
                 # B/C may use a wider cohort than the last overview attempt.
                 # Keep that attempt's retry state bound to its original input.
