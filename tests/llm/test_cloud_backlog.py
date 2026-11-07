@@ -117,7 +117,8 @@ def test_unknown_and_low_memory_do_not_spawn(monkeypatch):
     assert backlog.memory_workers(32) == 0
 
 
-def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
+@pytest.mark.parametrize("context_only", [False, True])
+def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch, context_only):
     import extract_llm
     (tmp_path / "data").mkdir()
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 4}}
@@ -130,7 +131,8 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
             helper = backlog.helper_path(tmp_path, require_installed=True)
             assert command[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
             assert command[7:11] == [sys.executable, str(Path(backlog.__file__).resolve()), "--parent", str(os.getpid())]
-            assert command[11:] == ["--index", str(len(children) % 2)]
+            assert command[11:] == ["--index", str(len(children) % 2),
+                                    *(["--context-only"] if context_only else [])]
             assert kw["stdin"] == subprocess.DEVNULL and kw["close_fds"]
             assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
             self.stopped = False
@@ -147,10 +149,10 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
             return 0
 
     monkeypatch.setattr(backlog.subprocess, "Popen", Child)
-    first, second = backlog.CloudBacklogPool(tmp_path), backlog.CloudBacklogPool(tmp_path)
+    first, second = (backlog.CloudBacklogPool(tmp_path, context_only=context_only) for _ in range(2))
     try:
         # Individual cloud routes are closed; spawn mechanics are dormant-path.
-        with legacy_cloud_routes():
+        with nullcontext() if context_only else legacy_cloud_routes():
             first.sync(cfg)
             assert len(children) == 2
             second.sync(cfg)
@@ -164,7 +166,7 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
         first.close()
         assert all(p.stopped for p in children)
         second.last_sync -= 11
-        with legacy_cloud_routes():
+        with nullcontext() if context_only else legacy_cloud_routes():
             second.sync(cfg)
             assert len(second.children) == 2
     finally:

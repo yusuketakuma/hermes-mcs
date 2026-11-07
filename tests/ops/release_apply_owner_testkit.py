@@ -142,7 +142,7 @@ def native_product(product, tmp_path):
     (repo / 'mcs_standalone/service.py').write_text('from pathlib import Path\nimport os\n'
         'def status(root, *, now=None):\n'
         ' stopped=(Path(root)/"data/update_in_progress.marker").exists()\n'
-        ' return {"update_in_progress":stopped,"children":{} if stopped else {k:{"kind":"background","pid":os.getpid()} for k in ("extract-0","extract-2")}}\n'
+        ' return {"update_in_progress":stopped,"children":{} if stopped else {k:{"kind":"background","pid":os.getpid()} for k in ("extract-0","extract-2","extract-night")}}\n'
         'def request_restart(root): return "synthetic-service-boundary"\n')
     home = tmp_path / 'native-runtime'
     home.mkdir(mode=0o700)

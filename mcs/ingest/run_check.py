@@ -241,31 +241,30 @@ def stage_derive(ledger, result, deadline, cfg=None,
             r[0] for r in ledger.db.execute(
                 "SELECT message_id FROM messages WHERE notified_at >= ?",
                 (time.time() - REALTIME_CARRY_S,))}
-        if budget < extract_llm._MIN_CALL_S or not realtime:
-            result["extract_llm"] = idle
-        elif extract_llm.pinned_slot_busy(time.monotonic() + budget):
-            # Hermes is using realtime; the arrival stays durable for
-            # another pass while ingestion and background keep moving.
-            result["extract_llm"] = {**idle, "skipped_busy": True}
-        else:
-            # T18: under the v4 engine (fact_source=canonical) the legacy
-            # v3 extractor admits NOTHING new; one helper with the drainer,
-            # fail-closed on an errored semantic config. No cfg (direct
-            # callers) keeps the per-key defaults, as before.
-            admitted = extract_llm.legacy_admissions(ledger, cfg or {})
-            # A fragmented batch can contain one row and retry it as a single.
-            per_row_budget = (extract_llm._batch_need_s(1) + extract_llm._MIN_CALL_S
-                              if extract_llm._BATCH_K >= 2 else extract_llm._MIN_CALL_S)
-            result["extract_llm"] = extract_llm.run_pending(
-                ledger, limit=max(1, int(budget // per_row_budget)),
-                budget_s=budget, admitted_ids=(
-                    realtime if admitted is None else realtime & admitted),
-                # Only realtime arrivals use this slot, newest first.
-                # Existing claim leases exclude in-flight work.
-                oldest_first=False, batch_k=extract_llm._BATCH_K, allow_cloud=False,
-                vital_policy=extract_validation.vital_threshold_policy(cfg), run_lock_fd=run_lock_fd)
-            if result["extract_llm"].get("gc_error") == "extract_stale_gc_failed":
-                result["errors"].append("extract_llm: extract_stale_gc_failed")
+        with extract_llm.local_llm.scheduling_scope(os.path.join(HOME, "data"), realtime=True):
+            if budget < extract_llm._MIN_CALL_S or not realtime:
+                result["extract_llm"] = idle
+            elif extract_llm.pinned_slot_busy(time.monotonic() + budget):
+                result["extract_llm"] = {**idle, "skipped_busy": True}
+            else:
+                # T18: under the v4 engine (fact_source=canonical) the legacy
+                # v3 extractor admits NOTHING new; one helper with the drainer,
+                # fail-closed on an errored semantic config. No cfg (direct
+                # callers) keeps the per-key defaults, as before.
+                admitted = extract_llm.legacy_admissions(ledger, cfg or {})
+                # A fragmented batch can contain one row and retry it as a single.
+                per_row_budget = (extract_llm._batch_need_s(1) + extract_llm._MIN_CALL_S
+                                 if extract_llm._BATCH_K >= 2 else extract_llm._MIN_CALL_S)
+                result["extract_llm"] = extract_llm.run_pending(
+                    ledger, limit=max(1, int(budget // per_row_budget)),
+                    budget_s=budget, admitted_ids=(
+                        realtime if admitted is None else realtime & admitted),
+                    # Only realtime arrivals use this slot, newest first.
+                    # Existing claim leases exclude in-flight work.
+                    oldest_first=False, batch_k=extract_llm._BATCH_K, allow_cloud=False,
+                    vital_policy=extract_validation.vital_threshold_policy(cfg), run_lock_fd=run_lock_fd)
+                if result["extract_llm"].get("gc_error") == "extract_stale_gc_failed":
+                    result["errors"].append("extract_llm: extract_stale_gc_failed")
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
@@ -795,14 +794,15 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
         result["semantic"] = _semantic_skipped(cfg, "no_budget")
         return
     import extract_llm
-    if extract_llm.pinned_slot_busy(deadline):
-        result["semantic"] = _semantic_skipped(cfg, "slot_busy")
-        return
     try:
-        result["semantic"] = semantic_drain.run_due(
-            ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
-            cfg_path=CONF_PATH, max_jobs=4, run_lock_fd=run_lock_fd,
-            lane="realtime")
+        with extract_llm.local_llm.scheduling_scope(os.path.join(HOME, "data"), realtime=True):
+            if extract_llm.pinned_slot_busy(deadline):
+                result["semantic"] = _semantic_skipped(cfg, "slot_busy")
+                return
+            result["semantic"] = semantic_drain.run_due(
+                ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
+                cfg_path=CONF_PATH, max_jobs=4, run_lock_fd=run_lock_fd,
+                lane="realtime")
     except Exception as e:
         result["errors"].append(f"semantic: {type(e).__name__}")
         return

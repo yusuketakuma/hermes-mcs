@@ -38,12 +38,13 @@ def test_jobs_quiesce_and_restart_after_the_updater_finishes(tmp_path, monkeypat
     now = datetime(2026, 10, 2, 5, 10, tzinfo=timezone.utc).timestamp()
     assert len(host.schedules) == 7
     host.tick(now)
-    assert set(host.children) == {"extract-0", "extract-2", "mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "update"}
+    assert set(host.children) == {"extract-0", "extract-2", "extract-night", "mcs_check", "mcs_deep", "mcs_health", "mcs_ocr", "update"}
     assert all(kw["env"]["MCS_ROOT"] == str(tmp_path) for _, kw, _ in launched)
     assert host.argv["extract-0"][-3:] == ["--lane", "2", "--semantic"]
     assert host.argv["extract-2"][-3:] == ["--lane", "3", "--semantic"]
+    assert host.argv["extract-night"][-3:] == ["--lane", "1", "--semantic"]
     host.tick(now + 0.5)
-    assert len(launched) == 7  # one instance per job and scheduled minute
+    assert len(launched) == 8  # one instance per job and scheduled minute
 
     marker = data / UPDATE_MARKER_NAME
     marker.write_text("synthetic")

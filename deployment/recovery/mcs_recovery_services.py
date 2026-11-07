@@ -62,7 +62,7 @@ def _standalone_drainer_problems():
     if status is None:
         return ["standalone_host_unverifiable"]
     problems = []
-    for job in ("extract-0", "extract-2"):
+    for job in ("extract-0", "extract-2", "extract-night"):
         row = status["children"].get(job) or {}
         pid = row.get("pid")
         try:

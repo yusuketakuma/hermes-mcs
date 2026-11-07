@@ -149,7 +149,9 @@ Hermesで自動作成した患者情報用チャンネルとMCSLOGは、`data/sl
 
 ## 常駐・診断
 
-macOSの`ai.mcs.standalone`が、定期7ジョブ、抽出worker2本、cmd/cmd_int取込と接続を所有します。
+macOSの`ai.mcs.standalone`が定期7ジョブ、抽出worker3本、cmd/cmd_int取込と接続を所有します。
+昼間（JST 08:00〜20:00）はバックグラウンド2枠、夜間は最大3枠で処理し、新着は次の空き枠を優先します。
+クラウドの患者コンテキスト処理は抽出workerが所有する別の子プロセスで進めます。
 保存済み添付のOCR・ローカル解析は毎分の独立ジョブが担当し、収集の失敗では停止しません。
 OCRが無効なら処理せず終了します。
 `backup.enabled=true`の場合は、offsite backupも同じhostの定期ジョブとして追加されます。

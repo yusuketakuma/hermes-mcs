@@ -31,7 +31,7 @@ def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch
     _standalone_heartbeat(updater, update_in_progress=True, children={"update": {"pid": os.getpid(), "kind": "core"}})
     monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("native service must not be stopped"))
     monkeypatch.setattr(update_services, '_run', updater._run)
-    assert updater.quiesce() == ["extract-0", "extract-2"]
+    assert updater.quiesce() == ["extract-0", "extract-2", "extract-night"]
     assert Path(updater.MARKER_PATH).exists()
     _standalone_heartbeat(updater)
     assert updater.restart_agents() == []
@@ -375,7 +375,7 @@ def test_quiesce_for_verified_mode_does_not_read_pending_config(updater, monkeyp
     stopped = updater._quiesce_for_mode(mode)
     assert Path(updater.MARKER_PATH).exists()
     if mode == "standalone":
-        assert stopped == ["extract-0", "extract-2"] and not calls
+        assert stopped == ["extract-0", "extract-2", "extract-night"] and not calls
     else:
         assert stopped == ["synthetic.a", "synthetic.b"]
         assert [argv[0:2] for argv in calls] == [["launchctl", "bootout"]] * 2

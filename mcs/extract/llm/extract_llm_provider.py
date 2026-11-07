@@ -542,7 +542,7 @@ def _slots_busy(deadline: float | None) -> dict | None:
 
 def pinned_slot_busy(deadline: float | None = None) -> bool:
     """Point sample for avoiding a call queued behind a busy fixed slot."""
-    if local_llm.admission_enabled():
+    if local_llm.admission_enabled() or local_llm.scheduling_enabled():
         return False
     busy = _slots_busy(deadline)
     return bool(busy) and busy.get(_choose_slot()) is True

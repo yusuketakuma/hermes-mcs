@@ -39,7 +39,8 @@ from .restart_transport import RestartCarrier
 from .host import DeliveryAdmission, log
 
 REPO = Path(__file__).resolve().parents[1]
-BACKGROUND = {"extract-0": "ai.mcs.extract-drainer", "extract-2": "ai.mcs.extract-drainer-2"}
+BACKGROUND = {"extract-0": "ai.mcs.extract-drainer", "extract-2": "ai.mcs.extract-drainer-2",
+              "extract-night": "ai.mcs.extract-drainer-night"}
 COMMANDS = {"cmd": "local.mcs-cmd", "cmd_int": "local.mcs-int"}
 
 # Crash restarts back off exponentially (30 s doubling) up to this cap, for

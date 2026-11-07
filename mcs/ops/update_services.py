@@ -102,7 +102,7 @@ def _standalone_drainer_problems():
     if status is None:
         return ["standalone_host_unverifiable"]
     problems = []
-    for job in ("extract-0", "extract-2"):
+    for job in ("extract-0", "extract-2", "extract-night"):
         row = status["children"].get(job) or {}
         pid = row.get("pid")
         try:
@@ -133,7 +133,7 @@ def _quiesce_for_mode(mode: str) -> list[str]:
             status = _standalone_status()
             if status is not None and status.get("update_in_progress") is True \
                     and not any(job != "update" for job in status["children"]):
-                return ["extract-0", "extract-2"]
+                return ["extract-0", "extract-2", "extract-night"]
             time.sleep(0.2)
         raise UpdateError("standalone_quiesce_unverifiable")
     for label in service_contract.LEGACY_LABELS:

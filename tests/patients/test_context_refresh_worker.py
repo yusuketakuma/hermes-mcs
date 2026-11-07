@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 import extract_llm as worker
+import cloud_backlog
 import cloud_inference
 import patient_context_refresh
 from extract_testkit import _hash, _ledger, _message, _v2_artifact
@@ -53,7 +54,7 @@ def capacity(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_resident, '_context_memory_available', worker._context_memory_available)
     calls = []
 
-    def run_due(led, config, *, deadline, admit, complete):
+    def run_due(led, config, *, deadline, admit, complete, local_admit=None):
         assert led is ledger and config == cfg
         assert deadline > worker.time.monotonic()
         assert worker.local_llm.request_slot() == LANES[3]
@@ -62,12 +63,34 @@ def capacity(tmp_path, monkeypatch):
         return {"status": "done", "done": 1}
 
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: True)
     yield ledger, cfg, calls
     ledger.close()
 
 
 def run(capacity, stop=None, state=(False, 123)):
-    return worker._background_context_refresh(capacity[0], state, stop)
+    cloud_worker = capacity[1].get("cloud_llm", {}).get("mode") == "on"
+    return worker._background_context_refresh(capacity[0], state, stop, cloud_worker=cloud_worker)
+
+
+def test_cloud_context_leaves_local_resident_free(capacity):
+    capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
+    assert worker._background_context_refresh(capacity[0], (False, 123)) == {"status": "off", "done": 0}
+    assert not capacity[2]
+    assert run(capacity)["done"] == 1
+
+
+def test_context_dry_run_keeps_existing_local_lane(capacity):
+    capacity[1]["cloud_llm"] = {"mode": "dry_run", "project_ids": [1]}
+    assert run(capacity)["done"] == 1
+    assert len(capacity[2]) == 1
+
+
+def test_context_child_stops_admitting_when_owner_disappears(capacity, monkeypatch):
+    capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: False)
+    assert run(capacity) == {"status": "deferred", "done": 0}
+    assert not capacity[2]
 
 
 @pytest.mark.parametrize("slot", [LANES[1], LANES[2], None])
