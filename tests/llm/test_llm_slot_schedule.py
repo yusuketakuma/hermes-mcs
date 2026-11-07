@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,47 @@ def test_night_borrows_three_slots_and_waiting_rt_gets_next_free(tmp_path, monke
         if bg.ident is not None:
             bg.join(4)
     assert not rt.is_alive() and not bg.is_alive()
+
+
+def test_rt_cleanup_keeps_next_free_slot_for_waiting_realtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "night", lambda: True)
+    with turn(tmp_path, preferred=1) as bg1, turn(tmp_path, preferred=2) as bg2:
+        assert {bg1, bg2} == {1, 2}
+        physical = []
+        original_open, original_close = schedule._open, os.close
+
+        def opened(directory, name):
+            fd = original_open(directory, name)
+            if name == "llm_slot_0.lock":
+                physical.append(fd)
+            return fd
+
+        with monkeypatch.context() as capture:
+            capture.setattr(schedule, "_open", opened)
+            current = turn(tmp_path, realtime=True)
+            assert current.__enter__() == 0
+        # Register the next RT's actual waiting intent, but do not let its
+        # allocator run until BG has tried the exact cleanup interleaving.
+        waiting = original_open(tmp_path, "llm_realtime.lock")
+        fcntl.flock(waiting, fcntl.LOCK_SH)
+        attempted = []
+
+        def closed(fd):
+            original_close(fd)
+            if fd == physical[0] and not attempted:
+                attempted.append("interrupted")
+                with turn(tmp_path, seconds=0.02) as background:
+                    attempted[0] = background
+
+        try:
+            with monkeypatch.context() as interruption:
+                interruption.setattr(schedule.os, "close", closed)
+                current.__exit__(None, None, None)
+            assert attempted == [None]
+            with turn(tmp_path, realtime=True) as next_rt:
+                assert next_rt == 0
+        finally:
+            original_close(waiting)
 
 
 def test_legacy_exclusive_turn_drains_before_new_physical_turn(tmp_path, monkeypatch):
@@ -270,6 +312,45 @@ def test_scheduled_transport_binds_route_permit_and_wire_slot(
     assert broker.held_slots() == set()
     denied = local_llm.admitted_chat("mcs.unregistered", "synthetic", request_fn=post, timeout=1)
     assert denied["admission"] == "unknown_client" and len(wire) == 1
+
+
+@pytest.mark.parametrize("spent", [0, 2])
+def test_scheduled_admission_keeps_minimum_budget_after_slot_wait(tmp_path, monkeypatch, broker, spent):
+    import patient_context_refresh_state
+    monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path))
+    monkeypatch.setenv(local_llm.WORK_CLASS_ENV, "BACKLOG")
+    monkeypatch.setattr(schedule, "night", lambda: False)
+    monkeypatch.setattr(local_llm, "_broker", lambda _: broker)
+    required = patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN
+    clock, waits, posted = [1000.0], [], []
+    deadline = clock[0] + required + 1
+    with ExitStack() as holders:
+        for preferred in (1, 2):
+            assert holders.enter_context(schedule.turn(tmp_path, realtime=False, preferred=preferred)) == preferred
+
+        def sleep(seconds):
+            waits.append(seconds)
+            clock[0] += spent
+            holders.close()
+
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+        monkeypatch.setattr(schedule, "time", fake_time)
+        monkeypatch.setattr(local_llm, "time", fake_time)
+
+        def post(_url, _method, _body, _timeout, absolute_deadline):
+            assert absolute_deadline == deadline
+            posted.append(True)
+            return 200, {}, b'{"choices":[{"message":{"content":"synthetic"},"finish_reason":"stop"}]}'
+
+        result = local_llm.admitted_chat("mcs.extract", "synthetic", timeout=required,
+            turn_min_s=required, deadline=deadline, request_fn=post)
+    assert waits
+    if spent:
+        assert result["admission"] == "slot_busy" and not posted
+        assert broker.db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
+    else:
+        assert result["status"] == 200 and posted == [True]
+    assert broker.held_slots() == set()
 
 
 def test_scheduled_realtime_reaches_intent_instead_of_early_busy_skip(tmp_path, monkeypatch):

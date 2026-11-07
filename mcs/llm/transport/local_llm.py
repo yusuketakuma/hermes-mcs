@@ -366,7 +366,8 @@ def admitted_chat(client_route: str, prompt: str, *,
         if os.environ.get(WORK_CLASS_ENV) == "RT":
             client_route = "mcs.realtime"
         slot_deadline = deadline if deadline is not None else time.monotonic() + kw.get("timeout", TIMEOUT)
-        with _request_turn(slot_deadline, 0.0, request_slot(), held_slots=broker.held_slots) as slot:
+        with _request_turn(slot_deadline, kw.get("turn_min_s", 0.0), request_slot(),
+                           held_slots=broker.held_slots) as slot:
             if slot is None:
                 unresolved = broker.status()["unresolved"]
                 return {"text": None, "status": None,
