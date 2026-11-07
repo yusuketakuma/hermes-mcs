@@ -831,7 +831,7 @@ def _delivery_completion(db, cfg, now, observation=None):
     retired = retired_transports(cfg)
     live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
     row = db.execute(
-        "WITH latest AS (SELECT r.delivery_id,r.state,r.parts_state FROM notification_renders r "
+        "WITH latest AS MATERIALIZED (SELECT r.delivery_id,r.state,r.parts_state FROM notification_renders r "
         "WHERE r.card_id IS NOT NULL AND r.op IN ('create','update') "
         "AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer "
         "WHERE newer.card_id=r.card_id)" + live + "), "
