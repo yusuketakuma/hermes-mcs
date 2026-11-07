@@ -319,8 +319,8 @@ def _route(row, meta, content):
                        and cloud_inference.is_supported_cloud_contract(contract)) else None
 
 
-def compact_header(header):
-    """Render a validated processing header without claiming live execution."""
+def compact_header_parts(header):
+    """Sealed compact header -> (display prefix, ordered provider keys)."""
     states = header["provider_states"]
     visible = header["visible_providers"]
     sequence = header.get("provider_sequence")
@@ -332,16 +332,19 @@ def compact_header(header):
             prefix = prefix.replace(label + ' · ', short + ' · ', 1)
             if prefix == label:
                 prefix = short
-        ordered = [key for key in visible if key in ('jev', 'local')]
-        providers = '  '.join(f'{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}'
-                              for key in ordered if states[key] in COMPACT_MARKS)
-        return prefix + (' · ' + providers if providers else '')
+        return prefix, [key for key in visible if key in ('jev', 'local')]
     prefix = prefix.partition(" · 採用結果の処理順: ")[0]
     for label, short in COMPACT_STATUS_LABELS.items():
         if prefix == label or prefix.endswith(" · " + label):
             prefix = prefix[:-len(label)] + short
             break
-    ordered = list(sequence or []) + [key for key in visible if key not in (sequence or [])]
+    return prefix, list(sequence or []) + [key for key in visible if key not in (sequence or [])]
+
+
+def compact_header(header):
+    """Render a validated processing header without claiming live execution."""
+    states = header["provider_states"]
+    prefix, ordered = compact_header_parts(header)
     providers = "  ".join(f"{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}"
                           for key in ordered if states[key] in COMPACT_MARKS)
     return prefix + (" · " + providers if providers else "")

@@ -74,6 +74,36 @@ def _provider_context(states, prefix=None, visible=None, sequence=None, *, compa
     return {"type": "context", "elements": elements}
 
 
+def _compact_header_context(header):
+    """The sealed compact header as context blocks: the Jev logo image
+    plus each provider's state mark. Other providers keep their text
+    names, and the frozen 👤 context stays inside the text prefix."""
+    from processing_route import COMPACT_MARKS, PROVIDER_NAMES, compact_header_parts
+    states = header["provider_states"]
+    prefix, ordered = compact_header_parts(header)
+    blocks = []
+    if len(prefix) > CONTEXT_MAX:
+        blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
+        prefix = prefix[-CONTEXT_MAX:]
+    elements = [{"type": "plain_text", "text": prefix}] if prefix else []
+    providers = {key: (name, url) for key, name, url in _PROVIDERS}
+    for key in ordered:
+        if states[key] not in COMPACT_MARKS:
+            continue
+        mark = COMPACT_MARKS[states[key]]
+        if key == "jev":
+            name, url = providers[key]
+            elements.append({"type": "image", "image_url": url,
+                             "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
+            elements.append({"type": "plain_text", "text": mark})
+        else:
+            elements.append({"type": "plain_text",
+                             "text": f"{PROVIDER_NAMES[key]} {mark}"})
+    if elements:
+        blocks.append({"type": "context", "elements": elements})
+    return blocks
+
+
 def _provider_line(text, *, version=1, visible=None):
     supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version in (2, 3, 4)}
     labels = "|".join(map(re.escape, supported.values()))
@@ -244,8 +274,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         if (card_kind == "thread" and version in (2, 3, 4) and item.get("provider_scope") == "header"
                 and kind == "text"):
             if parts.get('processing_display_version') == 3:
-                from processing_route import compact_header
-                blocks.extend(contexts(compact_header(item)))
+                blocks.extend(_compact_header_context(item))
                 continue
             states = item["provider_states"]
             text = item["text"]
