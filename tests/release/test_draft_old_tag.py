@@ -1,7 +1,9 @@
 """Draft generation supports legacy tags without bypassing newer bundle checks."""
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -91,3 +93,90 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(CHECKER, commands)
         self.assertIn("release_notes.py export --version 1.0.16", commands)
+
+
+class ExistingDraftCompatibility(unittest.TestCase):
+    def _run(self, pages, *, api_status=0, sync_status=0):
+        workflow = (ROOT / ".github/workflows/release-notes.yml").read_text()
+        step = workflow.split("      - name: Create a draft release\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory(prefix="synthetic-draft-reuse-") as directory:
+            repo = Path(directory)
+            commands = repo / "commands.jsonl"
+            releases = repo / "releases.json"
+            releases.write_text(pages if isinstance(pages, str) else json.dumps(pages))
+            (repo / "release-title.txt").write_text("Synthetic title\n")
+            (repo / "release-notes.md").write_text("Synthetic notes\n")
+            binary = repo / "bin"
+            binary.mkdir()
+            for name, body in {
+                "gh": '''
+import json, os, sys
+from pathlib import Path
+with open(os.environ["SYNTHETIC_COMMANDS"], "a") as stream:
+    stream.write(json.dumps(["gh", *sys.argv[1:]]) + "\\n")
+if sys.argv[1] == "api":
+    print(Path(os.environ["SYNTHETIC_RELEASES"]).read_text())
+    sys.exit(int(os.environ["SYNTHETIC_API_STATUS"]))
+sys.exit(0 if sys.argv[1:3] == ["release", "create"] else 97)
+''',
+                "python3": '''
+import json, os, sys
+if sys.argv[1] == "-":
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+with open(os.environ["SYNTHETIC_COMMANDS"], "a") as stream:
+    stream.write(json.dumps(["python3", *sys.argv[1:]]) + "\\n")
+sys.exit(int(os.environ["SYNTHETIC_SYNC_STATUS"]) if sys.argv[1] == "scripts/development/sync_release_notes.py" else 97)
+''',
+            }.items():
+                target = binary / name
+                target.write_text(f"#!{sys.executable}\n" + body)
+                target.chmod(0o700)
+            result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], cwd=repo,
+                                    env={**os.environ, "PATH": str(binary) + os.pathsep + os.defpath,
+                                         "RELEASE_TAG": "v1.1.2", "GH_REPO": "synthetic/repo",
+                                         "SYNTHETIC_COMMANDS": str(commands), "SYNTHETIC_RELEASES": str(releases),
+                                         "SYNTHETIC_API_STATUS": str(api_status), "SYNTHETIC_SYNC_STATUS": str(sync_status)},
+                                    capture_output=True, text=True, timeout=10)
+            calls = [json.loads(line) for line in commands.read_text().splitlines()]
+            self.assertEqual(calls[0], ["gh", "api", "--paginate", "--slurp", "repos/synthetic/repo/releases"])
+            return result, calls[1:]
+
+    def test_absent_tag_creates_one_verified_draft(self):
+        result, calls = self._run([[{"tag_name": "v1.1.1", "draft": False}], []])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["gh", "release", "create", "v1.1.2", "--verify-tag", "--draft",
+                                 "--title", "Synthetic title", "--notes-file", "release-notes.md"]])
+
+    def test_existing_draft_on_a_later_page_uses_safe_synchronization(self):
+        result, calls = self._run([[], [{"tag_name": "v1.1.2", "draft": True}]])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["python3", "scripts/development/sync_release_notes.py", "--repo", "synthetic/repo",
+                                 "--tag", "v1.1.2", "--apply"]])
+
+    def test_duplicate_or_published_release_stops_before_writes(self):
+        for pages in ([[{"tag_name": "v1.1.2", "draft": False}]],
+                      [[{"tag_name": "v1.1.2", "draft": True}], [{"tag_name": "v1.1.2", "draft": True}]]):
+            with self.subTest(pages=pages):
+                result, calls = self._run(pages)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
+    def test_malformed_pages_or_records_stop_before_writes(self):
+        for pages in ("{", {}, [], [None], [[None]], [[{}]], [[{"tag_name": 1, "draft": True}]],
+                      [[{"tag_name": "", "draft": True}]], [[{"tag_name": "v1.1.2"}]],
+                      [[{"tag_name": "v1.1.2", "draft": 1}]],
+                      [[{"tag_name": "v1.1.2", "draft": True}], [{"draft": False}]]):
+            with self.subTest(pages=pages):
+                result, calls = self._run(pages)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
+    def test_lookup_or_sync_failure_never_falls_back_to_create(self):
+        result, calls = self._run([[]], api_status=19)
+        self.assertEqual(result.returncode, 19)
+        self.assertEqual(calls, [])
+        result, calls = self._run([[{"tag_name": "v1.1.2", "draft": True}]], sync_status=23)
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(calls, [["python3", "scripts/development/sync_release_notes.py", "--repo", "synthetic/repo",
+                                 "--tag", "v1.1.2", "--apply"]])
