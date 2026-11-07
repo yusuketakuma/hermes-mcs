@@ -459,7 +459,9 @@ def owns_member_request(db, *, route, project_id, target_id, identity=None):
             and re.fullmatch(r'[0-9a-f]{64}', identity[1]) is not None
             and identity[2] in ('facts', 'summary')):
         return True
-    rows = db.execute("SELECT message_id, meta FROM artifacts WHERE kind=? AND project_id=? AND ("
+    # model and project_id ride along so a member-bound row can run the full
+    # _reserve_valid row checks before a verified different unit is skipped.
+    rows = db.execute("SELECT message_id, project_id, model, meta FROM artifacts WHERE kind=? AND project_id=? AND ("
         "(message_id=? AND NOT json_valid(meta)) OR "
         "(json_valid(meta) AND (json_extract(meta,'$.route')=? OR json_extract(meta,'$.route') IS NULL) "
         "AND (message_id=? OR json_extract(meta,'$.message_id')=? "

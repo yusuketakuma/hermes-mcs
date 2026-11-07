@@ -1426,7 +1426,8 @@ def _member_unit_reservation(led, cfg, job, mid, source, *, generation='other-ge
                     {'target': mid, 'source': source, 'generation': generation,
                      'phase': phase}),
                 unit_key=f"semantic:{job['job_id']}:{json.loads(job['payload']).get('generation', '')}",
-                reservation_id=rid, **overrides)
+                reservation_id=rid)
+    meta.update(overrides)
     with led.db:
         led.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
@@ -1458,6 +1459,68 @@ def test_closed_route_old_source_unit_does_not_own_new_source_member(cloud, orde
                 chat('synthetic member prompt')
             assert local == ['synthetic member prompt']
     assert not calls and len(rows(led, 'cloud_usage_reserve')) == 2
+
+
+def test_closed_route_prior_real_source_unit_frees_edited_source_member(cloud):
+    """A stored unit bound to the member's actual pre-edit source does not
+    own the post-edit source: the compared identity is the live occurrence
+    derivation — the same binding source_binding computes for the request."""
+    import mcs_util
+    from inference_dependency_loss import source_binding
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    old_source = mcs_util.payload_hash([(3, source_binding(led.db, 1, 3))])
+    _member_unit_reservation(led, cfg, job, 3, old_source)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=? WHERE message_id=3",
+                       ('編集済みの合成本文。',))
+    # The edit really moved the derived identity — this is not a label trick.
+    assert mcs_util.payload_hash([(3, source_binding(led.db, 1, 3))]) != old_source
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: True) as chat:
+            transport.set_inference_target(3)
+            chat('synthetic member prompt')
+            assert local == ['synthetic member prompt']
+    assert not calls and len(rows(led, 'cloud_usage_reserve')) == 2
+
+
+def test_closed_route_phase_different_unit_keeps_prefix_current_hold(cloud):
+    """A summary-phase unit is a different paid unit from the facts request,
+    but the fallback_current prefix check still owns the member's local path
+    — identity release never weakens the cloud-prefix mixing protection."""
+    led, cfg, job, calls = cloud
+    _mixed_targets(led, job, [3, 2])
+    _member_reservation(led, cfg, job, 2)
+    _member_unit_reservation(led, cfg, job, 3, 'a' * 64, phase='summary')
+    local = []
+    with transport.inference_targets('synthetic-gen'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct,
+                                         local_fallback=lambda p, timeout=None: local.append(p),
+                                         fallback_current=lambda mid: False) as chat:
+            transport.set_inference_target(3)
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_fallback_unavailable'):
+                chat('synthetic member prompt')
+    assert not local and not calls
+
+
+def test_owns_member_request_malformed_identity_owns_on_empty_history(cloud):
+    """With no reservation history at all a malformed current identity still
+    owns the member — an unproven request never releases the local path."""
+    led, cfg, job, calls = cloud
+    assert cloud_policy.owns_member_request(
+        led.db, route='semantic_backlog', project_id=1, target_id=3,
+        identity='not-a-tuple') is True
+    assert cloud_policy.owns_member_request(
+        led.db, route='semantic_backlog', project_id=1, target_id=3,
+        identity=(3, 'b' * 64, 'facts')) is False
+    assert cloud_policy.owns_member_request(
+        led.db, route='semantic_backlog', project_id=1, target_id=3) is False
 
 
 def test_closed_route_same_source_new_generation_member_still_holds(cloud):
