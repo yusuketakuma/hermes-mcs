@@ -151,6 +151,8 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
             return {"status": "off", "done": 0}
     except Exception as exc:
         return {"status": "error", "done": 0, "error": type(exc).__name__}
+    if not _writer_current(full=True):
+        return {"status": "source_changed", "done": 0, "run_lock_lost": "updated"}
     deadline = time.monotonic() + 900
     if stop is not None:
         deadline = min(deadline, stop)
