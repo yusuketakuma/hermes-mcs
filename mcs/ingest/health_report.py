@@ -30,6 +30,7 @@ DB_MAINT_STATE_MAX_BYTES = 65536
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
     import attachment_ocr
+    import writer_lock
     if not isinstance(cfg, dict):
         return {"state": "unknown", "reason": "attachment_ocr_config_unavailable"}
     settings = cfg.get("attachment_ocr", {})
@@ -40,9 +41,11 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     path = os.path.join(data, "attachment_ocr_status.json")
     counts = ("complete", "empty", "failed", "unsupported", "deferred", "pending_failed",
               "local_done", "local_deferred")
+    writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
     try:
         value = json.loads(safe_io.read_private_bytes(path, limit=4096))
-        if (not isinstance(value, dict) or set(value) - {"at", "reason", "queue_status", "paid_recovery_pending", *counts}
+        if (not isinstance(value, dict) or set(value) - {
+                "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
@@ -59,12 +62,20 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
             raise ValueError("ocr_status_invalid")
         if "paid_recovery_pending" in value and type(value["paid_recovery_pending"]) is not bool:
             raise ValueError("ocr_status_invalid")
+        writer_detail = {key: value[key] for key in writer_fields if key in value}
+        if writer_detail and (len(writer_detail) != len(writer_fields)
+                or any(type(item) is not str for item in writer_detail.values())
+                or writer_detail["writer_stage"] not in writer_lock._WRITER_REFUSAL_STAGES.get(
+                    writer_detail["writer_reason"], ())
+                or writer_detail["writer_job_stage"] not in ("local", "ocr")):
+            raise ValueError("ocr_status_invalid")
     except FileNotFoundError:
         return {"state": "unknown", "reason": "attachment_ocr_status_missing"}
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
-              **{key: value[key] for key in (*counts, "paid_recovery_pending") if key in value}}
+              **{key: value[key] for key in (*counts, "paid_recovery_pending") if key in value},
+              **writer_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
     if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred"):
