@@ -149,3 +149,29 @@ def test_old_queued_ocr_plan_is_unchanged_until_an_independent_render_reason(led
     notify_cards.sweep(led, CFG, now=NOW + 1)
     assert dict(_latest_render(led)) == old
     assert not led.artifacts('patient_context_progress_snapshot_v1')
+
+
+def test_creation_resolves_implicit_cloud_mode_from_existing_provider_probe(led, monkeypatch):
+    import cloud_policy
+    cfg = {**copy.deepcopy(CFG), "cloud_llm": {
+        "provider": "openai", "profiles": {"patient_context": "luna-medium"}}}
+    before = copy.deepcopy(cfg)
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("openai", "jev", "local"))
+    def forbidden(*args, **kwargs):
+        pytest.fail("context progress must not read a key")
+    monkeypatch.setattr(cloud_policy, "provider_key", forbidden)
+    seen = []
+    def observe(db, pid, effective):
+        seen.append(effective["cloud_llm"])
+        assert effective["cloud_llm"]["mode"] == "on"
+        assert effective["cloud_llm"]["provider"] == "openai"
+        assert effective["cloud_llm"]["project_ids"] is None
+        assert effective["cloud_llm"]["profiles"] == cfg["cloud_llm"]["profiles"]
+        return value(37)
+    monkeypatch.setattr(progress, "read", observe)
+    _seed_thread(led, mids=(100,))
+    assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)["dispatched"]
+    spec = json.loads(_latest_render(led)["spec_json"])
+    assert header(spec)["context_progress"]["percent"] == 37
+    assert len(seen) == 1 and cfg == before
+    assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] == 0

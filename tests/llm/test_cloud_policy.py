@@ -1030,3 +1030,26 @@ def test_explicit_sol_model_uses_supported_effort_without_pinning_profiles(monke
     assert errors == []
     assert (choice['model'], choice['effort'], choice['profile'], choice['max_tokens']) == (
         openai_client.SOL_MODEL, 'medium', 'sol-medium', 8192)
+
+
+@pytest.mark.parametrize("available", [(), ("anthropic",), ("openai",), ("openai", "anthropic")])
+@pytest.mark.parametrize("block", [
+    {}, {"provider": "openai"}, {"provider_order": ["openai", "anthropic"]},
+    {"provider": "anthropic", "mode": "off"},
+    {"provider": "openai", "mode": "on", "project_ids": [1]},
+])
+def test_public_provider_observation_matches_normal_resolution_without_key_read(monkeypatch, available, block):
+    cfg = {"cloud_llm": block}
+    monkeypatch.setattr(c, "provider_key", lambda provider, root=None: "synthetic-key" if provider in available else None)
+    expected = c.resolve_settings(cfg)
+    def forbidden(*args, **kwargs):
+        pytest.fail("public observation must not read a key")
+    monkeypatch.setattr(c, "provider_key", forbidden)
+    assert c.resolve_settings(cfg, available_providers=available) == expected
+
+
+@pytest.mark.parametrize("available", [[], "openai", ("local",), ("openai", "openai"), (1,)])
+def test_public_provider_observation_rejects_unknown_or_ambiguous_values(monkeypatch, available):
+    monkeypatch.setattr(c, "provider_key", lambda *args: pytest.fail("invalid observation read a key"))
+    with pytest.raises(ValueError, match="^cloud_provider_observation_invalid$"):
+        c.resolve_settings({}, available_providers=available)

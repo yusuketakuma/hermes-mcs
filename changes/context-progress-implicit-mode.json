@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "クラウド動作モードを省略した設定でも患者背景の進捗を観測",
+  "summary": "クラウドの動作モードを自動判定する設定で、新しい通知カードの患者背景の進捗が未確認表示に固定される問題を修正しました。カード作成時点の割合を表示し、その後は更新しない扱いを維持します。",
+  "details": [
+    "カード生成が既に確認した利用可能な提供元の一覧から、共通の設定解決処理で表示用の動作モードと提供元を決めます。進捗の読取り処理へ秘密鍵を渡さず、追加の秘密鍵読取りも行いません。元の設定と提供元別profileを保持し、表示用の設定をファイルへ保存しません。",
+    "入力の取得、ローカル解析、全区間の確認、監査と要約の既存の証拠を使って割合を計算します。不明な提供元一覧や不正設定は完了の証拠に使いません。送信・予約・対象範囲・予算の設定は変更しません。",
+    "既存カードに保存した進捗を読み直したり、過去の数値を推測で補ったりしません。進捗だけを理由にカードを更新せず、個別投稿向けクラウドアイコンの廃止も維持します。"
+  ],
+  "upgrade": "追加設定は不要です。適用後に新しく作成するカードへ反映します。既存カードの凍結済み進捗と、過去に観測できなかった表示は保持します。",
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/notify/notify_card_renders.py",
+    "tests/llm/test_cloud_policy.py",
+    "tests/notify/test_context_progress_frozen.py",
+    "tests/patients/test_patient_context_progress.py",
+    "mcs/notify/processing_route.py",
+    "tests/notify/test_processing_route.py",
+    "tests/notify/test_provider_key_visibility.py"
+  ]
+}

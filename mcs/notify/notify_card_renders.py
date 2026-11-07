@@ -408,7 +408,8 @@ def _context_progress_header(db, card, containers, cfg, now):
     return result
 
 
-def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tuple[dict, str | None]:
+def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
+                progress_cfg=None) -> tuple[dict, str | None]:
     """Persist the view/token identity and return (spec, optional part-budget hold).
 
     Borrow the active transaction; do not change the input card/content mappings.
@@ -471,7 +472,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     containers, footer = present.face(content["containers"],
                                       content["footer"], op, cfg)
     if card['kind'] == 'thread' and op != 'revoke':
-        containers = _context_progress_header(db, card, containers, cfg, now)
+        containers = _context_progress_header(db, card, containers,
+            cfg if progress_cfg is None else progress_cfg, now)
     # per-post 💊 buttons outrank the optional list buttons: reserve
     # their component slots (section + accessory) before row 4 fills up
     # Discord answers a card-face click in the channel, so where the
@@ -842,7 +844,16 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
     rev = (latest["render_rev"] + 1) if latest is not None else 1
     _cancel_open_renders(db, card_id, now)
     card = {**card, **render_gens}
-    spec, budget_hold = _build_spec(db, card, content, op, rev, cfg, now, waiting)
+    progress_cfg = cfg
+    if "visible_providers" in content_options:
+        import cloud_policy
+        available = tuple(name for name in content_options["visible_providers"]
+                          if name in cloud_policy.PROVIDERS)
+        settings, errors = cloud_policy.resolve_settings(cfg, available_providers=available)
+        progress_cfg = ({} if errors else {**cfg, "cloud_llm": {
+            **(cfg.get("cloud_llm") or {}), **settings}})
+    spec, budget_hold = _build_spec(db, card, content, op, rev, cfg, now, waiting,
+                                    progress_cfg=progress_cfg)
     _persist_render(db, card, spec, op, rev, now)
     if budget_hold:
         db.execute("UPDATE notification_renders SET state='held',parts_state='held' WHERE delivery_id=?", (spec["delivery_id"],))

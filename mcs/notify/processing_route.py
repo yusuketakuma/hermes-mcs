@@ -123,7 +123,7 @@ def cloud_followup(db, project_id, message_id, cfg):
     import cloud_policy
     import extract_llm
 
-    if not isinstance(cfg, dict):
+    if not isinstance(cfg, dict) or not cloud_policy.send_route("reextract"):
         return None
     settings = cloud_inference.resolve_cloud_settings(cfg)
     if settings["mode"] != "on" or not cloud_policy.eligible(settings, "reextract", project_id):

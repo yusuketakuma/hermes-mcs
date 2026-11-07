@@ -202,3 +202,22 @@ def test_progress_never_reads_private_key_values(runtime, monkeypatch):
     for cfg in (CFG, {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'auto'}},
                 {**CFG, 'cloud_llm': {'provider': 'anthropic'}}):
         assert progress.read(led.db, 1, cfg)['percent'] is None
+
+
+@pytest.mark.parametrize("available", [(), ("openai",)])
+def test_real_progress_reader_accepts_publicly_resolved_implicit_mode(runtime, monkeypatch, available):
+    import cloud_policy
+    led, _, _ = runtime
+    seed(led)
+    cfg = {**CFG, "cloud_llm": {"provider": "openai"}}
+    def forbidden(*args, **kwargs):
+        pytest.fail("display must not inspect credentials")
+    monkeypatch.setattr(cloud_policy, "provider_key", forbidden)
+    settings, errors = cloud_policy.resolve_settings(cfg, available_providers=available)
+    assert not errors
+    effective = {**cfg, "cloud_llm": {**cfg["cloud_llm"], **settings}}
+    assert progress.read(led.db, 1, cfg)["percent"] is None
+    result = progress.read(led.db, 1, effective)
+    assert result["percent"] == 10
+    assert result["stage"] == "sources"
+    assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] == 0

@@ -36,9 +36,10 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
     assert header["visible_providers"] == visible
     assert spec["parts"]["processing_display_version"] == 3
     assert header["provider_sequence"] is None
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert header["context_progress"]["observed_at"] == NOW
+    assert "👤 0%" in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert header["provider_states"] == states
     validate(spec)
@@ -120,9 +121,10 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     assert header["visible_providers"] == ["jev", "local"]
     assert spec["parts"]["processing_display_version"] == 3
     assert header["provider_sequence"] is None
-    assert header["context_progress"]["stage"] == "unknown"
-    assert header["context_progress"]["percent"] is None
-    assert "👤 —" in header["text"] and "☁" not in header["text"]
+    assert header["context_progress"]["stage"] == "inputs"
+    assert header["context_progress"]["percent"] == 0
+    assert header["context_progress"]["observed_at"] == NOW
+    assert "👤 0%" in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
     assert header["provider_states"] == states
     assert next(c for c in spec["parts"]["containers"] if c.get("rule"))["provider_states"] == states

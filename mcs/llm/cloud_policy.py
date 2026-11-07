@@ -292,15 +292,23 @@ def provider_key(provider, root=None):
     return api_key(root) if provider == "anthropic" else private_env_value(openai_client.KEY_ENV, root) if provider == "openai" else None
 
 
-def resolve_settings(cfg, root=None):
+def resolve_settings(cfg, root=None, *, available_providers=None):
     """Choose a configured provider by key availability; never retry a paid unit elsewhere."""
+    if available_providers is not None and (
+            type(available_providers) is not tuple
+            or any(type(name) is not str or name not in PROVIDERS for name in available_providers)
+            or len(set(available_providers)) != len(available_providers)):
+        raise ValueError("cloud_provider_observation_invalid")
+    def key_present(name):
+        return (bool(provider_key(name, root)) if available_providers is None
+                else name in available_providers)
     c, errors = cloud_config(cfg)
     provider = c["provider"]
     if provider == "auto":
-        provider = next((name for name in c["provider_order"] if provider_key(name, root)), c["provider_order"][0])
+        provider = next((name for name in c["provider_order"] if key_present(name)), c["provider_order"][0])
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
-        c, errors = cloud_config(cfg, key_present=bool(provider_key(provider, root)))
+        c, errors = cloud_config(cfg, key_present=key_present(provider))
     c["provider"] = provider
     if isinstance(block, dict) and "model" in block:
         try:

@@ -559,3 +559,14 @@ def test_route_recognizes_historical_and_current_openai_contracts():
         assert processing_route._route(row, {'actual_model': model}, {'synthetic': True}) is None
         assert processing_route._route(row, {**contract, 'actual_model': model, 'prompt': 'unknown'},
                                        {'synthetic': True}) is None
+
+
+def test_closed_individual_followup_does_not_resolve_credentials(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: calls.append(True) or {"mode": "off"})
+    assert processing_route.cloud_followup(object(), 1, 100, CFG) is None
+    assert calls == []
+    # Counterfactual open route reaches the existing mode check; the input is unchanged.
+    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
+    assert processing_route.cloud_followup(object(), 1, 100, CFG) is None
+    assert calls == [True]
