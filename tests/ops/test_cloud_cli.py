@@ -630,7 +630,8 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
     assert parts["shadow_additions"]["cloud_work_current"] == report["routes"]
     assert report["usage_calibration"]["status"] == "unmeasured"
     assert report["routes"]["reextract"]["estimated_output_tokens"] is None
-    assert report["routes"]["reextract"]["output_token_request_ceiling"] > 0
+    assert report["routes"]["reextract"]["output_token_request_ceiling"] == 0
+    assert report["routes"]["patient_context"]["output_token_request_ceiling"] > 0
     assert report["cost_basis"] == "reference_range_not_budget_reservation_or_invoice"
 
 

@@ -1,9 +1,10 @@
 """Canonical publication does not hide required raw-cloud work from bounded estimates.
 
-The individual reextract lane is closed to new sends; canonical approval and the
-lane's estimate contract live inside bounded legacy_cloud_routes blocks (the
-activation fingerprint is regime-dependent), while the real closed policy still
-asserts zero targets, reservations and POSTs."""
+The individual reextract lane is closed to new sends. Each test approves a valid
+canonical config under the real closed policy first — proving zero targets,
+reservations and POSTs on normal canonical input — then re-approves inside a
+bounded legacy_cloud_routes block, since the activation fingerprint is
+regime-dependent, and exercises the dormant lane's estimate contract there."""
 import time
 
 import pytest
@@ -60,15 +61,19 @@ def _canonical_source(local_then_cloud, monkeypatch, tmp_path, *, local_raw, att
 @pytest.mark.parametrize('local_raw', [True, False], ids=['local-complete', 'rawless'])
 def test_canonical_source_counts_required_cloud_then_stops_after_proven_completion(
         local_then_cloud, monkeypatch, tmp_path, local_raw):
-    with legacy_cloud_routes():
-        ledger, cfg, calls, projection, saved = _canonical_source(local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw)
+    # Closed approval first: a valid canonical input under the real closed policy.
+    ledger, cfg, calls, projection, saved = _canonical_source(local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw)
     evidence = _financial_rows(ledger)
-    # Closed control: the dormant lane reserves nothing, POSTs nothing, counts nothing.
+    assert not semantic_policy.runtime_config(cfg)[1]
     assert _count(ledger, cfg)['targets'] == 0
     assert _cloud_pass(ledger)['done'] == 0
     assert not calls and _financial_rows(ledger) == evidence
     assert not ledger.artifacts('cloud_usage_reserve')
     with legacy_cloud_routes():
+        approved = approved_config(cfg)  # Re-bind approval to the open-regime fingerprint.
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
         assert _count(ledger, cfg)['targets'] == 1
         assert not calls and _financial_rows(ledger) == evidence
         assert _cloud_pass(ledger)['done'] == 1
@@ -83,15 +88,19 @@ def test_canonical_source_counts_required_cloud_then_stops_after_proven_completi
 @pytest.mark.parametrize('local_raw', [True, False], ids=['local-complete', 'rawless'])
 def test_canonical_attention_does_not_estimate_a_fresh_dispatch_or_publish_complete(
         local_then_cloud, monkeypatch, tmp_path, local_raw):
-    with legacy_cloud_routes():
-        ledger, cfg, calls, projection, saved = _canonical_source(
-            local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw, attention=True)
+    ledger, cfg, calls, projection, saved = _canonical_source(
+        local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw, attention=True)
     evidence = _financial_rows(ledger)
+    assert not semantic_policy.runtime_config(cfg)[1]
     assert _count(ledger, cfg)['targets'] == 0
     assert _cloud_pass(ledger)['done'] == 0
     assert not calls and _financial_rows(ledger) == evidence
     assert not ledger.artifacts('cloud_usage_reserve')
     with legacy_cloud_routes():
+        approved = approved_config(cfg)
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
         assert _count(ledger, cfg)['targets'] == 1 and not calls
         assert _cloud_pass(ledger)['done'] == 1
         source = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
@@ -109,21 +118,23 @@ def test_canonical_attention_does_not_estimate_a_fresh_dispatch_or_publish_compl
 @pytest.mark.parametrize('boundary', ['unreceipted', 'excluded'])
 def test_canonical_presence_never_grants_history_permission_or_project_scope(
         local_then_cloud, monkeypatch, tmp_path, local_raw, boundary):
-    with legacy_cloud_routes():
-        ledger, cfg, calls, projection, saved = _canonical_source(local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw)
+    ledger, cfg, calls, projection, saved = _canonical_source(local_then_cloud, monkeypatch, tmp_path, local_raw=local_raw)
     if boundary == 'unreceipted':
         with ledger.db:
             ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_history_scope'")
     else:
         cfg['cloud_llm']['exclude_project_ids'] = [1]
-        with legacy_cloud_routes():
-            approved = approved_config(cfg)  # Keep this a valid canonical config after its scope change.
-            cfg.clear()
-            cfg.update(approved)
-            assert not semantic_policy.runtime_config(cfg)[1]
+        approved = approved_config(cfg)  # Keep this a valid canonical config after its scope change.
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
     evidence = _financial_rows(ledger)
     assert _count(ledger, cfg)['targets'] == 0
     with legacy_cloud_routes():
+        approved = approved_config(cfg)  # Re-bind approval to the open-regime fingerprint.
+        cfg.clear()
+        cfg.update(approved)
+        assert not semantic_policy.runtime_config(cfg)[1]
         # The boundary itself, not the route gate, keeps the count at zero.
         assert _count(ledger, cfg)['targets'] == 0
     assert not calls and _financial_rows(ledger) == evidence
