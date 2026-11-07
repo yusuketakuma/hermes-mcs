@@ -2,8 +2,12 @@
 import attachment_followups
 import hashlib
 import json
+import math
 import os
+import sqlite3
 import time
+from contextlib import suppress
+from time import monotonic
 
 import initial_import_state
 from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
@@ -49,6 +53,34 @@ TERMINAL_BODY_STATES = ("full", "deleted")
 # (a fresh url from the server revives the row — see _save_attachments)
 _ATTACH_PERMANENT = frozenset({
     "download_too_large", "url_not_allowed", "download_empty"})
+
+
+def message_write_failure_diagnostic(value):
+    """Allow only fixed SQLite writer-reservation diagnostics, never exception text."""
+    if type(value) is not dict or value.get("phase") != "message_write_reserve":
+        return None
+    code = value.get("sqlite_errorcode")
+    code = code if type(code) is int and 0 < code <= 0x7fffffff else None
+    name = value.get("sqlite_errorname")
+    primary_names = ("ERROR", "INTERNAL", "PERM", "ABORT", "BUSY", "LOCKED",
+                     "NOMEM", "READONLY", "INTERRUPT", "IOERR", "CORRUPT",
+                     "NOTFOUND", "FULL", "CANTOPEN", "PROTOCOL", "EMPTY",
+                     "SCHEMA", "TOOBIG", "CONSTRAINT", "MISMATCH", "MISUSE",
+                     "NOLFS", "AUTH", "FORMAT", "RANGE", "NOTADB", "NOTICE", "WARNING")
+    if not (type(name) is str and code is not None
+            and any(name == "SQLITE_" + base or name.startswith("SQLITE_" + base + "_")
+                    for base in primary_names)
+            and getattr(sqlite3, name, None) == code):
+        name = None
+    return {
+        "phase": "message_write_reserve",
+        "sqlite_errorcode": code, "sqlite_errorname": name,
+        "transaction_open_before": (value.get("transaction_open_before")
+                                    if type(value.get("transaction_open_before")) is bool else None),
+        **{key: (value.get(key) if type(value.get(key)) in (int, float)
+                 and 0 <= value[key] <= 1e20 and math.isfinite(value[key]) else None)
+           for key in ("elapsed_s", "at")},
+    }
 
 
 class LedgerCaptureMixin:
@@ -496,7 +528,23 @@ class LedgerCaptureMixin:
         now = time.time()
         chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
         # A zero-row write reserves the writer without committing caller work.
-        self.db.execute("UPDATE messages SET message_id=message_id WHERE 0")
+        started = transaction_open = None
+        with suppress(Exception):
+            transaction_open = self.db.in_transaction
+            started = monotonic()
+        try:
+            self.db.execute("UPDATE messages SET message_id=message_id WHERE 0")
+        except sqlite3.Error as exc:
+            with suppress(Exception):  # Diagnostic failure must preserve the original exception.
+                exc._mcs_message_write_failure = message_write_failure_diagnostic({
+                    "phase": "message_write_reserve",
+                    "sqlite_errorcode": getattr(exc, "sqlite_errorcode", None),
+                    "sqlite_errorname": getattr(exc, "sqlite_errorname", None),
+                    "transaction_open_before": transaction_open,
+                    "elapsed_s": None if started is None else monotonic() - started,
+                    "at": time.time(),
+                })
+            raise
         existing = self.db.execute(
             "SELECT * FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()

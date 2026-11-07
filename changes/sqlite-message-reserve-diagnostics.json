@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "メッセージ保存のSQLiteエラーを固定項目で診断",
+  "summary": "メッセージ保存前の書込み権確保が失敗した際、SQLite定数コード、transaction開始状態、SQL所要時間と時刻だけを既存run結果に残し、原因の切り分けを可能にします。",
+  "upgrade": "設定変更は不要です。適用後に開始した実行から有効です。本番適用は別途承認が必要で、診断追加だけでは滞留や再発を解消しません。",
+  "details": [
+    "患者情報、識別子、本文、SQL文・引数、秘密値、自由文の例外メッセージは診断に保存しません。未確認項目はnullです。",
+    "元の例外を維持し、診断補助の失敗で元の失敗状態を隠しません。診断用のSQL・commit・retryは追加しません。",
+    "timeout、busy_timeout、予算、transaction所有権、commit/rollback、通知、既読化、snapshotの35秒予約と検証・公開条件は変更しません。"
+  ],
+  "refs": ["mcs/core/ledger.py", "mcs/core/ledger_capture.py", "mcs/ingest/run_check.py"]
+}

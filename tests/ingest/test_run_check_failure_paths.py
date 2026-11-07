@@ -278,3 +278,36 @@ def test_self_probe_stores_same_second_latest_post(tmp_path):
     assert result["new_messages"] == 1
     assert db.probe_marker(90) in (None, 101)
     db.close()
+
+
+@pytest.mark.parametrize('diagnostic_failure', [False, True])
+def test_sqlite_crash_exports_fixed_fields_without_exception_text(
+        tmp_path, monkeypatch, capsys, diagnostic_failure):
+    import json
+    import sqlite3
+
+    secret = 'SYNTHETIC_PATIENT_AND_TOKEN_NEVER_EXPORT'
+    failure = sqlite3.OperationalError(secret)
+    failure._mcs_message_write_failure = {
+        'phase': 'message_write_reserve', 'sqlite_errorcode': sqlite3.SQLITE_BUSY,
+        'sqlite_errorname': 'SQLITE_BUSY', 'transaction_open_before': False,
+        'elapsed_s': .01, 'at': 100., 'body': secret,
+    }
+    _tick_world(tmp_path, monkeypatch, failure, overdue=False)
+    if diagnostic_failure:
+        def broken(_value):
+            raise RuntimeError(secret)
+        monkeypatch.setattr(run_check, 'message_write_failure_diagnostic', broken)
+    assert run_check.main() == 1
+    output = capsys.readouterr().out
+    assert secret not in output
+    result = json.loads(output.splitlines()[-1])
+    assert result['ok'] is False and 'crash: OperationalError' in result['errors']
+    if diagnostic_failure:
+        assert result['sqlite_failure'] is None
+    else:
+        assert result['sqlite_failure'] == {
+            'phase': 'message_write_reserve', 'sqlite_errorcode': sqlite3.SQLITE_BUSY,
+            'sqlite_errorname': 'SQLITE_BUSY', 'transaction_open_before': False,
+            'elapsed_s': .01, 'at': 100.,
+        }

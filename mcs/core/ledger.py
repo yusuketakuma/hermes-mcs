@@ -37,6 +37,7 @@ from ledger_capture import (
     TERMINAL_BODY_STATES as TERMINAL_BODY_STATES,
     _ATTACH_PERMANENT as _ATTACH_PERMANENT,
     _patient_name_for_write as _patient_name_for_write,
+    message_write_failure_diagnostic as message_write_failure_diagnostic,
 )
 from ledger_semantic_sources import (
     LedgerSemanticSourcesMixin,

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "snapshot処理後のhealth観測時間を確保",
+  "summary": "watchdog付きの通常・drain実行でsnapshotが終了期限を使い切り、healthの件数観測が不明になる問題を抑えます。snapshotの締切をhealth SQL上限30秒と後処理余裕5秒だけ早めます。",
+  "upgrade": "適用後の新しい通常実行から有効です。設定変更は不要です。watchdogなしとcommands-onlyは従来どおりです。snapshotが以前より早く期限切れになる場合があります。5秒は設計余裕であり、無限のI/O停止を保証しません。",
+  "details": [
+    "healthの上限、watchdog、全体の期限、実行順、snapshotの検証・公開条件は変更しません。",
+    "snapshotが公開前に失敗した場合は既存snapshotとdirty状態を保持し、healthには実際の観測結果または不明状態を保存します。",
+    "モデル、取得範囲、通知、既読化、人承認条件は変更しません。"
+  ],
+  "refs": ["mcs/ingest/run_check.py"]
+}
