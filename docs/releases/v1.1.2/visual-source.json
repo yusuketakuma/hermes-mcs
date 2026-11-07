@@ -3,9 +3,9 @@
   "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
   "scope": "v1.1.2 の主要な流れ（添付OCR・患者コンテキスト専用クラウド・通知分離）。最終候補SHAの固定・受入証拠ではない。",
   "source_checkout_observation": {
-    "head": "b34eb4dda0224424ed215b0c6b6cb882e220c1d7",
+    "head": "6977b1954f5c9dfc1a4eedf431a3cc5e5edf01eb",
     "dirty": true,
-    "observed_at": "2026-11-07T08:10:14.000000+00:00",
+    "observed_at": "2026-11-07T08:24:20.000000+00:00",
     "release_sha_fixed": false
   },
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
@@ -17,17 +17,17 @@
   },
   "visual_check": {
     "png_rendered": true,
-    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補79件へ更新後）",
+    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補80件へ更新後）",
     "narrow_width_ok": true
   },
   "artifacts": [
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "9aa1a8d424835873da8f68a9349efe91daa4ca52b0b4dcacb41aa4f1532f7b00"
+      "sha256": "79dac3d3f069a7a67c5c268f469fa7b9caac48e83aadee481daa5bec3da9ba25"
     },
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "86c8d6d53b2a8aed861225b8e36352b13410525d9d5124072e9d17cdf9817fc0"
+      "sha256": "b4f0a6e8e0dc2ac9c8b1c19a6bc777dcaa546c8a87bff52847e396223bc22765"
     }
   ],
   "source_file_observations": [
@@ -54,7 +54,7 @@
     }
   ],
   "notes": [
-    "図は候補79件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
+    "図は候補80件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
     "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
     "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
   ]

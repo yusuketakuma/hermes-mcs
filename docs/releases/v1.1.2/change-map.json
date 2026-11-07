@@ -1,7 +1,7 @@
 {
   "status": "unpublished_preparation",
-  "scope": "v1.1.2 の変更記録79件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加）。最終候補SHAの固定・受入証拠ではない。",
-  "fragment_count": 79,
+  "scope": "v1.1.2 の変更記録80件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加＋恒久fixで1件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "fragment_count": 80,
   "records": [
     {
       "path": "changes/archive/1.1.2/attachment-medical-ocr-112.json",
@@ -429,6 +429,13 @@
       "title": "更新先の設定機能をコメントから誤認する問題を修正",
       "category": "fixed",
       "sha256": "62deeb857c6c93f06ebaeff0c0ab6cf35999608227f52310f612711bc0cfb5e2"
+    },
+    {
+      "path": "changes/archive/1.1.2/setup-entry-bootstrap-imports.json",
+      "id": "setup-entry-bootstrap-imports",
+      "title": "設定ツールの直接起動を修正",
+      "category": "fixed",
+      "sha256": "7e5a4b54184493bd8557ae32e9d2ee160481a57b1e81df82e9ff6b47df4ba928"
     },
     {
       "path": "changes/archive/1.1.2/shared-patient-activity-order.json",
