@@ -77,7 +77,11 @@ def test_wait_closes_only_the_stale_trial_descriptor(tmp_path, monkeypatch, caus
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     fresh = None
     try:
-        assert writer_lock.wait_run_lock(path, wait_s=1, expected_code_stamp=1, marker_path=str(marker)) is None
+        with writer_lock.capture_writer_refusal() as diagnostic:
+            assert writer_lock.wait_run_lock(path, wait_s=1, expected_code_stamp=1, marker_path=str(marker)) is None
+        assert diagnostic == {
+            'writer_reason': 'update_marker_present' if cause == 'marker' else 'source_generation_changed',
+            'writer_stage': 'update_restore_fence' if cause == 'marker' else 'generation_fence'}
         with pytest.raises(OSError) as error:
             os.fstat(opened[0])
         assert error.value.errno == errno.EBADF
@@ -94,6 +98,21 @@ def test_wait_closes_only_the_stale_trial_descriptor(tmp_path, monkeypatch, caus
             except OSError as error:
                 if error.errno != errno.EBADF:
                     raise
+
+
+def test_wait_expiry_reports_actual_lock_refusal_without_replacing_outer_capture(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(writer_lock.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(writer_lock.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    trials = []
+    monkeypatch.setattr(writer_lock, 'acquire_run_lock', lambda path: trials.append(path))
+    with writer_lock.capture_writer_refusal() as outer:
+        with writer_lock.capture_writer_refusal() as inner:
+            assert writer_lock.wait_run_lock(str(tmp_path / 'run.lock'), wait_s=1,
+                expected_code_stamp=1, marker_path=str(tmp_path / 'marker')) is None
+        assert inner == {'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock'}
+        assert outer['writer_reason'] == 'writer_refusal_unclassified'
+    assert trials and 1 <= clock[0] < 1.3
 
 
 

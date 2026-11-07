@@ -136,6 +136,25 @@ def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkey
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 1}
 
 
+def test_drain_reports_captured_writer_refusal_without_changing_counts(tmp_path, monkeypatch):
+    database = tmp_path / 'synthetic.db'
+    database.touch()
+    cfg = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
+    monkeypatch.setattr(mcs_ocr, 'DB', str(database))
+    monkeypatch.setattr(mcs_ocr, 'DATA', str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr, 'Ledger', lambda path: SimpleNamespace(close=lambda: None))
+
+    def drain(ledger, settings, generation, deadline, *, live_config):
+        assert mcs_ocr.writer_lock.wait_run_lock(str(tmp_path / 'run.lock'), wait_s=0,
+            expected_code_stamp=generation[1], marker_path=str(tmp_path / 'marker')) is None
+        return {'complete': 0, 'local_done': 0, 'local_deferred': 1}
+
+    monkeypatch.setattr(mcs_ocr, '_drain', drain)
+    assert mcs_ocr.run(cfg) == {'complete': 0, 'local_done': 0, 'local_deferred': 1,
+                              'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock'}
+
+
 @pytest.mark.parametrize("outcome", ["ready", "busy", "updated", "deadline", "cancelled"])
 def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkeypatch, outcome):
     database = tmp_path / "synthetic.db"

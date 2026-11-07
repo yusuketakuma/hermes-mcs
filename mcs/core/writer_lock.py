@@ -199,8 +199,12 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
         time.sleep(RUN_LOCK_POLL_S)
         fd = acquire_run_lock(path)
         if fd is not None:
-            if os.path.exists(marker_path) or code_stamp() != expected_code_stamp:
+            marked = os.path.exists(marker_path)
+            if marked or code_stamp() != expected_code_stamp:
+                record_writer_refusal("update_marker_present" if marked else "source_generation_changed",
+                                      "update_restore_fence" if marked else "generation_fence")
                 os.close(fd)
                 return None
             return fd
+    record_writer_refusal("run_lock_not_acquired", "write_lock")
     return None

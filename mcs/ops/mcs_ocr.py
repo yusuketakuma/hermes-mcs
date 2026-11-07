@@ -133,7 +133,10 @@ def run(cfg=None):
             ledger = Ledger(DB)
         finally:
             os.close(fd)
-        result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
+        with writer_lock.capture_writer_refusal() as diagnostic:
+            result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
+        if diagnostic['writer_reason'] != 'writer_refusal_unclassified':
+            result.update(diagnostic)
         if result.get('reason') != 'config_invalid' and (
                 result.get('complete', 0) or result.get('empty', 0) or result['local_done']):
             remaining = min(5, deadline - time.monotonic())
