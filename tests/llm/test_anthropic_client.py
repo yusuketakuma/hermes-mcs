@@ -175,6 +175,7 @@ def test_empty_signed_thinking_is_accepted_without_exposing_opaque_content(stop,
 
 
 def test_signed_thinking_is_not_saved_in_usage_records(cloud, monkeypatch):
+    import cloud_inference
     import cloud_policy
     from test_semantic_cloud import rows
 
@@ -191,14 +192,15 @@ def test_signed_thinking_is_not_saved_in_usage_records(cloud, monkeypatch):
         return 200, {}, json.dumps(_reply(content=content)).encode()
 
     monkeypatch.setattr(a.AnthropicClient, "request", request)
-    client = a.AnthropicClient("synthetic")
-    result = client.complete(
-        "synthetic", deadline=time.monotonic() + 10, max_tokens=100,
-        reserve_fn=cloud_policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic"),
-        after_result=lambda reservation, meta, **_answer: cloud_policy.record_result(ledger, reservation, meta))
+    deadline = time.monotonic() + 10
+    unit = cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=1,
+        unit_key="synthetic", deadline=deadline, current=lambda: True,
+        dispatch=lambda call, **_kwargs: call())
+    result = unit("synthetic", deadline=deadline, max_tokens=100)
     reserves = rows(ledger, "cloud_usage_reserve")
     results = rows(ledger, "cloud_usage_result")
     assert calls == [True] and len(reserves) == len(results) == 1
+    assert json.loads(reserves[0]["meta"])["route"] == "patient_context"
     assert result["text"] == '{"synthetic":true}' and result["finish_reason"] == "stop"
     saved = json.loads(results[0]["meta"])
     assert saved["error_kind"] is None and saved["usage"] == result["usage"] and float(saved["cost_usd"]) > 0
@@ -514,28 +516,19 @@ def test_retry_wait_follows_settlement_and_preserves_send_guards(monkeypatch, ou
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai"])
-def test_semantic_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_path, monkeypatch, provider):
+def test_patient_context_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_path, monkeypatch, provider):
     import os
     import subprocess
     import sys
     import cloud_policy
     import extract_llm
     import openai_client
-    import semantic_transport
     import writer_lock
     from test_openai_client import response
     from test_semantic_cloud import rows
 
     import cloud_inference
-    original_call = cloud_inference.CloudInferenceUnit.__call__
-    def checked_call(self, *args, **kwargs):
-        try:
-            return original_call(self, *args, **kwargs)
-        except cloud_inference.CloudFallback as error:
-            raise AssertionError("synthetic retry unit unexpectedly failed") from error
-    monkeypatch.setattr(cloud_inference.CloudInferenceUnit, '__call__', checked_call)
-
-    led, cfg, job, _ = cloud
+    led, cfg, _job, _ = cloud
     cfg["cloud_llm"]["provider"] = provider
     monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
     monkeypatch.setattr(extract_llm_engine, 'HOME', extract_llm.HOME)
@@ -570,7 +563,7 @@ def test_semantic_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_pa
         events.append("post")
         if events == ["post"]:
             return 429, {"Retry-After": "2"}, b""
-        reply = _reply() if provider == "anthropic" else response()
+        reply = _reply() if provider == "anthropic" else response(model=unit.model)
         return 200, {}, json.dumps(reply).encode()
 
     def wait(delay):
@@ -599,10 +592,13 @@ finally:
     monkeypatch.setattr(cloud_policy, "record_result", settle)
     monkeypatch.setattr(extract_llm.time, "sleep", wait)
     try:
-        with semantic_transport.backlog_inference(led, cfg, job, deadline, lambda: True, transport) as chat:
-            assert json.loads(chat("Synthetic JSON:")) == {"synthetic": True}
+        unit = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
+            unit_key="synthetic-retry", deadline=deadline, current=lambda: True,
+            dispatch=lambda call, **_kwargs: call(), transport=transport)
+        assert json.loads(unit("Synthetic JSON:", deadline=deadline, max_tokens=100)["text"]) == {"synthetic": True}
         assert events == ["post", "settle", "wait", "post", "settle"]
         assert len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 2
+        assert all(json.loads(row["meta"])["route"] == "patient_context" for row in rows(led, "cloud_usage_reserve"))
         assert_locked()
     finally:
         os.close(lock_fd)

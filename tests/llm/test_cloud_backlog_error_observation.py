@@ -8,6 +8,7 @@ import pytest
 
 import cloud_backlog as backlog
 from test_cloud_backlog import carry_worker as carry_worker
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.mark.parametrize("code", sorted(backlog._RUNTIME_ERROR_CODES))
@@ -129,7 +130,9 @@ def test_all_worker_exception_events_share_fixed_diagnostics_without_changing_ca
     monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
-    backlog.worker(991)
+    # Open only this injected dormant pass; live closed-worker contracts stay separate.
+    with legacy_cloud_routes():
+        backlog.worker(991)
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     errors = [record for record in records if record["event"] in (
         "cloud_backlog_error", "cloud_carry_settle_error")]
