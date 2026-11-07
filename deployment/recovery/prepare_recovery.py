@@ -49,11 +49,6 @@ def _manifest(raw, entrypoint):
     return pins
 
 
-def support_manifest(entrypoint):
-    """Read only literal companion digests without importing the recovery tool."""
-    return _manifest(_regular(entrypoint), entrypoint)
-
-
 def _sync_directory(path):
     fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY)
     try:
