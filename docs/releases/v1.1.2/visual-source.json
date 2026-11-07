@@ -2,16 +2,16 @@
   "artifacts": [
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.svg",
-      "sha256": "3b23bafa4c98b9c4cdbbf7798f9a32ff448a87f410c28ea2856701e46da0d977"
+      "sha256": "f0fa1427c16374f07d3f29d21c66caeeb332324296a9ee6389ef9d2b3f10dd10"
     },
     {
       "path": "docs/releases/v1.1.2/cloud-continuity.png",
-      "sha256": "f9afbe44837fc95350ff9e35d52fd410743d295c0c4901c20151672ea8585c49"
+      "sha256": "6404f22c984b921f130607ffd46b74fa2853722b4b620f1843be7b139db003ba"
     }
   ],
   "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
   "notes": [
-    "図は候補84件の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
+    "図はv1.1.2の主要な流れを説明する合成図。実画面・測定結果・患者データを含まない。",
     "GitHub Release への画像添付と外部表示は未実施。リポジトリ内相対参照を保持。",
     "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。"
   ],
@@ -25,8 +25,8 @@
   "source": "docs/releases/v1.1.2/cloud-continuity.svg",
   "source_checkout_observation": {
     "dirty": true,
-    "head": "35e5630d901642905f29690958bd9cb438136b36",
-    "observed_at": "2026-11-07T10:10:43.558230+00:00",
+    "head": "1a2db2754719ee9144640cc02e72fa0a5b32f904",
+    "observed_at": "2026-11-07T10:55:05.359813+00:00",
     "release_sha_fixed": false
   },
   "source_file_observations": [
@@ -41,7 +41,7 @@
     },
     {
       "path": "mcs/extract/attachment_ocr.py",
-      "sha256": "d2b2e7b744eac35f213c7cb56138060841a439145efbf8beaf449acf56e33d18"
+      "sha256": "52b29573d76a18e5e7c145600cc7abc0435732fec12cae3f7afcb5d5748a0817"
     },
     {
       "path": "mcs/notify/notify_parts.py",
@@ -57,7 +57,7 @@
     },
     {
       "path": "mcs/ops/mcs_ocr.py",
-      "sha256": "b149444d7094f5b46987555ae1ed225c58502ca59942137492d9b2f3f6c474cd"
+      "sha256": "9213d29795042376ebbae2074474e193a75254ad81985bf66b825dbde9333522"
     },
     {
       "path": "adapters/common/spec.py",
@@ -70,7 +70,7 @@
   ],
   "status": "unpublished_preparation",
   "visual_check": {
-    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・候補84件へ更新後）",
+    "checked": "文字欠落・重なり・余白を390px幅で目視確認（2026-11-07・件数に依存しない説明へ更新後）",
     "narrow_width_ok": true,
     "png_rendered": true
   }

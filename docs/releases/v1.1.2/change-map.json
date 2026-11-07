@@ -1,5 +1,5 @@
 {
-  "fragment_count": 84,
+  "fragment_count": 85,
   "records": [
     {
       "category": "added",
@@ -297,6 +297,13 @@
     },
     {
       "category": "fixed",
+      "id": "ocr-save-wait-retry",
+      "path": "changes/archive/1.1.2/ocr-save-wait-retry.json",
+      "sha256": "677228ddf35d6c6cf9e704fbd77127c8fb67d621154332ec48cb23a67459d1ac",
+      "title": "文字起こしの保存が保存ロックの競合で先送りになると推論をやり直す問題を修正"
+    },
+    {
+      "category": "fixed",
       "id": "ocr-source-links-20261105",
       "path": "changes/archive/1.1.2/ocr-source-links-20261105.json",
       "sha256": "a3839b3c4dfafef1ba082dfbfe6b592a50ab56915ce8d98153d8252650e81154",
@@ -590,6 +597,6 @@
       "title": "添付OCRをYomitoku 0.16.1へ更新"
     }
   ],
-  "scope": "v1.1.2 の変更記録84件（release_notes.py build で changes/ から changes/archive/1.1.2/ へ移動済み＋後続mergeで3件追加＋恒久fixで3件追加）。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録85件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
