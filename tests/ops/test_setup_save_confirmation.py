@@ -97,8 +97,18 @@ def test_save_confirmation_shows_effective_provider_defaults_without_pinning(mon
 
 
 def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, tmp_path):
-    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "trickle_pages": 7}
-    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C12345678",
+           "notify_system_target": "slack:C87654321", "trickle_pages": 7,
+           "notify": {"interactive": "off", "slack": {
+               "profile": "synthetic", "application_id": "A12345678", "team_id": "T12345678"}}}
+    prompts = set()
+
+    def keep_once(prompt):
+        assert prompt not in prompts, "wizard repeated a prompt without a usable default"
+        prompts.add(prompt)
+        return ""
+
+    monkeypatch.setattr("builtins.input", keep_once)
     monkeypatch.setattr(setup_wizard, "wizard_drug_map", lambda *a, **k: pytest.fail("dictionary write"))
     step = setup_wizard.wizard(cfg)
     assert type(step) is int and step > 1
