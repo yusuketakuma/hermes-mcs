@@ -1185,7 +1185,7 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
         'provider':'anthropic', 'model':cloud_policy.MODEL, 'effort':'low'})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
-                              source_sig=plan.source_signature(source))
+                              source_sig=plan.source_signature(source, legacy=True))
     fixture['ref']['candidate_key'] = initial['candidate_key']
     _reseal_context(store, fixture)
     identity, pages = semantic_audit.patient_source_quality_identity(source, facts, occurrence,

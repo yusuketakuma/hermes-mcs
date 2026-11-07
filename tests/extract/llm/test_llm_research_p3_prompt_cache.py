@@ -88,7 +88,8 @@ def test_context_refresh_prompts_lead_with_the_fixed_instruction(monkeypatch):
     fact = {"id": "f1", "source": "s", "project_id": 1, "message_id": 1, "category": "living",
             "text": "合成の背景", "posted_at": POSTED, "subject": "patient"}
     for fn, args in ((patient_context_quality_controller._summary, ({}, [fact], None, lambda: True)),
-                     (patient_context_quality_controller._scan, ({}, {"body_text": "合成の本文", "items": []},
+                     (patient_context_quality_controller._scan, ({}, {"message_id": 1, "project_id": 1,
+                                              "source": "chat", "body_text": "合成の本文", "items": []},
                                               {}, "n1", None, lambda: True))):
         try:
             fn(*args)
