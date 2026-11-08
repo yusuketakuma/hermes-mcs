@@ -125,20 +125,26 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.writes, [])
 
     def test_created_at_drift_after_patch_is_accepted(self):
-        # GitHub derives created_at from the target tag's date, so a PATCH that
-        # re-resolves tag_name may legitimately return a different value.
+        # created_at carries target-related timestamp metadata rather than
+        # release identity, so the post-write comparison excludes it. Every
+        # other identity field is still checked.
         drifted = "2099-01-01T00:00:00Z"
 
-        def request(endpoint, payload=None):
-            if payload is not None and "?" not in endpoint:
-                self.record["created_at"] = drifted
-            return self.request(endpoint, payload)
+        for draft, published_at in ((False, "b"), (True, None)):
+            with self.subTest(draft=draft):
+                self.setUp()
+                self.record.update(draft=draft, published_at=published_at)
 
-        result = sync.synchronize(self.text, request, apply=True)
-        self.assertEqual(result["updated"], ["v1.0.0"])
-        self.assertEqual(self.record["created_at"], drifted)
-        self.assertEqual(sync.synchronize(self.text, request, apply=True)["updated"], [])
-        self.assertEqual(len(self.writes), 1)
+                def request(endpoint, payload=None):
+                    if payload is not None and "?" not in endpoint:
+                        self.record["created_at"] = drifted
+                    return self.request(endpoint, payload)
+
+                result = sync.synchronize(self.text, request, apply=True)
+                self.assertEqual(result["updated"], ["v1.0.0"])
+                self.assertEqual(self.record["created_at"], drifted)
+                self.assertEqual(sync.synchronize(self.text, request, apply=True)["updated"], [])
+                self.assertEqual(len(self.writes), 1)
 
     def test_created_at_drift_before_patch_is_rejected(self):
         def request(endpoint, payload=None):
