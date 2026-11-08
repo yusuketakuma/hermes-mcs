@@ -104,8 +104,11 @@ def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
         except (TypeError, ValueError):
             valid = False
         if not valid:
+            safe_request_id = (request_id if type(request_id) is str
+                               and re.fullmatch(r"[0-9a-f]{32}", request_id)
+                               is not None else None)
             _gateway_restart_report(
-                data, "failed", request_id=request_id,
+                data, "failed", request_id=safe_request_id,
                 error="gateway_restart_auto_args_invalid")
             return 1
         try:
