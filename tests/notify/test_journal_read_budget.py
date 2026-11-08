@@ -77,9 +77,15 @@ def test_invalid_deadline_is_rejected_before_reading(deadline):
         notify_journal.scan_journals({}, deadline=deadline)
 
 
-def test_evidence_module_import_preserves_the_core_only_bootstrap():
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_evidence_module_import_preserves_the_core_only_bootstrap(tmp_path, duplicate):
     root = Path(__file__).resolve().parents[2]
-    code = '''import sys,builtins
+    code = r'''import sys,builtins,json
+from pathlib import Path
+def offline(event,args):
+    if event in ("socket.connect","socket.getaddrinfo","subprocess.Popen","os.system"):
+        raise AssertionError("external_effect_forbidden")
+sys.addaudithook(offline)
 sys.path.insert(0,sys.argv[1])
 import _mcs_path
 original=builtins.__import__
@@ -88,9 +94,37 @@ def checked(name,*args,**kwargs):
         raise ImportError("adapter_not_in_candidate_bootstrap")
     return original(name,*args,**kwargs)
 builtins.__import__=checked
-import notify_journal
+import notify_journal,notify_spool,notify_reconcile
+from ledger import Ledger
 assert "started" in notify_journal.PHASES
+base=Path(sys.argv[2])
+notify_spool.ensure_dirs(str(base))
+dirs=notify_spool.notify_dirs(str(base))
+witness=Path(dirs["slack_state"])/"journal-synthetic.jsonl"
+row={"attempt_id":"synthetic-attempt","delivery_id":"123e4567-e89b-42d3-a456-426614174000","phase":"begin"}
+raw=(json.dumps(row)+"\n").encode()
+if sys.argv[3] == "1":
+    raw+=b'{"attempt_id":"synthetic-attempt","delivery_id":"123e4567-e89b-42d3-a456-426614174000","phase":"started","phase":"begin"}\n'
+else:
+    raw+=(json.dumps({**row,"phase":"started"})+"\n").encode()
+witness.write_bytes(raw)
+attempts,incomplete=notify_journal.scan_journals(dirs)
+assert incomplete == (sys.argv[3] == "1")
+assert attempts["synthetic-attempt"]["tainted"] == incomplete
+led=Ledger(str(base/"ledger.db"))
+try:
+    notify_spool.mark_restored(str(base),by="synthetic-test",now=1000)
+    report=notify_reconcile.reconcile_after_restore(led,{},now=1001)
+    assert report["journal_incomplete"] == incomplete
+    assert report["counts"].get("not_sent",0) == 0
+    assert report["counts"]["held"] == 1
+    assert bool(notify_spool.restore_pending(str(base))) == incomplete
+    assert led.db.execute("SELECT COUNT(*) FROM notification_restore_holds").fetchone()[0] == 1
+    assert witness.read_bytes() == raw
+finally:
+    led.close()
 '''
-    result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(root / "mcs")],
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(root / "mcs"),
+                             str(tmp_path / "data"), str(int(duplicate))],
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr

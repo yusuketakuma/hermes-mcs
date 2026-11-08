@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import json
 import math
 import time
 from notify_scope import SUPPORTED_TRANSPORTS
+from mcs_util import unique_pairs
 
 PHASES = ("claimed", "begin", "granted", "denied", "started", "result", "receipt")
 
@@ -19,16 +21,13 @@ def _journal_dirs(dirs: dict) -> list:
 
 def scan_journals(dirs: dict, *, deadline=None, max_bytes=None, max_rows=None) -> tuple[dict, bool]:
     """attempt_id -> {"rows": [...], "tainted": bool}, across every
-    per-worker journal file in both transport state dirs.
+    per-worker journal file in all transport state dirs.
 
     A file with an unparsable non-empty line is tainted: a torn tail
     is survivable, but a corrupt middle line could hide a 'started' or
     'result' row — absence-of-evidence verdicts are untrustworthy for
     any attempt recorded in it.
     """
-    # Candidate bootstrap contains mcs/, not the transport adapters.
-    from adapters.common.journal import parse_record
-
     if any(value is not None and (type(value) is not int or value <= 0)
            for value in (max_bytes, max_rows)) or (deadline is not None and (
                type(deadline) not in (int, float)
@@ -70,7 +69,7 @@ def scan_journals(dirs: dict, *, deadline=None, max_bytes=None, max_rows=None) -
                     if not terminated:
                         tainted = True
                     try:
-                        row = parse_record(raw)
+                        row = json.loads(raw, object_pairs_hook=unique_pairs)
                     except (ValueError, RecursionError):
                         tainted = True
                         continue
