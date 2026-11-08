@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "監視アラートの対処手順と照会コードを分かりやすく改善",
+  "summary": "MCS監視のアラートで、問題・影響・原因と対処・照会コードが一目で分かる形になりました。ディスク不足の警告は問題と影響と対処を個別に示し、開発元への連絡には共有用の doctor --share を案内します。再開・再起動のコマンドは実行できる完全な形で表示され、LINE WORKS アダプターの再起動方法は Mac と Linux で正しいコマンドだけが出ます。",
+  "upgrade": "追加操作は不要です。監視メッセージの文面だけが変わり、動作条件は変わりません。",
+  "details": [
+    "ディスク不足の警告を、見出し・影響・原因と対処・照会コード・コードの構成に変更",
+    "状態異常の警告にも照会コード（MCS-HLT-接頭辞）を追加。未分類の理由は MCS-HLT-UNKNOWN",
+    "開発元への診断共有は doctor --share、通知待ちの確認は doctor の完全なコマンドを表示",
+    "cloud-llm resume は python3 mcs/ops/mcs_setup.py を含む完全な形で表示",
+    "LINE WORKS アダプター再起動は macOS は launchctl、Linux は systemctl --user のサービス名で表示",
+    "分類不能な理由の生コードは照会コードに出さず UNKNOWN に丸める（従来どおり本文にも出さない）"
+  ],
+  "refs": ["mcs/ingest/health_watch.py", "mcs/ingest/collection_diagnostics.py"]
+}

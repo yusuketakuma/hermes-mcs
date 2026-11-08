@@ -294,3 +294,8 @@ def test_command_errors_never_advise_an_unconditional_retry(error):
     assert category == "command"
     todo = diagnostics.CATEGORIES[category][4]
     assert "反映されていないと確認できた場合だけ" in todo and "確認できない場合はやり直さず" in todo
+
+
+def test_developer_contact_guidance_uses_the_share_safe_doctor_output():
+    for category in ("schema", "other"):
+        assert "doctor --share" in diagnostics.CATEGORIES[category][4]

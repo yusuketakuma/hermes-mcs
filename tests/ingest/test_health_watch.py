@@ -10,6 +10,7 @@ health write, never the watcher's own assumption.
 import os
 import safe_io
 import json
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -411,7 +412,7 @@ def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
                             "disk_free_mb": 800})
     health_watch.main(["--home", str(tmp_path), "--now", "5700",
                        "--config", str(tmp_path / "none.json")])
-    assert "空き容量不足: 残り 800 MB" in capsys.readouterr().out
+    assert "（残り 800 MB）" in capsys.readouterr().out
 
 
 
@@ -834,7 +835,13 @@ def test_healthy_status_cannot_be_rendered_as_legacy_alert_but_low_disk_remains(
     report = {"status": "ok", "alert": True, "disk_alert": True, "disk_low": False}
     assert health_watch._alert_lines(report) == []
     assert health_watch._alert_lines({**report, "disk_low": True, "disk_free_mb": 123}) == [
-        "空き容量不足: 残り 123 MB"]
+        "🟠 MCS監視: 空き容量不足",
+        "影響: 保存に遅れや不具合があります。",
+        "原因と対処:",
+        "・ディスクの空き容量が不足しています（残り 123 MB）",
+        "　→ 不要なファイルを削除するか保存先を広げる",
+        "照会コード: MCS-HLT-DISK-LOW",
+        "コード: disk_low"]
 
 
 def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers(
@@ -845,7 +852,14 @@ def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers
     health_watch.evaluate(str(tmp_path), 1000, cfg={})
     _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": True, "disk_free_mb": 123})
     assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1061), {}) == 0
-    assert calls == ["空き容量不足: 残り 123 MB"]
+    assert calls == ["\n".join([
+        "🟠 MCS監視: 空き容量不足",
+        "影響: 保存に遅れや不具合があります。",
+        "原因と対処:",
+        "・ディスクの空き容量が不足しています（残り 123 MB）",
+        "　→ 不要なファイルを削除するか保存先を広げる",
+        "照会コード: MCS-HLT-DISK-LOW",
+        "コード: disk_low"])]
     assert capsys.readouterr().out == ""
 
 
@@ -980,7 +994,7 @@ def test_disk_alert_never_echoes_a_non_numeric_producer_field(tmp_path, capsys):
                        "--config", str(tmp_path / "none.json")])
     output = capsys.readouterr().out
     assert "synthetic private free text" not in output
-    assert "空き容量不足: 残り 不明" in output
+    assert "残り 不明" in output
 
 
 def test_alert_text_is_japanese_with_jst_times():
@@ -994,8 +1008,9 @@ def test_alert_text_is_japanese_with_jst_times():
                      "・収集または収集後の処理でエラーがありました",
                      "　→ 次回の収集で再試行されます。続く場合は data/mcs.log を確認",
                      "・送信待ちの通知があります",
-                     "　→ doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
+                     "　→ python3 mcs/ops/mcs_setup.py doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
                      "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
+                     "照会コード: MCS-HLT-STAGE-ERRORS,MCS-HLT-NOTIFICATION-PENDING",
                      "コード: degraded stage_errors,notification_pending"]
 
 
@@ -1070,3 +1085,49 @@ def test_standalone_check_stall_names_unified_log():
         "health_at": 3600}))
     assert "data/mcs.log を確認" in text
     assert "data/run_check.log" not in text
+
+
+def test_disk_only_alert_explains_problem_impact_action_and_query_code():
+    report = {"status": "ok", "alert": False, "disk_alert": True, "disk_low": True,
+              "disk_free_mb": 123, "run_status": "ok", "health_at": 3600}
+    lines = health_watch._alert_lines(report)
+    assert lines[0] == "🟠 MCS監視: 空き容量不足"
+    assert lines[1].startswith("影響: ") and "保存" in lines[1]
+    assert "・ディスクの空き容量が不足しています（残り 123 MB）" in lines
+    assert "　→ 不要なファイルを削除するか保存先を広げる" in lines
+    assert "照会コード: MCS-HLT-DISK-LOW" in lines
+    assert lines[-1] == "コード: disk_low"
+
+
+def test_query_codes_come_only_from_whitelisted_reasons():
+    report = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+              "state_reasons": ["disk_low", "synthetic_private_reason"], "health_at": 3600}
+    text = "\n".join(health_watch._alert_lines(report))
+    assert "照会コード: MCS-HLT-DISK-LOW,MCS-HLT-UNKNOWN" in text
+    assert "synthetic_private_reason" not in text
+    empty = "\n".join(health_watch._alert_lines(
+        {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+         "state_reasons": [], "health_at": 3600}))
+    assert "照会コード: MCS-HLT-UNKNOWN" in empty
+
+
+def test_cloud_resume_and_doctor_guidance_are_complete_existing_commands():
+    text = "\n".join(health_watch._reason_rows({}, ["cloud_llm_auth_error"]))
+    assert "python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '確認理由'" in text
+    pending = "\n".join(health_watch._reason_rows({}, ["notification_pending"]))
+    assert "python3 mcs/ops/mcs_setup.py doctor" in pending
+
+
+@pytest.mark.parametrize(("platform", "present", "absent"), [
+    ("darwin", "launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks", "systemctl --user restart"),
+    ("linux", "systemctl --user restart hermes-mcs-lineworks.service", "launchctl kickstart"),
+    ("freebsd", None, None),
+])
+def test_lineworks_restart_guidance_follows_the_host_os(monkeypatch, platform, present, absent):
+    monkeypatch.setattr(sys, "platform", platform)
+    text = "\n".join(health_watch._reason_rows(
+        {"status": "degraded", "notify_transport": "lineworks"}, ["worker_start_failed"]))
+    if present:
+        assert present in text and absent not in text
+    else:
+        assert "ai.mcs.lineworks" in text and "hermes-mcs-lineworks.service" in text

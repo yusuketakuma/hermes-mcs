@@ -50,7 +50,7 @@ def test_cloud_stop_is_visible_and_human_reset_clears_it(db, monkeypatch, kind):
     semantic_runtime.record_circuit_result(db, AnthropicError(kind), kind="cloud_circuit")
     reason = "cloud_llm_" + kind
     assert health_report.backlog_stalls(db.db, CFG, time.time()) == [reason]
-    assert all(health_watch._REASON_JA[reason])
+    assert all(health_watch._REASON_JA.get(reason) or health_watch._CLOUD_REASON_JA.get(reason))
     semantic_runtime.record_circuit_result(db, None, kind="cloud_circuit")
     assert health_report.cloud_stop_reason(db.db, CFG) == kind
     assert health_report.cloud_stop_reason(db.db, {}) is None   # unreadable config: the route is off

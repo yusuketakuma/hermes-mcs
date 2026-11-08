@@ -64,7 +64,8 @@ def test_provider_context_follows_transport_specific_action(monkeypatch, mode):
         expected = "独立実行の合成対処"
     else:
         report["notify_transport"] = "lineworks"
-        monkeypatch.setitem(health_watch._LINEWORKS_ACTION, reason, "LINE WORKSの合成対処")
+        monkeypatch.setattr(health_watch, "_lineworks_actions",
+                            lambda: {reason: "LINE WORKSの合成対処"})
         expected = "LINE WORKSの合成対処"
     text = "\n".join(health_watch._reason_rows(report, [reason]))
     assert expected in text
