@@ -25,7 +25,9 @@ def test_new_journal_segment_is_owner_only(tmp_path):
     assert len(journal.scan(str(tmp_path))["a1"]) == 2
 
 
-def test_journal_compaction_drops_only_settled_pre_backup_attempts(tmp_path):
+@pytest.mark.parametrize("damaged", [False, True])
+def test_journal_compaction_drops_only_settled_pre_backup_attempts(
+        tmp_path, damaged):
     import time as _time
     w, reg, _ = _mkworker(tmp_path)
     state = _state(tmp_path)
@@ -44,26 +46,37 @@ def test_journal_compaction_drops_only_settled_pre_backup_attempts(tmp_path):
     _settled(state, "w0", "a5" * 8, ids["claimed"], old)
     _settled(state, "w0", "a6" * 8, ids["pending"], old)
     _settled(state, "w9", "a7" * 8, ids["foreign"], old, channel_id="99")
-    _settled(state, "w8", "a8" * 8, ids["done"] + "x", old)
-    with (state / "journal-w8.jsonl").open("a") as stream:
-        stream.write("{torn\n")
+    if damaged:
+        _settled(state, "w8", "a8" * 8, ids["done"] + "x", old)
+        with (state / "journal-w8.jsonl").open("a") as stream:
+            stream.write("{torn\n")
     reg.put_parts_done(ids["done"])
     reg.claim(ids["claimed"], {"attempt_id": "zz", "phase": "settled"})
     pending = dict(_sealed(_spec(_chunks(1))), delivery_id=ids["pending"])
     _publish_spec(tmp_path, pending)             # parts not yet done
     before = journal.scan(str(state))
+    before_bytes = {p.name: p.read_bytes()
+                    for p in state.glob("journal-*.jsonl")}
 
-    # no restorable backup set -> nothing is pruned
+    # no backup yet: the 90-day fallback horizon keeps these 5-day-old
+    # rows, so nothing is pruned regardless of file damage
     asyncio.run(w.maintain_journal(rotate=True))
     assert journal.scan(str(state)) == before
 
     _backup(tmp_path, now - 86400)
     asyncio.run(w.maintain_journal(rotate=True))
     after = journal.scan(str(state))
-    assert "a1" * 8 not in after
-    assert set(before) - set(after) == {"a1" * 8}
-    assert after["a3" * 8] == before["a3" * 8]
-    assert (state / "journal-w8.jsonl").read_text().endswith("{torn\n")
+    if damaged:
+        # an unreadable row can hide another file's attempt membership:
+        # the whole pass drops nothing and every file stays byte-for-byte
+        assert after == before
+        assert {p.name: p.read_bytes()
+                for p in state.glob("journal-*.jsonl")} == before_bytes
+        assert (state / "journal-w8.jsonl").read_text().endswith("{torn\n")
+    else:
+        assert "a1" * 8 not in after
+        assert set(before) - set(after) == {"a1" * 8}
+        assert after["a3" * 8] == before["a3" * 8]
     # the recorded crash-recovery classification is unchanged
     assert journal.unfinished(after).keys() == journal.unfinished(before).keys()
     assert journal.unreported(after).keys() == journal.unreported(before).keys()

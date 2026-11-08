@@ -850,9 +850,14 @@ def test_part_dedupe_view_matches_full_scan_through_crash_and_compaction(
                             "part_id": "body:0004", "result": "delivered",
                             "remote_id": "1"}).encode())
     deliver(w, 4)
-    # compaction behind the cache's back (no invalidate): w8 rewritten
-    journal.compact(str(state), active="", file_ok=lambda rows: True,
-                    prunable=lambda a, rows: a == "c1" * 8)
+    # compaction behind the cache's back (no invalidate): the tainted
+    # w0 file aborts the whole pass, so w8 is not rewritten either
+    before_bytes = {p.name: p.read_bytes()
+                    for p in state.glob("journal-*.jsonl")}
+    assert journal.compact(str(state), active="", file_ok=lambda rows: True,
+                           prunable=lambda a, rows: a == "c1" * 8) == 0
+    assert {p.name: p.read_bytes()
+            for p in state.glob("journal-*.jsonl")} == before_bytes
     deliver(w, 5)
     with (state / "journal-w0.jsonl").open("ab") as f:
         f.write(b"\n{torn")
@@ -862,20 +867,24 @@ def test_part_dedupe_view_matches_full_scan_through_crash_and_compaction(
     deliver(w2, 2)
     deliver(w2, 3)
     deliver(w2, 2)                  # repeated resume: nothing left to do
-    # in-worker rotation + compaction of every settled closed file (a
-    # parts_done delivery is never resumed again, so its rows may go)
+    # in-worker rotation still runs, but compaction keeps every closed
+    # file byte-for-byte while journal-w0 stays tainted
     _backup(tmp_path, _time.time() + 3 * 86400)
     for i in (1, 2, 3, 4, 5):
         reg.put_parts_done(_did(i))
+    before_bytes = {p.name: p.read_bytes()
+                    for p in state.glob("journal-*.jsonl")}
     asyncio.run(w.maintain_journal())
     assert w._segment >= 1
+    assert {p.name: p.read_bytes()
+            for p in state.glob("journal-*.jsonl")} == before_bytes
     deliver(w, 6)                   # the old worker's cache, stale state
 
     assert seen["drive"] == 9 and seen["append"] > 50
     _same_as_full_scan(w._jview.refresh(), state)
     rows = journal.scan(str(state))
-    assert "c1" * 8 not in rows and "c3" * 8 in rows
-    assert "c2" * 8 not in rows              # in-worker compaction ran
+    assert "c1" * 8 in rows and "c3" * 8 in rows
+    assert "c2" * 8 in rows               # tainted file kept compaction off
     assert starts and set(starts.values()) == {1}      # never twice
     assert aid(2, "body:0004") not in starts     # proven by the tail row
     unknown = rows[aid(3, "body:0002")]
