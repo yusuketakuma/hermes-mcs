@@ -1,99 +1,111 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><title>cloud-continuity-v112-detailed</title></head><body>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 3944" width="780" height="3944" role="img" aria-labelledby="cloud-continuity-v112-detailed-title cloud-continuity-v112-detailed-desc" font-family="Hiragino Kaku Gothic ProN, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 4326" width="780" height="4326" role="img" aria-labelledby="cloud-continuity-v112-detailed-title cloud-continuity-v112-detailed-desc" font-family="Hiragino Kaku Gothic ProN, sans-serif">
 <title id="cloud-continuity-v112-detailed-title">v1.1.2 MCSの原文から患者情報・検索・通知までの流れ（詳細）</title>
-<desc id="cloud-continuity-v112-detailed-desc">MCSの投稿・返信・添付を出典と原文版つきで保存し、画像・PDFは任意でローカルOCR、個別ローカル抽出と品質確認のあと採用できる資料集合を固定します。患者contextは現在の設定で決まる実行先で、Bの全区間点検、Cの根拠照合、Aの項目・順序選択、品質確認・有限修復・再監査の順に進みます。採用直前と閲覧時に再照合して本人向け患者情報へ渡します。検索・原資料リンク・通知は保存直後からcontext完成を待たずに使えます。Jevは設定次第の別経路の外部監査です。送信結果不明は履歴を保持し自動再送やlocal置換をしません。合成の説明図で、実画面・測定値・患者データではありません。</desc>
+<desc id="cloud-continuity-v112-detailed-desc">MCSの投稿・返信・添付を出典と原文版つきで保存します。画像・PDFは任意でローカルOCRし、本文と添付なし・OCR無効の資料はOCRを通らずに個別ローカル抽出と品質確認へ進み、採用できる資料集合を固定します。患者contextは現在の設定で決まる実行先で、Bの全区間点検、Cの根拠照合、Aの項目・順序選択、必要な品質確認・有限修復・再監査を経て、9の採用直前と閲覧時の再照合から本人向け患者情報へ渡します。検索・原資料リンク・通知は1の保存から独立した経路でcontextの完成を待ちません。Jevは設定次第の別経路の外部監査で主線の通過先ではありません。番号はデータ依存の順で、処理は複数の周回で進みます。送信結果不明は履歴を保持し自動再送やlocal置換をしません。合成の説明図で、実画面・測定値・患者データではありません。</desc>
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
-<rect width="780" height="3944" fill="#f6f4ef"/>
+<rect width="780" height="4326" fill="#f6f4ef"/>
 <text x="36" y="60" font-size="34" font-weight="700" fill="#202124">v1.1.2 原文から患者情報までの流れ</text>
-<text x="36" y="100" font-size="28" fill="#66716f">合成の説明図。実画面・測定値・</text>
-<text x="36" y="138" font-size="28" fill="#66716f">患者データではありません。</text>
-<text x="36" y="176" font-size="28" fill="#66716f">番号は順序です。全てが新規のLLM実行ではなく、</text>
-<text x="36" y="214" font-size="28" fill="#66716f">保存済みの結果を再利用・迂回する段があります。</text>
-<text x="36" y="308" font-size="30" font-weight="700" fill="#087f5b">保存と個別解析（ローカル）</text>
-<rect x="36" y="356" width="708" height="164" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="410" font-size="30" font-weight="700" fill="#202124">1 MCSの投稿・返信・添付を保存</text>
-<text x="60" y="456" font-size="28" fill="#202124">出典・原文版・取得状態を記録</text>
-<text x="60" y="494" font-size="28" fill="#66716f">保存直後から検索・通知の枝にも渡る（下の活用）</text>
-<path d="M390 520 L390 560" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="566" width="708" height="202" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="620" font-size="30" font-weight="700" fill="#202124">2 画像・PDFを任意でローカルOCR</text>
-<text x="60" y="666" font-size="28" fill="#202124">本文とは別の資料・ページ付きで保存</text>
-<text x="60" y="704" font-size="28" fill="#66716f">本文・OCRとも無い場合は3へ迂回</text>
-<text x="60" y="742" font-size="28" fill="#66716f">取得不能は「完了」として扱わない</text>
-<path d="M390 768 L390 808" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="814" width="708" height="164" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="868" font-size="30" font-weight="700" fill="#202124">3 個別ローカル抽出＋品質確認</text>
-<text x="60" y="914" font-size="28" fill="#202124">投稿・OCRを原文・対象・否定・時制で照合</text>
-<text x="60" y="952" font-size="28" fill="#66716f">処理枠の時間配分は図の下の表を参照</text>
-<path d="M390 978 L390 1018" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="1024" width="708" height="164" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="1078" font-size="30" font-weight="700" fill="#202124">4 採用できる資料集合を固定</text>
-<text x="60" y="1124" font-size="28" fill="#202124">含む・未反映・取得不能を区別</text>
-<text x="60" y="1162" font-size="28" fill="#66716f">別患者・削除・旧版・権限不明は採用しない</text>
-<text x="36" y="1244" font-size="30" font-weight="700" fill="#087f5b">患者contextの育成</text>
-<text x="36" y="1292" font-size="28" fill="#66716f">実行先は現在の設定で決まる（local／cloud）。</text>
-<text x="36" y="1330" font-size="28" fill="#66716f">3の個別解析をcloudで続ける経路ではない。</text>
-<path d="M390 1378 L390 1402" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="1408" width="708" height="240" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="1462" font-size="30" font-weight="700" fill="#202124">5 B：資料の全区間を点検</text>
-<text x="60" y="1508" font-size="28" fill="#202124">根拠付きの事実を蓄積</text>
-<text x="60" y="1546" font-size="28" fill="#202124">原文・OCR・補助要約を区別</text>
-<text x="60" y="1584" font-size="28" fill="#66716f">補助要約は根拠にしない</text>
-<text x="60" y="1622" font-size="28" fill="#66716f">出典・版・区間が同じなら再利用</text>
-<path d="M390 1648 L390 1688" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="1694" width="708" height="202" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="1748" font-size="30" font-weight="700" fill="#202124">6 C：根拠を照合</text>
-<text x="60" y="1794" font-size="28" fill="#202124">出典・引用・対象者・否定・時制</text>
-<text x="60" y="1832" font-size="28" fill="#202124">資料品質の条件を確認</text>
-<text x="60" y="1870" font-size="28" fill="#66716f">未完了・失敗の資料は採用しない</text>
-<path d="M390 1896 L390 1936" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="1942" width="708" height="202" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="1996" font-size="30" font-weight="700" fill="#202124">7 A：概況の項目と順序を選ぶ</text>
-<text x="60" y="2042" font-size="28" fill="#202124">検証済みの事実だけを使う</text>
-<text x="60" y="2080" font-size="28" fill="#202124">表示文は原文の引用から復元</text>
-<text x="60" y="2118" font-size="28" fill="#66716f">前回のcontextを新しい事実として入れない</text>
-<path d="M390 2144 L390 2184" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
-<rect x="36" y="2190" width="708" height="164" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="2244" font-size="30" font-weight="700" fill="#202124">8 品質確認・有限修復・再監査</text>
-<text x="60" y="2290" font-size="28" fill="#202124">合格し適用条件を満たしたときだけ次へ</text>
-<text x="60" y="2328" font-size="28" fill="#66716f">入力・出典・判断が不明なら保留</text>
-<rect x="22" y="1386" width="736" height="988" rx="18" fill="none" stroke="#087f5b" stroke-width="3" stroke-dasharray="12 8"/>
-<rect x="36" y="2374" width="708" height="160" rx="14" fill="#edf0ee" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="2424" font-size="26" font-weight="700" fill="#202124">Jev（別経路・設定次第）</text>
-<text x="60" y="2470" font-size="28" fill="#202124">外部監査として別に送る経路</text>
-<text x="60" y="2508" font-size="28" fill="#202124">匿名・非送信が既定とは限らない</text>
-<text x="36" y="2590" font-size="30" font-weight="700" fill="#087f5b">活用</text>
-<rect x="36" y="2638" width="708" height="274" rx="14" fill="#e9f5ef" stroke="#087f5b" stroke-width="2"/>
-<text x="60" y="2688" font-size="26" font-weight="700" fill="#087f5b">検索・通知（1から独立した枝）</text>
-<text x="60" y="2734" font-size="28" fill="#202124">検索：入力500字まで・1ページ5件</text>
-<text x="60" y="2772" font-size="28" fill="#202124">検索はLLM・概況の回数を使わない</text>
-<text x="60" y="2810" font-size="28" fill="#202124">原資料・MCSへのリンク</text>
-<text x="60" y="2848" font-size="28" fill="#202124">通知：原文・個別解析の状態を先に表示</text>
-<text x="60" y="2886" font-size="28" fill="#66716f">context完成を待たずに使える</text>
-<rect x="36" y="2936" width="708" height="240" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="60" y="2990" font-size="30" font-weight="700" fill="#202124">9 採用直前と閲覧時に再照合</text>
-<text x="60" y="3036" font-size="28" fill="#202124">原資料・契約・権限・処理権を確認</text>
-<text x="60" y="3074" font-size="28" fill="#202124">保存して本人向けの患者情報へ</text>
-<text x="60" y="3112" font-size="28" fill="#66716f">訂正・削除・失効なら古い内容を返さない</text>
-<text x="60" y="3150" font-size="28" fill="#66716f">新着だけで既採用を捨てず未反映件数を表示</text>
-<text x="36" y="3232" font-size="30" font-weight="700" fill="#087f5b">待ち・不明時の扱い</text>
-<text x="36" y="3320" font-size="28" font-weight="700" fill="#202124">枠・期限の待ち</text>
-<text x="366" y="3320" font-size="28" fill="#202124">次の周回で処理</text>
-<text x="36" y="3360" font-size="28" font-weight="700" fill="#202124">同じ入力の品質不合格</text>
-<text x="366" y="3360" font-size="28" fill="#202124">既存の有限上限まで</text>
-<text x="36" y="3400" font-size="28" font-weight="700" fill="#202124">送信結果が不明</text>
-<text x="366" y="3400" font-size="28" fill="#202124">履歴を保持・自動再送しない</text>
-<text x="366" y="3440" font-size="28" fill="#202124">勝手にlocalへ置き換えない</text>
-<text x="36" y="3480" font-size="28" font-weight="700" fill="#202124">旧cloud予約の会計</text>
-<text x="366" y="3480" font-size="28" fill="#202124">会計・承認の証拠を保持</text>
-<text x="36" y="3536" font-size="30" font-weight="700" fill="#087f5b">回数と処理枠（JST）</text>
-<text x="36" y="3624" font-size="28" fill="#202124">・概況生成は患者ごとに1日4回・原則3時間間隔</text>
-<text x="36" y="3664" font-size="28" fill="#202124">・初回の全資料反映は間隔のみ免除（4回は維持）</text>
-<text x="36" y="3704" font-size="28" fill="#202124">・同じ入力の再開・有限修復は同じ1回</text>
-<text x="36" y="3744" font-size="28" fill="#202124">・B・C・検索・閲覧は回数の対象外</text>
-<text x="36" y="3784" font-size="28" fill="#202124">・A:B:C=6:3:1は順番の配分で速度保証ではない</text>
-<text x="36" y="3824" font-size="28" fill="#202124">・08–20時：対話1枠＋背景2枠</text>
-<text x="36" y="3864" font-size="28" fill="#202124">・20–08時：背景最大3枠</text>
-<text x="36" y="3904" font-size="28" fill="#202124">・新着は次の空き枠。実行中は中断しない</text>
+<text x="36" y="102" font-size="28" fill="#66716f">合成の説明図。実画面・測定値・</text>
+<text x="36" y="140" font-size="28" fill="#66716f">患者データではありません。</text>
+<text x="36" y="178" font-size="28" fill="#66716f">番号は原資料から表示までのデータ依存の順です。</text>
+<text x="36" y="216" font-size="28" fill="#66716f">処理は複数周回で進み、確認済み結果は再利用します。</text>
+<text x="110" y="272" font-size="30" font-weight="700" fill="#087f5b">保存と個別解析（ローカル）</text>
+<rect x="110" y="306" width="560" height="168" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="360" font-size="30" font-weight="700" fill="#202124">1 MCSの投稿・返信・添付を保存</text>
+<text x="132" y="406" font-size="28" fill="#202124">出典・原文版・取得状態を記録</text>
+<text x="132" y="444" font-size="28" fill="#66716f">左の線：検索・通知へ独立して渡る</text>
+<path d="M390 474 L390 520" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="524" width="560" height="244" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="578" font-size="30" font-weight="700" fill="#202124">2 画像・PDFを任意でローカルOCR</text>
+<text x="132" y="624" font-size="28" fill="#202124">本文とは別の資料・ページ付きで保存</text>
+<text x="132" y="662" font-size="28" fill="#66716f">本文はOCRを通らない（右の線）</text>
+<text x="132" y="700" font-size="28" fill="#66716f">添付なし・OCR無効もOCRを通らない</text>
+<text x="132" y="738" font-size="28" fill="#66716f">有効OCRが未完の添付は完了扱いしない</text>
+<path d="M390 768 L390 814" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="818" width="560" height="206" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="872" font-size="30" font-weight="700" fill="#202124">3 個別ローカル抽出＋品質確認</text>
+<text x="132" y="918" font-size="28" fill="#202124">投稿・OCRを原文・対象・否定・</text>
+<text x="132" y="956" font-size="28" fill="#202124">時制で照合</text>
+<text x="132" y="994" font-size="28" fill="#66716f">処理枠は下の表を参照</text>
+<path d="M670 356 H718 V868 H674" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<path d="M390 1024 L390 1070" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="1074" width="560" height="206" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="1128" font-size="30" font-weight="700" fill="#202124">4 採用できる資料集合を固定</text>
+<text x="132" y="1174" font-size="28" fill="#202124">含む・未反映・取得不能を区別</text>
+<text x="132" y="1212" font-size="28" fill="#66716f">別患者・削除・旧版・</text>
+<text x="132" y="1250" font-size="28" fill="#66716f">権限不明は採用しない</text>
+<text x="110" y="1336" font-size="30" font-weight="700" fill="#087f5b">患者contextの育成</text>
+<text x="110" y="1408" font-size="28" fill="#66716f">実行先は現在の設定で決まる（local／cloud）。</text>
+<text x="110" y="1446" font-size="28" fill="#66716f">3の個別解析をcloudで続ける経路ではない。</text>
+<path d="M390 1470 L390 1506" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="1510" width="560" height="244" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="1564" font-size="30" font-weight="700" fill="#202124">5 B：資料の全区間を点検</text>
+<text x="132" y="1610" font-size="28" fill="#202124">根拠付きの事実を蓄積</text>
+<text x="132" y="1648" font-size="28" fill="#202124">原文・OCR・補助要約を区別</text>
+<text x="132" y="1686" font-size="28" fill="#66716f">補助要約は根拠にしない</text>
+<text x="132" y="1724" font-size="28" fill="#66716f">出典・版・区間が同じなら再利用</text>
+<path d="M390 1754 L390 1800" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="1804" width="560" height="206" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="1858" font-size="30" font-weight="700" fill="#202124">6 C：根拠を照合</text>
+<text x="132" y="1904" font-size="28" fill="#202124">出典・引用・対象者・否定・時制</text>
+<text x="132" y="1942" font-size="28" fill="#202124">資料品質の条件を確認</text>
+<text x="132" y="1980" font-size="28" fill="#66716f">未完了・失敗の資料は採用しない</text>
+<path d="M390 2010 L390 2056" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="2060" width="560" height="244" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="2114" font-size="30" font-weight="700" fill="#202124">7 A：概況の項目と順序を選ぶ</text>
+<text x="132" y="2160" font-size="28" fill="#202124">検証済みの事実だけを使う</text>
+<text x="132" y="2198" font-size="28" fill="#202124">表示文は原文の引用から復元</text>
+<text x="132" y="2236" font-size="28" fill="#66716f">前回のcontextを新しい事実として入れ</text>
+<text x="132" y="2274" font-size="28" fill="#66716f">ない</text>
+<path d="M390 2304 L390 2350" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="2354" width="560" height="168" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="2408" font-size="30" font-weight="700" fill="#202124">8 必要な品質確認・有限修復・再監査</text>
+<text x="132" y="2454" font-size="28" fill="#202124">合格し適用条件を満たしたときだけ9へ</text>
+<text x="132" y="2492" font-size="28" fill="#66716f">入力・出典・判断が不明なら保留</text>
+<rect x="94" y="1470" width="592" height="1068" rx="18" fill="none" stroke="#087f5b" stroke-width="3" stroke-dasharray="12 8"/>
+<path d="M390 2538 L390 2584" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="2588" width="560" height="320" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="2642" font-size="30" font-weight="700" fill="#202124">9 採用直前と閲覧時に再照合</text>
+<text x="132" y="2688" font-size="28" fill="#202124">原資料・契約・権限・処理権を確認</text>
+<text x="132" y="2726" font-size="28" fill="#202124">保存して本人向けの患者情報へ</text>
+<text x="132" y="2764" font-size="28" fill="#66716f">保存済みの原資料で訂正・削除・</text>
+<text x="132" y="2802" font-size="28" fill="#66716f">失効を検知したら古い内容を返さない</text>
+<text x="132" y="2840" font-size="28" fill="#66716f">新着だけで既採用を捨てず未反映件数を</text>
+<text x="132" y="2878" font-size="28" fill="#66716f">表示</text>
+<text x="84" y="2964" font-size="30" font-weight="700" fill="#087f5b">主線の外にある経路</text>
+<rect x="36" y="2998" width="708" height="280" rx="14" fill="#e9f5ef" stroke="#087f5b" stroke-width="2"/>
+<text x="58" y="3050" font-size="28" font-weight="700" fill="#087f5b">検索・通知（1の保存から独立）</text>
+<text x="58" y="3096" font-size="28" fill="#202124">検索：入力500字まで・1ページ5件</text>
+<text x="58" y="3134" font-size="28" fill="#202124">検索はLLM・概況の回数を使わない</text>
+<text x="58" y="3172" font-size="28" fill="#202124">原資料・MCSへのリンク</text>
+<text x="58" y="3210" font-size="28" fill="#202124">通知：原文・個別解析の状態を先に表示</text>
+<text x="58" y="3248" font-size="28" fill="#66716f">contextの完成を待たない</text>
+<path d="M110 356 H62 V2994" stroke="#087f5b" stroke-width="3" fill="none" marker-end="url(#arrg)"/>
+<rect x="36" y="3302" width="708" height="204" rx="14" fill="#edf0ee" stroke="#d5dcd7" stroke-width="2"/>
+<text x="58" y="3354" font-size="28" font-weight="700" fill="#202124">Jev（設定次第の別経路）</text>
+<text x="58" y="3400" font-size="28" fill="#202124">外部監査として別に送る経路</text>
+<text x="58" y="3438" font-size="28" fill="#202124">匿名・非送信が既定とは限らない</text>
+<text x="58" y="3476" font-size="28" fill="#202124">1〜9の主線の通過先ではない</text>
+<text x="36" y="3562" font-size="30" font-weight="700" fill="#087f5b">待ち・不明時の扱い</text>
+<text x="36" y="3636" font-size="28" font-weight="700" fill="#202124">枠・期限の待ち</text>
+<text x="366" y="3636" font-size="28" fill="#202124">次の周回で処理</text>
+<text x="36" y="3676" font-size="28" font-weight="700" fill="#202124">同じ入力の品質不合格</text>
+<text x="366" y="3676" font-size="28" fill="#202124">既存の有限上限まで</text>
+<text x="36" y="3716" font-size="28" font-weight="700" fill="#202124">送信結果が不明</text>
+<text x="366" y="3716" font-size="28" fill="#202124">履歴を保持・自動再送しない</text>
+<text x="366" y="3756" font-size="28" fill="#202124">勝手にlocalへ置き換えない</text>
+<text x="36" y="3796" font-size="28" font-weight="700" fill="#202124">旧cloud予約の会計</text>
+<text x="366" y="3796" font-size="28" fill="#202124">会計・承認の証拠を保持</text>
+<text x="36" y="3852" font-size="30" font-weight="700" fill="#087f5b">回数と処理枠（JST）</text>
+<text x="36" y="3926" font-size="28" fill="#202124">・概況生成は患者ごとに1日4回・原則3時間間隔</text>
+<text x="36" y="3966" font-size="28" fill="#202124">・初回の全資料反映は間隔のみ免除（4回は維持）</text>
+<text x="36" y="4006" font-size="28" fill="#202124">・同じ入力の再開・有限修復は同じ1回</text>
+<text x="36" y="4046" font-size="28" fill="#202124">・B・C・検索・閲覧は回数の対象外</text>
+<text x="36" y="4086" font-size="28" fill="#202124">・A:B:C=6:3:1は仕事を巡回する順番の配分。</text>
+<text x="64" y="4126" font-size="28" fill="#202124">1周で5→6→7を全て行うとは限らず、</text>
+<text x="64" y="4166" font-size="28" fill="#202124">速度保証でもない</text>
+<text x="36" y="4206" font-size="28" fill="#202124">・08–20時：対話1枠＋背景2枠</text>
+<text x="36" y="4246" font-size="28" fill="#202124">・20–08時：背景最大3枠</text>
+<text x="36" y="4286" font-size="28" fill="#202124">・新着は次の空き枠。実行中は中断しない</text>
 </svg>
 </body></html>

@@ -46,15 +46,15 @@
   },
   {
    "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.html",
-   "sha256": "bcaff8ee42ef8f94e940ff97ac6d586b713204fa0d4f4be15196e8ffc1101e61"
+   "sha256": "b165f2005d5942b01b60722e8f3bd8c34bc4564a2f45f1b8a21f0d3ff6e02f13"
   },
   {
    "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.svg",
-   "sha256": "33f72bf27c515249df1e3cb70c431fb401573c117a6fe194311669f7c072fbaf"
+   "sha256": "640cb397ea319ef7ded703e86226d65fa432897f3a3044e5a2483a1c834b188f"
   },
   {
    "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.png",
-   "sha256": "082633f49229739b4d9828d985a38ad2d06596c6403e89ce9dc168c2b09c3e10"
+   "sha256": "11ad4daf0c985002b5c51e0d4f1873e3e9a73804f90094472bc2c3b73e9976dd"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
@@ -65,7 +65,8 @@
   "今回の部分作成・回数管理・患者内検索・昼夜3枠を反映。原資料検索は解析完了を待たない独立の矢印で表す。",
   "2026-11-08 visual-docs-16 r4-r7修正: 3枚ともHTML原稿をrepoへ保存しSVG/PNGを再生成。data-processingはMCS収集→Mac保存+OCR→個別localを主経路とし、患者コンテキストと通知・検索を並行する枝として修正（完成待ちの誤読を解消）。patient-findはMCS返信を通知カードで読む場面へ限定。setup-stepsはinstall_progress.jsonを最終開始段階の記録・再開はUPGRADE/SETUP診断へ修正し、check合格≠接続受入を明記。初回PNGはXML prolog混入でparser error表示となり、wrapperからprologを除きnested svgへwidth/heightを明示して再描画。実画面・測定結果ではない合成説明図。",
   "PNGは macOS qlmanage + ImageMagick のwrapper/crop経路。r9以降のwrapperは1200x1200へ原稿の中身をflatな <g transform=translate(405 80)> で格納（nested <svg> はqlmanageで配置がずれるため不使用）（XML prologはwrapperへ入れない）。寸法は data-processing 390x660 / patient-find 390x640 / setup-steps 390x640。",
-  "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは4000x4000 wrapperへflat <g>で格納しqlmanage -s 4000で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。"
+  "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは正方wrapperへflat <g>で格納しqlmanage -s max(4000,H+100)で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。",
+  "2026-11-08 r15: Root実見の指摘で詳細図のトポロジーを修正。主線1→9を中央の縦線で接続し、OCRを通らない資料は1→3の右外周rail、検索・通知は1から左外周railで末尾の独立panelへ接続（主boxを横断しない）。Jevは主線の通過先ではない末尾panel。2の注記を「本文はOCRを通らない／添付なし・OCR無効もOCRを通らない／有効OCRが未完の添付は完了扱いしない」へ、8を「必要な品質確認」、9の失効を「保存済みの原資料で訂正・削除・失効を検知したら」へ修正。冒頭は番号をデータ依存の順・複数周回・確認済み結果の再利用と説明し、6:3:1は巡回順の配分で1周で5→6→7を全て行うとは限らないと明記。"
  ],
  "renderer": {
   "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
@@ -73,7 +74,7 @@
   "tool": "macOS qlmanage + ImageMagick",
   "wrapper": "1200x1200 SVG with source SVG nested inside g transform=translate(405 80)"
  },
- "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。 2026-11-08 r11-r13で主図をcloud-continuity-v112-detailed（780x3944・9主ノード・3章）へ作り直した。旧cloud-continuity.svg/.pngは公開済みasset 721517700の履歴として削除・上書きせず保持。",
+ "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。 2026-11-08 r11-r13で主図をcloud-continuity-v112-detailed（780x4326・9主ノード・3章）へ作り直した。旧cloud-continuity.svg/.pngは公開済みasset 721517700の履歴として削除・上書きせず保持。",
  "source": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.svg",
  "source_checkout_observation": {
   "head": "b0b5f59b000e447ab0b4184b9b4e97eaa23c35b4",
