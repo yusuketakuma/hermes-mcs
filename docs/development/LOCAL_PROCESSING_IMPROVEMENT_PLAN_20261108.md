@@ -25,9 +25,11 @@
   （transport のみ unlock）。holder の個別特定は未追跡。
 - extract 53 call 中 repair 25。issue 件数（ev 75 等）は request 数
   ではなく、budget check 前に記録される分母。repair_wins は
-  nullable で成功率は導出不可。`empty_repair_candidate_binding` の
-  hold は used=0・llm_s=0 で selected 減算される既存保護
-  （`semantic_drain.py:878-886`）で、新費用を生まない。
+  nullable で成功率は導出不可。defer 理由 `empty_repair_candidate_binding`
+  20 件は defer 理由の記録であり、20 LLM call・新費用を示さない。
+  無消費（used=0・llm_s=0・progress なし）の binding hold は既存の
+  selected 減算で独立 job を阻まない（`semantic_drain.py:878-886`）。
+  20 件全てが無消費だったとは観測から確定しない。
 - patient_context は選択 pass 3,309 で当該窓の新完了 0。
   `scan_incomplete` は正常有限 slice 終了・CAS 競合・中断のいずれも
   含み、コードだけで正常/障害を決められない。
@@ -36,9 +38,11 @@
 有力仮説（仮説のまま保持）
 
 - writer（collector 等）の run.lock 長保持が再取得待ちの主因候補。
-- ev 支配の言い換え引用は first-pass 遵守ギャップの可能性があるが、
-  言い換え/非一意/空/非 str/chunk 境界の内訳は未取得で
-  「全てモデル遵守ギャップ」「必ず高効果」とはしない。
+- ev 支配の脱落は first-pass 引用遵守ギャップの可能性があるが、
+  `Validator.ev` は空・非 str・本文 None・非一意・不一致でも
+  span None になるため全件を言い換えとは断定しない。
+  言い換え/非一意/空/非 str/chunk 境界/同一引用の複数出現の内訳は
+  未取得で、「全てモデル遵守ギャップ」「必ず高効果」とはしない。
 
 ## 2. 案比較表
 
@@ -75,7 +79,9 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
   `_readiness_for_write`・送信直前・採用前再検証は不変。
 - 目標：SCAN/CHUNK＋品質 receipt の重複 read 1 組 → 0。
   同 fixture の selection/lane/source_sig は完全同等。
-  既存 caller は未指定のまま不変。
+  既存 caller は未指定のまま不変。合成受入は既存 readwitness /
+  authorizer 契約を必ず維持し、estimate・proof_for・scope の異なる
+  caller で取得物を共用しない。
 
 ### B1（候補・追補待ち・計画未確定）
 
@@ -100,16 +106,21 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
 ### E（repair・残差対応の比較案）
 
 - ev 75 は issue 数であり request 数ではない。一意引用失敗の機序は
-  確定だが内訳未取得のため効果は仮説のまま。
+  確定だが、言い換え/非一意/空・非 str/本文 None/chunk 境界/同一
+  引用の複数出現の内訳は未取得のため効果は仮説のまま。E は条件
+  付きの評価案であり高効果確定ではない。
 - 完全一致指示は既にあるので文言の重複追加はせず、既存 prompt を
   最小再配置・短い実行可能な引用指示へ置換する案を比較する。
 - 出力を減らして repair だけ減らす退行は、precision/recall・否定・
   対象・時制・数値・根拠で拒否。
 - `locate_quote_span`・validator・one-shot・品質 threshold は不変。
-- 評価は既存 `extract_bench`＋frozen 完全合成 corpus を使う。
-  `--mock-ok` は検証器の健全性確認だけで、prompt 改善の効果証明
-  ではない。実モデル比較は許可済み隔離評価環境での別工程で、
-  今回は実行しない。
+- 評価は既存 `extract_bench`＋frozen 完全合成 corpus を優先して
+  使う。反例（重複引用・chunk 境界・否定等）が既存 corpus に無い
+  場合のみ、完全合成の必要最小 case を追加してよい（新 fixture の
+  絶対不要とは固定しない）。
+- `--mock-ok` は検証器の健全性確認だけで、prompt 改善の効果証明
+  ではない。mock 成功は実モデルでの品質改善とは区別する。
+  実モデル比較は許可済み隔離評価環境での別工程で、今回は実行しない。
 - prompt 変更の contract/fingerprint と旧 checkpoint への影響は
   実装前に全 caller を確認する。checkpoint は新機構が既にあるので
   追加しない。repair_wins 3/25 など不完全な率の提示は禁止。
