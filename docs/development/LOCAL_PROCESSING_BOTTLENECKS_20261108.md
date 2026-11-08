@@ -160,6 +160,14 @@ thermal警告の記録なし。
   枠を増やしても3倍とは限らない（実hardware throughput未測定）。
   `-fa on`・KV q4_0・`-ub 512`・`--spec-type ngram-simple`・
   `--cache-ram 0` は起動plistと実launchargsがRoot照合で一致済み。
+  なおRoot実見は常駐3本＋患者context子10本・各枠の実値16384で、
+  child10本を「LLM同時10枠」と同義にはしない。/slots短窓は全idleで
+  「GPUが常時詰まる」は立証されていない。
+- **carry保存待ちによる仕事供給**：`extract_llm_resident.py:480-498`・
+  `512-515` で、carry（完成結果の保存待ち）が残る限り新しい推論・
+  semanticへ進まず保存処理へ戻る（物理LLM slotはtransport後に解放済）。
+  lock_lost 7と保存待ちが仕事供給へも影響しうるコード経路。
+  ただし各idle時点の原因をcarryへ断定はしない。
 - **`_wait_slot_idle` 占有**：transport切断後も枠を保持するcompletion未知
   保護。頻度未確認。
 - **`_BATCH_PER_ITEM_S=55.0`・`_BATCH_K=0`**：1件55秒は推定定数であり
@@ -173,8 +181,11 @@ thermal警告の記録なし。
   `_IDLE_FLOOR_S=5`→`min(30, 2倍)` の指数backoffか next_due起床。
   120秒は circuit-open/disk_low・再試行なし時のみ。新着は10分tick。
 - **OCR**：隔離runtime・network禁止・YomiToku CPUのみ・cv2/torch
-  スレッド1固定・200DPI・timeout既定120s・drain 900s・local:ocr=3:1。
+  スレッド1固定・200DPI。本文抽出とは別の原本OCRで、`mcs_ocr.py` の
+  LOCAL_CALL_S=300・原本OCR既定120秒・全drain 900秒・終端5。
   LLMと別経路だが同一機体のCPU/RAMを共有。実OCR所要時間は未測定。
+  既知の品質holdは当該60分窓の新失敗ではなく、timeout延長で自動解決
+  するとは限らない（別観測由来は時点不明として既知hold扱い）。
 
 ## 4. 優先対策と受入計測（Oracle採用順）
 
