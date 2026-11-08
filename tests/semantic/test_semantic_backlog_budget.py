@@ -240,6 +240,8 @@ def test_run_record_names_silent_skips_and_the_preamble(tmp_path):
                                llm_fn=_llm, lane="backlog", max_jobs=1)
         assert out["done"] == 0 and out["floor_skipped"] == {"semantic": 1}
         assert out["lock_skipped"] == {} and out["preamble_s"] >= 0
+        for key in ("invalidate_s", "reprocess_s", "reproject_s"):
+            assert key in out and (out[key] is None or out[key] >= 0)
         row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
         assert tuple(row) == ("pending", 0)
     finally:

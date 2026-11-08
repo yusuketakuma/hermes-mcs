@@ -196,6 +196,14 @@ def _report_open_transaction(ledger, result):
     return True
 
 
+def _snapshot_work_deadline(ledger, deadline: float) -> float:
+    """Latest monotonic time optional work may run until: the run deadline
+    minus the source-size snapshot verification budget and the fixed tail."""
+    import snapshots
+    source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    return deadline - snapshots.snapshot_verify_timeout_s(source_db) - 30
+
+
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90, run_lock_fd=None):
     """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
@@ -208,11 +216,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
         _require_closed_transaction(ledger, result)
 
     transaction_pending()
-    import snapshots
     # Keep the existing run cap and verification policy. Derived work yields
     # early enough for size-based snapshot validation and the existing tail.
-    source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
-    work_deadline = deadline - snapshots.snapshot_verify_timeout_s(source_db) - 30
+    work_deadline = _snapshot_work_deadline(ledger, deadline)
     try:
         import extract
         # Leave a fair share for medication mapping, rollups and signals.
@@ -773,7 +779,9 @@ def _deliver(ledger, args, cfg, result, deadline):
 
 
 # Realtime never waits for background slots or pauses on a night schedule.
-SEMANTIC_TAIL_RESERVE_S = 60
+# Minimum snapshot work window required before a realtime drain may start;
+# the dispatch deadline itself is the shared size-based work deadline.
+SEMANTIC_MIN_WORK_S = 60
 
 
 def _semantic_skipped(cfg, reason: str, **extra) -> dict:
@@ -791,17 +799,26 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
     if args.jobs_only:
         result["semantic"] = _semantic_skipped(cfg, "background_worker")
         return
-    if deadline - time.monotonic() <= SEMANTIC_TAIL_RESERVE_S:
+    try:
+        work_deadline = _snapshot_work_deadline(ledger, deadline)
+    except Exception as e:
+        result["errors"].append(f"semantic: {type(e).__name__}")
+        result["semantic"] = _semantic_skipped(cfg, "work_deadline_unavailable")
+        return
+    if work_deadline - time.monotonic() <= SEMANTIC_MIN_WORK_S:
         result["semantic"] = _semantic_skipped(cfg, "no_budget")
         return
     import extract_llm
     try:
         with extract_llm.local_llm.scheduling_scope(os.path.join(HOME, "data"), realtime=True):
-            if extract_llm.pinned_slot_busy(deadline):
+            if extract_llm.pinned_slot_busy(work_deadline):
                 result["semantic"] = _semantic_skipped(cfg, "slot_busy")
                 return
+            if time.monotonic() >= work_deadline:
+                result["semantic"] = _semantic_skipped(cfg, "no_budget")
+                return
             result["semantic"] = semantic_drain.run_due(
-                ledger, cfg, result, deadline - SEMANTIC_TAIL_RESERVE_S,
+                ledger, cfg, result, work_deadline,
                 cfg_path=CONF_PATH, max_jobs=4, run_lock_fd=run_lock_fd,
                 lane="realtime")
     except Exception as e:
