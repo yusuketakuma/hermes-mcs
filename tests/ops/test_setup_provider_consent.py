@@ -41,6 +41,30 @@ def test_consent_matches_selected_provider_and_send_mode(monkeypatch, capsys, bl
     if sending:
         label = 'OpenAI' if provider == 'openai' else 'Anthropic'
         assert f'選択した{label}のAPIへ送信します' in output
+        assert '患者コンテキストの作成・更新と同じコンテキストの品質修復' in output
+    assert '対象の再抽出で' not in output
+    assert 'OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません' in output
+    assert '過去の課金済み回答や送信結果不明の回復・保留は維持します' in output
+    assert '通常解析:' not in output
+    assert cfg == before
+
+
+def test_openai_preview_uses_only_patient_context_profiles(monkeypatch, capsys):
+    calls = []
+
+    def profile(cfg, settings, *, route, purpose):
+        assert route == 'patient_context'
+        calls.append(purpose)
+        return {'model': 'synthetic-' + purpose, 'effort': 'low'}, []
+
+    monkeypatch.setattr(cloud_policy, 'profile_for_settings', profile)
+    monkeypatch.setattr(setup_wizard, 'ask', lambda *a, **k: False)
+    cfg = {'cloud_llm': {'provider': 'openai'}}
+    before = copy.deepcopy(cfg)
+    assert setup_wizard.confirm_save(cfg, plugin_profile=None,
+                                     key_presence={'openai': True}) is False
+    assert calls == ['patient_context', 'quality_repair']
+    assert '同じ患者コンテキストの品質修復: synthetic-quality_repair' in capsys.readouterr().out
     assert cfg == before
 
 

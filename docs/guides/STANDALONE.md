@@ -10,7 +10,7 @@
 [能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
 
 [はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
-`./install.sh`の連携方式で`2) MCS 単独で使う`を選びます。
+`sh scripts/mcs install --mode standalone`でMCS単独の方式を指定します。方式の選択画面を使う場合は`--mode standalone`を省き、`2) MCS 単独で使う`を選びます。
 Hermes Agentと連携する標準の導入は`1)`です。独立実行ではHermesを導入せず、
 MCS専用の実行環境がSlack・Discordの接続と定期処理を担当します。
 LINE WORKSの通知先は、どちらの方式でも後の初期設定で選びます。
@@ -38,8 +38,8 @@ macOSの前提条件は[インストールガイド](INSTALLATION.md#1-共通の
 リポジトリを取得したルートで、以下を順に実行します。
 
 ```bash
-./install.sh --mode standalone --preflight
-./install.sh --mode standalone
+sh scripts/mcs install --mode standalone --preflight
+sh scripts/mcs install --mode standalone
 ```
 
 installer内で初期設定を完了した場合は再度initを実行せず、下の診断へ進みます。後回し・中断した場合だけ`~/.local/bin/mcs setup`で再開します。従来の直接入口`$HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init --runtime-mode standalone`も利用できます。

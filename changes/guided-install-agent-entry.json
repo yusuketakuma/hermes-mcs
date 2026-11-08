@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "対話初期設定とAIによるスタンドアローン導入の案内を整理",
+  "summary": "初期設定は通知の形式を先に選び、実際に質問がある段階だけと現在の選択に応じた総数を表示します。AIへリポジトリURLを渡す依頼から、新規導入・既存設定の再開を既存の操作へ案内します。",
+  "upgrade": "追加設定は不要です。更新後に開く初期設定画面と導入ガイドから反映します。既存の設定・認証情報・保存先・実行方式は保持し、導入済み環境では新しくcloneせず、既存の更新・復旧手順を使ってください。",
+  "details": [
+    "質問項目・設定キー・保存前の承認・中止と再開の条件は維持し、推奨コースで質問しない段階を表示しない。同じ段階内での選択に応じた追加質問は引き続き表示する。",
+    "保存前のOpenAI・Anthropicへの送信の説明を患者コンテキストの作成・更新と品質修復に限定し、個別投稿・添付OCR・意味解析の新規送信が停止済みであることと、旧課金済み・結果不明の回復を区別する。",
+    "READMEと既存のAI向け・初めての導入・恒久配置の手順を揃え、通知OFFの旧参照と抽出worker本数の説明を現行の3本へ修正する。installerの既定値、依存導入、安全上の更新拒否は変更しない。"
+  ],
+  "refs": [
+    "mcs/ops/setup/setup_wizard.py",
+    "docs/guides/SETUP_AGENT.md",
+    "docs/guides/EASY_SETUP.md",
+    "docs/guides/LOCAL_AGENT_INSTALL.md",
+    "tests/ops/test_setup_japanese.py",
+    "tests/ops/test_setup_provider_consent.py"
+  ]
+}

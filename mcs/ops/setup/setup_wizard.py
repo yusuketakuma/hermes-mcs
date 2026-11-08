@@ -59,16 +59,16 @@ WIZARD = [
         ("mcs_login_id", "req", None,
          "MCS のログインID", None),
     ]),
+    ("通知の形式を選ぶ", [
+        ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
+         "どの形式で通知しますか？ slack/discord/lineworks=ボタン付き通知 / off=文章のみ", None),
+    ]),
     ("通知の送り先", [
         ("notify_target", "opt", None,
          "患者情報の送り先（Slack新規作成は slack:new。カード利用時の新規作成は空欄。"
          "例: slack:<チャンネルID>、discord:<チャンネルID>、lineworks:<トークルームID>）", None),
         ("notify_system_target", "opt", None,
          "エラーや動作状況の通知先（Slackカード利用時は空欄で専用チャンネルを作成）", None),
-    ]),
-    ("通知の形式を選ぶ", [
-        ("notify.interactive", "choice:off,slack,discord,lineworks", "off",
-         "どの形式で通知しますか？ slack/discord/lineworks=ボタン付き通知 / off=文章のみ", None),
     ]),
     ("LINE WORKSの接続先と操作できる人", [
         ("notify.lineworks.profile", "req", "default",
@@ -400,18 +400,25 @@ def wizard(cfg: dict):
     Items whose feature is off are skipped via their gate."""
     print("\nMCS の設定を順番にご案内します。番号を入力して Enter を押してください。"
           "\n空欄で Enter を押すと、現在の設定を保持します。未設定なら推奨設定を使います。"
-          "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。")
+          "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。"
+          "\n各手順の総数は現在の選択に基づきます。通知形式などを変えると増減します。")
     detailed = ask("setup_detail", "choice:recommended,detailed", "recommended",
                     "設定の進め方", None) == "detailed"
     basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",
              "notify.interactive", "self_posts", "deep_history",
              "notify.card_thread", "signals.digest"}
+    sections = [(title, [item for item in items if detailed or item[0] in basic
+                        or item[1].startswith("req")
+                        or item[0].endswith(("project_ids", "project_ids_auto", "allowed_role_ids"))])
+                for title, items in WIZARD]
     step = 0
-    for title, items in WIZARD:
+    for index, (title, items) in enumerate(sections):
         if not any(when is None or when(cfg) for *_, when in items):
             continue
         step += 1
-        print(f"\n【手順 {step}】{title}")
+        total = step + sum(any(when is None or when(cfg) for *_, when in remaining)
+                           for _, remaining in sections[index + 1:])
+        print(f"\n【手順 {step}】{title}（現在の選択では全{total}段階）")
         if not detailed:
             print("  質問しない設定は現在の値を保持し、未設定ならその版の既定に従います。")
         for key, kind, default, desc, when in items:
@@ -419,9 +426,6 @@ def wizard(cfg: dict):
                 continue
             if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
                 kind = "reqintlist"
-            if not detailed and key not in basic and not kind.startswith("req") \
-                    and not key.endswith(("project_ids", "project_ids_auto", "allowed_role_ids")):
-                continue
             if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
                     and get_key(cfg, key) is None:
                 transport = key.split(".")[1]
@@ -603,9 +607,8 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
           + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {project_scope}")
     print(f"  AI利用先: {cloud['provider']} / モデル {cloud['model']} / API別上限 {cloud['provider_budgets']}")
     if provider == "openai":
-        for label, route, purpose in (("通常解析", "reextract", "backlog"),
-                                      ("患者コンテキスト", "patient_context", "patient_context"),
-                                      ("品質修復", "reextract", "quality_repair")):
+        for label, route, purpose in (("患者コンテキスト", "patient_context", "patient_context"),
+                                      ("同じ患者コンテキストの品質修復", "patient_context", "quality_repair")):
             selection, profile_errors = cloud_policy.profile_for_settings(cfg, cloud, route=route, purpose=purpose)
             if profile_errors:
                 print(f"  {label}: 設定を確認できません")
@@ -613,12 +616,14 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
                 print(f"  {label}: {selection['model']} / 推論 {selection['effort']}")
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
-        print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
+        print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストの作成・更新と同じコンテキストの品質修復で、"
               f"患者名を含む投稿本文・参考文脈を匿名化せず選択した{'OpenAI' if provider == 'openai' else 'Anthropic'}のAPIへ送信します。通常のAPI保持条件が適用されます。"
               "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
               "詳細: docs/guides/ANTHROPIC.md")
     else:
         print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
+    print("  OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません。"
+          "過去の課金済み回答や送信結果不明の回復・保留は維持します。")
     daily_cap, monthly_cap = ("上限なし" if cloud[key] is None else f"{cloud[key]:g} USD"
                               for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
     print(f"  外部AI合計費用上限: 1日 {daily_cap} / 1か月 {monthly_cap}（両方の上限を適用）")

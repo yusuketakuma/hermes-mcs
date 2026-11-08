@@ -4,6 +4,7 @@
 
 このガイドは現行のinstall/update/setup/doctorと、下記のinstall.sh・init・bootstrap・plan/apply・doctorの手順を説明する。
 統一入口は `sh scripts/mcs install`、導入後は `mcs setup`・`mcs update`・`mcs doctor`。
+URLだけを渡されても、新規か導入途中か既存更新かを確認し、README冒頭の表から分岐する。新規のstandalone指定はPhase 1で`--mode standalone`付きの事前確認を行い、Phase 6へ進む。既存のcheckoutがあれば新しくcloneしない。ソフトの準備後に設定が未完なら同じ場所の`~/.local/bin/mcs setup`から再開し、更新・復旧は[UPGRADE_AGENT.md](UPGRADE_AGENT.md)を使う。ローカル操作の権限がなければ、利用者のMacで実行するコマンドを案内し、導入済みとは報告しない。
 導入する公開タグの仕様はCHANGELOGと[更新ガイド](UPGRADE_AGENT.md)で確認する。合成検証と実機受入は区別し、実接続・鍵・通知先の受入は各環境で確認する。
 1.0.13の歴史的な開発・実機受入条件は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)に保持する。
 
@@ -78,9 +79,7 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
 ## 質問画面の案内
 
 `install.sh` の導入方法の選択、進捗、エラーと次の操作は日本語で表示します。
-導入後は表示された `mcs setup` を実行して、アカウント・通知先・通知形式・
-接続先ごとの権限・通知のまとめ方・朝のまとめ・収集範囲・AI・追加解析の順に設定します。
-使わない接続先の質問と見出しは表示しません。
+導入後は表示された `mcs setup` を実行して、アカウント・通知形式・通知先・接続先ごとの権限から順に設定します。推奨コースでは必要な質問だけを表示し、詳細コースでは通知のまとめ方・朝のまとめ・収集範囲・AI・追加解析も確認します。質問がない段階は見出しも省き、段階数は現在の選択に応じて更新します。
 
 - 質問の日本語を先に読み、必要なら下の「設定項目」で設定キーを確認できます。
 - Enter は既存の値を保持します。既存値がなければ表示された既定値を使います。
@@ -96,6 +95,8 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   キーが登録され、modeが未指定なら`assist`を使います。対象範囲と上限も
   未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は
   保持し、キーがない場合は送信しません。
+
+OpenAI・Anthropicへの新規クラウド送信は、患者コンテキストの作成・更新と同じコンテキストの品質修復に限ります。個別の投稿・添付OCR・意味解析への新規送信は行わず、過去の課金済み回答と送信結果不明の回復・保留は維持します。保存前に対象・モデル・予算と送る情報を確認します。
 
 質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
 コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
@@ -156,8 +157,8 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 導入形態がまだ決まっていなければ、ユーザーに次を尋ねる:
 
 > 導入形態を選んでください:
-> **A**: hermes-agent アドオン（推奨・全機能 — Discord/Slack 通知・
-> 対話カード・`/mcs` コマンドあり）
+> **A**: hermes-agent アドオン（Hermesと連携して使う — Discord/Slack通知・
+> 対話カード・`/mcs`コマンドあり）
 > **B**: スタンドアローン（全MCS機能。Slack/Discord/LINE WORKSの
 > 通知・操作をHermesなしで使う）
 
@@ -217,7 +218,7 @@ install を止めないが、表示されたコマンドをユーザーに案内
 - `lineworks` → [専用導入手順](LINEWORKS.md)。Phase 5のMCS設定では
   `notify.lineworks`の許可範囲を指定し、専用CLIで秘密値を入力・診断する。
   Slack/Discord用plugin設定・gateway同期は行わない
-- `off` → Phase 6 の通知を送らない構成を使う。`interactive=off` は
+- `off` → 通知先の接続準備を省き、Phase 5の設定へ進む。方式は切り替えない。`interactive=off` は
   テキスト配送を止めないため、全 runner に `--no-notify` が必要。
   既存の Hermes 定期ジョブがある場合は、承認範囲内で停止・置換を確認する
 
@@ -462,7 +463,7 @@ LINE WORKSは独立host内で起動するため、同じ資格情報で別アダ
 
 旧Hermes modeから移行する場合、`services`が旧manifest所有MCSジョブを停止します。
 手動crontabなどmanifest外の既存経路は確認し、明示範囲内だけで停止してください。
-独立hostは7定期ジョブ・2抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
+独立hostは7定期ジョブ・3抽出worker・cmd/cmd_int取込を所有し、同じジョブを別途登録しません。
 
 `check`の失敗は想定内として無視しません。モード・専用venv・scope・資格情報・常駐状態・
 文書生成とのdriftを確認し、固定エラーコードで原因を報告します。
