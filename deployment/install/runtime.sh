@@ -65,16 +65,26 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     fi
     REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
     [ -f "$REQUIREMENTS" ] || die "独立接続の依存一覧がありません。deployment/requirements-standalone.txt を確認してください"
+    standalone_sdk_ok() {
+        "$VENV_PY" -I -B -c '
+# mcs-standalone-sdk-probe
+import sys
+sys.path.insert(0, sys.argv[1])
+from mcs_standalone.__main__ import _sdk_problem
+raise SystemExit(1 if _sdk_problem() else 0)
+' "$REPO"
+    }
     if [ "$LOCKED_DEPENDENCIES" -eq 1 ]; then
         locked_dependencies "$VENV_PY" || die "固定依存の導入が未完了です。記録を削除せず確認してください"
         rm -f "$PIP_MARK"
-    elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
+    elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements" || ! standalone_sdk_ok; then
         : > "$PIP_MARK"
         if command -v uv >/dev/null 2>&1; then
             uv pip install --python "$VENV_PY" -r "$REQUIREMENTS"
         else
             "$VENV_PY" -m pip install -r "$REQUIREMENTS"
         fi
+        standalone_sdk_ok || die "独立接続 SDK の固定版を確認できません。導入途中の記録を保持して停止しました"
         cp "$REQUIREMENTS" "$VENV/.mcs-connector-requirements.tmp"
         mv -f "$VENV/.mcs-connector-requirements.tmp" "$VENV/.mcs-connector-requirements"
         rm -f "$PIP_MARK"
