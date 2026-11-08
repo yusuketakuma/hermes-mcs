@@ -71,20 +71,57 @@ def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
                 os.unlink(tmp)
 
 
-def _gateway_restart_report(data, status, **facts):
+def _gateway_restart_report(data, status, request_id=None, **facts):
     """Keep restart requests separate from verified process replacement."""
     os.makedirs(data, exist_ok=True)
-    _atomic_json(os.path.join(data, "gateway_restart.json"),
-                 {"status": status, "at": time.time(), **facts},
+    value = {"status": status, "at": time.time(), **facts}
+    if request_id is not None:
+        value["request_id"] = request_id
+    _atomic_json(os.path.join(data, "gateway_restart.json"), value,
                  ".gateway-restart.", suffix="")
 
 
-def _gateway_restart_run(data, agents, uid):
+def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
+                         update_lock_fd=None):
     """Resolve the owned gateway, then verify a changed PID in a detached child."""
     # Local imports: _GATEWAY_RESTART_PROGRAM runs this source without the module header.
     import plistlib
     import shlex
     import shutil
+
+    auto = expected_pid is not None or request_id is not None \
+        or update_lock_fd is not None
+    if auto:
+        try:
+            if not (type(expected_pid) in (int, str)
+                    and type(update_lock_fd) in (int, str)
+                    and type(request_id) is str):
+                raise ValueError("gateway_restart_auto_args_invalid")
+            expected_pid = int(expected_pid)
+            update_lock_fd = int(update_lock_fd)
+            valid = (expected_pid > 0 and update_lock_fd >= 0
+                     and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None)
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            _gateway_restart_report(
+                data, "failed", request_id=request_id,
+                error="gateway_restart_auto_args_invalid")
+            return 1
+        try:
+            fd_stat = os.fstat(update_lock_fd)
+            lock_stat = os.lstat(os.path.join(data, "update.lock"))
+            held = (stat.S_ISREG(fd_stat.st_mode)
+                    and stat.S_ISREG(lock_stat.st_mode)
+                    and (fd_stat.st_dev, fd_stat.st_ino)
+                    == (lock_stat.st_dev, lock_stat.st_ino))
+        except OSError:
+            held = False
+        if not held:
+            _gateway_restart_report(
+                data, "failed", request_id=request_id,
+                error="gateway_restart_lock_fd_mismatch")
+            return 1
 
     # One normal collection run (480s), lock wait (150s), PID observation (30s).
     deadline = time.monotonic() + 660
@@ -272,12 +309,26 @@ def _gateway_restart_run(data, agents, uid):
                         + match.group(1) + " live session(s)")
 
         target, old_pid = current()
+        if auto and old_pid != expected_pid:
+            _gateway_restart_report(
+                data, "failed", request_id=request_id,
+                error="gateway_restart_target_changed",
+                expected_pid=expected_pid, observed_pid=old_pid)
+            return 1
         env = dict(os.environ, HOME=str(home), HERMES_HOME=hermes_home)
         while time.monotonic() < deadline:
             target, pid = current()
-            if pid and pid != old_pid:
+            if auto:
+                if pid != expected_pid:
+                    _gateway_restart_report(
+                        data, "failed", request_id=request_id,
+                        error="gateway_restart_target_changed",
+                        expected_pid=expected_pid, observed_pid=pid)
+                    return 1
+            elif pid and pid != old_pid:
                 _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid)
+                                        previous_pid=old_pid or None, pid=pid,
+                                        request_id=request_id)
                 return 0
             if time.monotonic() >= deadline:
                 raise ValueError("gateway_restart_busy_timeout")
@@ -294,31 +345,35 @@ def _gateway_restart_run(data, agents, uid):
                 break
             if not refused:
                 _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
-                                        service=target, previous_pid=old_pid or None)
+                                        service=target, previous_pid=old_pid or None,
+                                        request_id=request_id)
                 return 1
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(5, remaining))
         else:
             _gateway_restart_report(data, "unknown", error="gateway_restart_busy_timeout",
-                                    service=target, previous_pid=old_pid or None)
+                                    service=target, previous_pid=old_pid or None,
+                                    request_id=request_id)
             return 1
         until = min(deadline, time.monotonic() + 30)
         while time.monotonic() < until:
             target, pid = current()
             if pid and pid != old_pid:
                 _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid)
+                                        previous_pid=old_pid or None, pid=pid,
+                                        request_id=request_id)
                 return 0
             time.sleep(min(0.2, max(0, until - time.monotonic())))
         _gateway_restart_report(data, "unknown", error="gateway_pid_not_replaced",
-                                service=target, previous_pid=old_pid or None)
+                                service=target, previous_pid=old_pid or None,
+                                request_id=request_id)
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError,
             RecursionError, plistlib.InvalidFileException) as exc:
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("gateway_") \
             else "gateway_restart_unverifiable"
         status = "unknown" if issued else "failed"
-        _gateway_restart_report(data, status, error=code)
+        _gateway_restart_report(data, status, error=code, request_id=request_id)
     return 1
 
 
@@ -333,20 +388,48 @@ _GATEWAY_RESTART_PROGRAM = (
     + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
 
 
-def request_gateway_restart(data, agents, uid):
+def request_gateway_restart(data, agents, uid, *, expected_pid=None,
+                            request_id=None, update_lock_fd=None):
     """Queue a detached verified restart; callers have already saved bookkeeping."""
+    auto = expected_pid is not None or request_id is not None \
+        or update_lock_fd is not None
+    if auto:
+        valid = (type(expected_pid) is int and expected_pid > 0
+                 and type(request_id) is str
+                 and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None
+                 and type(update_lock_fd) is int and update_lock_fd >= 0)
+        if not valid:
+            return False
+        try:
+            fd_stat = os.fstat(update_lock_fd)
+            lock_stat = os.lstat(os.path.join(data, "update.lock"))
+            held = (stat.S_ISREG(fd_stat.st_mode)
+                    and stat.S_ISREG(lock_stat.st_mode)
+                    and (fd_stat.st_dev, fd_stat.st_ino)
+                    == (lock_stat.st_dev, lock_stat.st_ino))
+        except OSError:
+            held = False
+        if not held:
+            return False
     try:
-        _gateway_restart_report(data, "requested")
+        _gateway_restart_report(data, "requested", request_id=request_id)
         env = {key: value for key, value in os.environ.items()
                if key not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
+        argv = [sys.executable, "-I", "-c", _GATEWAY_RESTART_PROGRAM,
+                data, agents, str(uid)]
+        pass_fds = ()
+        if auto:
+            argv += [str(expected_pid), request_id, str(update_lock_fd)]
+            pass_fds = (update_lock_fd,)
         # -I: no cwd/PYTHON* on sys.path — the child needs only stdlib.
-        subprocess.Popen([sys.executable, "-I", "-c", _GATEWAY_RESTART_PROGRAM,
-                          data, agents, str(uid)], env=env, cwd="/",
+        subprocess.Popen(argv, env=env, cwd="/",
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          stdin=subprocess.DEVNULL, close_fds=True,
+                         pass_fds=pass_fds,
                          start_new_session=True)
         return True
     except OSError:
         with suppress(OSError):
-            _gateway_restart_report(data, "failed", error="gateway_restart_spawn_failed")
+            _gateway_restart_report(data, "failed", request_id=request_id,
+                                    error="gateway_restart_spawn_failed")
         return False
