@@ -24,7 +24,7 @@ DATA = str(Path(DB).parent)
 
 
 DRAIN_BUDGET_S = 900
-LOCAL_CALL_S = 120
+LOCAL_CALL_S = 300
 _RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
 
 
