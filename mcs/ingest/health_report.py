@@ -393,7 +393,8 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     return at if finite_number(at) and 0 <= at <= now else now
 
 
-def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
+def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
+                   observation: dict | None = None) -> list:
     """Degraded reasons for work that silently stopped moving. Each
     check is gated on its feature being enabled and needs BOTH old
     waiting work and no completion inside the window, so a large but
@@ -420,33 +421,50 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
     import notify_spool
     import semantic_policy
     from mcs_queries import current_v4_id
+
+    def _phase(name):
+        if observation is not None:
+            observation["phase"] = name
+
     reasons = []
+    _phase("cloud_policy")
     cloud_reason = cloud_stop_reason(db, cfg)
     if cloud_reason:
         reasons.append(f"cloud_llm_{cloud_reason}")
     if notify_scope.interactive_enabled(cfg):
+        transport = notify_scope.active_transport(cfg)
+        _phase("card_queue_oldest")
         oldest = db.execute(
             "SELECT MIN(created_at) FROM notification_renders "
             "WHERE state='queued' AND transport=?",
-            (notify_scope.active_transport(cfg),)).fetchone()[0]
-        progress = db.execute(
-            "SELECT MAX(updated_at) FROM notification_renders "
-            "WHERE state='delivered' AND transport=?",
-            (notify_scope.active_transport(cfg),)).fetchone()[0]
-        part_progress = db.execute(
-            "SELECT MAX(p.updated_at) FROM notification_render_parts p "
-            "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
-            "WHERE p.state='delivered' AND r.transport=?",
-            (notify_scope.active_transport(cfg),)).fetchone()[0]
-        latest_progress = max((v for v in (progress, part_progress)
-                               if v is not None and v <= now), default=None)
-        if (oldest is not None and now - oldest > CARD_STALL_S
-                and (latest_progress is None or now - latest_progress > CARD_STALL_S)):
-            reasons.append("card_delivery_stalled")
-            import card_worker_status
-            worker = card_worker_status.diagnose(notify_spool.data_root(db), cfg)
-            if worker["state"] in ("unknown", "disabled"):
-                reasons.append(worker["reason"])
+            (transport,)).fetchone()[0]
+        # Progress reads only matter once a queued render is old; a recent
+        # whole-render delivery already proves the transport is moving, so
+        # the per-part JOIN is skipped in that case.
+        if oldest is not None and now - oldest > CARD_STALL_S:
+            _phase("card_render_progress")
+            progress = db.execute(
+                "SELECT MAX(updated_at) FROM notification_renders "
+                "WHERE state='delivered' AND transport=?",
+                (transport,)).fetchone()[0]
+            if progress is not None and progress <= now and now - progress <= CARD_STALL_S:
+                latest_progress = progress
+            else:
+                _phase("card_part_progress")
+                part_progress = db.execute(
+                    "SELECT MAX(p.updated_at) FROM notification_render_parts p "
+                    "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+                    "WHERE p.state='delivered' AND r.transport=?",
+                    (transport,)).fetchone()[0]
+                latest_progress = max((v for v in (progress, part_progress)
+                                       if v is not None and v <= now), default=None)
+            if latest_progress is None or now - latest_progress > CARD_STALL_S:
+                reasons.append("card_delivery_stalled")
+                import card_worker_status
+                worker = card_worker_status.diagnose(notify_spool.data_root(db), cfg)
+                if worker["state"] in ("unknown", "disabled"):
+                    reasons.append(worker["reason"])
+        _phase("card_restore_holds")
         if db.execute("SELECT 1 FROM notification_restore_holds "
                       "WHERE released_at IS NULL LIMIT 1").fetchone():
             reasons.append("restore_delivery_held")
@@ -462,6 +480,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
         lazily: the legacy probe walks eligible messages."""
         # due "now or within the slack": a deferring drainer keeps pushing
         # next_try a minute ahead, which must still read as waiting work
+        _phase("llm_due_semantic")
         if not errors and scfg["mode"] != "off" and db.execute(
                 "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
                 "AND state='pending' AND next_try<=? LIMIT 1",
@@ -471,6 +490,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
             return False
         # extract_llm's own pending predicate, minus exhausted rows
         import extract_llm
+        _phase("llm_due_extract")
         return db.execute(
             f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred(db)} "
             "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
@@ -480,6 +500,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
 
     # the LLM lane's own health record (llm_health.json): None means
     # unknown or healthy and never alerts
+    _phase("llm_lane_record")
     try:
         seconds = llm_availability.llm_down_for_s(db, now=now)
     except Exception:
@@ -490,6 +511,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
         reasons.append("local_llm_down")
     if errors:
         return reasons   # reported as stage errors; admission is closed
+    _phase("jev_block")
     blocked = jev_block_reason(db) if scfg["mode"] != "off" else None
     if blocked:
         # the cause is known and external — name it. A live drainer keeps
@@ -497,6 +519,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
         # still only fires when the drainer itself stopped.
         reasons.append(f"semantic_jev_{blocked}")
     sem_on = scfg["mode"] != "off"
+    _phase("semantic_backlog")
     due = sem_on and db.execute(
         "SELECT 1 FROM fetch_jobs WHERE kind='semantic' "
         "AND state='pending' AND next_try<=? LIMIT 1",
@@ -514,6 +537,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
                 (now, window)).fetchone()):
         reasons.append("semantic_backlog_stalled")
     if scfg["fact_source"] != "canonical":
+        _phase("extract_backlog")
         newest = db.execute(
             "SELECT created_at FROM artifacts WHERE kind='extract_llm' "
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()
@@ -970,7 +994,8 @@ def build_health(db, result: dict, status: str,
     stall_observation: dict = {}
     try:
         stalls = (bounded_health_read(
-                      db, lambda _check: backlog_stalls(db, cfg, now, marks=stall_marks),
+                      db, lambda _check: backlog_stalls(
+                          db, cfg, now, marks=stall_marks, observation=stall_observation),
                       seconds=remaining(), observation=stall_observation)
                   if checked else [])
     except Exception as e:
