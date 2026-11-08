@@ -6,6 +6,12 @@ import pytest
 import attachment_inference
 import maintenance
 import mcs_ocr
+from test_attachment_inference import page_store  # noqa: F401
+from test_attachment_inference_checkpoints import _long_page
+from test_cloud_after_local import local_then_cloud  # noqa: F401
+from test_anthropic_runtime import routed  # noqa: F401
+
+__all__ = ['page_store']
 
 CFG = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
 
@@ -169,3 +175,36 @@ def test_live_config_failure_stops_units_without_erasing_saved_counts(job, monke
     result = mcs_ocr.run()
     assert result['local_done'] == 1 and result['reason'] == 'config_invalid'
     assert job.snapshots == 0 and job.closed
+
+
+def test_local_page_budget_completes_two_slow_chunks_in_one_drain(page_store, monkeypatch):
+    ledger, cfg, key, calls, _, answers = page_store
+    body = '合成記録A。眠気はありません。\n合成記録B。頭痛はありません。\n'
+    _long_page(ledger, key, body)
+    size = len(body) // 2
+    monkeypatch.setattr(attachment_inference.extract_llm, '_CHUNK_SIZE', size)
+    assert len(attachment_inference.extract_llm.plan_chunks(body, size)) == 2
+    clock = [1000.0]
+    monkeypatch.setattr(attachment_inference.time, 'monotonic', lambda: clock[0])
+    original = attachment_inference.extract_llm.local_llm.chat
+
+    def slow(prompt, **kwargs):
+        target = prompt.rsplit('<<<', 1)[1].split('>>>')[0]
+        symptom = '眠気' if '眠気' in target else '頭痛'
+        answers['local'] = {'symptoms': [{'text': symptom, 'negated': True, 'subject': 'patient',
+            'status': 'ongoing', 'evidence': symptom + 'はありません。'}]}
+        response = original(prompt, **kwargs)
+        clock[0] += 80
+        return response
+
+    monkeypatch.setattr(attachment_inference.extract_llm.local_llm, 'chat', slow)
+    monkeypatch.setattr(attachment_inference.extract_llm.local_llm, 'admitted_chat',
+                        lambda client, prompt, **kw: slow(prompt, **kw))
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
+                        lambda *args, **kwargs: {'complete': 0})
+    result = mcs_ocr._drain(ledger, cfg, (False, 1), clock[0] + mcs_ocr.DRAIN_BUDGET_S,
+                            live_config=False)
+    assert result['local_done'] == 1 and result['local_deferred'] == 0
+    assert len(calls) == 2
+    assert attachment_inference.current(ledger.db, 1, key, cfg=cfg)['ready'] is True

@@ -176,11 +176,13 @@ def test_local_inference_deadline_uses_the_extended_page_budget(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
     monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(mcs_ocr, "Ledger", lambda path: SimpleNamespace(close=lambda: None))
+    now = [1000.0]
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
     received = []
 
     def local(ledger, settings, *, stage, deadline, limit):
         assert stage == "local" and limit == 1
-        received.append(deadline - mcs_ocr.time.monotonic())
+        received.append(deadline - now[0])
         return {"done": 0, "deferred": 1}
 
     monkeypatch.setattr(attachment_inference, "run_pending", local)
@@ -188,7 +190,54 @@ def test_local_inference_deadline_uses_the_extended_page_budget(tmp_path, monkey
                         lambda *args, **kwargs: {"complete": 0})
     mcs_ocr.run(cfg)
     assert mcs_ocr.LOCAL_CALL_S == 300
-    assert received and all(0 < span <= mcs_ocr.LOCAL_CALL_S for span in received)
+    assert received == [mcs_ocr.LOCAL_CALL_S]
+
+
+def test_local_inference_deadline_never_exceeds_the_remaining_job_budget(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    received = []
+
+    def local(ledger, settings, *, stage, deadline, limit):
+        received.append(deadline - now[0])
+        return {"done": 0, "deferred": 1}
+
+    monkeypatch.setattr(attachment_inference, "run_pending", local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending",
+                        lambda *args, **kwargs: {"complete": 0})
+    cfg = {"attachment_ocr": {"enabled": True, "timeout_seconds": 120}}
+    result = mcs_ocr._drain(SimpleNamespace(), cfg, (False, 1), now[0] + 120,
+                            live_config=False)
+    assert received == [115]
+    assert result["local_deferred"] == 1
+
+
+def test_large_raw_timeout_runs_original_ocr_before_local_inference(tmp_path, monkeypatch):
+    database = tmp_path / "synthetic.db"
+    database.touch()
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku",
+                              "timeout_seconds": 600}}
+    monkeypatch.setattr(mcs_ocr, "DB", str(database))
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr, "Ledger", lambda path: SimpleNamespace(close=lambda: None))
+    now = [1000.0]
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
+    events = []
+
+    def local(ledger, settings, *, stage, deadline, limit):
+        events.append("local")
+        return {"done": 0, "deferred": 0}
+
+    def ocr(ledger, settings, *, deadline, limit):
+        events.append("ocr")
+        return {"complete": 0}
+
+    monkeypatch.setattr(attachment_inference, "run_pending", local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", ocr)
+    mcs_ocr.run(cfg)
+    assert events == ["ocr", "local"]
 
 
 def test_ocr_call_deadline_is_the_job_residual_not_runtime_window(tmp_path, monkeypatch):

@@ -68,7 +68,7 @@ def test_120_second_local_pass_resumes_two_chunks_and_only_then_is_ready(page_st
     assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
 
 
-def test_explicit_300_second_deadline_completes_two_chunks_without_resend(page_store, monkeypatch):
+def test_explicit_300_second_deadline_resumes_remaining_chunk_without_resend(page_store, monkeypatch):
     ledger, cfg, key, calls, _, answers = page_store
     body = '合成記録A。眠気はありません。\n合成記録B。頭痛はありません。\n'
     _long_page(ledger, key, body)
