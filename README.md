@@ -21,7 +21,9 @@ Slack・Discordでは、元の投稿をチャンネルのカードに、後か�
 > | 既存環境の更新・復旧 | [UPGRADE_AGENT.md](docs/guides/UPGRADE_AGENT.md)（[raw](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/main/docs/guides/UPGRADE_AGENT.md)）。checkout は `repo_path` の場所（`--no-recovery` で導入して無い場合は [§1](docs/guides/UPGRADE_AGENT.md#1-対象と-python-の特定) の手順で特定）を使い、新しく clone しない |
 > | 更新が途中で止まった・`mcs/ops/mcs_update.py status` の `applying` が `null` でない | [UPGRADE_AGENT.md §7 失敗時・巻戻し](docs/guides/UPGRADE_AGENT.md#7-失敗時巻戻し) |
 >
-> 秘密値はチャットに書かせず、ユーザーの端末で入力してもらいます。投稿の収集・通知・既読化・サービス起動は、依頼された範囲でだけ行います。
+> 「スタンドアローンで」と指定された新規導入は、`--mode standalone`を明示してHermesの導入手順を省きます。既存環境はcheckoutと設定を保持し、新しくcloneせず、更新か初期設定の再開として進めます。方式の切替が必要なら、先に影響と残る確認事項を説明します。
+>
+> 秘密値はチャットに書かせず、ユーザーの端末で入力してもらいます。投稿の収集・通知・既読化・サービス起動は、依頼された範囲でだけ行います。ソフトの準備、設定の保存、ブラウザーと通知先の接続、利用開始の確認を分けて報告してください。
 
 | 収集 | 保存・整理 | 通知・操作 |
 |---|---|---|
@@ -317,12 +319,12 @@ MCSの投稿・返信・添付情報をこのMacへ保存します。新着と�
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
-./install.sh --mode standalone --preflight   # 読み取り専用の事前チェック
-./install.sh --mode standalone               # 依存一式を導入。途中で止まったら修正して再実行
+sh scripts/mcs install --mode standalone --preflight   # 読取り専用の事前チェック
+sh scripts/mcs install --mode standalone               # 依存を導入し、初期設定へ進む
 ```
 
 事前チェックの「要対処」に表示される`対処:`を確認し、`導入を妨げる問題 0件`になってから導入します。
-方式を省略した初回の`./install.sh`は、Hermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ねます。Enterの既定は従来どおりHermesです。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
+共通入口の`sh scripts/mcs install`は既存の`install.sh`を実行します。方式を省略した初回はHermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、Enterの既定は従来どおりHermesです。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
 導入後は、そのまま初期設定へ進むか、後で行うかを選べます。後で行う場合は、完了画面に表示される設定コマンドを使います。
 初期設定の推奨コースは必要な項目を順番に案内し、詳細コースでは全項目を確認できます。分からない必須情報は中止して確認できます。HermesモードのSlack/DiscordではHermesとの同期も行います。[初めての導入・更新・復旧](docs/guides/EASY_SETUP.md)に操作の流れをまとめています。
 本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。
@@ -331,9 +333,12 @@ cd hermes-mcs
 **AIに導入を任せる場合**は、リポジトリを開いたエージェントに次のように依頼できます。デスクトップ版のClaude・Codexが一時フォルダへ取得した場合は、`python3 scripts/install_local.py` で恒久的な置き場所へ導入します（[手順](docs/guides/LOCAL_AGENT_INSTALL.md)）。
 
 ```text
-docs/guides/SETUP_AGENT.md に従って、このMacへhermes-mcsを導入してください。
-既存設定と回答を再利用し、まず通知先を選んで進めてください。
-認証情報は私が端末へ直接入力します。投稿の収集・通知・既読化は開始前に範囲を確認してください。
+https://github.com/yusuketakuma/hermes-mcs を読んで、このMacへスタンドアローンで導入してください。
+SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1段階ずつ結果と次の操作を案内してください。
+既存環境があれば新しくcloneせず、既存checkoutから更新または設定の再開として進めてください。
+決まっている回答は再利用し、通知先・操作を許可する人・対象範囲の未決事項だけ確認してください。
+認証情報は私が端末へ直接入力します。収集・通知・既読化・サービス起動は依頼した範囲で行ってください。
+ソフトの準備と実際の接続・通知の確認を分け、未完了の項目と再開コマンドを報告してください。
 ```
 
 | 次に進む先 | 内容 |
