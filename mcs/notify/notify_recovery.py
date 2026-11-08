@@ -595,7 +595,7 @@ _CARD_PART_CHECK_MAX_ROWS = 100000
 
 
 def _journal_scope_rows(attempts, req, surface):
-    # The same delivery/part row scope _part_resolution_journal_error validates.
+    # Rows in the delivery/part scope, or the Discord recovery surface scope.
     return [row for record in attempts.values() for row in record["rows"]
             if row.get("delivery_id") == req["delivery_id"]
             and (row.get("part_id") == req["part_id"] if surface is None else
@@ -609,9 +609,10 @@ def card_part_check(ledger, data_dir, delivery_id, part_id) -> dict:
 
     The published snapshot supplies plan identity only; journal evidence is
     scanned from the explicitly supplied ``data_dir`` at a separate
-    observation time. ``journal_check`` is ``passed`` when the verified
-    journal contradicts no applicable proof, ``blocked`` when every
-    applicable proof fails on journal evidence, and ``unknown`` whenever
+    observation time. ``journal_check`` is ``passed`` when at least one
+    applicable proof is not contradicted by the verified journal,
+    ``blocked`` when every applicable proof fails on journal evidence,
+    and ``unknown`` whenever
     the journal is unreadable, incomplete, over the read budget, absent
     for the target scope, or missing — a tainted journal can hide a
     ``started`` row, so absence of evidence never passes. ``journal.state``
@@ -928,11 +929,7 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
         surface = group["surface"] if group else None
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return "file_group_identity_unverified"
-    rows = [row for record in attempts.values() for row in record["rows"]
-            if row.get("delivery_id") == req["delivery_id"]
-            and (row.get("part_id") == req["part_id"] if surface is None else
-                 row.get("attempt_id") == req["attempt_id"] and
-                 (row.get("part_id") == surface or surface == "card" and not row.get("part_id")))]
+    rows = _journal_scope_rows(attempts, req, surface)
     delivered = [row for row in rows if row.get("phase") == "result" and row.get("result") == "delivered"]
     if req["result"] == "mark_delivered":
         if any((row.get("message_id", row.get("remote_id")) if surface == "card"
