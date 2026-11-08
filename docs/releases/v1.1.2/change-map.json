@@ -1,5 +1,5 @@
 {
-  "fragment_count": 117,
+  "fragment_count": 118,
   "records": [
     {
       "category": "added",
@@ -819,8 +819,15 @@
       "path": "changes/archive/1.1.2/installer-interruption-progress.json",
       "sha256": "b3957f639e8fd570294a3777fce70e3355f002eb0bfbbbb97341f241b8bc19a7",
       "title": "導入・更新の途中停止から段階を確認して再開できる記録を追加"
+    },
+    {
+      "category": "fixed",
+      "id": "mcslog-stall-observation",
+      "path": "changes/archive/1.1.2/mcslog-stall-observation.json",
+      "sha256": "4eee0d170bacc51c73cf6fc4850267115adbf68481acfd0e6e5b4379df457309",
+      "title": "停滞チェックの観測失敗が収集エラーとして二重表示される問題を修正"
     }
   ],
-  "scope": "v1.1.2 の変更記録117件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録118件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }

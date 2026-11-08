@@ -270,6 +270,16 @@
 - 本番は70e4ae5eのまま。親工程の限定した読取りではdeadline_deferredとstall_check_failed:OperationalErrorを観測したが、独立した要約・薬剤集約の失敗は観測されず、postprocessは同じstallを二重に分類した表示だった。後続の自然実行ではstall・stage_errors・overshootは観測されず、期限による先送りが残った。警報分類は原因調査中で、実装修正と新しい変更記録は未確定。導入記録の追加で運用が回復した、患者コンテキストが完成した、医学的精度を確認したとは扱わない。新しいMacでの全導入、候補の本番適用・自然観測、公開は未実施で、既存Release下書きは未公開。unknownの自動解除・再送は行わない。
 - source・tests・manifest・生成DEVELOPMENTは親工程の所有のまま、文書担当は手編集・再生成していない。今回の文書集約で旧110件の条件や図の流れは変わらず、件数表示のない図は再描画していない。
 
+## 停滞チェックの観測診断の追補
+
+- 文書の基準は `a2acf03f11e46625e4da00c9560217e96cf29512`。既存117件へmcslog-stall-observationの1件を加え、全118件へ集約した。新fragmentは原文のbytesを保ってarchiveし、既存117件のhash、旧110件のbytes、SVG・PNG・visual-sourceの3資産と過去の受入を保持する。
+- 停滞チェックの観測失敗は固定語彙のstall_check診断へ記録し、result.errorsへ追加して収集・要約等の失敗として二重計上しない。status・reason・observationと、取得できた場合のSQLite主コード（下位8bit）を記録し、例外本文は保存しない。既存の停滞理由・degraded・閾値とlast_ok_atの更新条件は維持する。期限超過の説明は収集後の処理を含む実行全体へ、最終正常の説明は全監視項目が正常だった最終記録へ限定し、値と更新条件は変えない。
+- 親工程は旧6cと新しい同一テストで、観測失敗をresult.errorsへ追加しない条件が1件失敗することを確認した。終了1、約1.835秒で、旧製品のbytesは不変だった。その後、文書担当はdelivery-reconciliation/health-final-result.jsonの終端を照合した。a2acf03f固定の健康監視関連15fileは546件成功・失敗0・error 0・skip 0・終了0、約132.866268秒で完了した。source_stamp_changed=[]、終了HEADは同じa2acf03f、終了時のstatusはcleanだった。文書担当はpytestを起動していない。
+- 文書担当はdelivery-reconciliation/installer-final-result.jsonの終端を照合した。9910acbc固定のinstaller・初期設定関連21fileは859件成功・失敗0・error 0・skip 0・終了0、約553.7024秒で完了した。実行前後のHEADは同じ9910acbcで、source_stamp_changed=[]、終了時のstatusはcleanだった。前の8b固定709件成功と元45対象の2732件成功・1件失敗は当時の結果として保持する。今回の15fileや全体suite・GitHub CI全ジョブの成功とは扱わない。
+- 過去のSQLite観測失敗は例外型しか記録がなく、直接原因は未確定。今回の分類や今後得られるSQLite主コードから、過去の原因を補って断定しない。前のpostprocess二重表示と後続の自然実行で停滞警報等を観測しなかった結果は、親工程の限定観測として保持する。新候補の本番適用・自然観測は未実施で、本番は70e4ae5eのまま。期限による先送りの解消、患者コンテキストの完成、医学的精度や運用回復を確認した結果にはしない。
+- 親工程の同sourceのfullruff・gates 10/10・mine・readme・ownerの検査はすべて終了0。Devinはmergeの親関係と製品bytes、a2acのmetadataのみの差分、配布証跡524pathsとtopの不変、変更がhealthの2entryだけで不一致0、公式digestの再現を独立した読取りで確認し、親工程が受け入れた。本人はpytestを実行しておらず、動的根拠は上記の親工程による546件成功と分ける。追加の全体suiteやGitHub CIの成功とは扱わない。
+- 新しいMacでの全導入、公開は未実施で、既存Release下書きは未公開。unknownの自動解除・再送は行わない。文書担当はsource・tests・manifest・生成DEVELOPMENTを手編集・再生成せず、図も再描画していない。本番適用と自然観測は次工程の予定で、この記録の時点では未実施。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。
