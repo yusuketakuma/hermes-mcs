@@ -803,7 +803,9 @@ def _install_progress_warning():
         return None
     except (OSError, ValueError, RecursionError):
         return _install_progress_unreadable()
-    if not isinstance(progress, dict) or progress.get("version") != 1:
+    if (not isinstance(progress, dict)
+            or type(progress.get("version")) is not int
+            or progress.get("version") != 1):
         return _install_progress_unreadable()
     status = progress.get("status")
     stage = progress.get("stage")
@@ -818,7 +820,8 @@ def _install_progress_warning():
             or invocation not in _INSTALL_PROGRESS_INVOCATIONS
             or not isinstance(run_id, str) or not run_id
             or isinstance(updated, bool)
-            or not isinstance(updated, (int, float))):
+            or not isinstance(updated, (int, float))
+            or (isinstance(updated, float) and not math.isfinite(updated))):
         return _install_progress_unreadable()
     if status != "running":
         return None

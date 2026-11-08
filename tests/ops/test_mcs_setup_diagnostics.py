@@ -613,7 +613,7 @@ def test_install_progress_warning_reports_leftover_stage_without_time_claim(
         monkeypatch, tmp_path):
     """A leftover running record warns honestly — never asserts interruption
     or in-progress from the timestamp alone."""
-    for updated in (1, time.time()):
+    for updated in (1, time.time(), time.time() + 10**9):
         _install_progress_fixture(monkeypatch, tmp_path, _install_progress_record(
             stage="services", updated_at=updated))
         warning = mcs_setup._install_progress_warning()
@@ -641,11 +641,16 @@ def test_install_progress_warning_update_invocation_points_to_recover(
     _install_progress_record(status="running", stage="done"),  # inconsistent
     _install_progress_record(status="complete", stage="services"),
     _install_progress_record(version=2),                     # unknown version
+    _install_progress_record(version=True),                  # bool version
+    _install_progress_record(version=1.0),                   # float version
     _install_progress_record(invocation="sideways"),
     _install_progress_record(run_id=""),
     _install_progress_record(run_id=None),
     _install_progress_record(updated_at="soon"),
     _install_progress_record(updated_at=True),
+    _install_progress_record(updated_at=float("nan")),
+    _install_progress_record(updated_at=float("inf")),
+    _install_progress_record(updated_at=float("-inf")),
     [], "not a dict",
 ])
 def test_install_progress_warning_unreadable_shape_warns_fixed(

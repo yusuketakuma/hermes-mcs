@@ -1188,6 +1188,7 @@ _install_progress_fields() {  # validated "<status> <stage> <invocation> <run_id
     case "$_ipf_inv" in install|update) ;; *) return 1 ;; esac
     [ -n "$_ipf_run" ] || return 1
     if [ "$_ipf_stage" = done ] && [ "$_ipf_status" != complete ]; then return 1; fi
+    if [ "$_ipf_status" = complete ] && [ "$_ipf_stage" != done ]; then return 1; fi
     printf '%s %s %s %s\n' "$_ipf_status" "$_ipf_stage" "$_ipf_inv" "$_ipf_run"
 }
 _install_stage_label() {  # <stage-id>; fixed display names, never file text

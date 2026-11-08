@@ -301,7 +301,7 @@ def test_exit_names_stage_from_memory_when_journal_unwritable(tmp_path):
     assert "途中から再開します" in r.stderr
 
 
-@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage"])
+@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage", "complete_stage"])
 def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
     """A foreign or malformed journal is no record — never a crash or echo."""
     home, hermes_home, _stub, env = _world(tmp_path)
@@ -312,6 +312,12 @@ def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
         journal.symlink_to(home / ".mcs/config.json")
     elif kind == "garbage":
         journal.write_text("not json at all\n")
+    elif kind == "complete_stage":
+        # complete pairs only with done; a complete mid-stage record is malformed
+        journal.write_text(json.dumps({
+            "version": 1, "status": "complete", "stage": "services",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}))
     else:
         journal.write_text(json.dumps({
             "version": 1, "status": "running", "stage": "bogus_stage",
