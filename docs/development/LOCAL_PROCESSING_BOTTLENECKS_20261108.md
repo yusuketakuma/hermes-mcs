@@ -4,7 +4,7 @@
 遅い要因を整理したものです。根拠は2系統で、区別して扱います。
 
 - **Devin側**：コード照合と合成probe（一時ディレクトリのlockのみ。
-  実LLM・API・DB・Keychain・本番設定・再起動は不使用）。
+  新規推論要求・DB書込み・設定変更・再起動は不使用）。
 - **Root側**：本番のpass記録ログを bounded（直近60分・末尾16MiB制限）かつ
   固定語彙の数値集計のみ読み取ったもの。ID・本文・生ログは含まない。
   参照先は私有監査 `bounded-pass-summary.json` /
@@ -18,9 +18,9 @@
 ## 1. 現況表（Rootの bounded 集計・実機値）
 
 対象：`ff038ef8`、Apple M4 / 16GiB、Qwen3.5-9B-Q4_K_M。
-観測窓は 22:07:52–23:07:52 JST（60分）。機体状況：swap使用4.36GiB、
+観測窓は 22:07:52–23:07:52 JST（60分）。機体状況：swap使用約4.26GiB、
 `memory_pressure` free 22%（10%閾値はその時点で通過）、disk空き20.6GiB、
-thermal警告なし。
+thermal警告の記録なし。
 
 | 領域 | 実機値 |
 |---|---|
@@ -33,8 +33,8 @@ thermal警告なし。
 | 全収集tick | 4回とも291–354.8秒。内訳 fetch 115–129s / derive 78–129s / snapshot 48–75s（verify 42–55sが支配）。run_checkは取得〜closeまでrun.lock保持（LLM区間のみunlock） |
 | patient_context | 3,309 records・done 0。scan_incomplete 2,628 / waiting 681。30分窓の scan_ms 中央値716ms（min 9 / max 95,062）。waiting 324件の scanned8=305 / 7=19、中央値1,442.5ms |
 | /slots 短窓 | 23:15:54–23:16:19の6回GETで3枠すべてidle（短窓のため長期稼働率ではない） |
-| semantic実設定 | fact_source/loop_mode/summary_mode = shadow、assist、QC annotate、job_budget 1260。shadowは旧factsとの比較実行で新canonical自動採用ではない |
-| shadow_v2 | 7 calls / incomplete 5 / 1,808.9s（再取得待ちを内包しtransportと加算不可） |
+| semantic実設定 | fact_source/loop_mode/summary_mode = shadow、assist、QC annotate、job_budget 1260。shadowは旧factsを消費しつつv2比較文書を生成する経路で、新canonical自動採用ではない |
+| shadow_v2 | v2抽出段階の試行7 / incomplete 5 / 1,808.9s（再取得待ちを内包しtransportと加算不可。試行数は `semantic_fact_stages.py:156` のstageカウンタでHTTP call数ではない） |
 | systemwide | vm_page deltas: Compressions 350,466 / Decompressions 304,150（他アプリとこの調査自体を含みMCS原因断定不可） |
 
 ## 2. 実機で確認した要因（優先度順）
@@ -45,10 +45,12 @@ thermal警告なし。
   該当passは `budget_short` / `deferred_short` へ。
 - 機序（コード照合）：`semantic_due_selection.py:377-388` の
   `BACKLOG_COMMIT_RESERVE_S=540` と `semantic_transport.py:553`
-  `LONG_MIN_CALL_S=620`。job_budget 1260 では reserve 540・開始60を引くと
-  実call窓は最大約720秒。後続callは残300秒を要求するため、
-  推論200秒＋再取得400秒なら残120<300で model HTTP timeoutではなく
-  call開始前に `budget_short` となる。実passの長い再取得と整合する。
+  `LONG_MIN_CALL_S=620`。reserve=min(540, max(0, 1260-620-60))=540 で、
+  transport窓は 1260-540=720 が上限（上流deadline・準備でさらに短縮）。
+  後続callは `semantic_runtime.py:579-600` の `LLM_CALL_RESERVE_S=300`
+  で残300秒を要求するため、推論200秒＋再取得400秒なら残120<300で
+  model HTTP timeoutではなく call開始前に `budget_short` となる。
+  実passの長い再取得と整合する。
 - holder：各待ち時点のholder PIDは未追跡で、全てcollector原因とは断定しない。
   ただし全収集tickが291–354.8秒・run.lock保持（transportのみunlock）で、
   再取得待ちの機序と一致する。fetch/derive/snapshotの長区間が調査対象。
@@ -62,44 +64,53 @@ thermal警告なし。
 
 ### P2 repair・holdの負荷
 
-- 実測：call 53件中 repair 25件（repair_prompt_n 42,148、repair_wins 3）。
+- 実測：call 53件中 repair 25件（repair_prompt_n 42,148）。
   held_prior 5・lock_lost 7・`empty_repair_candidate_binding` 20。
+- 補足：repair_wins 3 はnullable・未記録項目があり 3/25 の成功率は
+  導出不可。held_prior は以前の結果の保全、lock_lost は保存carryへの
+  移行で、いずれもデータ消失ではない。ev 75 / items 23 / reasons 10 等は
+  issue件数であって失敗request数ではない。
 - 意味：repair呼出しは全体の約半分で、限られた枠・予算のかなりの部分を
   占める。原資料増でchunk・修復が増える一般機序と、今回の実観測を分ける。
 - 優先度：高。
-- 受入測定：repair_wins率・repair理由分布・同一passの反復回数。
-- 対策案：発生理由（ev 75 / items 23 / reasons 10 等）の内訳から
-  修復不能な束縛の多さを確認してから対象を絞る。一律な抑制はしない。
+- 受入測定：repair理由分布・同一passの反復回数（率の計測は同一対象・
+  観測完全性を確認してから）。
+- 対策案：発生理由の内訳から修復不能な束縛の多さを確認してから
+  対象を絞る。一律な抑制はしない。
 
 ### P3 patient_context の反復走査
 
-- 実測：3,309 passで done 0。scan_incomplete 2,628 / waiting 681。
-- **重要な反証**：scan_incomplete は障害ではない。1pass最大8反復・
-  `seen` はcallごとresetのため、正常な有限slice終了でも発生する
-  （13患者fixtureの `test_partial_pass_never_reports_complete` でpin）。
-  waitingの大半（305/324）は scanned=8 で「8件走査して待機」。
+- 実測：選択pass 3,309件・当該窓の新完了記録（done）0。
+  scan_incomplete 2,628 / waiting 681。3,309 はLLM/cloud callではなく
+  選択passの件数。
+- **重要な反証**：scan_incomplete は正常な有限slice終了でも発生する
+  （1pass最大8反復・`seen` はcallごとreset。13患者fixtureの
+  `test_partial_pass_never_reports_complete` でpin）。ただしCAS競合・
+  観測中断・SQLite/OSError等も同じ理由コードに入るため、コードだけで
+  正常とも障害とも決められない。waitingの大半（305/324）は scanned=8。
 - コード上の候補：`_select_patient` が候補ごとに global PROGRESS の
   pid0 CASを2回行い、他worker競合時に None → scan_incomplete となる経路
   （CAS競合の実比率は未確認）。最初の8候補が未準備でも9件目が実行可能な
   反例があるため「空走査」とは断定しない。
-- 優先度：中（done 0で通過量ゼロだが、走査自体の支配性は反証あり）。
-- 受入測定：未走査・future next_try・readiness待ち・CAS失敗・deadlineを
-  分けて集計。CAS失敗率が高ければ競合保護、低ければ供給不足。
+- 優先度：中（当該窓の新完了ゼロだが、走査自体の支配性は反証あり）。
+- 受入測定：未走査・future next_try・readiness待ち・CAS失敗・deadline・
+  読取重複を分けて集計。
 
 ### P4 systemwideメモリ圧縮（因果未特定）
 
-- 実測：swap 4.36GiB使用、短窓で Compressions 350k / Decompressions 304k。
+- 実測：swap約4.26GiB（vm_stat 4364MiB）使用、短窓で Compressions 350k /
+  Decompressions 304k。
 - 反証：他アプリとこの調査自体を含む全systemwide値であり、MCSへの
   因果は未特定。`memory_pressure` 10%閾値はその時点で通過。
-- 優先度：低〜中。16GiBで -c 49152×3枠のKVキャッシュと shadow 比較実行が
-  常駐する構成上の背景として記録。
+- 優先度：低〜中。16GiBで合計49152（3枠各16384）のコンテキストを持つ
+  常駐モデルと shadow 比較文書生成が載る構成上の背景として記録。
 
 ### P5 shadow 比較実行の負担
 
 - 実測：semantic実設定は shadow（fact_source/loop_mode/summary_mode）。
-  shadow_v2 は 7 calls / 1,808.9s（再取得待ちを内包）。
-- 意味：本番canonicalを自動採用しない比較目的の旧facts実行が、
-  本番と同じ枠・予算を消費する。不要と判断してOFF・自動canonical化は
+  shadow_v2 は v2抽出段階の試行7 / 1,808.9s（再取得待ちを内包）。
+- 意味：旧factsを消費しつつv2比較文書を生成する経路が、本番と同じ
+  枠・予算を消費する。不要と判断してOFF・自動canonical化は
   不可（目的と承認の確認が先）。
 - 優先度：中（目的確認後に負荷対効果を評価する領域）。
 
@@ -154,6 +165,10 @@ thermal警告なし。
 - **`_BATCH_PER_ITEM_S=55.0`・`_BATCH_K=0`**：1件55秒は推定定数であり
   実遅延の観測ではない。実値は上表の prompt_ms/predicted_ms 側。
   batch有効化は原因未立証のため、後段の合成比較候補に留める。
+- **`invalidate_s` / `reproject_s`**：当窓の実測は invalidate 0–0.002秒・
+  reproject 約0.001–0.004秒で、主因ではない（将来規模では監視対象）。
+- **Jev 通信**：transport 合計9.3秒に対し Jev再取得は142.5秒。
+  Jev通信自体を主因とする証拠はない（待ちの所在はlock側）。
 - **idle poll**：`extract_llm_resident.py:433-460, 631-660` で
   `_IDLE_FLOOR_S=5`→`min(30, 2倍)` の指数backoffか next_due起床。
   120秒は circuit-open/disk_low・再試行なし時のみ。新着は10分tick。
@@ -198,8 +213,9 @@ UNKNOWN解除は1件でも停止・撤回。
 - shadow比較実行の目的と公開対象差（Root側で追加照合）。
 - systemwide圧縮がMCSに及ぼす実影響（他要因を含み分離不能）。
 - 実OCR所要時間・添付ごとのtimeout完走率。
-- Oracle実行の表示名は gpt-6-pro（browserの `/select/pro`・log上のPro表示・
-  UIのpicker一致）だが、サーバ側の独立同定は未検証。
+- Oracle実行の表示名は request gpt-6-pro・browser strategy
+  select/thinking pro・ログ上のPro確認まで。backendの独立同定は不可で、
+  UI picker一致の証拠は未記録・未確認として区別。
 
 **文書とコードの食い違い（コード基準で記録）**
 
@@ -215,7 +231,9 @@ UNKNOWN解除は1件でも停止・撤回。
 ## 6. 対象外と検証
 
 **対象外・やらないこと**：安全gateの緩和・予算の一律増・品質確認省略は
-しない。実LLM・API・DB・Keychain・本番設定・再起動は行わない。
+しない。新規推論要求・DB書込み・設定変更・再起動は行っていない
+（Root側の readonly loopback GET `/slots` と既存ログ・状態の
+bounded観測はこの調査の範囲内）。
 `llm_lane_bench.sh` はworker/service停止が前提のowner向け道具であり
 この調査では実行しない（実測が必要になった場合はRoot判断で別途）。
 
