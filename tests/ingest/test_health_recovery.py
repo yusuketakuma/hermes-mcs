@@ -306,13 +306,13 @@ def test_overall_ok_does_not_complete_missing_host_evidence(world):
 
 def test_daily_budget_is_shared_and_runtime_changes_preserve_unknown(world):
     home, live, calls = world
-    # The known gateway target shares the top-level budget, even before its caller is enabled.
+    # Both targets consume the same top-level budget.
     state = recovery._load_state(str(home))
     state.update(window_start=NOW, attempts=2, targets={"ai.hermes.gateway": {"pending": None}})
     recovery._save_state(str(home), state)
     _run(world)
     before = (home / recovery.STATE_REL).read_bytes()
-    assert _run(world, cfg={"runtime_mode": "hermes"})["reason"] == "runtime_unsupported"
+    assert _run(world, cfg={"runtime_mode": "hermes"})["reason"] == "observation_unverified"
     assert (home / recovery.STATE_REL).read_bytes() == before
     live["generation"] = "c" * 32
     live["exits"] = {}
@@ -340,6 +340,10 @@ def test_other_target_pending_survives_window_rollover(world):
     _run(world)
     state = recovery._load_state(str(home))
     state["targets"]["ai.hermes.gateway"] = state["targets"].pop(recovery.TARGET)
+    pending = state["targets"]["ai.hermes.gateway"]["pending"]
+    identity = {"pid": 731, "started_at": NOW - 100}
+    pending.update(**identity, generation=recovery.payload_hash(identity), receipt_at=None,
+                   request_id=pending["operation_id"], reasons=["worker_start_failed"])
     recovery._save_state(str(home), state)
     before = (home / recovery.STATE_REL).read_bytes()
     assert _run(world, now=NOW + 2 * recovery.DEFAULT_WINDOW_S)["reason"] == "outcome_unresolved"
@@ -355,17 +359,36 @@ def test_existing_restart_request_is_not_overwritten_or_charged(world):
     assert path.read_bytes() == before and not (home / recovery.STATE_REL).exists()
 
 
+def test_proved_old_manual_request_does_not_block_current_auto_generation(world):
+    home, _, calls = world
+    path = home / "data" / service.RESTART_FILE
+    _private(path, {"generation": "c" * 32, "request_id": "d" * 32, "requested_at": NOW - 1})
+    before = path.read_bytes()
+    assert _run(world)["actions"][0]["result"] == "requested"
+    assert len(calls) == 1 and path.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", ["{", '{"generation":"old","request_id":"bad","requested_at":0}'])
+def test_unverified_manual_request_is_preserved_and_blocks_auto(world, raw):
+    home, _, calls = world
+    path = home / "data" / service.RESTART_FILE
+    path.write_text(raw)
+    path.chmod(0o600)
+    assert _run(world)["reason"] == "restart_request_present" and calls == []
+    assert path.read_text() == raw and not (home / recovery.STATE_REL).exists()
+
+
 def test_generation_race_rejects_request_before_publication(world, monkeypatch):
     home, live, calls = world
     monkeypatch.setattr(service, "request_restart", REAL_REQUEST)
     observations = iter([dict(live), {**live, "generation": "c" * 32}])
     monkeypatch.setattr(service, "status", lambda *a, **kw: next(observations))
     assert _run(world)["actions"][0]["result"] == "unknown"
-    assert not (home / "data" / service.RESTART_FILE).exists() and calls == []
+    assert not service.restart_request_path(str(home), GENERATION).exists() and calls == []
     assert _pending(home)["result"] == "unknown"
 
 
-def test_manual_request_wins_publication_race_without_overwrite(world, monkeypatch):
+def test_manual_request_race_keeps_both_request_files_and_no_replay(world, monkeypatch):
     home, _, calls = world
     monkeypatch.setattr(service, "request_restart", REAL_REQUEST)
     publish = safe_io.publish_new_bytes
@@ -377,8 +400,10 @@ def test_manual_request_wins_publication_race_without_overwrite(world, monkeypat
         publish(path, raw)
 
     monkeypatch.setattr(safe_io, "publish_new_bytes", race)
-    assert _run(world)["actions"][0]["result"] == "unknown" and calls == []
+    assert _run(world)["actions"][0]["result"] == "requested" and calls == []
     assert json.loads(request_path.read_text()) == manual
+    automatic = service.restart_request_path(str(home), GENERATION)
+    assert automatic != request_path and json.loads(automatic.read_text())["generation"] == GENERATION
     assert _run(world)["reason"] == "outcome_unresolved"
 
 

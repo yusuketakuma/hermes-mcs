@@ -7,4 +7,4 @@ PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 PY=__PYTHON__
 
-"$PY" __REPO__/mcs/ingest/health_watch.py
+"$PY" __REPO__/mcs/ingest/health_watch.py --send
