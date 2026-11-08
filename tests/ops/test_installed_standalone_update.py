@@ -334,8 +334,15 @@ def test_external_bootstrap_does_not_inherit_installed_runtime_expectation(monke
 
 def test_installed_reinstall_rejects_a_locked_descriptor_for_another_file(
         updater, prepared_run_log, monkeypatch, tmp_path):
-    launcher, repo, base, _target, _config, installs, _seen = _guide_world(
+    launcher, repo, base, target, config, installs, _seen = _guide_world(
         updater, monkeypatch, tmp_path, True)
+    # This synthetic base cannot run standalone: a failed install must retain the recovery hold.
+    for path in ('mcs_standalone/__main__.py', 'mcs/core/mcs_runtime.py'):
+        assert _git(repo, 'cat-file', '-e', f'{base}:{path}', check=False).returncode != 0
+    config_before = config.read_bytes()
+    restarts = []
+    monkeypatch.setattr(update_apply, 'quiesce', lambda: (updater._write_marker(), [])[1])
+    monkeypatch.setattr(update_apply, 'restart_agents', lambda: restarts.append(True) or [])
     attempted = []
     with (tmp_path / 'foreign.lock').open('w') as foreign:
         os.chmod(foreign.name, 0o600)
@@ -356,8 +363,15 @@ def test_installed_reinstall_rejects_a_locked_descriptor_for_another_file(
     assert attempted == [True] and installs == []
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state['applied'] == []
+    assert state['attempts']['v1.2.0']['result'] == 'failed'
     assert 'install_failed' in state['attempts']['v1.2.0']['detail']
-    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
+    assert 'rollback failed: standalone_runtime_missing_in_target' in state['attempts']['v1.2.0']['detail']
+    assert state['applying']['prev_sha'] == base and state['applying']['sha'] == target
+    assert state['applying']['reinstall'] is True and not state['applying'].get('reinstall_done')
+    assert state['stages'][-1]['stage'] == 'post_merge'
+    assert Path(updater.MARKER_PATH).is_file() and restarts == []
+    assert config.read_bytes() == config_before
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == target
 
 
 @pytest.mark.parametrize('finish', ['same_sha', 'tag_changed', 'head_changed', 'capability_lost'])
