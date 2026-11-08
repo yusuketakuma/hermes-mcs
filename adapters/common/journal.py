@@ -155,10 +155,12 @@ def _names(state_dir: str) -> list[str]:
 def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
     """Drop settled attempts from closed journal files. Returns rows dropped.
 
-    ``active`` is the caller's live segment path, never touched. A file
-    is rewritten only when every line parses (a torn/corrupt line keeps
-    the file as-is: restore reconcile treats it as tainted evidence) and
-    ``file_ok(rows)`` accepts it. An attempt is dropped only when all of
+    ``active`` is the caller's live segment path, never touched. If any
+    journal file fails to parse fully (a torn/corrupt row, an unreadable
+    file), the whole pass drops nothing: an unreadable row can hide
+    another file's attempt membership, and restore reconcile treats the
+    damaged file as tainted evidence. Otherwise a file is rewritten only
+    when ``file_ok(rows)`` accepts it. An attempt is dropped only when all of
     its rows are in that file and ``prunable(attempt_id, rows)`` holds.
     Each rewrite is atomic (tmp + fsync + rename + dir fsync), so a crash
     leaves either the old or the new file, never half an attempt.
