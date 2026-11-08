@@ -82,8 +82,16 @@ def test_lineworks_adapter_older_than_its_sources_needs_restart(monkeypatch, new
         assert f"kickstart -k gui/{mcs_setup._service_paths().uid}/{LW}" in stale[0]
 
 
-def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeypatch, capsys):  # noqa: F811
+@pytest.mark.parametrize("platform,expected", [
+    ("darwin", ["launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks"]),
+    ("linux", ["systemctl --user restart hermes-mcs-lineworks.service"]),
+    ("sunos5", ["launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks",
+                "systemctl --user restart hermes-mcs-lineworks.service"]),
+])
+def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeypatch, capsys,  # noqa: F811
+                                                            platform, expected):
     import card_worker_status
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: config())
     monkeypatch.setattr(card_worker_status, "diagnose", lambda *a, **kw: {
         "state": "disabled", "reason": "worker_start_failed",
@@ -91,7 +99,24 @@ def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeyp
     mcs_setup.main(["doctor"])
     out = capsys.readouterr().out
     assert "通知の配送処理（LINE WORKSアダプター）: 停止・無効（配送処理の起動に失敗しました）" in out
-    assert "ai.mcs.lineworks" in out and "data/mcs.log" in out
+    assert "data/mcs.log" in out
+    for text in expected:
+        assert text in out
+
+
+@pytest.mark.parametrize("reason", ["owner_unverified", "worker_started"])
+def test_doctor_shows_no_lineworks_restart_for_unknown_reasons(local_config, monkeypatch, capsys,  # noqa: F811
+                                                               reason):
+    import card_worker_status
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: config())
+    monkeypatch.setattr(card_worker_status, "diagnose", lambda *a, **kw: {
+        "state": "disabled", "reason": reason,
+        "restore_delivery_held": False, "recovery_scope": None})
+    mcs_setup.main(["doctor"])
+    out = capsys.readouterr().out
+    assert "通知の配送処理（LINE WORKSアダプター）" in out
+    assert "ai.mcs.lineworks" not in out
+    assert "hermes-mcs-lineworks.service" not in out
 
 
 def test_lineworks_update_diagnostic_keeps_one_deadline(monkeypatch):
