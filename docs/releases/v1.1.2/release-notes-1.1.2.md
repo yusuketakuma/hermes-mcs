@@ -22,12 +22,12 @@ v1.1.2は、品質を確認した資料から患者コンテキストの概況�
 ![v1.1.2の流れ：返信から患者情報・検索へ進み、同じ患者の別スレッドや添付OCRを探して出典とMCSへ戻る説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/patient-find-v112.png)
 
 - **添付の医療資料を文字起こしし、通知に原文と添付を表示**
-  画像・PDFをローカルで読み取り、投稿本文を変えずにページと出典付きの資料として保存し、診療情報提供書・報告書・薬剤資料などを医療項目へ整理します。Discord・LINE WORKSの通知カードに投稿原文と添付を表示し、Slackでは患者情報と運用ログの通知先を分けます。
+  画像・PDFをローカルで読み取り、投稿本文を変えずにページと出典付きの資料として保存し、診療情報提供書・報告書・薬剤資料などを医療項目へ整理します。Discord・LINE WORKSで投稿原文を表示し、Discordでは添付を原文の下へまとめて表示します（LINE WORKSは連続投稿・別ファイル経路です）。Slackでは患者情報と運用ログの通知先を分けます。
 
 - **導入の途中記録・AIへの導入案内・運用診断と安全な復帰**
   導入・更新が途中で止まると、最後に開始した段階を data/install_progress.json に記録し、中断メッセージと mcs setup check に段階名を出します。AIへリポジトリURLを渡す依頼から新規導入・再開を既存の操作へ案内します。解析の停止理由と配送結果不明の復旧対象を固定コードと一覧で確認でき、停滞を確認した処理へ監視から再起動を要求します。結果が不明な要求は自動で繰り返しません。
 
-![導入の4段階：事前チェック→依存導入→初期設定→接続確認の流れを示す説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/setup-steps-v112.png)
+![導入の4段階：ソフト準備→初期設定→browserと通知接続→checkと利用開始の流れを示す説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/setup-steps-v112.png)
 
 ### 改善
 

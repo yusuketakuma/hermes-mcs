@@ -313,7 +313,7 @@ sh scripts/mcs install --mode standalone --preflight   # 読取り専用の事�
 sh scripts/mcs install --mode standalone               # 依存を導入し、初期設定へ進む
 ```
 
-![導入の4段階：事前チェック→依存導入→初期設定→接続確認の流れを示す説明図](docs/releases/v1.1.2/setup-steps-v112.png)
+![導入の4段階：ソフト準備→初期設定→browserと通知接続→checkと利用開始の流れを示す説明図](docs/releases/v1.1.2/setup-steps-v112.png)
 
 説明図は実画面ではありません。各段階の詳細と止まったときの再開は[導入ガイド](docs/guides/INSTALLATION.md)と[更新・復旧](docs/guides/UPGRADE_AGENT.md)に従います。
 
