@@ -231,8 +231,10 @@ def test_interrupted_install_journal_names_stage_and_resume_notice(tmp_path):
 
     r2 = _run(env, hermes_home)
     assert r2.returncode == 0, r2.stderr
-    assert ("前回の導入は【3/6】Slack／Discord の操作カード用プラグインの段階で"
-            "中断していました") in r2.stdout
+    assert ("前回の導入記録が【3/6】Slack／Discord の操作カード用プラグインの段階で"
+            "残っています") in r2.stdout
+    assert "完了は記録されていません" in r2.stdout
+    assert "中断していました" not in r2.stdout
     done = json.loads(journal.read_text())
     assert done["status"] == "complete" and done["stage"] == "done"
     assert done["run_id"] != progress["run_id"]
@@ -267,3 +269,48 @@ def test_unwritable_journal_never_stops_install(tmp_path):
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
     assert journal.is_dir()
+    assert not list(journal.iterdir())   # the writer skips a directory dest
+
+
+def test_exit_names_stage_from_memory_when_journal_unwritable(tmp_path):
+    """The EXIT trap reports this run's stage even with no journal record."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.unlink()
+    journal.mkdir()
+    r = _run({**env, "STUB_FAIL_PLUGIN": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "操作カード用プラグインの段階で止まっていました" in r.stderr
+    assert "途中から再開します" in r.stderr
+
+
+@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage"])
+def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
+    """A foreign or malformed journal is no record — never a crash or echo."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.unlink()
+    if kind == "symlink":
+        journal.symlink_to(home / ".mcs/config.json")
+    elif kind == "garbage":
+        journal.write_text("not json at all\n")
+    else:
+        journal.write_text(json.dumps({
+            "version": 1, "status": "running", "stage": "bogus_stage",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}))
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "前回の導入記録" not in r.stdout
+    assert "bogus_stage" not in r.stdout + r.stderr
+
+
+def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
+    """A fresh install stopped at brew keeps the approval hold message."""
+    home, hermes_home, _stub, env = _world(tmp_path, brew=False)
+    r = _run(env, hermes_home)
+    assert r.returncode != 0
+    assert "導入は保留中です" in r.stderr
+    assert "担当者に確認してください" in r.stderr

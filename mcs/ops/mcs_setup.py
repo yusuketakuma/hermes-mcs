@@ -117,7 +117,7 @@ import mcs_runtime
 import runtime_inspection
 
 from mcs_util import (CONF_PATH, HOME, REPO)
-from safe_io import read_regular_nofollow
+from safe_io import read_json_nofollow, read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -781,25 +781,53 @@ _INSTALL_PROGRESS_STAGE_JA = {
 }
 
 
+_INSTALL_PROGRESS_LIMIT = 4096
+_INSTALL_PROGRESS_INVOCATIONS = {"install", "update"}
+
+
+def _install_progress_unreadable():
+    return "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください"
+
+
 def _install_progress_warning():
-    """Last installer stage if its run stopped before completion."""
+    """Last installer stage if its run stopped before completion.
+
+    The journal cannot prove whether its run is still alive, so the
+    warning states only recorded facts and leaves the wait/resume
+    decision to the operator — never a time-based interruption claim.
+    """
+    path = os.path.join(HOME, "data", "install_progress.json")
     try:
-        with open(os.path.join(HOME, "data", "install_progress.json"), encoding="utf-8") as f:
-            progress = json.load(f)
-    except (OSError, ValueError):
+        progress = read_json_nofollow(path, _INSTALL_PROGRESS_LIMIT)
+    except FileNotFoundError:
         return None
-    if not isinstance(progress, dict) or progress.get("status") != "running":
-        return None
+    except (OSError, ValueError, RecursionError):
+        return _install_progress_unreadable()
+    if not isinstance(progress, dict) or progress.get("version") != 1:
+        return _install_progress_unreadable()
+    status = progress.get("status")
     stage = progress.get("stage")
-    label = _INSTALL_PROGRESS_STAGE_JA.get(stage, "途中の段階")
+    invocation = progress.get("invocation")
+    run_id = progress.get("run_id")
     updated = progress.get("updated_at")
-    if progress.get("invocation") == "update":
-        return (f"更新処理の導入段階が{label}で中断しています。"
-                "mcs recover で状態を確認し、指示に従ってください")
-    if isinstance(updated, (int, float)) and time.time() - updated < 300:
-        return f"導入が{label}の段階で実行中です。完了を待ってから確認してください"
-    return (f"前回の導入が{label}の段階で中断しています。"
-            "install.sh を同じ引数で再実行すると途中から再開します")
+    if not all(isinstance(value, str) for value in (status, stage, invocation)):
+        return _install_progress_unreadable()
+    consistent = ((status == "running" and stage in _INSTALL_PROGRESS_STAGE_JA)
+                  or (status == "complete" and stage == "done"))
+    if (not consistent
+            or invocation not in _INSTALL_PROGRESS_INVOCATIONS
+            or not isinstance(run_id, str) or not run_id
+            or isinstance(updated, bool)
+            or not isinstance(updated, (int, float))):
+        return _install_progress_unreadable()
+    if status != "running":
+        return None
+    label = _INSTALL_PROGRESS_STAGE_JA.get(stage, "途中の段階")
+    if invocation == "update":
+        return (f"更新処理の導入記録が{label}の段階で残っています。完了は記録されていません。"
+                "実行中の場合は終了を待ち、mcs recover で状態を確認してください")
+    return (f"導入の記録が{label}の段階で残っています。完了は記録されていません。"
+            "実行中の場合は完了を待ち、終了していれば install.sh を同じ引数で再実行すると途中から再開します")
 
 
 def cmd_check(args) -> int:

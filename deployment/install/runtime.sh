@@ -11,13 +11,18 @@
 _install_progress_hold=""
 if [ "$_fresh_authorized" = 1 ]; then _install_progress_hold=1; fi
 _install_progress() {  # <stage-id> <running|complete>
-    [ -z "$_install_progress_hold" ] || return 0
-    mkdir -p "$MCS_DATA" 2>/dev/null || return 0
+    # The in-memory stage survives a held or failed journal write, so the
+    # install.sh EXIT trap can still name this run's last stage.
+    _ip_cur_stage="$1"
+    _ip_cur_status="$2"
     _ip_inv=install
     [ -z "${MCS_UPDATE_REINSTALL:-}" ] || _ip_inv=update
-    _ip_tmp="$MCS_DATA/.install-progress.$$"
+    [ -z "$_install_progress_hold" ] || return 0
+    [ -d "$MCS_DATA/install_progress.json" ] && return 0
+    mkdir -p "$MCS_DATA" 2>/dev/null || return 0
+    _ip_tmp="$(mktemp "$MCS_DATA/.install-progress.XXXXXXXX" 2>/dev/null)" || return 0
     if printf '{"version":1,"status":"%s","stage":"%s","runtime_mode":"%s","invocation":"%s","run_id":"%s","updated_at":%s}\n' \
-            "$2" "$1" "$RUNTIME_MODE" "$_ip_inv" "${INSTALL_PROGRESS_RUN:-unknown}" "$(date +%s 2>/dev/null || echo 0)" \
+            "$_ip_cur_status" "$_ip_cur_stage" "$RUNTIME_MODE" "$_ip_inv" "${INSTALL_PROGRESS_RUN:-unknown}" "$(date +%s 2>/dev/null || echo 0)" \
             > "$_ip_tmp" 2>/dev/null \
             && mv -f "$_ip_tmp" "$MCS_DATA/install_progress.json" 2>/dev/null; then
         return 0

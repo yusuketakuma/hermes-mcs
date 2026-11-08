@@ -137,7 +137,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="cfeee4e4f74a8f9612bc4e0d63305d80bf221d704344a8c7f7ae82d0b0e871d9"
+INSTALL_RUNTIME_SHA256="32c59fd0e955cf7a46aafbd6cba61e5f8d8f57bae657f3b76c99da2d7c038acc"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -1168,10 +1168,27 @@ require_ocr_tools
 # Per-run id ties the stage journal to this invocation; a stale journal from
 # an older interrupted run is never reported as this run's stage.
 INSTALL_PROGRESS_RUN="$$-$(date +%s 2>/dev/null || echo 0)"
-_install_progress_fields() {  # "<status> <stage> <invocation> <run_id>" or nothing
-    [ -f "$MCS_DATA/install_progress.json" ] || return 1
-    sed -n 's/.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
-        "$MCS_DATA/install_progress.json" | head -1
+_install_progress_fields() {  # validated "<status> <stage> <invocation> <run_id>" or nothing
+    _ipf="$MCS_DATA/install_progress.json"
+    [ -f "$_ipf" ] && [ ! -L "$_ipf" ] || return 1
+    # bounded read of a regular file only; sed sees at most 4 KiB
+    _ipf_line="$(dd if="$_ipf" bs=4096 count=1 2>/dev/null \
+        | sed -n 's/.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
+        | head -1)"
+    [ -n "$_ipf_line" ] || return 1
+    _ipf_status="${_ipf_line%% *}"
+    _ipf_rest="${_ipf_line#"$_ipf_status" }"
+    _ipf_stage="${_ipf_rest%% *}"
+    _ipf_rest2="${_ipf_rest#"$_ipf_stage" }"
+    _ipf_inv="${_ipf_rest2%% *}"
+    _ipf_run="${_ipf_rest2##* }"
+    case "$_ipf_status" in running|complete) ;; *) return 1 ;; esac
+    case "$_ipf_stage" in \
+        brew|runtime|plugin|log_helper|llm|services|recovery|options|done) ;; *) return 1 ;; esac
+    case "$_ipf_inv" in install|update) ;; *) return 1 ;; esac
+    [ -n "$_ipf_run" ] || return 1
+    if [ "$_ipf_stage" = done ] && [ "$_ipf_status" != complete ]; then return 1; fi
+    printf '%s %s %s %s\n' "$_ipf_status" "$_ipf_stage" "$_ipf_inv" "$_ipf_run"
 }
 _install_stage_label() {  # <stage-id>; fixed display names, never file text
     case "$1" in
@@ -1198,38 +1215,30 @@ _ip_inv="${_ip_rest2%% *}"
 _ip_run="${_ip_rest2##* }"
 if [ "$_ip_status" = running ] && [ "$_ip_run" != "$INSTALL_PROGRESS_RUN" ]; then
     if [ "$_ip_inv" = update ]; then
-        printf '前回の更新処理の導入段階が%sで中断していました。まず mcs recover で状態を確認し、指示に従ってください。\n' \
+        printf '前回の更新処理の導入記録が%sの段階で残っています。完了は記録されていません。まず mcs recover で状態を確認し、指示に従ってください。\n' \
             "$(_install_stage_label "$_ip_stage")"
     else
-        printf '前回の導入は%sの段階で中断していました。同じコマンドを再実行すると途中から再開します。\n' \
+        printf '前回の導入記録が%sの段階で残っています。完了は記録されていません。実行中の場合は完了を待ち、終了していれば同じコマンドを再実行すると途中から再開します。\n' \
             "$(_install_stage_label "$_ip_stage")"
     fi
 fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
+# _ip_cur_* is this run's last stage marker (runtime.sh), journal-independent.
 trap 'if [ "$?" -ne 0 ]; then
     if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
-    else
-        _ip_fields="$(_install_progress_fields || true)"
-        _ip_status="${_ip_fields%% *}"
-        _ip_rest="${_ip_fields#"$_ip_status" }"
-        _ip_stage="${_ip_rest%% *}"
-        _ip_rest2="${_ip_rest#"$_ip_stage" }"
-        _ip_inv="${_ip_rest2%% *}"
-        _ip_run="${_ip_rest2##* }"
-        if [ "$_ip_status" = running ] && [ "$_ip_run" = "$INSTALL_PROGRESS_RUN" ]; then
-            if [ "$_ip_inv" = update ]; then
-                printf "エラー: 更新処理の導入段階が中断しました。%sの段階で止まっていました。更新記録に基づき mcs recover で復旧を確認してください。\n" \
-                    "$(_install_stage_label "$_ip_stage")" >&2
-            else
-                printf "エラー: 導入を中断しました。失敗した段階の原因を確認してください。%sの段階で止まっていました。同じコマンドを再実行すると途中から再開します。\n" \
-                    "$(_install_stage_label "$_ip_stage")" >&2
-            fi
+    elif [ "${_ip_cur_status:-}" = running ]; then
+        if [ "${_ip_inv:-install}" = update ]; then
+            printf "エラー: 更新処理の導入記録が%sの段階で残り、完了は記録されていません。更新記録に基づき mcs recover で復旧を確認してください。\n" \
+                "$(_install_stage_label "${_ip_cur_stage:-}")" >&2
         else
-            printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
+            printf "エラー: 導入を中断しました。失敗した段階の原因を確認してください。%sの段階で止まっていました。同じコマンドを再実行すると途中から再開します。\n" \
+                "$(_install_stage_label "${_ip_cur_stage:-}")" >&2
         fi
+    else
+        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
     fi
 fi
 _install_stage_cleanup' EXIT
