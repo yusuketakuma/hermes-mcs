@@ -1194,9 +1194,10 @@ def cmd_doctor(args) -> int:
               f"（{labels.get(worker['reason'], '診断コード: ' + worker['reason'])}）")
         if lineworks:
             # Same remedy text health_watch alerts show for the separate adapter.
-            from health_watch import _LINEWORKS_ACTION
-            if worker['reason'] in _LINEWORKS_ACTION:
-                print(f"    対処: {_LINEWORKS_ACTION[worker['reason']]}")
+            from health_watch import _lineworks_actions
+            actions = _lineworks_actions()
+            if worker['reason'] in actions:
+                print(f"    対処: {actions[worker['reason']]}")
         if worker['restore_delivery_held']:
             print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
