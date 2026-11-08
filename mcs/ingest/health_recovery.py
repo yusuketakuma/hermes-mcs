@@ -206,7 +206,7 @@ def run(report: dict, home: str, cfg: dict, now: float) -> dict:
             return {**result, "reason": "no_restart_cause"}
         if os.path.lexists(Path(home) / "data" / service.RESTART_FILE):
             return {**result, "reason": "restart_request_present"}
-        if not state["targets"] or now - state["window_start"] >= window_s:
+        if now - state["window_start"] >= window_s:
             state.update(window_start=now, attempts=0)
         if state["attempts"] >= maximum:
             return {**result, "reason": "budget_exhausted", "exhausted": [TARGET]}

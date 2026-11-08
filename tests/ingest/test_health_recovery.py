@@ -324,6 +324,17 @@ def test_daily_budget_is_shared_and_runtime_changes_preserve_unknown(world):
     assert _run(world, now=NOW + recovery.DEFAULT_WINDOW_S)["actions"] and len(calls) == 2
 
 
+def test_empty_target_map_does_not_reset_recorded_shared_budget(world):
+    home, _, calls = world
+    state = recovery._load_state(str(home))
+    state.update(window_start=NOW, attempts=3)
+    assert state["targets"] == {} and recovery._valid_state(state)
+    recovery._save_state(str(home), state)
+    before = (home / recovery.STATE_REL).read_bytes()
+    assert _run(world)["reason"] == "budget_exhausted" and calls == []
+    assert (home / recovery.STATE_REL).read_bytes() == before
+
+
 def test_other_target_pending_survives_window_rollover(world):
     home, _, calls = world
     _run(world)
