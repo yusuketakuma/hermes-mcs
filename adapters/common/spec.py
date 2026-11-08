@@ -99,7 +99,9 @@ POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
-    "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast", "operator_verified"})
+    "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast", "operator_verified",
+    # discord file_group anchors: the surface part and its member ids
+    "surface", "members", "face_at", "prior_remote_file_id"})
 MAX_CAPTION = 300
 
 # Primary operations retained on older LINE WORKS cards without ``more``.
@@ -618,7 +620,7 @@ def file_group_sha256(spec):
     parts = spec.get("parts", {})
     stages = [{key: p.get(key) for key in (
         "part_id", "index", "attachment_id", "sha256", "bytes", "name",
-        "prior_remote_id", "operator_verified")}
+        "prior_remote_id", "prior_remote_file_id", "face_at", "operator_verified")}
         for p in parts.get("manifest", []) if p.get("kind") == "attachment_part"
         and p.get("unavailable") is not True]
     identity = {"card_key": spec.get("card_key"), "delivery": spec.get("delivery"),
@@ -649,8 +651,23 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                 and not _HEX64.fullmatch(str(p["sha256"])):
             _err("bad_part_sha256")
         kind = p["kind"]
+        if "prior_remote_file_id" in p or "face_at" in p:
+            if (kind != "attachment_part" or spec is None
+                    or spec["delivery"].get("transport", "discord") != "discord"):
+                _err("bad_discord_file_identity")
+            if "prior_remote_file_id" in p and (
+                    not _text(p["prior_remote_file_id"], 128) or not p.get("prior_remote_id")):
+                _err("bad_discord_file_identity")
+            if "face_at" in p and (type(p["face_at"]) is not int or p["face_at"] < 0):
+                _err("bad_discord_file_identity")
+        if "surface" in p or "members" in p:
+            if kind != "file_group":
+                _err("bad_part_keys")
         if kind == "file_group":
-            if (spec is None or spec.get("delivery", {}).get("transport") != "slack"
+            if spec is not None \
+                    and spec.get("delivery", {}).get("transport", "discord") == "discord":
+                pass    # cross-part rules run in _validate_discord_file_groups
+            elif (spec is None or spec.get("delivery", {}).get("transport") != "slack"
                     or spec.get("kind") != "thread"
                     or spec.get("op") not in ("create", "update")
                     or (spec.get("parts", {}).get("slack") or {}).get("file_group") is not True
@@ -725,6 +742,110 @@ def _validate_manifest(manifest, *, spec=None) -> None:
                 _err("bad_attachment_sha256")
             if type(p.get("bytes")) is not int or p["bytes"] < 0:
                 _err("bad_attachment_bytes")
+    _validate_discord_file_groups(spec, manifest)
+
+
+# Discord caps one message at 10 uploaded files (discord.py 2.7.1
+# ``files`` contract), 20 MiB per file by default (guild
+# ``attachment_size_limit`` may raise it; the conservative default is
+# the verified floor), and 25 MiB for the whole send request (official
+# message-create docs). A surface group never exceeds any of them;
+# OVERHEAD reserves room for the multipart/JSON envelope inside the
+# 25 MiB request cap — it is a safety margin, not an API value.
+DISCORD_GROUP_MAX_MEMBERS = 10
+DISCORD_GROUP_MAX_FILE_BYTES = 20 * 1024 * 1024
+DISCORD_GROUP_MAX_REQUEST_BYTES = 25 * 1024 * 1024
+DISCORD_GROUP_REQUEST_OVERHEAD = 64 * 1024
+
+
+def discord_file_name(member):
+    """Content-bound unique wire name shared by native file display and upload."""
+    name = member["name"]
+    spoiler = name.startswith("SPOILER_") or name.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp"))
+    while name.startswith("SPOILER_"):
+        name = name[8:]
+    wire = f"{member['part_id'].replace(':', '-')}-{member['sha256'][:12]}-{name}"
+    return ("SPOILER_" if spoiler else "") + wire
+
+
+def discord_file_group_sha256(spec, surface, members):
+    """Bind one surface's ordered member files to this sealed card,
+    source and route — the discord counterpart of file_group_sha256."""
+    parts = spec.get("parts", {})
+    stages = [{key: m.get(key) for key in (
+        "part_id", "index", "attachment_id", "sha256", "bytes", "name",
+        "prior_remote_id", "prior_remote_file_id", "face_at", "operator_verified")}
+        for m in members]
+    identity = {"card_key": spec.get("card_key"), "delivery": spec.get("delivery"),
+                "post_source_id": parts.get("post_source_id"),
+                "surface": surface, "stages": stages}
+    return hashlib.sha256(canonical(identity)).hexdigest()
+
+
+def _validate_discord_file_groups(spec, manifest) -> None:
+    """Cross-part rules for discord per-surface file groups: each group
+    anchors one card/body_part surface and its member attachment_parts
+    sit between that surface and the group; a member belongs to exactly
+    one group and a surface to exactly one group."""
+    if spec is None or spec.get("delivery", {}).get("transport", "discord") != "discord":
+        return
+    groups = [(i, p) for i, p in enumerate(manifest)
+              if p.get("kind") == "file_group"]
+    if not groups:
+        return
+    if (spec.get("kind") != "thread" or spec.get("op") not in ("create", "update")
+            or spec["parts"].get("chat_format_version") != 1):
+        _err("bad_discord_file_group")
+    by_id = {p["part_id"]: (i, p) for i, p in enumerate(manifest)}
+    used_members, used_surfaces = set(), set()
+    for i, g in groups:
+        if set(g) != {"part_id", "kind", "index", "surface", "members", "sha256"}:
+            _err("bad_discord_file_group")
+        surface, members = g.get("surface"), g.get("members")
+        if not _text(surface, MAX_PART_ID) or g.get("part_id") != f"file_group:{surface}":
+            _err("bad_discord_file_group")
+        sentry = by_id.get(surface)
+        if (sentry is None or sentry[0] >= i
+                or sentry[1].get("kind") not in ("card", "body_part")
+                or surface in used_surfaces):
+            _err("bad_discord_file_group")
+        used_surfaces.add(surface)
+        if (not isinstance(members, list) or not members
+                or len(members) > DISCORD_GROUP_MAX_MEMBERS):
+            _err("bad_discord_file_group")
+        if any(not _text(m, MAX_PART_ID) for m in members):
+            _err("bad_discord_file_group")
+        if len(set(members)) != len(members):
+            _err("bad_discord_file_group")
+        resolved = []
+        total = 0
+        for mid in members:
+            m = by_id.get(mid)
+            if (m is None or m[0] <= sentry[0] or m[0] >= i
+                    or m[1].get("kind") != "attachment_part"
+                    or m[1].get("unavailable") is True
+                    or mid in used_members):
+                _err("bad_discord_file_group")
+            if (type(m[1].get("bytes")) is not int
+                    or m[1]["bytes"] > DISCORD_GROUP_MAX_FILE_BYTES):
+                _err("bad_discord_file_group")
+            face_at = m[1].get("face_at")
+            if surface == "card":
+                posts = (spec["parts"].get("discord") or {}).get("face_posts") or []
+                if type(face_at) is not int or face_at not in {p["at"] for p in posts}:
+                    _err("bad_discord_file_identity")
+            elif face_at is not None:
+                _err("bad_discord_file_identity")
+            total += m[1]["bytes"]
+            used_members.add(mid)
+            resolved.append(m[1])
+        if total > DISCORD_GROUP_MAX_REQUEST_BYTES - DISCORD_GROUP_REQUEST_OVERHEAD:
+            _err("bad_discord_file_group")
+        if i != max(by_id[mid][0] for mid in members) + 1:
+            _err("bad_discord_file_group")
+        if g.get("sha256") != discord_file_group_sha256(spec, surface, resolved):
+            _err("bad_discord_file_group")
 
 
 def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
