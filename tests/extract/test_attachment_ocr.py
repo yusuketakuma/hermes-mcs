@@ -797,6 +797,8 @@ def test_status_keeps_backoff_failure_until_success(setup, monkeypatch):
     monkeypatch.setattr(ocr, "_runtime", fail)
     first = ocr.run_pending(ledger, cfg)
     assert first["pending_failed"] == 1 and first["queue_status"] == "known"
+    assert first["failure_reason_counts"] == {"local_processing_failed": 1}
+    assert first["exhausted_failed"] == 0
     backed_off = ocr.run_pending(ledger, cfg)
     assert backed_off["failed"] == 0 and backed_off["pending_failed"] == 1
     ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.next_try',0)")
@@ -808,6 +810,85 @@ def test_status_keeps_backoff_failure_until_success(setup, monkeypatch):
             break
     assert recovered["complete"] == 1 and recovered["pending_failed"] == 0
     assert recovered["queue_status"] == "known"
+    assert recovered["failure_reason_counts"] == {} and recovered["exhausted_failed"] == 0
+
+
+def test_failure_diagnostics_keep_history_and_exhausted_attempts(setup, monkeypatch):
+    ledger, cfg, _, _, _ = setup
+    clock, calls = [1000], []
+
+    def fail(*args):
+        calls.append(clock[0])
+        raise ValueError("output_schema_table_overlap")
+
+    monkeypatch.setattr(ocr.time, "time", lambda: clock[0])
+    monkeypatch.setattr(ocr, "_runtime", fail)
+    for attempt in range(1, 4):
+        for _ in range(3):
+            result = ocr.run_pending(ledger, cfg)
+            if result["failed"]:
+                break
+        assert result["failed"] == 1 and len(calls) == attempt
+        assert result["pending_failed"] == 1
+        assert result["failure_reason_counts"] == {"output_schema_table_overlap": 1}
+        assert result["exhausted_failed"] == (1 if attempt == 3 else 0)
+        assert ocr.run_pending(ledger, cfg)["failed"] == 0
+        assert len(calls) == attempt
+        clock[0] += 3601
+    before = ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall()
+    assert [json.loads(row["content"])["attempts"] for row in before] == [1, 2, 3]
+    for _ in range(3):
+        result = ocr.run_pending(ledger, cfg)
+        assert result["failed"] == 0 and result["exhausted_failed"] == 1
+    assert len(calls) == 3
+    assert ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall() == before
+    assert ocr.current(ledger.db, 1) is None
+
+
+@pytest.mark.parametrize("state,reason,attempts", [
+    ("failed", "synthetic_private_reason", True),
+    ("unavailable", ["synthetic_private_reason"], 4),
+])
+def test_failure_diagnostics_omit_unknown_reason_and_unverified_attempts(setup, monkeypatch,
+                                                                      state, reason, attempts):
+    ledger, cfg, _, _, _ = setup
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: (_ for _ in ()).throw(ValueError("engine_failed")))
+    assert ocr.run_pending(ledger, cfg)["failed"] == 1
+    doc = json.loads(ledger.db.execute("SELECT content FROM artifacts").fetchone()[0])
+    doc.update(state=state, reason=reason, attempts=attempts)
+    raw = json.dumps(doc)
+    ledger.db.execute("UPDATE artifacts SET content=?", (raw,))
+    ledger.db.commit()
+    result = ocr.run_pending(ledger, cfg)
+    assert result["pending_failed"] == 1 and result["queue_status"] == "known"
+    assert result["failure_reason_counts"] == {} and result["exhausted_failed"] == 0
+    assert "synthetic_private" not in json.dumps(result)
+    assert ledger.db.execute("SELECT content FROM artifacts").fetchall()[0][0] == raw
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 1
+
+
+def test_failure_diagnostics_cover_only_the_bounded_queue_sample(setup, monkeypatch):
+    ledger, cfg, _, _, _ = setup
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: (_ for _ in ()).throw(ValueError("output_schema_table_overlap")))
+    assert ocr.run_pending(ledger, cfg)["failed"] == 1
+    doc = json.loads(ledger.db.execute("SELECT content FROM artifacts").fetchone()[0])
+    doc["attempts"] = 3
+    ledger.db.execute("UPDATE artifacts SET content=?", (json.dumps(doc),))
+    for aid in range(2, 258):
+        ledger.db.execute("INSERT INTO attachments SELECT ?,message_id,state,sha256,bytes,local_path "
+                          "FROM attachments WHERE attachment_id=1", (aid,))
+        clone = {**doc, "attachment_id": aid,
+                 "reason": "timeout" if aid == 257 else "output_schema_table_overlap"}
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                          "VALUES(?,20,10,?,'yomitoku',?,1)",
+                          (ocr.KIND, json.dumps(clone), json.dumps({"attachment_id": aid})))
+    ledger.db.commit()
+    changes = ledger.db.total_changes
+    result = ocr.run_pending(ledger, cfg)
+    assert result["failed"] == 0 and result["queue_status"] == "partial"
+    assert result["pending_failed"] == result["exhausted_failed"] == 256
+    assert result["failure_reason_counts"] == {"output_schema_table_overlap": 256}
+    assert ledger.db.total_changes == changes
 
 
 def test_queue_status_does_not_claim_unobserved_rows_have_no_failures(setup, monkeypatch):
