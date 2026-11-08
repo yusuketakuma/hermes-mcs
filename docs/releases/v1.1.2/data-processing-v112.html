@@ -1,0 +1,43 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>data-processing-v112</title></head><body>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 660" role="img" aria-labelledby="t d" font-family="Hiragino Kaku Gothic ProN, sans-serif">
+<title id="t">v1.1.2 MCSの記録から通知・検索までの流れ</title>
+<desc id="d">MedicalCareStationの投稿・返信・添付をMacへ保存し、画像・PDFはローカルでOCR文字起こしします。個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成・更新します（生成クラウドは任意設定）。通知と検索は患者コンテキストの完成を待たずに使えます。外部監査Jevは別経路です。実画面や測定結果ではありません。</desc>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66716f"/></marker></defs>
+<rect width="390" height="660" fill="#f6f4ef"/>
+<g fill="#202124">
+<text x="20" y="34" font-size="17" font-weight="700">データ処理の流れ（v1.1.2）</text>
+<text x="20" y="56" font-size="12" fill="#66716f">MCSの記録から通知・検索まで・合成説明図</text>
+<rect x="16" y="72" width="358" height="80" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="100" font-size="15" font-weight="700">1　MCSから収集</text>
+<text x="32" y="122" font-size="12" fill="#66716f">MedicalCareStationを定期取得</text>
+<text x="32" y="142" font-size="12" fill="#66716f">本文と添付を分けて保持</text>
+<path d="M195 152V164" stroke="#66716f" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="16" y="168" width="358" height="80" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="196" font-size="15" font-weight="700">2　Macへ保存＋OCR</text>
+<text x="32" y="218" font-size="12" fill="#66716f">画像・PDFをページと出典付きで保存</text>
+<text x="32" y="238" font-size="12" fill="#66716f">ローカルで文字起こし</text>
+<path d="M195 248V260" stroke="#66716f" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="16" y="264" width="358" height="80" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="292" font-size="15" font-weight="700">3　個別解析（ローカル）</text>
+<text x="32" y="314" font-size="12" fill="#66716f">昼夜で最大3枠・新着優先</text>
+<text x="32" y="334" font-size="12" fill="#66716f">クラウドを待たずに進む</text>
+<path d="M195 344V356" stroke="#66716f" stroke-width="2"/>
+<path d="M101 356H289" stroke="#66716f" stroke-width="2"/>
+<path d="M101 356V372" stroke="#66716f" stroke-width="2" marker-end="url(#ar)"/>
+<path d="M289 356V372" stroke="#66716f" stroke-width="2" marker-end="url(#ar)"/>
+<rect x="16" y="376" width="171" height="118" rx="12" fill="#e9f5ef" stroke="#087f5b"/>
+<text x="32" y="404" font-size="15" font-weight="700" fill="#087f5b">患者コンテキスト</text>
+<text x="32" y="426" font-size="12" fill="#202124">品質確認資料から作成</text>
+<text x="32" y="446" font-size="12" fill="#202124">生成cloudは任意設定</text>
+<text x="32" y="466" font-size="12" fill="#202124">未取得は完了としない</text>
+<rect x="203" y="376" width="171" height="118" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="219" y="404" font-size="15" font-weight="700">通知・検索</text>
+<text x="219" y="426" font-size="12" fill="#66716f">カード表示・原資料検索</text>
+<text x="219" y="446" font-size="12" fill="#66716f">解析完了を待たず使える</text>
+<text x="219" y="466" font-size="12" fill="#66716f">検索はLLMを使わない</text>
+<text x="20" y="512" font-size="12" fill="#087f5b" font-weight="700">通知と検索は患者コンテキストの完成を待ちません</text>
+<rect x="16" y="524" width="358" height="70" rx="12" fill="#edf0ee" stroke="#d5dcd7"/>
+<text x="32" y="550" font-size="12" font-weight="700" fill="#66716f">別経路：外部監査（Jev）</text>
+<text x="32" y="572" font-size="12" fill="#66716f">設定時のみ・この経路とは別</text>
+</g></svg>
+</body></html>

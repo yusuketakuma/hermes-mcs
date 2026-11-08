@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 620" role="img" aria-labelledby="t d" font-family="Hiragino Kaku Gothic ProN, sans-serif" id="setup-steps-v112-root">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 640" role="img" aria-labelledby="t d" font-family="Hiragino Kaku Gothic ProN, sans-serif" id="setup-steps-v112-root">
 <title id="t">v1.1.2 導入から利用開始までの4段階</title>
-<desc id="d">ソフト準備、初期設定、browserと通知接続、checkと利用開始の4段階です。設定済みと接続完了と利用開始は別の段階です。実画面や測定結果ではありません。</desc>
+<desc id="d">ソフト準備、初期設定、browserと通知接続、checkと利用開始の4段階です。設定済みと接続完了と利用開始は別の段階で、各段階のcheck合格は全ての完了を保証しません。実画面や測定結果ではありません。</desc>
 <defs>
       <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');</style><marker id="setup-steps-v112-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66716f"/></marker></defs>
-<rect width="390" height="620" fill="#f6f4ef"/>
+<rect width="390" height="640" fill="#f6f4ef"/>
 <g fill="#202124">
 <text x="20" y="34" font-size="17" font-weight="700">導入から利用開始まで（v1.1.2）</text>
-<text x="20" y="56" font-size="12" fill="#66716f">4段階・各段階の完了はcheckで確認・合成説明図</text>
+<text x="20" y="56" font-size="12" fill="#66716f">この環境の導入例・4段階・合成説明図</text>
 <rect x="16" y="72" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
 <text x="32" y="102" font-size="15" font-weight="700">1　ソフト準備</text>
 <text x="32" y="126" font-size="12" fill="#66716f">依存ソフトとruntimeの導入</text>
@@ -26,8 +26,9 @@
 <rect x="16" y="402" width="358" height="100" rx="12" fill="#e9f5ef" stroke="#087f5b"/>
 <text x="32" y="432" font-size="15" font-weight="700" fill="#087f5b">4　check・利用開始</text>
 <text x="32" y="456" font-size="12" fill="#202124">mcs setup check で問題0を確認</text>
-<text x="32" y="476" font-size="12" fill="#202124">doctorで診断・案内を確認</text>
-<rect x="16" y="516" width="358" height="70" rx="12" fill="#edf0ee" stroke="#d5dcd7"/>
-<text x="32" y="542" font-size="12" font-weight="700" fill="#66716f">途中で止まった場合</text>
-<text x="32" y="564" font-size="12" fill="#66716f">install_progress.json の段階から再開</text>
+<text x="32" y="476" font-size="12" fill="#202124">doctorで診断・接続受入は別確認</text>
+<rect x="16" y="516" width="358" height="90" rx="12" fill="#edf0ee" stroke="#d5dcd7"/>
+<text x="32" y="544" font-size="12" font-weight="700" fill="#66716f">途中で止まった場合</text>
+<text x="32" y="566" font-size="12" fill="#66716f">install_progress.jsonは最後に開始した段階の記録</text>
+<text x="32" y="586" font-size="12" fill="#66716f">再開はUPGRADE・SETUPの診断手順へ</text>
 </g></svg>

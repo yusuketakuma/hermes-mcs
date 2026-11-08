@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 640" role="img" aria-labelledby="t d" font-family="Hiragino Kaku Gothic ProN, sans-serif" id="patient-find-v112-root">
 <title id="t">v1.1.2 患者の原資料を探して戻る</title>
-<desc id="d">通知カードの返信から患者情報と検索へ進み、同じ患者の別スレッドや添付OCRを探し、出典とMCSの患者ルームへ戻ります。実画面や測定結果ではありません。</desc>
+<desc id="d">通知カードでMCSの返信を読み、患者情報と検索へ進み、同じ患者の別スレッドや添付OCRを探し、出典とMCSの患者ルームへ戻ります。検索は解析完了を待ちません。実画面や測定結果ではありません。</desc>
 <defs>
       <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');</style><marker id="patient-find-v112-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66716f"/></marker></defs>
 <rect width="390" height="640" fill="#f6f4ef"/>
@@ -9,9 +9,9 @@
 <text x="20" y="34" font-size="17" font-weight="700">患者の原資料を探して戻る（v1.1.2）</text>
 <text x="20" y="56" font-size="12" fill="#66716f">検索は解析完了を待たない・合成説明図</text>
 <rect x="16" y="72" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
-<text x="32" y="102" font-size="15" font-weight="700">1　返信・通知カードから開始</text>
-<text x="32" y="126" font-size="12" fill="#66716f">「👤 患者情報」「🔎 この患者を検索」</text>
-<text x="32" y="146" font-size="12" fill="#66716f">本人向けの非公開表示</text>
+<text x="32" y="102" font-size="15" font-weight="700">1　通知カードから開始</text>
+<text x="32" y="126" font-size="12" fill="#66716f">MCSの返信を通知カードで確認</text>
+<text x="32" y="146" font-size="12" fill="#66716f">「👤 患者情報」「🔎 この患者を検索」</text>
 <path d="M195 160V178" stroke="#66716f" stroke-width="2" marker-end="url(#patient-find-v112-ar)"/>
 <rect x="16" y="182" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
 <text x="32" y="212" font-size="15" font-weight="700">2　患者情報・検索</text>
