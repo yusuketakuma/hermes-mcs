@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "停滞チェックの観測失敗が収集エラーとして二重表示される問題を修正",
+  "summary": "停滞判定の読み取りが時間・記憶の制限で一度失敗しても、収集処理のエラーとして重ねて表示されなくなりました。監視状態には「停滞の有無を今回の監視で確認できませんでした」と記録され、次回の収集で再判定します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "停滞判定の読み取り失敗は収集エラー一覧へ追記せず、data/health.json の stall_check（status・reason・observation・sqlite_code）へ固定の語彙で記録します。SQLite のコードは下位8bitの主コードだけを記録し、例外の本文は保存しません。",
+    "SQLite の割り込み・時間切れは observation_limit、それ以外の読み取り失敗は observation_unavailable として区別します。判定できなかった場合も全体状態は degraded のままで、last_ok_at の更新条件は変わりません。",
+    "監視アラートの期限超過の説明を収集後の処理を含む実行全体の表現へ、「最終正常」を全監視項目が正常だった最終記録である旨へ限定しました。表示する値と更新条件は変えていません。"
+  ],
+  "refs": [
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py"
+  ]
+}

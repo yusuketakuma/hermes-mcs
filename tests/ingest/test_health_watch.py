@@ -1009,7 +1009,7 @@ def test_alert_text_is_japanese_with_jst_times():
                      "　→ 次回の収集で再試行されます。続く場合は data/mcs.log を確認",
                      "・送信待ちの通知があります",
                      "　→ python3 mcs/ops/mcs_setup.py doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
-                     "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
+                     "全監視項目の最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
                      "照会コード: MCS-HLT-STAGE-ERRORS,MCS-HLT-NOTIFICATION-PENDING",
                      "コード: degraded stage_errors,notification_pending"]
 
@@ -1073,12 +1073,15 @@ def test_collection_alert_points_to_wrapper_collection_log(runtime_mode, reason)
     if runtime_mode is not None:
         report["runtime_mode"] = runtime_mode
     text = "\n".join(health_watch._alert_lines(report))
-    assert "data/mcs.log" in text
     assert "data/run_check.log" not in text
     # Standalone jobs and the collection wrapper use the same canonical sink.
     assert "data/mcs_check.log" not in text
     if reason == "stall_check_failed":
-        assert "stall_check_failed を確認" in text
+        # the bounded observation record lives in health.json, not the run log
+        assert "data/health.json の stall_check を確認" in text
+        assert "data/mcs.log" not in text
+    else:
+        assert "data/mcs.log" in text
 
 
 def test_standalone_check_stall_names_unified_log():
