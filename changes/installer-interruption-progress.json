@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "導入・更新の途中停止から段階を確認して再開できる記録を追加",
+  "summary": "install.sh が止まった段階を data/install_progress.json に記録し、中断メッセージと再実行時の案内に段階名を表示します。mcs check の注意にも中断した導入・更新の段階が出ます。完了済みの部分は従来どおり再実行で続きから進み、更新処理の一部として動いた導入では mcs recover の確認を案内します。",
+  "upgrade": "追加操作は不要です。既存の導入・更新はそのまま動き、次回の実行から記録が始まります。",
+  "details": [
+    "install.sh の各段階の開始・完了を data/install_progress.json へ原子的に記録する（書き込み失敗は導入を止めない）。",
+    "中断時のエラーに止まった段階名を表示し、再実行の冒頭に前回中断した段階を案内する。",
+    "更新処理が起動した導入（invocation=update）では install.sh の再実行ではなく mcs recover の確認を案内する。",
+    "初回導入の bootstrap 検査が data/ の内容を厳密に確認する区間では記録を書かず、検査通過後から記録する。",
+    "mcs check が running のまま残った記録を注意として表示する（直近5分以内は実行中、それ以降は中断として区別）。"
+  ],
+  "refs": ["deployment/install/runtime.sh", "install.sh", "mcs/ops/mcs_setup.py"]
+}

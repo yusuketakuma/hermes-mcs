@@ -137,7 +137,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="1b46cbc6592c44f915891f757211ef2f5df6bea0a29a5cd118457e058fa3eabe"
+INSTALL_RUNTIME_SHA256="cfeee4e4f74a8f9612bc4e0d63305d80bf221d704344a8c7f7ae82d0b0e871d9"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -1165,13 +1165,71 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
 fi
 require_ocr_tools
 
+# Per-run id ties the stage journal to this invocation; a stale journal from
+# an older interrupted run is never reported as this run's stage.
+INSTALL_PROGRESS_RUN="$$-$(date +%s 2>/dev/null || echo 0)"
+_install_progress_fields() {  # "<status> <stage> <invocation> <run_id>" or nothing
+    [ -f "$MCS_DATA/install_progress.json" ] || return 1
+    sed -n 's/.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
+        "$MCS_DATA/install_progress.json" | head -1
+}
+_install_stage_label() {  # <stage-id>; fixed display names, never file text
+    case "$1" in
+        brew)        printf '%s' '【1/6】基本ソフトの準備（Homebrew）' ;;
+        runtime)     if [ "$RUNTIME_MODE" = standalone ]; then
+                         printf '%s' '【2/6】MCS 単独接続の実行環境'
+                     else printf '%s' '【2/6】Hermes の実行環境'; fi ;;
+        plugin)      printf '%s' '【3/6】Slack／Discord の操作カード用プラグイン' ;;
+        log_helper)  printf '%s' '実行ログの配置' ;;
+        llm)         printf '%s' '【4/6】この Mac で動かす AI（llama-server、ポート8080）' ;;
+        services)    printf '【5/6】定期収集などの常駐サービス（%s）' "$RUNTIME_MODE" ;;
+        recovery)    printf '%s' '【6/6】更新失敗に備える復旧ツールと監視' ;;
+        options)     printf '%s' '導入設定の記録' ;;
+        *)           printf '%s' '途中の段階' ;;
+    esac
+}
+# fields: "<status> <stage> <invocation> <run_id>"; none contain spaces
+_ip_fields="$(_install_progress_fields || true)"
+_ip_status="${_ip_fields%% *}"
+_ip_rest="${_ip_fields#"$_ip_status" }"
+_ip_stage="${_ip_rest%% *}"
+_ip_rest2="${_ip_rest#"$_ip_stage" }"
+_ip_inv="${_ip_rest2%% *}"
+_ip_run="${_ip_rest2##* }"
+if [ "$_ip_status" = running ] && [ "$_ip_run" != "$INSTALL_PROGRESS_RUN" ]; then
+    if [ "$_ip_inv" = update ]; then
+        printf '前回の更新処理の導入段階が%sで中断していました。まず mcs recover で状態を確認し、指示に従ってください。\n' \
+            "$(_install_stage_label "$_ip_stage")"
+    else
+        printf '前回の導入は%sの段階で中断していました。同じコマンドを再実行すると途中から再開します。\n' \
+            "$(_install_stage_label "$_ip_stage")"
+    fi
+fi
+
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
     if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
     else
-        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
+        _ip_fields="$(_install_progress_fields || true)"
+        _ip_status="${_ip_fields%% *}"
+        _ip_rest="${_ip_fields#"$_ip_status" }"
+        _ip_stage="${_ip_rest%% *}"
+        _ip_rest2="${_ip_rest#"$_ip_stage" }"
+        _ip_inv="${_ip_rest2%% *}"
+        _ip_run="${_ip_rest2##* }"
+        if [ "$_ip_status" = running ] && [ "$_ip_run" = "$INSTALL_PROGRESS_RUN" ]; then
+            if [ "$_ip_inv" = update ]; then
+                printf "エラー: 更新処理の導入段階が中断しました。%sの段階で止まっていました。更新記録に基づき mcs recover で復旧を確認してください。\n" \
+                    "$(_install_stage_label "$_ip_stage")" >&2
+            else
+                printf "エラー: 導入を中断しました。失敗した段階の原因を確認してください。%sの段階で止まっていました。同じコマンドを再実行すると途中から再開します。\n" \
+                    "$(_install_stage_label "$_ip_stage")" >&2
+            fi
+        else
+            printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
+        fi
     fi
 fi
 _install_stage_cleanup' EXIT

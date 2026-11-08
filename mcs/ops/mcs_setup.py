@@ -769,6 +769,39 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     return out
 
 
+_INSTALL_PROGRESS_STAGE_JA = {
+    "brew": "基本ソフトの準備（Homebrew）",
+    "runtime": "実行環境",
+    "plugin": "操作カード用プラグイン",
+    "log_helper": "実行ログの配置",
+    "llm": "ローカルAI（llama-server）",
+    "services": "常駐サービス",
+    "recovery": "復旧ツールと監視",
+    "options": "導入設定の記録",
+}
+
+
+def _install_progress_warning():
+    """Last installer stage if its run stopped before completion."""
+    try:
+        with open(os.path.join(HOME, "data", "install_progress.json"), encoding="utf-8") as f:
+            progress = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(progress, dict) or progress.get("status") != "running":
+        return None
+    stage = progress.get("stage")
+    label = _INSTALL_PROGRESS_STAGE_JA.get(stage, "途中の段階")
+    updated = progress.get("updated_at")
+    if progress.get("invocation") == "update":
+        return (f"更新処理の導入段階が{label}で中断しています。"
+                "mcs recover で状態を確認し、指示に従ってください")
+    if isinstance(updated, (int, float)) and time.time() - updated < 300:
+        return f"導入が{label}の段階で実行中です。完了を待ってから確認してください"
+    return (f"前回の導入が{label}の段階で中断しています。"
+            "install.sh を同じ引数で再実行すると途中から再開します")
+
+
 def cmd_check(args) -> int:
     try:
         cfg = _diagnostic_config()
@@ -787,6 +820,9 @@ def cmd_check(args) -> int:
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
+    progress_warning = _install_progress_warning()
+    if progress_warning is not None:
+        warnings.append(progress_warning)
     for w in warnings:
         print(f"  注意: {w}")
     for e in errors:

@@ -1,4 +1,6 @@
 """Synthetic mcs setup diagnostics contracts; shared helpers preserve isolated runtime state."""
+import json
+import time
 import setup_config_snapshot
 import setup_integration
 import environment_diagnostics
@@ -579,3 +581,46 @@ def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
     cfg["notify"][transport] = {"project_ids": ids[:-1]}
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+
+
+def _install_progress_fixture(monkeypatch, tmp_path, record):
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    if record is not None:
+        (data / "install_progress.json").write_text(json.dumps(record))
+
+
+def test_install_progress_warning_silent_without_running_record(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, None)
+    assert mcs_setup._install_progress_warning() is None
+    _install_progress_fixture(monkeypatch, tmp_path, {"status": "complete", "stage": "done"})
+    assert mcs_setup._install_progress_warning() is None
+    _install_progress_fixture(monkeypatch, tmp_path, {"status": "running"})
+    # a running record without a usable stage still warns generically
+    assert mcs_setup._install_progress_warning() is not None
+
+
+def test_install_progress_warning_reports_stale_interrupted_stage(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, {
+        "status": "running", "stage": "services", "invocation": "install",
+        "run_id": "1-2", "updated_at": 1})
+    warning = mcs_setup._install_progress_warning()
+    assert warning is not None and "常駐サービス" in warning and "中断" in warning
+    assert "install.sh" in warning
+
+
+def test_install_progress_warning_recent_run_says_in_progress(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, {
+        "status": "running", "stage": "llm", "invocation": "install",
+        "run_id": "1-2", "updated_at": time.time()})
+    warning = mcs_setup._install_progress_warning()
+    assert warning is not None and "実行中" in warning and "ローカルAI" in warning
+
+
+def test_install_progress_warning_update_invocation_points_to_recover(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, {
+        "status": "running", "stage": "recovery", "invocation": "update",
+        "run_id": "1-2", "updated_at": time.time()})
+    warning = mcs_setup._install_progress_warning()
+    assert warning is not None and "mcs recover" in warning and "更新処理" in warning
