@@ -227,6 +227,10 @@ _REPROCESS_JOB_MAX_BYTES = semantic_store._REPROCESS_JOB_MAX_BYTES
 
 
 _BACKLOG_INVALIDATE_S = 300.0
+# Per-pass cap for the inference reprocess keyset walk: it is resumable by
+# cursor, so a short slice each drain still advances it without letting one
+# pass consume the window the model jobs and the snapshot tail need.
+REPROCESS_STEP_BUDGET_S = 5.0
 # A backlog worker releases the run lock around every model/Jev call and
 # must retake it before persisting the result. The tick (run_check) can
 # hold that lock for its whole RUN_DEADLINE_S (480 s) after waiting
@@ -311,7 +315,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if not cloud_only:
         _phase_t = time.perf_counter()
         try:
-            out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
+            out['inference_reprocess'] = reprocess_step(
+                ledger, cfg,
+                deadline=min(deadline,
+                             time.monotonic() + REPROCESS_STEP_BUDGET_S))
         except Exception as error:
             out['inference_reprocess'] = {'status': 'error', 'complete': False}
             result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
