@@ -118,7 +118,7 @@ def test_auto_request_rejects_invalid_args_without_receipt(gateway, monkeypatch,
 
 def test_auto_request_rejects_lock_fd_not_bound_to_update_lock(gateway, monkeypatch, tmp_path):
     rec, data, agents, _, _, _ = gateway
-    _lock_fd(data)
+    (data / "update.lock").touch()
     other = tmp_path / "other.lock"
     other.write_text("x")
     fd = os.open(str(other), os.O_RDWR)
@@ -264,9 +264,25 @@ def test_auto_run_rejects_malformed_args(gateway):
     assert not any(c[-4:] == ["-p", "default", "gateway", "restart"] for c in calls)
 
 
+@pytest.mark.parametrize("bad_id", ["not-a-request", "A" * 32, REQUEST_ID[:31], "", 12345])
+def test_auto_run_rejects_malformed_args_never_echoes_request_id(gateway, bad_id):
+    rec, data, agents, _, calls, running = gateway
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, "abc", bad_id, str(fd)) == 1
+    finally:
+        os.close(fd)
+    report = json.loads((data / "gateway_restart.json").read_text())
+    assert report["status"] == "failed"
+    assert report["error"] == "gateway_restart_auto_args_invalid"
+    assert "request_id" not in report
+    assert not any(c[-4:] == ["-p", "default", "gateway", "restart"] for c in calls)
+
+
 def test_auto_run_rejects_foreign_lock_fd(gateway, tmp_path):
     rec, data, agents, _, calls, running = gateway
-    _lock_fd(data)
+    (data / "update.lock").touch()
     other = tmp_path / "other.lock"
     other.write_text("x")
     fd = os.open(str(other), os.O_RDWR)
