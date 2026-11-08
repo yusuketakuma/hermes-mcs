@@ -1,4 +1,6 @@
 """Shared pieces every chat transport builds on (synthetic data only)."""
+import sys
+
 from adapters.common.context_view import context_entries, safe_url
 
 import card_worker_status
@@ -44,6 +46,7 @@ def test_lineworks_adapter_start_is_diagnosed_like_other_workers(tmp_path, monke
 def test_lineworks_alert_actions_point_at_the_adapter_not_the_gateway():
     report = {"status": "degraded", "notify_transport": "lineworks"}
     text = "\n".join(health_watch._reason_rows(report, ["card_delivery_stalled", "worker_start_unverified"]))
-    assert "ai.mcs.lineworks" in text and "hermes gateway" not in text
+    label = "ai.mcs.lineworks" if sys.platform == "darwin" else "hermes-mcs-lineworks.service"
+    assert label in text and "hermes gateway" not in text
     slack = "\n".join(health_watch._reason_rows({"status": "degraded"}, ["card_delivery_stalled"]))
     assert "hermes gateway restart" in slack

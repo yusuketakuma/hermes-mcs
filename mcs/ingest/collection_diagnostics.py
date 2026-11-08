@@ -55,7 +55,7 @@ CATEGORIES = {
                "次回の収集で再試行されます。続く場合はMCSの画面が開けるか確認"),
     "schema": ("応答形式", "schema", False,
                "MCSの応答が想定と違う形式でした（MCS側の仕様変更の可能性）",
-               "続く場合は開発元へ連絡（python3 mcs/ops/mcs_setup.py doctor の結果を添える）"),
+               "続く場合は開発元へ連絡（python3 mcs/ops/mcs_setup.py doctor --share の結果を添える）"),
     "storage": ("保存", "storage", False,
                 "取得した内容をこのMacに保存できませんでした",
                 "ディスクの空き容量と data フォルダの書込み権限を確認"),
@@ -85,7 +85,7 @@ CATEGORIES = {
                 "python3 mcs/ops/mcs_setup.py check を実行。続く場合は data/mcs.log を確認"),
     "other": ("その他・原因未分類", "other", False,
               "分類できないエラーがありました",
-              "続く場合は data/mcs.log を確認し、python3 mcs/ops/mcs_setup.py doctor の結果を開発元へ"),
+              "続く場合は data/mcs.log を確認し、python3 mcs/ops/mcs_setup.py doctor --share の結果を開発元へ"),
 }
 # Every code the current producers emit after the prefix (see test_collection_diagnostics).
 _CODES = {

@@ -704,6 +704,9 @@ _STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が
               "corrupt": "状態の記録が壊れています"}
 _SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
 _CHECK = "python3 mcs/ops/mcs_setup.py check"
+_DOCTOR = "python3 mcs/ops/mcs_setup.py doctor"
+_CLOUD_RESUME = ("python3 mcs/ops/mcs_setup.py cloud-llm resume "
+                 "--confirm-human --reason '確認理由'")
 _COLLECTION_LOG = "data/mcs.log"  # MCS-owned producers share the run_log sink in both modes.
 _STANDALONE_STATUS = "python -m mcs_standalone status"
 _STANDALONE_RESTART = ("hostを再起動（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.standalone、"
@@ -765,12 +768,12 @@ _REASON_JA = {
                               "次回以降に再取得されます。続く場合はMCSの画面と閲覧権限を確認"),
     "notification_failed": ("通知の送信に失敗しました",
                             "通知先の設定と Hermes gateway（独立接続なら ai.mcs.standalone）の稼働を確認"),
-    "notification_deferred": ("通知を先送りしました", "doctor で先送り理由を確認。送信条件が整うまで保留されます"),
+    "notification_deferred": ("通知を先送りしました", f"{_DOCTOR} で先送り理由を確認。送信条件が整うまで保留されます"),
     "notification_parked": ("通知が待機中です", "次回の収集で再確認されます"),
     "notification_held": ("通知が保留されています",
-                          "python3 mcs/ops/mcs_setup.py doctor で保留理由を確認"),
+                          f"{_DOCTOR} で保留理由を確認"),
     "notification_pending": ("送信待ちの通知があります",
-                             "doctor で待ちの理由と通知先・gateway の稼働を確認"),
+                             f"{_DOCTOR} で待ちの理由と通知先・gateway の稼働を確認"),
     "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
@@ -793,23 +796,13 @@ _REASON_JA = {
     "stall_check_failed": ("停滞の判定処理が失敗しました",
                            f"{_COLLECTION_LOG} の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
-                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
+                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機します。要約通知は遅れる場合があります"),
     "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
                                 "TYPESAFE_API_KEY を .env に設定"),
     "semantic_jev_budget_exceeded": ("TypeSafe Jev の1日の利用上限に達しました",
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
-    "cloud_llm_no_api_key": ("Anthropic のAPIキーが未登録のため、ローカルLLMで処理を継続しています",
-                              "外部AIを使う場合は、MCSの .env に MCS_ANTHROPIC_API_KEY を登録し、ファイル権限を0600にしてください"),
-    "cloud_llm_auth_error": ("Anthropic の認証に失敗し、外部AI処理を停止しました",
-                              "MCS_ANTHROPIC_API_KEY を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開。処理はローカルLLMへ戻ります"),
-    "cloud_llm_payment_required": ("Anthropic の支払い条件を確認するため、外部AI処理を停止しました",
-                                    "契約・残高を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開。処理はローカルLLMへ戻ります"),
-    "cloud_llm_pricing_unverified": ("Anthropic の料金または使用量を確認できず、外部AI処理を停止しました",
-                                     "doctor で料金表の期限と使用量を確認し、問題を解消してから cloud-llm resume --confirm-human --reason '確認理由' で再開"),
-    "cloud_llm_circuit_open": ("Anthropic への要求が続けて失敗し、外部AI処理を一時停止しています",
-                                "doctor で停止理由を確認。処理はローカルLLMへ戻り、待機期間後に再確認します"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
     "standalone_host_down": ("独立接続のhostが動いていません",
@@ -830,20 +823,35 @@ _REASON_JA = {
 _STANDALONE_ACTION = {
     "notification_failed": "通知先の設定と独立接続のhostの稼働を確認"
                            f"（{_STANDALONE_STATUS}）",
-    "notification_pending": f"doctor で待ちの理由と {_STANDALONE_STATUS} を確認",
+    "notification_pending": f"{_DOCTOR} で待ちの理由と {_STANDALONE_STATUS} を確認",
     "card_delivery_stalled": _STANDALONE_RESTART,
     "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2・extract-night を確認",
 }
 # notify.interactive=lineworks (Hermes mode): the separate LINE WORKS adapter
 # delivers, so the gateway/profile hints do not apply
-_LW_RESTART = ("launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks で独立アダプターを再起動し、"
-               f"python3 -m lineworks_adapter check と {_COLLECTION_LOG} を確認")
-_LINEWORKS_ACTION = {
-    "worker_start_unverified": "LINE WORKSアダプターの起動記録を確認。止まっていれば " + _LW_RESTART,
-    "worker_start_failed": f"{_COLLECTION_LOG} で起動失敗を確認し、" + _LW_RESTART,
-    "worker_restart_required": "更新後のコードで動かすため " + _LW_RESTART,
-    "card_delivery_stalled": "LINE WORKSアダプターの稼働を確認。止まっていれば " + _LW_RESTART,
-}
+
+
+def _lw_restart() -> str:
+    check = f"python3 -m lineworks_adapter check と {_COLLECTION_LOG} を確認"
+    if sys.platform == "darwin":
+        return ("launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks で独立アダプターを再起動し、" + check)
+    if sys.platform.startswith("linux"):
+        return ("systemctl --user restart hermes-mcs-lineworks.service で独立アダプターを再起動し、" + check)
+    return ("独立アダプターを再起動してください"
+            "（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks、"
+            "Linux: systemctl --user restart hermes-mcs-lineworks.service）し、" + check)
+
+
+def _lineworks_actions() -> dict:
+    restart = _lw_restart()
+    return {
+        "worker_start_unverified": "LINE WORKSアダプターの起動記録を確認。止まっていれば " + restart,
+        "worker_start_failed": f"{_COLLECTION_LOG} で起動失敗を確認し、" + restart,
+        "worker_restart_required": "更新後のコードで動かすため " + restart,
+        "card_delivery_stalled": "LINE WORKSアダプターの稼働を確認。止まっていれば " + restart,
+    }
+
+
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
             ("cloud_llm", "外部AI処理"),
             ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
@@ -976,13 +984,13 @@ _CLOUD_REASON_JA = {
     "cloud_llm_no_api_key": ("記録時点で外部AIのAPIキーを取得できず、ローカルLLMで処理を継続していました",
                              "MCSの .env に利用先のキーを登録し、ファイル権限を0600にしてください"),
     "cloud_llm_auth_error": ("外部AIの認証に失敗し、処理を停止しました",
-                            "キーを確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開"),
+                            f"キーを確認し、{_CLOUD_RESUME} で再開"),
     "cloud_llm_payment_required": ("外部AIの支払い条件を確認するため、処理を停止しました",
-                                  "契約・残高を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開"),
+                                  f"契約・残高を確認し、{_CLOUD_RESUME} で再開"),
     "cloud_llm_pricing_unverified": ("外部AIの料金または使用量を確認できず、処理を停止しました",
-                                     "doctor で料金表と使用量を確認し、問題を解消してから承認付きで再開"),
+                                     f"{_DOCTOR} で料金表と使用量を確認し、問題を解消してから {_CLOUD_RESUME} で再開"),
     "cloud_llm_circuit_open": ("外部AIへの要求が続けて失敗し、一時停止しています",
-                               "doctor で停止理由を確認し、待機期間後に再確認"),
+                               f"{_DOCTOR} で停止理由を確認し、待機期間後に再確認"),
 }
 
 
@@ -994,6 +1002,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         return ["・記録された理由はありません", "　→ 次回の収集を待つ"]
     oldest = report.get("oldest_age_s") or {}
     standalone = report.get("runtime_mode") == "standalone"
+    lw_actions = ({} if standalone or report.get("notify_transport") != "lineworks"
+                  else _lineworks_actions())
     rows = []
     for code in reasons:
         base = code.split(":")[0]
@@ -1002,11 +1012,11 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             meaning, action = _CLOUD_REASON_JA[base]
         if standalone:
             action = _STANDALONE_ACTION.get(base, action)
-        elif report.get("notify_transport") == "lineworks":
-            action = _LINEWORKS_ACTION.get(base, action)
+        else:
+            action = lw_actions.get(base, action)
         if base == 'collection_incomplete' and _collection_known_empty(report):
             meaning = "収集判定と現在の患者別の取得内訳に差があります"
-            action = ("前回の収集判定または今回の観測対象との差をdoctorで確認。"
+            action = (f"前回の収集判定または今回の観測対象との差を{_DOCTOR} で確認。"
                       "現在の患者別の未取得は0件ですが、収集全体の完了は断定できません")
         if base == 'collection_incomplete' and report.get('semantic_intake_unstored') in ('present', 'unverified'):
             meaning = ('保存できず、未取得の可能性が残る記録があります'
@@ -1026,12 +1036,12 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             waits = wait.get("reasons") or {}
             if report.get("observations_recorded") or not waits or any(
                     code in waits for code in ("stale", "unknown", "unrecorded")):
-                action = "doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません"
+                action = f"{_DOCTOR} で現在の待ち理由を確認。記録だけでは再送可否を判断できません"
             elif any("unknown" in code for code in waits):
                 action = "送信先と配送記録を照合。送信結果が不明な通知は自動で再送しません"
             elif wait.get("attention") or any(
                     "hold" in code or "exhausted" in code for code in waits):
-                action = "doctor で保留・再試行上限の理由を確認。解除には該当する承認手順が必要です"
+                action = f"{_DOCTOR} で保留・再試行上限の理由を確認。解除には該当する承認手順が必要です"
             else:
                 action = "送信条件を次回の収集で再確認します。配送完了はまだ確認できていません"
         if base == "notification_pending":
@@ -1054,6 +1064,29 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                      else _backup_local_text(report.get("backup_local")))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
             extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        elif base == "disk_low":
+            free = report.get("disk_free_mb")
+            extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"
+        elif base == "attachment_ocr_processing_failed":
+            ocr = report.get("attachment_ocr")
+            if (isinstance(ocr, dict)
+                    and isinstance(ocr.get("failure_reason_counts"), dict)
+                    and type(ocr.get("exhausted_failed")) is int):
+                failed_counts = ocr["failure_reason_counts"]
+                overlap = failed_counts.get("output_schema_table_overlap")
+                if type(overlap) is int and overlap > 0:
+                    action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
+                              "元の添付を確認してください。解消しない場合は開発元へ連絡"
+                              f"（照会コードと {_DOCTOR} --share の結果を添える）。")
+                    if any(type(n) is int and n > 0 for key, n in failed_counts.items()
+                           if key != "output_schema_table_overlap"):
+                        action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
+                if ocr["exhausted_failed"] > 0:
+                    note = (f"観測範囲で自動再試行が上限に到達した記録が{ocr['exhausted_failed']}件あります。"
+                            "元の添付を確認してください。")
+                    if not action.endswith("。"):
+                        action += "。"
+                    action += note
         guide = None
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')
@@ -1080,6 +1113,19 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             continue
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
     return rows
+
+
+def _query_codes(reasons) -> str:
+    """Stable inquiry codes for support: whitelisted reason bases only —
+    raw codes may carry provider detail and are never echoed here."""
+    codes = []
+    for code in reasons or []:
+        base = code.split(":")[0]
+        tag = ("MCS-HLT-" + base.upper().replace("_", "-")
+               if base in _REASON_JA or base in _CLOUD_REASON_JA else "MCS-HLT-UNKNOWN")
+        if tag not in codes:
+            codes.append(tag)
+    return ",".join(codes) if codes else "MCS-HLT-UNKNOWN"
 
 
 def _alert_lines(report: dict) -> list[str]:
@@ -1117,12 +1163,16 @@ def _alert_lines(report: dict) -> list[str]:
                          f"（該当理由の初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
         lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
                      f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
+        lines.append("照会コード: " + _query_codes(reasons))
         lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
                                             "none" if reasons is not None else "unknown"))
     if report["disk_alert"] and report["disk_low"]:
-        free = report.get("disk_free_mb")
-        lines.append(f"空き容量不足: 残り {free} MB" if finite_number(free)
-                     else "空き容量不足: 残り 不明")
+        lines.append("🟠 MCS監視: 空き容量不足")
+        lines.append("影響: " + _impact(report, ["disk_low"]))
+        lines.append("原因と対処:")
+        lines.extend(_reason_rows(report, ["disk_low"]))
+        lines.append("照会コード: " + _query_codes(["disk_low"]))
+        lines.append("コード: disk_low")
     return lines
 
 

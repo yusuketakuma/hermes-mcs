@@ -10,6 +10,7 @@ health write, never the watcher's own assumption.
 import os
 import safe_io
 import json
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -411,7 +412,7 @@ def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
                             "disk_free_mb": 800})
     health_watch.main(["--home", str(tmp_path), "--now", "5700",
                        "--config", str(tmp_path / "none.json")])
-    assert "空き容量不足: 残り 800 MB" in capsys.readouterr().out
+    assert "（残り 800 MB）" in capsys.readouterr().out
 
 
 
@@ -834,7 +835,13 @@ def test_healthy_status_cannot_be_rendered_as_legacy_alert_but_low_disk_remains(
     report = {"status": "ok", "alert": True, "disk_alert": True, "disk_low": False}
     assert health_watch._alert_lines(report) == []
     assert health_watch._alert_lines({**report, "disk_low": True, "disk_free_mb": 123}) == [
-        "空き容量不足: 残り 123 MB"]
+        "🟠 MCS監視: 空き容量不足",
+        "影響: 保存に遅れや不具合があります。",
+        "原因と対処:",
+        "・ディスクの空き容量が不足しています（残り 123 MB）",
+        "　→ 不要なファイルを削除するか保存先を広げる",
+        "照会コード: MCS-HLT-DISK-LOW",
+        "コード: disk_low"]
 
 
 def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers(
@@ -845,7 +852,14 @@ def test_unsent_combined_alert_retries_only_still_low_disk_after_health_recovers
     health_watch.evaluate(str(tmp_path), 1000, cfg={})
     _health_file(tmp_path, {"overall": "ok", "at": 1060, "disk_low": True, "disk_free_mb": 123})
     assert health_watch._watch(SimpleNamespace(home=str(tmp_path), now=1061), {}) == 0
-    assert calls == ["空き容量不足: 残り 123 MB"]
+    assert calls == ["\n".join([
+        "🟠 MCS監視: 空き容量不足",
+        "影響: 保存に遅れや不具合があります。",
+        "原因と対処:",
+        "・ディスクの空き容量が不足しています（残り 123 MB）",
+        "　→ 不要なファイルを削除するか保存先を広げる",
+        "照会コード: MCS-HLT-DISK-LOW",
+        "コード: disk_low"])]
     assert capsys.readouterr().out == ""
 
 
@@ -980,7 +994,7 @@ def test_disk_alert_never_echoes_a_non_numeric_producer_field(tmp_path, capsys):
                        "--config", str(tmp_path / "none.json")])
     output = capsys.readouterr().out
     assert "synthetic private free text" not in output
-    assert "空き容量不足: 残り 不明" in output
+    assert "残り 不明" in output
 
 
 def test_alert_text_is_japanese_with_jst_times():
@@ -994,8 +1008,9 @@ def test_alert_text_is_japanese_with_jst_times():
                      "・収集または収集後の処理でエラーがありました",
                      "　→ 次回の収集で再試行されます。続く場合は data/mcs.log を確認",
                      "・送信待ちの通知があります",
-                     "　→ doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
+                     "　→ python3 mcs/ops/mcs_setup.py doctor で現在の待ち理由を確認。記録だけでは再送可否を判断できません",
                      "最終正常 01-01 09:00 / 最新記録 01-01 10:00（JST）",
+                     "照会コード: MCS-HLT-STAGE-ERRORS,MCS-HLT-NOTIFICATION-PENDING",
                      "コード: degraded stage_errors,notification_pending"]
 
 
@@ -1009,6 +1024,9 @@ def test_alert_counts_pending_notifications_and_names_a_jev_block():
     assert lines[1] == "影響: 通知・意味チェック（任意機能）に遅れや不具合があります。収集は動いています。"
     assert "・送信待ちの通知があります 2件（最古 17.6時間）" in lines
     assert "・TypeSafe Jev が支払い未了（HTTP 402）を返しています" in lines
+    text = "\n".join(lines)
+    assert "要約通知は遅れる場合があります" in text
+    assert "収集・通知には影響しません" not in text
     assert all("AI" not in ln for ln in lines)
 
 
@@ -1070,3 +1088,97 @@ def test_standalone_check_stall_names_unified_log():
         "health_at": 3600}))
     assert "data/mcs.log を確認" in text
     assert "data/run_check.log" not in text
+
+
+def test_disk_only_alert_explains_problem_impact_action_and_query_code():
+    report = {"status": "ok", "alert": False, "disk_alert": True, "disk_low": True,
+              "disk_free_mb": 123, "run_status": "ok", "health_at": 3600}
+    lines = health_watch._alert_lines(report)
+    assert lines[0] == "🟠 MCS監視: 空き容量不足"
+    assert lines[1].startswith("影響: ") and "保存" in lines[1]
+    assert "・ディスクの空き容量が不足しています（残り 123 MB）" in lines
+    assert "　→ 不要なファイルを削除するか保存先を広げる" in lines
+    assert "照会コード: MCS-HLT-DISK-LOW" in lines
+    assert lines[-1] == "コード: disk_low"
+
+
+def test_query_codes_come_only_from_whitelisted_reasons():
+    report = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+              "state_reasons": ["disk_low", "synthetic_private_reason"], "health_at": 3600}
+    text = "\n".join(health_watch._alert_lines(report))
+    assert "照会コード: MCS-HLT-DISK-LOW,MCS-HLT-UNKNOWN" in text
+    assert "synthetic_private_reason" not in text
+    empty = "\n".join(health_watch._alert_lines(
+        {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+         "state_reasons": [], "health_at": 3600}))
+    assert "照会コード: MCS-HLT-UNKNOWN" in empty
+
+
+def test_cloud_resume_and_doctor_guidance_are_complete_existing_commands():
+    text = "\n".join(health_watch._reason_rows({}, ["cloud_llm_auth_error"]))
+    assert "python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '確認理由'" in text
+    pending = "\n".join(health_watch._reason_rows({}, ["notification_pending"]))
+    assert "python3 mcs/ops/mcs_setup.py doctor" in pending
+
+
+@pytest.mark.parametrize(("platform", "present", "absent"), [
+    ("darwin", "launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks", "systemctl --user restart"),
+    ("linux", "systemctl --user restart hermes-mcs-lineworks.service", "launchctl kickstart"),
+    ("freebsd", None, None),
+])
+def test_lineworks_restart_guidance_follows_the_host_os(monkeypatch, platform, present, absent):
+    monkeypatch.setattr(sys, "platform", platform)
+    text = "\n".join(health_watch._reason_rows(
+        {"status": "degraded", "notify_transport": "lineworks"}, ["worker_start_failed"]))
+    if present:
+        assert present in text and absent not in text
+    else:
+        assert "ai.mcs.lineworks" in text and "hermes-mcs-lineworks.service" in text
+
+
+def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    legacy = "\n".join(health_watch._reason_rows(base, ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応" not in legacy and "自動再試行" not in legacy
+    report = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed", "pending_failed": 3,
+        "failure_reason_counts": {"output_schema_table_overlap": 2}, "exhausted_failed": 1}}
+    text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
+    assert "観測範囲の記録のうち2件は表の行列対応を確定できず未採用です" in text
+    assert "元の添付を確認してください" in text
+    assert "照会コード" in text and "doctor --share" in text
+    # the overlap classification replaces the general settings guidance
+    assert "OCRの設定・実行環境" not in text
+    # exhausted_failed is a cross-reason count: a separate observed-range note
+    assert "観測範囲で自動再試行が上限に到達した記録が1件あります" in text
+    assert "再起動" not in text and "復元" not in text and "全件" not in text
+    # other failure reasons keep the general guidance alongside the overlap note
+    mixed = {**base, "attachment_ocr": {
+        "failure_reason_counts": {"output_schema_table_overlap": 1, "engine_inference_failed": 2},
+        "exhausted_failed": 0}}
+    mixed_text = "\n".join(health_watch._reason_rows(mixed, ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応を確定できず未採用" in mixed_text
+    assert "あわせてOCRの設定・実行環境と直近の実行結果を確認してください" in mixed_text
+    # exhausted alone keeps the general guidance and stays unjoined to overlap
+    exhausted_only = {**base, "attachment_ocr": {
+        "failure_reason_counts": {"timeout": 2}, "exhausted_failed": 2}}
+    exhausted_text = "\n".join(health_watch._reason_rows(
+        exhausted_only, ["attachment_ocr_processing_failed"]))
+    assert "OCRの設定・実行環境と直近の実行結果を確認してください" in exhausted_text
+    assert "観測範囲で自動再試行が上限に到達した記録が2件あります" in exhausted_text
+    assert "表の行列対応" not in exhausted_text
+    for bad in ({"failure_reason_counts": {"output_schema_table_overlap": 1}},
+                {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": True},
+                {"failure_reason_counts": "x", "exhausted_failed": 1}):
+        bad_text = "\n".join(health_watch._reason_rows(
+            {**base, "attachment_ocr": bad}, ["attachment_ocr_processing_failed"]))
+        assert "表の行列対応" not in bad_text and "自動再試行" not in bad_text
+    quiet = "\n".join(health_watch._reason_rows(
+        {**base, "attachment_ocr": {"failure_reason_counts": {"other_reason": 2},
+                                    "exhausted_failed": 0}},
+        ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応" not in quiet and "自動再試行" not in quiet
+    alert = "\n".join(health_watch._alert_lines(report))
+    assert "照会コード: MCS-HLT-ATTACHMENT-OCR-PROCESSING-FAILED" in alert
