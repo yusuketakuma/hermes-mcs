@@ -436,7 +436,8 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
     known = (*PART_HOLD_REASONS, _DEPENDENCY_ERROR, "timeouterror", "connectionerror", "worker_crash",
-             "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch")
+             "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch",
+             "edit_file_unverified", "file_target_unverified", "part_owner_ambiguous", "msg_too_long")
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
     available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")

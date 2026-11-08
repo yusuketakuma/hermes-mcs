@@ -82,14 +82,40 @@ def test_unknown_worklist_routes_to_existing_recovery_with_required_evidence(sto
     assert guide['final_scope_and_journal_validation_required'] and not guide['automatic_resend']
 
 
-def test_unknown_worklist_is_bounded_and_never_exposes_unrecognized_error_text(stored):
+@pytest.mark.parametrize('kind,code', [
+    ('attachment_part', 'edit_target_unverified'),
+    ('attachment_part', 'edit_file_unverified'),
+    ('attachment_part', 'file_target_unverified'),
+    ('body_part', 'part_owner_ambiguous'),
+    ('body_part', 'worker_crash'),
+    ('body_part', 'msg_too_long'),
+    ('file_group', 'stage_receipt_missing'),
+])
+def test_unknown_worklist_keeps_fixed_reasons_without_settling_records(stored, kind, code):
+    _card, delivery = _render(stored, [(kind, 'unknown', code)])
+    stored.execute("UPDATE notification_render_parts SET attempt_id='synthetic-attempt' WHERE delivery_id=?", (delivery,))
+    before = [tuple(row) for row in stored.execute('SELECT * FROM notification_render_parts')]
+    changes, in_transaction = stored.total_changes, stored.in_transaction
+    item, = notify_scope.health_cards(stored, SLACK)['unknown_parts']
+    assert item['kind'] == kind and item['state'] == 'unknown' and item['error_code'] == code
+    assert item['recovery']['requirements']['human_confirmation']
+    assert item['recovery']['final_scope_and_journal_validation_required']
+    assert not item['recovery']['automatic_resend']
+    assert [tuple(row) for row in stored.execute('SELECT * FROM notification_render_parts')] == before
+    assert stored.total_changes == changes and stored.in_transaction == in_transaction
+    if code not in ('edit_target_unverified', 'stage_receipt_missing'):
+        assert 'conditional_proof' not in item['recovery']['requirements']['mark_not_sent']
+
+
+@pytest.mark.parametrize('error', ['synthetic-private-error-text', 'synthetic_private_error'])
+def test_unknown_worklist_is_bounded_and_never_exposes_unrecognized_error_text(stored, error):
     for _ in range(21):
-        _render(stored, [('body_part', 'unknown', 'synthetic-private-error-text')])
+        _render(stored, [('body_part', 'unknown', error)])
     report = notify_scope.health_cards(stored, SLACK)
     assert len(report['unknown_parts']) == 20
     assert all(item['error_code'] == 'unknown' for item in report['unknown_parts'])
     assert all(not item['recovery']['available'] for item in report['unknown_parts'])
-    assert 'synthetic-private-error-text' not in json.dumps(report)
+    assert error not in json.dumps(report)
 
 
 def test_guidance_retains_lineworks_and_preflight_proof_conditions():
