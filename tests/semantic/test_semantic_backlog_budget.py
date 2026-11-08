@@ -240,8 +240,50 @@ def test_run_record_names_silent_skips_and_the_preamble(tmp_path):
                                llm_fn=_llm, lane="backlog", max_jobs=1)
         assert out["done"] == 0 and out["floor_skipped"] == {"semantic": 1}
         assert out["lock_skipped"] == {} and out["preamble_s"] >= 0
+        for key in ("invalidate_s", "reprocess_s", "reproject_s"):
+            assert key in out and (out[key] is None or out[key] >= 0)
         row = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
         assert tuple(row) == ("pending", 0)
+    finally:
+        db.close()
+
+
+def _reprocess_spy(monkeypatch, seen):
+    def stub(ledger, cfg, *, deadline=None, **kw):
+        seen["deadline"] = deadline
+        return {"status": "off", "complete": False}
+    monkeypatch.setattr(semantic_drain, "reprocess_step", stub)
+
+
+def test_reprocess_step_gets_a_five_second_sub_budget(tmp_path, monkeypatch):
+    """Each drain bounds the resumable reprocess walk to ~5s so one pass
+    cannot eat the window the model jobs and the snapshot tail need; the
+    pass still reaches the job loop afterwards."""
+    db = _seeded(tmp_path)
+    seen = {}
+    _reprocess_spy(monkeypatch, seen)
+    try:
+        before = time.monotonic()
+        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
+                               before + 400, jev_client=_FakeJev(),
+                               llm_fn=_llm, lane="backlog", max_jobs=1)
+        assert seen["deadline"] is not None
+        assert before < seen["deadline"] <= before + semantic_drain.REPROCESS_STEP_BUDGET_S + 0.5
+        assert out["preamble_s"] >= 0 and "floor_skipped" in out
+    finally:
+        db.close()
+
+
+def test_reprocess_sub_budget_never_extends_a_shorter_deadline(tmp_path, monkeypatch):
+    db = _seeded(tmp_path)
+    seen = {}
+    _reprocess_spy(monkeypatch, seen)
+    try:
+        deadline = time.monotonic() + 2
+        semantic_drain.run_due(db, _cfg("shadow"), {"errors": []}, deadline,
+                               jev_client=_FakeJev(), llm_fn=_llm,
+                               lane="backlog", max_jobs=1)
+        assert seen["deadline"] == deadline
     finally:
         db.close()
 
