@@ -328,12 +328,23 @@
 - r10〜r13 追補：Root は r9 の3図を独立に目視し、parser error の解消・390px での可読性・流れと4段階の意味・既存画面の保持を確認した。指摘に従い patient-find の条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ改め、SVG・PNGを再生成した。主図は cloud-continuity-v112-detailed（780×3944、本文28px）として新しく作り直した。保存と個別解析、患者contextの育成、活用の3章と9つの主ノードで構成する。検索・通知は1の保存から独立した枝、患者contextの実行先は現在の設定、Jevは設定次第の別経路とした。送信結果が不明な場合は履歴を保持し、自動再送やlocalへの置き換えをしない。公開済みasset 721517700 に対応する旧 cloud-continuity.svg/.png は削除・上書きせず履歴として残し、現行版の参照（CHANGELOG・Release本文・READMEの生成ブロック・版README）を新しいファイル名へ切り替えた。Devin のローカル確認は寸法、XML well-formed、紙色背景、390px縮小の読み取りに限る。詳細図の視覚受入は Root の独立目視を正本とし、まだ実施していない。asset の upload と外部表示も未実施。
 - r14/r15 追補：CHANGELOG [1.1.2] の可視部を目的別9項（新機能3・改善3・不具合修正3）へ再編し、比較表を3行へ戻した。可視部の文字数は be04f8eb の13259字・239行・太字項目45から、7528字・96行・9項になった。30件の個別修正の内容は技術詳細124件と change-map に残し、archive と hash は変更していない。既定値・外部送信・人承認・移行・再起動・回数の条件は「更新時の注意」の表と個別条件にそのまま残した。詳細図は Root の実見指摘に従って矢印の構成を直した。主線1→9は中央の縦線、OCRを通らない資料は1→3の右外周線、検索・通知は1から左外周線で末尾の独立panelへつなぎ、Jevは主線の通過先にしない。あわせて2・8・9の注記を修正した。見た目の最終受入は Root の独立目視を待つ。
 
+## CI修復と本番適用計画の追補
+
+- 文書の基準は候補 `4cffb141`（`8be5e896` の直上に test 契約整合の3 commit を積んだ状態）。既存124件の変更記録・archive・hashは変更せず、製品 runtime の挙動も変更していない（`adapters/common/journal.py` は docstring の契約明記のみで、生成 owner manifest の同期は同 entry の hash 更新のみ）。
+- Linux CI run42465260774 の新しい失敗5 node は、テストの fixture・時計・計測期待を現契約へ合わせて解消した。standalone の fixture へ `instance.root` を追加（製品の getattr fallback は付けず、実 `read_restart_request` 経路の巨大int拒否を維持）、notification health は `notify_recovery.time` も `notify_scope.time` と同じ固定時計へ pin（`recovery_worklist` が別時計で age_s を計算していた）、semantic `mode=off` は `perf_counter` を定数に固定して返却 dict の計測3項目を完全形で期待した。Discord journal の2 node は、`journal.compact()` が破損・torn・読取不能な1fileでも含めば全 pass を中止する現契約へ整合し、clean 側は従来の削除 assert を、damaged 側は全 file の bytes 不変と scan 不変・削除0を固定した。「backup なしは一切削除なし」の古い記述は、90日 fallback 期限で5日前の row を保持する実契約へ訂正した。assert の弱化はなく、unknown/open/recent/claimed/pending/foreign の保護分類と crash 復旧分類（unfinished・unreported）は両側で維持する。
+- 上記5件と、先行して修復済みの installer 5 node（`_install_progress` stub・run42465260774 で `command not found`）・shellcheck SC1010（引用符・run42465260774 hygiene）・sync helper の判定（run42465260744 の PATCH 後識別照合 fail-closed）を合わせ、追跡した CI の失敗要因はすべて対応済みと記録する。修復は test 契約側と shell 引用符・同期 helper のみで、製品の runtime 挙動・unknown 保持・人承認・復元 hold は変更していない。
+- 検証：指定の節目 batch 1 本（対象5 file＋関連4 file）は 201 tests・failures 0・errors 0・skipped 0・終了0（JUnit と log は証跡 `ci-final-delta-17/`）。Root が batch.xml を独立に実読し、元5失敗の全6ケース（damaged 両側を含む）の PASS を確認した。変更前の現 HEAD で同5失敗を再現済み。owner manifest は --write 後の clean tree で --check 終了0・manifest hash `7aa3f819`・変更 entry は journal.py のみ。ruff All checks passed。全体 suite ・installer 関連の約297件・候補 CI 全 job の再実行は行っていない。
+- 未解決の残件：`ci.yml` の pytest diagnostics upload-artifact は `if: always()` のため、pytest 全 green でも CreateArtifact の storage quota 超過で job が失敗し得る。製品の成否とは別のインフラ制限として保持し、quota を workflow の弱化・保存無効化・artifact 削除・課金変更で解消していない。当 repo の artifact 在庫は3件・1357654B のみで、account billing API は404・user scope不足のため上限・使用量の確定は未確認。
+- 本番適用の計画（読取りのみ・適用は未実施）：正本 UPGRADE_AGENT の既存 helper `scripts/mcs_upgrade.py plan` で、本番 root `~/.mcs`（HEAD `a669adb9`・clean・schema 12）から候補 `4cffb141` への plan を取得した。route は `reinstall`（`install_sh_changed`）、blockers は無し、runtime_mode は hermes、`slack_channels_required`、必要な再起動は gateway のみ。schema_bump・settings_migration は無く（none）、recovery_tool_changed も false。保存済みの install 選択 `--no-brew --no-llm` と既存 Hermes checkout を維持する条件で、config/.env/install-options の非公開 hash 保持を変えない。`--keep-hermes-checkout` は推奨 pin `2c08ca7a` ではなく本番の実 checkout `e604fa04`（branch `local/org-build`・clean）を指定する必要があり、推奨 pin を渡した初回 plan は `keep_hermes_checkout_mismatch` で blocked となった経緯を記録する。
+- 復元経路：apply pipeline は update.lock・run.lock と journal 駆動で、中断は `recover`/`mcs_recover.py` が復旧し、rollback は前回適用 entry の prev_sha へ戻す（schema_bump なしのため DB restore は伴わない想定）。更新境界の DB backup は `~/.mcs/data/backups/preupdate-*.db` に残り、復元 hold・同意記録は既存の機構を維持する。計画の取得のみで、checkout・設定・サービスの変更、push・tag・Release・asset upload・公開・本番適用はいずれも未実施。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。
 - 最終公開SHAの固定と、今回の投稿単位の判定修正の本番適用・運用受入。
 - OCR後のローカル解析と患者コンテキスト作成の完了、既存の通知保留の回復。
 - GitHub 上での画像表示、Release本文・asset・tag・公開。画像の来歴とハッシュは保持し、外部表示は未検証。
+- GitHub Actions の artifact storage quota の上限・使用量の確定（if:always() の diagnostics upload が quota で job を失敗させ得る製品外の制限）。
 - Git への push・tag・Release 公開（ユーザーの公開指示は受領済みだが、運用受入待ちで未実施）。
 
 最終リリースSHAは未固定です。`visual-source.json` は図の生成時の記録を保持しており、今回の検証候補の受入や公開を意味しません。
