@@ -762,7 +762,7 @@ else
     "$MCS_PY" "$REPO/mcs/ops/install_options.py" verify "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$_options_current" \
         || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
 fi
-_install_progress done complete
+_install_progress "done" complete
 
 # ------------------------------------------------------------ summary
 # Software preparation succeeded; a later setup failure has its own guidance.

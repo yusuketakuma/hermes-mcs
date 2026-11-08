@@ -137,7 +137,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="7dcb7dc58fafa8812dc4d7dbaddc6c1e9f61d2b0159e1d9cbd2e2c192126a43e"
+INSTALL_RUNTIME_SHA256="a29d95875a414cc361f34a615efb8593552cbf46d3a150adf946f92695605833"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -1187,8 +1187,8 @@ _install_progress_fields() {  # validated "<status> <stage> <invocation> <run_id
         brew|runtime|plugin|log_helper|llm|services|recovery|options|done) ;; *) return 1 ;; esac
     case "$_ipf_inv" in install|update) ;; *) return 1 ;; esac
     [ -n "$_ipf_run" ] || return 1
-    if [ "$_ipf_stage" = done ] && [ "$_ipf_status" != complete ]; then return 1; fi
-    if [ "$_ipf_status" = complete ] && [ "$_ipf_stage" != done ]; then return 1; fi
+    if [ "$_ipf_stage" = "done" ] && [ "$_ipf_status" != complete ]; then return 1; fi
+    if [ "$_ipf_status" = complete ] && [ "$_ipf_stage" != "done" ]; then return 1; fi
     printf '%s %s %s %s\n' "$_ipf_status" "$_ipf_stage" "$_ipf_inv" "$_ipf_run"
 }
 _install_stage_label() {  # <stage-id>; fixed display names, never file text
