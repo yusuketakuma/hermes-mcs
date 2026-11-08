@@ -1,12 +1,14 @@
 {
   "category": "added",
-  "title": "配送結果不明の復旧対象をhealth一覧から探せる",
-  "summary": "health.jsonのcards.recovery_partsが、unknownのpartに加えて添付identity確認待ちのheld partと依存拒否でnot_sentのSlack file_groupを、対応する計画関数で実際に検証した上で最大20件・候補総数と切捨て有無つきで示します。各項目はplannable/blockedと固定のblockerコードを持ち、Discordのグループ構成員は共有アンカーへの承認範囲を明示します。あわせてpart保留集計と復旧案内が、これまでunknownに丸められていた固定のproducerコード（file_group_unverified等）をそのまま保持するようになりました。",
-  "upgrade": "追加操作は不要です。health.jsonのcards.recovery_partsでstatus=plannableの項目を見つけたら、flowに対応するcard_part_planまたはattachment_identity_planで計画を確認し、従来どおり人承認つきで復旧します。blockedの項目はblockerの固定コードを確認してください。",
+  "title": "配送結果不明の復旧対象をhealth一覧とCLIから探せる",
+  "summary": "health.jsonのcards.recovery_partsが、unknownのpartに加えて添付identity確認待ちのheld partと依存拒否でnot_sentのSlack file_groupを、対応する計画関数で実際に検証した上で最大20件・候補総数と切捨て有無つきで示します。各項目はplannable/blockedと固定のblockerコードを持ち、Discordのグループ構成員は共有アンカーへの承認範囲を明示します。mcs_viewのrecovery_partsサブコマンドで同じ一覧をoffset/limitのページ単位で読み、card_part_checkサブコマンドで計画可能なpartの配送journal証拠を読み取り専用で事前確認できます。あわせてpart保留集計と復旧案内が、これまでunknownに丸められていた固定のproducerコード（file_group_unverified等）をそのまま保持するようになりました。",
+  "upgrade": "追加操作は不要です。health.jsonのcards.recovery_partsまたはmcs_view recovery_partsでstatus=plannableの項目を見つけたら、flowに対応するcard_part_planまたはattachment_identity_planで計画を確認し、従来どおり人承認つきで復旧します。journalの証拠を先に見たい場合はcard_part_check --data-dirに稼働中のデータルートを指定します。blockedの項目はblockerの固定コードを確認してください。",
   "details": [
     "一覧は読取りのみで、承認・enqueue・再送・状態変更を行いません。blockedのblockerは計画関数が返す固定コードで、失敗理由をそのまま示します。",
+    "recovery_partsサブコマンドは--offsetと--limit（1〜20）で同じsnapshot上のページを読み、limit/offsetは整数のみ受け付け負値を拒否します。並び順は更新時刻・配送ID・part IDで固定です。",
+    "card_part_checkは--data-dirで明示したliveのデータルートのjournalだけを読み、journal_checkをpassed/blocked/unknownで返します。証明ごとの結果はjournal_checksに分かれ、journal.stateはclean/incomplete/unreadable/read_limited/absentで、対象の配送・part範囲にjournal行が0件ならabsentとしてunknownに固定します（空dirsや別配送の行だけではpassedになりません）。読取りは共有scannerの上限（32MiB・100000行・5秒）で囲み、超過・読取り不可・不完全・不存在はunknownに固定して部分証拠を採用せず、未観測の項目はnullで示します。snapshotとjournalは別時点の観測として扱います。passedでも配送結果・worker停止・人承認・配送先identityは証明されず、required_external_checksと適用時の再照合が残ります。planのenvelopeとapply・承認・状態遷移は変更しません。",
     "取消済みのrenderと退役した通知サービスのpartは含みません。Discordのグループ構成員はapproval_part_idとgroup_approvalでグループ全体への承認を明示します。",
     "part_hold_reportのresolvableの説明を、実際の集計意味（unknownでattempt_idを持つpartの件数。card_part_resolve_planが権威で、依存拒否のnot_sent file_groupは数えません）に合わせて修正しました。"
   ],
-  "refs": ["mcs/notify/notify_recovery.py", "mcs/notify/notify_scope.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+  "refs": ["mcs/notify/notify_recovery.py", "mcs/notify/notify_scope.py", "mcs/views/mcs_view.py", "mcs/ingest/health_report.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
 }

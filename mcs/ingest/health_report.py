@@ -781,7 +781,7 @@ def build_health(db, result: dict, status: str,
         cards_health = dict.fromkeys((
             "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
             "revoked", "oldest_pending_age_s", "layout_inventory", "unknown_parts",
-            "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
+            "recovery_parts", "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
             "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
             "last_delivered_at"))
         cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc),
