@@ -1173,7 +1173,7 @@ _install_progress_fields() {  # validated "<status> <stage> <invocation> <run_id
     [ -f "$_ipf" ] && [ ! -L "$_ipf" ] || return 1
     # bounded read of a regular file only; sed sees at most 4 KiB
     _ipf_line="$(dd if="$_ipf" bs=4096 count=1 2>/dev/null \
-        | sed -n 's/.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
+        | sed -n 's/.*"version":1,.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
         | head -1)"
     [ -n "$_ipf_line" ] || return 1
     _ipf_status="${_ipf_line%% *}"

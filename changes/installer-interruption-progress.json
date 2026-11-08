@@ -1,14 +1,18 @@
 {
   "category": "added",
   "title": "導入・更新の途中停止から段階を確認して再開できる記録を追加",
-  "summary": "install.sh が最後に開始した段階とソフト準備の完了を data/install_progress.json に記録し、中断メッセージと再実行時の案内に段階名を表示します。mcs setup check の注意にも残った導入・更新の記録が出ます（診断の注意であり、初期設定や実接続の完了を意味しません）。記録は実行中かどうかを証明しないため、案内は「記録が残っています」と「実行中なら完了を待つ」形で、時間経過だけで中断・実行中・導入完了とは断定しません。完了済みの部分は従来どおり再実行で続きから進み、更新処理の一部として動いた導入では mcs recover の確認を案内します。",
+  "summary": "導入・更新が途中で止まると、最後に開始した段階を data/install_progress.json に記録し、中断メッセージと mcs setup check の案内に段階名を出します。記録は実行中かを証明しないため、案内は「残っています」と「実行中なら完了を待つ」形に留め、時間経過では中断と断定しません。",
   "upgrade": "追加操作は不要です。既存の導入・更新はそのまま動き、次回の実行から記録が始まります。",
   "details": [
     "install.sh の各段階の開始時の状態と、ソフト準備完了時の記録を data/install_progress.json へ原子的に記録する（書き込み失敗は導入を止めない）。記録先がディレクトリやリンクの場合は書き込まず既存の対象を保持する。初回導入で bootstrap 検査が data/ の内容を厳密に確認する区間では brew・runtime 段階を書かず、検査通過後から記録する。",
     "中断時のエラーに止まった段階名を表示する。段階は journal ではなく実行中のメモリ上の記録を使うため、journal の書き込みに失敗しても正しい段階を案内できる。",
-    "再実行の冒頭と mcs setup check は、前回の記録が残っている段階を「残っています」として案内し、実行中の場合は完了を待つよう促す。記録から実行中・中断・導入完了を断定しない。",
-    "記録ファイルは regular・非 symlink・4KiB 以内のものだけを読み、status/stage/invocation/version の形と既知の値を検証する。読めない・形が違う記録は固定の案内だけを出し、内容や例外文は表示しない。",
+    "再実行の冒頭と mcs setup check は、前回の記録が残っている段階を「残っています」として案内し、実行中の場合は完了を待つよう促す。記録から実行中・中断・導入完了を断定せず、完了済みの部分は従来どおり再実行で続きから進む。",
+    "記録ファイルの読取りは、install.sh が先頭4KiBの prefix を version=1 の固定形式と既知4 field（status/stage/invocation/run_id）で検査し、mcs setup check が全体4KiB以内の regular・非 symlink の JSON を version/status/stage/invocation/run_id/updated_at の形と既知の値で検証する。読めない・形が違う記録は固定の案内だけを出し、内容や例外文は表示しない。",
     "更新処理が起動した導入（invocation=update）では install.sh の再実行ではなく mcs recover の確認を案内する。"
   ],
-  "refs": ["deployment/install/runtime.sh", "install.sh", "mcs/ops/mcs_setup.py"]
+  "refs": [
+    "deployment/install/runtime.sh",
+    "install.sh",
+    "mcs/ops/mcs_setup.py"
+  ]
 }

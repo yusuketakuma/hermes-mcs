@@ -301,9 +301,12 @@ def test_exit_names_stage_from_memory_when_journal_unwritable(tmp_path):
     assert "途中から再開します" in r.stderr
 
 
-@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage", "complete_stage"])
+@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage", "complete_stage", "bad_version"])
 def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
-    """A foreign or malformed journal is no record — never a crash or echo."""
+    """A foreign or malformed journal is no record — never a crash or echo.
+    JSON fixtures use the writer's compact separators so the shell reader's
+    fixed-format check actually parses them (default dumps spacing would
+    never match and make every negative vacuous)."""
     home, hermes_home, _stub, env = _world(tmp_path)
     assert _run(env, hermes_home).returncode == 0
     journal = home / ".mcs/data/install_progress.json"
@@ -317,16 +320,38 @@ def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
         journal.write_text(json.dumps({
             "version": 1, "status": "complete", "stage": "services",
             "runtime_mode": "hermes", "invocation": "install",
-            "run_id": "old-run", "updated_at": 1}))
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    elif kind == "bad_version":
+        journal.write_text(json.dumps({
+            "version": 2, "status": "running", "stage": "services",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
     else:
         journal.write_text(json.dumps({
             "version": 1, "status": "running", "stage": "bogus_stage",
             "runtime_mode": "hermes", "invocation": "install",
-            "run_id": "old-run", "updated_at": 1}))
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
     r = _run(env, hermes_home)
     assert r.returncode == 0, r.stderr
     assert "前回の導入記録" not in r.stdout
     assert "bogus_stage" not in r.stdout + r.stderr
+
+
+def test_prior_run_journal_compact_record_shows_stage_notice(tmp_path):
+    """Positive control: a writer-shaped compact running record is parsed
+    and its stage is named in the rerun notice."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.write_text(json.dumps({
+        "version": 1, "status": "running", "stage": "services",
+        "runtime_mode": "hermes", "invocation": "install",
+        "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "前回の導入記録" in r.stdout
+    assert "常駐サービス" in r.stdout
+    assert "残っています" in r.stdout
 
 
 def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
