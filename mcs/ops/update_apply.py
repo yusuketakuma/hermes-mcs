@@ -476,6 +476,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                             " — 要再レビュー")
             if borrowed is None:
                 # Existing command drainers hold run.lock while writing config.
+                if expected_runtime is not None and mcs_util.load_config().get('runtime_mode') != expected_runtime:
+                    return bail('runtime_mode_changed')
                 # The old watchdog treats this applying-free journal as pre-merge.
                 receipt = None
                 def before_settings_publication():

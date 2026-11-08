@@ -261,6 +261,36 @@ def test_installed_guide_rejects_runtime_change_before_any_apply_effect(
     assert changed_config == [config.read_bytes()]
 
 
+@pytest.mark.parametrize('reinstall', [False, True])
+def test_installed_guide_rechecks_runtime_under_run_lock_before_quiesce(
+        updater, prepared_run_log, monkeypatch, tmp_path, reinstall):
+    launcher, repo, base, _target, config, installs, seen = _guide_world(
+        updater, monkeypatch, tmp_path, reinstall)
+    checked_modes, changed_config, stops = [], [], []
+    runtime_gate = update_apply._apply_runtime_gate_errors
+    def inspect_runtime(cfg, *args):
+        checked_modes.append(cfg['runtime_mode'])
+        result = runtime_gate(cfg, *args)
+        assert result == [] and cfg['runtime_mode'] == 'standalone'
+        value = json.loads(config.read_text())
+        value['runtime_mode'] = 'hermes'
+        config.write_text(json.dumps(value))
+        changed_config.append(config.read_bytes())
+        return result
+    monkeypatch.setattr(update_apply, '_apply_runtime_gate_errors', inspect_runtime)
+    monkeypatch.setattr(update_apply, 'quiesce', lambda: stops.append(True) or [])
+    monkeypatch.setattr('builtins.input', lambda *_: '2')
+    command = [sys.executable, str(repo / 'mcs/ops/mcs_update.py'), 'plan', '--tag', 'v1.2.0']
+    assert launcher.interactive_update(command, dict(os.environ), str(repo), installed=True) == 1
+    assert checked_modes == ['standalone'] and changed_config == [config.read_bytes()]
+    assert [argv[2] for argv in seen] == ['plan', 'apply']
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
+    assert stops == [] and installs == []
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state['applied'] == [] and state['applying'] is None
+    assert state['attempts']['v1.2.0']['detail'] == 'runtime_mode_changed'
+
+
 @pytest.mark.parametrize('mode', ['hermes', 'standalone'])
 def test_direct_update_without_runtime_expectation_keeps_existing_contract(
         updater, prepared_run_log, monkeypatch, tmp_path, mode):
