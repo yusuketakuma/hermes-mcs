@@ -288,6 +288,17 @@
 - この追補時点の本番は5e4efe70で、snapshot更新失敗は親工程の実機観測として候補の合成検証と分ける。意味解析の期限とsnapshot検証時間を調整した候補が、過去の実機失敗を解消した証拠にはしない。f67の先行適用と自然観測は次工程の予定で、現時点では未実施。患者コンテキスト完成、医学的精度や運用回復も確認済みとは扱わない。
 - 別途の自動復旧作業は未統合で、この119件の候補には含めていない。既存unknownの自動解除・再送は行わない。新しいMacでの全導入と公開は未実施で、既存Release下書きは未公開。文書担当はsource・tests・manifest・生成DEVELOPMENTを手編集・再生成せず、図も再描画していない。
 
+## 自動復帰と限定解析集計の追補
+
+- 文書の基準は統合merge `0cfec1af`（production source は c165b01e と byte 一致、生成 owner metadata を除く）。main `3e9a1010` を通常mergeで祖先へ取り込み、競合は `mcs/ingest/health_recovery.py` の1件のみで c165 blob を採用した。旧 `_retire_previous_restart` 方式の test は c165 の世代別 request 機構と非互換のため除外し、正式 archive fragment を保持して loose 重複を除いた。
+- 自動復帰は、standalone 稼働ホストの停滞・子処理失敗・接続断と、Hermes 共有 gateway の配送 worker 起動失敗（`worker_start_failed`・コード版/PID/開始時刻の一致）を対象に、update.lock 取得後に要求ID・対象世代・回数を `data/auto_recovery.json` へ保存し、既存の終了待ち・再起動機構へ委ねる。結果不明・破損・in-flight の記録は上書きせず自動再送しない。gateway 側は対象PID・要求ID・更新ロックを既存復旧ツールへ渡し、世代交代でも結果不明を保留する。手動停止・更新・復元待ちは自動解除しない。
+- 限定解析（`admitted_ids`/`shard` 指定・`cloud_only`）の `run_pending` は末尾の全履歴残件集計を省き、`left`・`left_estimate`・経過時間を null とする。対象限定なしの正確な残件集計と期限付き概算キャッシュは維持する。
+- 既存119件へ `auto-recovery`・`scoped-extraction-backlog-count` の2件を加え全121件へ集約した。新fragmentは原文のbytesを保って archive し、既存119件の hash・過去の受入・図3資産を保持する。生成 DEVELOPMENT と release owner manifest を再生成した。
+- Root runner 88523 は c165 関連20 file・729 passed・0 failed・0 skipped・rc0（556.667s・`source_stamp_changed=[]`）。別途保存の 489pass・853delta166pass・98cd9pass は部分結果であり全体 suite/CI の成功とは記録しない。文書担当は pytest を起動していない。
+- `tests/patients/test_private_context_basis_diagnostic.py` は参照する scenario 関数名を現行名へ合わせ（`aad05038` の改名に追随、assert は不変）、公式 runner で1 file 実行したが `baseline_pass_still_valid` の assert で失敗した。QUALITY_PASS 行は存在し内容も一致するが `audit_key` が baseline identity（`1026ed26…`）と不一致（保存行 `30f365ef…`）で、現行 `_quality_input` の audit_key 契約とのずれが原因。一時 probe で診断し Codex へ報告済み。prod fix は計画・レビュー待ちで本候補には含めない。
+- この追補時点の本番は f67a5447 適用済みで auto/scoped は未適用。初回 snapshot timeout 9355 の後、9357–9362 で6回 publish（9358/9362 は jobs-only、他 full は overshoot 0）。rollup deadline 先送りは残る。unknown 配送2件・OCR 表対応10件は保護 hold で未解消。Oracle browser GPT-6+Pro は UI 選択 verified だが backend 独立同定は不可。native source で遅延 restart が世代交代でも hold されることを確認。患者医療精度・新規 Mac 実接続導入・運用復旧は未検証。公式 master は 2026-11-08T06:41Z 確認で現行 20261013・19286件・同梱同版・offline checker rc0、yFile Fetch のみ target_unreachable（binary 取得未確認）。新たな無断外部サービス・有料 fallback は追加していない。
+- 公開前の最終受入根拠はこの制約を正直に記載する。新しい Mac での全導入と公開は未実施で、既存 Release 下書きは未公開。既存 unknown の自動解除・再送は行わない。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。

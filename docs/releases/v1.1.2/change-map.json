@@ -1,5 +1,5 @@
 {
-  "fragment_count": 119,
+  "fragment_count": 121,
   "records": [
     {
       "category": "added",
@@ -833,8 +833,22 @@
       "path": "changes/archive/1.1.2/snapshot-size-reserve.json",
       "sha256": "621b5f398ab6bd4306fe4fa8891a7988e5e77f16bc475a33a5800b5a51d4f814",
       "title": "大きな収集DBで定期実行が時間切れになり解析用snapshotの更新が失敗する問題を修正"
+    },
+    {
+      "category": "added",
+      "id": "auto-recovery",
+      "path": "changes/archive/1.1.2/auto-recovery.json",
+      "sha256": "e03b29ab60595879445a305c98fd92e32a4af4ae1ffdaa0c7b3e6e9d9455d5e1",
+      "title": "監視から通常の終了処理を待つ再起動を要求"
+    },
+    {
+      "category": "fixed",
+      "id": "scoped-extraction-backlog-count",
+      "path": "changes/archive/1.1.2/scoped-extraction-backlog-count.json",
+      "sha256": "dc288b091149139d79aae82157b3dbadc2bfbecbcf8e3e389f7c8d20ab7317a2",
+      "title": "対象を限定した解析後の全履歴集計を省く"
     }
   ],
-  "scope": "v1.1.2 の変更記録119件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録121件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }

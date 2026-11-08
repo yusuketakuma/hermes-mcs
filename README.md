@@ -518,6 +518,10 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 
 - 追加の操作は不要です。収集・通知・snapshotの厳格な検証と原子的な公開、解析ジョブの優先順位は変わりません。時間に余裕がある実行では従来どおり解析を進めます。
 
+- 自動復帰の監視ジョブ：導入・更新時のサービス再設定で、standalone と Hermes の監視ジョブに --send を付与します。無効化する場合は config.json の auto_recovery.enabled を false にしてください。手動停止や更新・復元待ちの状態は自動解除しません。Hermes 側は対象PID・要求ID・更新ロックを受け取る復旧ツールが必要で、旧ツールや検証できないツールでは要求を保留します。
+
+- 対象を限定した解析の残件表示：更新後の処理から適用されます。追加設定は不要です。解析対象・モデル・品質確認・保存条件は変わりません。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
