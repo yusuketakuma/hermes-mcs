@@ -279,6 +279,7 @@ class Runtime:
                           "last_error": None, "retry_at": None, "started_at": None}
         self.status_body = None
         self.status_written = None
+        self._startup_restart_file_checked = False
         self.write_error = {}
         subs = {"PYTHON": python_executable(cfg, root=self.root), "REPO": str(REPO),
                 "DATA": str(self.data), "RUNTIME_HOME": str(self.root)}
@@ -343,6 +344,37 @@ class Runtime:
             self._write_failed(SCHEDULE_FILE, exc)
         else:
             self._write_ok(SCHEDULE_FILE)
+
+    def _retire_previous_restart(self):
+        """Retire a verified old request once, before exposing this host generation."""
+        if self._startup_restart_file_checked:
+            return False
+        self._startup_restart_file_checked = True
+        if self._planning_host_fd is None or self.status_written is not None:
+            return False
+        from mcs_util import strict_json
+        path = self.data / service.RESTART_FILE
+        try:
+            value = strict_json(safe_io.read_private_bytes(path))
+            if (type(value) is not dict or set(value) != {"generation", "request_id", "requested_at"}
+                    or any(type(value[key]) is not str or re.fullmatch("[0-9a-f]{32}", value[key]) is None
+                           for key in ("generation", "request_id"))
+                    or type(value["requested_at"]) not in (int, float)
+                    or not 0 <= value["requested_at"] < 1e12
+                    or not math.isfinite(value["requested_at"])
+                    or value["generation"] == self.generation):
+                return False
+        except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
+            return False
+        # The single-host lock proves the old owner exited. No legitimate caller
+        # can target our generation before its first status publication.
+        try:
+            path.unlink()
+            safe_io.fsync_dir(self.data)
+        except OSError as exc:
+            self._write_failed(service.RESTART_FILE, exc)
+            return False
+        return True
 
     def _publish_status(self, now, updating):
         body = {"pid": os.getpid(), "generation": self.generation, "started_at": self.started_at,
@@ -1184,6 +1216,7 @@ async def serve(root, cfg, connector=None, *, restart_provision=None):
         except BlockingIOError:
             raise config.ConfigError("standalone_already_running") from None
         runtime._planning_host_fd = fd
+        runtime._retire_previous_restart()
         stopping = asyncio.Event()
         registered = []
         worker = None
