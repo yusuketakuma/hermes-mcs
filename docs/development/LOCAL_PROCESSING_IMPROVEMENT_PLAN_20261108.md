@@ -9,9 +9,9 @@
 分けて扱い、残時間の見積りや性能改善量は捏造せず、工程の依存だけを
 示します。
 
-**現時点の状態：計画確定稿（Codex の SHA レビュー待ち。B1 は
-合成反証に進める条件付き設計まで確定。採用・実装は別指示、
-速度効果は未実測、本番は未変更）。**
+**現時点の状態：Codex レビュー反映済み・計画確定（B1 は
+合成反証に進める条件付き設計。採用・実装は別指示、実装・
+速度効果は未検証、本番は未変更）。**
 
 ## 1. 目的と現況根拠
 
@@ -138,11 +138,12 @@ unlock 範囲と IF スケッチ（`writes_allowed` 境界と一体）
   `unlocked_transport` を使用）。`.snapshot.lock` は全期間保持する。
 - 順序：reacquire＋fence 確認 → fsync/rename → marker → dirtyCAS。
   copy/publish/marker/dirtyCAS の既存 lock 規約は変えない。
-- IF：keyword-only の `verification_context(*, deadline)`（context
-  manager）を `run_check` → `maintenance.refresh_snapshot` /
-  `_refresh_snapshot_locked` / `publish_snapshot` →
-  `snapshots._publish_snapshot_locked` へ透過する。default を持た
-  ない既存 caller は不変。
+- IF：keyword-only の `verification_context(*, deadline)` は
+  context manager を返す factory とし、`run_check` →
+  `maintenance.refresh_snapshot` / `_refresh_snapshot_locked` /
+  `publish_snapshot` → `snapshots._publish_snapshot_locked` へ透過
+  する。optional 引数の既定は None で、未指定 caller は旧動作の
+  まま不変。
 - 所有範囲：ingest の `run_check` ＋ `core/{maintenance,snapshots}`。
   既存 writer helper を再利用し、共有 `writer_lock` の意味変更は
   別レビュー扱い。
@@ -345,7 +346,7 @@ candidate scan/SQL 件数/同一 scope、snapshot 公開 age、RT 待ち。
 |---|---|---|---|---|
 | P0 | 計画内・最初 | 観測項目が固定語彙・数値で定義できる | PHI/本文を計測へ持ち込む案 | 実装担当 |
 | C1 | 最小確定案 | 同 fixture で重複 read 1 組→0・selection/lane/source_sig 同等 | scope/cfg/contract 差を同一視する設計 | 実装担当 |
-| B1 | 条件付き設計・最小 seam 確定 | 必須 2 条件（照合済み）＋最小 seam＋拡張合成反証を通過 | fd 所有偽装・旧 ledger への追記・安全違反 1 件・境界が最小差分で閉じない場合は延期 | Codex 設計確定→Devin |
+| B1 | 条件付き設計・最小 seam 確定 | 安定 run.lock の既存規約は照合済み。no-write/元例外保持は実装・合成検証で証明が必要。最小 seam＋拡張合成反証を通過 | fd 所有偽装・旧 ledger への追記・安全違反 1 件・境界が最小差分で閉じない場合は延期 | Codex 設計確定→Devin |
 | E | 比較案 | ev 内訳分類＋bench A/B で precision/recall 不悪化 | 完全一致・validator・one-shot の弱体化案 | Codex 判定→Devin |
 | C2 | 保留 | C1 後も listing 支配が残る | scope/権限/契約差の再導出省略 | Codex 判定 |
 | B2 | 保留 | B1 後も計算割合が支配 | derive 全体 unlock 案 | Codex 判定 |
