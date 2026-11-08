@@ -1,5 +1,5 @@
 {
-  "fragment_count": 118,
+  "fragment_count": 119,
   "records": [
     {
       "category": "added",
@@ -826,8 +826,15 @@
       "path": "changes/archive/1.1.2/mcslog-stall-observation.json",
       "sha256": "4eee0d170bacc51c73cf6fc4850267115adbf68481acfd0e6e5b4379df457309",
       "title": "停滞チェックの観測失敗が収集エラーとして二重表示される問題を修正"
+    },
+    {
+      "category": "fixed",
+      "id": "snapshot-size-reserve",
+      "path": "changes/archive/1.1.2/snapshot-size-reserve.json",
+      "sha256": "621b5f398ab6bd4306fe4fa8891a7988e5e77f16bc475a33a5800b5a51d4f814",
+      "title": "大きな収集DBで定期実行が時間切れになり解析用snapshotの更新が失敗する問題を修正"
     }
   ],
-  "scope": "v1.1.2 の変更記録118件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録119件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
