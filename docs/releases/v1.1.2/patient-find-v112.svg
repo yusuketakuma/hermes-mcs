@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 640" role="img" aria-labelledby="t d" font-family="Hiragino Kaku Gothic ProN, sans-serif" id="patient-find-v112-root">
+<title id="t">v1.1.2 患者の原資料を探して戻る</title>
+<desc id="d">通知カードの返信から患者情報と検索へ進み、同じ患者の別スレッドや添付OCRを探し、出典とMCSの患者ルームへ戻ります。実画面や測定結果ではありません。</desc>
+<defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');</style><marker id="patient-find-v112-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10" fill="#66716f"/></marker></defs>
+<rect width="390" height="640" fill="#f6f4ef"/>
+<g fill="#202124">
+<text x="20" y="34" font-size="17" font-weight="700">患者の原資料を探して戻る（v1.1.2）</text>
+<text x="20" y="56" font-size="12" fill="#66716f">検索は解析完了を待たない・合成説明図</text>
+<rect x="16" y="72" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="102" font-size="15" font-weight="700">1　返信・通知カードから開始</text>
+<text x="32" y="126" font-size="12" fill="#66716f">「👤 患者情報」「🔎 この患者を検索」</text>
+<text x="32" y="146" font-size="12" fill="#66716f">本人向けの非公開表示</text>
+<path d="M195 160V178" stroke="#66716f" stroke-width="2" marker-end="url(#patient-find-v112-ar)"/>
+<rect x="16" y="182" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="212" font-size="15" font-weight="700">2　患者情報・検索</text>
+<text x="32" y="236" font-size="12" fill="#66716f">同じ患者の取得済み原文を検索</text>
+<text x="32" y="256" font-size="12" fill="#66716f">LLM・概況回数を使わない</text>
+<path d="M195 270V288" stroke="#66716f" stroke-width="2" marker-end="url(#patient-find-v112-ar)"/>
+<rect x="16" y="292" width="358" height="86" rx="12" fill="#ffffff" stroke="#d5dcd7"/>
+<text x="32" y="322" font-size="15" font-weight="700">3　別スレッド・添付OCRへ</text>
+<text x="32" y="346" font-size="12" fill="#66716f">同じ患者の別投稿・OCR資料を表示</text>
+<text x="32" y="366" font-size="12" fill="#66716f">未検索範囲・未完了を区別</text>
+<path d="M195 380V398" stroke="#66716f" stroke-width="2" marker-end="url(#patient-find-v112-ar)"/>
+<rect x="16" y="402" width="358" height="100" rx="12" fill="#e9f5ef" stroke="#087f5b"/>
+<text x="32" y="432" font-size="15" font-weight="700" fill="#087f5b">4　出典とMCSへ戻る</text>
+<text x="32" y="456" font-size="12" fill="#202124">結果から原資料と患者ルームを開く</text>
+<text x="32" y="476" font-size="12" fill="#202124">閲覧は所属・条件を毎回照合</text>
+<rect x="16" y="516" width="358" height="86" rx="12" fill="#edf0ee" stroke="#d5dcd7"/>
+<text x="32" y="546" font-size="12" font-weight="700" fill="#66716f">条件の目安</text>
+<text x="32" y="570" font-size="12" fill="#66716f">入力500字・5件ずつ・本人表示</text>
+<text x="32" y="590" font-size="12" fill="#66716f">詳細は更新時の注意を参照</text>
+</g></svg>
