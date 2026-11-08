@@ -48,6 +48,20 @@ from update_repository import (
     _git_out,
 )
 
+INSTALLED_STANDALONE_UPDATE_VERSION = 1
+
+
+def _installed_standalone_contract(cfg):
+    root = Path(__file__).resolve().parents[2]
+    updater = root / "mcs/ops/mcs_update.py"
+    if ("MCS_UPDATE_REPO" in os.environ or not mcs_runtime.standalone(cfg)
+            or root != Path(mcs_util.REPO).resolve()
+            or Path(sys.argv[0]).resolve() != updater or not updater.is_file()):
+        return None
+    return {"version": INSTALLED_STANDALONE_UPDATE_VERSION,
+            "repository": str(root), "updater": str(updater)}
+
+
 def _plugin_changed(tag: str, cfg: dict, *, deadline=None) -> bool:
     return bool(_git_out(
         ["diff", "--name-only", "-z", "HEAD", tag, "--",
@@ -113,6 +127,7 @@ def plan(tag: str | None = None, *, candidate_sha: str | None = None,
 def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> dict:
     import slack_channel_setup
     cur_tag, cur_sha = current["tag"], current["sha"]
+    installed = None if candidate else _installed_standalone_contract(cfg)
     local_errors = precheck_local(cfg)
     tag_errors = precheck_tag(tag)
     decision = update_policy.preflight_decision(
@@ -120,7 +135,8 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         restore_pending=bool(_awaiting_consent_marker()),
         legacy_source=_git(["cat-file", "-e", "HEAD:mcs/ops/mcs_update.py"]).returncode != 0,
         standalone=mcs_runtime.standalone(cfg),
-        automatic=_update_mode(cfg) == "auto", noop=cur_sha == target_sha)
+        automatic=_update_mode(cfg) == "auto", noop=cur_sha == target_sha,
+        entry_context="installed_standalone" if installed else "external")
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
     try:
@@ -157,6 +173,7 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         "route": route, "current": current,
         "target": {"tag": tag, "sha": target_sha},
         "runtime_mode": cfg.get("runtime_mode") or "hermes",
+        **({"installed_standalone_update": installed} if installed else {}),
         "slack_channels_required": slack_channel_setup.required(cfg),
         "blockers": sorted(set(blockers)), "reinstall": reinstall,
         "schema_bump": decision["schema_bump"],

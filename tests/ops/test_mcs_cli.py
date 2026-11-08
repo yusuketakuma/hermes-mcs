@@ -97,6 +97,7 @@ def test_invalid_arguments_exit_two(pinned, argv):
 @pytest.mark.parametrize("phase", ["apply", "rollback"])
 def test_mutating_update_retains_existing_entrypoints(pinned, monkeypatch, phase):
     calls = []
+    monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
     monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append((exe, argv)))
     args = ["update", phase]
     if phase == "apply":
@@ -115,6 +116,7 @@ def test_mutating_update_retains_existing_entrypoints(pinned, monkeypatch, phase
 @pytest.mark.parametrize("route,exit_code", [("apply", 0), ("blocked", 1)])
 def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
         pinned, monkeypatch, tmp_path, capsys, route, exit_code):
+    monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
     repo, bare = _make_repo(tmp_path)
     stub = ("import json,os,sys\nprint(json.dumps("
             f"{{'route':{route!r},'argv':sys.argv[1:],"
@@ -135,6 +137,30 @@ def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
     assert seen["repo"] == str(repo)
     assert before == {str(p.relative_to(repo)): p.read_bytes()
                       for p in repo.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize('phase', ['guide', 'plan', 'apply', 'rollback'])
+def test_standalone_cli_uses_installed_update_contract(pinned, monkeypatch, phase):
+    monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'standalone'})
+    calls = []
+    def execute(exe, argv):
+        calls.append(argv)
+        raise SystemExit(0)
+    monkeypatch.setattr(mcs_cli.os, 'execv', execute)
+    monkeypatch.setattr(mcs_cli.subprocess, 'run', lambda argv, **kw:
+                        calls.append(argv) or subprocess.CompletedProcess(argv, 0, '{"route":"apply"}', ''))
+    if phase == 'plan':
+        assert mcs_cli.main(['update', phase, '--to', 'v1.2.0']) == 0
+    else:
+        with pytest.raises(SystemExit) as stopped:
+            mcs_cli.main(['update', phase, *([] if phase == 'rollback' else ['--to', 'v1.2.0'])])
+        assert stopped.value.code == 0
+    if phase == 'rollback':
+        assert calls == [[sys.executable, str(ROOT / 'mcs/ops/mcs_update.py'), 'rollback']]
+    else:
+        assert calls == [[sys.executable, str(ROOT / 'scripts/mcs_upgrade.py'),
+                          '--repo', str(ROOT), '--installed-standalone',
+                          *(['--no-fetch'] if phase == 'plan' else []), phase, '--to', 'v1.2.0']]
 
 
 def test_bootstrap_install_does_not_need_python_or_path_launcher(tmp_path):
