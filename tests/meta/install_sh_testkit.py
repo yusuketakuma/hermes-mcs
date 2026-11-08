@@ -88,7 +88,11 @@ case "$1" in
   pip)
     pwd > "$STUB_ROOT/uv-pip-cwd"
     [ -z "$STUB_FAIL_PIP" ] || { echo "error: build failed" >&2; exit 1; }
-    case "$*" in *requirements-standalone.txt*) exit 0 ;; esac
+    case "$*" in *requirements-standalone.txt*)
+        touch "$STUB_STATE/sdk-ready"
+        printf '%s' "${STUB_SDK_POST_FAULT:-}" > "$STUB_STATE/sdk-fault"
+        exit 0 ;;
+    esac
     cp "$STUB_ROOT/venv-hermes" "$(dirname "$py")/hermes"; exit 0 ;;
 esac
 exit 0
@@ -160,6 +164,11 @@ exit 0
     # ambient python3 answers version probes as the supported 3.14 runtime
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
+if [ "$1" = "-m" ] && [ "$2" = venv ]; then
+    mkdir -p "$3/bin"
+    cp "$STUB_ROOT/venv-python" "$3/bin/python3"
+    exit 0
+fi
 case "$*" in
   *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
@@ -205,6 +214,12 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
+  *mcs-standalone-sdk-probe*) exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/sdk-check.py" "$@" ;;
+  *"-m pip install -r "*requirements-standalone.txt*)
+    [ -z "$STUB_FAIL_PIP" ] || exit 1
+    touch "$STUB_STATE/sdk-ready"
+    printf '%s' "${STUB_SDK_POST_FAULT:-}" > "$STUB_STATE/sdk-fault"
+    exit 0 ;;
   *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
   *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
@@ -284,6 +299,32 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False, configured=
                        ("venv-hermes", VENV_HERMES)):
         (stub_root / name).write_text(body)
         (stub_root / name).chmod(0o755)
+    # Run the real pin reader/checker with only distribution metadata replaced.
+    (stub_root / "sdk-check.py").write_text(f"""\
+import importlib.metadata, os, runpy, sys
+from pathlib import Path
+fixture_home = os.environ['HOME']
+runpy.run_path({str(ROOT / 'tests/conftest.py')!r})
+os.environ['HOME'] = fixture_home
+os.environ['MCS_ROOT'] = str(Path(fixture_home) / '.mcs')
+sys.path.insert(0, {str(ROOT)!r})
+from mcs_standalone.__main__ import _pinned
+pins = _pinned()
+state = Path(os.environ['STUB_STATE'])
+fault_path = state / 'sdk-fault'
+fault = fault_path.read_text() if fault_path.exists() else ''
+def version(name):
+    if not (state / 'sdk-ready').exists() or fault == 'missing:' + name:
+        raise importlib.metadata.PackageNotFoundError(name)
+    return '0.0.0' if fault == 'mismatch:' + name else pins[name]
+importlib.metadata.version = version
+with open(os.environ['STUB_LOG'], 'a') as stream:
+    stream.write('sdk-metadata ' + (fault or 'pinned') + '\\n')
+index = sys.argv.index('-c')
+code = sys.argv[index + 1]
+sys.argv = ['-c', *sys.argv[index + 2:]]
+exec(compile(code, '<installer-sdk-check>', 'exec'))
+""")
     # Every install_options child uses this isolated runner. No command is
     # spawned: worker and cron listings are synthetic, while the real cron
     # parser and fresh-install checks still consume their output.

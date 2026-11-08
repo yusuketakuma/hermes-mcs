@@ -1,10 +1,155 @@
 """install.sh runtime selection: --mode standalone installs no Hermes,
 an existing standalone config keeps its mode, non-interactive stays hermes."""
 import json
+import shutil
 
 import pytest
 
 from test_install_sh import ROOT, _calls, _run, _world
+
+
+def _hide_tools(stub, env, *names):
+    """Hide selected tools even when the machine has /usr/bin/git."""
+    system = stub / 'system-bin'
+    system.mkdir(exist_ok=True)
+    for name in ('sh', 'dirname', 'stat', 'readlink', 'mktemp', 'cp', 'chmod',
+                 'rm', 'awk', 'shasum', 'sha256sum', 'tr', 'sed', 'grep', 'cat',
+                 'cmp', 'mkdir', 'basename', 'lockf', 'flock', 'wc', 'mv', 'touch'):
+        executable = shutil.which(name)
+        if executable:
+            (system / name).symlink_to(executable)
+    for name in names:
+        (stub / 'bin' / name).rename(stub / ('hidden-' + name))
+    env['PATH'] = str(stub / 'bin') + ':' + str(system)
+
+
+@pytest.mark.parametrize('missing', ['uv', 'git'])
+@pytest.mark.parametrize('mode', ['--preflight', '--dry-run', 'install'])
+def test_standalone_ocr_missing_tools_refuse_before_fresh_state(tmp_path, missing, mode):
+    home, _, stub, env = _world(tmp_path)
+    _hide_tools(stub, env, missing)
+    flags = [] if mode == 'install' else [mode]
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-recovery', '--with-yomitoku', *flags)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert missing in result.stdout + result.stderr
+    assert list(home.iterdir()) == []
+    assert not any('mcs_setup.py services' in call or call.startswith(('uv ', 'venv-python '))
+                   for call in _calls(stub))
+
+
+@pytest.mark.parametrize('missing', [('git',), ('uv', 'git')])
+def test_standalone_without_ocr_does_not_require_uv_or_git(tmp_path, missing):
+    home, _, stub, env = _world(tmp_path)
+    _hide_tools(stub, env, *missing)
+    result = _run(env, None, '--preflight', '--mode', 'standalone', '--no-brew',
+                  '--no-llm', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert list(home.iterdir()) == []
+
+
+@pytest.mark.parametrize('with_uv', [True, False])
+def test_empty_home_standalone_installs_and_checks_sdk_with_uv_or_pip(tmp_path, with_uv):
+    home, _, stub, env = _world(tmp_path)
+    if not with_uv:
+        _hide_tools(stub, env, 'uv')
+    flags = ('--mode', 'standalone', '--no-brew', '--no-llm', '--no-recovery')
+    before = _run(env, None, '--preflight', *flags)
+    assert before.returncode == 0, before.stdout + before.stderr
+    assert list(home.iterdir()) == []
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(stub)
+    install = next(i for i, call in enumerate(calls)
+                   if ('uv pip install' if with_uv else '-m pip install -r') in call)
+    checked = calls.index('sdk-metadata pinned')
+    services = next(i for i, call in enumerate(calls) if 'mcs_setup.py services' in call)
+    assert install < checked < services
+    assert not (home / '.hermes').exists()
+    assert (home / '.mcs/venv/.mcs-connector-requirements').read_bytes() == (
+        ROOT / 'deployment/requirements-standalone.txt').read_bytes()
+    assert not (home / '.mcs/venv/.mcs-pip-incomplete').exists()
+
+
+@pytest.mark.parametrize('missing', ['uv', 'git'])
+def test_standalone_ocr_tools_may_be_supplied_by_brew_before_use(tmp_path, missing):
+    _, _, stub, env = _world(tmp_path)
+    _hide_tools(stub, env, missing)
+    env['STUB_MISSING_OCR_TOOL'] = missing
+    (stub / 'bin/brew').write_text('''#!/bin/sh
+echo "brew $*" >> "$STUB_LOG"
+if [ "$1" = list ] && [ "$3" = "$STUB_MISSING_OCR_TOOL" ]; then exit 1; fi
+if [ "$1" = install ] && [ "$2" = "$STUB_MISSING_OCR_TOOL" ]; then
+    cp "$STUB_ROOT/hidden-$2" "$STUB_ROOT/bin/$2"
+fi
+exit 0
+''')
+    result = _run(env, None, '--preflight', '--mode', 'standalone', '--no-llm',
+                  '--no-recovery', '--with-yomitoku')
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = _run(env, None, '--mode', 'standalone', '--no-llm', '--no-recovery', '--with-yomitoku')
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(stub)
+    installed = calls.index('brew install ' + missing)
+    ocr = next(i for i, call in enumerate(calls) if 'scripts/setup_yomitoku.py' in call)
+    assert installed < ocr
+
+
+@pytest.mark.parametrize('fault', ['', 'missing:slack-bolt', 'missing:yarl',
+                                  'mismatch:slack-sdk', 'mismatch:yarl'])
+def test_matching_sdk_marker_is_checked_and_only_drift_is_reinstalled(tmp_path, fault):
+    home, _, stub, env = _world(tmp_path)
+    flags = ('--mode', 'standalone', '--no-brew', '--no-llm', '--no-recovery')
+    first = _run(env, None, *flags)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = home / '.mcs/venv/.mcs-connector-requirements'
+    pinned = (ROOT / 'deployment/requirements-standalone.txt').read_bytes()
+    assert marker.read_bytes() == pinned
+    (stub / 'state/sdk-fault').write_text(fault)
+    start = len(_calls(stub))
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(stub)[start:]
+    assert any(call.startswith('uv pip install') for call in calls) == bool(fault)
+    probes = [call for call in calls if call.startswith('sdk-metadata ')]
+    assert probes == (['sdk-metadata ' + fault, 'sdk-metadata pinned'] if fault else ['sdk-metadata pinned'])
+    assert marker.read_bytes() == pinned
+    assert not (marker.parent / '.mcs-pip-incomplete').exists()
+
+
+@pytest.mark.parametrize('fault', ['missing:slack-bolt', 'mismatch:yarl'])
+def test_sdk_install_without_verified_pins_keeps_fresh_hold_and_incomplete_marker(tmp_path, fault):
+    home, _, stub, env = _world(tmp_path)
+    result = _run({**env, 'STUB_SDK_POST_FAULT': fault}, None, '--mode', 'standalone',
+                  '--no-brew', '--no-llm', '--no-recovery')
+    assert result.returncode != 0
+    assert 'SDK の固定版を確認できません' in result.stderr
+    venv = home / '.mcs/venv'
+    assert (venv / '.mcs-pip-incomplete').is_file()
+    assert not (venv / '.mcs-connector-requirements').exists()
+    assert (home / '.mcs/data/.provider-bootstrap-fresh.json').is_file()
+    assert not (home / '.mcs/config.json').exists()
+    assert not any('mcs_setup.py services' in call for call in _calls(stub))
+
+
+def test_failed_sdk_repair_retains_marker_and_retries_without_services(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    flags = ('--mode', 'standalone', '--no-brew', '--no-llm', '--no-recovery')
+    first = _run(env, None, *flags)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = home / '.mcs/venv/.mcs-connector-requirements'
+    before = marker.read_bytes()
+    (stub / 'state/sdk-fault').write_text('missing:yarl')
+    start = len(_calls(stub))
+    failed = _run({**env, 'STUB_FAIL_PIP': '1'}, None, *flags)
+    assert failed.returncode != 0
+    assert marker.read_bytes() == before
+    assert (marker.parent / '.mcs-pip-incomplete').is_file()
+    assert not any('mcs_setup.py services' in call for call in _calls(stub)[start:])
+    retried = _run(env, None, *flags)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert marker.read_bytes() == before
+    assert not (marker.parent / '.mcs-pip-incomplete').exists()
 
 
 def test_fresh_standalone_without_hermes_bootstraps_before_services(tmp_path):

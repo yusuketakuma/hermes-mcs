@@ -137,7 +137,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="c9bd834ff3c0ab28180815b2a4f7f47c4a833d80c9c3e6e440742849ad98d9c0"
+INSTALL_RUNTIME_SHA256="1b46cbc6592c44f915891f757211ef2f5df6bea0a29a5cd118457e058fa3eabe"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -809,6 +809,9 @@ preflight() {
     if [ "$RUNTIME_MODE" = hermes ] && [ "$SKIP_BREW" -eq 1 ] && ! command -v uv >/dev/null 2>&1; then
         pf_ng "uv が未導入です（Hermes の導入に uv が必要です）" "brew install uv"
     fi
+    if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$_brew_fills" -eq 0 ] && ! command -v uv >/dev/null 2>&1; then
+        pf_ng "uv が未導入です（追加OCRの導入に必要です）" "brew install uv"
+    fi
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
@@ -827,7 +830,7 @@ preflight() {
     if [ "$RUNTIME_MODE" = hermes ] && { [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; }; then _need_clone=1; fi
     if command -v git >/dev/null 2>&1; then pf_ok "git: $(command -v git)"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "git は未導入です。段階1で導入します"
-    elif [ "$_need_clone" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
+    elif [ "$_need_clone" -eq 1 ] || [ "$WITH_YOMITOKU" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
     fi
 
     _need_gb=12
@@ -962,6 +965,14 @@ if [ "$MODE" != install ]; then
     [ "$PF_NG" -eq 0 ] || exit 1
     exit 0
 fi
+
+require_ocr_tools() {
+    if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$SKIP_BREW" -eq 1 ]; then
+        command -v uv >/dev/null 2>&1 || die "追加OCRの導入には uv が必要です。導入してから再実行してください"
+        command -v git >/dev/null 2>&1 || die "追加OCRの導入には git が必要です。導入してから再実行してください"
+    fi
+}
+require_ocr_tools
 
 # ---------------------------------------------------------- guards
 [ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
@@ -1152,6 +1163,7 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
     [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
         || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
+require_ocr_tools
 
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
