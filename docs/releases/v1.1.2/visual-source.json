@@ -74,7 +74,7 @@
   "tool": "macOS qlmanage + ImageMagick",
   "wrapper": "1200x1200 SVG with source SVG nested inside g transform=translate(405 80)"
  },
- "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。 2026-11-08 r11-r13で主図をcloud-continuity-v112-detailed（780x4326・9主ノード・3章）へ作り直した。旧cloud-continuity.svg/.pngは公開済みasset 721517700の履歴として削除・上書きせず保持。",
+ "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。 2026-11-08 r11-r13で主図をcloud-continuity-v112-detailed（780x4326・9主ノード・3章）へ作り直した。旧cloud-continuity.svg/.pngは既存draft添付asset 721517700の履歴として削除・上書きせず保持。",
  "source": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.svg",
  "source_checkout_observation": {
   "head": "b0b5f59b000e447ab0b4184b9b4e97eaa23c35b4",
