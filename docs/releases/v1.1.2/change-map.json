@@ -866,7 +866,7 @@
    "category": "fixed",
    "id": "release-candidate-checks",
    "path": "changes/archive/1.1.2/release-candidate-checks.json",
-   "sha256": "0ab33f0a56d385ceb6316857e377335dd77f5f3967ce2e03bfc0e1313cfa3a42",
+   "sha256": "f5eeef6d5dee0f1d413b69cf149c6ca2e9ecc98585443f4e079b9e326698f524",
    "title": "公開前検査で見つかった表記・同期判定・テスト準備の問題を修正"
   }
  ],
