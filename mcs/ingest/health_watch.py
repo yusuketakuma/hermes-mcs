@@ -803,8 +803,6 @@ _REASON_JA = {
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
-    "cloud_llm_no_api_key": ("Anthropic のAPIキーが未登録のため、ローカルLLMで処理を継続しています",
-                              "外部AIを使う場合は、MCSの .env に MCS_ANTHROPIC_API_KEY を登録し、ファイル権限を0600にしてください"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
     "standalone_host_down": ("独立接続のhostが動いていません",
@@ -1018,7 +1016,7 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             action = lw_actions.get(base, action)
         if base == 'collection_incomplete' and _collection_known_empty(report):
             meaning = "収集判定と現在の患者別の取得内訳に差があります"
-            action = ("前回の収集判定または今回の観測対象との差をdoctorで確認。"
+            action = (f"前回の収集判定または今回の観測対象との差を{_DOCTOR} で確認。"
                       "現在の患者別の未取得は0件ですが、収集全体の完了は断定できません")
         if base == 'collection_incomplete' and report.get('semantic_intake_unstored') in ('present', 'unverified'):
             meaning = ('保存できず、未取得の可能性が残る記録があります'

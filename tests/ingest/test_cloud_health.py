@@ -89,9 +89,9 @@ def test_explicit_cloud_without_key_warns_and_explains_local_continuation(db, mo
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, **kw: True)
     cfg = {"cloud_llm": {"mode": mode, "project_ids": scope}}
     assert health_report.backlog_stalls(db.db, cfg, time.time()) == ["cloud_llm_no_api_key"]
-    meaning, action = health_watch._REASON_JA["cloud_llm_no_api_key"]
+    meaning, action = health_watch._CLOUD_REASON_JA["cloud_llm_no_api_key"]
     assert "ローカルLLM" in meaning and "継続" in meaning
-    assert "MCS_ANTHROPIC_API_KEY" in action and ".env" in action and "0600" in action
+    assert "利用先のキー" in action and ".env" in action and "0600" in action
     assert not db.artifacts("cloud_control") and not db.artifacts("cloud_circuit")
 
 
@@ -126,4 +126,4 @@ def test_keyless_warning_never_resets_terminal_cloud_failure(db, monkeypatch):
     assert [dict(row) for row in db.artifacts("cloud_circuit")] == before
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-private-key")
     assert health_report.cloud_stop_reason(db.db, cfg) == "auth_error"
-    assert "synthetic-private-key" not in str(health_watch._REASON_JA["cloud_llm_no_api_key"])
+    assert "synthetic-private-key" not in str(health_watch._CLOUD_REASON_JA["cloud_llm_no_api_key"])
