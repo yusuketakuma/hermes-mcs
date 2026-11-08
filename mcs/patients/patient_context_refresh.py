@@ -1275,7 +1275,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             adoption_writes[0] += written
                     if lane == "C" or lane == "B" and result["complete"]:
                         progress["summary_pending"] = True
-                        if any(f.get("discovery") == "backfill_found" for f in result.get("facts", [])):
+                        if True:
                             progress.update(attempts=0, next_try=0, failure=None)
                 if proof_changed:
                     ledger.bump_inference_analysis_epoch_tx()
