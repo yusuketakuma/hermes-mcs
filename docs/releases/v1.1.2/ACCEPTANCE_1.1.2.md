@@ -338,10 +338,16 @@
 - 本番適用の計画（読取りのみ・適用は未実施）：正本 UPGRADE_AGENT の既存 helper `scripts/mcs_upgrade.py plan` で、本番 root `~/.mcs`（HEAD `a669adb9`・clean・schema 12）から候補 `4cffb141` への plan を取得した。route は `reinstall`（`install_sh_changed`）、blockers は無し、runtime_mode は hermes、`slack_channels_required`、必要な再起動は gateway のみ。schema_bump・settings_migration は無く（none）、recovery_tool_changed も false。保存済みの install 選択 `--no-brew --no-llm` と既存 Hermes checkout を維持する条件で、config/.env/install-options の非公開 hash 保持を変えない。`--keep-hermes-checkout` は推奨 pin `2c08ca7a` ではなく本番の実 checkout `e604fa04`（branch `local/org-build`・clean）を指定する必要があり、推奨 pin を渡した初回 plan は `keep_hermes_checkout_mismatch` で blocked となった経緯を記録する。
 - 復元経路：apply pipeline は update.lock・run.lock と journal 駆動で、中断は `recover`/`mcs_recover.py` が復旧し、rollback は前回適用 entry の prev_sha へ戻す（schema_bump なしのため DB restore は伴わない想定）。更新境界の DB backup は `~/.mcs/data/backups/preupdate-*.db` に残り、復元 hold・同意記録は既存の機構を維持する。計画の取得のみで、checkout・設定・サービスの変更、push・tag・Release・asset upload・公開・本番適用はいずれも未実施。
 
+## 本番適用に向けた受入追補
+
+- ユーザーの最新指示（2026-11-08）は「無料枠で使用します。そのままリリース」。account artifact quota の解消を待つ従来の保留はこの指示により解除され、無料枠を維持して既存の成功と修復再検証の証拠をもって公開へ進む条件となった。課金変更・予算0の変更・workflow弱化によるgreen化は行わない。
+- 追跡したコード・テスト側の失敗要因は修復・再検証済み（前項の通り）で、CI全体は artifact quota 未解決のまま成功扱いとはしない。quota の上限・使用量の確定は引き続き未確認として記録する。
+- 本番適用は既存 candidate updater の経路（`mcs_upgrade.py apply`・candidate SHA・base `a669adb9`・keep `e604fa04`・保存済み `--no-brew --no-llm`）で実施し、backup/rollback/世代/人承認/unknown・復元 hold は既存機構を維持する。push・tag・Release・asset upload・公開は本番適用後の受入を待つ。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。
-- 最終公開SHAの固定と、今回の投稿単位の判定修正の本番適用・運用受入。
+- 本番適用後の運用受入（最終公開SHAは本追補の commit で固定）。
 - OCR後のローカル解析と患者コンテキスト作成の完了、既存の通知保留の回復。
 - GitHub 上での画像表示、Release本文・asset・tag・公開。画像の来歴とハッシュは保持し、外部表示は未検証。
 - GitHub Actions の artifact storage quota の上限・使用量の確定（if:always() の diagnostics upload が quota で job を失敗させ得る製品外の制限）。
