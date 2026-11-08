@@ -15,6 +15,7 @@
     <string>--</string>
     <string>__PYTHON__</string>
     <string>__REPO__/mcs/ingest/health_watch.py</string>
+    <string>--send</string>
   </array>
   <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><false/>
