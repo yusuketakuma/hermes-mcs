@@ -526,6 +526,8 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 
 - LINE WORKSアダプターの診断対処：追加操作は不要です。mcs doctor を実行すると、LINE WORKSアダプターの停止・起動失敗など既知の理由に対して、監視アラートと同じ対処文が表示されます。
 
+- 公開前検査の修正：追加操作は不要です。導入スクリプト・Release同期ツール・診断テストの内部修正で、利用者の操作や動作、既定値は変わりません。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)

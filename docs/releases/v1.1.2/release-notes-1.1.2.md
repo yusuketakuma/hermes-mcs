@@ -150,6 +150,9 @@
 - **動作診断がLINE WORKSアダプターの対処を表示できない問題を修正**
   mcs doctor（動作診断）がLINE WORKSアダプターの配送処理を調べるとき、削除済みの内部名を参照して診断が失敗する問題を修正しました。監視通知と同じ対処文をOSに合わせて表示します（macOSはlaunchctl、Linuxはsystemctl）。
 
+- **公開前検査で見つかった表記・同期判定・テスト準備の問題を修正**
+  v1.1.2 のタグ検査で見つかった3件を修正しました。導入スクリプト内の予約語の書き方（動作は変わりません）、Releaseノート同期ツールがタグ差し替え後の作成日時の変化を誤って拒否する問題、診断テストの準備不足の3件です。利用者の操作や動作への変更はありません。
+
 ### 更新時の注意
 
 - 患者コンテキストの作成回数：患者ごとに日本時間の1日4回、原則3時間間隔を適用します。全資料の処理完了を初めて反映する更新は間隔だけを省き、1日4回は超えません。同じ入力の回復と有限回の品質修復は同じ1回にまとめます。送信前に止まったと確認できる初回の試行だけ回数を戻し、送信結果不明の記録と回数は保持します。個別資料の解析・品質確認、検索、閲覧はこの制限の対象外で、クラウドの費用・送信回数の上限は別に適用します。
@@ -227,6 +230,8 @@
 - OCRページのローカル推論の期限：更新後の最初のMCS OCRジョブから、ローカル推論の1ページあたり期限は最大300秒（残りのジョブ予算が短い場合はそれ以下）になります。設定変更・辞書有効化・手動操作は不要です。途中で止まっていたページは、これまでどおりcheckpointから未完了chunkだけを再開します。
 
 - LINE WORKSアダプターの診断対処：追加操作は不要です。mcs doctor を実行すると、LINE WORKSアダプターの停止・起動失敗など既知の理由に対して、監視アラートと同じ対処文が表示されます。
+
+- 公開前検査の修正：追加操作は不要です。導入スクリプト・Release同期ツール・診断テストの内部修正で、利用者の操作や動作、既定値は変わりません。
 
 ### 技術詳細
 
@@ -1104,5 +1109,13 @@
 - 対処文は監視アラートと同一です。macOSは launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks、Linuxは systemctl --user restart hermes-mcs-lineworks.service、その他のOSでは両方の手順を併記します。辞書にない理由には再起動文を出しません。
 - テストは実行OSに依存しないよう platform 別の期待値（darwin/linux/その他のfallback）へ更新し、未知の理由で再起動文が出ないことも確認しています。Slack・Discord・standalone の経路は既存の doctor 回帰で変更がないことを確認しました。
 - 根拠: mcs/ops/mcs_setup.py、mcs/ingest/health_watch.py、tests/ops/test_lineworks_diagnostics_and_init.py
+
+#### 公開前検査で見つかった表記・同期判定・テスト準備の問題を修正
+
+- install.sh の導入段階検証と deployment/install/runtime.sh の完了記録呼出で、シェルの予約語 done を引用符なしで使っていた箇所を引用符付きへ修正しました。意味・型検査・構造は変えていません。runtime.sh を正本として install.sh 内の INSTALL_RUNTIME_SHA256 pin を再生成し、shellcheck と bash -n が両ファイルで問題ないことを確認しました。
+- scripts/development/sync_release_notes.py の既存Release同期は、GitHub公式資料が示すとおり created_at をRelease作成時刻ではなく対象タグ・コミット側の日付として扱います。タグを差し替えて同期PATCHが tag_name を再解決すると created_at が正当に変わるため、書込み後の識別再照合がこれを変更と誤認して停止していました。PATCH応答と再取得の2か所の比較からだけ created_at を外し、識別子の定義・型検証・書込み前スナップショット比較・他6項目の照合はすべて維持しています。
+- 合成テストで、created_at のみの正常な変化は受理して再書込みしないこと、書込み前のずれ・欠落・不正型・他項目の変化・本文不一致は引き続き拒否することを固定しました。旧コードでは新規positiveが RED、修正後は GREEN です。
+- tests/meta/test_install_log_sink.py のサービス段階ハーネスは install.sh と runtime.sh から該当区間を切り出して実行しますが、導入中断記録の追加で生まれた _install_progress 呼出を未定義のまま残していました。既存の出力関数と同じ形の no-op スタブ _install_progress() { :; } をハーネスへ補い、5件の失敗を解消しました。製品コードと各assert（サービス有無・bytes・helper・private・symlink不変・exit）は一切変更していません。進捗writer自体は既存の導入進捗テストで実検証を維持しています。
+- 根拠: install.sh、deployment/install/runtime.sh、scripts/development/sync_release_notes.py、tests/release/test_sync_release_notes.py、tests/meta/test_install_log_sink.py
 
 </details>

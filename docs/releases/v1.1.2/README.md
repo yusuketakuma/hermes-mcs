@@ -1,6 +1,6 @@
 # v1.1.2 リリース資料
 
-v1.1.2候補の変更記録123件を `changes/archive/1.1.2/` へ集約し、CHANGELOG・README・説明図を現在の実装へ合わせた資料です。既存121件を保持し、OCRローカル推論のページ予算延長とLINE WORKS診断対処の修正を追加しました。
+v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHANGELOG・README・説明図を現在の実装へ合わせた資料です。既存123件を保持し、公開前検査で見つかった表記・同期判定・テスト準備の修正を追加しました。
 
 解析と必要な品質確認を終えた資料から、全資料の完了を待たずに患者背景の概況を作成します。患者ごとに日本時間の1日4回、原則3時間間隔とし、同じ入力の回復と有限回の品質修復は同じ1回にまとめます。全資料の処理完了を初めて反映する更新は間隔だけを省き、1日4回は超えません。未解析・未取得を全体完了とせず、送信結果不明の記録と回数は保持します。
 
@@ -16,7 +16,7 @@ v1.1.2候補の変更記録123件を `changes/archive/1.1.2/` へ集約し、CHA
 
 説明図は実画面や性能の測定結果ではありません。患者データ・実投稿は使用していません。画像・PDFのローカルOCR、患者情報と運用ログを分けるSlack通知先、Discord・LINE WORKSの原文表示も本版に含みます。個別投稿への新規クラウド送信は停止し、患者コンテキストの作成・更新と品質修復に限定します。旧予約・課金済み回答・結果不明の記録は保持します。[外部送信と費用の条件](../../guides/ANTHROPIC.md)を確認してください。
 
-全123件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は[SVG](cloud-continuity.svg)、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
+全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は[SVG](cloud-continuity.svg)、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
 
 2026-11-08の追補時点では、初回の失敗95件と後続63fileでの13失敗を修正・再検証しました。最後の関連5fileは125件成功・失敗0・skip 0で、追加の負の対照も確認済みです。実行済みの成功結果と合わせてローカル検証を受け入れましたが、単一の全体suiteやGitHub CIの一括成功ではありません。その追補時点の本番は `d621f96d` のままで、今回の新機能は未適用・未公開でした。
 
@@ -49,3 +49,5 @@ snapshot検証時間の確保の追補では既存118件を保持して全119件
 自動復帰と限定解析集計の追補では既存119件を保持して全121件へ集約しました。監視はstandalone稼働ホストの停滞・子処理失敗・接続断とHermes共有gatewayの配送worker起動失敗を確認したとき、update.lockを取得して要求ID・対象世代・回数を記録し、既存の終了待ち・再起動機構へ委ねます。結果不明・破損・in-flightの記録は上書きせず自動再送せず、手動停止・更新・復元待ちは自動解除しません。gateway側は対象PID・要求ID・更新ロックを既存復旧ツールへ渡し、世代交代でも結果不明を保留します。限定した解析の残件集計は全履歴を0件と表示せず不明として扱います。文書の基準は統合merge `0cfec1af`（production sourceはc165b01eとbyte一致、生成owner metadataを除く）で、main `3e9a1010`を通常mergeで祖先へ取り込みました。Root runner88523はc165関連20file729件成功・失敗0・skip 0・終了0（556.667s）で、別途保存の489pass・853delta166pass・98cd9passは部分結果として区別します。診断test1fileは`baseline_pass_still_valid`で失敗し、QUALITY_PASS行のaudit_keyがbaseline identityと不一致という契約差異を報告済みです（prod fixは計画・レビュー待ち）。本番はf67a5447適用済みでauto/scopedは未適用、unknown配送2件・OCR表対応10件は保護holdで未解消です。公開・新しいMacでの全導入・既存unknownの解除・再送は行っていません。
 
 OCR予算とLINE WORKS診断の追補では既存121件を保持して全123件へ集約しました。添付OCRのローカル推論が1ページに使える期限を120秒から最大300秒へ延ばします（残りのジョブ予算が短い場合はそれ以下）。抽出HTTP300秒・semantic 600秒・共通local_llm既定90秒・原本OCR timeout_seconds既定120秒・ジョブ処理予算900秒・終端5秒・slot優先・試行上限・paid/unknown・原文QCは不変で、callee既定120秒とcheckpoint contract identityも維持します。mcs doctor が削除済みの内部名を参照して失敗していたLINE WORKSアダプターの対処表示は、監視側と同じ _lineworks_actions() へ接続してOS別の再起動手順を表示します。OCR関連は実_drain→実run_pendingの合成検証で新300秒=1pass完了/再送なし/ready・旧120秒=途中leaf deferredをRED/GREEN実測（関連3file40件成功・終了0）、LINE WORKS関連はplatform別期待値と未知reason非表示を含む3file99件成功・終了0です。実モデル・実機timeout解消・単一の全体suite・GitHub CI全ジョブの成功とは扱いません。remote CI run42433639313には既知のLINE WORKS node失敗（本修正で解消）に加えpytest diagnosticsのartifact storage quota超過が両jobにあり、quotaは成功とは扱いません。本番は候補未適用で、自然観測・公開・新しいMacでの全導入・既存unknownの解除・再送は行っていません。
+
+公開前検査の修正追補では既存123件を保持して全124件へ集約しました。タグCIで見つかった3件を修正します。install.sh の導入段階検証と deployment/install/runtime.sh の完了記録呼出でシェル予約語 done を引用符付きへ直し（意味・型検査は不変）、runtime.sh を正本として INSTALL_RUNTIME_SHA256 pin を再生成しました。sync_release_notes.py の既存Release同期は、タグ差し替え後に GitHub が正当に変える created_at を PATCH応答と再取得の識別再照合からだけ外し、識別子定義・型検証・書込み前比較・他6項目の照合は維持します。test_install_log_sink.py のサービス段階ハーネスへは既存の出力関数と同じ形の no-op スタブ _install_progress() { :; } を補い、製品コードと各assertは変更していません。対象testは focused で全件成功・終了0、合成テストは旧コードで RED・修正後 GREEN を確認しました。shellcheck・bash -n・ruff も問題ありません。利用者の操作・動作・既定値は変わりません。候補CIの全job成功・公開・本番適用は未実施で、この追補だけで合格とは扱いません。

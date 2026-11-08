@@ -309,6 +309,15 @@
 - 親工程が既存 mcs.log 末尾8MiBを bounded read-only で再読し、08観測中の failed1 行に first_calls1/repair_calls1/length_stops0・repair_issues.structure1 を確認した。初回出力の構造検証不合格から修復呼出へ進んだことは確定するが、最終出力の詳細と timeout 因果はこの集約に無く未確定のままとする。「LLM呼出なし」「時間不足」とは断定せず、採用0・原因不明を正常化もしない。品質不適合は既存 gate で不採用となる正しい処理で、gate 緩和・試行数増・再送は行わない。
 - この追補時点の本番は `2bda672d` 適用済みで、OCR予算・LINE WORKS診断の2修正は未適用。自然観測・公開・新しいMacでの全導入・既存unknownの解除・再送は行っていない。単一の全体suiteやGitHub CI全ジョブの成功とは扱わない。
 
+## 公開前検査の修正追補
+
+- 文書の基準は候補 `a669adb9` に本修正を積んだ作業tree。既存123件へ `release-candidate-checks` の1件を加え全124件へ集約した。新fragmentは原文のbytesを保って archive し、既存123件の hash・過去の受入・図3資産を保持する。`changes/` 直下の loose fragment は0件。
+- 修正は3件。`install.sh` の導入段階検証2箇所と `deployment/install/runtime.sh` の完了記録呼出で、シェル予約語 `done` を引用符付きへ直した（`[ "$_ipf_stage" = "done" ]`・`_install_progress "done" complete`）。意味・型検査・構造は不変で、`runtime.sh` を正本として `INSTALL_RUNTIME_SHA256` pin を再生成した。CI hygiene の SC1010 はこの引用符で解消する。
+- `scripts/development/sync_release_notes.py` は、GitHub公式資料が示すとおり `created_at` をRelease作成時刻ではなく対象タグ・コミット側の日付として扱う。タグを差し替えて同期PATCHが `tag_name` を再解決すると `created_at` が正当に変わるため、run42465260744 の draft job は PATCH成功後の識別再照合で fail-closed 停止した（書込み自体は成功・本文は一致済み）。PATCH応答と再取得の2か所の比較からだけ `created_at` を外し、IDENTITY定義・型検証・書込み前スナップショット比較・他6項目・本文一致の照合はすべて維持する。合成テストは `created_at` のみの正常な変化を受理して再書込みしないこと、書込み前のずれ・欠落・不正型・他項目の変化・本文不一致を引き続き拒否することを固定し、旧コードで RED・修正後 GREEN を確認した。
+- `tests/meta/test_install_log_sink.py` のサービス段階ハーネスは `install.sh` と `runtime.sh` から該当区間を切り出して実行するが、導入中断記録の追加で生まれた `_install_progress` 呼出を未定義のまま残していた。既存の出力関数と同じ形の no-op スタブ `_install_progress() { :; }` をハーネスへ補い、CI macos で失敗した5件を解消した。製品コードと各assert（サービス有無・bytes・helper・private・symlink不変・exit）は一切変更していない。進捗writer自体は既存の導入進捗テストで実検証を維持する。
+- 検証：focused の `test_install_log_sink.py` 5件・`test_sync_release_notes.py` 関連は全件成功・終了0、ruff All checks passed、shellcheck/bad substitution なし、bash -n 両ファイル OK、fragment lint error0。RED 証拠は CI run42465260774（hygiene SC1010・macos `_install_progress: command not found` 5件）と run42465260744（created_at fail-closed）を再利用する。ローカル再現でも同一内容の失敗を確認済み。
+- 節目batch（tests/release＋install系meta 9file＋test_install_log_sink.py）は297件成功・失敗0・skip 0・rc=0で完了した（証跡 `release-check-fixes-15/boundary-batch.log`）。候補CIの全job再実行・push・tag差替え・Release公開・本番適用は未実施。この追補だけで合格とは扱わない。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。

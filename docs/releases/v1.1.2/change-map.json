@@ -1,5 +1,5 @@
 {
- "fragment_count": 123,
+ "fragment_count": 124,
  "records": [
   {
    "category": "added",
@@ -861,8 +861,15 @@
    "path": "changes/archive/1.1.2/lineworks-doctor-remedy.json",
    "sha256": "3bba8fb14a9a262f88c7e119d56036d1fedc6cc81031135e06fc994b2799fa72",
    "title": "動作診断がLINE WORKSアダプターの対処を表示できない問題を修正"
+  },
+  {
+   "category": "fixed",
+   "id": "release-candidate-checks",
+   "path": "changes/archive/1.1.2/release-candidate-checks.json",
+   "sha256": "0ab33f0a56d385ceb6316857e377335dd77f5f3967ce2e03bfc0e1313cfa3a42",
+   "title": "公開前検査で見つかった表記・同期判定・テスト準備の問題を修正"
   }
  ],
- "scope": "v1.1.2 の変更記録121件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+ "scope": "v1.1.2 の変更記録124件を全件収録。最終候補SHAの固定・受入証拠ではない。",
  "status": "unpublished_preparation"
 }
