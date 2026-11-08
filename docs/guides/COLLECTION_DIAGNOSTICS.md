@@ -71,3 +71,29 @@ PY=/absolute/path/to/mcs-python
 表示した内容を確認し、必要なときだけコピーして共有してください。自動送信やクリップボードへの書込みは行いません。`--share`自体は追加のprobeを実行せず、既存の`--probe`指定を維持します。`--probe data`で観測した取得未完了は状態のみとし、患者・投稿の件数や投稿時刻は共有用JSONに含めません。収集の観測時刻はUnix秒の`collection.observed_at`で残し、確認できない場合は`null`にします。エラー数は固定分類の診断件数で、患者数ではありません。
 
 `--json`だけの通常診断はローカルでの調査用です。共有用は`--share`を指定してください。CSDCへの診断送信・遠隔操作は別の同意と受入を必要とします。
+
+## MCSLOGの結果と対応を読む
+
+MCSLOGは患者情報を含めず、何が起きたか、影響、次の操作、照会用のコードを示します。
+「更新を適用しました」はプログラムの切り替えと更新記録の保存を完了した通知です。この通知への対応は不要です。
+全サービスの正常稼働や、収集・通知の再開まで確認したという意味ではありません。別の警報が出ている場合は、その警報の手順で確認してください。
+
+| コードの例 | 意味と対応 |
+|---|---|
+| `MCS-UPD-APPLIED` | プログラムの更新を適用。通知への対応は不要 |
+| `MCS-UPD-AVAILABLE` | 新しいバージョンを検出。まだ適用していないため、変更点と適用前の確認を読む |
+| `MCS-UPD-ABORTED` / `MCS-UPD-ROLLBACK-FAILED` | 更新の中止、または更新前のバージョンへ戻す処理の失敗。`python3 mcs/ops/mcs_update.py status`で更新記録を確認 |
+| `MCS-UPD-RECOVERY-COMPLETED` | 復旧処理の記録が完了。収集・通知の再開は`python3 mcs/ops/mcs_setup.py check`で別途確認 |
+| `MCS-UPD-GATEWAY-RESTART-FAILED` / `MCS-UPD-LINEWORKS-RESTART-FAILED` / `MCS-UPD-STANDALONE-RESTART-FAILED` | 常駐処理の再起動要求を確認できない。更新を繰り返さず、通知の確認手順を実行 |
+| `MCS-UPD-DELIVERY-RECONCILE-HELD` | DB復元後に送信済みか確認できない通知が残る。[配送結果の個別確認](NOTIFICATION_RECOVERY.md)へ進み、不明なまま再送しない |
+| `MCS-UPD-UNKNOWN` / `MCS-UPD-RECOVERY-UNKNOWN` | 通知から結果を確認できない。成功・未送信と推測せず、更新記録を確認 |
+| `MCS-HLT-…` | 監視の固定理由を識別するコード。例えば`MCS-HLT-DISK-LOW`は空き容量不足。通知中の原因別の対処を実行 |
+
+OCRの表の行列対応を確定できない場合、曖昧な表は採用しません。自動再試行の上限到達と表示された場合は、元の添付の内容を確認してください。
+再起動や再送で品質判定を解除せず、原資料と確認できた固定コードを基に調査します。
+配送の送信結果不明は未送信を意味しません。固定理由が表示されても、本人による配送先・記録の照合と既存の承認手順が必要です。
+
+サポートへはコードと、上記の`doctor --share`で確認した共有用の診断を伝えてください。私有ログや患者情報をそのまま貼り付けないでください。
+文面は、[Microsoftのエラー処理指針](https://learn.microsoft.com/en-us/dynamics365/business-central/dev-itpro/developer/devenv-error-handling-guidelines)の「起きたことと次の操作」、
+[Google SREのオンコール運用](https://sre.google/workbook/on-call/)の対応につながる通知、
+[OWASPのログ指針](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)の結果分類と機密情報の除外を参考にしています。
