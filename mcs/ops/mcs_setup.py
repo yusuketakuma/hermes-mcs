@@ -117,7 +117,7 @@ import mcs_runtime
 import runtime_inspection
 
 from mcs_util import (CONF_PATH, HOME, REPO)
-from safe_io import read_regular_nofollow
+from safe_io import read_json_nofollow, read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -769,6 +769,70 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     return out
 
 
+_INSTALL_PROGRESS_STAGE_JA = {
+    "brew": "基本ソフトの準備（Homebrew）",
+    "runtime": "実行環境",
+    "plugin": "操作カード用プラグイン",
+    "log_helper": "実行ログの配置",
+    "llm": "ローカルAI（llama-server）",
+    "services": "常駐サービス",
+    "recovery": "復旧ツールと監視",
+    "options": "導入設定の記録",
+}
+
+
+_INSTALL_PROGRESS_LIMIT = 4096
+_INSTALL_PROGRESS_INVOCATIONS = {"install", "update"}
+
+
+def _install_progress_unreadable():
+    return "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください"
+
+
+def _install_progress_warning():
+    """Last installer stage if its run stopped before completion.
+
+    The journal cannot prove whether its run is still alive, so the
+    warning states only recorded facts and leaves the wait/resume
+    decision to the operator — never a time-based interruption claim.
+    """
+    path = os.path.join(HOME, "data", "install_progress.json")
+    try:
+        progress = read_json_nofollow(path, _INSTALL_PROGRESS_LIMIT)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError):
+        return _install_progress_unreadable()
+    if (not isinstance(progress, dict)
+            or type(progress.get("version")) is not int
+            or progress.get("version") != 1):
+        return _install_progress_unreadable()
+    status = progress.get("status")
+    stage = progress.get("stage")
+    invocation = progress.get("invocation")
+    run_id = progress.get("run_id")
+    updated = progress.get("updated_at")
+    if not all(isinstance(value, str) for value in (status, stage, invocation)):
+        return _install_progress_unreadable()
+    consistent = ((status == "running" and stage in _INSTALL_PROGRESS_STAGE_JA)
+                  or (status == "complete" and stage == "done"))
+    if (not consistent
+            or invocation not in _INSTALL_PROGRESS_INVOCATIONS
+            or not isinstance(run_id, str) or not run_id
+            or isinstance(updated, bool)
+            or not isinstance(updated, (int, float))
+            or (isinstance(updated, float) and not math.isfinite(updated))):
+        return _install_progress_unreadable()
+    if status != "running":
+        return None
+    label = _INSTALL_PROGRESS_STAGE_JA.get(stage, "途中の段階")
+    if invocation == "update":
+        return (f"更新処理の導入記録が{label}の段階で残っています。完了は記録されていません。"
+                "実行中の場合は終了を待ち、mcs recover で状態を確認してください")
+    return (f"導入の記録が{label}の段階で残っています。完了は記録されていません。"
+            "実行中の場合は完了を待ち、終了していれば install.sh を同じ引数で再実行すると途中から再開します")
+
+
 def cmd_check(args) -> int:
     try:
         cfg = _diagnostic_config()
@@ -787,6 +851,9 @@ def cmd_check(args) -> int:
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
+    progress_warning = _install_progress_warning()
+    if progress_warning is not None:
+        warnings.append(progress_warning)
     for w in warnings:
         print(f"  注意: {w}")
     for e in errors:
