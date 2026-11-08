@@ -1,4 +1,6 @@
 """Synthetic mcs setup diagnostics contracts; shared helpers preserve isolated runtime state."""
+import json
+import time
 import setup_config_snapshot
 import setup_integration
 import environment_diagnostics
@@ -579,3 +581,96 @@ def test_check_warns_on_a_static_project_scope_over_the_runner_cap(transport):
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
     cfg["notify"][transport] = {"project_ids": ids[:-1]}
     assert not [w for w in mcs_setup.validate_config(cfg)[1] if "project_ids" in w]
+
+
+def _install_progress_fixture(monkeypatch, tmp_path, record):
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    if record is not None:
+        (data / "install_progress.json").write_text(json.dumps(record))
+
+
+def _install_progress_record(**overrides):
+    record = {
+        "version": 1, "status": "running", "stage": "services",
+        "runtime_mode": "hermes", "invocation": "install",
+        "run_id": "1-2", "updated_at": 1,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_install_progress_warning_silent_without_running_record(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, None)
+    assert mcs_setup._install_progress_warning() is None
+    _install_progress_fixture(monkeypatch, tmp_path, _install_progress_record(
+        status="complete", stage="done"))
+    assert mcs_setup._install_progress_warning() is None
+
+
+def test_install_progress_warning_reports_leftover_stage_without_time_claim(
+        monkeypatch, tmp_path):
+    """A leftover running record warns honestly — never asserts interruption
+    or in-progress from the timestamp alone."""
+    for updated in (1, time.time(), time.time() + 10**9):
+        _install_progress_fixture(monkeypatch, tmp_path, _install_progress_record(
+            stage="services", updated_at=updated))
+        warning = mcs_setup._install_progress_warning()
+        assert warning is not None
+        assert "常駐サービス" in warning and "残っています" in warning
+        assert "完了は記録されていません" in warning
+        assert "install.sh" in warning
+        assert "中断" not in warning and "実行中です" not in warning
+
+
+def test_install_progress_warning_update_invocation_points_to_recover(
+        monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, _install_progress_record(
+        stage="recovery", invocation="update", updated_at=time.time()))
+    warning = mcs_setup._install_progress_warning()
+    assert warning is not None and "mcs recover" in warning and "更新処理" in warning
+    assert "残っています" in warning and "中断" not in warning
+
+
+@pytest.mark.parametrize("record", [
+    {"status": "running"},                                   # missing fields
+    _install_progress_record(stage=[]),                      # non-string stage
+    _install_progress_record(stage={}),                      # non-string stage
+    _install_progress_record(stage="bogus_stage"),           # unknown stage
+    _install_progress_record(status="running", stage="done"),  # inconsistent
+    _install_progress_record(status="complete", stage="services"),
+    _install_progress_record(version=2),                     # unknown version
+    _install_progress_record(version=True),                  # bool version
+    _install_progress_record(version=1.0),                   # float version
+    _install_progress_record(invocation="sideways"),
+    _install_progress_record(run_id=""),
+    _install_progress_record(run_id=None),
+    _install_progress_record(updated_at="soon"),
+    _install_progress_record(updated_at=True),
+    _install_progress_record(updated_at=float("nan")),
+    _install_progress_record(updated_at=float("inf")),
+    _install_progress_record(updated_at=float("-inf")),
+    [], "not a dict",
+])
+def test_install_progress_warning_unreadable_shape_warns_fixed(
+        monkeypatch, tmp_path, record):
+    """A present but unverifiable record gets one fixed warning — the
+    check itself never crashes and never echoes record contents."""
+    _install_progress_fixture(monkeypatch, tmp_path, record)
+    warning = mcs_setup._install_progress_warning()
+    assert warning == ("導入の途中経過の記録を確認できませんでした。"
+                       "install.sh の状態を確認してください")
+
+
+def test_install_progress_warning_swallows_unreadable_file(monkeypatch, tmp_path):
+    _install_progress_fixture(monkeypatch, tmp_path, None)
+    journal = tmp_path / "data" / "install_progress.json"
+    journal.write_text("{broken json")
+    assert mcs_setup._install_progress_warning() == (
+        "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください")
+    journal.unlink()
+    journal.symlink_to(tmp_path / "data" / "config.json")
+    (tmp_path / "data" / "config.json").write_text("{}")
+    assert mcs_setup._install_progress_warning() == (
+        "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください")

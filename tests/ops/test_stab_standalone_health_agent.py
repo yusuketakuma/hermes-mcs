@@ -15,7 +15,7 @@ def test_rendered_health_watch_runs_outside_the_host(tmp_path):
     value = plistlib.loads(body.encode())
     assert name == "local.mcs-health.plist" and value["Label"] == service_contract.HEALTH_LABEL
     assert value["ProgramArguments"][8].endswith("/mcs/ingest/health_watch.py")
-    assert value["ProgramArguments"][9:] == ["--home", str(tmp_path)]
+    assert value["ProgramArguments"][9:] == ["--home", str(tmp_path), "--send"]
     assert value["ProgramArguments"][1] == "-I"
     assert value["ProgramArguments"][3:7] == ["exec", "--data-dir", str(tmp_path / "data"), "--"]
     assert value["StandardOutPath"] == value["StandardErrorPath"] == "/dev/null"

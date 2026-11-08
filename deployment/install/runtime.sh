@@ -3,8 +3,41 @@
 : "${_fresh_authorized?}" "${_legacy_uninitialized?}" "${_fresh_data_info?}"
 : "${RECOVERY_DIR:?}" "${SETUP:?}"
 
+# Best-effort stage journal for interruption reporting; never stops the install.
+# All values are fixed literals or validated modes — nothing user-supplied is
+# interpolated, so the JSON stays well-formed without an escaper.
+# Fresh installs verify an exact data-dir inventory inside bootstrap-fresh;
+# the journal stays out of data/ until that check has passed.
+_install_progress_hold=""
+if [ "$_fresh_authorized" = 1 ]; then _install_progress_hold=1; fi
+_install_progress() {  # <stage-id> <running|complete>
+    # The in-memory stage survives a held or failed journal write, so the
+    # install.sh EXIT trap can still name this run's last stage.
+    _ip_cur_stage="$1"
+    _ip_cur_status="$2"
+    _ip_inv=install
+    [ -z "${MCS_UPDATE_REINSTALL:-}" ] || _ip_inv=update
+    [ -z "$_install_progress_hold" ] || return 0
+    # mv would move the tmp *into* a directory or replace a symlink; the
+    # optional journal only ever replaces a regular file it wrote before.
+    if [ -e "$MCS_DATA/install_progress.json" ] || [ -L "$MCS_DATA/install_progress.json" ]; then
+        [ -f "$MCS_DATA/install_progress.json" ] && [ ! -L "$MCS_DATA/install_progress.json" ] || return 0
+    fi
+    mkdir -p "$MCS_DATA" 2>/dev/null || return 0
+    _ip_tmp="$(mktemp "$MCS_DATA/.install-progress.XXXXXXXX" 2>/dev/null)" || return 0
+    if printf '{"version":1,"status":"%s","stage":"%s","runtime_mode":"%s","invocation":"%s","run_id":"%s","updated_at":%s}\n' \
+            "$_ip_cur_status" "$_ip_cur_stage" "$RUNTIME_MODE" "$_ip_inv" "${INSTALL_PROGRESS_RUN:-unknown}" "$(date +%s 2>/dev/null || echo 0)" \
+            > "$_ip_tmp" 2>/dev/null \
+            && mv -f "$_ip_tmp" "$MCS_DATA/install_progress.json" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$_ip_tmp" 2>/dev/null || :
+    return 0
+}
+
 # ---------------------------------------------------------------- 1. brew
 say "【1/6】基本ソフトの準備（Homebrew）"
+_install_progress brew running
 if [ "$SKIP_BREW" -eq 1 ]; then
     skip "--no-brew のため省略します。git・Python・uv・llama.cpp・Chrome は別途導入済みである必要があります"
     sum "1/6 基本ソフト:     省略（--no-brew）"
@@ -38,6 +71,7 @@ else
 fi
 
 # ----------------------------------------------------------- 2. hermes
+_install_progress runtime running
 LOCKED_DEPENDENCIES=0
 if [ -e "$REPO/deployment/sdc-release-lock.json" ] || [ -L "$REPO/deployment/sdc-release-lock.json" ]; then
     LOCKED_DEPENDENCIES=1
@@ -65,16 +99,26 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     fi
     REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
     [ -f "$REQUIREMENTS" ] || die "独立接続の依存一覧がありません。deployment/requirements-standalone.txt を確認してください"
+    standalone_sdk_ok() {
+        "$VENV_PY" -I -B -c '
+# mcs-standalone-sdk-probe
+import sys
+sys.path.insert(0, sys.argv[1])
+from mcs_standalone.__main__ import _sdk_problem
+raise SystemExit(1 if _sdk_problem() else 0)
+' "$REPO"
+    }
     if [ "$LOCKED_DEPENDENCIES" -eq 1 ]; then
         locked_dependencies "$VENV_PY" || die "固定依存の導入が未完了です。記録を削除せず確認してください"
         rm -f "$PIP_MARK"
-    elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
+    elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements" || ! standalone_sdk_ok; then
         : > "$PIP_MARK"
         if command -v uv >/dev/null 2>&1; then
             uv pip install --python "$VENV_PY" -r "$REQUIREMENTS"
         else
             "$VENV_PY" -m pip install -r "$REQUIREMENTS"
         fi
+        standalone_sdk_ok || die "独立接続 SDK の固定版を確認できません。導入途中の記録を保持して停止しました"
         cp "$REQUIREMENTS" "$VENV/.mcs-connector-requirements.tmp"
         mv -f "$VENV/.mcs-connector-requirements.tmp" "$VENV/.mcs-connector-requirements"
         rm -f "$PIP_MARK"
@@ -487,8 +531,10 @@ if [ "$_fresh_authorized" -eq 1 ]; then
         "$MCS_DATA/install_options.json" "$CONFIG_CREATION_PROOF" "$_fresh_data_info" "$MCS_INSTALL_UPDATE_LOCK_FD" \
         || die "初回導入の安全性を確認できません。設定と保留記録を保持し、担当者に確認してください"
 fi
+_install_progress_hold=""
 # -------------------------------------------------------- 3. plugin
 say "【3/6】Slack／Discord の操作カード用プラグイン"
+_install_progress plugin running
 if [ "$SKIP_PLUGIN" -eq 1 ]; then
     if [ "$RUNTIME_MODE" = standalone ]; then
         skip "MCS 単独接続では使用しません。独立接続機能が操作カードを提供します"
@@ -521,6 +567,7 @@ fi
 
 # Install the independent helper before either llama or the regular services
 # can start using it. This is a prefix import; old open FDs remain sources.
+_install_progress log_helper running
 mkdir -p "$MCS_DATA"
 "$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" "$MCS_ROOT" "$REPO" "$RECOVERY_DIR" \
     || die "ログの統合準備を確認できません。旧ログを保持して常駐サービスの登録前に停止しました。内容を確認して再実行してください"
@@ -530,6 +577,7 @@ RUN_LOG_HELPER="$("$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" --helper-path 
 
 # -------------------------------------------------- 4. local LLM server
 say "【4/6】この Mac で動かす AI（llama-server、ポート8080）"
+_install_progress llm running
 if [ "$SKIP_LLM" -eq 1 ]; then
     skip "--no-llm のため省略します。別途 OpenAI 互換サーバーを 127.0.0.1:8080 で動かしてください"
     sum "4/6 ローカルAI:      省略（--no-llm）"
@@ -635,6 +683,7 @@ fi
 _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
 verify_split_runtime
 say "【5/6】定期収集などの常駐サービス（${RUNTIME_MODE}）"
+_install_progress services running
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
@@ -651,6 +700,7 @@ fi
 
 # --------------------------------- 6. update recovery (independent)
 say "【6/6】更新失敗に備える復旧ツールと監視"
+_install_progress recovery running
 if [ "$SKIP_RECOVERY" -eq 1 ]; then
     skip "--no-recovery のため省略します"
     sum "6/6 復旧: 省略（--no-recovery）"
@@ -700,6 +750,7 @@ fi
 # The updater's plan reports these so a reinstall repeats the same opt-outs
 # without asking (mcs_update.INSTALL_ARGS; --no-services is the updater's own).
 # Updater runs add migration/repair opt-outs the operator did not choose.
+_install_progress options running
 if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
     "$MCS_PY" "$REPO/mcs/ops/install_options.py" save "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$OPTIONS_BASE" "$@" \
         || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
@@ -711,6 +762,7 @@ else
     "$MCS_PY" "$REPO/mcs/ops/install_options.py" verify "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$_options_current" \
         || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
 fi
+_install_progress done complete
 
 # ------------------------------------------------------------ summary
 # Software preparation succeeded; a later setup failure has its own guidance.

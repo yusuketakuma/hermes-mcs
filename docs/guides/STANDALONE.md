@@ -10,7 +10,7 @@
 [能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
 
 [はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
-`./install.sh`の連携方式で`2) MCS 単独で使う`を選びます。
+`sh scripts/mcs install --mode standalone`でMCS単独の方式を指定します。方式の選択画面を使う場合は`--mode standalone`を省き、`2) MCS 単独で使う`を選びます。
 Hermes Agentと連携する標準の導入は`1)`です。独立実行ではHermesを導入せず、
 MCS専用の実行環境がSlack・Discordの接続と定期処理を担当します。
 LINE WORKSの通知先は、どちらの方式でも後の初期設定で選びます。
@@ -24,8 +24,7 @@ LINE WORKSの通知先は、どちらの方式でも後の初期設定で選び�
 
 ## 導入・診断と実機確認の境界
 
-standaloneの外部bootstrap applyはhostの協調停止を駆動できず阻害されるため、
-共通入口の提供を外部apply対応の完了と扱いません。
+対応する導入済みupdaterを確認できるstandaloneでは、`mcs update`の対話案内から更新できます（[具体的な手順](#更新復旧)）。旧版・外部bootstrap・未公開候補の適用拒否は維持し、この新しい経路の対象にはしません。共通入口があることを、すべての既存版や外部applyへの対応完了とは扱いません。
 
 doctorの選択Python/SQLite・recovery・SDK配布metadataは
 [ローカル診断](../../mcs/ops/mcs_setup.py)の結果であり、実SDK認証・接続・
@@ -38,8 +37,8 @@ macOSの前提条件は[インストールガイド](INSTALLATION.md#1-共通の
 リポジトリを取得したルートで、以下を順に実行します。
 
 ```bash
-./install.sh --mode standalone --preflight
-./install.sh --mode standalone
+sh scripts/mcs install --mode standalone --preflight
+sh scripts/mcs install --mode standalone
 ```
 
 installer内で初期設定を完了した場合は再度initを実行せず、下の診断へ進みます。後回し・中断した場合だけ`~/.local/bin/mcs setup`で再開します。従来の直接入口`$HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init --runtime-mode standalone`も利用できます。
@@ -231,6 +230,14 @@ Hermesへ戻す場合は`./install.sh --mode hermes`、HermesのPythonで`init -
 実データや配送履歴を削除する必要はありません。
 
 ## 更新・復旧
+
+対応する更新プログラムと`mcs`コマンドを導入済みの場合は、次の順で進めます。
+
+1. 計画だけを見る場合は`~/.local/bin/mcs update plan`。取得済みの公開タグを対象にし、タグの追加取得や適用は行いません。
+2. 更新する場合は`~/.local/bin/mcs update`。公開版を選び、計画と必要な再導入を確認してから、最後に実行を選びます。Enterだけでは更新を始めません。
+3. 結果を読み、`~/.local/bin/mcs doctor`で残る確認と未検査項目を調べます。次に`~/.local/bin/mcs doctor --probe services`で、明示した常駐処理の追加診断を行い、最後に通知先で応答を確認します。実際の収集再開はこれらと分け、未確認なら利用開始済みとは扱いません。
+
+導入先・更新プログラム・以前の導入設定などを確認できない場合は停止します。旧版や未対応のupdater、外部から取り出した更新ツール、未公開候補をこの経路で適用できるとは扱いません。内部引数の追加、設定や保留記録の削除、新しいcloneで拒否を回避しないでください。詳細は[対応する導入済みstandaloneの対話更新](UPGRADE_AGENT.md#1-a-対応する導入済みstandaloneの対話更新)を参照します。
 
 既存の承認・理由・receipt、送信不確実性の抑止、添付pin、安全な既読化を維持します。
 更新marker中はhostが背景処理を止め、自分のupdaterを維持します。

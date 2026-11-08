@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """MCS更新ツール — 更新先の版に合わせた手順で、安全に更新します。
 
-Taken out of the target tag and run from a temp file, so the installed
-version's updater (missing before v1.0.3, unable to re-run install.sh
-before v1.0.11) never decides anything:
+For external bootstrap, take this file out of the target tag and run it
+from a temp file, so the installed updater (missing before v1.0.3, unable
+to re-run install.sh before v1.0.11) does not decide the update route:
 
   git -C ~/.mcs fetch --tags origin
   WORK=$(mktemp -d); git -C ~/.mcs show v1.0.13:scripts/mcs_upgrade.py > "$WORK/mcs_upgrade.py"
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.13
   "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.13 [--reinstall]
 
-It copies the tag's exact ``mcs/`` blobs and recovery helper into a private temp dir and runs
+The installed standalone CLI instead uses its own versioned updater contract;
+its existing lock handoff also supports reinstalling the target runtime.
+The external bootstrap copies the tag's exact ``mcs/`` blobs and recovery helper into a private temp dir and runs
 that ``mcs/ops/mcs_update.py`` with ``MCS_UPDATE_REPO`` set to the live
 checkout. Stdlib only, imports nothing from the repo. Runbook:
 docs/guides/UPGRADE_AGENT.md.
@@ -286,7 +288,47 @@ def _complete_slack_channels(env, repo, report=None):
     return 1
 
 
-def _post_apply_plan(command, env, repo):
+def _installed_plan_pins(report, command, repo):
+    """Accept only the installed standalone updater's versioned, exact plan."""
+    root = Path(repo).resolve()
+    updater = root / 'mcs/ops/mcs_update.py'
+    contract = report.get('installed_standalone_update')
+    if (not isinstance(contract, dict) or type(contract.get('version')) is not int
+            or contract != {'version': 2, 'repository': str(root), 'updater': str(updater)}
+            or report.get('runtime_mode') != 'standalone'
+            or len(command) != 5 or command[2:4] != ['plan', '--tag']
+            or Path(command[1]).resolve() != updater):
+        raise ValueError('installed_updater_unverified')
+    current, target = report.get('current'), report.get('target')
+    if (not isinstance(current, dict) or not isinstance(target, dict)
+            or target.get('tag') != command[4]
+            or not all(isinstance(value, str) and COMMIT_SHA_RE.fullmatch(value)
+                       for value in (current.get('sha'), target.get('sha')))
+            or (report.get('route') == 'noop' and current['sha'] != target['sha'])):
+        raise ValueError('installed_plan_identity_unverified')
+    return ['--sha', target['sha'], '--base-sha', current['sha']]
+
+
+def _update_plan(command, env, repo, *, installed=False):
+    try:
+        result = subprocess.run(command, env=env, cwd=repo, capture_output=True, text=True,
+                                timeout=600, **_lifetime_fds())
+    except subprocess.TimeoutExpired:
+        print('確認が時間内に終わりませんでした。更新は開始していません。担当者に接続と導入状態の確認を依頼してください。')
+        return None
+    try:
+        report = json.loads(result.stdout)
+        if result.returncode or not isinstance(report, dict):
+            raise ValueError
+        if installed:
+            _installed_plan_pins(report, command, repo)
+        return report
+    except (ValueError, RecursionError):
+        print('更新の確認に失敗しました。更新は開始していません。担当者に mcs doctor での確認を依頼してください。')
+        return None
+
+
+def _post_apply_plan(command, env, repo, *, installed=False, expected_sha=None):
     try:
         checked = subprocess.run(command, env=env, cwd=repo, capture_output=True, text=True,
                                  timeout=600, **_lifetime_fds())
@@ -294,6 +336,10 @@ def _post_apply_plan(command, env, repo):
         if (checked.returncode or not isinstance(report, dict)
                 or report.get('route') != 'noop' or report.get('blockers')):
             raise ValueError
+        if installed:
+            pins = _installed_plan_pins(report, command, repo)
+            if pins[1] != expected_sha or pins[3] != expected_sha:
+                raise ValueError('installed_update_incomplete')
         return report
     except (subprocess.TimeoutExpired, OSError, ValueError, TypeError, RecursionError):
         print('更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。')
@@ -330,20 +376,11 @@ def _offer_api_keys(env, repo):
           "~/.local/bin/mcs setup api-keys を実行してください。起動コマンドがない場合は担当者に導入状態の確認を依頼してください。")
 
 
-def interactive_update(cmd, env, repo):
+def interactive_update(cmd, env, repo, *, installed=False):
     """Explain the target updater's plan before an explicit local update."""
     print("手順 2/3: この Mac を更新できるか確認しています。")
-    try:
-        result = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600, **_lifetime_fds())
-    except subprocess.TimeoutExpired:
-        print("確認が時間内に終わりませんでした。更新は開始していません。担当者に接続と導入状態の確認を依頼してください。")
-        return 1
-    try:
-        report = json.loads(result.stdout)
-        if result.returncode or not isinstance(report, dict):
-            raise ValueError
-    except (ValueError, RecursionError):
-        print("更新の確認に失敗しました。更新は開始していません。担当者に mcs doctor での確認を依頼してください。")
+    report = _update_plan(cmd, env, repo, installed=installed)
+    if report is None:
         return 1
     route = report.get("route")
     if route == "noop" and not report.get("blockers"):
@@ -391,8 +428,12 @@ def interactive_update(cmd, env, repo):
         return 0
     apply_cmd = list(cmd)
     apply_cmd[2] = "apply"
+    if installed:
+        apply_cmd.extend(_installed_plan_pins(report, cmd, repo))
     # Keep the approved record separate from temporary repair/install flags.
     apply_env = dict(env)
+    if installed:
+        apply_env['MCS_UPDATE_RUNTIME_EXPECTED'] = 'standalone'
     if route == "reinstall":
         apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))
         apply_cmd.append("--reinstall")
@@ -401,7 +442,8 @@ def interactive_update(cmd, env, repo):
     if result.returncode:
         print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
         return result.returncode
-    final = _post_apply_plan(cmd, env, repo)
+    final = _post_apply_plan(cmd, env, repo, **(
+        {'installed': True, 'expected_sha': report['target']['sha']} if installed else {}))
     if final is None:
         return 1
     print("選択した版への更新完了を確認しました。mcs doctor で動作を確認し、通知先で応答を確認してください。")
@@ -411,9 +453,55 @@ def interactive_update(cmd, env, repo):
     return 0
 
 
+def _installed_update(args, repo, tag):
+    updater = Path(repo) / 'mcs/ops/mcs_update.py'
+    if not updater.is_file() or updater.resolve() != updater:
+        print('導入済みの更新プログラムを確認できません。更新を開始せず、担当者に導入状態の確認を依頼してください。')
+        return 2
+    command = [sys.executable, str(updater), 'plan', '--tag', tag]
+    env = dict(os.environ)
+    env.pop('MCS_UPDATE_KEEP_HERMES_CHECKOUT', None)
+    env.pop('MCS_UPDATE_OPTIONS_EXPECTED', None)
+    env.pop('MCS_UPDATE_RUNTIME_EXPECTED', None)
+    if args.cmd == 'guide':
+        print(f'更新する版: {tag}')
+        return interactive_update(command, env, repo, installed=True)
+    report = _update_plan(command, env, repo, installed=True)
+    if report is None:
+        return 1
+    if args.cmd == 'plan':
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
+    route = report.get('route')
+    if (report.get('blockers') or route not in ('apply', 'reinstall', 'noop')
+            or (route == 'reinstall' and not args.reinstall)):
+        print('更新を開始できません。mcs update で確認結果と必要な手順を確認してください。')
+        return 1
+    if args.reinstall:
+        previous = report.get('install_args')
+        if (report.get('reinstall_requires_recovery_repair')
+                or not isinstance(previous, list) or any(arg not in INSTALL_ARGS for arg in previous)):
+            print('以前の導入設定または復旧環境を確認できません。更新を開始せず、担当者に確認を依頼してください。')
+            return 1
+        env['MCS_UPDATE_OPTIONS_EXPECTED'] = json.dumps(previous, separators=(',', ':'))
+    apply_command = [*command[:2], 'apply', *command[3:],
+                     *_installed_plan_pins(report, command, repo)]
+    if args.reinstall:
+        apply_command.append('--reinstall')
+    apply_command.extend(f'--install-arg={arg}' for arg in args.install_arg)
+    apply_env = dict(env, MCS_UPDATE_RUNTIME_EXPECTED='standalone')
+    result = subprocess.run(apply_command, env=apply_env, cwd=repo, **_lifetime_fds())
+    if result.returncode:
+        return result.returncode
+    final = _post_apply_plan(command, env, repo, installed=True,
+                             expected_sha=report['target']['sha'])
+    return 1 if final is None else _complete_slack_channels(env, repo, final)
+
+
 def _main(argv=None) -> int:
     ap = _JapaneseParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", default=".", help="MCSの保存先フォルダ（省略時: 現在のフォルダ）")
+    ap.add_argument('--installed-standalone', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument("--no-fetch", action="store_true",
                     help="通信せず、取得済みの版情報を使う")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -439,6 +527,12 @@ def _main(argv=None) -> int:
     args = ap.parse_args(argv)
     candidate_sha = getattr(args, "candidate_sha", None)
     base_sha = getattr(args, "base_sha", None)
+    if args.installed_standalone and (
+            'MCS_UPDATE_REPO' in os.environ or candidate_sha is not None
+            or args.cmd not in ('guide', 'plan', 'apply')
+            or getattr(args, 'keep_hermes_checkout', None)):
+        print('この起動方法では単独実行の更新を確認できません。導入済みの mcs update から実行してください。')
+        return 2
     if candidate_sha is not None:
         if not all(isinstance(value, str) and COMMIT_SHA_RE.fullmatch(value)
                    for value in (candidate_sha, base_sha)):
@@ -490,6 +584,8 @@ def _main(argv=None) -> int:
                 raise SystemExit("未公開候補のコミットをローカルで確認できません。--candidate-sha と --repo を確認してください") from None
         elif len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
             raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
+        if args.installed_standalone:
+            return _installed_update(args, repo, tag)
         tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
         try:
             extract(repo, tag, tmp, local_candidate=candidate_sha is not None)
@@ -513,6 +609,7 @@ def _main(argv=None) -> int:
             env = {**os.environ, "MCS_UPDATE_REPO": repo}
             env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
             env.pop("MCS_UPDATE_OPTIONS_EXPECTED", None)
+            env.pop('MCS_UPDATE_RUNTIME_EXPECTED', None)
             if getattr(args, 'keep_hermes_checkout', None):
                 env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
             try:

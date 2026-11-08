@@ -34,3 +34,18 @@ def test_plan_classification_keeps_observations(state, tag_errors, automatic, no
     assert decision["schema_bump"] == next(
         (error for error in tag_errors if error.startswith("schema_bump:")), None)
     assert (state, tag_errors) == before
+
+
+@pytest.mark.parametrize('context', ['external', 'installed_standalone', 'unverified'])
+@pytest.mark.parametrize('errors,expected', [([], 'apply'), (['install_sh_changed'], 'reinstall')])
+def test_standalone_entry_context_is_explicit_and_preserves_other_holds(context, errors, expected):
+    kwargs = dict(restore_pending=False, legacy_source=False, standalone=True,
+                  automatic=False, noop=False, entry_context=context)
+    result = preflight_decision([], errors, {}, **kwargs)
+    if context == 'installed_standalone':
+        assert result['route'] == expected and result['blockers'] == []
+    else:
+        assert result['route'] == 'blocked' and result['blockers'] == ['standalone_external_apply']
+    held = preflight_decision(['tree_dirty'], errors, {'applying': {'sha': 'a' * 40}}, **kwargs)
+    assert held['route'] == 'blocked'
+    assert {'tree_dirty', 'update_in_progress_or_interrupted'} <= set(held['blockers'])

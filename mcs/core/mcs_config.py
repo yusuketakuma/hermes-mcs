@@ -52,6 +52,23 @@ def _dict(v):
     return None if isinstance(v, dict) else "JSONオブジェクト（キーと値の組）を指定してください"
 
 
+def _auto_recovery(v):
+    if not isinstance(v, dict):
+        return "JSONオブジェクト（キーと値の組）を指定してください"
+    if set(v) - {"enabled", "max_attempts", "window_s"}:
+        return "enabled・max_attempts・window_sだけを指定してください"
+    enabled = v.get("enabled", True)
+    attempts = v.get("max_attempts", 3)
+    window = v.get("window_s", 86400)
+    if type(enabled) is not bool:
+        return "enabledはtrue（有効）かfalse（無効）を指定してください"
+    if type(attempts) is not int or not 1 <= attempts <= 10:
+        return "max_attemptsは1から10までの整数を指定してください"
+    if type(window) is not int or not 3600 <= window <= 7 * 86400:
+        return "window_sは3600から604800までの整数を指定してください"
+    return None
+
+
 def _install_args(value):
     return None if install_options_contract.valid(value) else "導入時の省略項目を確認してください"
 
@@ -167,6 +184,7 @@ CONFIG_RULES = {
     "urgency_escalation":    (False, _urgency_escalation),
     "watchdog_grace_s":      (False, lambda v: None if type(v) is int and 0 <= v <= 3600
                              else "0から3600までの整数を指定してください"),
+    "auto_recovery":         (False, _auto_recovery),
 }
 
 

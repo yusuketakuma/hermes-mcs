@@ -137,7 +137,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="c9bd834ff3c0ab28180815b2a4f7f47c4a833d80c9c3e6e440742849ad98d9c0"
+INSTALL_RUNTIME_SHA256="7dcb7dc58fafa8812dc4d7dbaddc6c1e9f61d2b0159e1d9cbd2e2c192126a43e"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -809,6 +809,9 @@ preflight() {
     if [ "$RUNTIME_MODE" = hermes ] && [ "$SKIP_BREW" -eq 1 ] && ! command -v uv >/dev/null 2>&1; then
         pf_ng "uv が未導入です（Hermes の導入に uv が必要です）" "brew install uv"
     fi
+    if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$_brew_fills" -eq 0 ] && ! command -v uv >/dev/null 2>&1; then
+        pf_ng "uv が未導入です（追加OCRの導入に必要です）" "brew install uv"
+    fi
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
@@ -827,7 +830,7 @@ preflight() {
     if [ "$RUNTIME_MODE" = hermes ] && { [ -f "$CLONE_MARK" ] || [ ! -e "$HERMES_DIR" ]; }; then _need_clone=1; fi
     if command -v git >/dev/null 2>&1; then pf_ok "git: $(command -v git)"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "git は未導入です。段階1で導入します"
-    elif [ "$_need_clone" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
+    elif [ "$_need_clone" -eq 1 ] || [ "$WITH_YOMITOKU" -eq 1 ]; then pf_ng "git が未導入です" "xcode-select --install   （または brew install git）"
     fi
 
     _need_gb=12
@@ -962,6 +965,14 @@ if [ "$MODE" != install ]; then
     [ "$PF_NG" -eq 0 ] || exit 1
     exit 0
 fi
+
+require_ocr_tools() {
+    if [ "$WITH_YOMITOKU" -eq 1 ] && [ "$SKIP_BREW" -eq 1 ]; then
+        command -v uv >/dev/null 2>&1 || die "追加OCRの導入には uv が必要です。導入してから再実行してください"
+        command -v git >/dev/null 2>&1 || die "追加OCRの導入には git が必要です。導入してから再実行してください"
+    fi
+}
+require_ocr_tools
 
 # ---------------------------------------------------------- guards
 [ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
@@ -1152,12 +1163,81 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
     [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
         || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
+require_ocr_tools
+
+# Per-run id ties the stage journal to this invocation; a stale journal from
+# an older interrupted run is never reported as this run's stage.
+INSTALL_PROGRESS_RUN="$$-$(date +%s 2>/dev/null || echo 0)"
+_install_progress_fields() {  # validated "<status> <stage> <invocation> <run_id>" or nothing
+    _ipf="$MCS_DATA/install_progress.json"
+    [ -f "$_ipf" ] && [ ! -L "$_ipf" ] || return 1
+    # bounded read of a regular file only; sed sees at most 4 KiB
+    _ipf_line="$(dd if="$_ipf" bs=4096 count=1 2>/dev/null \
+        | sed -n 's/.*"version":1,.*"status":"\([^"]*\)".*"stage":"\([^"]*\)".*"invocation":"\([^"]*\)".*"run_id":"\([^"]*\)".*/\1 \2 \3 \4/p' \
+        | head -1)"
+    [ -n "$_ipf_line" ] || return 1
+    _ipf_status="${_ipf_line%% *}"
+    _ipf_rest="${_ipf_line#"$_ipf_status" }"
+    _ipf_stage="${_ipf_rest%% *}"
+    _ipf_rest2="${_ipf_rest#"$_ipf_stage" }"
+    _ipf_inv="${_ipf_rest2%% *}"
+    _ipf_run="${_ipf_rest2##* }"
+    case "$_ipf_status" in running|complete) ;; *) return 1 ;; esac
+    case "$_ipf_stage" in \
+        brew|runtime|plugin|log_helper|llm|services|recovery|options|done) ;; *) return 1 ;; esac
+    case "$_ipf_inv" in install|update) ;; *) return 1 ;; esac
+    [ -n "$_ipf_run" ] || return 1
+    if [ "$_ipf_stage" = done ] && [ "$_ipf_status" != complete ]; then return 1; fi
+    if [ "$_ipf_status" = complete ] && [ "$_ipf_stage" != done ]; then return 1; fi
+    printf '%s %s %s %s\n' "$_ipf_status" "$_ipf_stage" "$_ipf_inv" "$_ipf_run"
+}
+_install_stage_label() {  # <stage-id>; fixed display names, never file text
+    case "$1" in
+        brew)        printf '%s' '【1/6】基本ソフトの準備（Homebrew）' ;;
+        runtime)     if [ "$RUNTIME_MODE" = standalone ]; then
+                         printf '%s' '【2/6】MCS 単独接続の実行環境'
+                     else printf '%s' '【2/6】Hermes の実行環境'; fi ;;
+        plugin)      printf '%s' '【3/6】Slack／Discord の操作カード用プラグイン' ;;
+        log_helper)  printf '%s' '実行ログの配置' ;;
+        llm)         printf '%s' '【4/6】この Mac で動かす AI（llama-server、ポート8080）' ;;
+        services)    printf '【5/6】定期収集などの常駐サービス（%s）' "$RUNTIME_MODE" ;;
+        recovery)    printf '%s' '【6/6】更新失敗に備える復旧ツールと監視' ;;
+        options)     printf '%s' '導入設定の記録' ;;
+        *)           printf '%s' '途中の段階' ;;
+    esac
+}
+# fields: "<status> <stage> <invocation> <run_id>"; none contain spaces
+_ip_fields="$(_install_progress_fields || true)"
+_ip_status="${_ip_fields%% *}"
+_ip_rest="${_ip_fields#"$_ip_status" }"
+_ip_stage="${_ip_rest%% *}"
+_ip_rest2="${_ip_rest#"$_ip_stage" }"
+_ip_inv="${_ip_rest2%% *}"
+_ip_run="${_ip_rest2##* }"
+if [ "$_ip_status" = running ] && [ "$_ip_run" != "$INSTALL_PROGRESS_RUN" ]; then
+    if [ "$_ip_inv" = update ]; then
+        printf '前回の更新処理の導入記録が%sの段階で残っています。完了は記録されていません。まず mcs recover で状態を確認し、指示に従ってください。\n' \
+            "$(_install_stage_label "$_ip_stage")"
+    else
+        printf '前回の導入記録が%sの段階で残っています。完了は記録されていません。実行中の場合は完了を待ち、終了していれば同じコマンドを再実行すると途中から再開します。\n' \
+            "$(_install_stage_label "$_ip_stage")"
+    fi
+fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
+# _ip_cur_* is this run's last stage marker (runtime.sh), journal-independent.
 trap 'if [ "$?" -ne 0 ]; then
     if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
+    elif [ "${_ip_cur_status:-}" = running ]; then
+        if [ "${_ip_inv:-install}" = update ]; then
+            printf "エラー: 更新処理の導入記録が%sの段階で残り、完了は記録されていません。更新記録に基づき mcs recover で復旧を確認してください。\n" \
+                "$(_install_stage_label "${_ip_cur_stage:-}")" >&2
+        else
+            printf "エラー: 導入を中断しました。失敗した段階の原因を確認してください。%sの段階で止まっていました。同じコマンドを再実行すると途中から再開します。\n" \
+                "$(_install_stage_label "${_ip_cur_stage:-}")" >&2
+        fi
     else
         printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
     fi

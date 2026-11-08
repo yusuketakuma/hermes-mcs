@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import plistlib
+import re
 import sys
 import time
 import uuid
@@ -65,12 +66,25 @@ def status(root, *, now=None):
         raise ValueError("standalone_status_unavailable") from None
 
 
-def request_restart(root):
+def request_restart(root, *, expected_generation=None):
     live = status(root)
+    if expected_generation is not None:
+        if (type(expected_generation) is not str
+                or re.fullmatch(r"[0-9a-f]{32}", expected_generation) is None
+                or live["generation"] != expected_generation):
+            raise ValueError("standalone_generation_changed")
+        if (live.get("restarting") is not False or live.get("update_in_progress") is not False
+                or "restart_reservation" not in live or live["restart_reservation"] is not None
+                or "update_marker" not in live or live["update_marker"] is not None):
+            raise ValueError("standalone_restart_busy")
     value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
              "requested_at": time.time()}
     path = Path(root).expanduser().resolve() / "data" / RESTART_FILE
-    atomic_write(str(path), lambda stream: json.dump(value, stream), mode=0o600)
+    if expected_generation is None:
+        atomic_write(str(path), lambda stream: json.dump(value, stream), mode=0o600)
+    else:
+        # A simultaneous manual request wins; never replace its intent with an automatic one.
+        safe_io.publish_new_bytes(path, json.dumps(value).encode("utf-8"))
     return value["request_id"]
 
 
@@ -88,7 +102,7 @@ def render_health(root, platform=None, *, recovery_dir=None):
     platform = platform or sys.platform
     repository = str(Path(__file__).resolve().parents[1])
     python = python_executable({"runtime_mode": "standalone"}, root=root)
-    argv = [python, repository + "/mcs/ingest/health_watch.py", "--home", str(root)]
+    argv = [python, repository + "/mcs/ingest/health_watch.py", "--home", str(root), "--send"]
     argv = [python, "-I", helper_path(root, recovery_dir, checkout=repository), "exec",
             "--data-dir", str(root / "data"), "--", *argv]
     logfile = os.devnull

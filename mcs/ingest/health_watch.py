@@ -293,13 +293,13 @@ def _read_standalone_status(home: str):
     return value if isinstance(value, dict) else None
 
 
-def standalone_host_reasons(home: str, now: float, cfg: dict):
+def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     """runtime_mode=standalone: (severity, reason codes, details) from the
     host's own standalone-status.json. The host runs every job — this
     watcher included when it is not installed separately — so its death,
     crash loops, a lost connection or a wedged update are checked here,
     from outside it. Details are job codes and numbers only."""
-    status = _read_standalone_status(home)
+    status = _read_standalone_status(home) if status is None else status
     stamp = status.get("updated_at") if status else None
     if status is None or not finite_number(stamp) or not _pid_alive(status.get("pid")) \
             or now - stamp > STANDALONE_HOST_STALE_S:
@@ -758,8 +758,8 @@ _REASON_JA = {
     "stage_errors": ("収集または収集後の処理でエラーがありました",
                      f"次回の収集で再試行されます。続く場合は {_COLLECTION_LOG} を確認"),
     "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
-    "run_deadline_exceeded": ("収集が制限時間を超えました",
-                              "続く場合は llama-server とネットワークの負荷を確認"),
+    "run_deadline_exceeded": ("収集と収集後の処理を含む実行全体が制限時間を超えました",
+                              "続く場合は収集ログの段階別の所要時間とディスク・llama-server・ネットワークの負荷を確認"),
     "ledger_relation_violations": ("保存データの整合性に問題があります",
                                    f"{_CHECK} を実行し、修復手順に従う"),
     "backup_not_verified": ("バックアップの完了を確認できません",
@@ -793,8 +793,8 @@ _REASON_JA = {
                           f"llama-server の稼働と {_COLLECTION_LOG} を確認"),
     "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
                                  f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
-    "stall_check_failed": ("停滞の判定処理が失敗しました",
-                           f"{_COLLECTION_LOG} の stall_check_failed を確認。続く場合は {_CHECK}"),
+    "stall_check_failed": ("停滞の有無を今回の監視で確認できませんでした",
+                           "次回の収集で再判定します。続く場合は data/health.json の stall_check を確認"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
                                       "TypeSafe の契約・残高を確認。解消まで意味チェックは待機します。要約通知は遅れる場合があります"),
     "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
@@ -1163,7 +1163,7 @@ def _alert_lines(report: dict) -> list[str]:
             # observed count and the actual elapsed time, never a nominal cadence
             lines.append(f"継続: 監視理由ごとの連続観測は最大{count}回"
                          f"（該当理由の初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
-        lines.append(f"最終正常 {_jst(report.get('last_ok_at'))}"
+        lines.append(f"全監視項目の最終正常 {_jst(report.get('last_ok_at'))}"
                      f" / 最新記録 {_jst(report.get('health_at'))}（JST）")
         lines.append("照会コード: " + _query_codes(reasons))
         lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
@@ -1180,6 +1180,14 @@ def _alert_lines(report: dict) -> list[str]:
 
 def _watch(args, cfg) -> int:
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
+    if getattr(args, "send", False) and args.now is None:
+        try:
+            from health_recovery import run as auto_recovery
+            report["auto_recovery"] = auto_recovery(
+                report, args.home, cfg, report["watched_at"])
+        except Exception:
+            report["auto_recovery"] = {"enabled": False, "actions": [],
+                                       "reason": "recovery_error"}
     for line in _alert_lines(report):
         print(line)
     if report.get("delivery_error"):
@@ -1238,6 +1246,8 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--home", default=HOME)
     ap.add_argument("--now", type=float, default=None,
                     help="inject clock for tests/dry-run")
+    ap.add_argument("--send", action="store_true",
+                    help="allow automatic coordinated restart requests during live monitoring")
     ap.add_argument("--config", default=None,
                     help="config.json path (default ~/.mcs/config.json)")
     args = ap.parse_args(argv)

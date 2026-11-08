@@ -1,5 +1,5 @@
 {
-  "fragment_count": 110,
+  "fragment_count": 118,
   "records": [
     {
       "category": "added",
@@ -770,8 +770,64 @@
       "path": "changes/archive/1.1.2/mcslog-health-actions.json",
       "sha256": "a3a2725cb0f5a45f08d784995b3229b2ce14099f219c8f349e51b453ae9e7c4e",
       "title": "監視アラートの対処手順と照会コードを分かりやすく改善"
+    },
+    {
+      "category": "fixed",
+      "id": "delivery-journal-duplicate-keys",
+      "path": "changes/archive/1.1.2/delivery-journal-duplicate-keys.json",
+      "sha256": "cf6662d11207321b53064c9ce845aef0f959439072d72db4d5ce8ff999a8d218",
+      "title": "配送結果の照合で重複キーを含む記録を証拠にしない"
+    },
+    {
+      "category": "added",
+      "id": "delivery-journal-read-budget",
+      "path": "changes/archive/1.1.2/delivery-journal-read-budget.json",
+      "sha256": "de959dde00abf5ab0602dc91452f4080167e611b295cf43774a39192947c062c",
+      "title": "配送記録の確認で読取り量と時間を制限"
+    },
+    {
+      "category": "added",
+      "id": "delivery-recovery-worklist",
+      "path": "changes/archive/1.1.2/delivery-recovery-worklist.json",
+      "sha256": "b857783e3a7cd558e7acfa259f8df077e3244de8623dd5fa60d01ecbebcb519b",
+      "title": "配送結果不明の復旧対象をhealth一覧とCLIから探せる"
+    },
+    {
+      "category": "fixed",
+      "id": "guided-install-agent-entry",
+      "path": "changes/archive/1.1.2/guided-install-agent-entry.json",
+      "sha256": "c5a03111e30db5660acd3bcd97847684467b41cef2cb576196b02bf111c48dd8",
+      "title": "対話初期設定とAIによるスタンドアローン導入の案内を整理"
+    },
+    {
+      "category": "fixed",
+      "id": "installed-standalone-update-guide",
+      "path": "changes/archive/1.1.2/installed-standalone-update-guide.json",
+      "sha256": "ea7a494b997ee729bf8fd4a02c7fcb9ab49498414d3d270ed11a77768b8521eb",
+      "title": "単独実行の更新を対話形式で進められるように修正"
+    },
+    {
+      "category": "fixed",
+      "id": "installer-dependency-integrity",
+      "path": "changes/archive/1.1.2/installer-dependency-integrity.json",
+      "sha256": "32885ba05b9c32e41fb7715ea23cdab74926559af0bc0300383873f51f862334",
+      "title": "独立導入のSDK確認と追加OCRの依存チェックを修正"
+    },
+    {
+      "category": "added",
+      "id": "installer-interruption-progress",
+      "path": "changes/archive/1.1.2/installer-interruption-progress.json",
+      "sha256": "b3957f639e8fd570294a3777fce70e3355f002eb0bfbbbb97341f241b8bc19a7",
+      "title": "導入・更新の途中停止から段階を確認して再開できる記録を追加"
+    },
+    {
+      "category": "fixed",
+      "id": "mcslog-stall-observation",
+      "path": "changes/archive/1.1.2/mcslog-stall-observation.json",
+      "sha256": "4eee0d170bacc51c73cf6fc4850267115adbf68481acfd0e6e5b4379df457309",
+      "title": "停滞チェックの観測失敗が収集エラーとして二重表示される問題を修正"
     }
   ],
-  "scope": "v1.1.2 の変更記録110件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録118件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }

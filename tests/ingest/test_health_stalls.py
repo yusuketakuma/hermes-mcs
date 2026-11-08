@@ -2,6 +2,7 @@
 signal detector errors, a lost failure alert, and card / semantic /
 extraction work that stopped moving. Temp ledger and stubs only."""
 import health_report
+import sqlite3
 import time
 from types import SimpleNamespace
 
@@ -116,8 +117,105 @@ def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
     health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
     assert "stall_check_failed" in health["state_reasons"]
     assert all(health_watch._is_code(r) for r in health["state_reasons"])
-    assert "stall_check_failed: RuntimeError" in result["errors"]
+    # an observation failure is not a run error: nothing may be appended to
+    # result["errors"], so it cannot echo as a postprocess stage error
+    assert result["errors"] == []
+    assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
+    check = health["stall_check"]
+    assert check["status"] == "unknown"
+    assert check["reason"] == "observation_unavailable"
+    assert check["observation"]["stop"] == "read_unavailable"
+    assert "sqlite_code" not in check
     assert "stall_check_failed" in health_watch._REASON_JA
+
+
+def _sql_error(message, code):
+    exc = sqlite3.OperationalError(message)
+    exc.sqlite_errorcode = code
+    return exc
+
+
+def test_stall_check_records_a_successful_observation(db):
+    result = {"errors": [], "notify": {}}
+    health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
+    check = health["stall_check"]
+    assert check["status"] == "recorded"
+    assert check["observed_at"] == health["at"]
+    assert check["observation"]["stop"] == "complete"
+    assert "stall_check_failed" not in health["state_reasons"]
+    assert result["errors"] == []
+
+
+def test_stall_check_without_config_reports_unknown_not_recorded(db):
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok")
+    check = health["stall_check"]
+    assert check["status"] == "unknown" and check["reason"] == "config_not_loaded"
+    assert "stall_check_failed" not in health["state_reasons"]
+
+
+def test_stall_check_budget_exhaustion_is_observation_limit(db):
+    result = {"errors": [], "notify": {}}
+    health = health_report.build_health(
+        db.db, result, "ok", cfg=SLACK, deadline=time.monotonic() - 1)
+    assert "stall_check_failed" in health["state_reasons"]
+    check = health["stall_check"]
+    assert check["status"] == "unknown" and check["reason"] == "observation_limit"
+    assert check["observation"]["stop"] == "budget_exhausted"
+    assert result["errors"] == []
+    assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
+
+
+@pytest.mark.parametrize(("exc", "reason", "stop", "sqlite_code"), [
+    # SQLITE_INTERRUPT surfaces as a bounded observation limit
+    (_sql_error("interrupted", sqlite3.SQLITE_INTERRUPT),
+     "observation_limit", "read_unavailable", sqlite3.SQLITE_INTERRUPT),
+    # BUSY is a storage failure, not a limit; the primary code is masked to & 255
+    (_sql_error("database is locked", sqlite3.SQLITE_BUSY),
+     "observation_unavailable", "storage_busy", sqlite3.SQLITE_BUSY),
+    (_sql_error("database is locked", sqlite3.SQLITE_BUSY | (2 << 8)),
+     "observation_unavailable", "storage_busy", sqlite3.SQLITE_BUSY),
+    # a genuine SQL failure stays 'unavailable' and keeps its masked code
+    (_sql_error("no such table: x", sqlite3.SQLITE_ERROR),
+     "observation_unavailable", "read_unavailable", sqlite3.SQLITE_ERROR),
+    # a non-integer sqlite_errorcode is never copied into the report
+    (_sql_error("synthetic", "not-an-int"),
+     "observation_unavailable", "read_unavailable", None),
+])
+def test_stall_check_failure_records_fixed_diagnosis(
+        db, monkeypatch, exc, reason, stop, sqlite_code):
+    def boom(*_args, **_kw):
+        raise exc
+    monkeypatch.setattr(health_report, 'backlog_stalls', boom)
+    result = {"errors": [], "notify": {}}
+    health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
+    assert "stall_check_failed" in health["state_reasons"]
+    assert result["errors"] == []
+    assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
+    check = health["stall_check"]
+    assert check["status"] == "unknown" and check["reason"] == reason
+    assert check["observation"]["stop"] == stop
+    if sqlite_code is None:
+        assert "sqlite_code" not in check
+    else:
+        assert check["sqlite_code"] == sqlite_code
+
+
+def test_real_derive_error_still_reports_stage_errors(db):
+    """Control: a genuine postprocess failure in result["errors"] must keep
+    producing stage_errors — only the stall observation echo was removed."""
+    result = {"errors": ["extract_llm: RuntimeError"], "notify": {}}
+    health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
+    assert "stage_errors" in health["state_reasons"]
+    assert health["overall"] == "degraded"
+
+
+def test_deferred_only_errors_do_not_report_stage_errors(db):
+    result = {"errors": ["deadline_deferred: rollup_scan"], "notify": {}}
+    health = health_report.build_health(db.db, result, "ok", cfg=SLACK)
+    assert "stage_errors" not in health["state_reasons"]
 
 
 def test_extract_stall_needs_unstarted_old_message_and_no_progress(db):

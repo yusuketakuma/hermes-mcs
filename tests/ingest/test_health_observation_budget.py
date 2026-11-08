@@ -455,6 +455,7 @@ def test_failed_card_phase_is_fixed_and_preserves_unknown(stored, monkeypatch, h
     assert cards["status"] == cards["completion"]["status"] == "unknown"
     assert cards["pending"] is None and cards["completion"]["reason"] == "observation_unavailable"
     assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(cards)
+    assert cards["recovery_parts"] is None
 
 
 @pytest.mark.parametrize("failure,stop,reason", [

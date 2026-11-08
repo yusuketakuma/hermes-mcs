@@ -1,13 +1,13 @@
-# デスクトップ版のClaude・Codexから導入する
+# AIエージェントからこのMacへ導入する
 
-Claude（デスクトップ版）やCodexなどのAIエージェントに、このMacへのMCS導入を任せるときの手順です。
+Claude Code・Codexやデスクトップ版のAIエージェントに、リポジトリのURLを渡してこのMacへMCSを導入してもらうときの手順です。[READMEの依頼文](../../README.md#quickstart)ではstandaloneを指定し、既存環境があれば新規取得を増やさず更新・設定の再開へ分岐します。
 エージェントはリポジトリを一時的な作業フォルダへ取得することが多いため、そのまま`install.sh`を実行すると、
 常駐サービスやプラグインが一時フォルダを参照してしまいます。
 `scripts/install_local.py`は、恒久的な置き場所を決めてから、その場所の`install.sh`を実行します。
 
 ```bash
-python3 scripts/install_local.py              # 置き場所を自動で決めて導入
-python3 scripts/install_local.py --dry-run    # 計画だけを表示（何も書き込まない）
+python3 scripts/install_local.py --mode standalone             # 置き場所を決めてMCS単独で導入
+python3 scripts/install_local.py --mode standalone --dry-run   # 計画だけを表示（何も書き込まない）
 python3 scripts/install_local.py --dest "/path/to/folder" --mode standalone
 ```
 

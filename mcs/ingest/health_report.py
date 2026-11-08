@@ -781,7 +781,7 @@ def build_health(db, result: dict, status: str,
         cards_health = dict.fromkeys((
             "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
             "revoked", "oldest_pending_age_s", "layout_inventory", "unknown_parts",
-            "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
+            "recovery_parts", "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
             "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
             "last_delivered_at"))
         cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc),
@@ -967,17 +967,30 @@ def build_health(db, result: dict, status: str,
     # an unchecked run (no config) carries the episode marks forward
     prev_marks = prev_health().get("stall_marks") if not checked else None
     stall_marks: dict = dict(prev_marks) if isinstance(prev_marks, dict) else {}
+    stall_observation: dict = {}
     try:
         stalls = (bounded_health_read(
                       db, lambda _check: backlog_stalls(db, cfg, now, marks=stall_marks),
-                      seconds=remaining())
+                      seconds=remaining(), observation=stall_observation)
                   if checked else [])
     except Exception as e:
         # a plain reason code: health_watch validates codes as snake_case
-        # and would otherwise drop every reason in the list
+        # and would otherwise drop every reason in the list. An observation
+        # failure is not a run error — it must not echo into result["errors"]
+        # and double-report as a postprocess stage error; the bounded
+        # observation record carries the fixed diagnosis instead.
         stalls = ["stall_check_failed"]
-        result["errors"] = list(result.get("errors") or []) \
-            + [f"stall_check_failed: {type(e).__name__}"]
+        stall_check = {"status": "unknown", "observed_at": now,
+                       "reason": _observation_failure(e),
+                       "observation": stall_observation}
+        code = getattr(e, "sqlite_errorcode", None)
+        if type(code) is int:
+            stall_check["sqlite_code"] = code & 255
+    else:
+        stall_check = {"status": "recorded" if checked else "unknown",
+                       "observed_at": now, "observation": stall_observation}
+        if not checked:
+            stall_check["reason"] = "config_not_loaded"
     errors = result.get("errors") or []
     # A mid-tick mcs/ change is a deploy guard, not a fault: skipped
     # stages rerun next tick on the new code. The run row keeps
@@ -1115,6 +1128,7 @@ def build_health(db, result: dict, status: str,
         "patient_context": patient_context_health(
             db, cfg if checked else None, now, source, seconds=remaining()),
         "stall_marks": stall_marks,
+        "stall_check": stall_check,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }

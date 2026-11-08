@@ -7,6 +7,7 @@ holds and journals constrain operator evidence before any card or part is reboun
 from __future__ import annotations
 
 import json
+import math
 import time
 
 from mcs_requests import canonical, payload_hash, positive, replay_receipt, valid_uuid
@@ -15,7 +16,8 @@ import notify_spool
 import notify_journal
 import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
-                          scope_fields, scope_matches, TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
+                          scope_fields, scope_matches, retired_transports,
+                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
@@ -427,17 +429,28 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
     return plan
 
 
-# reasons the planner/worker stores on a held or unknown part; others count as 'unknown'
+# every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
-                     *_PREFLIGHT_ERRORS)
+                     *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,
+                     "timeouterror", "connectionerror", "worker_crash", "journal_incomplete",
+                     "edit_reference_missing", "edit_file_size_mismatch", "edit_file_unverified",
+                     "file_target_unverified", "part_owner_ambiguous", "msg_too_long",
+                     "body_part_wire_too_long", "attachment_unavailable", "attachment_mismatch",
+                     "file_group_unverified", "file_group_missing", "file_group_duplicate",
+                     "message_mismatch", "missing_remote_id",
+                     "edit_response_unverified", "edit_result_unknown", "edit_thread_unverified",
+                     "card_target_missing", "body_part_missing",
+                     "thread_root_missing", "thread_scope_mismatch", "thread_capability_blocked",
+                     "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
+                     "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
+                     "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
+                     "operator_part_resolve")
 
 
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
-    known = (*PART_HOLD_REASONS, _DEPENDENCY_ERROR, "timeouterror", "connectionerror", "worker_crash",
-             "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch",
-             "edit_file_unverified", "file_target_unverified", "part_owner_ambiguous", "msg_too_long")
+    known = PART_HOLD_REASONS
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
     available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
@@ -474,7 +487,11 @@ def part_hold_report(ledger) -> dict:
 
     Every fixed reason is present (0 is observed, not missing); a NULL code
     is 'not_recorded' and any other code 'unknown'. ``resolvable`` counts
-    the parts card_part_resolve_plan would plan. The caller bounds time."""
+    unknown parts carrying an attempt id — a planning hint, not a
+    guarantee: card_part_resolve_plan stays authoritative (it can still
+    reject, e.g. an unverified Discord group identity), and the
+    dependency-rejected ``not_sent`` file_groups it also plans are not
+    counted here. The caller bounds time."""
     db = cards.connection(ledger)
     marks = ",".join("?" * len(PART_HOLD_REASONS))
     by_state = {state: dict.fromkeys((*PART_HOLD_REASONS, "not_recorded", "unknown"), 0)
@@ -497,6 +514,197 @@ def part_hold_report(ledger) -> dict:
     return {"parts": by_state, "resolvable": resolvable,
             "specs": {"stored_json": spec[0], "published_files": spec[1],
                       "kept_for_edit_check": spec[2]}}
+
+
+def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
+    """Bounded operator worklist of parts awaiting human-reviewed recovery.
+
+    Read-only on the caller's connection. Candidates are non-card parts
+    that are ``unknown``, held awaiting attachment-identity confirmation,
+    or dependency-rejected ``file_groups``; each is then verified through
+    the same plan the approval command uses, so ``status``/``blocker``
+    report real plan eligibility rather than a guess. Cancelled renders
+    and retired transports are excluded. ``total`` counts every candidate
+    before ``limit``; ``truncated`` marks a cut list. A Discord member
+    redirected to its shared ``file_group`` anchor names the anchor in
+    ``approval_part_id`` with ``group_approval`` — approval covers the
+    whole sealed group, never the member alone. ``limit`` is a page size
+    (1..20) and ``offset`` a stable page start; SQLite ``LIMIT -1`` is
+    never reachable."""
+    if type(limit) is not int or not 1 <= limit <= 20 \
+            or type(offset) is not int or offset < 0:
+        raise ValueError("bad_page")
+    now = time.time()
+    retired = retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    live = f" AND r.transport NOT IN ({marks})" if retired else ""
+    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
+             " AND (p.state='unknown' "
+             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
+    params = (*retired, _DEPENDENCY_ERROR)
+    total = db.execute(
+        "SELECT COUNT(*) FROM notification_render_parts p "
+        "JOIN notification_renders r USING(delivery_id) WHERE " + where,
+        params).fetchone()[0]
+    items = []
+    for row in db.execute(
+            "SELECT p.delivery_id,p.part_id,p.kind,p.state,p.error_code,p.attempt_id,"
+            "r.transport,COALESCE(p.updated_at,r.updated_at) observed_at "
+            "FROM notification_render_parts p JOIN notification_renders r USING(delivery_id) "
+            "WHERE " + where +
+            " ORDER BY p.updated_at,p.delivery_id,p.part_id LIMIT ? OFFSET ?",
+            (*params, limit, offset)):
+        delivery_id, part_id = row["delivery_id"], row["part_id"]
+        if row["state"] == "held":
+            flow = "attachment_identity_confirm"
+            plan = attachment_identity_confirm_plan(db, delivery_id, part_id)
+        else:
+            flow = "card_part_resolve"
+            plan = card_part_resolve_plan(db, delivery_id, part_id)
+        at = row["observed_at"]
+        item = {"delivery_id": delivery_id, "part_id": part_id,
+                "kind": row["kind"], "state": row["state"],
+                "transport": row["transport"],
+                "error_code": recovery_guidance(row["kind"], row["transport"],
+                                                row["error_code"], row["attempt_id"])["error_code"],
+                "attempt_id": row["attempt_id"],
+                "age_s": (round(max(0, now - at), 1)
+                          if type(at) in (int, float) and math.isfinite(at)
+                          and 0 <= at <= now else None),
+                "flow": flow}
+        if "error" in plan:
+            item["status"] = "blocked"
+            item["blocker"] = plan["error"]
+        else:
+            item["status"] = "plannable"
+            if plan["part_id"] != part_id:
+                item["approval_part_id"] = plan["part_id"]
+                item["group_approval"] = True
+        items.append(item)
+    return {"total": total, "offset": offset, "limit": limit,
+            "truncated": offset + len(items) < total, "items": items}
+
+
+_CARD_PART_CHECK_PROOFS = ("no_journal_started", "api_rejected", "remote_absent")
+_CARD_PART_CHECK_EXTERNAL = ("worker_stop_evidence", "human_approval",
+                             "remote_identity_or_absence", "apply_revalidation")
+_CARD_PART_CHECK_DEADLINE_S = 5
+_CARD_PART_CHECK_MAX_BYTES = 32 * 1024 * 1024
+_CARD_PART_CHECK_MAX_ROWS = 100000
+
+
+def _journal_scope_rows(attempts, req, surface):
+    # Rows in the delivery/part scope, or the Discord recovery surface scope.
+    return [row for record in attempts.values() for row in record["rows"]
+            if row.get("delivery_id") == req["delivery_id"]
+            and (row.get("part_id") == req["part_id"] if surface is None else
+                 row.get("attempt_id") == req["attempt_id"] and
+                 (row.get("part_id") == surface
+                  or surface == "card" and not row.get("part_id")))]
+
+
+def card_part_check(ledger, data_dir, delivery_id, part_id) -> dict:
+    """Read-only journal check for one resolvable part against a live data dir.
+
+    The published snapshot supplies plan identity only; journal evidence is
+    scanned from the explicitly supplied ``data_dir`` at a separate
+    observation time. ``journal_check`` is ``passed`` when at least one
+    applicable proof is not contradicted by the verified journal,
+    ``blocked`` when every applicable proof fails on journal evidence,
+    and ``unknown`` whenever
+    the journal is unreadable, incomplete, over the read budget, absent
+    for the target scope, or missing — a tainted journal can hide a
+    ``started`` row, so absence of evidence never passes. ``journal.state``
+    is ``absent`` when no journal row matches the target delivery/part
+    scope; an empty or unrelated journal root can never pass. Per-proof
+    outcomes stay in ``journal_checks``; ``passed`` there means only that
+    the journal does not contradict that proof — remote absence still
+    needs external verification. The shared scanner enforces the
+    byte/row/time budget and discards partial evidence on
+    ``JournalReadLimit``. Passing never implies delivery outcome, worker
+    stop, human approval, or remote identity; those stay in
+    ``required_external_checks`` and are revalidated at apply."""
+    plan = card_part_resolve_plan(ledger, delivery_id, part_id)
+    if "error" in plan:
+        return {"error": plan["error"]}
+    db = cards.connection(ledger)
+    part = db.execute("SELECT kind,error_code FROM notification_render_parts "
+                      "WHERE delivery_id=? AND part_id=?",
+                      (plan["delivery_id"], plan["part_id"])).fetchone()
+    req = {"delivery_id": plan["delivery_id"], "part_id": plan["part_id"],
+           "attempt_id": plan["attempt_id"], "result": "mark_not_sent",
+           "expected_state": plan["expected_state"]}
+    if plan["expected_state"] == "not_sent":
+        proofs = [_DEPENDENCY_PROOF]
+    else:
+        proofs = list(_CARD_PART_CHECK_PROOFS)
+        if (plan["transport"] == "slack" and part is not None
+                and part["kind"] == "attachment_part"
+                and part["error_code"] in _PREFLIGHT_ERRORS):
+            proofs.append(_PREFLIGHT_PROOF)
+    try:
+        attempts, incomplete = notify_journal.scan_journals(
+            notify_spool.notify_dirs(data_dir),
+            deadline=time.monotonic() + _CARD_PART_CHECK_DEADLINE_S,
+            max_bytes=_CARD_PART_CHECK_MAX_BYTES,
+            max_rows=_CARD_PART_CHECK_MAX_ROWS)
+        journal_state = "incomplete" if incomplete else "clean"
+        journal_reason = None
+    except notify_journal.JournalReadLimit:
+        attempts, incomplete = {}, True
+        journal_state, journal_reason = "read_limited", "journal_read_limit"
+    except OSError:
+        attempts, incomplete = {}, True
+        journal_state, journal_reason = "unreadable", None
+    scope_rows = None
+    if journal_state == "clean":
+        try:
+            group = _discord_recovery_group(db, req)
+            surface = group["surface"] if group else None
+            scope_rows = _journal_scope_rows(attempts, req, surface)
+            if not scope_rows:
+                journal_state = "absent"
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            scope_rows = None
+    fact_rows = scope_rows or []
+    delivered = [row for row in fact_rows if row.get("phase") == "result"
+                 and row.get("result") == "delivered"]
+    result = {"version": 1, "delivery_id": plan["delivery_id"],
+              "part_id": plan["part_id"], "attempt_id": plan["attempt_id"],
+              "transport": plan["transport"], "expected_state": plan["expected_state"],
+              "proofs_checked": proofs,
+              "required_external_checks": list(_CARD_PART_CHECK_EXTERNAL),
+              "journal": {"state": journal_state, "reason": journal_reason,
+                          "scope_rows": len(fact_rows) if scope_rows else None,
+                          "phases": sorted({row["phase"] for row in fact_rows
+                                            if isinstance(row.get("phase"), str)}) if scope_rows else None,
+                          "has_started": any(row.get("phase") == "started" for row in fact_rows) if scope_rows else None,
+                          "has_delivered_result": bool(delivered) if scope_rows else None,
+                          "remote_id_recorded": any(
+                              row.get("remote_id") or row.get("message_id")
+                              for row in delivered) if scope_rows else None},
+              "journal_observed_at": time.time(),
+              "note": "read-only check on separate snapshot/journal observations; "
+                      "apply revalidates all evidence"}
+    if journal_state != "clean":
+        result["journal_checks"] = {proof: "unknown" for proof in proofs}
+        result["journal_check"] = "unknown"
+        return result
+    checks = {}
+    reasons = set()
+    for proof in proofs:
+        req["evidence"] = {"proof": proof}
+        error = _part_resolution_journal_error(
+            ledger, req, journal_evidence=(attempts, incomplete))
+        checks[proof] = "blocked" if error else "passed"
+        if error:
+            reasons.add(error)
+    result["journal_checks"] = checks
+    result["journal_check"] = "passed" if "passed" in checks.values() else "blocked"
+    if reasons:
+        result["journal_blocked_reasons"] = sorted(reasons)
+    return result
 
 
 def validate_card_part_resolve(req) -> str | None:
@@ -721,11 +929,7 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
         surface = group["surface"] if group else None
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return "file_group_identity_unverified"
-    rows = [row for record in attempts.values() for row in record["rows"]
-            if row.get("delivery_id") == req["delivery_id"]
-            and (row.get("part_id") == req["part_id"] if surface is None else
-                 row.get("attempt_id") == req["attempt_id"] and
-                 (row.get("part_id") == surface or surface == "card" and not row.get("part_id")))]
+    rows = _journal_scope_rows(attempts, req, surface)
     delivered = [row for row in rows if row.get("phase") == "result" and row.get("result") == "delivered"]
     if req["result"] == "mark_delivered":
         if any((row.get("message_id", row.get("remote_id")) if surface == "card"

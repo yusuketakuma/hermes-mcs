@@ -4,7 +4,7 @@ import plistlib
 import shutil
 import sys
 import pytest
-from install_sh_testkit import INSTALL as INSTALL, ROOT as ROOT, SAVED_FLAGS as SAVED_FLAGS, STOPPED as STOPPED, _bootstraps as _bootstraps, _calls as _calls, _real_config_writer as _real_config_writer, _run as _run, _without_supported_python as _without_supported_python, _world as _world
+from install_sh_testkit import INSTALL as INSTALL, ROOT as ROOT, SAVED_FLAGS as SAVED_FLAGS, STOPPED as STOPPED, _bootstraps as _bootstraps, _calls as _calls, _real_config_writer as _real_config_writer, _run as _run, _run_reinstall as _run_reinstall, _without_supported_python as _without_supported_python, _world as _world
 
 
 def test_existing_recovery_selection_preserves_other_settings(tmp_path):
@@ -212,3 +212,152 @@ def test_fresh_mac_preflight_defers_recovery_check_when_brew_installs_python(tmp
     # --recovery-python cannot be verified without Python: still a blocker
     r = _run(env, None, "--preflight", "--recovery-python", "/synthetic/recovery/python3")
     assert r.returncode == 1 and "復旧サービスのテンプレートに問題があります: Python の安全条件" in r.stdout
+
+
+def test_interrupted_install_journal_names_stage_and_resume_notice(tmp_path):
+    """A stopped install leaves a stage journal; the rerun names the stage
+    and converges to a done record."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    journal = home / ".mcs/data/install_progress.json"
+    r = _run({**env, "STUB_FAIL_PLUGIN": "1"}, hermes_home)
+    assert r.returncode != 0
+    progress = json.loads(journal.read_text())
+    assert progress["status"] == "running"
+    assert progress["stage"] == "plugin"
+    assert progress["invocation"] == "install"
+    assert progress["run_id"]
+    assert "操作カード用プラグインの段階で止まっていました" in r.stderr
+    assert "途中から再開します" in r.stderr
+
+    r2 = _run(env, hermes_home)
+    assert r2.returncode == 0, r2.stderr
+    assert ("前回の導入記録が【3/6】Slack／Discord の操作カード用プラグインの段階で"
+            "残っています") in r2.stdout
+    assert "完了は記録されていません" in r2.stdout
+    assert "中断していました" not in r2.stdout
+    done = json.loads(journal.read_text())
+    assert done["status"] == "complete" and done["stage"] == "done"
+    assert done["run_id"] != progress["run_id"]
+
+
+def test_successful_install_records_done_journal(tmp_path):
+    home, hermes_home, _stub, env = _world(tmp_path)
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    progress = json.loads((home / ".mcs/data/install_progress.json").read_text())
+    assert progress["status"] == "complete" and progress["stage"] == "done"
+    assert progress["invocation"] == "install"
+
+
+def test_updater_reinstall_journal_marks_update_invocation(tmp_path):
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    r = _run_reinstall(env, hermes_home, "--no-llm", "--no-plugin", "--no-services")
+    assert r.returncode == 0, r.stderr
+    progress = json.loads((home / ".mcs/data/install_progress.json").read_text())
+    assert progress["status"] == "complete" and progress["invocation"] == "update"
+
+
+@pytest.mark.parametrize("kind", ["dir", "link_dir", "link_file"])
+def test_unwritable_journal_never_stops_install(tmp_path, kind):
+    """A journal path that cannot be safely replaced is skipped, not fatal:
+    mv must never move the tmp into a directory or through a symlink."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    data = home / ".mcs/data"
+    journal = data / "install_progress.json"
+    journal.unlink()
+    if kind == "dir":
+        journal.mkdir()
+        r = _run(env, hermes_home)
+        assert r.returncode == 0, r.stderr
+        assert journal.is_dir() and not list(journal.iterdir())
+    else:
+        target = data / ("linked-dir" if kind == "link_dir" else "linked-file")
+        if kind == "link_dir":
+            target.mkdir()
+        else:
+            target.write_bytes(b"sentinel journal target")
+        journal.symlink_to(target)
+        r = _run(env, hermes_home)
+        assert r.returncode == 0, r.stderr
+        assert journal.is_symlink()          # the link itself is preserved
+        if kind == "link_dir":
+            assert target.is_dir() and not list(target.iterdir())
+        else:
+            assert target.read_bytes() == b"sentinel journal target"
+
+
+def test_exit_names_stage_from_memory_when_journal_unwritable(tmp_path):
+    """The EXIT trap reports this run's stage even with no journal record."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.unlink()
+    journal.mkdir()
+    r = _run({**env, "STUB_FAIL_PLUGIN": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "操作カード用プラグインの段階で止まっていました" in r.stderr
+    assert "途中から再開します" in r.stderr
+
+
+@pytest.mark.parametrize("kind", ["symlink", "garbage", "unknown_stage", "complete_stage", "bad_version"])
+def test_prior_run_journal_rejects_untrusted_records(tmp_path, kind):
+    """A foreign or malformed journal is no record — never a crash or echo.
+    JSON fixtures use the writer's compact separators so the shell reader's
+    fixed-format check actually parses them (default dumps spacing would
+    never match and make every negative vacuous)."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.unlink()
+    if kind == "symlink":
+        journal.symlink_to(home / ".mcs/config.json")
+    elif kind == "garbage":
+        journal.write_text("not json at all\n")
+    elif kind == "complete_stage":
+        # complete pairs only with done; a complete mid-stage record is malformed
+        journal.write_text(json.dumps({
+            "version": 1, "status": "complete", "stage": "services",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    elif kind == "bad_version":
+        journal.write_text(json.dumps({
+            "version": 2, "status": "running", "stage": "services",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    else:
+        journal.write_text(json.dumps({
+            "version": 1, "status": "running", "stage": "bogus_stage",
+            "runtime_mode": "hermes", "invocation": "install",
+            "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "前回の導入記録" not in r.stdout
+    assert "bogus_stage" not in r.stdout + r.stderr
+
+
+def test_prior_run_journal_compact_record_shows_stage_notice(tmp_path):
+    """Positive control: a writer-shaped compact running record is parsed
+    and its stage is named in the rerun notice."""
+    home, hermes_home, _stub, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    journal = home / ".mcs/data/install_progress.json"
+    journal.write_text(json.dumps({
+        "version": 1, "status": "running", "stage": "services",
+        "runtime_mode": "hermes", "invocation": "install",
+        "run_id": "old-run", "updated_at": 1}, separators=(",", ":")))
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "前回の導入記録" in r.stdout
+    assert "常駐サービス" in r.stdout
+    assert "残っています" in r.stdout
+
+
+def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
+    """A fresh install stopped at brew keeps the approval hold message."""
+    home, hermes_home, _stub, env = _world(tmp_path, brew=False)
+    r = _run(env, hermes_home)
+    assert r.returncode != 0
+    assert "導入は保留中です" in r.stderr
+    assert "担当者に確認してください" in r.stderr

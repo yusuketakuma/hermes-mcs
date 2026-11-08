@@ -43,3 +43,25 @@ def test_unreadable_deep_spec_is_not_a_reconcile_crash(world):
     path = world.data / "discord_render" / (did + ".json")
     path.write_bytes(b"[" * 20000 + b"]" * 20000)
     assert notify_reconcile._read_spec(dirs, did) is None
+
+
+def test_duplicate_phase_cannot_hide_a_started_send_after_restore(world):
+    world.seed()
+    world.dispatch()
+    spec = world.spec(world.render()["delivery_id"])
+    dirs = notify_spool.notify_dirs(str(world.data))
+    aid = _journal_claim(dirs["discord_state"], "synthetic", spec)
+    path = world.data / "discord_state" / "journal-synthetic.jsonl"
+    with path.open("ab") as handle:
+        handle.write(b'{"attempt_id":' + json.dumps(aid).encode()
+                     + b',"phase":"started","phase":"begin"}\n')
+    before = path.read_bytes()
+    notify_spool.mark_restored(str(world.data), now=NOW)
+    _, incomplete = notify_journal.scan_journals(dirs)
+    assert incomplete
+    result = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert result["journal_incomplete"]
+    assert result["counts"].get("not_sent", 0) == 0
+    assert world.holds() and world.card()["delivery_state"] == "delivery_unknown"
+    assert notify_spool.restore_pending(str(world.data)) is not None
+    assert path.read_bytes() == before

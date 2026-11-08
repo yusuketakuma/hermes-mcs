@@ -1,5 +1,6 @@
 """Periodic receipt recovery never treats the current sender's grants as orphaned."""
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -138,4 +139,37 @@ def test_receipt_from_current_reconciler_does_not_hide_old_attempt(tmp_path):
             assert not w.client.calls
         finally:
             worker.release_scope_lock()
+    asyncio.run(scenario())
+
+
+def test_duplicate_phase_never_turns_a_started_send_into_not_sent(tmp_path):
+    w = world(tmp_path)
+    worker = _worker(w)
+    spec = overflow_spec()
+    claim = {"attempt_id": "d" * 32, "worker_id": "synthetic-old", "spec": spec,
+             "payload_hash": envelopes.payload_hash(spec), "phase": "started",
+             "spec_path": str(Path(w.dirs["render"], spec["delivery_id"] + ".json"))}
+    w.reg.claim(spec["delivery_id"], claim)
+    row = {"phase": "started", "attempt_id": claim["attempt_id"],
+           "delivery_id": spec["delivery_id"],
+           "receipt_envelope": envelopes.transport_receipt(claim, "unknown")}
+    raw = json.dumps(row)[:-1] + ', "phase": "begin"}\n'
+    path = Path(w.dirs["state"], "journal-synthetic-old.jsonl")
+    path.write_text(raw)
+
+    async def scenario():
+        assert worker.acquire_scope_lock()
+        try:
+            stats = await worker.reconcile(periodic=True)
+            assert stats["not_sent"] == 0 and stats["unknown"] == 1
+            files = list(Path(w.dirs["cmd_int"]).glob("*.json"))
+            assert len(files) == 1
+            receipt = json.loads(files[0].read_bytes())
+            assert receipt["result"] == "unknown"
+            assert receipt["error_code"] == "journal_incomplete"
+            assert path.read_text() == raw
+            assert not w.client.calls
+        finally:
+            worker.release_scope_lock()
+
     asyncio.run(scenario())

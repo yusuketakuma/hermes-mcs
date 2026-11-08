@@ -131,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
                          str(REPO / "mcs/ops/mcs_update.py"), "rollback"])
             cmd = [sys.executable, str(REPO / "scripts/mcs_upgrade.py"),
                    "--repo", str(REPO)]
+            if mcs_runtime.standalone(load_config()):
+                cmd.append("--installed-standalone")
             if opts.phase == "plan" or opts.no_fetch:
                 cmd.append("--no-fetch")
             cmd.append(opts.phase)
