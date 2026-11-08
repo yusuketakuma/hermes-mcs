@@ -46,6 +46,7 @@ def stage(tmp_path, *, broken=False, no_services=False):
     runtime_end = script.index('\n_verify_root_alias ||', runtime_start)
     harness = tmp_path / 'service-stage.sh'
     harness.write_text('set -eu\nsay() { :; }\nskip() { :; }\nsum() { :; }\nok() { :; }\n'
+                       '_install_progress() { :; }\n'
                        'shell_quote() { printf "%s" "$1"; }\n'
                        'die() { printf "%s\\n" "$*" >&2; exit 1; }\n'
                        + script[lock_start:lock_end] + script[guard_start:guard_end]
