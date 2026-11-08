@@ -19,11 +19,6 @@ import os
 
 import pytest
 
-# health_recovery must never reach the real launchctl from a test: tests
-# drive health_watch.main() with synthetic homes, so the default launcher
-# is disabled for the whole pytest process (injected doubles unaffected)
-os.environ.setdefault("MCS_AUTO_RECOVERY", "off")
-
 
 @pytest.fixture
 def snapshot_child_clock():

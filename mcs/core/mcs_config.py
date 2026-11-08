@@ -55,6 +55,8 @@ def _dict(v):
 def _auto_recovery(v):
     if not isinstance(v, dict):
         return "JSONオブジェクト（キーと値の組）を指定してください"
+    if set(v) - {"enabled", "max_attempts", "window_s"}:
+        return "enabled・max_attempts・window_sだけを指定してください"
     enabled = v.get("enabled", True)
     attempts = v.get("max_attempts", 3)
     window = v.get("window_s", 86400)

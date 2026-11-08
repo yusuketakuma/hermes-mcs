@@ -1,337 +1,237 @@
-"""Bounded auto-recovery driven by the health watcher's fresh verdict.
-
-The watcher already knows *why* the system is unhealthy; this module turns
-a small fixed set of those causes into bounded service actions — never
-into data writes, notification sends, or approval decisions. Every action
-is journaled to data/auto_recovery.json and capped per target per window;
-an exhausted target falls back to the ordinary alert path. Anything the
-probes cannot prove stays untouched (fail-closed).
-"""
+"""Journal bounded coordinated restart requests without guessing recovery outcomes."""
 from __future__ import annotations
 
 import json
 import math
 import os
-import sys
+from pathlib import Path
+import re
+import uuid
 
+import mcs_config
+from mcs_util import strict_json
+import notify_spool
 import safe_io
+import service_contract
+import update_journal
+import writer_lock
+from mcs_standalone import service
 
 STATE_REL = os.path.join("data", "auto_recovery.json")
-MANIFEST_REL = os.path.join("data", "service_manifest.json")
-INSTALL_PROGRESS_REL = os.path.join("data", "install_progress.json")
 MAX_STATE_BYTES = 64 * 1024
 HISTORY_MAX = 50
-LAUNCHCTL_TIMEOUT_S = 10
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_WINDOW_S = 24 * 3600
-# a 'running' journal younger than this may be a live install; older than
-# this with a dead recorded pid is treated as an interrupted install
-INTERRUPTED_AFTER_S = 30 * 60
-
-# host reasons that justify a restart request; update_stuck stays with
-# org.mcs.recovery (the update domain owns interrupted-update recovery)
+TARGET = service_contract.STANDALONE_LABEL
+TARGETS = frozenset({TARGET, "ai.hermes.gateway"})
+# A dead/missing host cannot consume a cooperative request. Never bootstrap it.
 HOST_RESTART_REASONS = frozenset({
-    "standalone_host_down", "standalone_check_stalled",
-    "standalone_child_failing", "standalone_connector_down"})
+    "standalone_check_stalled", "standalone_child_failing", "standalone_connector_down"})
+_PENDING_KEYS = {"operation_id", "generation", "reserved_at", "request_id", "result", "reasons"}
+
+
+def _stamp(value) -> bool:
+    return type(value) in (int, float) and 0 <= value < 1e12 and math.isfinite(value)
+
+
+def _identity(value) -> bool:
+    return type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value) is not None
 
 
 def _options(cfg: dict) -> tuple[bool, int, int] | None:
-    """(enabled, max_attempts, window_s); None when the section is unusable."""
-    section = cfg.get("auto_recovery") if isinstance(cfg, dict) else None
-    if section is None:
-        return True, DEFAULT_MAX_ATTEMPTS, DEFAULT_WINDOW_S
-    if not isinstance(section, dict):
+    if type(cfg) is not dict:
         return None
-    enabled = section.get("enabled", True)
-    attempts = section.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
-    window = section.get("window_s", DEFAULT_WINDOW_S)
-    if type(enabled) is not bool \
-            or type(attempts) is not int or not 1 <= attempts <= 10 \
-            or type(window) is not int or not 3600 <= window <= 7 * 86400:
+    section = cfg.get("auto_recovery", {})
+    if mcs_config._auto_recovery(section) is not None:
         return None
-    return enabled, attempts, window
+    return (section.get("enabled", True),
+            section.get("max_attempts", DEFAULT_MAX_ATTEMPTS),
+            section.get("window_s", DEFAULT_WINDOW_S))
+
+
+def _valid_pending(row) -> bool:
+    return (type(row) is dict and set(row) == _PENDING_KEYS
+            and _identity(row["operation_id"]) and _identity(row["generation"])
+            and _stamp(row["reserved_at"])
+            and row["result"] in ("reserved", "requested", "unknown")
+            and (row["request_id"] is None or _identity(row["request_id"]))
+            and (row["result"] != "requested" or row["request_id"] is not None)
+            and (row["result"] != "reserved" or row["request_id"] is None)
+            and type(row["reasons"]) is list and bool(row["reasons"])
+            and all(type(reason) is str and reason in HOST_RESTART_REASONS for reason in row["reasons"])
+            and row["reasons"] == sorted(set(row["reasons"])))
+
+
+def _valid_state(state) -> bool:
+    if (type(state) is not dict or set(state) != {"v", "window_start", "attempts", "targets", "history"}
+            or type(state["v"]) is not int or state["v"] != 1
+            or not _stamp(state["window_start"])
+            or type(state["attempts"]) is not int or not 0 <= state["attempts"] <= 10
+            or type(state["targets"]) is not dict or set(state["targets"]) - TARGETS
+            or type(state["history"]) is not list or len(state["history"]) > HISTORY_MAX):
+        return False
+    for row in state["targets"].values():
+        if (type(row) is not dict or set(row) != {"pending"}
+                or row["pending"] is not None and (
+                    not _valid_pending(row["pending"]) or state["attempts"] < 1
+                    or row["pending"]["reserved_at"] < state["window_start"])):
+            return False
+    for row in state["history"]:
+        if (type(row) is not dict or set(row) != _PENDING_KEYS | {
+                "target", "observation", "observed_at", "observed_generation"}
+                or not _valid_pending({key: row[key] for key in _PENDING_KEYS})
+                or row["target"] not in TARGETS or row["observation"] != "healthy_observed"
+                or not _stamp(row["observed_at"]) or row["observed_at"] < row["reserved_at"]
+                or not _identity(row["observed_generation"])
+                or row["observed_generation"] == row["generation"]):
+            return False
+    return True
+
+
+def _read(path: Path, limit: int):
+    return strict_json(safe_io.read_private_bytes(path, limit))
 
 
 def _load_state(home: str) -> dict:
+    path = Path(home) / STATE_REL
     try:
-        value = safe_io.read_json_nofollow(
-            os.path.join(home, STATE_REL), MAX_STATE_BYTES)
-    except (OSError, ValueError, RecursionError):
-        return {"targets": {}, "history": []}
-    if not isinstance(value, dict) \
-            or not isinstance(value.get("targets"), dict) \
-            or not isinstance(value.get("history"), list):
-        return {"targets": {}, "history": []}
-    return value
+        state = _read(path, MAX_STATE_BYTES)
+    except FileNotFoundError:
+        if os.path.lexists(path):
+            raise ValueError("state_unverified") from None
+        return {"v": 1, "window_start": 0, "attempts": 0, "targets": {}, "history": []}
+    if not _valid_state(state):
+        raise ValueError("state_unverified")
+    return state
 
 
 def _save_state(home: str, state: dict) -> None:
-    safe_io.atomic_publish_text(
-        os.path.join(home, STATE_REL),
-        json.dumps(state, ensure_ascii=False))
+    if not _valid_state(state):
+        raise ValueError("state_unverified")
+    raw = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if len(raw.encode("utf-8")) > MAX_STATE_BYTES:
+        raise ValueError("state_unverified")
+    safe_io.atomic_write(os.path.join(home, STATE_REL), lambda stream: stream.write(raw),
+                         mode=0o600, makedirs=False)
 
 
-def _manifest_loaded(home: str, label: str) -> bool:
-    """True only when the service manifest recorded this agent loaded —
-    evidence it should be running, never proof it may be started now."""
-    try:
-        value = safe_io.read_json_nofollow(
-            os.path.join(home, MANIFEST_REL), MAX_STATE_BYTES)
-    except (OSError, ValueError, RecursionError):
-        return False
-    agents = value.get("agents") if isinstance(value, dict) else None
-    return isinstance(agents, list) and any(
-        isinstance(a, dict) and a.get("label") == label and a.get("loaded") is True
-        for a in agents)
-
-
-def _default_launch(argv: list):
-    # pytest sets MCS_AUTO_RECOVERY=off (conftest): tests drive main() with
-    # synthetic homes and must never reach the real launchctl
-    if os.environ.get("MCS_AUTO_RECOVERY") == "off":
-        raise RuntimeError("auto_recovery_disabled")
-    from lifecycle_io import run_bounded
-    return run_bounded(argv, timeout=LAUNCHCTL_TIMEOUT_S)
-
-
-def _agent_state(label: str, launch) -> str | None:
-    """'loaded' | 'absent' | None (probe failed — never proof of a stop)."""
-    try:
-        result = launch(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
-    except Exception:
-        return None
-    code = getattr(result, "returncode", None)
-    if code == 0:
-        return "loaded"
-    if code == 113:
-        return "absent"
-    return None
-
-
-def _do(label: str, verb: str, plist: str | None, launch) -> str:
-    """One bounded launchctl verb; returns a fixed result word."""
-    if verb == "kickstart":
-        argv = ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"]
-    elif verb == "bootstrap":
-        if not plist:
-            return "skipped"
-        argv = ["launchctl", "bootstrap", f"gui/{os.getuid()}", plist]
-    else:
-        return "skipped"
-    try:
-        result = launch(argv)
-    except Exception:
-        return "failed"
-    return "done" if getattr(result, "returncode", None) == 0 else "failed"
-
-
-def _budget(state: dict, target: str, now: float,
-            max_attempts: int, window_s: int) -> bool:
-    row = state["targets"].get(target)
-    if not isinstance(row, dict):
+def _update_blocked(home: str) -> bool:
+    data = Path(home) / "data"
+    if os.path.lexists(data / writer_lock.UPDATE_MARKER_NAME):
         return True
-    started = row.get("window_start")
-    if type(started) not in (int, float) or now - started > window_s:
-        return True
-    return type(row.get("attempts")) is int and row["attempts"] < max_attempts
-
-
-def _record(state: dict, target: str, action: str, result: str,
-            reasons: list, now: float, window_s: int) -> None:
-    row = state["targets"].get(target)
-    if not isinstance(row, dict) or type(row.get("window_start")) not in (int, float) \
-            or now - row["window_start"] > window_s:
-        row = {"window_start": now, "attempts": 0}
-        state["targets"][target] = row
-    prior = row.get("attempts")
-    row["attempts"] = (prior if type(prior) is int else 0) + 1
-    row["last_at"] = now
-    row["last_action"] = action
-    row["last_result"] = result
-    state["history"] = (state.get("history") or [])[-(HISTORY_MAX - 1):] + [
-        {"at": now, "target": target, "action": action,
-         "result": result, "reasons": list(reasons)}]
-    state["targets"] = dict(list(state["targets"].items())[-64:])
-
-
-def _pid_dead(pid: int) -> bool:
-    """True only when the pid provably does not exist."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except (OverflowError, OSError):
-        return False                   # alive, permission or invalid: unproven
-    return False
+        state = _read(data / "update_state.json", 1024 * 1024)
+    except FileNotFoundError:
+        if os.path.lexists(data / "update_state.json"):
+            return True
+        state = update_journal.default_state()  # The updater also treats first-run absence as idle.
+    return (not update_journal.valid_state(state) or bool(state.get("_corrupt"))
+            or state.get("applying") is not None
+            or bool(state.get("stages")) or "restore_consent" in state
+            or notify_spool.restore_writer_hold(str(data)) is not None)
 
 
-def _interrupted_install(home: str, now: float) -> bool:
-    """True only when the install journal proves an interrupted run:
-    status 'running', stale update, and the recorded pid no longer exists.
-    Anything less certain (fresh journal, live/unparseable pid, unreadable
-    or malformed file) is not proof — bootstrap stays off (fail-closed)."""
-    try:
-        value = safe_io.read_json_nofollow(
-            os.path.join(home, INSTALL_PROGRESS_REL), MAX_STATE_BYTES)
-    except (OSError, ValueError, RecursionError):
-        return False
-    if not isinstance(value, dict) or value.get("status") != "running":
-        return False
-    updated = value.get("updated_at")
-    if isinstance(updated, bool) or not isinstance(updated, (int, float)) \
-            or (isinstance(updated, float) and not math.isfinite(updated)):
-        return False
-    if now - updated <= INTERRUPTED_AFTER_S:
-        return False
-    run_id = value.get("run_id")
-    if not isinstance(run_id, str):
-        return False
-    try:
-        pid = int(run_id.split("-", 1)[0])
-    except (ValueError, IndexError):
-        return False
-    return pid > 0 and _pid_dead(pid)
+def _host_idle(live: dict) -> bool:
+    return (type(live) is dict and _identity(live.get("generation"))
+            and type(live.get("exits")) is dict and type(live.get("connector")) is dict
+            and _stamp(live.get("started_at"))
+            and live.get("restarting") is False and live.get("update_in_progress") is False
+            and "restart_reservation" in live and live["restart_reservation"] is None
+            and "update_marker" in live and live["update_marker"] is None)
 
 
-def _agents_dir() -> str:
-    return os.path.expanduser("~/Library/LaunchAgents")
-
-
-def _agent_pass(cfg: dict, home: str, state: dict, now: float, launch,
-                max_attempts: int, window_s: int,
-                resume_install: bool) -> list[dict]:
-    """Complete an interrupted install's service layer: bootstrap owned
-    agents the manifest proves were running but launchd no longer has.
-    Only runs on proven install interruption — a manually booted-out
-    agent is operator intent, never auto-reversed. Never labels outside
-    desired_agent_labels, never on a failed or timed-out probe."""
-    if not resume_install:
-        return []
-    import service_contract as contract
-    try:
-        labels = contract.desired_agent_labels(cfg)
-    except (ValueError, TypeError):
-        return []
-    actions = []
-    for label in labels:
-        if label == contract.STANDALONE_LABEL:
-            continue                     # the host path owns this label
-        if not _budget(state, label, now, max_attempts, window_s):
-            continue
-        if _agent_state(label, launch) != "absent":
-            continue
-        if not _manifest_loaded(home, label):
-            continue
-        plist = os.path.join(_agents_dir(), label + ".plist")
-        if not os.path.isfile(plist):
-            continue
-        result = _do(label, "bootstrap", plist, launch)
-        _record(state, label, "bootstrap", result, ["agent_absent"],
-                now, window_s)
-        actions.append({"target": label, "action": "bootstrap",
-                        "result": result, "reasons": ["agent_absent"]})
-    return actions
-
-
-def _host_pass(report: dict, home: str, state: dict, now: float,
-               launch, restart, max_attempts: int, window_s: int,
-               resume_install: bool) -> list[dict]:
-    """Restart the standalone host on host-level evidence: a graceful drain
-    request first, one hard kickstart when the graceful attempt did not
-    clear the cause, bootstrap only with manifest+plist proof."""
-    import service_contract as contract
-    reasons = sorted(HOST_RESTART_REASONS & set(report.get("state_reasons") or []))
-    if not reasons:
-        return []
-    label = contract.STANDALONE_LABEL
-    if not _budget(state, label, now, max_attempts, window_s):
-        return []
-    last = state["targets"].get(label) or {}
-    if sys.platform == "darwin":
-        loaded = _agent_state(label, launch)
-        if loaded == "absent":
-            plist = os.path.join(_agents_dir(), label + ".plist")
-            # bootstrap resurrects a service launchd no longer has — only
-            # a proven interrupted install justifies reversing that state
-            if not (resume_install and _manifest_loaded(home, label)
-                    and os.path.isfile(plist)):
-                return []
-            result = _do(label, "bootstrap", plist, launch)
-            _record(state, label, "bootstrap", result, reasons, now,
-                    window_s)
-            return [{"target": label, "action": "bootstrap",
-                     "result": result, "reasons": reasons}]
-        if loaded is None:
-            return []                        # probe unknown: fail closed
-    # loaded (or a non-darwin host where only the file request applies):
-    # a graceful drain request first, one hard kickstart when the graceful
-    # attempt did not clear the cause
-    if last.get("last_action") == "restart_request":
-        if sys.platform != "darwin":
-            return []                    # no hard-restart verb on this platform
-        result = _do(label, "kickstart", None, launch)
-        _record(state, label, "kickstart", result, reasons, now,
-                window_s)
-        return [{"target": label, "action": "kickstart",
-                 "result": result, "reasons": reasons}]
-    try:
-        rid = restart(home)
-    except Exception:
-        rid = None
-    if rid is not None:
-        _record(state, label, "restart_request", "requested", reasons, now,
-                window_s)
-        return [{"target": label, "action": "restart_request",
-                 "result": "requested", "reasons": reasons}]
-    if sys.platform != "darwin":
-        return []                        # graceful request impossible, no verb left
-    result = _do(label, "kickstart", None, launch)
-    _record(state, label, "kickstart", result, reasons, now,
-            window_s)
-    return [{"target": label, "action": "kickstart",
-             "result": result, "reasons": reasons}]
-
-
-def run(report: dict, home: str, cfg: dict, now: float, *,
-        launch=None, restart=None) -> dict:
-    """One bounded recovery pass after a health evaluation.
-
-    Returns a small machine-readable summary for the watch report; every
-    attempted action is journaled. Probes that cannot prove a state never
-    produce an action.
-    """
+def run(report: dict, home: str, cfg: dict, now: float) -> dict:
+    """Reserve before requesting; unresolved attempts never authorize another request."""
+    result = {"enabled": False, "actions": []}
     options = _options(cfg)
     if options is None:
-        return {"enabled": False, "actions": [], "reason": "config_invalid"}
-    enabled, max_attempts, window_s = options
+        return {**result, "reason": "config_invalid"}
+    enabled, maximum, window_s = options
     if not enabled:
-        return {"enabled": False, "actions": []}
-    launch = launch or _default_launch
-    if restart is None:
+        return result
+    if cfg.get("runtime_mode") != "standalone":
+        return {**result, "reason": "runtime_unsupported"}
+    if (type(report) is not dict or report.get("runtime_mode") != "standalone"
+            or not _stamp(now) or not _stamp(report.get("watched_at")) or report["watched_at"] != now
+            or report.get("state_reasons") is not None and (
+                type(report["state_reasons"]) is not list
+                or any(type(reason) is not str for reason in report["state_reasons"]))):
+        return {**result, "reason": "observation_unverified"}
+    result["enabled"] = True
+    try:
+        live = service.status(home, now=now)  # Fresh heartbeat, live PID and generation are required.
+    except (OSError, ValueError, TypeError):
+        return {**result, "reason": "host_unavailable"}
+    if not _host_idle(live):
+        return {**result, "reason": "host_busy"}
+    from health_watch import standalone_host_reasons
+    host_severity, host_reasons, _ = standalone_host_reasons(home, now, cfg, status=live)
+    try:
+        fd = writer_lock.acquire_run_lock(os.path.join(home, "data", "update.lock"))
+    except OSError:
+        return {**result, "reason": "update_lock_unavailable"}
+    if fd is None:
+        return {**result, "reason": "update_busy"}
+    try:
         try:
-            from mcs_standalone.service import request_restart
-            restart = request_restart
+            if _update_blocked(home):
+                return {**result, "reason": "update_or_restore_held"}
+            state = _load_state(home)
+        except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
+            return {**result, "reason": "state_unverified"}
+        row = state["targets"].get(TARGET)
+        pending = row["pending"] if row else None
+        if now < state["window_start"] or any(
+                item["pending"] and now < item["pending"]["reserved_at"]
+                for item in state["targets"].values()):
+            return {**result, "reason": "clock_unverified"}
+        if pending is not None:
+            if (live["generation"] != pending["generation"] and host_severity == "ok"
+                    and not host_reasons):
+                # This proves healthy observation, not that our request caused the restart.
+                state["history"] = (state["history"] + [{**pending, "target": TARGET,
+                    "observation": "healthy_observed", "observed_generation": live["generation"],
+                    "observed_at": now}])[-HISTORY_MAX:]
+                row["pending"] = None
+                try:
+                    _save_state(home, state)
+                except (OSError, ValueError):
+                    return {**result, "reason": "state_persist_failed"}
+                return {**result, "reason": "healthy_observed"}
+            return {**result, "reason": "outcome_unresolved"}
+        if any(item["pending"] is not None for item in state["targets"].values()):
+            return {**result, "reason": "outcome_unresolved"}
+        reasons = sorted(HOST_RESTART_REASONS & set(host_reasons) & set(report.get("state_reasons") or []))
+        if not reasons or report.get("status") not in ("degraded", "failed", "stale", "missing", "corrupt"):
+            return {**result, "reason": "no_restart_cause"}
+        if os.path.lexists(Path(home) / "data" / service.RESTART_FILE):
+            return {**result, "reason": "restart_request_present"}
+        if not state["targets"] or now - state["window_start"] >= window_s:
+            state.update(window_start=now, attempts=0)
+        if state["attempts"] >= maximum:
+            return {**result, "reason": "budget_exhausted", "exhausted": [TARGET]}
+        pending = {"operation_id": uuid.uuid4().hex, "generation": live["generation"],
+                   "reserved_at": now, "request_id": None, "result": "reserved", "reasons": reasons}
+        state["targets"][TARGET] = {"pending": pending}
+        state["attempts"] += 1
+        try:
+            _save_state(home, state)
+        except (OSError, ValueError):
+            return {**result, "reason": "state_persist_failed"}
+        try:
+            request_id = service.request_restart(home, expected_generation=live["generation"])
+            if not _identity(request_id):
+                raise ValueError("restart_request_unverified")
         except Exception:
-            def restart(_root):
-                return None
-    state = _load_state(home)
-    resume_install = _interrupted_install(home, now)
-    actions = []
-    if report.get("runtime_mode") == "standalone":
-        actions += _host_pass(report, home, state, now, launch, restart,
-                              max_attempts, window_s, resume_install)
-    if sys.platform == "darwin":
-        actions += _agent_pass(cfg, home, state, now, launch,
-                               max_attempts, window_s, resume_install)
-    if actions:
+            # No replay: publication may have succeeded before its response was lost.
+            pending["result"] = "unknown"
+        else:
+            pending.update(result="requested", request_id=request_id)
+        result["actions"] = [{"target": TARGET, "action": "restart_request", **pending}]
         try:
-            _save_state(home, state)      # journal only real attempts
-        except OSError:
-            pass                        # journal loss never blocks the watch
-    exhausted = sorted(t for t, row in state["targets"].items()
-                       if isinstance(row, dict)
-                       and type(row.get("attempts")) is int
-                       and row["attempts"] >= max_attempts
-                       and type(row.get("window_start")) in (int, float)
-                       and now - row["window_start"] <= window_s)
-    return {"enabled": True, "actions": actions, "exhausted": exhausted}
+            _save_state(home, state)
+        except (OSError, ValueError):
+            result["reason"] = "state_persist_failed"  # The durable reservation still blocks retries.
+        return result
+    finally:
+        os.close(fd)

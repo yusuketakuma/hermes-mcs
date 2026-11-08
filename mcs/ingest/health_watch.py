@@ -293,13 +293,13 @@ def _read_standalone_status(home: str):
     return value if isinstance(value, dict) else None
 
 
-def standalone_host_reasons(home: str, now: float, cfg: dict):
+def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     """runtime_mode=standalone: (severity, reason codes, details) from the
     host's own standalone-status.json. The host runs every job — this
     watcher included when it is not installed separately — so its death,
     crash loops, a lost connection or a wedged update are checked here,
     from outside it. Details are job codes and numbers only."""
-    status = _read_standalone_status(home)
+    status = _read_standalone_status(home) if status is None else status
     stamp = status.get("updated_at") if status else None
     if status is None or not finite_number(stamp) or not _pid_alive(status.get("pid")) \
             or now - stamp > STANDALONE_HOST_STALE_S:
@@ -1180,15 +1180,14 @@ def _alert_lines(report: dict) -> list[str]:
 
 def _watch(args, cfg) -> int:
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
-    try:
-        # bounded self-healing on the fresh verdict; a recovery failure
-        # must never break the watch itself
-        from health_recovery import run as auto_recovery
-        report["auto_recovery"] = auto_recovery(
-            report, args.home, cfg, report["watched_at"])
-    except Exception:
-        report["auto_recovery"] = {"enabled": False, "actions": [],
-                                   "reason": "recovery_error"}
+    if getattr(args, "send", False) and args.now is None:
+        try:
+            from health_recovery import run as auto_recovery
+            report["auto_recovery"] = auto_recovery(
+                report, args.home, cfg, report["watched_at"])
+        except Exception:
+            report["auto_recovery"] = {"enabled": False, "actions": [],
+                                       "reason": "recovery_error"}
     for line in _alert_lines(report):
         print(line)
     if report.get("delivery_error"):
@@ -1247,6 +1246,8 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--home", default=HOME)
     ap.add_argument("--now", type=float, default=None,
                     help="inject clock for tests/dry-run")
+    ap.add_argument("--send", action="store_true",
+                    help="allow automatic coordinated restart requests during live monitoring")
     ap.add_argument("--config", default=None,
                     help="config.json path (default ~/.mcs/config.json)")
     args = ap.parse_args(argv)
