@@ -1069,6 +1069,17 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         elif base == "disk_low":
             free = report.get("disk_free_mb")
             extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"
+        elif base == "attachment_ocr_processing_failed":
+            ocr = report.get("attachment_ocr")
+            if (isinstance(ocr, dict)
+                    and isinstance(ocr.get("failure_reason_counts"), dict)
+                    and type(ocr.get("exhausted_failed")) is int):
+                failed_counts = ocr["failure_reason_counts"]
+                if type(failed_counts.get("output_schema_table_overlap")) is int \
+                        and failed_counts["output_schema_table_overlap"] > 0:
+                    action += "表の行列対応を確定できず未採用の記録があります。"
+                if ocr["exhausted_failed"] > 0:
+                    action += "自動再試行が上限に到達。元の添付を確認してください。"
         guide = None
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')

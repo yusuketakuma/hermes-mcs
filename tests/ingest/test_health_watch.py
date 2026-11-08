@@ -1134,3 +1134,31 @@ def test_lineworks_restart_guidance_follows_the_host_os(monkeypatch, platform, p
         assert present in text and absent not in text
     else:
         assert "ai.mcs.lineworks" in text and "hermes-mcs-lineworks.service" in text
+
+
+def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
+    base = {"status": "degraded", "alert": True, "disk_alert": False, "disk_low": False,
+            "state_reasons": ["attachment_ocr_processing_failed"],
+            "last_ok_at": 0, "health_at": 3600}
+    legacy = "\n".join(health_watch._reason_rows(base, ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応" not in legacy and "自動再試行" not in legacy
+    report = {**base, "attachment_ocr": {
+        "state": "failed", "reason": "attachment_ocr_processing_failed", "pending_failed": 3,
+        "failure_reason_counts": {"output_schema_table_overlap": 2}, "exhausted_failed": 1}}
+    text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応を確定できず未採用" in text
+    assert "自動再試行が上限に到達" in text and "元の添付を確認" in text
+    assert "再起動" not in text and "復元" not in text
+    for bad in ({"failure_reason_counts": {"output_schema_table_overlap": 1}},
+                {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": True},
+                {"failure_reason_counts": "x", "exhausted_failed": 1}):
+        bad_text = "\n".join(health_watch._reason_rows(
+            {**base, "attachment_ocr": bad}, ["attachment_ocr_processing_failed"]))
+        assert "表の行列対応" not in bad_text and "自動再試行" not in bad_text
+    quiet = "\n".join(health_watch._reason_rows(
+        {**base, "attachment_ocr": {"failure_reason_counts": {"other_reason": 2},
+                                    "exhausted_failed": 0}},
+        ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応" not in quiet and "自動再試行" not in quiet
+    alert = "\n".join(health_watch._alert_lines(report))
+    assert "照会コード: MCS-HLT-ATTACHMENT-OCR-PROCESSING-FAILED" in alert
