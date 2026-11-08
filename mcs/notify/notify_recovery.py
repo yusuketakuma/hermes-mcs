@@ -7,6 +7,7 @@ holds and journals constrain operator evidence before any card or part is reboun
 from __future__ import annotations
 
 import json
+import math
 import time
 
 from mcs_requests import canonical, payload_hash, positive, replay_receipt, valid_uuid
@@ -15,7 +16,8 @@ import notify_spool
 import notify_journal
 import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
-                          scope_fields, scope_matches, TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
+                          scope_fields, scope_matches, retired_transports,
+                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
@@ -427,17 +429,28 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
     return plan
 
 
-# reasons the planner/worker stores on a held or unknown part; others count as 'unknown'
+# every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
-                     *_PREFLIGHT_ERRORS)
+                     *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,
+                     "timeouterror", "connectionerror", "worker_crash", "journal_incomplete",
+                     "edit_reference_missing", "edit_file_size_mismatch", "edit_file_unverified",
+                     "file_target_unverified", "part_owner_ambiguous", "msg_too_long",
+                     "body_part_wire_too_long", "attachment_unavailable", "attachment_mismatch",
+                     "file_group_unverified", "file_group_missing", "file_group_duplicate",
+                     "message_mismatch", "missing_remote_id",
+                     "edit_response_unverified", "edit_result_unknown", "edit_thread_unverified",
+                     "card_target_missing", "body_part_missing",
+                     "thread_root_missing", "thread_scope_mismatch", "thread_capability_blocked",
+                     "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
+                     "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
+                     "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
+                     "operator_part_resolve")
 
 
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
-    known = (*PART_HOLD_REASONS, _DEPENDENCY_ERROR, "timeouterror", "connectionerror", "worker_crash",
-             "journal_incomplete", "edit_reference_missing", "edit_file_size_mismatch",
-             "edit_file_unverified", "file_target_unverified", "part_owner_ambiguous", "msg_too_long")
+    known = PART_HOLD_REASONS
     code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
     card = kind == "card"
     available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
@@ -474,7 +487,11 @@ def part_hold_report(ledger) -> dict:
 
     Every fixed reason is present (0 is observed, not missing); a NULL code
     is 'not_recorded' and any other code 'unknown'. ``resolvable`` counts
-    the parts card_part_resolve_plan would plan. The caller bounds time."""
+    unknown parts carrying an attempt id — a planning hint, not a
+    guarantee: card_part_resolve_plan stays authoritative (it can still
+    reject, e.g. an unverified Discord group identity), and the
+    dependency-rejected ``not_sent`` file_groups it also plans are not
+    counted here. The caller bounds time."""
     db = cards.connection(ledger)
     marks = ",".join("?" * len(PART_HOLD_REASONS))
     by_state = {state: dict.fromkeys((*PART_HOLD_REASONS, "not_recorded", "unknown"), 0)
@@ -497,6 +514,69 @@ def part_hold_report(ledger) -> dict:
     return {"parts": by_state, "resolvable": resolvable,
             "specs": {"stored_json": spec[0], "published_files": spec[1],
                       "kept_for_edit_check": spec[2]}}
+
+
+def recovery_worklist(db, cfg=None, *, limit=20) -> dict:
+    """Bounded operator worklist of parts awaiting human-reviewed recovery.
+
+    Read-only on the caller's connection. Candidates are non-card parts
+    that are ``unknown``, held awaiting attachment-identity confirmation,
+    or dependency-rejected ``file_groups``; each is then verified through
+    the same plan the approval command uses, so ``status``/``blocker``
+    report real plan eligibility rather than a guess. Cancelled renders
+    and retired transports are excluded. ``total`` counts every candidate
+    before ``limit``; ``truncated`` marks a cut list. A Discord member
+    redirected to its shared ``file_group`` anchor names the anchor in
+    ``approval_part_id`` with ``group_approval`` — approval covers the
+    whole sealed group, never the member alone."""
+    now = time.time()
+    retired = retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    live = f" AND r.transport NOT IN ({marks})" if retired else ""
+    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
+             " AND (p.state='unknown' "
+             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
+    params = (*retired, _DEPENDENCY_ERROR)
+    total = db.execute(
+        "SELECT COUNT(*) FROM notification_render_parts p "
+        "JOIN notification_renders r USING(delivery_id) WHERE " + where,
+        params).fetchone()[0]
+    items = []
+    for row in db.execute(
+            "SELECT p.delivery_id,p.part_id,p.kind,p.state,p.error_code,p.attempt_id,"
+            "r.transport,COALESCE(p.updated_at,r.updated_at) observed_at "
+            "FROM notification_render_parts p JOIN notification_renders r USING(delivery_id) "
+            "WHERE " + where + " ORDER BY p.updated_at LIMIT ?",
+            (*params, limit)):
+        delivery_id, part_id = row["delivery_id"], row["part_id"]
+        if row["state"] == "held":
+            flow = "attachment_identity_confirm"
+            plan = attachment_identity_confirm_plan(db, delivery_id, part_id)
+        else:
+            flow = "card_part_resolve"
+            plan = card_part_resolve_plan(db, delivery_id, part_id)
+        at = row["observed_at"]
+        item = {"delivery_id": delivery_id, "part_id": part_id,
+                "kind": row["kind"], "state": row["state"],
+                "transport": row["transport"],
+                "error_code": recovery_guidance(row["kind"], row["transport"],
+                                                row["error_code"], row["attempt_id"])["error_code"],
+                "attempt_id": row["attempt_id"],
+                "age_s": (round(max(0, now - at), 1)
+                          if type(at) in (int, float) and math.isfinite(at)
+                          and 0 <= at <= now else None),
+                "flow": flow}
+        if "error" in plan:
+            item["status"] = "blocked"
+            item["blocker"] = plan["error"]
+        else:
+            item["status"] = "plannable"
+            if plan["part_id"] != part_id:
+                item["approval_part_id"] = plan["part_id"]
+                item["group_approval"] = True
+        items.append(item)
+    return {"total": total, "truncated": total > len(items), "items": items}
 
 
 def validate_card_part_resolve(req) -> str | None:
