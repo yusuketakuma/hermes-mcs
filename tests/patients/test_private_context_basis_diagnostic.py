@@ -39,25 +39,33 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
             coverage = readiness._inference_coverage(db, 1, cfg, snap, read_proof=proof)
             view = readiness.context_view_input(db, 1, cfg=cfg)
             qa = {}
-            _, _, _, active_facts, active_state = sources._all_facts(
-                db, 1, snap, meta.get('night_id'), include_all=True, cfg=cfg, read_proof=proof)
+            scope_keys = meta.get('source_scope')
+            scoped_snap = sources._snapshot(db, 1, cfg, hydrate=True, contract=contract,
+                                            source_keys=scope_keys)
+            scoped_proof = proof_for(scoped_snap, cfg)
+            _, _, _, scoped_facts, scoped_state = sources._all_facts(
+                db, 1, scoped_snap, meta.get('night_id'), include_all=True, cfg=cfg,
+                read_proof=scoped_proof)
             if doc:
                 policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
                 assert not errors
                 try:
                     captured = sources._quality_capture(db, 1, cfg, meta.get('night_id'),
                         doc.get('summary'), state._quality_assessment(policy),
-                        doc.get('temporal_view'), contract=contract, read_proof=proof)
+                        doc.get('temporal_view'), contract=contract, read_proof=scoped_proof,
+                        source_keys=scope_keys)
                     qa['identity'] = captured['identity']
                     qa['facts_hash'] = digest(captured['facts'])
                     qa['state'] = captured['state']
                     if view and not posts:
+                        assert captured['identity']['audit_key'] == meta.get('quality_audit_key')
+                        assert quality._quality_passed(db, 1, captured['identity'])
                         baseline_identity = captured['identity']
                 except (ValueError, TypeError, KeyError, RuntimeError) as exc:
                     qa['error'] = str(exc)
                 try:
-                    qa['active_basis_identity'] = sources._quality_input(db, 1, snap,
-                        active_facts, active_state, doc.get('summary'),
+                    qa['active_basis_identity'] = sources._quality_input(db, 1, scoped_snap,
+                        scoped_facts, scoped_state, doc.get('summary'),
                         state._quality_assessment(policy), doc.get('temporal_view'))
                 except (ValueError, TypeError, KeyError, RuntimeError) as exc:
                     qa['active_basis_error'] = str(exc)
@@ -74,9 +82,10 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
                          'body_hash': digest(s.get('body_text')),
                          'derived_hash': digest(s.get('derived_summaries'))} for s in snap['sources']],
                 'publication_hash': digest((doc, meta)), 'publication_meta': meta,
+                'source_scope': scope_keys,
                 'current_scan_sig': state._scan_sig(db, 1),
                 'selected_scans': scans, 'coverage': coverage, 'qa': qa,
-                'active_facts_sig': state._facts_sig(active_facts), 'active_state': active_state,
+                'active_facts_sig': state._facts_sig(scoped_facts), 'active_state': scoped_state,
                 'artifacts': [{'id': r['artifact_id'], 'kind': r['kind'],
                                'content_hash': digest(r['content']), 'meta_hash': digest(r['meta']),
                                'meta': json.loads(r['meta'] or '{}')} for r in rows
@@ -95,6 +104,8 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
     partial = next(o for o in observations if o['posts'] and not o['visible']
                    and o['current_scan_sig'] != baseline['current_scan_sig'])
     final = observations[-1]
+    assert baseline['source_scope'] == [1]
+    assert final['source_scope'] == [1]
     assert baseline['raw'] == partial['raw'] == final['raw']
     assert baseline['source_sig'] == partial['source_sig'] == final['source_sig']
     assert baseline['contract'] == partial['contract'] == final['contract']
