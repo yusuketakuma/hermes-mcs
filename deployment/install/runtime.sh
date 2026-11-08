@@ -18,7 +18,11 @@ _install_progress() {  # <stage-id> <running|complete>
     _ip_inv=install
     [ -z "${MCS_UPDATE_REINSTALL:-}" ] || _ip_inv=update
     [ -z "$_install_progress_hold" ] || return 0
-    [ -d "$MCS_DATA/install_progress.json" ] && return 0
+    # mv would move the tmp *into* a directory or replace a symlink; the
+    # optional journal only ever replaces a regular file it wrote before.
+    if [ -e "$MCS_DATA/install_progress.json" ] || [ -L "$MCS_DATA/install_progress.json" ]; then
+        [ -f "$MCS_DATA/install_progress.json" ] && [ ! -L "$MCS_DATA/install_progress.json" ] || return 0
+    fi
     mkdir -p "$MCS_DATA" 2>/dev/null || return 0
     _ip_tmp="$(mktemp "$MCS_DATA/.install-progress.XXXXXXXX" 2>/dev/null)" || return 0
     if printf '{"version":1,"status":"%s","stage":"%s","runtime_mode":"%s","invocation":"%s","run_id":"%s","updated_at":%s}\n' \

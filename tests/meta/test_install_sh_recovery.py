@@ -258,18 +258,34 @@ def test_updater_reinstall_journal_marks_update_invocation(tmp_path):
     assert progress["status"] == "complete" and progress["invocation"] == "update"
 
 
-def test_unwritable_journal_never_stops_install(tmp_path):
-    """A journal path that cannot be replaced is skipped, not fatal."""
+@pytest.mark.parametrize("kind", ["dir", "link_dir", "link_file"])
+def test_unwritable_journal_never_stops_install(tmp_path, kind):
+    """A journal path that cannot be safely replaced is skipped, not fatal:
+    mv must never move the tmp into a directory or through a symlink."""
     home, hermes_home, _stub, env = _world(tmp_path)
     assert _run(env, hermes_home).returncode == 0
     data = home / ".mcs/data"
     journal = data / "install_progress.json"
     journal.unlink()
-    journal.mkdir()          # a directory: mv lands inside it, readers see absent
-    r = _run(env, hermes_home)
-    assert r.returncode == 0, r.stderr
-    assert journal.is_dir()
-    assert not list(journal.iterdir())   # the writer skips a directory dest
+    if kind == "dir":
+        journal.mkdir()
+        r = _run(env, hermes_home)
+        assert r.returncode == 0, r.stderr
+        assert journal.is_dir() and not list(journal.iterdir())
+    else:
+        target = data / ("linked-dir" if kind == "link_dir" else "linked-file")
+        if kind == "link_dir":
+            target.mkdir()
+        else:
+            target.write_bytes(b"sentinel journal target")
+        journal.symlink_to(target)
+        r = _run(env, hermes_home)
+        assert r.returncode == 0, r.stderr
+        assert journal.is_symlink()          # the link itself is preserved
+        if kind == "link_dir":
+            assert target.is_dir() and not list(target.iterdir())
+        else:
+            assert target.read_bytes() == b"sentinel journal target"
 
 
 def test_exit_names_stage_from_memory_when_journal_unwritable(tmp_path):
