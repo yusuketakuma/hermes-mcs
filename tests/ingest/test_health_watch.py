@@ -1146,9 +1146,29 @@ def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
         "state": "failed", "reason": "attachment_ocr_processing_failed", "pending_failed": 3,
         "failure_reason_counts": {"output_schema_table_overlap": 2}, "exhausted_failed": 1}}
     text = "\n".join(health_watch._reason_rows(report, ["attachment_ocr_processing_failed"]))
-    assert "表の行列対応を確定できず未採用" in text
-    assert "自動再試行が上限に到達" in text and "元の添付を確認" in text
-    assert "再起動" not in text and "復元" not in text
+    assert "観測範囲の記録のうち2件は表の行列対応を確定できず未採用です" in text
+    assert "元の添付を確認してください" in text
+    assert "照会コード" in text and "doctor --share" in text
+    # the overlap classification replaces the general settings guidance
+    assert "OCRの設定・実行環境" not in text
+    # exhausted_failed is a cross-reason count: a separate observed-range note
+    assert "観測範囲で自動再試行が上限に到達した記録が1件あります" in text
+    assert "再起動" not in text and "復元" not in text and "全件" not in text
+    # other failure reasons keep the general guidance alongside the overlap note
+    mixed = {**base, "attachment_ocr": {
+        "failure_reason_counts": {"output_schema_table_overlap": 1, "engine_inference_failed": 2},
+        "exhausted_failed": 0}}
+    mixed_text = "\n".join(health_watch._reason_rows(mixed, ["attachment_ocr_processing_failed"]))
+    assert "表の行列対応を確定できず未採用" in mixed_text
+    assert "あわせてOCRの設定・実行環境と直近の実行結果を確認してください" in mixed_text
+    # exhausted alone keeps the general guidance and stays unjoined to overlap
+    exhausted_only = {**base, "attachment_ocr": {
+        "failure_reason_counts": {"timeout": 2}, "exhausted_failed": 2}}
+    exhausted_text = "\n".join(health_watch._reason_rows(
+        exhausted_only, ["attachment_ocr_processing_failed"]))
+    assert "OCRの設定・実行環境と直近の実行結果を確認してください" in exhausted_text
+    assert "観測範囲で自動再試行が上限に到達した記録が2件あります" in exhausted_text
+    assert "表の行列対応" not in exhausted_text
     for bad in ({"failure_reason_counts": {"output_schema_table_overlap": 1}},
                 {"failure_reason_counts": {"output_schema_table_overlap": 1}, "exhausted_failed": True},
                 {"failure_reason_counts": "x", "exhausted_failed": 1}):

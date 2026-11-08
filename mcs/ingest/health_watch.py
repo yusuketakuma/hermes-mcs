@@ -1075,11 +1075,20 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                     and isinstance(ocr.get("failure_reason_counts"), dict)
                     and type(ocr.get("exhausted_failed")) is int):
                 failed_counts = ocr["failure_reason_counts"]
-                if type(failed_counts.get("output_schema_table_overlap")) is int \
-                        and failed_counts["output_schema_table_overlap"] > 0:
-                    action += "表の行列対応を確定できず未採用の記録があります。"
+                overlap = failed_counts.get("output_schema_table_overlap")
+                if type(overlap) is int and overlap > 0:
+                    action = (f"観測範囲の記録のうち{overlap}件は表の行列対応を確定できず未採用です。"
+                              "元の添付を確認してください。解消しない場合は開発元へ連絡"
+                              f"（照会コードと {_DOCTOR} --share の結果を添える）。")
+                    if any(type(n) is int and n > 0 for key, n in failed_counts.items()
+                           if key != "output_schema_table_overlap"):
+                        action += "あわせてOCRの設定・実行環境と直近の実行結果を確認してください。"
                 if ocr["exhausted_failed"] > 0:
-                    action += "自動再試行が上限に到達。元の添付を確認してください。"
+                    note = (f"観測範囲で自動再試行が上限に到達した記録が{ocr['exhausted_failed']}件あります。"
+                            "元の添付を確認してください。")
+                    if not action.endswith("。"):
+                        action += "。"
+                    action += note
         guide = None
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')
