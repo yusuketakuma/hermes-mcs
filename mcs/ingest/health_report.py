@@ -998,7 +998,7 @@ def build_health(db, result: dict, status: str,
     # health or fire a monitoring alert by itself.
     from collection_diagnostics import classify
     recorded_errors = [e for e in errors if e != "code_changed"]
-    real_errors = [e for e in recorded_errors if classify(e) != "deferred"]
+    real_errors = [e for e in recorded_errors if classify(e) not in ("deferred", "reevaluate")]
     overall = ("failed" if status in ("failed", "session_expired")
                else "degraded"
                if (real_errors or coll["collection"] != "ok"

@@ -371,3 +371,46 @@ def test_claim_renewal_does_not_invalidate_unchanged_rollup_inputs(tmp_path, mon
                 rollup.rebuild(ledger, 1)
         assert rollup.build_rollup(ledger.db, 1) == clinical
         assert not ledger.db.in_transaction
+
+
+def test_clock_rollback_is_unverified_not_a_source_change(tmp_path, monkeypatch):
+    """A clock moving backwards after the build is a read-integrity
+    failure, not a legitimate source change: the previous rollup stays."""
+    now = [datetime(2026, 11, 1, 12, tzinfo=rollup.JST).timestamp()]
+    monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
+    with closing(_seed(tmp_path)) as ledger:
+        rollup.rebuild(ledger, 1)
+        before = _cached(ledger.db)
+        real = rollup._completion_valid_until
+
+        def rewind(*args):
+            out = real(*args)
+            now[0] -= 120
+            return out
+
+        monkeypatch.setattr(rollup, '_completion_valid_until', rewind)
+        with pytest.raises(rollup.RollupSourceUnverified, match='rollup_clock_unverified'):
+            rollup.rebuild(ledger, 1)
+        assert _cached(ledger.db) == before and not ledger.db.in_transaction
+
+
+@pytest.mark.parametrize('jump', [float('nan'), float('inf'), -float('inf')])
+def test_non_finite_observation_time_is_unverified(tmp_path, monkeypatch, jump):
+    """NaN and ±inf can never read as 'expired': only a real expiry is a
+    source change. Infinite/NaN observation time is unverified."""
+    now = [datetime(2026, 11, 1, 12, tzinfo=rollup.JST).timestamp()]
+    monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
+    with closing(_seed(tmp_path)) as ledger:
+        rollup.rebuild(ledger, 1)
+        before = _cached(ledger.db)
+        real = rollup._completion_valid_until
+
+        def corrupt(*args):
+            out = real(*args)
+            now[0] = jump
+            return out
+
+        monkeypatch.setattr(rollup, '_completion_valid_until', corrupt)
+        with pytest.raises(rollup.RollupSourceUnverified, match='rollup_clock_unverified'):
+            rollup.rebuild(ledger, 1)
+        assert _cached(ledger.db) == before and not ledger.db.in_transaction

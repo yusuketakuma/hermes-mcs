@@ -659,7 +659,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
         resources.callback(_close_rollup_cursor, cursor)
         first_page = cursor.fetchmany(64)
         if not first_page:
-            raise RollupSourceChanged('rollup_source_page_unavailable')
+            raise RollupSourceUnverified('rollup_source_page_unavailable')
     else:
         first_page = []
     # 連携サマリー (#21): the newest karte_summary artifact, or None when

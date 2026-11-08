@@ -299,3 +299,33 @@ def test_paged_rollup_checks_real_source_binding_and_progress_on_both_pages(tmp_
         assert all(states[mid] is False for mid in range(2, 67))
         assert result['measurement_coverage']['unbound_sources'] >= 65
         assert result['measurement_coverage']['complete'] is False
+
+
+def test_unavailable_second_pass_page_is_unverified_not_a_change(tmp_path):
+    """An empty second-pass page after a non-empty first pass is a read
+    we cannot verify — RollupSourceUnverified, not a source change."""
+    with closing(_seed(tmp_path)) as ledger:
+        calls = [0]
+        inner = ledger.db
+
+        class EmptyPage:
+            def fetchmany(self, _n):
+                return []
+
+            def close(self):
+                pass
+
+        class SecondPassEmpty:
+            def __getattr__(self, name):
+                return getattr(inner, name)
+
+            def execute(self, sql, parameters=()):
+                if isinstance(sql, str) and "ORDER BY posted_at_ts DESC" in sql:
+                    calls[0] += 1
+                    if calls[0] > 1:
+                        return EmptyPage()
+                return inner.execute(sql, parameters)
+
+        with pytest.raises(rollup_builder.RollupSourceUnverified,
+                           match='rollup_source_page_unavailable'):
+            rollup_builder.build_rollup(SecondPassEmpty(), 1)

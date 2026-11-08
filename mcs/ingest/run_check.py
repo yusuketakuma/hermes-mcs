@@ -328,7 +328,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
             source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons, cfg=cfg)
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
-            result["errors"].append("rollup: source_changed")
+            result["errors"].append("rollup_source_changed")
         if source_unknown:
             result["rollup_source_unknown"] = len(source_unknown)
             if (not set(source_unknown_reasons) <= {"deadline", "source_unverified"}
