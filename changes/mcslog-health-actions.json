@@ -9,7 +9,8 @@
     "開発元への診断共有は doctor --share、通知待ちの確認は doctor の完全なコマンドを表示",
     "cloud-llm resume は python3 mcs/ops/mcs_setup.py を含む完全な形で表示",
     "LINE WORKS アダプター再起動は macOS は launchctl、Linux は systemctl --user のサービス名で表示",
-    "分類不能な理由の生コードは照会コードに出さず UNKNOWN に丸める（従来どおり本文にも出さない）"
+    "分類不能な理由の生コードは照会コードに出さず UNKNOWN に丸める（従来どおり本文にも出さない）",
+    "Jev 支払い未了（402）の案内から「収集・通知に影響しない」という断定を外し、要約通知が遅れ得ることを明示"
   ],
   "refs": ["mcs/ingest/health_watch.py", "mcs/ingest/collection_diagnostics.py"]
 }

@@ -1024,6 +1024,9 @@ def test_alert_counts_pending_notifications_and_names_a_jev_block():
     assert lines[1] == "影響: 通知・意味チェック（任意機能）に遅れや不具合があります。収集は動いています。"
     assert "・送信待ちの通知があります 2件（最古 17.6時間）" in lines
     assert "・TypeSafe Jev が支払い未了（HTTP 402）を返しています" in lines
+    text = "\n".join(lines)
+    assert "要約通知は遅れる場合があります" in text
+    assert "収集・通知には影響しません" not in text
     assert all("AI" not in ln for ln in lines)
 
 

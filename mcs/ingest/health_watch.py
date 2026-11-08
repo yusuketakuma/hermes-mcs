@@ -796,7 +796,7 @@ _REASON_JA = {
     "stall_check_failed": ("停滞の判定処理が失敗しました",
                            f"{_COLLECTION_LOG} の stall_check_failed を確認。続く場合は {_CHECK}"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
-                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機し、収集・通知には影響しません"),
+                                      "TypeSafe の契約・残高を確認。解消まで意味チェックは待機します。要約通知は遅れる場合があります"),
     "semantic_jev_no_api_key": ("TypeSafe Jev のAPIキーが設定されていません",
                                 "TYPESAFE_API_KEY を .env に設定"),
     "semantic_jev_budget_exceeded": ("TypeSafe Jev の1日の利用上限に達しました",
