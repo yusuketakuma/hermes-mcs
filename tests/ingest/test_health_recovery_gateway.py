@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import subprocess
 
 import pytest
 
@@ -11,6 +12,7 @@ import card_worker_status
 import environment_diagnostics
 import health_recovery as recovery
 import health_watch
+import run_log
 import writer_lock
 from mcs_util import payload_hash
 
@@ -32,7 +34,7 @@ def _report(now=NOW):
 
 @pytest.fixture
 def gateway(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+    home = (tmp_path / "home").resolve()
     (home / "data").mkdir(parents=True, mode=0o700)
     cfg = {"notify": {"interactive": "slack", "slack": {
         "profile": "synthetic", "application_id": "A_SYNTHETIC",
@@ -228,6 +230,120 @@ def test_verified_terminal_native_receipt_allows_a_new_reservation(gateway, stat
         "previous_pid": PID - 2, "pid": PID - 1, "service": f"gui/{os.getuid()}/{recovery.GATEWAY}"})
     _private(gateway["home"] / "data/gateway_restart.json", receipt)
     assert _run(gateway)["actions"] and len(gateway["calls"]) == 1
+
+
+def _old_unknown_receipt():
+    return {"status": "unknown", "at": BIRTH - 1, "error": "gateway_restart_busy_timeout",
+            "previous_pid": PID - 1, "service": f"gui/{os.getuid()}/{recovery.GATEWAY}"}
+
+
+@pytest.mark.parametrize("error", ["gateway_restart_nonzero", "gateway_restart_busy_timeout",
+                                  "gateway_pid_not_replaced"])
+def test_only_proved_old_target_unknown_allows_admission_without_rewriting_it(gateway, error):
+    path = gateway["home"] / "data/gateway_restart.json"
+    _private(path, {**_old_unknown_receipt(), "error": error})
+    before = path.read_bytes()
+    live = recovery._gateway_observation(str(gateway["home"]), gateway["cfg"], NOW)
+    assert recovery._gateway_previous_clear(str(gateway["home"]), NOW, live) == (True, before)
+    # This is the read-only admission decision; the native helper is deliberately not called.
+    assert path.read_bytes() == before and gateway["calls"] == []
+    assert not (gateway["home"] / recovery.STATE_REL).exists()
+
+
+@pytest.mark.parametrize("changes", [{"previous_pid": PID}, {"previous_pid": None},
+    {"previous_pid": True}, {"previous_pid": 0}, {"status": "requested"}, {"at": BIRTH},
+    {"at": BIRTH + 1}, {"error": "gateway_restart_unverifiable"},
+    {"service": "gui/0/other"}, {"extra": "synthetic_secret"}])
+def test_old_unknown_needs_strict_process_and_birth_proof(gateway, changes):
+    path = gateway["home"] / "data/gateway_restart.json"
+    _private(path, {**_old_unknown_receipt(), **changes})
+    before = path.read_bytes()
+    assert _run(gateway)["reason"] == "gateway_request_unresolved"
+    assert path.read_bytes() == before and gateway["calls"] == []
+    assert not (gateway["home"] / recovery.STATE_REL).exists()
+
+
+def test_old_native_unknown_cannot_release_an_existing_auto_reservation(gateway):
+    _run(gateway)
+    path = gateway["home"] / "data/gateway_restart.json"
+    _private(path, _old_unknown_receipt())
+    before = path.read_bytes()
+    state_before = (gateway["home"] / recovery.STATE_REL).read_bytes()
+    assert _run(gateway)["reason"] == "outcome_unresolved"
+    assert path.read_bytes() == before and len(gateway["calls"]) == 1
+    assert (gateway["home"] / recovery.STATE_REL).read_bytes() == state_before
+
+
+def test_old_unknown_is_archived_before_reservation_and_real_helper_publication(gateway, monkeypatch):
+    home = gateway["home"]
+    path = home / "data/gateway_restart.json"
+    raw = (json.dumps(_old_unknown_receipt(), indent=1) + "\n").encode("utf-8")
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    request = REAL_LOADER()
+    assert callable(request)  # Requires the integrated pinned automatic helper contract.
+    monkeypatch.setattr(recovery, "_load_gateway_restart", lambda: request)
+    events = []
+    append, save = run_log.append, recovery._save_state
+
+    def archive(data, payload):
+        assert path.read_bytes() == raw and not (home / recovery.STATE_REL).exists()
+        append(data, payload)
+        events.append("archive")
+
+    def persist(root, state):
+        pending = state["targets"][recovery.GATEWAY]["pending"]
+        record = json.loads((home / "data" / run_log.LOG).read_text())
+        assert record == {"event": "auto_recovery_prior_gateway_receipt",
+                          "operation_id": pending["operation_id"], "receipt_utf8": raw.decode("utf-8")}
+        assert record["receipt_utf8"].encode("utf-8") == raw
+        save(root, state)
+        events.append(pending["result"])
+
+    def spawn(argv, **kwargs):
+        assert events == ["archive", "reserved"]
+        native = json.loads(path.read_text())
+        assert native["status"] == "requested"
+        assert native["request_id"] == _pending(gateway)["operation_id"]
+        assert argv[-3] == str(PID) and argv[-2] == native["request_id"]
+        assert kwargs["pass_fds"] == (int(argv[-1]),)
+        assert os.fstat(kwargs["pass_fds"][0]).st_ino == (home / "data/update.lock").stat().st_ino
+        assert writer_lock.acquire_run_lock(str(home / "data/update.lock")) is None
+        events.append("spawn")
+        return object()  # The child is never started; only the real parent publication runs.
+
+    monkeypatch.setattr(run_log, "append", archive)
+    monkeypatch.setattr(recovery, "_save_state", persist)
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    out = _run(gateway)
+    assert events == ["archive", "reserved", "spawn", "requested"]
+    assert out["actions"][0]["result"] == "requested"
+    assert json.loads(path.read_text())["status"] == "requested"
+    assert recovery._load_state(str(home))["history"] == []
+    assert (home / "data" / run_log.LOG).stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("after_append", [False, True])
+def test_archive_failure_or_uncertain_append_never_reserves_or_requests(gateway, monkeypatch, after_append):
+    home = gateway["home"]
+    path = home / "data/gateway_restart.json"
+    _private(path, _old_unknown_receipt())
+    before = path.read_bytes()
+    append = run_log.append
+
+    def fail(data, payload):
+        if after_append:
+            append(data, payload)
+        raise run_log.RunLogError("synthetic_secret")
+
+    monkeypatch.setattr(run_log, "append", fail)
+    out = _run(gateway)
+    assert out["reason"] == "prior_receipt_archive_failed" and gateway["calls"] == []
+    assert not (home / recovery.STATE_REL).exists() and path.read_bytes() == before
+    assert "synthetic_secret" not in json.dumps(out)
+    if after_append:
+        record = json.loads((home / "data" / run_log.LOG).read_text())
+        assert record["receipt_utf8"].encode("utf-8") == before
 
 
 @pytest.mark.parametrize("failure", ["crash", "effect_error", "record_error"])
