@@ -470,15 +470,15 @@ def _remove_marker() -> None:
 
 
 _NOTICE_CHILD = (
-    "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
+    "import sys, json; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
     "db = ledger.Ledger(sys.argv[2])\n"
     "try:\n"
-    "    db.outbox_add('update_notice', None, {'text': sys.argv[3]})\n"
+    "    db.outbox_add('update_notice', None, json.loads(sys.argv[3]))\n"
     "finally:\n"
     "    db.db.close()\n")
 
 
-def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
+def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, tag=None) -> bool:
     """Freeze sanitized text into an update_notice outbox event.
     use_run_lock=True for the daily check (NB acquire — a busy tick
     defers the notify to the next check); the apply child skips it
@@ -489,7 +489,11 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
         if fd is None:
             return False
     try:
-        text = update_policy.defuse_mentions(text)
+        payload = {"text": update_policy.defuse_mentions(text)}
+        if notice_code is not None:
+            payload["notice_code"] = notice_code
+        if tag is not None:
+            payload["tag"] = tag
         live = os.path.join(REPO, "mcs")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if os.path.realpath(here) != os.path.realpath(live):
@@ -497,12 +501,12 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
             # would migrate the live DB past what the live tree runs, so
             # only the live tree's own Ledger may open it
             r = _run_with_lifetime(
-                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, text],
+                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, json.dumps(payload)],
                 stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
             return r.returncode == 0
         db = ledger.Ledger(LEDGER)
         try:
-            db.outbox_add("update_notice", None, {"text": text})
+            db.outbox_add("update_notice", None, payload)
         finally:
             db.db.close()
         return True

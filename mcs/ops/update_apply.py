@@ -364,7 +364,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 if problems:
                     reason += " restart:" + ",".join(problems)
             _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
-                            use_run_lock=run_fd is None)
+                            use_run_lock=run_fd is None, notice_code="aborted", tag=tag)
             return 1
 
         try:
@@ -751,7 +751,7 @@ def rollback(command_id: str | None = None) -> int:
             # gateway restart AFTER the durable save (self-deadlock)
             restart_services(mcs_util.load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
-                            f"{entry.get('tag')} → {prev[:12]}")
+                            f"{entry.get('tag')} → {prev[:12]}", notice_code="rolled_back")
             return 0
         except Exception as e:
             if consent_hold:
@@ -773,7 +773,7 @@ def rollback(command_id: str | None = None) -> int:
                 _record_executed(state, command_id, "rollback_failed", str(e))
                 journal_store.save_state(STATE_PATH, state)
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
-                            use_run_lock=run_fd is None)
+                            use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
     finally:

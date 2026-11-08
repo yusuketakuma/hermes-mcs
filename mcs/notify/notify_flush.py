@@ -272,35 +272,106 @@ _SYSTEM_TEXT = {
                    'python3 mcs/ops/mcs_setup.py check で確認してください。'),
     'health_write_failed': ('🔴 監視記録の保存失敗', '最新の稼働状況を確認できません。',
                             '保存先の空き容量と書込み権限を確認してください。'),
-    'update_notice': ('ℹ️ 更新のお知らせ', '更新の確認・適用・復旧に関する記録があります。',
-                      'python3 mcs/ops/mcs_update.py status で更新状況を確認してください。'),
 }
+
+
+_UPDATE_STATUS = 'python3 mcs/ops/mcs_update.py status で更新記録を確認してください。'
+_UPDATE_CHECK = 'python3 mcs/ops/mcs_setup.py check で稼働状況を確認してください。'
+_UPDATE_TEXT = {
+    'available': ('ℹ️ 新しいバージョンがあります', 'この通知ではプログラムを切り替えていません。',
+                  '変更点を確認し、更新する場合は適用前の確認を実行してください。'),
+    'applied': ('✅ 更新を適用しました', 'プログラムの切り替えと更新記録の保存を完了しました。',
+                'この通知への対応は不要です。'),
+    'aborted': ('🟠 更新を中止しました', '今回の更新は完了していません。', _UPDATE_STATUS),
+    'rolled_back': ('🟠 更新前の版へ戻しました', '今回の更新は取り消されています。', _UPDATE_CHECK),
+    'rollback_failed': ('🔴 更新前の版へ戻せませんでした', '更新・復旧が完了せず、処理が停止している可能性があります。',
+                        _UPDATE_STATUS + ' 再適用を繰り返さず、管理者へこのコードを伝えてください。'),
+    'recovery_completed': ('🟢 中断した更新の復旧処理を完了しました',
+                           '復旧の記録を保存しました。収集・通知の再開はこの通知だけでは確認できません。', _UPDATE_CHECK),
+    'recovery_required': ('🔴 中断した更新を復旧できません', '更新・収集が停止している可能性があります。',
+                          _UPDATE_STATUS + ' 管理者へこのコードを伝えてください。'),
+    'runtime_rolled_back': ('🟠 Pythonの移行を元に戻しました', '実行環境の更新は完了していません。', _UPDATE_STATUS),
+    'gateway_restart_failed': ('🔴 Hermesの再起動要求に失敗しました',
+                               'プログラムは切り替わっていても、旧版の通知処理が稼働している可能性があります。', _UPDATE_CHECK),
+    'lineworks_restart_failed': ('🔴 LINE WORKSの再起動要求に失敗しました',
+                                 'LINE WORKSの通知処理へ更新が反映されていない可能性があります。', _UPDATE_CHECK),
+    'standalone_restart_failed': ('🔴 MCS常駐処理の再起動要求を確認できません',
+                                  '収集・解析・通知が旧版のまま、または停止している可能性があります。', _UPDATE_CHECK),
+    'delivery_reconcile_held': ('🟠 DB復元後の通知を照合待ちにしています',
+                               '送信済みか確認できない通知があります。自動では再送しません。',
+                               'python3 mcs/ops/mcs_setup.py doctor --share で診断を確認し、送信先と配送記録を照合してください。'),
+    'drug_master_changed': ('ℹ️ 医薬品マスターの確認が必要です',
+                            '公式原本と同梱版の差異を検出しました。辞書は自動で有効化していません。',
+                            '管理者へこのコードを伝え、公式原本と同梱版を照合してください。'),
+    'drug_insert_changed': ('ℹ️ 添付文書の改訂を検出しました',
+                            '登録した添付文書の本文が変わっています。自動では受け入れていません。',
+                            '管理者が登録した添付文書の改訂内容を確認してから受け入れてください。'),
+    'unknown': ('🟠 更新通知の結果を判定できません', '更新の成功・失敗はこの通知から確認できません。', _UPDATE_STATUS),
+}
+_RELEASE_TAG = r'v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}'
+_LEGACY_UPDATE_HEADERS = (
+    ('aborted', r'\[MCS\] 更新 .* を中止しました: '),
+    ('rolled_back', r'\[MCS\] ロールバックしました: '),
+    ('rollback_failed', r'\[MCS\] ロールバックに失敗しました: '),
+    ('recovery_required', r'\[MCS\] 更新の中断復旧ができません（要手動対応）: '),
+    ('recovery_completed', r'\[MCS\] 更新が中断され復旧しました: '),
+    ('runtime_rolled_back', r'\[MCS\] 中断されたPython 3\.14への移行を元に戻しました。'),
+    ('standalone_restart_failed', r'\[MCS\] 独立プロセスの再起動要求を確認できません。'),
+    ('gateway_restart_failed', r'\[MCS\] gatewayの再起動要求を保存・起動できません。'),
+    ('lineworks_restart_failed', r'\[MCS\] LINE WORKSアダプターの再起動要求を起動できません。'),
+    ('delivery_reconcile_held', r'\[MCS\] DB復元後の配送照合で未解決の配送があります'),
+    ('drug_master_changed', r'\[MCS\] 医薬品マスター: '),
+    ('drug_insert_changed', r'\[MCS\] 添付文書の本文が変わりました: '),
+)
+
+
+def _update_event(payload):
+    """Classify fixed updater outcomes; read old queued headers without relaying their bodies."""
+    tag = payload.get('tag')
+    tag = tag if isinstance(tag, str) and re.fullmatch(_RELEASE_TAG, tag) else None
+    if 'notice_code' in payload:
+        code = payload['notice_code']
+        if not isinstance(code, str) or code not in _UPDATE_TEXT or (code == 'available' and tag is None):
+            return 'unknown', None
+        return code, tag
+    text = payload.get('text')
+    if not isinstance(text, str):
+        return 'unknown', None
+    match = re.match(r'\A\[MCS\] 新しいバージョン (' + _RELEASE_TAG + r') を検出しました(?:[（\n]|$)', text)
+    if match:
+        return 'available', match[1]
+    match = re.fullmatch(r'\[MCS\] 更新を適用しました: (' + _RELEASE_TAG
+                         + r'|None|(?:candidate:)?[0-9a-f]{40})\nprev: [0-9a-f]{12} → [0-9a-f]{12}', text)
+    if match:
+        return 'applied', match[1] if re.fullmatch(_RELEASE_TAG, match[1]) else None
+    if text in ('[MCS] 中断された更新の後処理を完了しました',
+                '[MCS] 更新の中断を検出し、post-merge を完了しました'):
+        return 'recovery_completed', None
+    for code, header in _LEGACY_UPDATE_HEADERS:
+        if re.match(r'\A' + header, text):
+            return code, None
+    return 'unknown', None
 
 
 def _system_event_text(kind, payload):
     """Render operational notices from fixed vocabulary without raw payload text."""
-    title, impact, action = _SYSTEM_TEXT[kind]
+    code, tag = _update_event(payload) if kind == 'update_notice' else (None, None)
+    title, impact, action = _UPDATE_TEXT[code] if code else _SYSTEM_TEXT[kind]
     lines = [f'[MCSLOG] {title}', '影響: ' + impact, '次の操作: ' + action]
     run_id = payload.get('run_id')
     if type(run_id) is int and 0 < run_id < 2**63:
         lines.append(f'実行: run {run_id}')
-    # Preserve only a known stage token; exception messages and source data stay local.
     detail = payload.get('detail')
     stage = detail.partition(':')[0] if isinstance(detail, str) else None
     if stage in ('history_jobs', 'collection', 'bootstrap', 'unreads', 'self_probe'):
         lines.append('処理: ' + stage)
-    if kind == 'update_notice':
-        # Legacy updater events contain frozen text. Read only the exact release header,
-        # never release notes, error strings, arbitrary commands or URLs from that text.
-        text = payload.get('text')
-        match = re.match(r'\A\[MCS\] 新しいバージョン (v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}) を検出しました(?:[（\n]|$)', text) if isinstance(text, str) else None
-        if match:
-            tag = match[1]
-            lines.append('候補版: ' + tag)
-            command = {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
-                       'tag': tag, 'reason': '<理由>'}
-            lines.append('/mcsの操作を許可したチャンネルで実行（適用前の確認）: /mcs ' + json.dumps(command, ensure_ascii=False, separators=(',', ':')))
-    lines.append('コード: ' + kind)
+    if tag:
+        lines.append(('候補版: ' if code == 'available' else '対象版: ') + tag)
+    if code == 'available':
+        command = {'op': 'control', 'phase': 'preview', 'action': 'update_apply',
+                   'tag': tag, 'reason': '<理由>'}
+        lines.append('/mcsの操作を許可したチャンネルで実行（適用前の確認）: /mcs ' + json.dumps(command, ensure_ascii=False, separators=(',', ':')))
+    lines.append('コード: ' + ('MCS-UPD-' + code.upper().replace('_', '-') if code else kind))
     return '\n'.join(lines)
 
 
@@ -335,7 +406,7 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
             raise semantic_send_gate.DeferredSend(stale)
         if stale:
             raise semantic_send_gate.StaleSend(stale)
-    if ev["kind"] in ("update_notice", "task_reminder", "daily_digest"):
+    if ev["kind"] in ("task_reminder", "daily_digest"):
         # Frozen text like semantic_notice — sanitized at enqueue time
         # (mentions defused), the sender just relays it.
         text = payload.get("text")

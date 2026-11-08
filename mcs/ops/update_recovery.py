@@ -168,7 +168,7 @@ def _complete_done_bookkeeping(state: dict) -> int:
     journal_store.save_state(STATE_PATH, state)
     _remove_marker()
     _report("resumed_done", "completed bookkeeping after crash")
-    _enqueue_notice("[MCS] 中断された更新の後処理を完了しました")
+    _enqueue_notice("[MCS] 中断された更新の後処理を完了しました", notice_code="recovery_completed")
     _gateway_restart_if_needed(state)
     return 0
 
@@ -198,7 +198,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     _remove_marker()
     _report("resumed", "post-merge completed after crash")
     _enqueue_notice(
-        "[MCS] 更新の中断を検出し、post-merge を完了しました")
+        "[MCS] 更新の中断を検出し、post-merge を完了しました", notice_code="recovery_completed")
     restart_services(mcs_util.load_config(), applying.get("plugin_changed"))
     return 0
 
@@ -417,7 +417,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
             if notify and not _enqueue_notice(
                     f"[MCS] 更新の中断復旧ができません（要手動対応）: {detail}"
                     + ((" restart:" + ",".join(problems))
-                       if problems else "")):
+                       if problems else ""), notice_code="recovery_required"):
                 _report("escalate", detail, alert_key=key,
                         drainers_key=dkey)          # retry next
             return 1
@@ -700,7 +700,7 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     _remove_marker()
     _report("rolled_back", "interrupted runtime migration undone")
     _enqueue_notice("[MCS] 中断されたPython 3.14への移行を元に戻しました。"
-                    "scripts/mcs_upgrade.py で再度更新してください")
+                    "scripts/mcs_upgrade.py で再度更新してください", notice_code="runtime_rolled_back")
     return 0
 
 
@@ -733,5 +733,5 @@ def _finish_recovery(state: dict, result: str, removed: list) -> int:
     state.pop("restore_consent", None)
     journal_store.save_state(STATE_PATH, state)
     _report(result, "removed locks: " + ",".join(removed))
-    _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}")
+    _enqueue_notice(f"[MCS] 更新が中断され復旧しました: {result}", notice_code="recovery_completed")
     return 0

@@ -285,11 +285,11 @@ def restart_gateway(cfg: dict) -> None:
             from mcs_standalone.service import request_restart
             request_restart(str(Path(DATA).parent))
         except (OSError, ValueError):
-            _enqueue_notice("[MCS] 独立プロセスの再起動要求を確認できません。更新状態を確認し、常駐プロセスを再起動してください。")
+            _enqueue_notice("[MCS] 独立プロセスの再起動要求を確認できません。更新状態を確認し、常駐プロセスを再起動してください。", notice_code="standalone_restart_failed")
         return
     if _request_gateway_restart is None \
             or not _request_gateway_restart(DATA, AGENTS_DIR, _uid()):
-        _enqueue_notice("[MCS] gatewayの再起動要求を保存・起動できません。更新記録と稼働プロセスを確認してください。")
+        _enqueue_notice("[MCS] gatewayの再起動要求を保存・起動できません。更新記録と稼働プロセスを確認してください。", notice_code="gateway_restart_failed")
 
 
 def restart_lineworks(cfg: dict) -> None:
@@ -312,7 +312,7 @@ def restart_lineworks(cfg: dict) -> None:
         # the request was never issued — the same human boundary as a
         # lost gateway restart request (completion is never awaited)
         _enqueue_notice("[MCS] LINE WORKSアダプターの再起動要求を起動できません。"
-                        "更新記録と稼働プロセスを確認し、アダプターを再起動してください。")
+                        "更新記録と稼働プロセスを確認し、アダプターを再起動してください。", notice_code="lineworks_restart_failed")
 
 
 def restart_services(cfg: dict, plugin_changed) -> None:

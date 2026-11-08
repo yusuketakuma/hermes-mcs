@@ -78,7 +78,8 @@ def _drug_info_notices(cfg: dict) -> None:
         import import_drug_master
         manifest, _archive = import_drug_master.load_bundled_master()
         for key, value, text in drug_info.daily_notices((manifest["edition"], manifest["rows"])):
-            if _enqueue_notice(text, use_run_lock=True):
+            if _enqueue_notice(text, use_run_lock=True,
+                               notice_code="drug_master_changed" if key == "listing" else "drug_insert_changed"):
                 drug_info.mark_notified(key, value)
     except Exception:  # noqa: BLE001 -- best effort; the outcome stays in data/drug-info
         return
@@ -160,7 +161,7 @@ def cmd_check() -> int:
                           '{"op":"control","phase":"preview",'
                           f'"action":"update_apply","tag":"{tag}",'
                           '"reason":"<理由>"}']
-                if _enqueue_notice("\n".join(lines), use_run_lock=True):
+                if _enqueue_notice("\n".join(lines), use_run_lock=True, notice_code="available", tag=tag):
                     state["notified_at"] = tag
         if not held:
             pendings, consumed = scan_pending_approvals(state)

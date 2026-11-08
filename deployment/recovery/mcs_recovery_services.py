@@ -386,17 +386,21 @@ _RECOVERY_RESTART_FAILED_TEXT = (
 def _notification_text(text):
     """Use fixed recovery notices even when this stdlib-only bundle runs outside the repo."""
     if isinstance(text, str) and text in _RECOVERY_COMPLETE_TEXTS:
+        code = 'MCS-UPD-RECOVERY-COMPLETED'
         title = '🟢 更新・復旧の処理完了'
         impact = '復旧処理を完了しました。収集・通知の再開は別途確認してください。'
     elif text == _RECOVERY_RESTART_FAILED_TEXT:
+        code = 'MCS-UPD-RESTART-FAILED'
         title = '🔴 再起動要求の失敗・要確認'
         impact = '常駐処理が再開していない可能性があります。'
     else:
+        code = 'MCS-UPD-RECOVERY-UNKNOWN'
         title = '🟠 更新・復旧の状態確認'
         impact = '復旧の完了は確認できません。私有の更新記録を確認してください。'
     return ('[MCSLOG] ' + title + '\n影響: ' + impact
             + '\n次の操作: python3 mcs/ops/mcs_update.py status'
-            + '\n稼働の確認: python3 mcs/ops/mcs_setup.py doctor')
+            + '\n稼働の確認: python3 mcs/ops/mcs_setup.py doctor'
+            + '\nコード: ' + code)
 
 
 def _channel_target(value, cfg):

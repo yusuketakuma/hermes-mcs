@@ -447,5 +447,6 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
     journal_store.save_state(STATE_PATH, state)
     _enqueue_notice(
         f"[MCS] 更新を適用しました: {applying['tag']}\n"
-        f"prev: {applying['prev_sha'][:12]} → {applying['sha'][:12]}")
+        f"prev: {applying['prev_sha'][:12]} → {applying['sha'][:12]}",
+        notice_code="applied", tag=applying["tag"])
     return 0

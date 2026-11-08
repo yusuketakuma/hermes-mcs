@@ -488,6 +488,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     # the same notice for holds already announced
     if (held and _hold_rows(db) > holds_before) or new_text_holds:
         ledger.outbox_add("update_notice", None, {
+            "notice_code": "delivery_reconcile_held",
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
                     f"（card held={len(held)}件、text held={len(text_held)}件）。"
                     "restore_reconcile.json を確認してください。"
