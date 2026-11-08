@@ -85,18 +85,18 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
 
 ### B1（条件付き案・前提確認＋合成反証後に採用判断）
 
-Oracle followup の結論：**「そのまま実装可」ではなく条件付きの
-研究・合成検証案**。既存 `unlocked_transport` を挿すだけの実装は
-不可。C1 を先行する計画と矛盾しない。
+Oracle followup の結論：**実装は条件付きの研究・合成検証案に限る**
+（そのままの実装は不可）。既存 `unlocked_transport` を挿すだけの
+実装は不可。C1 を先行する計画と矛盾しない。
 
-必須 2 条件：
+必須 2 条件
 
 1. restore を含む writer 全体が同じ安定 run.lock で排他されること
    （pathname 差替えで oldfd/newfd が分裂しないこと）。
 2. snapshot 専用の書込禁止状態を物理 held と分離し、元例外を保持
    して全終端 caller へ伝えること。
 
-要件：
+要件
 
 - `.snapshot.lock` の LOCK_NB は維持し、既存 caller 間の ABBA を
   作らない。reacquire timeout・他 publisher の partial 増加は受入
