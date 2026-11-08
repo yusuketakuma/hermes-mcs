@@ -1133,11 +1133,13 @@ def _alert_lines(report: dict) -> list[str]:
     each reason with its next step, timestamps in JST, and the raw codes
     last on one line for operators to search."""
     lines = []
+    disk_reported = False
     if report["alert"] and report["status"] != "ok":
         status = report["status"] if report["status"] in _STATUS_JA else 'unknown'
         raw_reasons = report.get("state_reasons")
-        reasons = ([code if code in _REASON_JA or code in _CLOUD_REASON_JA else 'unknown'
+        reasons = ([code if isinstance(code, str) and (code in _REASON_JA or code in _CLOUD_REASON_JA) else 'unknown'
                     for code in raw_reasons] if isinstance(raw_reasons, list) else None)
+        disk_reported = "disk_low" in (reasons or [])
         glyph = "🔴" if status in _SEVERE else "🟠"
         lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, "状態を確認できません")}")
         lines.append("影響: " + _impact(report, reasons))
@@ -1166,7 +1168,7 @@ def _alert_lines(report: dict) -> list[str]:
         lines.append("照会コード: " + _query_codes(reasons))
         lines.append(f"コード: {status} " + (",".join(reasons) if reasons else
                                             "none" if reasons is not None else "unknown"))
-    if report["disk_alert"] and report["disk_low"]:
+    if report["disk_alert"] and report["disk_low"] and not disk_reported:
         lines.append("🟠 MCS監視: 空き容量不足")
         lines.append("影響: " + _impact(report, ["disk_low"]))
         lines.append("原因と対処:")

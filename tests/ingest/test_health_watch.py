@@ -1182,3 +1182,22 @@ def test_attachment_ocr_failure_guidance_uses_only_the_verified_pair():
     assert "表の行列対応" not in quiet and "自動再試行" not in quiet
     alert = "\n".join(health_watch._alert_lines(report))
     assert "照会コード: MCS-HLT-ATTACHMENT-OCR-PROCESSING-FAILED" in alert
+
+
+@pytest.mark.parametrize('reasons', [['disk_low'], ['notification_held']])
+def test_combined_disk_warning_is_explained_once_without_suppressing_it(reasons):
+    report = {'status': 'degraded', 'alert': True, 'disk_alert': True, 'disk_low': True,
+              'state_reasons': reasons, 'disk_free_mb': 100, 'health_at': 0}
+    text = '\n'.join(health_watch._alert_lines(report))
+    assert text.count('MCS-HLT-DISK-LOW') == 1
+    assert text.count('ディスクの空き容量が不足しています') == 1
+    assert '100 MB' in text
+
+
+@pytest.mark.parametrize('reason', [None, False, [], {}, {'body': 'synthetic_private_reason'}])
+def test_malformed_reason_values_are_unknown_instead_of_crashing_the_alert(reason):
+    report = {'status': 'degraded', 'alert': True, 'disk_alert': False, 'disk_low': False,
+              'state_reasons': [reason], 'health_at': 0}
+    text = '\n'.join(health_watch._alert_lines(report))
+    assert 'MCS-HLT-UNKNOWN' in text and text.endswith('コード: degraded unknown')
+    assert 'synthetic_private_reason' not in text
