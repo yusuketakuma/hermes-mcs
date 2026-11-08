@@ -5,7 +5,7 @@
  "upgrade": "更新後の最初のMCS OCRジョブから、ローカル推論の1ページあたり期限は最大300秒（残りのジョブ予算が短い場合はそれ以下）になります。設定変更・辞書有効化・手動操作は不要です。途中で止まっていたページは、これまでどおりcheckpointから未完了chunkだけを再開します。",
  "details": [
   "変更は mcs/ops/mcs_ocr.py の LOCAL_CALL_S=120→300 の1定数だけです。_drain が attachment_inference.run_pending(stage='local') へ渡す deadline=min(ジョブ残り-5秒, 現在+300秒) になります。ジョブ全体の DRAIN_BUDGET_S=900 と終端5秒の猶予、原本OCR側の timeout_seconds+5 による段取り（raw_budget）判定は変えていません。",
-  "実機の _drain→run_pending 経路を通す合成検証で、80秒×2chunkの長いページが新しい300秒では1回のpassで完了し chunk を再送せず ready になること、旧120秒では途中leafを保存して deferred になることを確認しました（fake clockとcheckpoint seam・実モデル呼出なし）。処理速度の改善や実機でのタイムアウト解消を実測したものではありません。",
+  "実装の _drain→run_pending を通す合成検証で、80秒×2chunkの長いページが新しい300秒では1回のpassで完了し chunk を再送せず ready になること、旧120秒では途中leafを保存して deferred になることを確認しました（fake clockとcheckpoint seam・実モデル呼出なし）。処理速度の改善や実機でのタイムアウト解消を実測したものではありません。",
   "ローカルと原本OCRの段取りでは、残り時間が raw_budget 以上 raw_budget+LOCAL_CALL_S 未満の間はローカル段を後回しにして原本OCRを優先する既存の判定があります。LOCAL_CALL_S が300秒になるとこの後回し区間が広がり、原本OCRの優先は維持されます。",
   "callee（attachment_inference.run_pending）の既定期限120秒は、呼出側が明示期限を渡さない経路の既定として残しています。ファイル全体が checkpoint の contract identity に含まれるため、不要な版更新・途中leafの再処理を避けるためです。",
   "変更しない時間の上限: 抽出のHTTP呼出上限300秒、semantic 600秒、共通local_llm既定90秒、原本OCRの timeout_seconds 既定120秒、ジョブ全体の処理予算900秒（保存時のwriter待ち等を含む厳密な壁時計上限ではありません）、終端5秒の猶予、slot優先・試行上限・paid/unknown・原文QC。"

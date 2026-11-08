@@ -1,0 +1,16 @@
+{
+ "category": "fixed",
+ "title": "動作診断がLINE WORKSアダプターの対処を表示できない問題を修正",
+ "summary": "mcs doctor（動作診断）がLINE WORKSアダプターの配送処理を調べるとき、削除済みの内部名を参照して診断が失敗する問題を修正しました。監視通知と同じ対処文をOSに合わせて表示します（macOSはlaunchctl、Linuxはsystemctl）。",
+ "upgrade": "追加操作は不要です。mcs doctor を実行すると、LINE WORKSアダプターの停止・起動失敗など既知の理由に対して、監視アラートと同じ対処文が表示されます。",
+ "details": [
+  "mcs/ops/mcs_setup.py の doctor 表示が、監視アラート改善で削除済みの health_watch._LINEWORKS_ACTION を import して ImportError になっていました。既存の health_watch._lineworks_actions()（監視側の _reason_rows と同じ helper で、OS別の再起動手順を組み立てる _lw_restart() を内包）へ接続し、生成された辞書を1回だけ取得して、reason が既知キーに一致する場合だけ対処文を表示します。古い定数や互換wrapperは復活させていません。",
+  "対処文は監視アラートと同一です。macOSは launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks、Linuxは systemctl --user restart hermes-mcs-lineworks.service、その他のOSでは両方の手順を併記します。辞書にない理由には再起動文を出しません。",
+  "テストは実行OSに依存しないよう platform 別の期待値（darwin/linux/その他のfallback）へ更新し、未知の理由で再起動文が出ないことも確認しています。Slack・Discord・standalone の経路は既存の doctor 回帰で変更がないことを確認しました。"
+ ],
+ "refs": [
+  "mcs/ops/mcs_setup.py",
+  "mcs/ingest/health_watch.py",
+  "tests/ops/test_lineworks_diagnostics_and_init.py"
+ ]
+}
