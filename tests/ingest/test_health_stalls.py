@@ -121,6 +121,7 @@ def test_stall_check_failure_stays_a_plain_reason_code(db, monkeypatch):
     # result["errors"], so it cannot echo as a postprocess stage error
     assert result["errors"] == []
     assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
     check = health["stall_check"]
     assert check["status"] == "unknown"
     assert check["reason"] == "observation_unavailable"
@@ -163,6 +164,7 @@ def test_stall_check_budget_exhaustion_is_observation_limit(db):
     assert check["observation"]["stop"] == "budget_exhausted"
     assert result["errors"] == []
     assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
 
 
 @pytest.mark.parametrize(("exc", "reason", "stop", "sqlite_code"), [
@@ -191,6 +193,7 @@ def test_stall_check_failure_records_fixed_diagnosis(
     assert "stall_check_failed" in health["state_reasons"]
     assert result["errors"] == []
     assert "stage_errors" not in health["state_reasons"]
+    assert health["overall"] == "degraded"
     check = health["stall_check"]
     assert check["status"] == "unknown" and check["reason"] == reason
     assert check["observation"]["stop"] == stop

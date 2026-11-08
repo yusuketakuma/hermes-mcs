@@ -759,7 +759,7 @@ _REASON_JA = {
                      f"次回の収集で再試行されます。続く場合は {_COLLECTION_LOG} を確認"),
     "code_changed": ("収集中にコードが更新されました", "対処不要。次回の収集で続行します"),
     "run_deadline_exceeded": ("収集と収集後の処理を含む実行全体が制限時間を超えました",
-                              "続く場合は収集ログの段階別の所要時間と llama-server・ネットワークの負荷を確認"),
+                              "続く場合は収集ログの段階別の所要時間とディスク・llama-server・ネットワークの負荷を確認"),
     "ledger_relation_violations": ("保存データの整合性に問題があります",
                                    f"{_CHECK} を実行し、修復手順に従う"),
     "backup_not_verified": ("バックアップの完了を確認できません",
