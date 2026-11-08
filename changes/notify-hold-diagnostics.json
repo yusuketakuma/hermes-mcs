@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "通知保留の既存理由コードを診断表示に保持",
+  "summary": "通知の保留状況で、編集先・添付の照合待ち、配送の所有関係の確認待ち、本文の長さに関するエラーを既存の理由コードで区別できるようにしました。",
+  "upgrade": "更新後の観測から適用されます。追加の設定変更は不要です。既存の保留件の解消には、引き続き配送先と記録の本人照合・承認が必要です。",
+  "details": [
+    "edit_file_unverified、file_target_unverified、part_owner_ambiguous、msg_too_longを診断用の固定語彙に追加する。",
+    "送信状態、承認条件、記録の保持条件、再送条件は変更しない。",
+    "未登録のエラー文字列は表示せず、unknownとして扱う。"
+  ],
+  "refs": ["mcs/notify/notify_recovery.py"]
+}
