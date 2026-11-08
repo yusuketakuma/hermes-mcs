@@ -651,7 +651,70 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     result = {"errors": []}
     deadline = time.monotonic() + 400
     run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
-    assert seen["deadline"] <= deadline - run_check.SEMANTIC_TAIL_RESERVE_S
+    # a tiny temp DB floors the size-based verify budget at 30s, so the
+    # shared work deadline lands exactly one fixed tail (60s) early
+    assert seen["deadline"] == pytest.approx(deadline - 60)
+    db.close()
+
+
+def test_semantic_run_defers_when_size_reserve_exceeds_window(tmp_path, monkeypatch):
+    """Large source DBs reserve more than the fixed floor: once the shared
+    work deadline leaves under SEMANTIC_MIN_WORK_S the drain must not start,
+    even though the raw run deadline still looks roomy."""
+    import snapshots
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda path: 180.0)
+    monkeypatch.setattr(semantic_drain, 'run_due',
+                        lambda *a, **k: pytest.fail("must not dispatch"))
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    # raw window 250s > old fixed 60s floor, but work window is 250-210=40s
+    run_check._run_semantic(db, _sem_args(), {}, result,
+                            time.monotonic() + 250, True)
+    assert result["semantic"]["skipped"] == "no_budget"
+    db.close()
+
+
+def test_semantic_run_stops_dispatch_when_probe_reaches_work_deadline(tmp_path, monkeypatch):
+    """A slot probe that consumes the work window must not start run_due."""
+    clock = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    _sem_setup(monkeypatch, tmp_path)
+
+    def busy(deadline):
+        clock[0] = deadline
+        return False
+    monkeypatch.setattr(extract_llm, "pinned_slot_busy", busy)
+    monkeypatch.setattr(semantic_drain, 'run_due',
+                        lambda *a, **k: pytest.fail("must not dispatch"))
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result, clock[0] + 400, True)
+    assert result["semantic"]["skipped"] == "no_budget"
+    db.close()
+
+
+def test_semantic_run_reports_error_when_source_db_unreadable(tmp_path, monkeypatch):
+    """A failed source-DB probe skips the drain with an explicit error and
+    never falls back to the full run deadline."""
+    import sqlite3
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(semantic_drain, 'run_due',
+                        lambda *a, **k: pytest.fail("must not dispatch"))
+    db = _ledger(tmp_path)
+
+    class _FailingDB:
+        def execute(self, *a, **k):
+            raise sqlite3.OperationalError("synthetic")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(db, "db", _FailingDB())
+    result = {"errors": []}
+    run_check._run_semantic(db, _sem_args(), {}, result,
+                            time.monotonic() + 400, True)
+    assert result["errors"] == ["semantic: OperationalError"]
+    assert result["semantic"]["skipped"] == "work_deadline_unavailable"
     db.close()
 
 
