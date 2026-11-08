@@ -110,7 +110,8 @@ def parse_upgrade_notes(text: str, tag: str, cur_tag: str | None) -> list[dict]:
 
 def preflight_decision(local_errors: list[str], tag_errors: list[str], state: dict,
                        *, restore_pending: bool, legacy_source: bool,
-                       standalone: bool, automatic: bool, noop: bool) -> dict:
+                       standalone: bool, automatic: bool, noop: bool,
+                       entry_context: str = "external") -> dict:
     """Classify already-observed gates without reading files, git or services."""
     reinstall = [error for error in tag_errors if error in REINSTALL_ERRORS]
     bump = [error for error in tag_errors if error.startswith("schema_bump:")]
@@ -127,7 +128,7 @@ def preflight_decision(local_errors: list[str], tag_errors: list[str], state: di
         blockers.append("reinstall_incomplete")
     if legacy_source:
         blockers.append("legacy_source_manual")
-    if standalone:
+    if standalone and entry_context != "installed_standalone":
         blockers.append("standalone_external_apply")
     if bump and automatic:
         blockers.append("schema_bump_auto_blocked")
