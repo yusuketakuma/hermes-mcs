@@ -17,6 +17,29 @@
 Discordのグループ構成員が共有アンカーへ誘導される場合は`approval_part_id`と`group_approval`を示し、承認はグループ全体に対して行います。
 一覧への掲載は承認・送信・配送成功を意味せず、実際の復旧可否は計画と適用時の再照合が決めます。
 
+一覧が20件を超える場合は、公開snapshotに対してページ単位で続きを読めます。
+
+```sh
+python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+  recovery_parts --offset 20 --limit 20
+```
+
+`--offset`は読み飛ばす件数、`--limit`は1〜20のページサイズです。並び順は更新時刻・配送ID・part IDで固定され、同じsnapshotではページ間で重複・欠落しません。`total`は全候補数、`truncated`は続きがあるかどうかです。healthの`recovery_parts`は先頭20件だけを示します。
+
+### journalの証拠を事前に確認する
+
+`card_part_check`は、計画が作れるpartについて、稼働中のデータ領域の配送journalだけを読み、証拠の状態を返す読み取り専用コマンドです。snapshotは計画の同一性にだけ使い、journalは`--data-dir`で明示したliveのデータルートから読みます。journalルートをsnapshotや`--cmd-dir`の親から推測することはありません。
+
+```sh
+python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+  card_part_check --delivery-id DELIVERY_UUID --part-id PART_ID \
+  --data-dir /absolute/path/to/live-data
+```
+
+`journal_check`は`passed`・`blocked`・`unknown`の3値で、証明ごとの結果は`journal_checks`に`passed`・`blocked`・`unknown`で分かれます。`passed`は確認済みのjournalが該当する証明のいずれも否定しないこと、`blocked`は全ての証明がjournal上の固定理由で拒否されること、`unknown`はjournalが読めない・不完全・読取り上限（32MiB・100000行・5秒）を超えた・対象範囲の行が無い・存在しない場合です。`journal.state`は`clean`・`incomplete`・`unreadable`・`read_limited`・`absent`で、`absent`は対象の配送・part範囲に対応するjournal行が0件だったことを示します。空のjournalや別の配送の行だけでは`passed`になりません。`journal`には対象範囲の行数・phase・開始・配送済み記録の有無など、固定語彙の事実だけを返し、journalの行そのものや例外文は返しません。観測できなかった項目は0やfalseではなく`null`で示し、部分的な証拠は採用しません。`proofs_checked`は照合した証明の一覧、`journal_blocked_reasons`は`blocked`の証明があるときの固定理由、`journal.reason`は読取り上限超過のとき`journal_read_limit`です。`journal_checks`の`passed`はその証明をjournalが否定しないことだけを意味し、`remote_absent`の配送先不在は外部確認が別途必要です。
+
+`passed`でも配送結果・worker停止・人の承認・配送先のidentityは証明されません。それらは`required_external_checks`に固定で示し、適用時に全て再照合されます。`remote_absent`の証明はjournalだけでは配送先の不在を示さないため、外部での確認が別途必要です。heldのpartはこのコマンドの対象外で、`flow`に従い`attachment_identity_plan`側で確認します。計画が作れないpartは`card_part_plan`と同じ固定エラーを返します。
+
 ### カード本体が届いていても本文・添付が未完了の場合
 
 送信待ちの一覧が0件でも、最新カードの本文・添付などが未完了の場合があります。

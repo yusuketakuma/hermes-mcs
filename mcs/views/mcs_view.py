@@ -904,6 +904,16 @@ def _parser():
                             help="Local operator: inspect a held attachment identity without approving a write")
     plan2.add_argument("--delivery-id", required=True)
     plan2.add_argument("--part-id", required=True)
+    worklist = subs.add_parser("recovery_parts",
+                               help="Local operator: page the bounded delivery-recovery worklist")
+    worklist.add_argument("--offset", type=int, default=0)
+    worklist.add_argument("--limit", type=int, default=20)
+    check = subs.add_parser("card_part_check",
+                            help="Local operator: read-only journal check for a resolvable part")
+    check.add_argument("--delivery-id", required=True)
+    check.add_argument("--part-id", required=True)
+    check.add_argument("--data-dir", type=Path, required=True,
+                       help="Live MCS data dir holding notify journal state; never inferred")
     for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context", "local_measurements"):
         sub = subs.add_parser(kind)
         if kind == "control":
@@ -1034,6 +1044,18 @@ def main(argv=None):
                 raise ValueError("bad_part_identity")
             from notify_recovery import attachment_identity_confirm_plan
             result = attachment_identity_confirm_plan(view.db, args["delivery_id"], args["part_id"])
+        elif args["kind"] == "recovery_parts":
+            from mcs_util import load_config_checked
+            from notify_recovery import recovery_worklist
+            result = recovery_worklist(view.db, load_config_checked(),
+                                       limit=args["limit"], offset=args["offset"])
+        elif args["kind"] == "card_part_check":
+            if (not requests.valid_uuid(args["delivery_id"])
+                    or not valid_text(args["part_id"], 64)):
+                raise ValueError("bad_part_identity")
+            from notify_recovery import card_part_check
+            result = card_part_check(view.db, str(args["data_dir"]),
+                                     args["delivery_id"], args["part_id"])
         elif action in ("create", "update") or args["kind"] == "control":
             req = requests.parse_command(sys.stdin.buffer.read(requests.MAX_COMMAND_BYTES + 1))
             if not isinstance(req, dict) or req.keys() & {"cmd", "version", "project_id", "human_confirmed"}:
@@ -1067,7 +1089,10 @@ def main(argv=None):
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 1 if (result.get("outcome") == "unknown" or
-                     (args["kind"] in ("card_part_plan", "attachment_identity_plan") and "error" in result)) else 0
+                     (args["kind"] in ("card_part_plan", "attachment_identity_plan",
+                                       "card_part_check") and "error" in result) or
+                     (args["kind"] == "card_part_check"
+                      and result.get("journal_check") == "unknown")) else 0
     except (ValueError, OSError, sqlite3.Error, RecursionError) as error:
         # User text/SQL/paths must never be interpolated into error logs.
         code = safe_error_code(error)

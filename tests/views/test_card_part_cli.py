@@ -204,6 +204,27 @@ def test_unavailable_plan_has_nonzero_exit_and_not_a_chat_view(led, tmp_path, ca
         view.close()
 
 
+def test_cli_recovery_parts_and_card_part_check(led, tmp_path, capsys):
+    req = prepare(led)
+    snap = snapshot(led, tmp_path)
+    inbox = tmp_path / 'cmd'
+    inbox.mkdir()
+    common = ['--snapshot', snap, '--cmd-dir', str(inbox)]
+    assert mcs_view.main(common + ['recovery_parts']) == 0
+    page = json.loads(capsys.readouterr().out)
+    assert page['limit'] == 20 and page['offset'] == 0
+    assert isinstance(page['total'], int) and isinstance(page['items'], list)
+    assert mcs_view.main(common + ['recovery_parts', '--limit=-1']) == 1
+    assert json.loads(capsys.readouterr().out)['error'] == 'bad_page'
+    assert mcs_view.main(common + ['card_part_check', '--delivery-id', req['delivery_id'],
+                                   '--part-id', req['part_id'],
+                                   '--data-dir', str(tmp_path / 'absent')]) == 1
+    check = json.loads(capsys.readouterr().out)
+    assert check['journal_check'] == 'unknown' and check['journal']['state'] == 'unreadable'
+    assert check['journal_checks']['remote_absent'] == 'unknown'
+    assert 'error' not in check
+
+
 def test_lineworks_absence_keeps_duplicate_risk_gate(led, tmp_path, monkeypatch, capsys):
     req = prepare(led)
     snap = snapshot(led, tmp_path)
