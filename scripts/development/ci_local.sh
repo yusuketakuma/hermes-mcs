@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Local counterpart of every .github/workflows/ci.yml job, run serially on an
 # isolated clean clone of one exact SHA. Only for releases whose hosted CI
-# could not start (billing, runner outage) — never a substitute for a CI run
-# that failed. The run lines below are copied verbatim from ci.yml and
+# could not start (billing, runner outage) or failed for infrastructure-only
+# reasons (artifact storage quota, upload/download errors). Never a
+# substitute for a CI run that failed on product code or tests — those must
+# be fixed and re-verified, not covered by local evidence. A local pass is
+# recorded as local evidence, not as hosted CI success.
+# The run lines below are copied verbatim from ci.yml and
 # tests/meta/test_ci_local_runner.py fails when the two drift.
 #
 # Usage: scripts/development/ci_local.sh [--out DIR] [--fetch] [JOB ...]

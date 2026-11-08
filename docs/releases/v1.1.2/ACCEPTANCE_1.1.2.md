@@ -343,6 +343,19 @@
 - ユーザーの最新指示（2026-11-08）は「無料枠で使用します。そのままリリース」。account artifact quota の解消を待つ従来の保留はこの指示により解除され、無料枠を維持して既存の成功と修復再検証の証拠をもって公開へ進む条件となった。課金変更・予算0の変更・workflow弱化によるgreen化は行わない。
 - 追跡したコード・テスト側の失敗要因は修復・再検証済み（前項の通り）で、CI全体は artifact quota 未解決のまま成功扱いとはしない。quota の上限・使用量の確定は引き続き未確認として記録する。
 - 本番適用は既存 candidate updater の経路（`mcs_upgrade.py apply`・candidate SHA・base `a669adb9`・keep `e604fa04`・保存済み `--no-brew --no-llm`）で実施し、backup/rollback/世代/人承認/unknown・復元 hold は既存機構を維持する。push・tag・Release・asset upload・公開は本番適用後の受入を待つ。
+- 本番適用の実績：上記経路で `b18d9590` を `~/.mcs` へ適用済み（reinstall 完了・backup `preupdate-20261108-202542` 作成・config/.env/install-options の hash 保持を確認）。gateway 再起動は live session 保護の拒否が検証窓内に解消せず `gateway_restart_unverifiable` の unknown で保持し、強制再起動・重複 apply は行っていない。既存の通知 hold・OCR hold は保存したままである。
+- ユーザー追記（2026-11-08）「CIが使用できない場合はローカルで同様の質の担保を行うことでリリースできるように」に合わせ、正本 skill（release-mcs・repository-release）と `docs/development/RELEASE_NOTES.md`・`scripts/development/ci_local.sh` の説明文を整合した。適用範囲は「CI未開始」と「artifact保存等のインフラ要因のみの失敗」で、製品・test失敗を未修正で免除しない。実jobごとの対応は次の通り。
+
+| ci.yml job | hosted CI の状況 | ローカル対応（`ci_local.sh` の同名job） | 修正後の再検証 | 対象SHA・依存/OS差の留保 |
+|---|---|---|---|---|
+| lint-test | run42433639313 失敗（LINE WORKS ImportError・修正済）・run42465260774 失敗（新規5 node・test契約整合済）・diagnostics upload は quota によるインフラ失敗 | `ci_local.sh lint-test`（`make lint`・master checker・`run_tests.sh`・`update_readme.py --check`） | 指定 batch 201件・終了0（`ci-final-delta-17/`）・ruff 全 pass | 最終SHAでの全体 suite は未実行・ubuntu runner の実環境差は未検証・依存 pin は ci.yml 基準 |
+| hygiene | run42465260774 失敗（SC1010・引用符修正済） | `ci_local.sh hygiene`（禁止file・旧 adapter 参照・secret 走査・shellcheck・plugin 登録） | 修正後 shellcheck/bad substitution なし・bash -n 通過（`release-check-fixes-15/`） | 同一 SHA の hosted 再実行なし |
+| standalone-sdk | run42433639313 以降 success | `ci_local.sh standalone-sdk`（固定 SDK の隔離 venv で `check_pinned_sdks.sh standalone`） | 既存 hosted success を再利用（変更影響なし） | ローカル再実行なし |
+| incident-gates | run42433639313 以降 success | `ci_local.sh incident-gates`（`ci/gates.py`・`ci/mine_gates.py --check`） | 同上 | 同上 |
+| macos | run42433639313 失敗（同 ImportError）・run42465260774 失敗（installer 5 node・stub 修正済）・diagnostics upload は quota | `ci_local.sh macos`（`tests/meta tests/ops`） | 修正後 focused 5件・終了0（macOS 実環境・`release-check-fixes-15/`） | 最終SHAでの installer 全体再実行なし |
+| hermes-integration | run42433639313 以降 success | `ci_local.sh hermes-integration`（固定 hermes ref の隔離 venv で `check_pinned_sdks.sh hermes`） | 同上再利用 | pinned ref は ci.yml 同一・再実行なし |
+
+- 表は「CI 実測成功」「ローカル代替の受入証拠」「未実行」を区別する記録であり、全6jobの実測成功・GitHub CI の成功とは扱わない。artifact quota の上限・使用量の確定は引き続き未確認。
 
 ## この資料では確認していない事項
 
