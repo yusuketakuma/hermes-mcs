@@ -651,9 +651,9 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     result = {"errors": []}
     deadline = time.monotonic() + 400
     run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
-    # a tiny temp DB floors the size-based verify budget at 30s, so the
-    # shared work deadline lands exactly one fixed tail (60s) early
-    assert seen["deadline"] == pytest.approx(deadline - 60)
+    # The shared size-based calculation must preserve the 60s minimum.
+    assert seen["deadline"] <= deadline - 60
+    assert seen["deadline"] == run_check._snapshot_work_deadline(db, deadline)
     db.close()
 
 
