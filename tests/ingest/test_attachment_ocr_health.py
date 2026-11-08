@@ -137,6 +137,105 @@ def test_unobserved_queue_is_unknown_and_backoff_failure_remains_failed(tmp_path
         assert report["state"] == state and report["reason"] == reason
 
 
+def test_failure_diagnostics_preserve_unknown_reasons_and_partial_observation(tmp_path):
+    diagnostic = {"failure_reason_counts": {"output_schema_table_overlap": 2, "timeout": 1},
+                  "exhausted_failed": 2}
+    _status(tmp_path, pending_failed=4, queue_status="partial")
+    prior = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert prior["state"] == "failed"
+    assert "failure_reason_counts" not in prior and "exhausted_failed" not in prior
+    _status(tmp_path, pending_failed=4, queue_status="partial", **diagnostic)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {**prior, **diagnostic}
+
+
+@pytest.mark.parametrize("updates,now", [
+    ({}, 1000), ({"queue_status": "partial"}, 1000),
+    ({"paid_recovery_pending": True, "local_done": 1}, 1000),
+    ({"reason": "memory_deferred", "deferred": 1}, 1000),
+    ({"local_deferred": 1}, 1000), ({"at": 0}, 3000),
+])
+def test_empty_failure_diagnostics_do_not_override_health_outcome(tmp_path, updates, now):
+    _status(tmp_path, **updates)
+    prior = health_report.attachment_ocr_health(str(tmp_path), CFG, now)
+    diagnostic = {"failure_reason_counts": {}, "exhausted_failed": 0}
+    _status(tmp_path, **updates, **diagnostic)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, now) == {**prior, **diagnostic}
+
+
+@pytest.mark.parametrize("diagnostic", [
+    {"failure_reason_counts": {}}, {"exhausted_failed": 0},
+    {"failure_reason_counts": None, "exhausted_failed": 0},
+    {"failure_reason_counts": [], "exhausted_failed": 0},
+    {"failure_reason_counts": {"synthetic_private_reason": 1}, "exhausted_failed": 0},
+    {"failure_reason_counts": {"timeout": True}, "exhausted_failed": 0},
+    {"failure_reason_counts": {"timeout": 1.0}, "exhausted_failed": 0},
+    {"failure_reason_counts": {"timeout": -1}, "exhausted_failed": 0},
+    {"failure_reason_counts": {"timeout": 2, "engine_failed": 1}, "exhausted_failed": 0},
+    {"failure_reason_counts": {}, "exhausted_failed": True},
+    {"failure_reason_counts": {}, "exhausted_failed": 1.0},
+    {"failure_reason_counts": {}, "exhausted_failed": -1},
+    {"failure_reason_counts": {}, "exhausted_failed": 3},
+])
+def test_malformed_failure_diagnostics_are_corrupt_and_never_exposed(tmp_path, diagnostic):
+    _status(tmp_path, pending_failed=2, **diagnostic)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+
+
+def test_failure_diagnostics_require_observed_pending_count(tmp_path):
+    path = _status(tmp_path, failure_reason_counts={}, exhausted_failed=0)
+    value = json.loads(path.read_text())
+    del value["pending_failed"]
+    path.write_text(json.dumps(value))
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+
+
+@pytest.mark.parametrize("reason_count,exhausted", [(257, 0), (0, 257)])
+def test_failure_diagnostics_cannot_exceed_queue_observation_limit(tmp_path, reason_count, exhausted):
+    _status(tmp_path, pending_failed=257, failure_reason_counts={"timeout": reason_count},
+            exhausted_failed=exhausted)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+
+
+def test_failure_diagnostics_accept_the_full_observation_limit(tmp_path):
+    diagnostic = {"failure_reason_counts": {"timeout": 256}, "exhausted_failed": 256}
+    _status(tmp_path, pending_failed=256, queue_status="partial", **diagnostic)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report["state"] == "failed" and report["pending_failed"] == 256
+    assert {key: report[key] for key in diagnostic} == diagnostic
+
+
+def test_drain_keeps_last_failure_snapshot_without_summing_it(tmp_path, monkeypatch):
+    import attachment_inference
+    import mcs_ocr
+    import writer_lock
+
+    generation, calls = (False, 1), []
+    diagnostic = {"failure_reason_counts": {"output_schema_table_overlap": 1},
+                  "exhausted_failed": 1}
+
+    def raw(*args, **kwargs):
+        calls.append(1)
+        return {"complete": 0, "empty": 0, "failed": 1 if len(calls) == 1 else 0,
+                "unsupported": 0, "deferred": 0, "pending_failed": 1,
+                "queue_status": "partial", **diagnostic}
+
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: generation)
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: 1000)
+    monkeypatch.setattr(attachment_inference, "run_pending",
+                        lambda *args, **kwargs: {"done": 0, "deferred": 0})
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", raw)
+    result = mcs_ocr._drain(None, CFG, generation, 1600, live_config=False)
+    assert len(calls) == 2 and result["failed"] == 1 and result["queue_status"] == "partial"
+    assert {key: result[key] for key in diagnostic} == diagnostic
+    _status(tmp_path, **result)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report["state"] == "failed" and report["pending_failed"] == 1
+    assert {key: report[key] for key in diagnostic} == diagnostic
+
+
 @pytest.mark.parametrize("local_done,local_deferred,state", [(1, 0, "ok"), (0, 1, "deferred")])
 def test_local_inference_counts_are_valid_and_not_ocr_failure(tmp_path, local_done, local_deferred, state):
     _status(tmp_path, local_done=local_done, local_deferred=local_deferred)

@@ -42,10 +42,12 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     counts = ("complete", "empty", "failed", "unsupported", "deferred", "pending_failed",
               "local_done", "local_deferred")
     writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
+    failure_fields = ("failure_reason_counts", "exhausted_failed")
     try:
         value = json.loads(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
-                "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields}
+                "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
+                *failure_fields}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
@@ -62,6 +64,18 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
             raise ValueError("ocr_status_invalid")
         if "paid_recovery_pending" in value and type(value["paid_recovery_pending"]) is not bool:
             raise ValueError("ocr_status_invalid")
+        failure_detail = {key: value[key] for key in failure_fields if key in value}
+        if failure_detail:
+            if len(failure_detail) != len(failure_fields) or "pending_failed" not in value:
+                raise ValueError("ocr_status_invalid")
+            reasons, exhausted = (failure_detail[key] for key in failure_fields)
+            observed_limit = min(value["pending_failed"], 256)
+            if (type(reasons) is not dict or any(
+                    key not in attachment_ocr.FAILURE_REASONS or type(count) is not int or count < 0
+                    for key, count in reasons.items())
+                    or sum(reasons.values()) > observed_limit
+                    or type(exhausted) is not int or not 0 <= exhausted <= observed_limit):
+                raise ValueError("ocr_status_invalid")
         writer_detail = {key: value[key] for key in writer_fields if key in value}
         if writer_detail and (len(writer_detail) != len(writer_fields)
                 or any(type(item) is not str for item in writer_detail.values())
@@ -75,7 +89,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
               **{key: value[key] for key in (*counts, "paid_recovery_pending") if key in value},
-              **writer_detail}
+              **writer_detail, **failure_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
     if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred"):

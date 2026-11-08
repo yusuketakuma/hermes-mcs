@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "添付の文字起こし失敗の原因別件数を監視情報へ記録",
+  "summary": "添付の文字起こしで失敗が残った場合に、確認した範囲の原因別件数と再試行上限に達した件数を監視情報へ残します。",
+  "upgrade": "通常の更新後、次回のOCRジョブと監視処理から反映されます。失敗履歴や試行回数は変更しません。",
+  "details": [
+    "既存の最大256件の観測範囲で、現在の原資料と実行契約に一致する最新の失敗を集計する。failure_reason_countsには既定の失敗理由だけを記録し、不明な理由や原資料の本文、パスは出力しない。",
+    "exhausted_failedは試行回数が整数の3である失敗の件数とする。原因別件数の合計とexhausted_failedはそれぞれpending_failed以下かつ256件以下に制限し、型違い、真偽値、未知の理由、項目の片欠けは監視情報の破損として扱う。旧形式の状態ファイルは引き続き読み取る。",
+    "観測が一部にとどまる場合はqueue_statusのpartialを維持する。既存の失敗、会計の保留、ローカル解析の保留、状態の鮮度による判定は変更しない。",
+    "OCRエンジンと品質検証、再試行条件は変更しない。この変更で既存の失敗を解除したり、未採用の結果を採用したりすることはない。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_ocr.py",
+    "mcs/ingest/health_report.py",
+    "tests/extract/test_attachment_ocr.py",
+    "tests/ingest/test_attachment_ocr_health.py"
+  ]
+}

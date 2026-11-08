@@ -518,6 +518,7 @@ _RUNTIME_REASONS = frozenset({
     "engine_load_failed", "engine_inference_failed", "input_decode_failed",
     "output_schema_table_overlap",
 })
+FAILURE_REASONS = _RUNTIME_REASONS | {"timeout", "local_processing_failed"}
 
 
 def _settle(ledger, source, doc, root, generation, settings, deadline=None):
@@ -680,7 +681,8 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                 counts["deferred"] += 1
         cursor["turn"] += 1
         atomic_write(str(cursor_path), lambda stream: json.dump(cursor, stream), mode=0o600)
-        counts.update(pending_failed=0, queue_status="partial")
+        counts.update(pending_failed=0, queue_status="partial",
+                      failure_reason_counts={}, exhausted_failed=0)
         if deadline is None or time.monotonic() < deadline:
             observed = ledger.db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
                                          "ORDER BY attachment_id LIMIT 257").fetchall()
@@ -692,6 +694,12 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                 prior = _latest(ledger.db, source) if source is not None else None
                 if source is not None and _matching(prior, source) and prior["state"] in ("failed", "unavailable"):
                     counts["pending_failed"] += 1
+                    failure_reason = prior.get("reason")
+                    if type(failure_reason) is str and failure_reason in FAILURE_REASONS:
+                        reasons = counts["failure_reason_counts"]
+                        reasons[failure_reason] = reasons.get(failure_reason, 0) + 1
+                    if type(prior.get("attempts")) is int and prior["attempts"] == 3:
+                        counts["exhausted_failed"] += 1
                 checked += 1
             if checked == len(observed):
                 counts["queue_status"] = "known"
