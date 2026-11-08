@@ -12,11 +12,15 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 ローカルLLMは日本時間08:00〜20:00に新着・対話1枠と背景処理2枠、20:00〜08:00に背景処理へ最大3枠を使います。夜間の新着は次の空き枠を優先し、実行中の処理は中断しません。3物理枠を前提とし、backendの起動設定を自動変更する機能ではありません。
 
-![v1.1.2の流れ1/3：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](cloud-continuity-v112-part1.png)
+![v1.1.2の流れ1/5：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](landscape-01.png)
 
-![v1.1.2の流れ2/3：B・C・Aの照合と品質確認で患者コンテキストを育てる流れの説明図](cloud-continuity-v112-part2.png)
+![v1.1.2の流れ2/5：資料の全区間点検（B）と根拠照合（C）の説明図](landscape-02.png)
 
-![v1.1.2の流れ3/3：検索・通知の独立経路と、待ち・不明時の扱い、回数と処理枠の説明図](cloud-continuity-v112-part3.png)
+![v1.1.2の流れ3/5：概況の項目と順序（A）・品質確認・採用直前の再照合から本人向けの患者情報への説明図](landscape-03.png)
+
+![v1.1.2の流れ4/5：検索・通知の独立経路と設定次第のJev外部監査の説明図](landscape-04.png)
+
+![v1.1.2の流れ5/5：待ち・不明時の扱いと、概況の回数・巡回配分・昼夜の処理枠の説明図](landscape-05.png)
 
 <details>
 <summary>補足の説明図（処理の流れ・患者検索・導入の4段階）を開く</summary>
@@ -31,7 +35,7 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 説明図は実画面や性能の測定結果ではありません。患者データ・実投稿は使用していません。画像・PDFのローカルOCR、患者情報と運用ログを分けるSlack通知先、Discord・LINE WORKSの原文表示も本版に含みます。個別投稿への新規クラウド送信は停止し、患者コンテキストの作成・更新と品質修復に限定します。旧予約・課金済み回答・結果不明の記録は保持します。[外部送信と費用の条件](../../guides/ANTHROPIC.md)を確認してください。
 
-全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図はHTML原稿（cloud-continuity-v112-part1〜3・[旧統合版cloud-continuity-v112-detailed.html](cloud-continuity-v112-detailed.html)・data-processing-v112・patient-find-v112・setup-steps-v112）からSVGとPNGを生成しています。表示が縦長すぎた詳細図は同じ要素を章ごとに3枚へ分割し、part1〜3として置き換えました（旧ファイルは来歴として残しています）。各図の来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
+全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図はHTML原稿（landscape-01〜05・cloud-continuity-v112-part1〜3・[旧統合版cloud-continuity-v112-detailed.html](cloud-continuity-v112-detailed.html)・data-processing-v112・patient-find-v112・setup-steps-v112）からSVGとPNGを生成しています。詳細図は横長の工程帯＋説明列形式の5枚（landscape-01〜05・各1600×900）へ全面的に作り替えました。元は縦長すぎた詳細図を章ごとに3枚へ分割したpart1〜3で、こちらも旧ファイルと同じく来歴として残しています。各図の来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
 
 2026-11-08の追補時点では、初回の失敗95件と後続63fileでの13失敗を修正・再検証しました。最後の関連5fileは125件成功・失敗0・skip 0で、追加の負の対照も確認済みです。実行済みの成功結果と合わせてローカル検証を受け入れましたが、単一の全体suiteやGitHub CIの一括成功ではありません。その追補時点の本番は `d621f96d` のままで、今回の新機能は未適用・未公開でした。
 
@@ -67,4 +71,4 @@ OCR予算とLINE WORKS診断の追補では既存121件を保持して全123件�
 
 公開前検査の修正追補では既存123件を保持して全124件へ集約しました。タグCIで見つかった3件を修正します。install.sh の導入段階検証と deployment/install/runtime.sh の完了記録呼出でシェル予約語 done を引用符付きへ直し（意味・型検査は不変）、runtime.sh を正本として INSTALL_RUNTIME_SHA256 pin を再生成しました。sync_release_notes.py の既存Release同期は、書込み後の識別再照合で対象に由来する日時情報 created_at の正当な変化を変更と誤認して拒否し得たため、PATCH応答と再取得の2か所の比較からだけ外し、識別子定義・型検証・書込み前比較・他6項目の照合は維持します。実CIで変化したfieldは未特定で、実CIでの再現可否は更新後の次の必要な同期で確認します。test_install_log_sink.py のサービス段階ハーネスへは既存の出力関数と同じ形の no-op スタブ _install_progress() { :; } を補い、製品コードと各assertは変更していません。対象testは focused で全件成功・終了0、合成テストは旧コードで RED・修正後 GREEN を確認しました。shellcheck・bash -n・ruff も問題ありません。利用者の操作・動作・既定値は変わりません。候補CIの全job成功・公開・本番適用は未実施で、この追補だけで合格とは扱いません。
 
-図表主体の文書整備追補では既存124件の変更記録とarchiveを変更せず、README手書き領域を図・表中心の構成へ見直し、全体処理・患者検索・導入4段階の合成説明図3枚（SVG正本・PNG描画）を追加しました。既存の cloud-continuity 図はREADMEでは補足detailsへ畳み、Release本文では従来どおり表示します（この段落はその時点の記録です。現在はHTML原稿からSVG・PNGを生成し、主図は cloud-continuity-v112-part1〜3 の3分割へ置き換えています（cloud-continuity-v112-detailed は縦長のため3枚へ再構成）。旧 cloud-continuity.svg/.png は既存draft添付assetの履歴として残しています）。3枚はいずれも実画面・測定結果ではなく、Releaseへの画像添付uploadは未実施です。anchor・AI導入route判定・外部送信表・安全境界は保持し、製品コード・既定値・検証条件は変更していません。
+図表主体の文書整備追補では既存124件の変更記録とarchiveを変更せず、README手書き領域を図・表中心の構成へ見直し、全体処理・患者検索・導入4段階の合成説明図3枚（SVG正本・PNG描画）を追加しました。既存の cloud-continuity 図はREADMEでは補足detailsへ畳み、Release本文では従来どおり表示します（この段落はその時点の記録です。現在はHTML原稿からSVG・PNGを生成し、主図は横長の工程帯＋説明列形式の landscape-01〜05 の5枚へ全面的に作り替えています（cloud-continuity-v112-detailed は縦長のためまず3枚のpart1〜3へ分割し、その後 landscape 形式へ再構成。part・detailed・旧 cloud-continuity の各SVG/HTML/PNGは既存draft添付assetの履歴として残しています）。これらの図はいずれも実画面・測定結果ではなく、Releaseへの画像添付uploadは未実施です。anchor・AI導入route判定・外部送信表・安全境界は保持し、製品コード・既定値・検証条件は変更していません。

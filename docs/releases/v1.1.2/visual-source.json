@@ -101,6 +101,81 @@
    "path": "docs/releases/v1.1.2/cloud-continuity-v112-part3.png",
    "sha256": "fdc284ecfa440f77864a2d822f1468ed27853d9cf0a18fa48b6569d527af080f"
   }
+,
+  {
+   "path": "docs/releases/v1.1.2/landscape-01.html",
+   "sha256": "1243c7e90a48d3c877179abb0667aaec9c1ba2c92e02329c2aafbe758b07f249"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-01.svg",
+   "sha256": "2fa598f2b0ce91ee0731669e5613f2ceb515e13865905a1b5902b81c26586d3b"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-01.png",
+   "sha256": "3e003dde3c9f97a4a7189cb634b6829d4809c3c706e4b4dae785646284963494"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-02.html",
+   "sha256": "c1460e9eb456c5682014e96bb4cc0521dac06cea4e557551a3c6042ae5692f1e"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-02.svg",
+   "sha256": "ec0d100fec897ceab781a4483144a6e7bac527af688699eca7bb1cd5e000b89e"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-02.png",
+   "sha256": "f8ab70349bad6bbd1d89aa792e1cf9215f7b5fa861d0ac45b4db6a1dd03f2943"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-03.html",
+   "sha256": "b149de101d1f1310a96fb784ff7a241a2d8b3f15739915a1fda40ca1b5911625"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-03.svg",
+   "sha256": "ae6b9dd267e4262943d7881d8f35e207bab413beb1423c9941ca0ac5fe6cd303"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-03.png",
+   "sha256": "4d806f57f563d10c147041ef7cfacc378038cd2d326094b9f03ad42bfe420f7c"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-04.html",
+   "sha256": "371d5bc5b6dca204008796c319f47fa99cedc4931ae4081740ff1690a1272a1a"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-04.svg",
+   "sha256": "413f32c55bbc9fcdfe42274c2b34962d5ac15f0b1e685b434dab9b59dc30a97d"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-04.png",
+   "sha256": "12f29a63315151ab58cc4c56761bb03add5be86dc7ef7d8fd05296004fba4ea0"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-05.html",
+   "sha256": "7a2f6b3d5e446864e5d078d3d1f8d737d5a55c688f2328d2476272085008e97f"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-05.svg",
+   "sha256": "23a2d3a22a403eeace81615f90504f6c1d9eb4697e5005f6b707ea3a8fe3de65"
+  }
+ ,
+  {
+   "path": "docs/releases/v1.1.2/landscape-05.png",
+   "sha256": "dd79408dbae058c42639ea22e0f67f68478b37c4fb8308d81a0004ee5a2fbac1"
+  }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
  "notes": [
@@ -112,7 +187,8 @@
   "PNGは macOS qlmanage + ImageMagick のwrapper/crop経路。r9以降のwrapperは1200x1200へ原稿の中身をflatな <g transform=translate(405 80)> で格納（nested <svg> はqlmanageで配置がずれるため不使用）（XML prologはwrapperへ入れない）。寸法は data-processing 390x660 / patient-find 390x640 / setup-steps 390x640。",
   "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは正方wrapperへflat <g>で格納しqlmanage -s max(4000,H+100)で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。",
   "2026-11-08 r15: Root実見の指摘で詳細図のトポロジーを修正。主線1→9を中央の縦線で接続し、OCRを通らない資料は1→3の右外周rail、検索・通知は1から左外周railで末尾の独立panelへ接続（主boxを横断しない）。Jevは主線の通過先ではない末尾panel。2の注記を「本文はOCRを通らない／添付なし・OCR無効もOCRを通らない／有効OCRが未完の添付は完了扱いしない」へ、8を「必要な品質確認」、9の失効を「保存済みの原資料で訂正・削除・失効を検知したら」へ修正。冒頭は番号をデータ依存の順・複数周回・確認済み結果の再利用と説明し、6:3:1は巡回順の配分で1周で5→6→7を全て行うとは限らないと明記。",
-  "2026-11-08 r-split: 詳細図 cloud-continuity-v112-detailed（780x4326）がRelease表示で縦長すぎたため、同じ要素を章ごとに cloud-continuity-v112-part1（保存と個別解析780x1360）・part2（患者context育成780x1800）・part3（活用・待ち・回数780x1540）の3枚へ分割。part1のbox3注記は「3/3 の表を参照」、各部のrailは部間の継続として端で表す。旧detailedのHTML/SVG/PNGと公開済assetは来歴として保持。描画は同じqlmanage+magickの正方wrapper経路。"
+  "2026-11-08 r-split: 詳細図 cloud-continuity-v112-detailed（780x4326）がRelease表示で縦長すぎたため、同じ要素を章ごとに cloud-continuity-v112-part1（保存と個別解析780x1360）・part2（患者context育成780x1800）・part3（活用・待ち・回数780x1540）の3枚へ分割。part1のbox3注記は「3/3 の表を参照」、各部のrailは部間の継続として端で表す。旧detailedのHTML/SVG/PNGと公開済assetは来歴として保持。描画は同じqlmanage+magickの正方wrapper経路。",
+  "2026-11-08 landscape-design-23: 詳細図を横長1600x900の工程帯＋説明列形式の5枚（landscape-01〜05）へ全面的に作り替え。内容は旧part1〜3/detailedと同じ項目を保持し、OCR bypass・検索通知の独立枝・Jevの独立欄・5〜8の破線枠・待ち不明4組・概況回数と昼夜処理枠を新レイアウトへ再配置。PNGはqlmanage+ImageMagickの既存wrapper/crop経路（1700x2500 viewBox内で原稿をflatなg transform=translate(50 400)へ格納し、実測trim 2354x1324+73+588をcropして1600x900へ縮小）。実PNGを全枚目視確認し、1600x900では本文判読・390pxでは工程番号と主要見出しが判読可能。旧detailed/part/cloud-continuityのHTML/SVG/PNGは削除せず来歴として保持。"
  ],
  "renderer": {
   "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",

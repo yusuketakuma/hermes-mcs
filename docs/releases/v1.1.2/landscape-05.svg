@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="landscape-05-title landscape-05-desc" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title id="landscape-05-title">v1.1.2 待ち・不明と回数・処理枠（5/5）</title>
+<desc id="landscape-05-desc">枠・期限の待ち、品質不合格、送信結果不明、旧cloud予約の扱いと、概況の回数・巡回配分・昼夜の処理枠。合成の説明図。</desc>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
+<rect width="1600" height="900" fill="#f6f4ef"/>
+<text x="48" y="86" font-size="52" font-weight="700" fill="#202124">v1.1.2 待ち・不明と回数・処理枠（JST）（5/5）</text>
+<text x="48" y="132" font-size="28" font-weight="400" fill="#66716f">説明図（実画面・測定値・患者データではありません）</text>
+<text x="48" y="168" font-size="26" font-weight="400" fill="#66716f">送信結果不明は履歴を保持し、自動再送やlocal置換をしません。</text>
+<rect x="48" y="240" width="672" height="470" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="72" y="292" font-size="36" font-weight="700" fill="#087f5b">待ち・不明時の扱い</text>
+<text x="72" y="352" font-size="28" font-weight="700" fill="#202124">枠・期限の待ち</text>
+<text x="400" y="352" font-size="28" font-weight="400" fill="#202124">次の周回で処理</text>
+<text x="72" y="408" font-size="28" font-weight="700" fill="#202124">同じ入力の品質不合格</text>
+<text x="400" y="408" font-size="28" font-weight="400" fill="#202124">既存の有限上限まで</text>
+<text x="72" y="464" font-size="28" font-weight="700" fill="#202124">送信結果が不明</text>
+<text x="400" y="464" font-size="28" font-weight="400" fill="#202124">履歴を保持・自動再送しない</text>
+<text x="400" y="520" font-size="28" font-weight="400" fill="#202124">勝手にlocalへ置き換えない</text>
+<text x="72" y="576" font-size="28" font-weight="700" fill="#202124">旧cloud予約の会計</text>
+<text x="400" y="576" font-size="28" font-weight="400" fill="#202124">会計・承認の証拠を保持</text>
+<rect x="800" y="240" width="752" height="470" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="824" y="292" font-size="36" font-weight="700" fill="#087f5b">概況の回数</text>
+<text x="824" y="352" font-size="28" font-weight="400" fill="#202124">・患者ごとに1日4回・原則3時間間隔</text>
+<text x="824" y="404" font-size="28" font-weight="400" fill="#202124">・初回の全資料反映は間隔のみ免除（4回は維持）</text>
+<text x="824" y="456" font-size="28" font-weight="400" fill="#202124">・同じ入力の再開・有限修復は同じ1回</text>
+<text x="824" y="508" font-size="28" font-weight="400" fill="#202124">・B・C・検索・閲覧は回数の対象外</text>
+<text x="824" y="576" font-size="32" font-weight="700" fill="#087f5b">巡回配分</text>
+<text x="824" y="624" font-size="28" font-weight="400" fill="#202124">A:B:C=6:3:1 は仕事を巡回する順番の配分。</text>
+<text x="824" y="668" font-size="28" font-weight="400" fill="#202124">1周で5→6→7を全て行うとは限らず、速度保証でもない。</text>
+<rect x="48" y="742" width="464" height="110" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="72" y="796" font-size="30" font-weight="700" fill="#087f5b">昼 08–20時</text>
+<text x="72" y="832" font-size="26" font-weight="400" fill="#202124">対話1枠＋背景2枠</text>
+<rect x="568" y="742" width="464" height="110" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="592" y="796" font-size="30" font-weight="700" fill="#087f5b">夜 20–08時</text>
+<text x="592" y="832" font-size="26" font-weight="400" fill="#202124">背景最大3枠</text>
+<rect x="1088" y="742" width="464" height="110" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="1112" y="796" font-size="30" font-weight="700" fill="#087f5b">新着</text>
+<text x="1112" y="832" font-size="26" font-weight="400" fill="#202124">次の空き枠。実行中は中断しない</text>
+</svg>

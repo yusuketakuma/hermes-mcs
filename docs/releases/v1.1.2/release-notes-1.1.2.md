@@ -8,11 +8,15 @@ v1.1.2は、品質を確認した資料から患者コンテキストの概況�
 | 患者背景の作成 | 患者内の処理完了を待って作成 | 品質を確認した資料から部分作成し、未反映を区別 | 全資料の完了前でも確認済みの情報を参照できる |
 | クラウド解析の範囲 | 履歴抽出と意味解析でも新規送信 | 新規送信は患者コンテキスト専用、個別はローカルで継続・旧予約は回収 | 外部送信を絞り、保存済みの結果も失わない |
 
-![v1.1.2の流れ1/3：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity-v112-part1.png)
+![v1.1.2の流れ1/5：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/landscape-01.png)
 
-![v1.1.2の流れ2/3：B・C・Aの照合と品質確認で患者コンテキストを育てる流れの説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity-v112-part2.png)
+![v1.1.2の流れ2/5：資料の全区間点検（B）と根拠照合（C）の説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/landscape-02.png)
 
-![v1.1.2の流れ3/3：検索・通知の独立経路と、待ち・不明時の扱い、回数と処理枠の説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity-v112-part3.png)
+![v1.1.2の流れ3/5：概況の項目と順序（A）・品質確認・採用直前の再照合から本人向けの患者情報への説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/landscape-03.png)
+
+![v1.1.2の流れ4/5：検索・通知の独立経路と設定次第のJev外部監査の説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/landscape-04.png)
+
+![v1.1.2の流れ5/5：待ち・不明時の扱いと、概況の回数・巡回配分・昼夜の処理枠の説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/landscape-05.png)
 
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.2/docs/guides/ANTHROPIC.md)を確認してください。
 

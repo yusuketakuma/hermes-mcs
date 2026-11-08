@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="landscape-02-title landscape-02-desc" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
+<title id="landscape-02-title">v1.1.2 患者コンテキスト：資料と根拠（2/5）</title>
+<desc id="landscape-02-desc">患者コンテキストの育成。実行先は現在の設定で決まり、Bの全区間点検とCの根拠照合を経る。合成の説明図。</desc>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
+<rect width="1600" height="900" fill="#f6f4ef"/>
+<text x="48" y="86" font-size="52" font-weight="700" fill="#202124">v1.1.2 患者コンテキスト：資料と根拠（2/5）</text>
+<text x="48" y="132" font-size="28" font-weight="400" fill="#66716f">説明図（実画面・測定値・患者データではありません）</text>
+<text x="48" y="168" font-size="26" font-weight="400" fill="#66716f">図1の資料集合から続きます。実行先は現在の設定で決まる（local／cloud）。</text>
+<text x="48" y="200" font-size="26" font-weight="400" fill="#66716f">3の個別解析をcloudで続ける経路ではありません。</text>
+<path d="M400 292 H1340" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="48" y="254" width="704" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="72" y="306" font-size="44" font-weight="700" fill="#202124">5 B：資料の全区間を点検</text>
+<rect x="848" y="254" width="704" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="872" y="306" font-size="44" font-weight="700" fill="#202124">6 C：根拠を照合</text>
+<rect x="48" y="372" width="704" height="398" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="76" y="428" font-size="30" font-weight="400" fill="#202124">根拠付きの事実を蓄積</text>
+<text x="76" y="472" font-size="30" font-weight="400" fill="#202124">原文・OCR・補助要約を区別</text>
+<text x="76" y="536" font-size="30" font-weight="400" fill="#202124">補助要約は根拠にしない</text>
+<text x="76" y="580" font-size="30" font-weight="400" fill="#202124">出典・版・区間が同じなら</text>
+<text x="76" y="624" font-size="30" font-weight="400" fill="#202124">再利用</text>
+<rect x="848" y="372" width="704" height="398" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="876" y="428" font-size="30" font-weight="400" fill="#202124">出典・引用・対象者・否定・</text>
+<text x="876" y="472" font-size="30" font-weight="400" fill="#202124">時制を確認</text>
+<text x="876" y="536" font-size="30" font-weight="400" fill="#202124">資料品質の条件を確認</text>
+<text x="876" y="580" font-size="30" font-weight="400" fill="#202124">未完了・失敗の資料は</text>
+<text x="876" y="624" font-size="30" font-weight="400" fill="#202124">採用しない</text>
+<rect x="36" y="240" width="1516" height="518" rx="18" fill="none" stroke="#087f5b" stroke-width="3" stroke-dasharray="12 8"/>
+<text x="60" y="232" font-size="26" font-weight="700" fill="#087f5b">図3の7・8へ続く同じ範囲（5〜8）</text>
+<rect x="848" y="800" width="704" height="44" rx="8" fill="#e9f5ef"/>
+<text x="864" y="831" font-size="26" font-weight="700" fill="#087f5b">検証済みの事実を図3へ</text>
+</svg>
