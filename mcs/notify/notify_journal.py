@@ -4,8 +4,9 @@ from __future__ import annotations
 import os
 import math
 import time
-from adapters.common.journal import PHASES, parse_record
 from notify_scope import SUPPORTED_TRANSPORTS
+
+PHASES = ("claimed", "begin", "granted", "denied", "started", "result", "receipt")
 
 
 class JournalReadLimit(ValueError):
@@ -25,6 +26,9 @@ def scan_journals(dirs: dict, *, deadline=None, max_bytes=None, max_rows=None) -
     'result' row — absence-of-evidence verdicts are untrustworthy for
     any attempt recorded in it.
     """
+    # Candidate bootstrap contains mcs/, not the transport adapters.
+    from adapters.common.journal import parse_record
+
     if any(value is not None and (type(value) is not int or value <= 0)
            for value in (max_bytes, max_rows)) or (deadline is not None and (
                type(deadline) not in (int, float)

@@ -1,6 +1,8 @@
 """Optional operator read limits never turn a partial journal into evidence."""
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -73,3 +75,22 @@ def test_invalid_limits_are_rejected_before_reading(key, limit):
 def test_invalid_deadline_is_rejected_before_reading(deadline):
     with pytest.raises(ValueError, match="^bad_journal_budget$"):
         notify_journal.scan_journals({}, deadline=deadline)
+
+
+def test_evidence_module_import_preserves_the_core_only_bootstrap():
+    root = Path(__file__).resolve().parents[2]
+    code = '''import sys,builtins
+sys.path.insert(0,sys.argv[1])
+import _mcs_path
+original=builtins.__import__
+def checked(name,*args,**kwargs):
+    if name == "adapters" or name.startswith("adapters."):
+        raise ImportError("adapter_not_in_candidate_bootstrap")
+    return original(name,*args,**kwargs)
+builtins.__import__=checked
+import notify_journal
+assert "started" in notify_journal.PHASES
+'''
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(root / "mcs")],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
