@@ -117,7 +117,7 @@
    "category": "fixed",
    "id": "cloud-progress-permission-evidence",
    "path": "changes/archive/1.1.2/cloud-progress-permission-evidence.json",
-   "sha256": "a605538409c02480d644b76d4d87868d0567bd312d01a5c03cf66b9d538fe118",
+   "sha256": "021d0c19fc919c6aa6c330ac10219ab48c0ed900cf5c053200ed7819f4bccf4d",
    "title": "クラウド送信の承認証拠が不明な場合も進捗を推測で隠さない"
   },
   {
