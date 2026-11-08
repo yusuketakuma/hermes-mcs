@@ -138,7 +138,7 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
 **ロールアウト費用（必須確認・コード根拠）**
 
 C1/E は「小さい差分だから再処理への影響ゼロ」としない。契約束縛は
-ソース全体に及ぶ：
+ソース全体に及ぶ。
 
 - `_LOADED_SOURCE_PATHS`（`extract_llm_source_contract.py:205-229`）は
   `patient_context_refresh_readiness` 等を含み、`_upgrade_contract`
