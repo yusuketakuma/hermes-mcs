@@ -1236,7 +1236,7 @@ def test_transient_read_error_after_reservation_stays_unsent_and_discarded(route
     assert not provider.possibly_sent and not led.db.in_transaction
 
 
-def test_capacity_read_failure_discards_previously_settled_response(routed, monkeypatch):
+def test_config_read_failure_preserves_previously_settled_response(routed, monkeypatch):
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     unavailable, posts = [False], []
@@ -1257,14 +1257,15 @@ def test_capacity_read_failure_discards_previously_settled_response(routed, monk
                                      deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
     provider("synthetic", deadline=deadline, max_tokens=100)
     unavailable[0] = True
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_changed"):
+    with pytest.raises(cloud_inference.CloudObservationIncomplete, match="cloud_guard_unverified"):
         provider("synthetic", deadline=deadline, max_tokens=100)
     result, = led.artifacts("cloud_usage_result")
     meta = json.loads(result["meta"])
     assert len(posts) == 1 and meta["http_class"] == "http_200"
     assert meta["usage"]["input_tokens"] == 10 and meta["usage"]["output_tokens"] == 5
-    disposition, = led.artifacts("cloud_usage_disposition")
-    assert json.loads(disposition["meta"])["disposition"] == "discarded_scope"
+    assert json.loads(result["content"])["text"] == '{"symptoms":[]}'
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not provider.discarded and provider.final_disposition is None
     assert not led.db.in_transaction
 
 
