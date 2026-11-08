@@ -1,11 +1,10 @@
-"""Read durable delivery evidence for restore and human resolution without importing their writers."""
+"""Read durable delivery evidence using the worker's journal parsing contract."""
 from __future__ import annotations
 
-import json
 import os
+from adapters.common.journal import PHASES, parse_record
 from notify_scope import SUPPORTED_TRANSPORTS
 
-PHASES = ("claimed", "begin", "granted", "denied", "started", "result", "receipt")
 
 def _journal_dirs(dirs: dict) -> list:
     return [dirs[t + "_state"] for t in SUPPORTED_TRANSPORTS]
@@ -39,7 +38,7 @@ def scan_journals(dirs: dict) -> tuple[dict, bool]:
                     if not terminated:
                         tainted = True
                     try:
-                        row = json.loads(raw)
+                        row = parse_record(raw)
                     except (ValueError, RecursionError):
                         tainted = True
                         continue

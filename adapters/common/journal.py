@@ -40,6 +40,18 @@ PHASES = ("claimed", "begin", "granted", "denied",
           "started", "result", "receipt")
 
 
+def parse_record(raw):
+    """Read journal JSON without allowing repeated keys to hide evidence."""
+    def pairs(items):
+        record = {}
+        for key, value in items:
+            if key in record:
+                raise ValueError("duplicate_journal_key")
+            record[key] = value
+        return record
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
 def card_message_id(records: dict, delivery_id: str) -> str | None:
     """Latest factual card result for a delivery — dependent parts may
     only attach to a card the journal proves was posted."""
@@ -166,7 +178,7 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
                     if not raw.strip():
                         continue
                     try:
-                        row = json.loads(raw)
+                        row = parse_record(raw)
                     except (ValueError, RecursionError):
                         row = None
                     aid = row.get("attempt_id") if isinstance(row, dict) \
@@ -180,7 +192,10 @@ def compact(state_dir: str, *, active: str, file_ok, prunable) -> int:
                     lines.append((raw, row, aid))
         except OSError:
             clean = False
-        if clean and path != active:
+        if not clean:
+            # An unreadable row can hide another file's attempt membership.
+            return 0
+        if path != active:
             files[name] = lines
     dropped = 0
     for name, lines in files.items():
@@ -233,7 +248,7 @@ def _parse_rows(data: bytes, out: dict) -> bool:
         if not raw.strip():
             continue
         try:
-            row = json.loads(raw)
+            row = parse_record(raw)
         except (ValueError, RecursionError):
             clean = False
             continue  # torn tail line — earlier rows still count
