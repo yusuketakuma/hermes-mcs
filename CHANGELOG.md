@@ -19,7 +19,7 @@ v1.1.2は、解析と必要な品質確認を終えた資料から患者コン�
 | 通知カードの原文 | 本文のみを表示 | Discord・LINE WORKSで原文と添付を表示 | 返信内容をその場で確認できる |
 | 導入・更新の記録 | 中断時は手動で段階を調査 | 最後に開始した段階を install_progress.json へ記録 | 中断メッセージと check 案内に段階名が出る |
 
-![原文とOCRのローカル解析から、確認済み資料による患者コンテキスト作成と、同じ患者の原資料検索へ進む説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity.png)
+![MCSの原文を保存し、OCR・個別解析・資料集合の固定を経て、B・C・Aの照合と品質確認で患者コンテキストを育て、検索と通知は独立して使える流れの詳細図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/cloud-continuity-v112-detailed.png)
 
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.2/docs/guides/ANTHROPIC.md)を確認してください。
 

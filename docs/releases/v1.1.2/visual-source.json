@@ -22,15 +22,15 @@
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.html",
-   "sha256": "e11861ef009da91cdc160e6dd7cf6e479219053a40b177900ecc49cbb2afe45e"
+   "sha256": "d82e56cca33d41d9ed5db0f33cf48d59c67c949ef28261d8a931fbb03b31b218"
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.svg",
-   "sha256": "f6da5dd04331e0b833f60a5a63e0dc7b74f3e927e07fee706efd9debc02f04ee"
+   "sha256": "72ace793810a5a84f7c6fab94e47dfd68d279bb07e74ddab51867cb1f90faa62"
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.png",
-   "sha256": "57786e05a308700b360e0006b5e678ad844c537ce47c0985c62136a25109c3e5"
+   "sha256": "5463a25717aad31d00977b36e925f252418ce712cc529f660a83c8bf6a81a7cd"
   },
   {
    "path": "docs/releases/v1.1.2/setup-steps-v112.html",
@@ -43,6 +43,18 @@
   {
    "path": "docs/releases/v1.1.2/setup-steps-v112.png",
    "sha256": "19dc2f36d8c03fc4c9f323ca7066d25ae642a482a4117933f88bb42d59b56fc1"
+  },
+  {
+   "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.html",
+   "sha256": "bcaff8ee42ef8f94e940ff97ac6d586b713204fa0d4f4be15196e8ffc1101e61"
+  },
+  {
+   "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.svg",
+   "sha256": "33f72bf27c515249df1e3cb70c431fb401573c117a6fe194311669f7c072fbaf"
+  },
+  {
+   "path": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.png",
+   "sha256": "082633f49229739b4d9828d985a38ad2d06596c6403e89ce9dc168c2b09c3e10"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
@@ -52,7 +64,8 @@
   "停止前の予約と課金済み回答の回収は証跡照合経路として存続。確認不能な結果は成功・失敗へ推測しない。",
   "今回の部分作成・回数管理・患者内検索・昼夜3枠を反映。原資料検索は解析完了を待たない独立の矢印で表す。",
   "2026-11-08 visual-docs-16 r4-r7修正: 3枚ともHTML原稿をrepoへ保存しSVG/PNGを再生成。data-processingはMCS収集→Mac保存+OCR→個別localを主経路とし、患者コンテキストと通知・検索を並行する枝として修正（完成待ちの誤読を解消）。patient-findはMCS返信を通知カードで読む場面へ限定。setup-stepsはinstall_progress.jsonを最終開始段階の記録・再開はUPGRADE/SETUP診断へ修正し、check合格≠接続受入を明記。初回PNGはXML prolog混入でparser error表示となり、wrapperからprologを除きnested svgへwidth/heightを明示して再描画。実画面・測定結果ではない合成説明図。",
-  "PNGは macOS qlmanage + ImageMagick のwrapper/crop経路。wrapperは1200x1200へ nested <svg x=405 y=80 width=390 height=H viewBox> で原稿を格納（XML prologはwrapperへ入れない）。寸法は data-processing 390x660 / patient-find 390x640 / setup-steps 390x640。"
+  "PNGは macOS qlmanage + ImageMagick のwrapper/crop経路。r9以降のwrapperは1200x1200へ原稿の中身をflatな <g transform=translate(405 80)> で格納（nested <svg> はqlmanageで配置がずれるため不使用）（XML prologはwrapperへ入れない）。寸法は data-processing 390x660 / patient-find 390x640 / setup-steps 390x640。",
+  "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは4000x4000 wrapperへflat <g>で格納しqlmanage -s 4000で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。"
  ],
  "renderer": {
   "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
@@ -60,8 +73,8 @@
   "tool": "macOS qlmanage + ImageMagick",
   "wrapper": "1200x1200 SVG with source SVG nested inside g transform=translate(405 80)"
  },
- "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。",
- "source": "docs/releases/v1.1.2/cloud-continuity.svg",
+ "scope": "v1.1.2 の主要な流れ（原文・OCR保存、昼夜のローカル3枠、部分的な患者コンテキスト、回数管理、患者内検索）。最終候補SHAの固定・受入証拠ではない。加えて全体処理・患者検索・導入4段階の3枚の合成説明図（HTML原稿・SVG・PNG）を同版へ追加。 2026-11-08 r11-r13で主図をcloud-continuity-v112-detailed（780x3944・9主ノード・3章）へ作り直した。旧cloud-continuity.svg/.pngは公開済みasset 721517700の履歴として削除・上書きせず保持。",
+ "source": "docs/releases/v1.1.2/cloud-continuity-v112-detailed.svg",
  "source_checkout_observation": {
   "head": "b0b5f59b000e447ab0b4184b9b4e97eaa23c35b4",
   "dirty": true,
@@ -143,6 +156,7 @@
  "visual_check": {
   "checked": "2026-11-07、390px幅のPNGで文字欠落・重なり・余白と、検索が解析完了に依存しない矢印を目視確認。",
   "narrow_width_ok": true,
-  "png_rendered": true
+  "png_rendered": true,
+  "detailed_2026_11_08": "Devinのローカル確認は寸法・XML well-formed・紙色背景と390px縮小の読取りのみ。視覚受入はRootの独立目視が正本で未実施。"
  }
 }

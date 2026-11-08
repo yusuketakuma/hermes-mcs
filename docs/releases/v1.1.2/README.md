@@ -12,7 +12,7 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 ローカルLLMは日本時間08:00〜20:00に新着・対話1枠と背景処理2枠、20:00〜08:00に背景処理へ最大3枠を使います。夜間の新着は次の空き枠を優先し、実行中の処理は中断しません。3物理枠を前提とし、backendの起動設定を自動変更する機能ではありません。
 
-![個別解析から確認済み資料の患者コンテキスト作成へ進み、同じ患者の原資料を検索する説明図](cloud-continuity.png)
+![MCSの原文を保存し、OCR・個別解析・資料集合の固定を経て、B・C・Aの照合と品質確認で患者コンテキストを育て、検索と通知は独立して使える流れの詳細図](cloud-continuity-v112-detailed.png)
 
 ![MCSの投稿・返信・添付をMacへ保存し、添付OCRと個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成し、通知・検索は解析完了を待たず使える流れの説明図](data-processing-v112.png)
 
@@ -22,7 +22,7 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 説明図は実画面や性能の測定結果ではありません。患者データ・実投稿は使用していません。画像・PDFのローカルOCR、患者情報と運用ログを分けるSlack通知先、Discord・LINE WORKSの原文表示も本版に含みます。個別投稿への新規クラウド送信は停止し、患者コンテキストの作成・更新と品質修復に限定します。旧予約・課金済み回答・結果不明の記録は保持します。[外部送信と費用の条件](../../guides/ANTHROPIC.md)を確認してください。
 
-全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は各[SVG](cloud-continuity.svg)（cloud-continuity・data-processing-v112・patient-find-v112・setup-steps-v112）、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
+全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は各[SVG](cloud-continuity-v112-detailed.svg)（cloud-continuity-v112-detailed・data-processing-v112・patient-find-v112・setup-steps-v112）、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
 
 2026-11-08の追補時点では、初回の失敗95件と後続63fileでの13失敗を修正・再検証しました。最後の関連5fileは125件成功・失敗0・skip 0で、追加の負の対照も確認済みです。実行済みの成功結果と合わせてローカル検証を受け入れましたが、単一の全体suiteやGitHub CIの一括成功ではありません。その追補時点の本番は `d621f96d` のままで、今回の新機能は未適用・未公開でした。
 
