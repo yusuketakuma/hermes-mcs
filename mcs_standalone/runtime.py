@@ -279,7 +279,6 @@ class Runtime:
                           "last_error": None, "retry_at": None, "started_at": None}
         self.status_body = None
         self.status_written = None
-        self._startup_restart_file_checked = False
         self.write_error = {}
         subs = {"PYTHON": python_executable(cfg, root=self.root), "REPO": str(REPO),
                 "DATA": str(self.data), "RUNTIME_HOME": str(self.root)}
@@ -344,37 +343,6 @@ class Runtime:
             self._write_failed(SCHEDULE_FILE, exc)
         else:
             self._write_ok(SCHEDULE_FILE)
-
-    def _retire_previous_restart(self):
-        """Retire a verified old request once, before exposing this host generation."""
-        if self._startup_restart_file_checked:
-            return False
-        self._startup_restart_file_checked = True
-        if self._planning_host_fd is None or self.status_written is not None:
-            return False
-        from mcs_util import strict_json
-        path = self.data / service.RESTART_FILE
-        try:
-            value = strict_json(safe_io.read_private_bytes(path))
-            if (type(value) is not dict or set(value) != {"generation", "request_id", "requested_at"}
-                    or any(type(value[key]) is not str or re.fullmatch("[0-9a-f]{32}", value[key]) is None
-                           for key in ("generation", "request_id"))
-                    or type(value["requested_at"]) not in (int, float)
-                    or not 0 <= value["requested_at"] < 1e12
-                    or not math.isfinite(value["requested_at"])
-                    or value["generation"] == self.generation):
-                return False
-        except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
-            return False
-        # The single-host lock proves the old owner exited. No legitimate caller
-        # can target our generation before its first status publication.
-        try:
-            path.unlink()
-            safe_io.fsync_dir(self.data)
-        except OSError as exc:
-            self._write_failed(service.RESTART_FILE, exc)
-            return False
-        return True
 
     def _publish_status(self, now, updating):
         body = {"pid": os.getpid(), "generation": self.generation, "started_at": self.started_at,
@@ -628,19 +596,16 @@ class Runtime:
     def _planning_controls_clear(self):
         from adapters.sdc.protocol import strict_json
 
-        try:
-            request = strict_json(safe_io.read_private_bytes(self.data / service.RESTART_FILE))
-        except FileNotFoundError:
-            pass
-        else:
-            if (type(request) is not dict or set(request) != {"generation", "request_id", "requested_at"}
-                    or any(type(request[k]) is not str or re.fullmatch("[0-9a-f]{32}", request[k]) is None
-                           for k in ("generation", "request_id"))
-                    or type(request["requested_at"]) not in (int, float)
-                    or not math.isfinite(request["requested_at"])
-                    or request["requested_at"] < 0
-                    or request["generation"] == self.generation):
-                raise RuntimeError("standalone_restart_planning_unavailable")
+        for generation in (None, self.generation):
+            path = service.restart_request_path(self.root, generation)
+            try:
+                request = service.read_restart_request(path)
+            except FileNotFoundError:
+                if os.path.lexists(path):
+                    raise RuntimeError("standalone_restart_planning_unavailable") from None
+            else:
+                if generation is not None or request["generation"] == self.generation:
+                    raise RuntimeError("standalone_restart_planning_unavailable")
         # No O_CREAT: a missing lock is unknown, not evidence of an idle updater.
         fd = os.open(self.data / "update.lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         try:
@@ -1151,18 +1116,15 @@ class Runtime:
                 and not native["running"] and not self.delivery_admission.snapshot()["active_passes"])
 
     def _restart_requested(self, now):
-        path = self.data / service.RESTART_FILE
-        try:
-            raw = safe_io.read_private_bytes(path)
-            value = json.loads(raw)
-            stamp = value["requested_at"]
-            return (value["generation"] == self.generation
-                    and isinstance(value["request_id"], str)
-                    and len(value["request_id"]) == 32
-                    and type(stamp) in (int, float) and math.isfinite(stamp)
-                    and -2 <= now - stamp <= service.STATUS_TTL)
-        except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
-            return False
+        for generation in (self.generation, None):
+            try:
+                value = service.read_restart_request(service.restart_request_path(self.root, generation))
+                if (value["generation"] == self.generation
+                        and -2 <= now - value["requested_at"] <= service.STATUS_TTL):
+                    return True
+            except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError):
+                continue
+        return False
 
     # ------------------------------------------------------------ connector
 
@@ -1216,7 +1178,6 @@ async def serve(root, cfg, connector=None, *, restart_provision=None):
         except BlockingIOError:
             raise config.ConfigError("standalone_already_running") from None
         runtime._planning_host_fd = fd
-        runtime._retire_previous_restart()
         stopping = asyncio.Event()
         registered = []
         worker = None

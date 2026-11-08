@@ -66,6 +66,46 @@ def status(root, *, now=None):
         raise ValueError("standalone_status_unavailable") from None
 
 
+def restart_request_path(root, generation=None):
+    """Keep automatic intents separate from the existing manual request file."""
+    name = RESTART_FILE
+    if generation is not None:
+        if type(generation) is not str or re.fullmatch(r"[0-9a-f]{32}", generation) is None:
+            raise ValueError("standalone_generation_changed")
+        # shortcut: Keep old generation files; add bounded retention if their count becomes costly.
+        name += "." + generation
+    return Path(root).expanduser().resolve() / "data" / name
+
+
+def read_restart_request(path):
+    """Read a bounded native restart intent without accepting ambiguous records."""
+    from mcs_util import strict_json
+
+    value = strict_json(safe_io.read_private_bytes(path, 2048))
+    if (type(value) is not dict or set(value) != {"generation", "request_id", "requested_at"}
+            or any(type(value[key]) is not str or re.fullmatch(r"[0-9a-f]{32}", value[key]) is None
+                   for key in ("generation", "request_id"))
+            or type(value["requested_at"]) not in (int, float)
+            or not 0 <= value["requested_at"] < 1e12
+            or not math.isfinite(value["requested_at"])):
+        raise ValueError("standalone_restart_request_unverified")
+    return value
+
+
+def automatic_restart_blocked(root, generation):
+    """Preserve current or unknown manual intent; ignore only a proved old generation."""
+    if os.path.lexists(restart_request_path(root, generation)):
+        return True
+    manual = restart_request_path(root)
+    try:
+        value = read_restart_request(manual)
+    except FileNotFoundError:
+        return os.path.lexists(manual)
+    except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
+        return True
+    return value["generation"] == generation
+
+
 def request_restart(root, *, expected_generation=None):
     live = status(root)
     if expected_generation is not None:
@@ -77,13 +117,15 @@ def request_restart(root, *, expected_generation=None):
                 or "restart_reservation" not in live or live["restart_reservation"] is not None
                 or "update_marker" not in live or live["update_marker"] is not None):
             raise ValueError("standalone_restart_busy")
+        if automatic_restart_blocked(root, expected_generation):
+            raise ValueError("standalone_restart_busy")
     value = {"generation": live["generation"], "request_id": uuid.uuid4().hex,
              "requested_at": time.time()}
-    path = Path(root).expanduser().resolve() / "data" / RESTART_FILE
+    path = restart_request_path(root, expected_generation)
     if expected_generation is None:
         atomic_write(str(path), lambda stream: json.dump(value, stream), mode=0o600)
     else:
-        # A simultaneous manual request wins; never replace its intent with an automatic one.
+        # Late old writers cannot occupy the next generation's automatic path.
         safe_io.publish_new_bytes(path, json.dumps(value).encode("utf-8"))
     return value["request_id"]
 
