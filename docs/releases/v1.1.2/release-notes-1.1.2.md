@@ -67,6 +67,9 @@
 - **監視アラートの対処手順と照会コードを分かりやすく改善**
   MCS監視のアラートで、問題・影響・原因と対処・照会コードが一目で分かる形になりました。ディスク不足の警告は問題と影響と対処を個別に示し、開発元への連絡には共有用の doctor --share を案内します。再開・再起動のコマンドは実行できる完全な形で表示され、LINE WORKS アダプターの再起動方法は Mac と Linux で正しいコマンドだけが出ます。
 
+- **OCRページのローカル推論に使う時間の上限を延ばす**
+  添付OCRのローカル推論が1ページの処理に使える時間を、120秒から最大300秒へ延ばします。長いページを途中で打ち切られにくくなります。設定変更は不要で、残りのジョブ予算が短い場合はそれ以下に収まります。
+
 ### 不具合修正
 
 - **添付OCRから解析・通知・患者コンテキストまでの処理を接続**
@@ -144,6 +147,9 @@
 - **対象を限定した解析で全履歴の残件を0件と誤表示する問題を修正**
   新着や担当枠だけを対象にした解析では、末尾の全履歴の残件集計を省きます。解析対象が空でも全体の残件を0件とは表示せず、不明として扱います。
 
+- **動作診断がLINE WORKSアダプターの対処を表示できない問題を修正**
+  mcs doctor（動作診断）がLINE WORKSアダプターの配送処理を調べるとき、削除済みの内部名を参照して診断が失敗する問題を修正しました。監視通知と同じ対処文をOSに合わせて表示します（macOSはlaunchctl、Linuxはsystemctl）。
+
 ### 更新時の注意
 
 - 患者コンテキストの作成回数：患者ごとに日本時間の1日4回、原則3時間間隔を適用します。全資料の処理完了を初めて反映する更新は間隔だけを省き、1日4回は超えません。同じ入力の回復と有限回の品質修復は同じ1回にまとめます。送信前に止まったと確認できる初回の試行だけ回数を戻し、送信結果不明の記録と回数は保持します。個別資料の解析・品質確認、検索、閲覧はこの制限の対象外で、クラウドの費用・送信回数の上限は別に適用します。
@@ -217,6 +223,10 @@
 - 自動復帰の監視ジョブ：導入・更新時のサービス再設定で、standalone と Hermes の監視ジョブに --send を付与します。無効化する場合は config.json の auto_recovery.enabled を false にしてください。手動停止や更新・復元待ちの状態は自動解除しません。Hermes 側は対象PID・要求ID・更新ロックを受け取る復旧ツールが必要で、旧ツールや検証できないツールでは要求を保留します。
 
 - 対象を限定した解析の残件表示：更新後の処理から適用されます。追加設定は不要です。解析対象・モデル・品質確認・保存条件は変わりません。
+
+- OCRページのローカル推論の期限：更新後の最初のMCS OCRジョブから、ローカル推論の1ページあたり期限は最大300秒（残りのジョブ予算が短い場合はそれ以下）になります。設定変更・辞書有効化・手動操作は不要です。途中で止まっていたページは、これまでどおりcheckpointから未完了chunkだけを再開します。
+
+- LINE WORKSアダプターの診断対処：追加操作は不要です。mcs doctor を実行すると、LINE WORKSアダプターの停止・起動失敗など既知の理由に対して、監視アラートと同じ対処文が表示されます。
 
 ### 技術詳細
 
@@ -1078,5 +1088,21 @@
 - 対象を限定しない処理の正確な残件集計と期限付きの概算キャッシュは維持します。限定した処理の完了件数は既存キャッシュに加算されないため、次の全体集計までは概算が多めに残る場合があります。
 - 対象選択や保存の経路は維持します。担当枠の選択時などに使う別の集計を全て除いた変更ではありません。
 - 根拠: mcs/extract/llm/extract_llm_runner.py、tests/extract/llm/test_stab_pending_pred.py
+
+#### OCRページのローカル推論に使う時間の上限を延ばす
+
+- 変更は mcs/ops/mcs_ocr.py の LOCAL_CALL_S=120→300 の1定数だけです。_drain が attachment_inference.run_pending(stage='local') へ渡す deadline=min(ジョブ残り-5秒, 現在+300秒) になります。ジョブ全体の DRAIN_BUDGET_S=900 と終端5秒の猶予、原本OCR側の timeout_seconds+5 による段取り（raw_budget）判定は変えていません。
+- 実装の _drain→run_pending を通す合成検証で、80秒×2chunkの長いページが新しい300秒では1回のpassで完了し chunk を再送せず ready になること、旧120秒では途中leafを保存して deferred になることを確認しました（fake clockとcheckpoint seam・実モデル呼出なし）。処理速度の改善や実機でのタイムアウト解消を実測したものではありません。
+- ローカルと原本OCRの段取りでは、残り時間が raw_budget 以上 raw_budget+LOCAL_CALL_S 未満の間はローカル段を後回しにして原本OCRを優先する既存の判定があります。LOCAL_CALL_S が300秒になるとこの後回し区間が広がり、原本OCRの優先は維持されます。
+- callee（attachment_inference.run_pending）の既定期限120秒は、呼出側が明示期限を渡さない経路の既定として残しています。ファイル全体が checkpoint の contract identity に含まれるため、不要な版更新・途中leafの再処理を避けるためです。
+- 変更しない時間の上限: 抽出のHTTP呼出上限300秒、semantic 600秒、共通local_llm既定90秒、原本OCRの timeout_seconds 既定120秒、ジョブ全体の処理予算900秒（保存時のwriter待ち等を含む厳密な壁時計上限ではありません）、終端5秒の猶予、slot優先・試行上限・paid/unknown・原文QC。
+- 根拠: mcs/ops/mcs_ocr.py、tests/ops/test_ocr_independent_drain.py、tests/ops/test_mcs_ocr_entry.py、tests/extract/test_attachment_inference_checkpoints.py、docs/guides/ATTACHMENT_OCR.md
+
+#### 動作診断がLINE WORKSアダプターの対処を表示できない問題を修正
+
+- mcs/ops/mcs_setup.py の doctor 表示が、監視アラート改善で削除済みの health_watch._LINEWORKS_ACTION を import して ImportError になっていました。既存の health_watch._lineworks_actions()（監視側の _reason_rows と同じ helper で、OS別の再起動手順を組み立てる _lw_restart() を内包）へ接続し、生成された辞書を1回だけ取得して、reason が既知キーに一致する場合だけ対処文を表示します。古い定数や互換wrapperは復活させていません。
+- 対処文は監視アラートと同一です。macOSは launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks、Linuxは systemctl --user restart hermes-mcs-lineworks.service、その他のOSでは両方の手順を併記します。辞書にない理由には再起動文を出しません。
+- テストは実行OSに依存しないよう platform 別の期待値（darwin/linux/その他のfallback）へ更新し、未知の理由で再起動文が出ないことも確認しています。Slack・Discord・standalone の経路は既存の doctor 回帰で変更がないことを確認しました。
+- 根拠: mcs/ops/mcs_setup.py、mcs/ingest/health_watch.py、tests/ops/test_lineworks_diagnostics_and_init.py
 
 </details>

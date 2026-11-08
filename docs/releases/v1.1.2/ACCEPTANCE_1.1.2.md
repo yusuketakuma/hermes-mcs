@@ -299,6 +299,16 @@
 - この追補時点の本番は f67a5447 適用済みで auto/scoped は未適用。初回 snapshot timeout 9355 の後、9357–9362 で6回 publish（9358/9362 は jobs-only、他 full は overshoot 0）。rollup deadline 先送りは残る。unknown 配送2件・OCR 表対応10件は保護 hold で未解消。Oracle browser GPT-6+Pro は UI 選択 verified だが backend 独立同定は不可。MCS 側の保守 gate が遅延 restart の結果不明を世代交代後も hold することを確認（Hermes native の保証ではない。native の遅延作用は PID だけでは除外できないため保留を維持する）。患者医療精度・新規 Mac 実接続導入・運用復旧は未検証。公式 master は 2026-11-08T06:41Z 確認で現行 20261013・19286件・同梱同版・offline checker rc0。公式 downloadMenu/yFile を stdlib urllib（no-proxy/no-redirect・32MiB上限・timeout60・1回）で 2026-11-08T07:10Z に取得し、ZIP 1,158,682 bytes・SHA-256 `c3efc8aa…`、member `y_20261013.csv` 6,083,884 bytes・SHA-256 `6fa8f08c…`、19,286行・全行42項目が候補 manifest と完全一致した（非機密JSON証跡は私有audit `drug-master-yfile-20261108/verify.json`）。新たな無断外部サービス・有料 fallback は追加していない。
 - 公開前の最終受入根拠はこの制約を正直に記載する。新しい Mac での全導入と公開は未実施で、既存 Release 下書きは未公開。既存 unknown の自動解除・再送は行わない。
 
+## OCR予算延長とLINE WORKS診断の追補
+
+- 文書の基準は候補 `a6327313`。既存121件へ `ocr-local-inference-budget`・`lineworks-doctor-remedy` の2件を加え全123件へ集約した。新fragmentは原文のbytesを保って archive し、既存121件の hash・過去の受入・図3資産を保持する。`changes/` 直下の loose fragment は0件。
+- OCRローカル推論の期限は `mcs/ops/mcs_ocr.py` の `LOCAL_CALL_S`=120→300 のみ。`_drain` が `attachment_inference.run_pending(stage='local')` へ渡す deadline は `min(ジョブ残り-5秒, 現在+300秒)`。callee 既定120秒・checkpoint contract identity・抽出HTTP300秒・semantic 600秒・共通local_llm既定90秒・原本OCR timeout_seconds既定120秒・DRAIN_BUDGET_S=900・終端5秒・slot優先・試行上限・paid/unknown・原文QC は全て不変。残り時間が raw_budget 以上 raw_budget+LOCAL_CALL_S 未満ではローカル段を後回しにして原本OCRを優先する既存判定を維持する。
+- 検証は関連3fileの40件成功・失敗0・skip 0・終了0（証跡 `ocr-budget-r4/`）。実装の `_drain`→実 `run_pending` を通す合成検証で、80秒×2chunk のページが新300秒では1pass完了・chunk再送なし・ready、旧120秒では途中leafを保存して deferred になることを RED/GREEN で実測した（fake clockとcheckpoint seam・実モデル呼出なし）。処理速度の改善や実機でのタイムアウト解消を実測したものではない。
+- LINE WORKS診断の修正は `mcs_setup.py` が削除済み `health_watch._LINEWORKS_ACTION` を import して ImportError になっていた問題を、既存 `health_watch._lineworks_actions()`（`_reason_rows` と同じ helper・`_lw_restart()` 内包）へ接続して解消した。古い定数や互換wrapperは復活させていない。対処文は監視アラートと同一で、darwin=launchctl kickstart・linux=systemctl --user restart・その他=両案内。辞書にない理由には再起動文を出さない。関連3file99件成功・失敗0・終了0（証跡 `lineworks-doctor-11/`）。remote CI run42433639313 の同 node 失敗（release系 `70e4ae5e` でも再現）を本修正で解消する見込みだが、CI の再実行成功は未確認。
+- remote CI run42433639313 は Codex 独立確認で、失敗2job（lint-test/macos）の pytest 失敗 node は既知の LINE WORKS ImportError のみで追加 node・collection error・internal error・ログ欠落なし、残4jobは success と確定した。両 job の pytest diagnostics step は CreateArtifact の storage quota 超過で、これは製品の成否とは別のインフラ制限として保持する。quota 超過を成功・失敗のいずれにも数えず、候補 HEAD での CI 再実行は未実施。
+- 親工程が既存 mcs.log 末尾8MiBを bounded read-only で再読し、08観測中の failed1 行に first_calls1/repair_calls1/length_stops0・repair_issues.structure1 を確認した。初回出力の構造検証不合格から修復呼出へ進んだことは確定するが、最終出力の詳細と timeout 因果はこの集約に無く未確定のままとする。「LLM呼出なし」「時間不足」とは断定せず、採用0・原因不明を正常化もしない。品質不適合は既存 gate で不採用となる正しい処理で、gate 緩和・試行数増・再送は行わない。
+- この追補時点の本番は `2bda672d` 適用済みで、OCR予算・LINE WORKS診断の2修正は未適用。自然観測・公開・新しいMacでの全導入・既存unknownの解除・再送は行っていない。単一の全体suiteやGitHub CI全ジョブの成功とは扱わない。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。
