@@ -149,17 +149,17 @@
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.html",
-   "sha256": "50c2648f3262b7400cefc37a04c5392fda4c2cb96906c0675f4f169f3cb83035"
+   "sha256": "56e6c1691f7878df9b5e66fa31ef5f6bcd5adb8a0ba9e13f556beaa458c8b0dd"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.svg",
-   "sha256": "127273f70bfb60f6ebd9a009b400d8b22bcb9a4b11e04ff16057ec6399c76b87"
+   "sha256": "34c341efc5e1e50e593d80469787de9cce325afb9852d6eefc2a3dd19d3fd2ba"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.png",
-   "sha256": "e05b57e7f333c71136c0fd8fbe032f673b7fb786365f4676ac6da849d6930552"
+   "sha256": "a9a5a96229d14c1cff9e54064ffe1b066b717283ab77972020e11439cddb2a43"
   }
  ,
   {
@@ -188,7 +188,7 @@
   "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは正方wrapperへflat <g>で格納しqlmanage -s max(4000,H+100)で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。",
   "2026-11-08 r15: Root実見の指摘で詳細図のトポロジーを修正。主線1→9を中央の縦線で接続し、OCRを通らない資料は1→3の右外周rail、検索・通知は1から左外周railで末尾の独立panelへ接続（主boxを横断しない）。Jevは主線の通過先ではない末尾panel。2の注記を「本文はOCRを通らない／添付なし・OCR無効もOCRを通らない／有効OCRが未完の添付は完了扱いしない」へ、8を「必要な品質確認」、9の失効を「保存済みの原資料で訂正・削除・失効を検知したら」へ修正。冒頭は番号をデータ依存の順・複数周回・確認済み結果の再利用と説明し、6:3:1は巡回順の配分で1周で5→6→7を全て行うとは限らないと明記。",
   "2026-11-08 r-split: 詳細図 cloud-continuity-v112-detailed（780x4326）がRelease表示で縦長すぎたため、同じ要素を章ごとに cloud-continuity-v112-part1（保存と個別解析780x1360）・part2（患者context育成780x1800）・part3（活用・待ち・回数780x1540）の3枚へ分割。part1のbox3注記は「3/3 の表を参照」、各部のrailは部間の継続として端で表す。旧detailedのHTML/SVG/PNGと公開済assetは来歴として保持。描画は同じqlmanage+magickの正方wrapper経路。",
-  "2026-11-08 landscape-design-23: 詳細図を横長1600x900の工程帯＋説明列形式の5枚（landscape-01〜05）へ全面的に作り替え。内容は旧part1〜3/detailedと同じ項目を保持し、OCR bypass・検索通知の独立枝・Jevの独立欄・5〜8の破線枠・待ち不明4組・概況回数と昼夜処理枠を新レイアウトへ再配置。PNGはqlmanage+ImageMagickの既存wrapper/crop経路（1700x2500 viewBox内で原稿をflatなg transform=translate(50 400)へ格納し、実測trim 2354x1324+73+588をcropして1600x900へ縮小）。実PNGを全枚目視確認し、1600x900では本文判読・390pxでは工程番号と主要見出しが判読可能。旧detailed/part/cloud-continuityのHTML/SVG/PNGは削除せず来歴として保持。 2026-11-08 landscape-design-23 r2修正: rendererをqlmanageからmacOS標準sipsへ変更（qlmanage実PNGが明朝系描画でREADME実ゴシックと不一致だったため、generate_slack_gallery.pyのsips経路と同じ sips -s format png --resampleWidth 1600 へ。外部依存・font追加なし）。sipsはSVG marker-endを描画しないため矢印先端を明示的な三角形polygonへ置換し、工程間edgeをgapごとに独立化（先端は対象box直前）。実ゴシック幅で列・行を再折返し（図1列1/2・図4左box・図5右列の溢れと枠下はみ出しを解消、padding確保）。図4は『図1の1から直接』へ文言修正・『原資料・MCSへのリンク』を検索box内へ移動。実PNG 5枚を原寸目視で切れ/重なり/溢れ0を確認、390pxで工程番号・主要見出し判読。"
+  "2026-11-08 landscape-design-23: 詳細図を横長1600x900の工程帯＋説明列形式の5枚（landscape-01〜05）へ全面的に作り替え。内容は旧part1〜3/detailedと同じ項目を保持し、OCR bypass・検索通知の独立枝・Jevの独立欄・5〜8の破線枠・待ち不明4組・概況回数と昼夜処理枠を新レイアウトへ再配置。PNGはqlmanage+ImageMagickの既存wrapper/crop経路（1700x2500 viewBox内で原稿をflatなg transform=translate(50 400)へ格納し、実測trim 2354x1324+73+588をcropして1600x900へ縮小）。実PNGを全枚目視確認し、1600x900では本文判読・390pxでは工程番号と主要見出しが判読可能。旧detailed/part/cloud-continuityのHTML/SVG/PNGは削除せず来歴として保持。 2026-11-08 landscape-design-23 r2修正: rendererをqlmanageからmacOS標準sipsへ変更（qlmanage実PNGが明朝系描画でREADME実ゴシックと不一致だったため、generate_slack_gallery.pyのsips経路と同じ sips -s format png --resampleWidth 1600 へ。外部依存・font追加なし）。sipsはSVG marker-endを描画しないため矢印先端を明示的な三角形polygonへ置換し、工程間edgeをgapごとに独立化（先端は対象box直前）。実ゴシック幅で列・行を再折返し（図1列1/2・図4左box・図5右列の溢れと枠下はみ出しを解消、padding確保）。図4は『図1の1から直接』へ文言修正・『原資料・MCSへのリンク』を検索box内へ移動。実PNG 5枚を原寸目視で切れ/重なり/溢れ0を確認、390pxで工程番号・主要見出し判読。 r4: 図4通知box下端を660→680へ延長し最終baselineとの下余白を28px確保。"
  ],
  "renderer": {
   "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
