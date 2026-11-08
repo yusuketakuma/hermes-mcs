@@ -514,6 +514,8 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 
 - 既存の設定や資格情報は保持します。修復が必要な場合は、従来と同じオプションでinstall.shを実行してください。追加OCRを使わない独立モードは引き続きuvなしで導入できます。OCRは明示した場合だけ準備し、利用を自動では有効にしません。
 
+- 追加操作は不要です。既存の導入・更新はそのまま動き、次回の実行から記録が始まります。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)
