@@ -135,6 +135,31 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
 | 比較 | 同条件で 1 変更ずつ合成受入 | 実装担当 | C1/B1 の単位完成 |
 | 残差 | E/C2/B2/D/A の採否を残差で判定 | Codex 判定・Devin 実装 | 比較結果 |
 
+**ロールアウト費用（必須確認・コード根拠）**
+
+C1/E は「小さい差分だから再処理への影響ゼロ」としない。契約束縛は
+ソース全体に及ぶ：
+
+- `_LOADED_SOURCE_PATHS`（`extract_llm_source_contract.py:205-229`）は
+  `patient_context_refresh_readiness` 等を含み、`_upgrade_contract`
+  （`extract_llm_qc.py:51-53`）は全 digest を束縛、`_quality_code`
+  （`patient_context_refresh_state.py:268-272`）は loaded digests＋
+  `semantic_candidate` contract を束縛する。E の `_PROMPT_HEAD` は
+  `_chunk_context(checkpoint=True)`（`extract_llm_context.py:135-147`）
+  へ入る。
+- したがってソース変更は旧 checkpoint/QC/promotion/held_prior 契約の
+  再照合に及ぶ。隔離した旧版→候補の合成 fixture で、実装前に影響
+  範囲を確認する。
+- 新しい hash 再承認の偽装・既存 approval の流用・gate 緩和は不可。
+  unknown/paid 履歴・人承認は保持する。
+- 契約変更で増える再評価処理と、定常速度の改善を分けて受入判断する。
+- C1 は先にローカル実装＋合成比較できる小単位だが、契約影響が広
+  ければ本番先行適用の必然性はない。変更ごとに本番を再起動・再評
+  価させず、独立 commit＋局所 A/B を済ませた 1 固定候補へまとめて、
+  既存許可に沿って適用する。最初の実機比較で 1 要因だけにする場合
+  も、この再評価費用を先に確認する。単純に「毎 commit 配備」とは
+  しない。
+
 ## 5. 合成受入・将来実測・中止条件
 
 **主要 KPI**：品質合格して保存/採用された処理数・context 公開数
