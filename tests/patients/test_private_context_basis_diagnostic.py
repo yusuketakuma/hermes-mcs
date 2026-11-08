@@ -1,7 +1,6 @@
 """Private synthetic observation; no product gates are replaced."""
 import hashlib
 import json
-from pathlib import Path
 
 import patient_context_plan as plan
 import patient_context_quality_receipts as quality
@@ -90,7 +89,7 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
         return outcome
 
     monkeypatch.setattr(scenario, 'step', observed_step)
-    scenario.test_local_context_stays_usable_until_real_cloud_inspects_every_input(
+    scenario.test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_every_input(
         runtime, real_cloud, monkeypatch)
     baseline = [o for o in observations if o['visible'] and not o['posts']][-1]
     partial = next(o for o in observations if o['posts'] and not o['visible']
@@ -111,11 +110,3 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
     before_ids = {a['id'] for a in baseline['artifacts']}
     partial_new = [a for a in partial['artifacts'] if a['id'] not in before_ids]
     assert not any('quality_fail' in a['kind'] for a in partial_new)
-    report = {'head': '56615365', 'baseline': baseline, 'first_partial': partial,
-              'final': final, 'partial_new_artifacts': partial_new,
-              'timeline': [{k: o[k] for k in ('step', 'outcome', 'posts', 'visible',
-                           'current_scan_sig', 'reserves', 'results')} for o in observations]}
-    Path('/tmp/mcs-context-partial-basis-56615365.json').write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, default=str))
-    Path('/tmp/mcs-context-partial-basis-all-56615365.json').write_text(
-        json.dumps(observations, ensure_ascii=False, indent=2, default=str))
