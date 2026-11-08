@@ -372,3 +372,17 @@ def test_writer_diagnostic_does_not_override_health_outcome(tmp_path, updates, n
     _status(tmp_path, **updates, **WRITER_DIAGNOSTIC)
     assert health_report.attachment_ocr_health(str(tmp_path), CFG, now) == {
         **prior, **WRITER_DIAGNOSTIC}
+
+
+def test_validated_partial_failure_snapshot_reaches_cause_specific_alert(tmp_path):
+    _status(tmp_path, pending_failed=2, queue_status='partial',
+            failure_reason_counts={'output_schema_table_overlap': 1}, exhausted_failed=1)
+    ocr = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert ocr['state'] == 'failed' and ocr['pending_failed'] == 2
+    lines = health_watch._reason_rows({'attachment_ocr': ocr}, ['attachment_ocr_processing_failed'])
+    text = '\n'.join(lines)
+    assert '表の行列対応を確定できず未採用' in text
+    assert '観測範囲' in text and '1件' in text and '自動再試行が上限' in text
+    assert 'doctor --share' in text and '元の添付' in text
+    assert 'OCRの設定・実行環境' not in text
+    assert '全件' not in text and 'すべて' not in text
