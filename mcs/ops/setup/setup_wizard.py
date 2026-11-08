@@ -401,7 +401,8 @@ def wizard(cfg: dict):
     print("\nMCS の設定を順番にご案内します。番号を入力して Enter を押してください。"
           "\n空欄で Enter を押すと、現在の設定を保持します。未設定なら推奨設定を使います。"
           "\n必須のIDは施設の管理者に確認してください。? で説明、q または Ctrl+C で中止できます。"
-          "\n各手順の総数は現在の選択に基づきます。通知形式などを変えると増減します。")
+          "\n総数はここで入力する設定項目の質問部分だけの段階数です。通知形式などを変えると増減します。"
+          "\nこの後にも追加機能の選択、保存前の確認、必要に応じた辞書・接続設定、診断があります。")
     detailed = ask("setup_detail", "choice:recommended,detailed", "recommended",
                     "設定の進め方", None) == "detailed"
     basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",

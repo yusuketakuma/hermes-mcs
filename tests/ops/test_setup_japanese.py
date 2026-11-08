@@ -92,7 +92,10 @@ def test_notification_format_is_selected_before_destinations_and_keeps_existing_
     assert setup_wizard.wizard(cfg) == 5
     assert seen.index("notify.interactive") < seen.index("notify_target") < seen.index("notify_system_target")
     assert cfg["runtime_mode"] == "standalone" and cfg["semantic"]["mode"] == "off"
-    headings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("【手順 ")]
+    output = capsys.readouterr().out
+    assert "総数はここで入力する設定項目の質問部分だけの段階数です" in output
+    assert "この後にも追加機能の選択、保存前の確認、必要に応じた辞書・接続設定、診断があります" in output
+    headings = [line for line in output.splitlines() if line.startswith("【手順 ")]
     assert len(headings) == 4
     assert headings[-1] == "【手順 4】取り込む投稿と履歴（現在の選択では全4段階）"
 
