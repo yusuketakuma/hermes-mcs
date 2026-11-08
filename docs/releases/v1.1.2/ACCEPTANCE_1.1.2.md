@@ -352,7 +352,7 @@
 | hygiene | run42465260774 失敗（SC1010・引用符修正済） | `ci_local.sh hygiene`（禁止file・旧 adapter 参照・secret 走査・shellcheck・plugin 登録） | 修正後 shellcheck/bad substitution なし・bash -n 通過（`release-check-fixes-15/`） | 同一 SHA の hosted 再実行なし |
 | standalone-sdk | run42465260774 success | `ci_local.sh standalone-sdk`（固定 SDK の隔離 venv で `check_pinned_sdks.sh standalone`） | hosted run42465260774 success を再利用・変更影響なし・local 再実行なし | — |
 | incident-gates | run42465260774 success | `ci_local.sh incident-gates`（`ci/gates.py`・`ci/mine_gates.py --check`） | hosted run42465260774 success を再利用・変更影響なし・local 再実行なし | — |
-| macos | run42433639313 失敗（LINE WORKS ImportError・修正済）・diagnostics upload は quota | `ci_local.sh macos`（`tests/meta tests/ops`） | LINE WORKS 修正 99件 pass・installer focused 5件 pass（macOS 実環境・`lineworks-doctor-11/`・`release-check-fixes-15/`） | 最終SHAでの installer 全体再実行なし |
+| macos | run42433639313 失敗（LINE WORKS ImportError・修正済）・run42465260774 失敗（installer 5 node・修正済）・diagnostics upload は quota | `ci_local.sh macos`（`tests/meta tests/ops`） | LINE WORKS 修正 99件 pass・installer focused 5件 pass（macOS 実環境・`lineworks-doctor-11/`・`release-check-fixes-15/`） | 最終SHAでの installer 全体再実行なし |
 | hermes-integration | run42465260774 success | `ci_local.sh hermes-integration`（固定 hermes ref の隔離 venv で `check_pinned_sdks.sh hermes`） | hosted run42465260774 success を再利用・対象 SDK/経路差分なし・local 再実行なし | pinned ref は ci.yml 同一 |
 
 - 表は「CI 実測成功」「ローカル代替の受入証拠」「未実行」を区別する記録であり、全6jobの実測成功・GitHub CI の成功とは扱わない。artifact quota の上限・使用量の確定は引き続き未確認。
