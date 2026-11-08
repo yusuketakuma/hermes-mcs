@@ -10,39 +10,39 @@
   },
   {
    "path": "docs/releases/v1.1.2/data-processing-v112.html",
-   "sha256": "15f494ac53d35801bccdbcc39ab3417329c659f3ef5d7c906fd9440e181fb311"
+   "sha256": "f3aa6879caec2ef6ea821b05a18513a98e2a250fe7c70326d5aada1f60ef159f"
   },
   {
    "path": "docs/releases/v1.1.2/data-processing-v112.svg",
-   "sha256": "ec0d33740a55f615e850578b4b49a561fd5f3175237a8447f4fdaac39a5c0f9b"
+   "sha256": "e5e17c43544f551460d2e1aa294340447cea3fd7248aa0c9d13cc3576b5dcdde"
   },
   {
    "path": "docs/releases/v1.1.2/data-processing-v112.png",
-   "sha256": "37ec627a41483ef6f6fca8fdc132dffdfa5c67b97cbbfbdbd9b5d953517b6101"
+   "sha256": "9a892849f3eebae669b7c3e44622d0ce5f43ec0f34415ce368aaaca651d50333"
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.html",
-   "sha256": "21346899498e853c7b0c4a8c65336b5523768dbceee96a3116a92ce4a20e98e8"
+   "sha256": "e11861ef009da91cdc160e6dd7cf6e479219053a40b177900ecc49cbb2afe45e"
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.svg",
-   "sha256": "ecf938e6b41e1a03e33173456b176a0a925376f5b621040e73453a1724fa6b10"
+   "sha256": "f6da5dd04331e0b833f60a5a63e0dc7b74f3e927e07fee706efd9debc02f04ee"
   },
   {
    "path": "docs/releases/v1.1.2/patient-find-v112.png",
-   "sha256": "42376f81d0ba85877b7358b32b4bf66eed3b22acb51c8219696bb2470a3a69b3"
+   "sha256": "57786e05a308700b360e0006b5e678ad844c537ce47c0985c62136a25109c3e5"
   },
   {
    "path": "docs/releases/v1.1.2/setup-steps-v112.html",
-   "sha256": "1f7bf306873cf58b28589062a4860a6ec29d222605cf15816bd7ccb62001772b"
+   "sha256": "533c9c33aa48b32761de0fedc4c56e04a562163f9a7d7988390e6820ee5d85af"
   },
   {
    "path": "docs/releases/v1.1.2/setup-steps-v112.svg",
-   "sha256": "9af4d8206696e6041edad6e4ba0bc5abc0684d5481896748049e1f496f981895"
+   "sha256": "59854b621fe35b977298d87cfd4c2b7aecf0a36ec042164be5b33f0122726942"
   },
   {
    "path": "docs/releases/v1.1.2/setup-steps-v112.png",
-   "sha256": "785fc2c705038adc4883d08732144a58f20579e56ac0227f5d17e19cacc55d36"
+   "sha256": "19dc2f36d8c03fc4c9f323ca7066d25ae642a482a4117933f88bb42d59b56fc1"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
