@@ -22,7 +22,7 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 説明図は実画面や性能の測定結果ではありません。患者データ・実投稿は使用していません。画像・PDFのローカルOCR、患者情報と運用ログを分けるSlack通知先、Discord・LINE WORKSの原文表示も本版に含みます。個別投稿への新規クラウド送信は停止し、患者コンテキストの作成・更新と品質修復に限定します。旧予約・課金済み回答・結果不明の記録は保持します。[外部送信と費用の条件](../../guides/ANTHROPIC.md)を確認してください。
 
-全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は各[SVG](cloud-continuity-v112-detailed.svg)（cloud-continuity-v112-detailed・data-processing-v112・patient-find-v112・setup-steps-v112）、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
+全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図はHTML原稿（[cloud-continuity-v112-detailed.html](cloud-continuity-v112-detailed.html)・data-processing-v112・patient-find-v112・setup-steps-v112）からSVGとPNGを生成しています。各図の来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
 
 2026-11-08の追補時点では、初回の失敗95件と後続63fileでの13失敗を修正・再検証しました。最後の関連5fileは125件成功・失敗0・skip 0で、追加の負の対照も確認済みです。実行済みの成功結果と合わせてローカル検証を受け入れましたが、単一の全体suiteやGitHub CIの一括成功ではありません。その追補時点の本番は `d621f96d` のままで、今回の新機能は未適用・未公開でした。
 
@@ -58,4 +58,4 @@ OCR予算とLINE WORKS診断の追補では既存121件を保持して全123件�
 
 公開前検査の修正追補では既存123件を保持して全124件へ集約しました。タグCIで見つかった3件を修正します。install.sh の導入段階検証と deployment/install/runtime.sh の完了記録呼出でシェル予約語 done を引用符付きへ直し（意味・型検査は不変）、runtime.sh を正本として INSTALL_RUNTIME_SHA256 pin を再生成しました。sync_release_notes.py の既存Release同期は、書込み後の識別再照合で対象に由来する日時情報 created_at の正当な変化を変更と誤認して拒否し得たため、PATCH応答と再取得の2か所の比較からだけ外し、識別子定義・型検証・書込み前比較・他6項目の照合は維持します。実CIで変化したfieldは未特定で、実CIでの再現可否は更新後の次の必要な同期で確認します。test_install_log_sink.py のサービス段階ハーネスへは既存の出力関数と同じ形の no-op スタブ _install_progress() { :; } を補い、製品コードと各assertは変更していません。対象testは focused で全件成功・終了0、合成テストは旧コードで RED・修正後 GREEN を確認しました。shellcheck・bash -n・ruff も問題ありません。利用者の操作・動作・既定値は変わりません。候補CIの全job成功・公開・本番適用は未実施で、この追補だけで合格とは扱いません。
 
-図表主体の文書整備追補では既存124件の変更記録とarchiveを変更せず、README手書き領域を図・表中心の構成へ見直し、全体処理・患者検索・導入4段階の合成説明図3枚（SVG正本・PNG描画）を追加しました。既存の cloud-continuity 図はREADMEでは補足detailsへ畳み、Release本文では従来どおり表示します。3枚はいずれも実画面・測定結果ではなく、Releaseへの画像添付uploadは未実施です。anchor・AI導入route判定・外部送信表・安全境界は保持し、製品コード・既定値・検証条件は変更していません。
+図表主体の文書整備追補では既存124件の変更記録とarchiveを変更せず、README手書き領域を図・表中心の構成へ見直し、全体処理・患者検索・導入4段階の合成説明図3枚（SVG正本・PNG描画）を追加しました。既存の cloud-continuity 図はREADMEでは補足detailsへ畳み、Release本文では従来どおり表示します（この段落はその時点の記録です。現在はHTML原稿からSVG・PNGを生成し、主図は cloud-continuity-v112-detailed へ置き換えています。旧 cloud-continuity.svg/.png は公開済みassetの履歴として残しています）。3枚はいずれも実画面・測定結果ではなく、Releaseへの画像添付uploadは未実施です。anchor・AI導入route判定・外部送信表・安全境界は保持し、製品コード・既定値・検証条件は変更していません。
