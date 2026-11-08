@@ -1,15 +1,19 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><title>landscape-01</title></head><body>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="landscape-01-title landscape-01-desc" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
 <title id="landscape-01-title">v1.1.2 保存と個別解析（1/5）</title>
-<desc id="landscape-01-desc">MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れ。本文・添付なし・OCR無効はOCRを通らず、検索・通知は独立した経路。合成の説明図で実画面・測定値・患者データではありません。</desc>
-<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
-<rect width="1600" height="900" fill="#f6f4ef"/>
+<desc id="landscape-01-desc">MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れ。本文・添付なし・OCR無効はOCRを通らず、検索・通知は独立した経路。合成の説明図で実画面・測定値・患者データではありません。</desc><rect width="1600" height="900" fill="#f6f4ef"/>
 <text x="48" y="86" font-size="52" font-weight="700" fill="#202124">v1.1.2 保存と個別解析（ローカル）（1/5）</text>
 <text x="48" y="132" font-size="28" font-weight="400" fill="#66716f">説明図（実画面・測定値・患者データではありません）</text>
 <text x="48" y="168" font-size="26" font-weight="400" fill="#66716f">番号はデータ依存の順です。処理は複数周回で進み、確認済み結果は再利用します。</text>
-<path d="M221 224 V206 H993 V256" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<path d="M221 224 V206 H993 V242" stroke="#66716f" stroke-width="3" fill="none"/>
+<path d="M981 242 L1005 242 L993 254 Z" fill="#66716f"/>
 <text x="261" y="200" font-size="24" font-weight="400" fill="#66716f">本文・添付なし・OCR無効は 2 を通らない</text>
-<path d="M221 300 H1519" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<path d="M396 300 H418" stroke="#66716f" stroke-width="3" fill="none"/>
+<path d="M420 288 L432 300 L420 312 Z" fill="#66716f"/>
+<path d="M782 300 H804" stroke="#66716f" stroke-width="3" fill="none"/>
+<path d="M806 288 L818 300 L806 312 Z" fill="#66716f"/>
+<path d="M1168 300 H1190" stroke="#66716f" stroke-width="3" fill="none"/>
+<path d="M1192 288 L1204 300 L1192 312 Z" fill="#66716f"/>
 <rect x="48" y="262" width="346" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
 <text x="72" y="314" font-size="44" font-weight="700" fill="#202124">1 保存</text>
 <rect x="434" y="262" width="346" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
@@ -19,38 +23,41 @@
 <rect x="1206" y="262" width="346" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
 <text x="1230" y="314" font-size="44" font-weight="700" fill="#202124">4 資料集合</text>
 <rect x="48" y="380" width="346" height="390" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="72" y="432" font-size="32" font-weight="700" fill="#202124">MCSの投稿・返信・添付を</text>
-<text x="72" y="472" font-size="32" font-weight="700" fill="#202124">保存する</text>
-<text x="72" y="532" font-size="28" font-weight="400" fill="#202124">出典・原文版・</text>
-<text x="72" y="572" font-size="28" font-weight="400" fill="#202124">取得状態を記録</text>
-<text x="72" y="612" font-size="28" font-weight="400" fill="#202124">左の線：検索・通知へ</text>
-<text x="72" y="652" font-size="28" font-weight="400" fill="#202124">独立して渡る</text>
+<text x="72" y="428" font-size="30" font-weight="700" fill="#202124">MCSの投稿・返信・</text>
+<text x="72" y="466" font-size="30" font-weight="700" fill="#202124">添付を保存する</text>
+<text x="72" y="520" font-size="28" font-weight="400" fill="#202124">出典・原文版・</text>
+<text x="72" y="552" font-size="28" font-weight="400" fill="#202124">取得状態を記録</text>
+<text x="72" y="584" font-size="28" font-weight="400" fill="#202124">左の線：検索・通知へ</text>
+<text x="72" y="616" font-size="28" font-weight="400" fill="#202124">独立して渡る</text>
 <rect x="434" y="380" width="346" height="390" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="458" y="432" font-size="32" font-weight="700" fill="#202124">画像・PDFを任意で</text>
-<text x="458" y="472" font-size="32" font-weight="700" fill="#202124">ローカルOCR</text>
-<text x="458" y="532" font-size="28" font-weight="400" fill="#202124">本文とは別の資料・</text>
-<text x="458" y="572" font-size="28" font-weight="400" fill="#202124">ページ付きで保存</text>
-<text x="458" y="632" font-size="28" font-weight="400" fill="#202124">本文はOCRを通らない</text>
-<text x="458" y="672" font-size="28" font-weight="400" fill="#202124">（上の線）</text>
-<text x="458" y="712" font-size="28" font-weight="400" fill="#202124">添付なし・OCR無効も</text>
-<text x="458" y="752" font-size="28" font-weight="400" fill="#202124">OCRを通らない</text>
-<text x="458" y="792" font-size="28" font-weight="400" fill="#202124">有効OCRが未完の添付は</text>
-<text x="458" y="832" font-size="28" font-weight="400" fill="#202124">完了扱いしない</text>
+<text x="458" y="428" font-size="30" font-weight="700" fill="#202124">画像・PDFを任意で</text>
+<text x="458" y="466" font-size="30" font-weight="700" fill="#202124">ローカルOCR</text>
+<text x="458" y="520" font-size="28" font-weight="400" fill="#202124">本文とは別の資料・</text>
+<text x="458" y="552" font-size="28" font-weight="400" fill="#202124">ページ付きで保存</text>
+<text x="458" y="600" font-size="28" font-weight="400" fill="#202124">本文・添付なし・</text>
+<text x="458" y="632" font-size="28" font-weight="400" fill="#202124">OCR無効はOCRを</text>
+<text x="458" y="664" font-size="28" font-weight="400" fill="#202124">通らない（上の線）</text>
+<text x="458" y="712" font-size="28" font-weight="400" fill="#202124">有効OCRが未完の</text>
+<text x="458" y="744" font-size="28" font-weight="400" fill="#202124">添付は完了扱いしない</text>
 <rect x="820" y="380" width="346" height="390" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="844" y="432" font-size="32" font-weight="700" fill="#202124">個別ローカル抽出</text>
-<text x="844" y="472" font-size="32" font-weight="700" fill="#202124">＋品質確認</text>
-<text x="844" y="532" font-size="28" font-weight="400" fill="#202124">投稿・OCRを原文・</text>
-<text x="844" y="572" font-size="28" font-weight="400" fill="#202124">対象・否定・時制で照合</text>
-<text x="844" y="632" font-size="28" font-weight="400" fill="#202124">処理枠は 5/5 の表を参照</text>
+<text x="844" y="428" font-size="30" font-weight="700" fill="#202124">個別ローカル抽出</text>
+<text x="844" y="466" font-size="30" font-weight="700" fill="#202124">＋品質確認</text>
+<text x="844" y="520" font-size="28" font-weight="400" fill="#202124">投稿・OCRを原文・</text>
+<text x="844" y="552" font-size="28" font-weight="400" fill="#202124">対象・否定・時制で</text>
+<text x="844" y="584" font-size="28" font-weight="400" fill="#202124">照合</text>
+<text x="844" y="632" font-size="28" font-weight="400" fill="#202124">処理枠は5/5の</text>
+<text x="844" y="664" font-size="28" font-weight="400" fill="#202124">表を参照</text>
 <rect x="1206" y="380" width="346" height="390" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
-<text x="1230" y="432" font-size="32" font-weight="700" fill="#202124">採用できる資料集合を</text>
-<text x="1230" y="472" font-size="32" font-weight="700" fill="#202124">固定</text>
-<text x="1230" y="532" font-size="28" font-weight="400" fill="#202124">含む・未反映・</text>
-<text x="1230" y="572" font-size="28" font-weight="400" fill="#202124">取得不能を区別</text>
-<text x="1230" y="632" font-size="28" font-weight="400" fill="#202124">別患者・削除・旧版・</text>
-<text x="1230" y="672" font-size="28" font-weight="400" fill="#202124">権限不明は採用しない</text>
-<path d="M131 772 V814" stroke="#087f5b" stroke-width="3" fill="none" marker-end="url(#arrg)"/>
+<text x="1230" y="428" font-size="30" font-weight="700" fill="#202124">採用できる資料集合を</text>
+<text x="1230" y="466" font-size="30" font-weight="700" fill="#202124">固定</text>
+<text x="1230" y="520" font-size="28" font-weight="400" fill="#202124">含む・未反映・</text>
+<text x="1230" y="552" font-size="28" font-weight="400" fill="#202124">取得不能を区別</text>
+<text x="1230" y="600" font-size="28" font-weight="400" fill="#202124">別患者・削除・旧版・</text>
+<text x="1230" y="632" font-size="28" font-weight="400" fill="#202124">権限不明は採用しない</text>
+<path d="M131 772 V800" stroke="#087f5b" stroke-width="3" fill="none"/>
+<path d="M119 800 L143 800 L131 812 Z" fill="#087f5b"/>
 <text x="151" y="812" font-size="26" font-weight="700" fill="#087f5b">検索・通知：図4へ</text>
-<path d="M1259 772 V814" stroke="#087f5b" stroke-width="3" fill="none" marker-end="url(#arrg)"/>
+<path d="M1259 772 V800" stroke="#087f5b" stroke-width="3" fill="none"/>
+<path d="M1247 800 L1271 800 L1259 812 Z" fill="#087f5b"/>
 <text x="1279" y="812" font-size="26" font-weight="700" fill="#087f5b">資料集合を図2へ</text>
 </svg></body></html>

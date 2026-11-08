@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="landscape-02-title landscape-02-desc" font-family="Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif">
 <title id="landscape-02-title">v1.1.2 患者コンテキスト：資料と根拠（2/5）</title>
-<desc id="landscape-02-desc">患者コンテキストの育成。実行先は現在の設定で決まり、Bの全区間点検とCの根拠照合を経る。合成の説明図。</desc>
-<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
-<rect width="1600" height="900" fill="#f6f4ef"/>
+<desc id="landscape-02-desc">患者コンテキストの育成。実行先は現在の設定で決まり、Bの全区間点検とCの根拠照合を経る。合成の説明図。</desc><rect width="1600" height="900" fill="#f6f4ef"/>
 <text x="48" y="86" font-size="52" font-weight="700" fill="#202124">v1.1.2 患者コンテキスト：資料と根拠（2/5）</text>
 <text x="48" y="132" font-size="28" font-weight="400" fill="#66716f">説明図（実画面・測定値・患者データではありません）</text>
 <text x="48" y="168" font-size="26" font-weight="400" fill="#66716f">図1の資料集合から続きます。実行先は現在の設定で決まる（local／cloud）。</text>
 <text x="48" y="200" font-size="26" font-weight="400" fill="#66716f">3の個別解析をcloudで続ける経路ではありません。</text>
-<path d="M400 292 H1340" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<path d="M754 292 H832" stroke="#66716f" stroke-width="3" fill="none"/>
+<path d="M834 280 L846 292 L834 304 Z" fill="#66716f"/>
 <rect x="48" y="254" width="704" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
 <text x="72" y="306" font-size="44" font-weight="700" fill="#202124">5 B：資料の全区間を点検</text>
 <rect x="848" y="254" width="704" height="76" rx="12" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>

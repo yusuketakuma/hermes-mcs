@@ -104,77 +104,77 @@
 ,
   {
    "path": "docs/releases/v1.1.2/landscape-01.html",
-   "sha256": "1243c7e90a48d3c877179abb0667aaec9c1ba2c92e02329c2aafbe758b07f249"
+   "sha256": "eba3658d50f7062721445f485ba3b37274ec7591510698d6d7da9900ba3f0c03"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-01.svg",
-   "sha256": "2fa598f2b0ce91ee0731669e5613f2ceb515e13865905a1b5902b81c26586d3b"
+   "sha256": "07f01b1b247e1891a6e9ee28aa5545b373551f3e42ed44187cd86edf6bb511e6"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-01.png",
-   "sha256": "3e003dde3c9f97a4a7189cb634b6829d4809c3c706e4b4dae785646284963494"
+   "sha256": "382503341c8c508dece15bf9fca579f33ea32e468d2b80012f7738a8be5589cb"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-02.html",
-   "sha256": "c1460e9eb456c5682014e96bb4cc0521dac06cea4e557551a3c6042ae5692f1e"
+   "sha256": "03dc519dc77df49d47287af0ad06b9c7e796bbb48bad2a7d22252f12a0d4b925"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-02.svg",
-   "sha256": "ec0d100fec897ceab781a4483144a6e7bac527af688699eca7bb1cd5e000b89e"
+   "sha256": "6a8b6150823113d1a7dffc5142572a74575cbfefb381505b72dcb81953ea2b99"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-02.png",
-   "sha256": "f8ab70349bad6bbd1d89aa792e1cf9215f7b5fa861d0ac45b4db6a1dd03f2943"
+   "sha256": "9613db231d829e19ae7de38a3f02170641d922bf37deba61747af6ea50a5cd36"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-03.html",
-   "sha256": "b149de101d1f1310a96fb784ff7a241a2d8b3f15739915a1fda40ca1b5911625"
+   "sha256": "44d8e019534f9cbbdcf1f2260ee03f44f00a8374a1774478b38a46fe8e0cddcd"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-03.svg",
-   "sha256": "ae6b9dd267e4262943d7881d8f35e207bab413beb1423c9941ca0ac5fe6cd303"
+   "sha256": "d0e42e57e4b30d902cce52470a673e424870ebc2411199a6dda0405958115185"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-03.png",
-   "sha256": "4d806f57f563d10c147041ef7cfacc378038cd2d326094b9f03ad42bfe420f7c"
+   "sha256": "22e4ca0c069d2cef8211309c174af1662d76d2e5d4738e38f7e110138b645af7"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.html",
-   "sha256": "371d5bc5b6dca204008796c319f47fa99cedc4931ae4081740ff1690a1272a1a"
+   "sha256": "50c2648f3262b7400cefc37a04c5392fda4c2cb96906c0675f4f169f3cb83035"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.svg",
-   "sha256": "413f32c55bbc9fcdfe42274c2b34962d5ac15f0b1e685b434dab9b59dc30a97d"
+   "sha256": "127273f70bfb60f6ebd9a009b400d8b22bcb9a4b11e04ff16057ec6399c76b87"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-04.png",
-   "sha256": "12f29a63315151ab58cc4c56761bb03add5be86dc7ef7d8fd05296004fba4ea0"
+   "sha256": "e05b57e7f333c71136c0fd8fbe032f673b7fb786365f4676ac6da849d6930552"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-05.html",
-   "sha256": "7a2f6b3d5e446864e5d078d3d1f8d737d5a55c688f2328d2476272085008e97f"
+   "sha256": "99588808ea4571b1693ff028f40b4fbf9a7f31cc7c86738923ccea0d4d933b5f"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-05.svg",
-   "sha256": "23a2d3a22a403eeace81615f90504f6c1d9eb4697e5005f6b707ea3a8fe3de65"
+   "sha256": "ac4d9e020ce98a4216805fb5a2ba4672717170fcc17105d029202532e01caa2d"
   }
  ,
   {
    "path": "docs/releases/v1.1.2/landscape-05.png",
-   "sha256": "dd79408dbae058c42639ea22e0f67f68478b37c4fb8308d81a0004ee5a2fbac1"
+   "sha256": "d800f206883d70d4e66f65decee0ca45ed8510e5f8b0e17c259858bb61f01cf4"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
@@ -188,7 +188,7 @@
   "2026-11-08 visual-docs-16 r11-r13: cloud-continuity-v112-detailedを新規作成。章1 保存と個別解析（1保存・2任意OCR・3個別local抽出+QC・4資料集合固定）、章2 患者context（実行先は現設定、5B全区間点検・6C根拠照合・7A項目順序選択・8品質確認/有限修復/再監査）、Jevは設定次第の別経路、章3 活用（検索・通知は1から独立した枝、9採用直前と閲覧時の再照合）。待ち・不明時と回数/処理枠は表で示し、送信結果不明は履歴保持・自動再送やlocal置換をしない。PNGは正方wrapperへflat <g>で格納しqlmanage -s max(4000,H+100)で描画して780xHへcrop。本文28px（390px表示で約14px相当）。patient-find-v112の検索条件文を「入力500字まで・1ページ5件・本人表示」「使い方と条件はユーザーガイド参照」へ更新し再描画。",
   "2026-11-08 r15: Root実見の指摘で詳細図のトポロジーを修正。主線1→9を中央の縦線で接続し、OCRを通らない資料は1→3の右外周rail、検索・通知は1から左外周railで末尾の独立panelへ接続（主boxを横断しない）。Jevは主線の通過先ではない末尾panel。2の注記を「本文はOCRを通らない／添付なし・OCR無効もOCRを通らない／有効OCRが未完の添付は完了扱いしない」へ、8を「必要な品質確認」、9の失効を「保存済みの原資料で訂正・削除・失効を検知したら」へ修正。冒頭は番号をデータ依存の順・複数周回・確認済み結果の再利用と説明し、6:3:1は巡回順の配分で1周で5→6→7を全て行うとは限らないと明記。",
   "2026-11-08 r-split: 詳細図 cloud-continuity-v112-detailed（780x4326）がRelease表示で縦長すぎたため、同じ要素を章ごとに cloud-continuity-v112-part1（保存と個別解析780x1360）・part2（患者context育成780x1800）・part3（活用・待ち・回数780x1540）の3枚へ分割。part1のbox3注記は「3/3 の表を参照」、各部のrailは部間の継続として端で表す。旧detailedのHTML/SVG/PNGと公開済assetは来歴として保持。描画は同じqlmanage+magickの正方wrapper経路。",
-  "2026-11-08 landscape-design-23: 詳細図を横長1600x900の工程帯＋説明列形式の5枚（landscape-01〜05）へ全面的に作り替え。内容は旧part1〜3/detailedと同じ項目を保持し、OCR bypass・検索通知の独立枝・Jevの独立欄・5〜8の破線枠・待ち不明4組・概況回数と昼夜処理枠を新レイアウトへ再配置。PNGはqlmanage+ImageMagickの既存wrapper/crop経路（1700x2500 viewBox内で原稿をflatなg transform=translate(50 400)へ格納し、実測trim 2354x1324+73+588をcropして1600x900へ縮小）。実PNGを全枚目視確認し、1600x900では本文判読・390pxでは工程番号と主要見出しが判読可能。旧detailed/part/cloud-continuityのHTML/SVG/PNGは削除せず来歴として保持。"
+  "2026-11-08 landscape-design-23: 詳細図を横長1600x900の工程帯＋説明列形式の5枚（landscape-01〜05）へ全面的に作り替え。内容は旧part1〜3/detailedと同じ項目を保持し、OCR bypass・検索通知の独立枝・Jevの独立欄・5〜8の破線枠・待ち不明4組・概況回数と昼夜処理枠を新レイアウトへ再配置。PNGはqlmanage+ImageMagickの既存wrapper/crop経路（1700x2500 viewBox内で原稿をflatなg transform=translate(50 400)へ格納し、実測trim 2354x1324+73+588をcropして1600x900へ縮小）。実PNGを全枚目視確認し、1600x900では本文判読・390pxでは工程番号と主要見出しが判読可能。旧detailed/part/cloud-continuityのHTML/SVG/PNGは削除せず来歴として保持。 2026-11-08 landscape-design-23 r2修正: rendererをqlmanageからmacOS標準sipsへ変更（qlmanage実PNGが明朝系描画でREADME実ゴシックと不一致だったため、generate_slack_gallery.pyのsips経路と同じ sips -s format png --resampleWidth 1600 へ。外部依存・font追加なし）。sipsはSVG marker-endを描画しないため矢印先端を明示的な三角形polygonへ置換し、工程間edgeをgapごとに独立化（先端は対象box直前）。実ゴシック幅で列・行を再折返し（図1列1/2・図4左box・図5右列の溢れと枠下はみ出しを解消、padding確保）。図4は『図1の1から直接』へ文言修正・『原資料・MCSへのリンク』を検索box内へ移動。実PNG 5枚を原寸目視で切れ/重なり/溢れ0を確認、390pxで工程番号・主要見出し判読。"
  ],
  "renderer": {
   "crop_command": "magick TEMP/release.svg.png -crop 390x1040+405+80 +repage -strip docs/releases/v1.1.2/cloud-continuity.png",
