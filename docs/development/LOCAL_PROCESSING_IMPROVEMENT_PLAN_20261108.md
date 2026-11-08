@@ -10,12 +10,18 @@
 示します。
 
 **現時点の状態：計画確定稿（Codex の SHA レビュー待ち。B1 は
-合成反証に進める条件付き設計まで確定。採用・実装は別指示）。**
+合成反証に進める条件付き設計まで確定。採用・実装は別指示、
+速度効果は未実測、本番は未変更）。**
 
 ## 1. 目的と現況根拠
 
 目的：task 24 で実測した遅延要因に対し、安全契約を保持したまま
 最小変更で有効成果／壁時計を改善する工程を決める。
+
+基準：開発・検証は `ff038ef8` 系 source（この文書の作業中に
+`53f27ce8` との mcs/adapters/deployment 差分 0 を再確認）。元の
+観測窓は 2026-11-08 22:07:52–23:07:52 JST。レビューが 2026-11-09
+へ跨いだが、ファイル名は起票日 11/08 のまま維持する。
 
 確定事実（24 の bounded 実機集計とコード照合）
 
@@ -24,7 +30,8 @@
   の機序と整合）。全収集 tick は 291–354.8 秒で run.lock 保持
   （transport のみ unlock）。holder の個別特定は未追跡。
 - extract 53 call 中 repair 25。issue 件数（ev 75 等）は request 数
-  ではなく、budget check 前に記録される分母。repair_wins は
+  ではなく、budget check 前に記録される validation 失敗項目数。
+  repair_wins は
   nullable で成功率は導出不可。defer 理由 `empty_repair_candidate_binding`
   20 件は defer 理由の記録であり、20 LLM call・新費用を示さない。
   無消費（used=0・llm_s=0・progress なし）の binding hold は既存の
@@ -55,10 +62,13 @@
 | C2 | source 集合の 1 回取得→共通 builder | scope 差の再導出が必須で単純 filter 不可 | C1 後の残差で判定 |
 | B2 | derive 計算の chunk 単位 TX 外化 | derive 全体 unlock は不可。実計算割合不明 | B1 後の残差で判定 |
 | D | context 走査の反復削減 | no-due 証明できない。107>8 で効く証拠なし | 低順位 |
-| A | 期限延長・worker 増加 | 実推論打切りまたは供給不足＋資源余力の証拠がある時のみ可逆比較。B/C/D の全面棄却を必須にしない | 限定条件 |
+| A | 予算・実行設定の限定比較 | 実推論打切りまたは供給不足＋資源余力の証拠がある時のみ可逆比較。B/C/D の全面棄却を必須にしない | 限定条件 |
 
 実作業順：**P0 → C1 → B1 → 同条件比較 → 残差に応じて E/C2/B2/D/A**。
-C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 変更ずつ。
+C1 と B1 の設計・合成 fixture 準備は独立。局所合成 A/B は 1 要因
+ずつ。本番適用は再評価費用を確認した固定候補単位とし、複合候補
+では各施策の実機寄与率を断定しない。契約移行直後と定常を分離
+する。
 
 初手にしないもの：タイムアウト一律延長・昼 slot0 借用・worker 増・
 新永続 cache・新 queue・品質/unknown gate の緩和。
@@ -82,6 +92,18 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
   既存 caller は未指定のまま不変。合成受入は既存 readwitness /
   authorizer 契約を必ず維持し、estimate・proof_for・scope の異なる
   caller で取得物を共用しない。
+
+呼出例（イメージ）：`observed = {}` → `_pending(..., observed_out=observed)`
+→ `scans = observed['scans']`（`_select_patient` 側は `_current_scans`
+を同じ stored 参照へ置換）。
+
+合成受入（C1）
+
+- 8 件未準備＋9 件目 ready で活動順が中断しても公平性が保たれる
+- scope・cfg・proof の異なる caller で取得物を共用しない
+- 資料 QC・権限変更時は送信・採用を拒否する
+- readwitness 拒否・unknown 会計は既存どおり動く
+- 同一入力で出力が完全同等、かつ重複 SQL/read が削減される
 
 ### B1（条件付き設計・前提照合済み・合成反証後に採用判断）
 
@@ -108,6 +130,22 @@ Oracle followup と readonly source 照合の結論：**既存の協調 lock
    （pathname 差替えで oldfd/newfd が分裂しないこと・照合済み）。
 2. snapshot 専用の書込禁止状態を物理 held と分離し、元例外を保持
    して全終端 caller へ伝えること。
+
+unlock 範囲と IF スケッチ（`writes_allowed` 境界と一体）
+
+- snapshot の private copy 取得は run.lock 下で行い、unlock するのは
+  `_valid_snapshot_candidate` の検証期間だけ（既存
+  `unlocked_transport` を使用）。`.snapshot.lock` は全期間保持する。
+- 順序：reacquire＋fence 確認 → fsync/rename → marker → dirtyCAS。
+  copy/publish/marker/dirtyCAS の既存 lock 規約は変えない。
+- IF：keyword-only の `verification_context(*, deadline)`（context
+  manager）を `run_check` → `maintenance.refresh_snapshot` /
+  `_refresh_snapshot_locked` / `publish_snapshot` →
+  `snapshots._publish_snapshot_locked` へ透過する。default を持た
+  ない既存 caller は不変。
+- 所有範囲：ingest の `run_check` ＋ `core/{maintenance,snapshots}`。
+  既存 writer helper を再利用し、共有 `writer_lock` の意味変更は
+  別レビュー扱い。
 
 最小 seam（確定）
 
@@ -145,17 +183,24 @@ Oracle followup と readonly source 照合の結論：**既存の協調 lock
 - runlock fd は親借用・子へ非継承。budget 延長なし。default
   caller は不変。
 
-合成反証の条件
+合成反証の条件（完全な検証表）
 
-- normalException/KeyboardInterrupt × reacquire timeout/restore/
-  cleanup 失敗、old ledger＋sourcepath 不一致、finish_run 済みの
-  失敗、DB A→B、NB 他 publisher、false validator の通常 partial、
-  default factory/None deadline を合成で検証する。
-- 安全違反 1 件で不採用。性能面も writer wait 改善なし・snapshot
-  partial/RT 遅延増なら戻す。
-- この no-write/例外境界が最小差分で閉じなければ B1 を延期し、
-  C1 だけを採用判断する。大規模な共通 writer protocol の作り直し
-  へ自動拡張しない。
+- 別 process の通常 commit で dirty 世代が保持される
+- copy/publish/marker/dirty の各手順が既存どおり保持される
+- 非 blocking `.snapshot.lock` の他 publisher・prune との競合
+- 同版 restore・DB 交換・hold の開始/終了
+- DB/lock/fence 不一致で no-write になる
+- deadline 内 verify と期限後 reacquire が分離して扱われる
+- false validator 通常 partial・各種例外・取消 × 再取得失敗/
+  restore 失敗/cleanup 二次失敗
+- old ledger＋sourcepath 不一致、finish_run 済みの失敗、DB A→B
+- unreaped 子 process の publication fence
+- default factory・None deadline で旧動作のまま
+
+安全違反 1 件で不採用。性能面も writer wait 改善なし・snapshot
+partial/RT 遅延増なら戻す。この no-write/例外境界が最小差分で
+閉じなければ B1 を延期し、C1 だけを採用判断する。大規模な共通
+writer protocol の作り直しへ自動拡張しない。
 
 ### E（repair・残差対応の比較案）
 
@@ -179,14 +224,24 @@ Oracle followup と readonly source 照合の結論：**既存の協調 lock
   実装前に全 caller を確認する。checkpoint は新機構が既にあるので
   追加しない。repair_wins 3/25 など不完全な率の提示は禁止。
 
+### 所有範囲と代表テスト
+
+| 案 | 実装担当 | 所有 path | 既存の代表テスト（実在確認済み） |
+|---|---|---|---|
+| C1 | Devin | `patients/` の 2 source（`patient_context_refresh_readiness`・`patient_context_refresh`） | `tests/patients/test_context_scan_integration.py`・`test_patient_readiness_witness.py`・`test_readiness_cursor_witness.py`・`test_patient_context_refresh.py` |
+| B1 | Devin（設計は Codex 確定済） | ingest の `run_check` ＋ `core/{maintenance,snapshots}`＋既存 writer helper の再利用 | `tests/core/test_snapshot_refresh_timing.py`・`test_snapshot_failure_reason.py`・`test_snapshot_maintenance.py`・`test_run_lock_error_cleanup.py`・`tests/ingest/test_derive_transaction_ownership.py` |
+
+テストは変更影響に応じて節目ごとの batch を選定する。毎回の全件
+実行は必須としない（§5 テスト境界と同じ規約）。
+
 ## 4. 段階別実施順と担当
 
 | 段階 | 作業 | 担当 | 依存 |
 |---|---|---|---|
-| P0 | 既存証跡の基準固定・必要最小の観測項目定義 | 実装担当（計画レビューはCodex） | なし |
-| C1 | 重複 read 除去の最小実装＋合成 fixture | 実装担当 | P0 の観測定義 |
-| B1 | writer 保持の局所短縮（最小 seam 確定・合成反証後に採用判断） | 実装担当（設計はCodex確定済） | P0・必須条件 |
-| 比較 | 同条件で 1 変更ずつ合成受入 | 実装担当 | C1/B1 の単位完成 |
+| P0 | 既存証跡の基準固定・必要最小の観測項目定義 | Devin（計画レビューはCodex） | なし |
+| C1 | 重複 read 除去の最小実装＋合成 fixture | Devin | P0 の観測定義 |
+| B1 | writer 保持の局所短縮（最小 seam 確定・合成反証後に採用判断） | Devin（設計はCodex確定済） | P0・必須条件 |
+| 比較 | 同条件で 1 変更ずつ合成受入 | Devin | C1/B1 の単位完成 |
 | 残差 | E/C2/B2/D/A の採否を残差で判定 | Codex 判定・Devin 実装 | 比較結果 |
 
 **ロールアウト費用（必須確認・コード根拠）**
@@ -227,15 +282,18 @@ candidate scan/SQL 件数/同一 scope、snapshot 公開 age、RT 待ち。
 計測へ持ち込まない。P0 の新分類は必要な分岐でのみ（slice/CAS/SQL
 中断等を推測で決めない）。観測基盤を別製品として増築しない。
 
-**停止条件**：旧版/別患者/権限失効/QC 不合格/unknown 解放/重複送信/
-課金/不正公開/CAS 上書きは 1 件でも停止・撤回。速度効果未証明・
-RT 公平性/carry/snapshot が悪化するなら次の拡張前に rollback または
-不採用。旧データ・履歴・hold は削除せずコード単位で戻す。
+**停止条件**：旧版・別患者・失効権限・QC 不合格の誤採用、unknown の
+不正解除、重複送信・重複または未承認課金、不正公開、CAS 上書きは
+1 件でも停止・撤回。保護 hold や QC 拒否そのものは失敗扱いしない。
+速度効果未証明・RT 公平性/carry/snapshot が悪化するなら次の拡張
+前に rollback または不採用。旧データ・履歴・hold は削除せずコード
+単位で戻す。
 
 **テスト境界**：一時 DB＋完全合成＋stub/実 filelock 子 process のみ。
 節目に関連 1 batch、成功結果を無変更で再実行しない。実機観測は
-将来の本番適用承認後に、自然稼働の同時間・同設定窓で 1 変更ずつ。
-今回は新 pytest なし。
+将来の本番適用承認後に、自然稼働の同時間・同設定窓で行う。局所
+合成 A/B は 1 要因ずつ、本番は再評価費用を確認した固定候補単位
+（§2 と同じ規約）。今回は新 pytest なし。
 
 ## 6. 保留案・未確認・文書差異
 
@@ -253,14 +311,17 @@ RT 公平性/carry/snapshot が悪化するなら次の拡張前に rollback ま
   候補の公平性を守る）。`_next_due_in` は future hint で no-due 証明
   ではない。complete＋全対象 covered が実証できる状態のみ、既存の
   5→30 backoff/next_due を再利用。現状 107>8 で効く証拠なし、低順位。
-- A：300/600 等の一律拡大、-np/ctx/batch/threads/モデル/GPU を
-  まとめて変更しない。1 因子の可逆比較だけ。3 枠/日夜/新着次空き
-  優先/実行中非中断は維持。shadow 停止も承認目的を確認後の限定
-  比較で、自動削除なし。
+- A（予算・実行設定の限定比較）：300/600 等の一律拡大、-np/ctx/
+  batch/threads/モデル/GPU をまとめて変更しない。1 因子の可逆
+  比較だけ。物理 LLM 3 枠・日夜帯・新着次空き優先・実行中非中断
+  は維持（worker 子 process 数と物理 3 枠は別物）。メモリ圧縮・
+  単一 GPU・共有資源・既存 batch OFF・shadow 目的は当初から断定
+  しない。既存 `llm_lane_bench` 等の隔離評価が必要な条件付き案
+  として位置付ける（新 bench framework は作らない）。shadow 停止
+  も承認目的を確認後の限定比較で、自動削除なし。
 
 **未確認**
 
-- B1 の新競合反例（Oracle followup 中・追補で確定）。
 - ev 脱落の内訳（言い換え/非一意/空/非 str/chunk 境界）。
 - 各 wait 時点の holder 特定・長期枠稼働率・CAS 競合実比率・
   systemwide 圧縮の MCS 影響分離・実 OCR 所要時間。
@@ -273,8 +334,10 @@ RT 公平性/carry/snapshot が悪化するなら次の拡張前に rollback ま
   `active_legacy_admissions`。
 - resident `--workers` ヘルプ「同じ固定 slot」vs scheduled 経路の
   物理枠再配分。
-- 新発見：run_check held=True 末端 write は B1 で考慮必須。
-  全経路 no-write と誤記しない。
+
+（補足）`run_check` held=True の末端 write は、今回新たに確認した
+実装上の境界で B1 の必須条件へ組込み済み。文書差異そのものとは
+断定しない。
 
 ## 7. 全案の受入・停止・担当
 
@@ -287,6 +350,6 @@ RT 公平性/carry/snapshot が悪化するなら次の拡張前に rollback ま
 | C2 | 保留 | C1 後も listing 支配が残る | scope/権限/契約差の再導出省略 | Codex 判定 |
 | B2 | 保留 | B1 後も計算割合が支配 | derive 全体 unlock 案 | Codex 判定 |
 | D | 低順位 | complete＋全 covered が実証可能 | 一律延長・no-due 未証明での間引き | Codex 判定 |
-| A | 限定条件 | 推論打切りまたは供給不足＋資源余力の証拠 | 一律拡大・複数因子の同時変更 | Codex 判定 |
+| A | 限定条件（予算・実行設定の比較） | 推論打切りまたは供給不足＋資源余力の証拠＋既存 lane bench での隔離評価 | 一律拡大・複数因子の同時変更・3 枠構成の変更 | Codex 判定 |
 
 （計画確定稿・B1 は合成反証後に採用判断。採用/実装開始は別指示）
