@@ -229,6 +229,7 @@ def test_unrepresentable_restart_timestamp_is_ignored(monkeypatch, tmp_path):
     from mcs_standalone import runtime
     instance = object.__new__(runtime.Runtime)
     instance.data = tmp_path
+    instance.root = tmp_path
     instance.generation = "a" * 32
     monkeypatch.setattr(runtime.safe_io, "read_private_bytes", lambda *_args: (
         '{"generation":"' + "a" * 32 + '","request_id":"' + "b" * 32

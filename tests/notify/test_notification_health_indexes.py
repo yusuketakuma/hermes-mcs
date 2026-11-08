@@ -73,6 +73,7 @@ def _operations(db, query):
 
 def test_reopen_adds_indexes_without_changing_health_or_history(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_scope, 'time', SimpleNamespace(time=lambda: 100_000.0))
+    monkeypatch.setattr(notify_recovery, 'time', SimpleNamespace(time=lambda: 100_000.0))
     store = make_ledger(tmp_path)
     try:
         _seed(store.db)

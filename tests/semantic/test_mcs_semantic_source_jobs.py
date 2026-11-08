@@ -49,15 +49,18 @@ def test_fingerprint_covers_revisions(tmp_path):
 
 # ---------- pipeline ----------
 
-def test_off_no_seed_no_drain(tmp_path):
+def test_off_no_seed_no_drain(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     assert semantic.seed(db, 1, cfg_path="/nonexistent.json") is None
     res = {"errors": []}
+    monkeypatch.setattr(semantic_drain.time, 'perf_counter', lambda: 1.0)
     out = semantic_drain.run_due(db, {"semantic": {"mode": "off"}}, res,
                            time.monotonic() + 60)
     assert out == {"mode": "off", "done": 0, "deferred": 0,
                    "failed": 0, "left": None, "budget_exhausted": False,
-                   "progressed": 0}
+                   "progressed": 0,
+                   "invalidate_s": 0.0, "reprocess_s": None,
+                   "reproject_s": None}
     assert db.job_pending("semantic", 1, 1)["state"] == "pending"
     db.close()
 
