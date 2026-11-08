@@ -103,10 +103,10 @@ def synchronize(text, request, apply=False, tag=None, release_id=None):
                 raise ValueError(f"{old['tag_name']}: 取得後に変更されたため停止します")
             # Omitting tag_name can detach a draft from its existing tag.
             updated = release_record(request(endpoint, desired | {"tag_name": old["tag_name"]}))
-            if any(updated.get(k) != old.get(k) for k in IDENTITY):
+            if any(updated.get(k) != old.get(k) for k in IDENTITY if k != "created_at"):
                 raise ValueError("Releaseの識別・公開状態が変わったため停止します")
             verified = release_record(request(endpoint))
-            if any(verified.get(k) != old.get(k) for k in IDENTITY):
+            if any(verified.get(k) != old.get(k) for k in IDENTITY if k != "created_at"):
                 raise ValueError("再取得時にReleaseの識別・公開状態が変わったため停止します")
             if any(verified.get(k) != v for k, v in desired.items()):
                 raise ValueError(f"{old['tag_name']}: 更新後の本文が一致しません")

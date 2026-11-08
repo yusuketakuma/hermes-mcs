@@ -124,6 +124,88 @@ class SyncTest(unittest.TestCase):
             sync.synchronize(self.text, request, apply=True)
         self.assertEqual(self.writes, [])
 
+    def test_created_at_drift_after_patch_is_accepted(self):
+        # GitHub derives created_at from the target tag's date, so a PATCH that
+        # re-resolves tag_name may legitimately return a different value.
+        drifted = "2099-01-01T00:00:00Z"
+
+        def request(endpoint, payload=None):
+            if payload is not None and "?" not in endpoint:
+                self.record["created_at"] = drifted
+            return self.request(endpoint, payload)
+
+        result = sync.synchronize(self.text, request, apply=True)
+        self.assertEqual(result["updated"], ["v1.0.0"])
+        self.assertEqual(self.record["created_at"], drifted)
+        self.assertEqual(sync.synchronize(self.text, request, apply=True)["updated"], [])
+        self.assertEqual(len(self.writes), 1)
+
+    def test_created_at_drift_before_patch_is_rejected(self):
+        def request(endpoint, payload=None):
+            result = self.request(endpoint, payload)
+            if "?" not in endpoint and payload is None:
+                return result | {"created_at": "drifted"}
+            return result
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, request, apply=True)
+        self.assertEqual(self.writes, [])
+
+    def test_created_at_missing_or_invalid_after_patch_is_rejected(self):
+        sentinel = object()
+        for bad in (sentinel, None, 123, ""):
+            for when in ("patch", "verify"):
+                with self.subTest(bad=repr(bad), when=when):
+                    self.setUp()
+
+                    def request(endpoint, payload=None):
+                        result = self.request(endpoint, payload)
+                        hit = (payload is not None if when == "patch"
+                               else payload is None and bool(self.writes))
+                        if "?" not in endpoint and hit:
+                            if bad is sentinel:
+                                result.pop("created_at", None)
+                            else:
+                                result["created_at"] = bad
+                        return result
+
+                    with self.assertRaises(ValueError):
+                        sync.synchronize(self.text, request, apply=True)
+
+    def test_other_identity_fields_still_reject_post_write_drift(self):
+        mutations = {
+            "id": 2, "tag_name": "v2.0.0", "draft": True, "prerelease": True,
+            "target_commitish": "other", "published_at": "2099-01-01T00:00:00Z",
+        }
+        for field, value in mutations.items():
+            for when in ("patch", "verify"):
+                with self.subTest(field=field, when=when):
+                    self.setUp()
+
+                    def request(endpoint, payload=None):
+                        result = self.request(endpoint, payload)
+                        hit = (payload is not None if when == "patch"
+                               else payload is None and bool(self.writes))
+                        if "?" not in endpoint and hit:
+                            result[field] = value
+                        return result
+
+                    with self.assertRaises(ValueError):
+                        sync.synchronize(self.text, request, apply=True)
+
+    def test_name_or_body_mismatch_after_write_is_rejected(self):
+        for field in ("name", "body"):
+            with self.subTest(field=field):
+                self.setUp()
+
+                def request(endpoint, payload=None):
+                    result = self.request(endpoint, payload)
+                    if "?" not in endpoint and payload is None and self.writes:
+                        result[field] = "tampered"
+                    return result
+
+                with self.assertRaises(ValueError):
+                    sync.synchronize(self.text, request, apply=True)
+
 
 if __name__ == "__main__":
     unittest.main()
