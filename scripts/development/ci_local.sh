@@ -3,9 +3,10 @@
 # isolated clean clone of one exact SHA. Only for releases whose hosted CI
 # could not start (billing, runner outage) or failed for infrastructure-only
 # reasons (artifact storage quota, upload/download errors). Never a
-# substitute for a CI run that failed on product code or tests — those must
-# be fixed and re-verified, not covered by local evidence. A local pass is
-# recorded as local evidence, not as hosted CI success.
+# substitute for a CI run that failed on product code or tests — local
+# re-verification may prove the fix, but unresolved failures still block
+# release. A local pass is recorded as local evidence, not as hosted CI
+# success.
 # The run lines below are copied verbatim from ci.yml and
 # tests/meta/test_ci_local_runner.py fails when the two drift.
 #
