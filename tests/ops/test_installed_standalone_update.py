@@ -15,7 +15,7 @@ import mcs_util
 import update_apply
 import update_discovery
 import update_planning
-from ops_testkit import _git, in_process_post_merge
+from ops_testkit import _git, _make_repo, in_process_post_merge
 from test_mcs_upgrade import _apply_env, _fake_install, _launcher, _plan_env, _release
 from test_mcs_update import prepared_run_log as prepared_run_log, updater as updater
 
@@ -64,12 +64,12 @@ def test_installed_identity_cannot_open_external_or_ambiguous_source(
 def _report(repo, *, route='apply'):
     return {'route': route, 'blockers': [], 'runtime_mode': 'standalone',
             'current': {'sha': 'a' * 40}, 'target': {'tag': 'v1.2.0', 'sha': 'b' * 40},
-            'installed_standalone_update': {'version': 1, 'repository': str(repo),
+            'installed_standalone_update': {'version': 2, 'repository': str(repo),
                                            'updater': str(repo / 'mcs/ops/mcs_update.py')},
             'install_args': ['--no-brew', '--no-llm'], 'slack_channels_required': False}
 
 
-@pytest.mark.parametrize('problem', ['missing', 'old', 'bool', 'extra', 'repository', 'updater',
+@pytest.mark.parametrize('problem', ['missing', 'old', 'bool', 'float', 'extra', 'repository', 'updater',
                                     'runtime', 'tag', 'short_sha', 'upper_sha', 'missing_base'])
 def test_guide_holds_unverified_installed_contract_before_apply(monkeypatch, tmp_path, problem):
     repo = tmp_path.resolve()
@@ -77,8 +77,8 @@ def test_guide_holds_unverified_installed_contract_before_apply(monkeypatch, tmp
     contract = report['installed_standalone_update']
     if problem == 'missing':
         del report['installed_standalone_update']
-    elif problem in ('old', 'bool'):
-        contract['version'] = 0 if problem == 'old' else True
+    elif problem in ('old', 'bool', 'float'):
+        contract['version'] = {'old': 1, 'bool': True, 'float': 2.0}[problem]
     elif problem == 'extra':
         contract['unverified'] = True
     elif problem in ('repository', 'updater'):
@@ -163,7 +163,8 @@ def _guide_world(updater, monkeypatch, tmp_path, reinstall):
         seen.append(argv)
         output = io.StringIO()
         with redirect_stdout(output), monkeypatch.context() as child:
-            for key in ('MCS_UPDATE_OPTIONS_EXPECTED', 'MCS_UPDATE_KEEP_HERMES_CHECKOUT'):
+            for key in ('MCS_UPDATE_OPTIONS_EXPECTED', 'MCS_UPDATE_KEEP_HERMES_CHECKOUT',
+                        'MCS_UPDATE_RUNTIME_EXPECTED'):
                 if key in kwargs['env']:
                     child.setenv(key, kwargs['env'][key])
                 else:
@@ -226,6 +227,79 @@ def test_confirmed_plan_rejects_later_identity_or_option_changes(
     assert state['applied'] == [] and state['applying'] is None
     if change != 'install_options':
         assert ('base_sha_mismatch' if change == 'head' else 'tag_moved') in state['attempts']['v1.2.0']['detail']
+
+
+@pytest.mark.parametrize('reinstall', [False, True])
+def test_installed_guide_rejects_runtime_change_before_any_apply_effect(
+        updater, prepared_run_log, monkeypatch, tmp_path, reinstall):
+    launcher, repo, base, _target, config, installs, seen = _guide_world(
+        updater, monkeypatch, tmp_path, reinstall)
+    def snapshot():
+        return {str(path.relative_to(updater.DATA)): path.read_bytes()
+                for path in Path(updater.DATA).rglob('*') if path.is_file()}
+    before = snapshot()
+    runtime_checks = []
+    runtime_gate = update_apply._apply_runtime_gate_errors
+    def inspect_runtime(cfg, *args):
+        runtime_checks.append(cfg['runtime_mode'])
+        return runtime_gate(cfg, *args)
+    monkeypatch.setattr(update_apply, '_apply_runtime_gate_errors', inspect_runtime)
+    changed_config = []
+    def choose(_):
+        value = json.loads(config.read_text())
+        assert value['runtime_mode'] == 'standalone'
+        value['runtime_mode'] = 'hermes'
+        config.write_text(json.dumps(value))
+        changed_config.append(config.read_bytes())
+        return '2'
+    monkeypatch.setattr('builtins.input', choose)
+    command = [sys.executable, str(repo / 'mcs/ops/mcs_update.py'), 'plan', '--tag', 'v1.2.0']
+    rc = launcher.interactive_update(command, dict(os.environ), str(repo), installed=True)
+    assert (rc, _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base,
+            snapshot() == before, len(installs), runtime_checks) == (2, True, True, 0, [])
+    assert [argv[2] for argv in seen] == ['plan', 'apply']
+    assert changed_config == [config.read_bytes()]
+
+
+@pytest.mark.parametrize('mode', ['hermes', 'standalone'])
+def test_direct_update_without_runtime_expectation_keeps_existing_contract(
+        updater, prepared_run_log, monkeypatch, tmp_path, mode):
+    _launcher, repo, base, target, config, installs, _seen = _guide_world(
+        updater, monkeypatch, tmp_path, False)
+    monkeypatch.delenv('MCS_UPDATE_RUNTIME_EXPECTED', raising=False)
+    value = json.loads(config.read_text())
+    value['runtime_mode'] = mode
+    config.write_text(json.dumps(value))
+    assert updater.apply('v1.2.0', target, None, base_sha=base) == 0
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == target and installs == []
+    assert updater.journal_store.load_state(updater.STATE_PATH)['applied'][-1]['sha'] == target
+
+
+@pytest.mark.parametrize('expected', ['', 'hermes', 'STANDALONE'])
+def test_invalid_runtime_expectation_stops_before_environment_checks(
+        updater, prepared_run_log, monkeypatch, tmp_path, expected):
+    _launcher, repo, base, target, config, installs, _seen = _guide_world(
+        updater, monkeypatch, tmp_path, False)
+    before = config.read_bytes()
+    monkeypatch.setenv('MCS_UPDATE_RUNTIME_EXPECTED', expected)
+    monkeypatch.setattr(update_apply, '_apply_runtime_gate_errors',
+                        lambda *_a, **_k: pytest.fail('unverified expectation reached runtime checks'))
+    assert updater.apply('v1.2.0', target, None, base_sha=base) == 2
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == base
+    assert not Path(updater.STATE_PATH).exists() and installs == []
+    assert config.read_bytes() == before
+
+
+def test_external_bootstrap_does_not_inherit_installed_runtime_expectation(monkeypatch, tmp_path, capfd):
+    repo, bare = _make_repo(tmp_path)
+    _release(tmp_path / 'remote-work', bare, 'v1.2.0', {
+        'mcs/ops/mcs_update.py': "import json,os\nprint(json.dumps({"
+        "'expected':os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED'),"
+        "'external':os.environ.get('MCS_UPDATE_REPO')}))\n"})
+    _git(repo, 'fetch', '-q', '--tags')
+    monkeypatch.setenv('MCS_UPDATE_RUNTIME_EXPECTED', 'standalone')
+    assert _launcher().main(['--repo', str(repo), '--no-fetch', 'plan', '--to', 'v1.2.0']) == 0
+    assert json.loads(capfd.readouterr().out) == {'expected': None, 'external': str(repo)}
 
 
 def test_installed_reinstall_rejects_a_locked_descriptor_for_another_file(

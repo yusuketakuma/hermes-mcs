@@ -171,6 +171,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 tag = "candidate:" + candidate_sha
                 sha = candidate_sha
             cfg = mcs_util.load_config()
+            expected_runtime = os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED')
+            if expected_runtime is not None and (
+                    expected_runtime != 'standalone' or cfg.get('runtime_mode') != expected_runtime):
+                print('確認後に実行モードが変わったか確認できないため、更新を開始しません。mcs update で確認し直してください。')
+                return 2
             runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
             if runtime_errors:
                 # Even acquiring update.lock or writing local_checks is a mutation.

@@ -48,7 +48,7 @@ from update_repository import (
     _git_out,
 )
 
-INSTALLED_STANDALONE_UPDATE_VERSION = 1
+INSTALLED_STANDALONE_UPDATE_VERSION = 2
 
 
 def _installed_standalone_contract(cfg):

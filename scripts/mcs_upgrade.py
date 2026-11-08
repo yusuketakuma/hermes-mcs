@@ -294,7 +294,7 @@ def _installed_plan_pins(report, command, repo):
     updater = root / 'mcs/ops/mcs_update.py'
     contract = report.get('installed_standalone_update')
     if (not isinstance(contract, dict) or type(contract.get('version')) is not int
-            or contract != {'version': 1, 'repository': str(root), 'updater': str(updater)}
+            or contract != {'version': 2, 'repository': str(root), 'updater': str(updater)}
             or report.get('runtime_mode') != 'standalone'
             or len(command) != 5 or command[2:4] != ['plan', '--tag']
             or Path(command[1]).resolve() != updater):
@@ -432,6 +432,8 @@ def interactive_update(cmd, env, repo, *, installed=False):
         apply_cmd.extend(_installed_plan_pins(report, cmd, repo))
     # Keep the approved record separate from temporary repair/install flags.
     apply_env = dict(env)
+    if installed:
+        apply_env['MCS_UPDATE_RUNTIME_EXPECTED'] = 'standalone'
     if route == "reinstall":
         apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))
         apply_cmd.append("--reinstall")
@@ -460,6 +462,7 @@ def _installed_update(args, repo, tag):
     env = dict(os.environ)
     env.pop('MCS_UPDATE_KEEP_HERMES_CHECKOUT', None)
     env.pop('MCS_UPDATE_OPTIONS_EXPECTED', None)
+    env.pop('MCS_UPDATE_RUNTIME_EXPECTED', None)
     if args.cmd == 'guide':
         print(f'更新する版: {tag}')
         return interactive_update(command, env, repo, installed=True)
@@ -486,7 +489,8 @@ def _installed_update(args, repo, tag):
     if args.reinstall:
         apply_command.append('--reinstall')
     apply_command.extend(f'--install-arg={arg}' for arg in args.install_arg)
-    result = subprocess.run(apply_command, env=env, cwd=repo, **_lifetime_fds())
+    apply_env = dict(env, MCS_UPDATE_RUNTIME_EXPECTED='standalone')
+    result = subprocess.run(apply_command, env=apply_env, cwd=repo, **_lifetime_fds())
     if result.returncode:
         return result.returncode
     final = _post_apply_plan(command, env, repo, installed=True,
@@ -605,6 +609,7 @@ def _main(argv=None) -> int:
             env = {**os.environ, "MCS_UPDATE_REPO": repo}
             env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
             env.pop("MCS_UPDATE_OPTIONS_EXPECTED", None)
+            env.pop('MCS_UPDATE_RUNTIME_EXPECTED', None)
             if getattr(args, 'keep_hermes_checkout', None):
                 env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
             try:
