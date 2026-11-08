@@ -90,15 +90,15 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 **成功の目安**:
 
 - `--preflight` の最終行が `事前確認: 導入を妨げる問題 0件、注意 N件`（exit 0）
-- `install.sh` が `ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。` と 6 ステージ分の結果を表示して終わる
+- `install.sh` が `ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。` とソフト準備の6ステージ分の結果を表示して終わる。続く初期設定・接続・利用開始の確認は別に行う
   （途中で止まった場合は `エラー: 導入を中断しました。…` が出る — §7-1）
 - `check` の最終行が `設定確認: 正常 （問題0件、注意N件）`（exit 0）。
   `注意:` 行は動作を止めないが、内容は一度確認する
 - `check` が OK であれば `local.mcs-cmd`・`local.mcs-int`・
-  `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`org.mcs.recovery`
+  `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`ai.mcs.extract-drainer-night`の抽出worker3本と`org.mcs.recovery`
   と、llama-server（`ai.hermes.llamacpp` か `ai.mcs.llamaserver` の
   どちらか）のロード状態も確認済み（未ロードは `check` の error になる）。
-  `doctor` は launchd の状態を表示しない
+  `doctor`の既定では常駐処理は未検査。明示した`mcs doctor --probe services`で常駐処理を追加診断できるが、通知到着の証明とは分ける
 
 メッセージ別の対処は §7 トラブルシューティング。詳細な仕組みは以下の各節。
 
