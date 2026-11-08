@@ -516,6 +516,8 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 
 - 追加操作は不要です。既存の導入・更新はそのまま動き、次回の実行から記録が始まります。
 
+- 追加の操作は不要です。収集・通知・snapshotの厳格な検証と原子的な公開、解析ジョブの優先順位は変わりません。時間に余裕がある実行では従来どおり解析を進めます。
+
 </details>
 
 [すべての変更と技術詳細](CHANGELOG.md) · [GitHub Releases](https://github.com/yusuketakuma/hermes-mcs/releases)

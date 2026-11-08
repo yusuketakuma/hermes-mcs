@@ -227,6 +227,10 @@ _REPROCESS_JOB_MAX_BYTES = semantic_store._REPROCESS_JOB_MAX_BYTES
 
 
 _BACKLOG_INVALIDATE_S = 300.0
+# Per-pass cap for the inference reprocess keyset walk: it is resumable by
+# cursor, so a short slice each drain still advances it without letting one
+# pass consume the window the model jobs and the snapshot tail need.
+REPROCESS_STEP_BUDGET_S = 5.0
 # A backlog worker releases the run lock around every model/Jev call and
 # must retake it before persisting the result. The tick (run_check) can
 # hold that lock for its whole RUN_DEADLINE_S (480 s) after waiting
@@ -283,7 +287,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
            # jobs whose pass persisted at least one new stage artifact
            # (usage receipts excluded) — "no completion" is not "no
            # progress" for the tick's starvation guard (2026-09-30)
-           "progressed": 0}
+           "progressed": 0,
+           # fixed-shape phase timings for the preamble maintenance calls
+           "invalidate_s": None, "reprocess_s": None, "reproject_s": None}
     if scfg['mode'] != 'off':
         try:
             initial_sched, _ = _reservation_sched(ledger)
@@ -300,16 +306,23 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if not cloud_only and (lane != "backlog" or _invalidated_at is None \
             or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S):
         from semantic_publication import invalidate_projections
+        _phase_t = time.perf_counter()
         invalidate_projections(ledger.db, scfg)
+        out["invalidate_s"] = round(time.perf_counter() - _phase_t, 3)
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
     if not cloud_only:
+        _phase_t = time.perf_counter()
         try:
-            out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
+            out['inference_reprocess'] = reprocess_step(
+                ledger, cfg,
+                deadline=min(deadline,
+                             time.monotonic() + REPROCESS_STEP_BUDGET_S))
         except Exception as error:
             out['inference_reprocess'] = {'status': 'error', 'complete': False}
             result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
+        out["reprocess_s"] = round(time.perf_counter() - _phase_t, 3)
     # Stability guards shared with the extract lane: a nearly-full
     # volume turns per-job artifact writes into an I/O error storm, and
     # an open endpoint breaker means every llm_fn call pays a dead
@@ -324,10 +337,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # rows minted by an older projection version up to date, a bounded
     # slice per tick, right after this tick's invalidation pass.
     if not cloud_only:
+        _phase_t = time.perf_counter()
         try:
             out["reproject"] = v4.reproject_stale(ledger, scfg)
         except Exception as e:
             result["errors"].append(f"semantic_reproject: {type(e).__name__}")
+        out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
     circuit_s = llm_availability.circuit_open_s(ledger.db)
     if circuit_s and not cloud_only:
         out["circuit_open_s"] = round(circuit_s)
