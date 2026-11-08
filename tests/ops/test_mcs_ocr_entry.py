@@ -168,6 +168,29 @@ def test_drain_reports_captured_writer_phase_without_changing_counts(tmp_path, m
         'writer_job_stage': 'local' if phase == 'local' else 'ocr'}
 
 
+def test_local_inference_deadline_uses_the_extended_page_budget(tmp_path, monkeypatch):
+    database = tmp_path / "synthetic.db"
+    database.touch()
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    monkeypatch.setattr(mcs_ocr, "DB", str(database))
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr, "Ledger", lambda path: SimpleNamespace(close=lambda: None))
+    received = []
+
+    def local(ledger, settings, *, stage, deadline, limit):
+        assert stage == "local" and limit == 1
+        received.append(deadline - mcs_ocr.time.monotonic())
+        return {"done": 0, "deferred": 1}
+
+    monkeypatch.setattr(attachment_inference, "run_pending", local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending",
+                        lambda *args, **kwargs: {"complete": 0})
+    mcs_ocr.run(cfg)
+    assert mcs_ocr.LOCAL_CALL_S == 300
+    assert received and all(0 < span <= mcs_ocr.LOCAL_CALL_S for span in received)
+
+
 def test_ocr_call_deadline_is_the_job_residual_not_runtime_window(tmp_path, monkeypatch):
     database = tmp_path / 'synthetic.db'
     database.touch()

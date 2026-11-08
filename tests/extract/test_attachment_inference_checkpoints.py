@@ -68,6 +68,38 @@ def test_120_second_local_pass_resumes_two_chunks_and_only_then_is_ready(page_st
     assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
 
 
+def test_explicit_300_second_deadline_completes_two_chunks_without_resend(page_store, monkeypatch):
+    ledger, cfg, key, calls, _, answers = page_store
+    body = '合成記録A。眠気はありません。\n合成記録B。頭痛はありません。\n'
+    _long_page(ledger, key, body)
+    size = len(body) // 2
+    monkeypatch.setattr(worker.extract_llm, '_CHUNK_SIZE', size)
+    assert len(worker.extract_llm.plan_chunks(body, size)) == 2
+    clock = [1000.0]
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    original = worker.extract_llm.local_llm.chat
+    def slow(prompt, **kwargs):
+        target = prompt.rsplit('<<<', 1)[1].split('>>>')[0]
+        symptom = '眠気' if '眠気' in target else '頭痛'
+        answers['local'] = {'symptoms': [{'text': symptom, 'negated': True, 'subject': 'patient',
+            'status': 'ongoing', 'evidence': symptom + 'はありません。'}]}
+        response = original(prompt, **kwargs)
+        clock[0] += 80
+        return response
+    monkeypatch.setattr(worker.extract_llm.local_llm, 'chat', slow)
+    monkeypatch.setattr(worker.extract_llm.local_llm, 'admitted_chat', lambda client, prompt, **kw: slow(prompt, **kw))
+    first = worker.run_pending(ledger, cfg, stage='local', deadline=clock[0] + 120)
+    assert first['deferred'] == 1
+    source = original_source_keys.source(ledger.db, 1, key)
+    kwargs = worker._local_checkpoints(ledger, source, cfg, worker.writer_lock.updater_state())
+    assert list(kwargs['chunks_in']) == [0]
+    calls_after_first = len(calls)
+    second = worker.run_pending(ledger, cfg, stage='local', deadline=clock[0] + 300)
+    assert second['done'] == 1
+    assert len(calls) == calls_after_first + 1
+    assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
+
+
 def test_checkpoint_split_and_pending_candidate_stay_bound_and_pending(page_store, monkeypatch):
     ledger, cfg, key, *_ = page_store
     assert _run(ledger, cfg)['done'] == 1
