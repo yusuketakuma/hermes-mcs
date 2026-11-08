@@ -969,10 +969,10 @@
 
 #### 配送結果の照合で重複キーを含む記録を証拠にしない
 
-- ワーカー・復元後の照合・差分読取りで同じJSON読取り処理を使い、入れ子を含む重複キーを拒否します。
+- 本体の読取りは既存のJSON検証部品を使い、ワーカー・差分読取り・整理処理と同じく入れ子を含む重複キーを拒否します。
 - journalの読取り失敗・破損・末尾未完了を検出した整理処理は、別ファイルの証拠も削除せず終了します。人の承認、通知先・試行・内容の照合条件は維持します。
-- 候補の更新プログラムを準備するbootstrapでは、journalを実際に読むまでadapterを読み込まず、コアだけの起動条件を保ちます。
-- 根拠: adapters/common/journal.py、mcs/notify/notify_journal.py、tests/adapters/common/test_journal_phase_recovery.py、tests/notify/test_restore_journal_shape.py
+- 候補の更新・復旧に本体だけを取り出して動かす場合も、adapterに依存せず配送記録を読取り、送信済みの可能性がある記録と不完全な記録の保留を維持します。
+- 根拠: adapters/common/journal.py、mcs/notify/notify_journal.py、tests/adapters/common/test_journal_phase_recovery.py、tests/notify/test_restore_journal_shape.py、mcs/core/mcs_util.py、tests/notify/test_journal_read_budget.py
 
 #### 配送記録の確認で読取り量と時間を制限
 

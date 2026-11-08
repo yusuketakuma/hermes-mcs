@@ -775,7 +775,7 @@
       "category": "fixed",
       "id": "delivery-journal-duplicate-keys",
       "path": "changes/archive/1.1.2/delivery-journal-duplicate-keys.json",
-      "sha256": "717889ffa56358237020f7ac987f84a768c70d6f3baa1d4e1d57be928595e384",
+      "sha256": "cf6662d11207321b53064c9ce845aef0f959439072d72db4d5ce8ff999a8d218",
       "title": "配送結果の照合で重複キーを含む記録を証拠にしない"
     },
     {
