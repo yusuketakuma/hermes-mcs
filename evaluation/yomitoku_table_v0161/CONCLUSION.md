@@ -2,18 +2,18 @@
 
 ## 結論
 
-`output_schema_table_overlap` の原因は、YomiToku 0.16.1 が出力する
-grid の実際の重複です。MCS の重複検出は正しい fail-closed で、
-実関数で機序を再現しました。
+この合成例では、YomiToku 0.16.1 の出力 grid で cell の実際の重複が
+発生し得る機序を再現しました。MCS の重複検出は正しい fail-closed
+です。実 10 件の警報がすべてこの原因とは断定しません。
 
 ## 機序（実関数で証明）
 
 1. `extract_cells` は row/col の交差から 1 起点の cell grid を作る。
 2. `filter_contained_cells_within_spancell` は span box に
-   `is_contained`（包含率 > 0.8）で完全包含される sub-cell のみ除去
-   し、包含子 index の min/max+1 から merged cell の row/col/span を
-   作る。
-3. 包含率 0.8 未満の sub-cell は除去されず残る。merged cell の index
+   `is_contained`（包含率 > 0.8、面積の 80% 超が含まれる）で
+   判定された sub-cell のみ除去し、包含子 index の min/max+1
+   から merged cell の row/col/span を作る。
+3. 包含率 0.8 以下の sub-cell は除去されず残る。merged cell の index
    範囲にその残存 cell が入ると、同一行で col 範囲が重複する。
 
 合成反例：2×2・各 100px の grid に span `[15,15,200,200]` を与えると、
@@ -29,9 +29,9 @@ grid の実際の重複です。MCS の重複検出は正しい fail-closed で�
   全文 word リストへ割当するため、重複 cell は複製/分割 text を持ち
   得る。無損失の自動 merge は証明できず、医療文書では fail-closed が
   適切。
-- MCS 側の課題は「決定的失敗（同一入力＋pin 済み engine で必ず同一
-  結果）と一時失敗の不分離」で、再試行後も `pending_failed` に残り
-  常駐警報となる点。終端分離の設計は別判定。
+- MCS 側の課題は、再試行上限到達後も失敗記録が `pending_failed`
+  として監視へ残り、常駐警報となる点。終端・確認済み失敗の管理
+  分離は別判定。
 
 ## 限界（断定しないこと）
 

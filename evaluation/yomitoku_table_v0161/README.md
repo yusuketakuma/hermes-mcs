@@ -12,8 +12,8 @@ import しません（MCS 収集・解析コアの標準ライブラリ限定の
 - 著作権：YomiToku © 2024 by Kotaro Kinoshita
 - ライセンス：**CC BY-NC-SA 4.0**
   <https://creativecommons.org/licenses/by-nc-sa/4.0/>
-- 導入済み実ライブラリ（`/Users/yusuke/.local/share/mcs-ocr/ocr-venv`・
-  yomitoku 0.16.1）の対象 file と抽出元 file は byte 一致を確認済み。
+- 導入済み実ライブラリ（`<OCR_ENV>`・yomitoku 0.16.1）の対象 file と
+  抽出元 file は byte 一致を確認済み。
 
 ## 抽出範囲（`upstream_cells.py`）
 
@@ -30,6 +30,13 @@ import しません（MCS 収集・解析コアの標準ライブラリ限定の
 
 モデル・重み・SDK のコピーはありません。製品経路の変更・本番 import
 もありません。
+
+## upstream 文書の食い違い（検証基準の明記）
+
+`is_contained` の docstring は `threshold` の既定を 0.9 と説明しますが、
+実装の既定値は 0.8 です。抽出 body は upstream 原文のまま保存して
+います。本評価の判定は docstring でなく実装コードの 0.8 を基準に
+します。
 
 ## 使い方
 
