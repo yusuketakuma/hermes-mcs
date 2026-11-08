@@ -81,7 +81,7 @@ def test_corrupt_live_db_recovery_retains_restore_hold_without_empty_consent(
     monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
     notices = []
-    monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text) or True)
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **_notice_fields: notices.append(text) or True)
     monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
@@ -154,7 +154,7 @@ def test_failed_restart_remains_retryable(updater, monkeypatch):
     monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
-    monkeypatch.setattr(updater, "_enqueue_notice", lambda text: notices.append(text))
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda text, **_notice_fields: notices.append(text))
     monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)

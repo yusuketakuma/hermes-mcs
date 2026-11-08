@@ -197,7 +197,7 @@ def test_daily_notices_are_owed_once_and_marked_only_after_enqueue(gateway, tmp_
 
 def test_update_check_hook_is_best_effort_and_opt_out(monkeypatch):
     sent, marked = [], []
-    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda text, use_run_lock=False: sent.append(text) or len(sent) == 1)
+    monkeypatch.setattr(mcs_update, "_enqueue_notice", lambda text, use_run_lock=False, **_notice_fields: sent.append(text) or len(sent) == 1)
     monkeypatch.setattr(update_apply, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(update_cli, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(update_recovery, '_enqueue_notice', mcs_update._enqueue_notice)

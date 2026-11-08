@@ -314,7 +314,6 @@ _LEGACY_UPDATE_HEADERS = (
     ('rolled_back', r'\[MCS\] ロールバックしました: '),
     ('rollback_failed', r'\[MCS\] ロールバックに失敗しました: '),
     ('recovery_required', r'\[MCS\] 更新の中断復旧ができません（要手動対応）: '),
-    ('recovery_completed', r'\[MCS\] 更新が中断され復旧しました: '),
     ('runtime_rolled_back', r'\[MCS\] 中断されたPython 3\.14への移行を元に戻しました。'),
     ('standalone_restart_failed', r'\[MCS\] 独立プロセスの再起動要求を確認できません。'),
     ('gateway_restart_failed', r'\[MCS\] gatewayの再起動要求を保存・起動できません。'),
@@ -344,6 +343,8 @@ def _update_event(payload):
                          + r'|None|(?:candidate:)?[0-9a-f]{40})\nprev: [0-9a-f]{12} → [0-9a-f]{12}', text)
     if match:
         return 'applied', match[1] if re.fullmatch(_RELEASE_TAG, match[1]) else None
+    if re.fullmatch(r'\[MCS\] 更新が中断され復旧しました: (?:merge_aborted|interrupted_pre_merge|mixed_tree_reset)', text):
+        return 'recovery_completed', None
     if text in ('[MCS] 中断された更新の後処理を完了しました',
                 '[MCS] 更新の中断を検出し、post-merge を完了しました'):
         return 'recovery_completed', None

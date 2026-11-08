@@ -256,3 +256,14 @@ def test_update_event_stays_on_operational_route_without_patient_fallback(system
     assert notify_sender.target(cfg, 'new_messages') == 'slack:C12345678'
     assert notify_sender.target(cfg, 'semantic_notice') == 'slack:C12345678'
     assert cfg == before
+
+
+@pytest.mark.parametrize('result', ['merge_aborted', 'interrupted_pre_merge', 'mixed_tree_reset',
+                                  'needs_manual', '', 'mixed_tree_reset\n' + _PRIVATE])
+def test_legacy_recovery_requires_a_known_complete_result(result):
+    text = _render({'text': '[MCS] 更新が中断され復旧しました: ' + result})
+    if result in ('merge_aborted', 'interrupted_pre_merge', 'mixed_tree_reset'):
+        _assert_code(text, 'recovery_completed')
+    else:
+        _assert_unknown(text)
+    assert _PRIVATE not in text
