@@ -1196,8 +1196,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
                 held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
                 repairs=comparison_meta.get("repairs", 0 if valid else None))
-    # Cloud selection is scope-limited; an empty result cannot bound the global backlog.
-    left, age_min, age_max, estimate = (None, None, None, None) if cloud_only else _backlog_report(
+    # Restricted selection cannot bound the global backlog, even when it is empty.
+    scoped = cloud_only or admitted_ids is not None or shard is not None
+    left, age_min, age_max, estimate = (None, None, None, None) if scoped else _backlog_report(
         ledger, selected_count, limit, done + skipped + held_prior)
     now_ts = time.time()
     llm_calls = _llm_call_stats([*metas, *batch_metas])

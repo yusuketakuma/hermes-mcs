@@ -7,6 +7,8 @@ import extract_llm_runner
 import json
 import time
 
+import pytest
+
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_projection import PROJECTION_VERSION
@@ -216,5 +218,37 @@ def test_full_selection_reports_left_estimate(tmp_path, monkeypatch):
         assert res["left_estimate_age_s"] >= 0
         res = extract_llm.run_pending(db, limit=20, budget_s=30)
         assert res["left"] == 0 and res["left_estimate"] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("scope,expected_done", [
+    ({"admitted_ids": set()}, 0),
+    ({"admitted_ids": {999}}, 0),
+    ({"shard": (0, 2)}, 0),
+    ({"admitted_ids": {1}}, 1),
+    ({"shard": (1, 2)}, 1),
+])
+def test_scoped_pass_skips_global_backlog_report(tmp_path, monkeypatch, scope, expected_done):
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body="体温37度")])
+        # The global backlog is nonempty even when this pass admits nothing.
+        assert extract_llm._backlog_report(db, 0, 20, 0)[0] == 1
+        calls = []
+        monkeypatch.setattr(extract_llm_runner, "llm_extract",
+                            lambda body, **_: calls.append(body) or {"summary": "ok"})
+
+        def no_global_report(*_args):
+            pytest.fail("a scoped pass must not count the global backlog")
+
+        monkeypatch.setattr(extract_llm_runner, "_backlog_report", no_global_report)
+        result = extract_llm.run_pending(db, limit=20, budget_s=30, **scope)
+        assert result["selected"] == result["done"] == expected_done
+        assert len(calls) == expected_done
+        assert result["failed"] == 0
+        assert all(result[key] is None for key in
+                   ("left", "left_estimate", "left_estimate_age_s"))
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (KIND,)).fetchone()[0] == expected_done
     finally:
         db.close()
