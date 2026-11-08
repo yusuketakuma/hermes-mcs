@@ -1,5 +1,5 @@
 {
-  "fragment_count": 106,
+  "fragment_count": 110,
   "records": [
     {
       "category": "added",
@@ -742,8 +742,36 @@
       "path": "changes/archive/1.1.2/notification-completion-grouped-heads.json",
       "sha256": "117a9458b2689a96555586d308a2f993d4593de370aa0db490a59d64617cdc3b",
       "title": "通知完了集計で過去の配送版ごとに最大版を探す処理を解消"
+    },
+    {
+      "category": "fixed",
+      "id": "mcslog-update-outcomes",
+      "path": "changes/archive/1.1.2/mcslog-update-outcomes.json",
+      "sha256": "30418023211f7ef000471e4ff920a270773535f18e88bbbe92f084d9d24ad488",
+      "title": "MCSLOGで更新結果と必要な対応を区別"
+    },
+    {
+      "category": "fixed",
+      "id": "notify-hold-diagnostics",
+      "path": "changes/archive/1.1.2/notify-hold-diagnostics.json",
+      "sha256": "870d077b7083235fcd19bd916bb62786ba18642bdfd07c414fe78357f1078957",
+      "title": "通知保留の既存理由コードを診断表示に保持"
+    },
+    {
+      "category": "fixed",
+      "id": "ocr-failure-diagnostics",
+      "path": "changes/archive/1.1.2/ocr-failure-diagnostics.json",
+      "sha256": "0b6f6112a04aee8639adb0231888fbaad0d0854a569bec00fabed42e0a36bd10",
+      "title": "添付の文字起こし失敗の原因別件数を監視情報へ記録"
+    },
+    {
+      "category": "changed",
+      "id": "mcslog-health-actions",
+      "path": "changes/archive/1.1.2/mcslog-health-actions.json",
+      "sha256": "a3a2725cb0f5a45f08d784995b3229b2ce14099f219c8f349e51b453ae9e7c4e",
+      "title": "監視アラートの対処手順と照会コードを分かりやすく改善"
     }
   ],
-  "scope": "v1.1.2 の変更記録106件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+  "scope": "v1.1.2 の変更記録110件を全件収録。最終候補SHAの固定・受入証拠ではない。",
   "status": "unpublished_preparation"
 }
