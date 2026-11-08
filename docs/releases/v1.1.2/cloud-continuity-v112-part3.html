@@ -1,0 +1,45 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>cloud-continuity-v112-part3</title></head><body>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 1540" width="780" height="1540" role="img" aria-labelledby="cloud-continuity-v112-part3-title cloud-continuity-v112-part3-desc" font-family="Hiragino Kaku Gothic ProN, sans-serif">
+<title id="cloud-continuity-v112-part3-title">v1.1.2 原文から患者情報までの流れ 3/3：活用・待ち・回数</title>
+<desc id="cloud-continuity-v112-part3-desc">検索・原資料リンク・通知は1の保存から独立した経路でcontextの完成を待ちません。Jevは設定次第の別経路の外部監査で主線の通過先ではありません。枠・期限の待ち、品質不合格、送信結果不明は履歴を保持し自動再送やlocal置換をしません。回数と処理枠の条件を示します。合成の説明図で、実画面・測定値・患者データではありません。</desc>
+<defs><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#087f5b"/></marker></defs>
+<rect width="780" height="1540" fill="#f6f4ef"/>
+<text x="36" y="56" font-size="30" font-weight="700" fill="#202124">v1.1.2 原文から患者情報までの流れ（3/3）</text>
+<text x="36" y="98" font-size="26" fill="#66716f">検索・通知は1の保存から独立した経路です。</text>
+<text x="84" y="168" font-size="30" font-weight="700" fill="#087f5b">主線の外にある経路</text>
+<path d="M62 108 V196" stroke="#087f5b" stroke-width="3" fill="none" marker-end="url(#arrg)"/>
+<rect x="36" y="200" width="708" height="280" rx="14" fill="#e9f5ef" stroke="#087f5b" stroke-width="2"/>
+<text x="58" y="252" font-size="28" font-weight="700" fill="#087f5b">検索・通知（1の保存から独立）</text>
+<text x="58" y="298" font-size="28" fill="#202124">検索：入力500字まで・1ページ5件</text>
+<text x="58" y="336" font-size="28" fill="#202124">検索はLLM・概況の回数を使わない</text>
+<text x="58" y="374" font-size="28" fill="#202124">原資料・MCSへのリンク</text>
+<text x="58" y="412" font-size="28" fill="#202124">通知：原文・個別解析の状態を先に表示</text>
+<text x="58" y="450" font-size="28" fill="#66716f">contextの完成を待たない</text>
+<rect x="36" y="504" width="708" height="204" rx="14" fill="#edf0ee" stroke="#d5dcd7" stroke-width="2"/>
+<text x="58" y="556" font-size="28" font-weight="700" fill="#202124">Jev（設定次第の別経路）</text>
+<text x="58" y="602" font-size="28" fill="#202124">外部監査として別に送る経路</text>
+<text x="58" y="640" font-size="28" fill="#202124">匿名・非送信が既定とは限らない</text>
+<text x="58" y="678" font-size="28" fill="#202124">1〜9の主線の通過先ではない</text>
+<text x="36" y="774" font-size="30" font-weight="700" fill="#087f5b">待ち・不明時の扱い</text>
+<text x="36" y="848" font-size="28" font-weight="700" fill="#202124">枠・期限の待ち</text>
+<text x="366" y="848" font-size="28" fill="#202124">次の周回で処理</text>
+<text x="36" y="888" font-size="28" font-weight="700" fill="#202124">同じ入力の品質不合格</text>
+<text x="366" y="888" font-size="28" fill="#202124">既存の有限上限まで</text>
+<text x="36" y="928" font-size="28" font-weight="700" fill="#202124">送信結果が不明</text>
+<text x="366" y="928" font-size="28" fill="#202124">履歴を保持・自動再送しない</text>
+<text x="366" y="968" font-size="28" fill="#202124">勝手にlocalへ置き換えない</text>
+<text x="36" y="1008" font-size="28" font-weight="700" fill="#202124">旧cloud予約の会計</text>
+<text x="366" y="1008" font-size="28" fill="#202124">会計・承認の証拠を保持</text>
+<text x="36" y="1076" font-size="30" font-weight="700" fill="#087f5b">回数と処理枠（JST）</text>
+<text x="36" y="1150" font-size="28" fill="#202124">・概況生成は患者ごとに1日4回・原則3時間間隔</text>
+<text x="36" y="1190" font-size="28" fill="#202124">・初回の全資料反映は間隔のみ免除（4回は維持）</text>
+<text x="36" y="1230" font-size="28" fill="#202124">・同じ入力の再開・有限修復は同じ1回</text>
+<text x="36" y="1270" font-size="28" fill="#202124">・B・C・検索・閲覧は回数の対象外</text>
+<text x="36" y="1310" font-size="28" fill="#202124">・A:B:C=6:3:1は仕事を巡回する順番の配分。</text>
+<text x="64" y="1350" font-size="28" fill="#202124">1周で5→6→7を全て行うとは限らず、</text>
+<text x="64" y="1390" font-size="28" fill="#202124">速度保証でもない</text>
+<text x="36" y="1430" font-size="28" fill="#202124">・08–20時：対話1枠＋背景2枠</text>
+<text x="36" y="1470" font-size="28" fill="#202124">・20–08時：背景最大3枠</text>
+<text x="36" y="1510" font-size="28" fill="#202124">・新着は次の空き枠。実行中は中断しない</text>
+</svg>
+</body></html>

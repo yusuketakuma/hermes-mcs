@@ -324,9 +324,13 @@ SETUP_AGENT.mdに従い、必要な依存ソフトから初期設定まで、1�
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。
 
 <details>
-<summary>v1.1.2の患者コンテキスト作成と原資料検索の流れ（補足図）を開く</summary>
+<summary>v1.1.2の患者コンテキスト作成と原資料検索の流れ（補足図・3分割）を開く</summary>
 
-![MCSの原文を保存し、OCR・個別解析・資料集合の固定を経て、B・C・Aの照合と品質確認で患者コンテキストを育て、検索と通知は独立して使える流れの詳細図](docs/releases/v1.1.2/cloud-continuity-v112-detailed.png)
+![v1.1.2の流れ1/3：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](docs/releases/v1.1.2/cloud-continuity-v112-part1.png)
+
+![v1.1.2の流れ2/3：B・C・Aの照合と品質確認で患者コンテキストを育てる流れの説明図](docs/releases/v1.1.2/cloud-continuity-v112-part2.png)
+
+![v1.1.2の流れ3/3：検索・通知の独立経路と、待ち・不明時の扱い、回数と処理枠の説明図](docs/releases/v1.1.2/cloud-continuity-v112-part3.png)
 
 </details>
 
@@ -419,7 +423,11 @@ MCSの投稿・返信・添付情報をこのMacへ保存します。新着と�
 
 v1.1.2は、品質を確認した資料から患者コンテキストの概況を作り、同じ患者の別スレッドや添付OCRを検索して原資料とMCSへ戻れるようにする版です。添付の画像・PDFはローカルで文字起こしし、解析はローカルLLMの昼夜3枠と、患者コンテキストに限ったクラウド処理で分担します。DB世代12・OCRモデルの更新など、更新時に必要な条件は「更新時の注意」の表にまとめています。
 
-![MCSの原文を保存し、OCR・個別解析・資料集合の固定を経て、B・C・Aの照合と品質確認で患者コンテキストを育て、検索と通知は独立して使える流れの詳細図](docs/releases/v1.1.2/cloud-continuity-v112-detailed.png)
+![v1.1.2の流れ1/3：MCSの投稿・返信・添付を保存し、任意のローカルOCRと個別抽出・品質確認を経て採用する資料集合を固定する流れの説明図](docs/releases/v1.1.2/cloud-continuity-v112-part1.png)
+
+![v1.1.2の流れ2/3：B・C・Aの照合と品質確認で患者コンテキストを育てる流れの説明図](docs/releases/v1.1.2/cloud-continuity-v112-part2.png)
+
+![v1.1.2の流れ3/3：検索・通知の独立経路と、待ち・不明時の扱い、回数と処理枠の説明図](docs/releases/v1.1.2/cloud-continuity-v112-part3.png)
 
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.2/docs/guides/ANTHROPIC.md)を確認してください。
 

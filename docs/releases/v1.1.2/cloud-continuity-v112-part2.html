@@ -1,0 +1,49 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>cloud-continuity-v112-part2</title></head><body>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 1800" width="780" height="1800" role="img" aria-labelledby="cloud-continuity-v112-part2-title cloud-continuity-v112-part2-desc" font-family="Hiragino Kaku Gothic ProN, sans-serif">
+<title id="cloud-continuity-v112-part2-title">v1.1.2 原文から患者情報までの流れ 2/3：患者contextの育成</title>
+<desc id="cloud-continuity-v112-part2-desc">患者contextは現在の設定で決まる実行先で、Bの全区間点検、Cの根拠照合、Aの項目・順序選択、必要な品質確認・有限修復・再監査を経て、9の採用直前と閲覧時の再照合から本人向け患者情報へ渡します。合成の説明図で、実画面・測定値・患者データではありません。</desc>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#66716f"/></marker></defs>
+<rect width="780" height="1800" fill="#f6f4ef"/>
+<text x="36" y="56" font-size="30" font-weight="700" fill="#202124">v1.1.2 原文から患者情報までの流れ（2/3）</text>
+<text x="36" y="98" font-size="26" fill="#66716f">1/3 の「4 採用できる資料集合を固定」から続きます。</text>
+<text x="110" y="170" font-size="30" font-weight="700" fill="#087f5b">患者contextの育成</text>
+<text x="110" y="212" font-size="26" fill="#66716f">実行先は現在の設定で決まる（local／cloud）。</text>
+<text x="110" y="248" font-size="26" fill="#66716f">3の個別解析をcloudで続ける経路ではない。</text>
+<path d="M390 272 L390 310" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="314" width="560" height="244" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="368" font-size="30" font-weight="700" fill="#202124">5 B：資料の全区間を点検</text>
+<text x="132" y="414" font-size="28" fill="#202124">根拠付きの事実を蓄積</text>
+<text x="132" y="452" font-size="28" fill="#202124">原文・OCR・補助要約を区別</text>
+<text x="132" y="490" font-size="28" fill="#66716f">補助要約は根拠にしない</text>
+<text x="132" y="528" font-size="28" fill="#66716f">出典・版・区間が同じなら再利用</text>
+<path d="M390 558 L390 604" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="608" width="560" height="206" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="662" font-size="30" font-weight="700" fill="#202124">6 C：根拠を照合</text>
+<text x="132" y="708" font-size="28" fill="#202124">出典・引用・対象者・否定・時制</text>
+<text x="132" y="746" font-size="28" fill="#202124">資料品質の条件を確認</text>
+<text x="132" y="784" font-size="28" fill="#66716f">未完了・失敗の資料は採用しない</text>
+<path d="M390 814 L390 860" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="864" width="560" height="244" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="918" font-size="30" font-weight="700" fill="#202124">7 A：概況の項目と順序を選ぶ</text>
+<text x="132" y="964" font-size="28" fill="#202124">検証済みの事実だけを使う</text>
+<text x="132" y="1002" font-size="28" fill="#202124">表示文は原文の引用から復元</text>
+<text x="132" y="1040" font-size="28" fill="#66716f">前回のcontextを新しい事実として入れ</text>
+<text x="132" y="1078" font-size="28" fill="#66716f">ない</text>
+<path d="M390 1108 L390 1154" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="1158" width="560" height="168" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="1212" font-size="30" font-weight="700" fill="#202124">8 必要な品質確認・有限修復・再監査</text>
+<text x="132" y="1258" font-size="28" fill="#202124">合格し適用条件を満たしたときだけ9へ</text>
+<text x="132" y="1296" font-size="28" fill="#66716f">入力・出典・判断が不明なら保留</text>
+<rect x="94" y="272" width="592" height="1070" rx="18" fill="none" stroke="#087f5b" stroke-width="3" stroke-dasharray="12 8"/>
+<path d="M390 1342 L390 1388" stroke="#66716f" stroke-width="3" fill="none" marker-end="url(#arr)"/>
+<rect x="110" y="1392" width="560" height="320" rx="14" fill="#ffffff" stroke="#d5dcd7" stroke-width="2"/>
+<text x="132" y="1446" font-size="30" font-weight="700" fill="#202124">9 採用直前と閲覧時に再照合</text>
+<text x="132" y="1492" font-size="28" fill="#202124">原資料・契約・権限・処理権を確認</text>
+<text x="132" y="1530" font-size="28" fill="#202124">保存して本人向けの患者情報へ</text>
+<text x="132" y="1568" font-size="28" fill="#66716f">保存済みの原資料で訂正・削除・</text>
+<text x="132" y="1606" font-size="28" fill="#66716f">失効を検知したら古い内容を返さない</text>
+<text x="132" y="1644" font-size="28" fill="#66716f">新着だけで既採用を捨てず未反映件数を</text>
+<text x="132" y="1682" font-size="28" fill="#66716f">表示</text>
+<text x="110" y="1756" font-size="26" fill="#66716f">→ 3/3：活用・待ち・回数へ続く</text>
+</svg>
+</body></html>
