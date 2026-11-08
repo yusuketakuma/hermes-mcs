@@ -23,6 +23,8 @@ import pytest
 import cloud_policy
 import extract_llm
 import cloud_inference
+import mcs_util
+from extract_testkit import _message
 from anthropic_client import AnthropicClient
 from ledger import Ledger
 from test_anthropic_runtime import _assert_legacy_retained as _assert_legacy_retained, _current_artifacts as _current_artifacts, old as old, routed as routed
@@ -390,7 +392,7 @@ def test_claim_limit_and_after_claim_failure_release_owned_leases(cloud_candidat
     assert _claim_count(led) == 0 and not led.db.in_transaction
 
 
-@pytest.mark.parametrize("change", ["scope", "source", "source_edit", "budget", "unknown_paid"])
+@pytest.mark.parametrize("change", ["scope", "source", "source_edit", "owner_replace", "db_failure", "budget", "unknown_paid"])
 def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_candidates, monkeypatch, change):
     led, cfg, *_ = cloud_candidates
     prior = [dict(row) for row in led.artifacts(extract_llm.KIND)]
@@ -398,6 +400,7 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
     monkeypatch.setattr(cloud_policy, "record_result", _REAL_RESULT)
     monkeypatch.setattr(extract_llm.anthropic_client, "AnthropicClient", AnthropicClient)
     sent, unresolved, changed = [], [], []
+    probe_failures, cas_releases, claim_rows = [], [], {}
 
     def forbidden_http(*args, **kwargs):
         sent.append(True)
@@ -415,6 +418,22 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
     def change_after_claim(ledger, row, hints):
         ensure(ledger, row, hints)
         changed.append(row["message_id"])
+
+        def real_edit():
+            # A real writer edit: save_messages recomputes the hash and writes
+            # the new revision — no fabricated hash or billing shape injected.
+            source = ledger.db.execute("SELECT project_id, posted_at FROM messages WHERE message_id=?",
+                                       (row["message_id"],)).fetchone()
+            ledger.save_messages([_message(row["message_id"], body="合成の原文編集です。",
+                                         project_id=source["project_id"],
+                                         posted_at=source["posted_at"])])
+            edited = ledger.db.execute("SELECT content_hash, body_state FROM messages WHERE message_id=?",
+                                       (row["message_id"],)).fetchone()
+            assert mcs_util.valid_hash(edited["content_hash"]) and edited["content_hash"] != row["content_hash"]
+            assert edited["body_state"] == "full"
+            assert ledger.db.execute("SELECT COUNT(*) FROM message_revisions WHERE message_id=?",
+                                     (row["message_id"],)).fetchone()[0] >= 2
+
         if change == "scope":
             cfg["cloud_llm"]["exclude_project_ids"] = [1]
         elif change == "source":
@@ -422,23 +441,78 @@ def test_claim_refill_preserves_live_send_and_unresolved_charge_guards(cloud_can
                 ledger.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=?",
                                    (row["message_id"],))
         elif change == "source_edit":
-            # A real source edit produces a different valid hash: a provably
-            # changed head must release its claim so the new body re-claims.
+            real_edit()
+        elif change == "owner_replace":
+            # A provably changed source behind another owner's claim reaches
+            # the release CAS — which must not delete a row it does not own.
+            real_edit()
             with ledger.db:
-                ledger.db.execute("UPDATE messages SET content_hash=? WHERE message_id=?",
-                                   ("9" * 64, row["message_id"]))
+                ledger.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.owner_token',?)"
+                                  " WHERE kind='extract_claim'", ("other-owner",))
+            claim_rows["before"] = [dict(j) for j in ledger.db.execute(
+                "SELECT * FROM fetch_jobs WHERE kind='extract_claim'")]
+        elif change == "db_failure":
+            # A provably changed source plus an unreadable probe: unverifiable
+            # stays unverifiable — the bounded claim is kept.
+            real_edit()
+            real_db = ledger.db
+            class _FailProbe:
+                def __getattr__(self, name):
+                    return getattr(real_db, name)
+                def __enter__(self):
+                    real_db.__enter__()
+                    return self
+                def __exit__(self, *exc):
+                    return real_db.__exit__(*exc)
+                def execute(self, sql, params=()):
+                    if "content_hash FROM messages WHERE project_id" in sql:
+                        probe_failures.append(sql)
+                        raise sqlite3.OperationalError("synthetic-read-failure")
+                    return real_db.execute(sql, params)
+            ledger.db = _FailProbe()
         elif change == "budget":
             cfg["cloud_llm"]["daily_request_budget"] = 0
 
+    real_release = extract_llm_runner._release
+    def release_spy(ledger_, r_, lease_):
+        cas_releases.append(r_.get("_claim_token") if isinstance(r_, dict) else None)
+        return real_release(ledger_, r_, lease_)
     monkeypatch.setattr(AnthropicClient, "request", forbidden_http)
     monkeypatch.setattr(cloud_policy, "usage_reserver", reserve_factory)
+    monkeypatch.setattr(extract_llm_runner, "_release", release_spy)
     monkeypatch.setattr(extract_llm, "_ensure_v1", change_after_claim)
     monkeypatch.setattr(extract_llm_prepare, '_ensure_v1', extract_llm._ensure_v1)
     monkeypatch.setattr(extract_llm_runner, '_ensure_v1', extract_llm._ensure_v1)
     assert _cloud_pass(led)["done"] == 0 and len(changed) == 1
-    # An unverifiable head (invalid hash, unresolved paid unit) keeps the
-    # bounded claim; a provably changed source must release via the CAS.
-    assert sent == [] and _claim_count(led) == int(change in ("source", "unknown_paid")) and not _current_artifacts(led)
+    # An unverifiable head (invalid hash, owner swap, probe failure, unresolved
+    # paid unit) keeps the bounded claim; a provably changed source releases.
+    assert sent == [] and _claim_count(led) == int(change in ("source", "owner_replace", "db_failure",
+                                                            "unknown_paid")) and not _current_artifacts(led)
+    if change == "owner_replace":
+        owners = [r[0] for r in led.db.execute(
+            "SELECT json_extract(payload,'$.owner_token') FROM fetch_jobs WHERE kind='extract_claim'")]
+        assert owners == ["other-owner"]
+        # The release CAS ran under our old claim token and could not touch
+        # another owner's row — the claim survives byte-for-byte.
+        assert cas_releases
+        assert [dict(j) for j in led.db.execute(
+            "SELECT * FROM fetch_jobs WHERE kind='extract_claim'")] == claim_rows["before"]
+    if change == "db_failure":
+        # The change probe actually fired and failed — not a kept-by-accident.
+        assert probe_failures
+    if change in ("source_edit", "owner_replace", "db_failure"):
+        # A real writer edit flags the edited message's prior extraction rows
+        # invalidated — the only permitted change: every other column and the
+        # rest of meta is preserved, never silently rewritten.
+        after = {r["artifact_id"]: dict(r) for r in led.artifacts(extract_llm.KIND)}
+        flagged = [row for row in prior if row["message_id"] == changed[0]]
+        assert flagged
+        for row in flagged:
+            current = after[row["artifact_id"]]
+            assert {k: v for k, v in current.items() if k != "meta"} == \
+                {k: v for k, v in row.items() if k != "meta"}
+            assert json.loads(current["meta"]) == {**json.loads(row["meta"]), "invalidated": True}
+        prior = [row for row in prior if row["message_id"] != changed[0]]
     _assert_legacy_retained(led, prior)
     usage = cloud_policy.usage_report(led)
     assert not usage["pricing_unverified"]
