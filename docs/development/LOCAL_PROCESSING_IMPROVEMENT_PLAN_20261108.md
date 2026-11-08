@@ -9,8 +9,8 @@
 分けて扱い、残時間の見積りや性能改善量は捏造せず、工程の依存だけを
 示します。
 
-**現時点の状態：draft（B1 節は Oracle focused followup の追補待ちで
-計画未確定）。**
+**現時点の状態：draft（B1 は前提確認＋合成反証後に採用判断の条件
+付き案。Root の protocol 最終確認は追補待ち）。**
 
 ## 1. 目的と現況根拠
 
@@ -50,7 +50,7 @@
 |---|---|---|---|
 | P0 | 既存証跡の基準固定・必要最小の観測項目定義 | 計測なしに改善を判定できない | 最初 |
 | C1 | ctx 計画の重複 read 除去（最小確定案） | 同一条件の純粋 read を 1 組減らす。小さく確実 | P0 の次 |
-| B1 | writer 保持の局所短縮（候補・追補待ち） | 再取得 132–413 秒の実測に直撃する候補 | C1 の次 |
+| B1 | writer 保持の局所短縮（条件付き案・合成反証後に採用判断） | 再取得 132–413 秒の実測に直撃する候補。必須 2 条件つき | C1 の次 |
 | E | repair 負荷（first-pass evidence 指示の最小再配置） | ev 支配だが内訳未確定・仮説として限定 | 残差次第 |
 | C2 | source 集合の 1 回取得→共通 builder | scope 差の再導出が必須で単純 filter 不可 | C1 後の残差で判定 |
 | B2 | derive 計算の chunk 単位 TX 外化 | derive 全体 unlock は不可。実計算割合不明 | B1 後の残差で判定 |
@@ -83,25 +83,51 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
   authorizer 契約を必ず維持し、estimate・proof_for・scope の異なる
   caller で取得物を共用しない。
 
-### B1（候補・追補待ち・計画未確定）
+### B1（条件付き案・前提確認＋合成反証後に採用判断）
 
-- 候補：private snapshot コピー完成後の `_valid_snapshot_candidate`
-  の中だけ run.lock を解放。copy/publish/marker/dirtyCAS は保持、
-  `.snapshot.lock` は全期間保持かつ LOCK_NB 取得は不変。
-  既存 `unlocked_transport` helper を再利用し、optional の
-  verification context factory を run_check → maintenance →
-  snapshots へ透過（default なしは既存動作）。
-- 要解決：同 code restore の DB os.replace / lockfile 交換 / 期限 /
-  child fd / RunLockLost。現在 run_check は RunLockLost held=True
-  でも finish_run＋health を書くため、helper を挟むだけでは不可。
-  検証後 stale/所有不明は古い ledger/health へ追記しない最小境界が
-  必要。fd 所有を偽装しない。
-- validator 終了を scope 内採時し reacquire と分離、同一 absolute
-  deadline で通算。通常の別 writer commit は point-in-time snapshot
-  として許容し、新 dirty 世代を消さない。
-- verify 42–55 秒を他 writer へ開放できる候補だが、fetch/derive を
-  含む 132–413 秒の全部解消は約束しない。
-- **Oracle の新競合反例 followup 待ち。追補で確定/差替えする。**
+Oracle followup の結論：**「そのまま実装可」ではなく条件付きの
+研究・合成検証案**。既存 `unlocked_transport` を挿すだけの実装は
+不可。C1 を先行する計画と矛盾しない。
+
+必須 2 条件：
+
+1. restore を含む writer 全体が同じ安定 run.lock で排他されること
+   （pathname 差替えで oldfd/newfd が分裂しないこと）。
+2. snapshot 専用の書込禁止状態を物理 held と分離し、元例外を保持
+   して全終端 caller へ伝えること。
+
+要件：
+
+- `.snapshot.lock` の LOCK_NB は維持し、既存 caller 間の ABBA を
+  作らない。reacquire timeout・他 publisher の partial 増加は受入
+  観測項目。
+- DB の dev/inode は置換が残る場合に検出可能だが、marker/code
+  stamp の前後一致だけでは単調世代の証明にならない。stat の無限
+  追加で未証明 ABA を隠さない。restore の lock 取得〜replace・
+  lockfile 寿命は Codex の別 review で source 照合中（追補待ち）。
+- no-write は `RunLockLost.updated` だけでは完結しない。通常例外
+  ＋再取得失敗でも generic handler が旧 DB へ書く反例を閉じる。
+  snapshot 呼出し終了まで所有者保持の write-permit 状態を伝達し、
+  `_finish_run` の except Exception・outer RunLockLost・generic・
+  `_run_stage` を覆う最小案にする。元例外を再取得・cleanup の二次
+  例外で覆わない。fd held を偽装したり、他 LLM caller を一括変更
+  しない。
+- `finish_run` は既に snapshot 前に完了している。stale 時 no-write
+  でも「running→次回 crashed」とは書かず、local result＋exit で
+  失敗を示し、旧 ledger への補正はしない。
+- 有限の absolute snapshot deadline がある時だけ B1 を有効化し、
+  None は旧動作。validator 終了時刻は unlock scope 内で採時し、
+  reacquire を verify_s へ混入しない。reacquire 後と replace 直前
+  でも deadline を確認。nativeIO 等を hard 期限の保証としない。
+- runlock fd は親借用とし、validator へ渡さず close しない。
+  unreaped child の publication fence・候補保全は維持。通常 writer
+  更新は point-in-time として許容し、copy 前 signature と dirty
+  世代 CAS は不変。
+- 合成受入は r3 の条件に加え、元例外各種×再取得/restore/cleanup
+  二次失敗、runlock 置換と検査後置換、NB 出版/prune 競合、
+  none-deadline の旧動作を加える。安全違反 1 件で不採用。
+  性能面も writer wait 改善なし・snapshot partial/RT 遅延増なら
+  戻す。
 
 ### E（repair・残差対応の比較案）
 
@@ -131,7 +157,7 @@ C1 と B1 の設計・合成 fixture 準備は独立だが、本番比較は 1 �
 |---|---|---|---|
 | P0 | 既存証跡の基準固定・必要最小の観測項目定義 | 実装担当（計画レビューはCodex） | なし |
 | C1 | 重複 read 除去の最小実装＋合成 fixture | 実装担当 | P0 の観測定義 |
-| B1 | writer 保持の局所短縮（Oracle 追補で確定後） | 実装担当（設計確定はCodex/Oracle） | P0・追補 |
+| B1 | writer 保持の局所短縮（前提確認＋合成反証後に採用判断） | 実装担当（設計確定はCodex） | P0・必須条件 |
 | 比較 | 同条件で 1 変更ずつ合成受入 | 実装担当 | C1/B1 の単位完成 |
 | 残差 | E/C2/B2/D/A の採否を残差で判定 | Codex 判定・Devin 実装 | 比較結果 |
 
@@ -228,11 +254,11 @@ RT 公平性/carry/snapshot が悪化するなら次の拡張前に rollback ま
 |---|---|---|---|---|
 | P0 | 計画内・最初 | 観測項目が固定語彙・数値で定義できる | PHI/本文を計測へ持ち込む案 | 実装担当 |
 | C1 | 最小確定案 | 同 fixture で重複 read 1 組→0・selection/lane/source_sig 同等 | scope/cfg/contract 差を同一視する設計 | 実装担当 |
-| B1 | 候補・追補待ち | Oracle 追補で反例解決＋stale 非書込み境界が立つ | fd 所有偽装・旧 ledger への追記 | Codex 設計確定→Devin |
+| B1 | 条件付き案・前提確認中 | 必須 2 条件（writer 全体が安定 run.lock 排他・no-write 状態の伝達）＋合成反証を通過 | fd 所有偽装・旧 ledger への追記・安全違反 1 件 | Codex 設計確定→Devin |
 | E | 比較案 | ev 内訳分類＋bench A/B で precision/recall 不悪化 | 完全一致・validator・one-shot の弱体化案 | Codex 判定→Devin |
 | C2 | 保留 | C1 後も listing 支配が残る | scope/権限/契約差の再導出省略 | Codex 判定 |
 | B2 | 保留 | B1 後も計算割合が支配 | derive 全体 unlock 案 | Codex 判定 |
 | D | 低順位 | complete＋全 covered が実証可能 | 一律延長・no-due 未証明での間引き | Codex 判定 |
 | A | 限定条件 | 推論打切りまたは供給不足＋資源余力の証拠 | 一律拡大・複数因子の同時変更 | Codex 判定 |
 
-（draft・B1 追補待ち）
+（draft・B1 は前提確認＋合成反証後に採用判断）
