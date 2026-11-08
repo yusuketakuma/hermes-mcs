@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "監視が不安定の原因を診断し、範囲を限った自動復帰を行う機能を追加",
+  "summary": "監視がシステムの不安定を検知したとき、原因に応じてサービスの再起動や中断した導入のサービス復旧を自動で試みるようになりました。各操作は回数と期間に上限があり、記録は data/auto_recovery.json に残ります。",
+  "upgrade": "追加操作は不要です。無効にする場合は config.json の auto_recovery.enabled を false にしてください。",
+  "details": [
+    "standalone の監視対象のホストで停滞・子の失敗・接続断などが続く場合、まず通常の終了処理を待つ再起動要求を出し、解消しない場合は強制再起動に切り替えます。更新処理の中断（standalone_update_stuck）は更新復旧の担当範囲のため対象外です。",
+    "サービスが launchd から外れている場合の復旧（bootstrap）は、導入記録 install_progress.json が中断を証明する場合に限ります。記録がない・新しい・実行中の可能性がある場合は手動で止めた意図とみなし、何もしません。",
+    "各対象への操作は既定で24時間に3回まで。上限に達した対象は以後の自動操作を止め、通常のアラート経路に任せます。操作の成否・理由・回数は data/auto_recovery.json に記録し、例外の本文や患者データは保存しません。",
+    "launchctl の状態確認が失敗・時間切れの場合は状態不明として何もしません（fail-closed）。auto_recovery には enabled・max_attempts（1〜10）・window_s（3600〜604800）を設定でき、無効化や上限の変更が可能です。"
+  ],
+  "refs": [
+    "mcs/ingest/health_recovery.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/core/mcs_config.py"
+  ]
+}

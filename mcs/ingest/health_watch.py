@@ -1180,6 +1180,15 @@ def _alert_lines(report: dict) -> list[str]:
 
 def _watch(args, cfg) -> int:
     report = evaluate(home=args.home, now=args.now, cfg=cfg)
+    try:
+        # bounded self-healing on the fresh verdict; a recovery failure
+        # must never break the watch itself
+        from health_recovery import run as auto_recovery
+        report["auto_recovery"] = auto_recovery(
+            report, args.home, cfg, report["watched_at"])
+    except Exception:
+        report["auto_recovery"] = {"enabled": False, "actions": [],
+                                   "reason": "recovery_error"}
     for line in _alert_lines(report):
         print(line)
     if report.get("delivery_error"):
