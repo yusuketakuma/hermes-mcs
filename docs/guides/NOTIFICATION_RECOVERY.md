@@ -8,6 +8,15 @@
 外部やチャットへそのまま貼り付けないでください。`mcs doctor`のworker起動・復元保留の表示だけでは、
 個々のpartの配送結果は確定しません。
 
+`data/health.json`の`cards.recovery_parts`は、個別の確認が必要なpartを探すための一覧です。
+`unknown`のpartに加え、添付の配送先identity確認待ちで`held`のpartと、依存する記録がなく`not_sent`で止まったSlackの`file_group`を含みます。
+各項目は`delivery_id`・`part_id`・`kind`・`state`・`transport`・固定の`error_code`・`attempt_id`・`age_s`・`flow`を持ちます。
+`status=plannable`は対応する計画が実際に作れること、`status=blocked`は`blocker`の固定コードが計画できない理由を示します。
+`flow`は計画に使う系統で、`card_part_resolve`は`card_part_plan`、`attachment_identity_confirm`は`attachment_identity_plan`に対応します。
+`total`は一覧化前の候補総数、`truncated`は20件を超えて切り捨てたかどうかです。取消済みのrenderと退役した通知サービスは含みません。
+Discordのグループ構成員が共有アンカーへ誘導される場合は`approval_part_id`と`group_approval`を示し、承認はグループ全体に対して行います。
+一覧への掲載は承認・送信・配送成功を意味せず、実際の復旧可否は計画と適用時の再照合が決めます。
+
 ### カード本体が届いていても本文・添付が未完了の場合
 
 送信待ちの一覧が0件でも、最新カードの本文・添付などが未完了の場合があります。

@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "配送結果不明の復旧対象をhealth一覧から探せる",
+  "summary": "health.jsonのcards.recovery_partsが、unknownのpartに加えて添付identity確認待ちのheld partと依存拒否でnot_sentのSlack file_groupを、対応する計画関数で実際に検証した上で最大20件・候補総数と切捨て有無つきで示します。各項目はplannable/blockedと固定のblockerコードを持ち、Discordのグループ構成員は共有アンカーへの承認範囲を明示します。あわせてpart保留集計と復旧案内が、これまでunknownに丸められていた固定のproducerコード（file_group_unverified等）をそのまま保持するようになりました。",
+  "upgrade": "追加操作は不要です。health.jsonのcards.recovery_partsでstatus=plannableの項目を見つけたら、flowに対応するcard_part_planまたはattachment_identity_planで計画を確認し、従来どおり人承認つきで復旧します。blockedの項目はblockerの固定コードを確認してください。",
+  "details": [
+    "一覧は読取りのみで、承認・enqueue・再送・状態変更を行いません。blockedのblockerは計画関数が返す固定コードで、失敗理由をそのまま示します。",
+    "取消済みのrenderと退役した通知サービスのpartは含みません。Discordのグループ構成員はapproval_part_idとgroup_approvalでグループ全体への承認を明示します。",
+    "part_hold_reportのresolvableの説明を、実際の集計意味（unknownでattempt_idを持つpartの件数。card_part_resolve_planが権威で、依存拒否のnot_sent file_groupは数えません）に合わせて修正しました。"
+  ],
+  "refs": ["mcs/notify/notify_recovery.py", "mcs/notify/notify_scope.py", "docs/guides/NOTIFICATION_RECOVERY.md"]
+}

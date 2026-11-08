@@ -868,7 +868,7 @@ def health_cards(db, cfg=None, *, observation=None) -> dict:
     transport (after a notify.interactive switch) are reported only as
     ``retired_unsettled`` and leave the live counts."""
     now = time.time()
-    from notify_recovery import recovery_guidance
+    from notify_recovery import recovery_guidance, recovery_worklist
     retired = retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     live = f" AND r.transport NOT IN ({marks})" if retired else ""
@@ -960,6 +960,9 @@ def health_cards(db, cfg=None, *, observation=None) -> dict:
         item['error_code'] = item['recovery'].pop('error_code')
         unknown_parts.append(item)
     if observation is not None:
+        observation["phase"] = "recovery_worklist"
+    recovery_parts = recovery_worklist(db, cfg)
+    if observation is not None:
         observation["phase"] = "layout_inventory"
     inventory = layout_migration_counts(db)
     completion = _delivery_completion(db, cfg, now, observation)
@@ -975,6 +978,7 @@ def health_cards(db, cfg=None, *, observation=None) -> dict:
         "oldest_pending_age_s": round(now - oldest, 1) if oldest else 0,
         "layout_inventory": inventory,
         "unknown_parts": unknown_parts,
+        "recovery_parts": recovery_parts,
         "unknown_part_resolution": "カード本体はops.card_resolve、本文・添付はcard_part_planで確認後、人承認付きops.card_part_resolveを使ってください。",
         "completion": completion,
         "renders_queued": queued,
