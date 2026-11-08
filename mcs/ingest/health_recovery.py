@@ -16,7 +16,6 @@ import mcs_config
 from mcs_util import payload_hash, strict_json
 from health_policy import freshness_deadline
 import notify_spool
-import run_log
 import safe_io
 import service_contract
 import update_journal
@@ -231,47 +230,37 @@ def _load_gateway_restart():
         return None
 
 
-def _gateway_previous_clear(home: str, now: float, live: dict) -> tuple[bool, bytes | None]:
+def _gateway_previous_clear(home: str, now: float) -> bool:
     path = Path(home) / "data/gateway_restart.json"
     try:
-        raw = safe_io.read_private_bytes(path, 4096)
-        row = strict_json(raw.decode("utf-8"))
+        row = _read(path, 4096)
     except FileNotFoundError:
-        return not os.path.lexists(path), None
+        return not os.path.lexists(path)
     except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
-        return False, None
+        return False
     if (type(row) is not dict or not _stamp(row.get("at")) or row["at"] > now
             or "request_id" in row and not _identity(row["request_id"])):
-        return False, None
+        return False
     keys = set(row) - {"request_id"}
-    if row.get("status") == "unknown":
-        # Only a completed helper's receipt can prove it belongs to an older native target.
-        clear = (keys == {"status", "at", "error", "service", "previous_pid"}
-                and row["error"] in ("gateway_restart_nonzero", "gateway_restart_busy_timeout",
-                                     "gateway_pid_not_replaced")
-                and row["service"] in (f"gui/{os.getuid()}/{GATEWAY}", f"user/{os.getuid()}/{GATEWAY}")
-                and type(row["previous_pid"]) is int and row["previous_pid"] > 0
-                and row["previous_pid"] != live["pid"]
-                and row["at"] < live["started_at"] <= now)
-        return clear, raw if clear else None
     if row.get("status") == "failed":
         if type(row.get("error")) is not str or row["error"] not in _GATEWAY_FAILURES:
-            return False, None
+            return False
         if row["error"] == "gateway_restart_target_changed":
             return (keys == {"status", "at", "error", "expected_pid", "observed_pid"}
                     and type(row["expected_pid"]) is int and row["expected_pid"] > 0
                     and type(row["observed_pid"]) is int and row["observed_pid"] >= 0
-                    and row["expected_pid"] != row["observed_pid"]), None
-        return keys == {"status", "at", "error"}, None
+                    and row["expected_pid"] != row["observed_pid"])
+        return keys == {"status", "at", "error"}
     if row.get("status") == "supervisor_restart_verified":
         return (keys == {"status", "at", "service", "previous_pid", "pid"}
                 and row["service"] in (f"gui/{os.getuid()}/{GATEWAY}", f"user/{os.getuid()}/{GATEWAY}")
                 and type(row["pid"]) is int and row["pid"] > 0
                 and (row["previous_pid"] is None or type(row["previous_pid"]) is int
                      and row["previous_pid"] > 0)
-                and row["pid"] != row["previous_pid"]), None
-    # Requested never proves its child has selected a target, even if a new PID is live.
-    return False, None
+                and row["pid"] != row["previous_pid"])
+    # A later native PID cannot prove a delayed restart helper has finished acting.
+    # Requested/unknown receipts stay held regardless of elapsed time or replacement.
+    return False
 
 
 def _gateway_receipt(home: str, pending: dict, now: float, cfg: dict) -> bool:
@@ -382,11 +371,8 @@ def run(report: dict, home: str, cfg: dict, now: float) -> dict:
             return {**result, "reason": "observation_unverified"}
         if target == TARGET and service.automatic_restart_blocked(home, live["generation"]):
             return {**result, "reason": "restart_request_present"}
-        prior_raw = None
-        if target == GATEWAY:
-            clear, prior_raw = _gateway_previous_clear(home, now, live)
-            if not clear:
-                return {**result, "reason": "gateway_request_unresolved"}
+        if target == GATEWAY and not _gateway_previous_clear(home, now):
+            return {**result, "reason": "gateway_request_unresolved"}
         gateway_request = _load_gateway_restart() if target == GATEWAY else None
         if target == GATEWAY and gateway_request is None:
             return {**result, "reason": "gateway_helper_unavailable"}
@@ -399,15 +385,6 @@ def run(report: dict, home: str, cfg: dict, now: float) -> dict:
         if target == GATEWAY:
             pending.update(pid=live["pid"], started_at=live["started_at"], receipt_at=None,
                            request_id=pending["operation_id"])
-        if prior_raw is not None:
-            payload = json.dumps({"event": "auto_recovery_prior_gateway_receipt",
-                                  "operation_id": pending["operation_id"],
-                                  "receipt_utf8": prior_raw.decode("utf-8")},
-                                 ensure_ascii=False, allow_nan=False) + "\n"
-            try:
-                run_log.append(str(Path(home) / "data"), payload.encode("utf-8"))
-            except (OSError, ValueError, run_log.RunLogError):
-                return {**result, "reason": "prior_receipt_archive_failed"}
         state["targets"][target] = {"pending": pending}
         state["attempts"] += 1
         try:
