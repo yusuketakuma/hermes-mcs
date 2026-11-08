@@ -318,6 +318,13 @@
 - 検証：focused の `test_install_log_sink.py` 5件・`test_sync_release_notes.py` 関連は全件成功・終了0、ruff All checks passed、shellcheck/bad substitution なし、bash -n 両ファイル OK、fragment lint error0。RED 証拠は CI run42465260774（hygiene SC1010・macos `_install_progress: command not found` 5件）と run42465260744（PATCH後の識別照合 fail-closed・変化field未特定）を再利用する。ローカル再現でも同一内容の失敗を確認済み。
 - 節目batch（tests/release＋install系meta 9file＋test_install_log_sink.py の対象コマンド）は終了0で完了した。`-q` 実行のため明示的な件数・JUnitは無く、進捗表示のドット計測で約297件・失敗表示0（証跡 `release-check-fixes-15/boundary-batch.log`）。このbatchは文書編集と並行した作業treeでの実行であり、最終SHAの全対象source不変の証明とはしない。文書/manifestを読む tests/release 3fileと更新した sync file の最終tree再確認は49件成功・終了0（`docs-readers-retest.log`）。候補CIの全job再実行・push・tag差替え・Release公開・本番適用は未実施。この追補だけで合格とは扱わない。
 
+## 図表主体の文書整備追補
+
+- 文書の基準は公開前検査の修正を積んだ作業tree（`be04f8eb` 以降の文書変更を含む）。既存124件の変更記録・archive・hashは変更せず、README手書き領域の構成見直しと説明図3枚の追加だけを行った。製品コード・既定値・検証条件・anchor・AI導入route判定・外部送信表・安全境界は保持する。
+- 追加した図は `data-processing-v112`（全体処理）・`patient-find-v112`（患者検索）・`setup-steps-v112`（導入4段階）の3枚。いずれも hermes-mcs の Diagram Design profile（warm paper・MCS green・390px幅）で作成した合成説明図で、HTML原稿の self_check を通過後、export_svg.py でSVGを書き出し、macOS qlmanage + ImageMagick の既存wrapper/crop経路でPNGを生成した（寸法は順に390x720・390x640・390x620）。実画面・測定結果・患者データを含まず、来歴・ハッシュは `visual-source.json` の artifacts へ登録した。
+- READMEでは data-processing を処理節の先頭図、patient-find を患者情報節、setup-steps をクイックスタート節へ配置し、既存 cloud-continuity は補足detailsへ畳んだ。CHANGELOG・版README・Release本文には同3図を v1.1.2 の release download URL で追加した。PNGの upload と外部表示は未実施で、URLは既存 cloud-continuity と同じ確定パターンの予定参照であり、upload・表示の検証済みを意味しない。
+- 検証：`update_readme.py --check`・`release_notes.py check` は終了0。PNGは描画パイプラインで生成し白画素率・ink分布の統計確認を行ったが、モデルの画像表示制約により細部の目視確認は未実施で、Rootの独立確認へ委ねる。文書を読む tests/release 系の再確認は公開前検査追補の49件成功を基準とし、今回の文書変更が読む範囲は同一file群のため重複全量実行は行っていない。単一の全体suite・候補CI全job成功・公開・本番適用は未実施。
+
 ## この資料では確認していない事項
 
 - GitHub CI全ジョブの実測成功。ローカルの必須検査と失敗項目の再検証とは区別する。

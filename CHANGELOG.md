@@ -22,6 +22,12 @@
 
 説明図は実画面や速度の測定結果ではありません。患者データ・実投稿は使用していません。クラウド利用には登録・有効設定・対象範囲・予算等の条件があります。[外部送信と費用の条件](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.2/docs/guides/ANTHROPIC.md)を確認してください。
 
+![v1.1.2の流れ：MCSの投稿・返信・添付をMacへ保存し、添付OCRと個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成して通知・検索へ渡す説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/data-processing-v112.png)
+
+![v1.1.2の流れ：返信から患者情報・検索へ進み、同じ患者の別スレッドや添付OCRを探して出典とMCSへ戻る説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/patient-find-v112.png)
+
+![導入の4段階：事前チェック→依存導入→初期設定→接続確認の流れを示す説明図](https://github.com/yusuketakuma/hermes-mcs/releases/download/v1.1.2/setup-steps-v112.png)
+
 ### 新機能
 
 - **解析済みの資料から患者背景を作成し、未反映を区別**

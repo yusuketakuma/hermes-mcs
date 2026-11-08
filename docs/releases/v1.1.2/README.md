@@ -14,9 +14,15 @@ v1.1.2候補の変更記録124件を `changes/archive/1.1.2/` へ集約し、CHA
 
 ![個別解析から確認済み資料の患者コンテキスト作成へ進み、同じ患者の原資料を検索する説明図](cloud-continuity.png)
 
+![MCSの投稿・返信・添付をMacへ保存し、添付OCRと個別解析はローカルLLMで進め、品質を確認した資料から患者コンテキストを作成して通知・検索へ渡す説明図](data-processing-v112.png)
+
+![返信から患者情報・検索へ進み、同じ患者の別スレッドや添付OCRを探して出典とMCSへ戻る説明図](patient-find-v112.png)
+
+![導入の4段階：事前チェック→依存導入→初期設定→接続確認の流れを示す説明図](setup-steps-v112.png)
+
 説明図は実画面や性能の測定結果ではありません。患者データ・実投稿は使用していません。画像・PDFのローカルOCR、患者情報と運用ログを分けるSlack通知先、Discord・LINE WORKSの原文表示も本版に含みます。個別投稿への新規クラウド送信は停止し、患者コンテキストの作成・更新と品質修復に限定します。旧予約・課金済み回答・結果不明の記録は保持します。[外部送信と費用の条件](../../guides/ANTHROPIC.md)を確認してください。
 
-全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は[SVG](cloud-continuity.svg)、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
+全124件は[変更対応表](change-map.json)、既存の成功結果と今回の統合検証の状況は[受入準備票](ACCEPTANCE_1.1.2.md)に記載しています。図の正本は各[SVG](cloud-continuity.svg)（cloud-continuity・data-processing-v112・patient-find-v112・setup-steps-v112）、来歴・ハッシュ・描画手順は[visual-source.json](visual-source.json)です。今回の文書集約だけで、候補全体の合格・本番適用・公開を完了とは扱いません。
 
 2026-11-08の追補時点では、初回の失敗95件と後続63fileでの13失敗を修正・再検証しました。最後の関連5fileは125件成功・失敗0・skip 0で、追加の負の対照も確認済みです。実行済みの成功結果と合わせてローカル検証を受け入れましたが、単一の全体suiteやGitHub CIの一括成功ではありません。その追補時点の本番は `d621f96d` のままで、今回の新機能は未適用・未公開でした。
 
@@ -51,3 +57,5 @@ snapshot検証時間の確保の追補では既存118件を保持して全119件
 OCR予算とLINE WORKS診断の追補では既存121件を保持して全123件へ集約しました。添付OCRのローカル推論が1ページに使える期限を120秒から最大300秒へ延ばします（残りのジョブ予算が短い場合はそれ以下）。抽出HTTP300秒・semantic 600秒・共通local_llm既定90秒・原本OCR timeout_seconds既定120秒・ジョブ処理予算900秒・終端5秒・slot優先・試行上限・paid/unknown・原文QCは不変で、callee既定120秒とcheckpoint contract identityも維持します。mcs doctor が削除済みの内部名を参照して失敗していたLINE WORKSアダプターの対処表示は、監視側と同じ _lineworks_actions() へ接続してOS別の再起動手順を表示します。OCR関連は実_drain→実run_pendingの合成検証で新300秒=1pass完了/再送なし/ready・旧120秒=途中leaf deferredをRED/GREEN実測（関連3file40件成功・終了0）、LINE WORKS関連はplatform別期待値と未知reason非表示を含む3file99件成功・終了0です。実モデル・実機timeout解消・単一の全体suite・GitHub CI全ジョブの成功とは扱いません。remote CI run42433639313には既知のLINE WORKS node失敗（本修正で解消）に加えpytest diagnosticsのartifact storage quota超過が両jobにあり、quotaは成功とは扱いません。本番は候補未適用で、自然観測・公開・新しいMacでの全導入・既存unknownの解除・再送は行っていません。
 
 公開前検査の修正追補では既存123件を保持して全124件へ集約しました。タグCIで見つかった3件を修正します。install.sh の導入段階検証と deployment/install/runtime.sh の完了記録呼出でシェル予約語 done を引用符付きへ直し（意味・型検査は不変）、runtime.sh を正本として INSTALL_RUNTIME_SHA256 pin を再生成しました。sync_release_notes.py の既存Release同期は、書込み後の識別再照合で対象に由来する日時情報 created_at の正当な変化を変更と誤認して拒否し得たため、PATCH応答と再取得の2か所の比較からだけ外し、識別子定義・型検証・書込み前比較・他6項目の照合は維持します。実CIで変化したfieldは未特定で、実CIでの再現可否は更新後の次の必要な同期で確認します。test_install_log_sink.py のサービス段階ハーネスへは既存の出力関数と同じ形の no-op スタブ _install_progress() { :; } を補い、製品コードと各assertは変更していません。対象testは focused で全件成功・終了0、合成テストは旧コードで RED・修正後 GREEN を確認しました。shellcheck・bash -n・ruff も問題ありません。利用者の操作・動作・既定値は変わりません。候補CIの全job成功・公開・本番適用は未実施で、この追補だけで合格とは扱いません。
+
+図表主体の文書整備追補では既存124件の変更記録とarchiveを変更せず、README手書き領域を図・表中心の構成へ見直し、全体処理・患者検索・導入4段階の合成説明図3枚（SVG正本・PNG描画）を追加しました。既存の cloud-continuity 図はREADMEでは補足detailsへ畳み、Release本文では従来どおり表示します。3枚はいずれも実画面・測定結果ではなく、Releaseへの画像添付uploadは未実施です。anchor・AI導入route判定・外部送信表・安全境界は保持し、製品コード・既定値・検証条件は変更していません。
