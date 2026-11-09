@@ -190,3 +190,62 @@ def test_coverage_probe_is_small_and_requires_every_snapshot_patient(runtime):
         assert refresh._scan_covered(reader.db, {1, 2, 3})
         assert len(queries) == 2
         assert all('LIMIT 1' in query and 'COUNT' not in query for query in queries)
+
+
+def test_selection_reuses_the_pending_scan_read(runtime, monkeypatch):
+    """One stored-scan read serves _pending's due check and the scope
+    listing — a second identical read would be pure duplicate work."""
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+    reads = []
+    original = patient_context_refresh_sources._current_scans
+    original_select = refresh._select_patient
+
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return original(*args, **kwargs)
+
+    during = []
+    def select(*args, **kwargs):
+        start = len(reads)
+        outcome = original_select(*args, **kwargs)
+        during.append(len(reads) - start)
+        return outcome
+
+    monkeypatch.setattr(patient_context_refresh_sources, '_current_scans', counted)
+    monkeypatch.setattr(refresh, '_select_patient', select)
+    result = step(runtime)
+    assert result['status'] == 'progressed'
+    # Each _pending performs exactly one stored read; the scope listing
+    # reuses it instead of running another identical _current_scans.
+    assert during == [result['scan_reads']] >= [1]
+
+
+def test_scan_stats_split_interrupts_from_ordinary_incompletion(runtime, monkeypatch):
+    """CAS/contention interrupts are counted apart from a normal
+    finite-slice 'incomplete' — same reason, distinguishable counters."""
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+    monkeypatch.setattr(refresh, '_advance_patient_scan', lambda *a, **k: None)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+    assert result['scan_interrupts'] == 1 and result['scan_reads'] == 0
+    assert result['covered'] is False and result['waiting'] == 0
+
+
+def test_finite_slice_incompletion_is_not_an_interrupt(runtime, monkeypatch):
+    led, _, _ = runtime
+    for pid in range(1, 14):
+        seed(led, mid=pid, pid=pid)
+    original = patient_context_refresh_readiness._pending
+
+    def pending(db, pid, cfg, **kwargs):
+        snapshot, progress, _ = original(db, pid, cfg, **kwargs)
+        snapshot['unfinished'] = False
+        return snapshot, progress, {'A': False, 'B': False, 'C': False}
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+    assert result['scan_interrupts'] == 0
+    assert result['scanned'] > 0 and result['scan_reads'] <= result['scanned']

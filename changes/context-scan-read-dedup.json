@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト候補の重複した走査読取りを1回に削減",
+  "summary": "患者コンテキストの候補評価で、同じ走査結果を2回読み取っていた箇所を、直前の読取り結果の再利用へ変えました。結果・選択順・判定は変わらず、読取りが1回減ります。あわせて、走査の結果に待機数・走査完了可否・読取り回数・中断回数の数値が記録されるようになり、遅延の切り分けが容易になります。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "読取り結果の再利用は同じ候補・同じ接続・同じ読取りトランザクション内だけに限ります。",
+    "処理結果に waiting・covered・scan_reads・scan_interrupts の数値キーが増えました（既存の status・reason は不変）。"
+  ],
+  "refs": ["mcs/patients/patient_context_refresh.py", "mcs/patients/patient_context_refresh_readiness.py"]
+}
