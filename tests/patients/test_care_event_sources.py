@@ -343,6 +343,258 @@ def test_canonical_event_records_obey_per_source_limit(tmp_path, monkeypatch):
         db.close()
 
 
+def _canonical_repair_care_fixture(tmp_path, monkeypatch, *, tamper=None):
+    """One care_event carried through a real bounded QC repair.
+
+    Original extraction -> NEEDS_REVIEW audit -> reserved repair dispatch
+    -> repaired doc -> PASS re-audit -> projection, with the same
+    stored-answer/receipt contract ``_repaired_projection_producer``
+    replays. ``tamper`` damages one repair-evidence element.
+    """
+    import hashlib as _hl
+    import mcs_util
+    import semantic_extraction
+    import semantic_facts as sfacts
+    import semantic_policy
+    import semantic_publication as v4
+    import semantic_store
+    import semantic_testkit as st
+    import semantic_transport
+    from inference_dependency_loss import source_binding
+    from semantic_policy import (KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_FACT_REPAIR)
+
+    db = st._ledger(tmp_path)
+    p = st._patient(db)
+    body = "本人は2026年9月1日に退院しました。"
+    p.messages = [st._message(1, body=body)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    member = next(m for m in bundle["members"] if m["message_id"] == 1)
+    fp = bundle["source_fingerprint"]
+    policy, errors = semantic_policy.runtime_config(st._canonical_cfg())
+    assert not errors
+    policy_fp = semantic_policy.policy_fingerprint(policy)
+    common = {inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
+              "fingerprint": fp, "policy_fingerprint": policy_fp}
+
+    original_item = {"statement": "退院", "kind": "care_event",
+                     "subject_role": "patient", "polarity": "affirmed",
+                     "epistemic": "asserted", "workflow_status": "performed",
+                     "importance": "T1", "evidence_quote": body}
+
+    def observed(prompt):
+        semantic_transport._record_inference("local")
+        return json.dumps({"facts": [original_item],
+                           "category_presence": dict(st.NO_FACTS, care_event="one")},
+                          ensure_ascii=False)
+
+    original = semantic_extraction.extract_facts_v2(
+        observed, member, ledger=db, project_id=1, source_fingerprint=fp)["doc"]
+    original_meta = {**common, "provider_provenance": {"version": 1, "stage": "facts",
+        "providers": ["local"], "complete": True,
+        "result_hash": mcs_util.payload_hash(original),
+        "source_fingerprint": fp, "policy_fingerprint": policy_fp,
+        "target_revision": member["revision"]}}
+    original_id = db.artifact_add(KIND_FACTS_V2, json.dumps(original), project_id=1,
+                                  message_id=1, meta=original_meta)
+    original_hash = sfacts.doc_hash(original)
+    fid = original["facts"][0]["fact_id"]
+    rejected = {fid: "fact_not_supported"}
+    audit = {"status": "NEEDS_REVIEW", "evaluated": True,
+             "findings": [{"code": "fact_not_supported", "fact": fid}],
+             "fact_verdicts": {fid: {"choice": "not_supported", "confidence": 0.9}}}
+    audit_id = db.artifact_add(KIND_FACT_AUDIT, json.dumps(audit), project_id=1,
+        message_id=1, meta={**common, "doc_hash": original_hash,
+            "jev_provenance": {"version": 1, "stage": "fact_audit", "outcome": "done",
+                "result_hash": mcs_util.payload_hash(audit), "doc_hash": original_hash,
+                "document_hash": mcs_util.payload_hash(original)}})
+    started_id = db.artifact_add(KIND_FACT_REPAIR,
+        json.dumps({"status": "started", "rejected": rejected}), project_id=1,
+        message_id=1, meta={**common, "doc_hash": original_hash})
+    rid = "b" * 32
+    reserve_id = db.artifact_add("cloud_usage_reserve", "{}", project_id=1,
+                                 message_id=1, meta={"reservation_id": rid})
+
+    repaired_item = dict(original_item, statement="退院の記録(修復)")
+    repair_text = json.dumps({"facts": [repaired_item],
+                              "category_presence": dict(st.NO_FACTS, care_event="one")},
+                             ensure_ascii=False)
+    prompts = []
+
+    def answer(prompt):
+        prompts.append(prompt)
+        return repair_text
+
+    repaired = semantic_extraction.repair_facts_v2(
+        answer, member, original, rejected, coverage_missing=False)
+    assert repaired["repaired"] and len(prompts) == 1
+    binding = source_binding(db.db, 1, 1)
+    root = db.db.execute(
+        "SELECT COALESCE(parent_id,message_id) FROM messages "
+        "WHERE project_id=1 AND message_id=1").fetchone()[0]
+    owner = {"semantic_target_id": 1, "semantic_thread_root": root,
+             "semantic_phase": "facts",
+             "semantic_source": mcs_util.payload_hash([(1, binding)]),
+             "semantic_generation": "synthetic"}
+    contract = {"backend": "openai", "model": "synthetic-sol",
+                "prompt": "synthetic-contract"}
+    answer_record = {"text": repair_text,
+                     "prompt_sha256": _hl.sha256(prompts[0].encode()).hexdigest(),
+                     "reservation_id": rid, "unit_key": "semantic:synthetic",
+                     "owner": owner, "contract": contract}
+    if tamper == "answer_text":
+        answer_record["text"] += "changed"
+    evidence = {"version": 1, "original_artifact_id": original_id,
+                "audit_artifact_id": audit_id, "started_artifact_id": started_id,
+                "source_binding": binding, "target_revision": member["revision"],
+                "original_doc_hash": original_hash,
+                "repaired_doc_hash": sfacts.doc_hash(repaired["doc"]),
+                "coverage_missing": False, "answers": [answer_record]}
+    completed = {"rejected": rejected, "repaired": True,
+                 "owner_chunk_ids": repaired["owner_chunk_ids"],
+                 "repaired_fact_ids": repaired["repaired_fact_ids"],
+                 "__mcs_internal_proof_v1": evidence}
+    completed_id = db.artifact_add(KIND_FACT_REPAIR, json.dumps(completed),
+                                   project_id=1, message_id=1, meta=common)
+    repaired_meta = {**common, "repaired": True,
+                     "repair_artifact_id": completed_id,
+                     "coverage_status": repaired["doc"]["coverage"]["status"],
+                     "facts": len(repaired["doc"]["facts"])}
+    db.artifact_add(KIND_FACTS_V2, json.dumps(repaired["doc"]), project_id=1,
+                    message_id=1, meta=repaired_meta)
+    repaired_hash = sfacts.doc_hash(repaired["doc"])
+    new_fid = repaired["doc"]["facts"][0]["fact_id"]
+    pass_audit = {"status": "PASS", "evaluated": True, "findings": [],
+                  "fact_verdicts": {new_fid: {"choice": "supports", "confidence": 0.9}}}
+    db.artifact_add(KIND_FACT_AUDIT, json.dumps(pass_audit), project_id=1,
+        message_id=1, meta={**common, "doc_hash": repaired_hash,
+            "audit_status": "PASS",
+            "jev_provenance": {"version": 1, "stage": "fact_audit", "outcome": "done",
+                "result_hash": mcs_util.payload_hash(pass_audit),
+                "doc_hash": repaired_hash,
+                "document_hash": mcs_util.payload_hash(repaired["doc"])}})
+
+    def verify(_db, **kw):
+        if (kw["reservation_artifact_id"] != reserve_id or kw["reservation_id"] != rid
+                or kw["prompt"] != prompts[0] or kw["answer_text"] != repair_text
+                or kw["owner"] != owner):
+            raise ValueError("synthetic-receipt-invalid")
+        return {}
+
+    monkeypatch.setattr(__import__("cloud_inference"), "verify_cloud_repair_evidence", verify)
+    with db.db:
+        v4.publish(db, 1, 1, fp, policy_fp, member, repaired["doc"])
+    return db, body
+
+
+def test_repaired_canonical_care_event_projects_through_collect(tmp_path, monkeypatch):
+    db, _body = _canonical_repair_care_fixture(tmp_path, monkeypatch)
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        event, = result["events"]
+        assert event["kind"] == "discharge" and event["unverified"] is False
+        assert result["coverage"]["canonical_unconfirmed"] == 0
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_repair_evidence_damage_never_projects(tmp_path, monkeypatch):
+    db, _body = _canonical_repair_care_fixture(tmp_path, monkeypatch, tamper="answer_text")
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] == [] and result["coverage"]["canonical_unconfirmed"] == 1
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_canonical_aba_revision_never_reads_stale_events(tmp_path, monkeypatch):
+    """A real A->B->A save_messages cycle must not revive the old canonical
+    generation even though the restored body hash is identical."""
+    import semantic_testkit as st
+    db, body = _canonical_care_fixture(tmp_path, monkeypatch)
+    try:
+        db.save_messages([st._message(1, body="本人は別の合成記録です。")])
+        db.save_messages([st._message(1, body=body)])
+        cfg = st._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] == []
+        assert result["coverage"]["canonical_unconfirmed"] == 1
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def _canonical_bulk_care_fixture(tmp_path, monkeypatch, count):
+    """``count`` care_event facts, each bound to its own sentence.
+
+    Statements use disjoint entity tokens so the quadratic relation scan
+    emits no pairs; evidence quotes are unique verbatim sentences.
+    """
+    import semantic_testkit as st
+    db = st._ledger(tmp_path)
+    p = st._patient(db)
+    body = "".join(f"記録{i}。" for i in range(count))
+    p.messages = [st._message(1, body=body)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    facts = [{"statement": f"item{i:04d}", "kind": "care_event",
+              "subject_role": "patient", "polarity": "affirmed",
+              "epistemic": "asserted", "workflow_status": "performed",
+              "importance": "T2",
+              "evidence_quote": f"記録{i}。"}
+             for i in range(count)]
+    presence = dict(st.NO_FACTS, care_event="multiple")
+
+    def llm(prompt):
+        if "要約器" in prompt:
+            return st._summary_from_facts(prompt)
+        import semantic_transport
+        semantic_transport._record_inference("local")
+        return json.dumps({"facts": facts, "category_presence": presence},
+                          ensure_ascii=False)
+    choice_map = {f"has_{c}": "absent" for c in st.sf.MANDATORY_CATEGORIES}
+    choice_map["has_care_event"] = "present"
+    st._drain(db, llm=llm, jev=st._FakeJev(choice_map=choice_map))
+    return db
+
+
+@pytest.mark.parametrize("count,oversize,projected", [(256, 0, True), (257, 1, False)])
+def test_canonical_event_records_real_256_257_boundary(tmp_path, monkeypatch, count, oversize, projected):
+    db = _canonical_bulk_care_fixture(tmp_path, monkeypatch, count)
+    try:
+        import care_event_timeline
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        calls = []
+        real_project = care_event_timeline.project
+        monkeypatch.setattr(care_event_timeline, "project",
+                            lambda *a, **k: calls.append(1) or real_project(*a, **k))
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["coverage"]["oversize"] == oversize
+        assert bool(calls) is projected
+        assert result["coverage"]["canonical_unconfirmed"] == 0
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
 def test_limits_and_incomplete_sources_are_reported_not_treated_as_zero(store):
     for mid, day in ((1, 1), (2, 2), (3, 3)):
         body = f"本人は2026年9月{day}日に退院しました。"
