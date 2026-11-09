@@ -837,7 +837,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         patient_context_quality_receipts._quality_release(ledger, pid, identity["input_key"], claim)
 
 
-def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
+def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, local_guard=None):
     if not admit() or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline:
         raise patient_context_refresh_state.Deferred("nightly_capacity_or_deadline")
     prompt = json.dumps(payload, ensure_ascii=False)
@@ -849,6 +849,8 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
         max_tokens = 1600 if selected_tokens is None else selected_tokens
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens)
     else:
+        if local_guard is not None:
+            local_guard(prompt)
         endpoint, model = local_llm.resolve(cfg)
         chat = (lambda prompt, **kw: local_llm.admitted_chat("mcs.extract", prompt, **kw)) \
             if local_llm.admission_enabled() else local_llm.chat
@@ -881,7 +883,7 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
     return answer
 
 
-def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None, source_sig=None):
+def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None, source_sig=None, local_guard=None):
     if not facts:
         if metrics is not None:
             metrics.update(rejected=0, repairs=0)
@@ -896,7 +898,7 @@ def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None, source
         "JSON {\"fact_ids\":[\"入力id\"]}だけを返す。idはreportsのidを文字列のまま使う。"
         "文章は生成せず原文単位を選ぶ。", "reports": offered,
         **({"source_identity": {"signature": source_sig}} if source_sig is not None else {})},
-                  deadline, admit, **({"provider": provider} if provider else {}))
+                  deadline, admit, **({"provider": provider} if provider else {}), local_guard=local_guard)
     selected = context_plan.summary_selection(answer, offered)
     result = context_plan.summary_selection({'fact_ids': [aliases[row['fact_ids'][0]] for row in selected]}, reports)
     if metrics is not None:
@@ -905,11 +907,11 @@ def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None, source
 
 
 def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metrics=None, source_repair=None,
-          evidence_out=None, replay=None):
+          evidence_out=None, replay=None, local_guard=None):
     def answer(payload):
         if replay is not None:
             return replay(payload)
-        return _ask(cfg, payload, deadline, admit, **({"provider": provider} if provider else {}),
+        return _ask(cfg, payload, deadline, admit, local_guard=local_guard, **({"provider": provider} if provider else {}),
                     **({"evidence_out": evidence_out} if evidence_out is not None else {}))
     return context_scan.scan_source(source, saved, night_id, answer_for=answer, clock=patient_context_refresh_state.time.time,
                                     metrics=metrics, source_repair=source_repair)

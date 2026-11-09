@@ -558,6 +558,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     estimated_unit = False
     shadow_call = None
     shadow_unit = None
+    local_checks = []
     quality_identity = None
     quality_keys = None
     source_quality_identity = None
@@ -734,12 +735,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         meta.pop("provider", None)
         if "provider" in snapshot["contract"]:
             meta["route_contract"] = snapshot["contract"]
+            meta["local_fallback"] = True
             meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
         meta["model"] = local_llm.resolve(cfg)[1]
 
     def infer(fn, *, unit_key, mid=None, saved=None):
         nonlocal provider, shadow_call, estimated_unit, generation_uncertain, generation_contacted
-        # A local cursor cannot stand in for cloud inspection of the original.
+        # A cloud attempt starts from the original; a checked local fallback keeps its own cursor.
         use_cloud = mode == "on"
         local_saved = dict(saved) if saved and not saved.get("_provider_contract") else None
         if use_cloud:
@@ -754,10 +756,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 meta["model"] = provider.model
                 return value
             except cloud_client.CloudNotSent as error:
-                generation_uncertain = True
-                # nothing left the wire: defer the unit — it must not take a
-                # local slot or re-send next tick as if the refusal never ran
-                raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from error
+                generation_contacted = generation_contacted or provider.possibly_sent
+                if getattr(provider, 'unresolved', provider.possibly_sent):
+                    generation_uncertain = True
+                    raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from error
+                provider = None
             except cloud_inference.CloudObservationIncomplete as error:
                 raise patient_context_refresh_state.Deferred('patient_context_readiness_unverified') from error
             except (cloud_inference.CloudFallback, ValueError) as error:
@@ -802,11 +805,20 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 raise patient_context_refresh_state.Deferred("nightly_cloud_pending")
         if not local_admit():
             raise patient_context_refresh_state.Deferred("nightly_local_capacity")
-        local_route()
+        def guard_local(prompt):
+            nonlocal generation_uncertain
+            try:
+                cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
+                    message_id=mid, unit_key=unit_key,
+                    owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
+            except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
+                generation_uncertain = True
+                raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
+            if (unit_key, mid, prompt) not in local_checks:
+                local_checks.append((unit_key, mid, prompt))
         reset = bool(saved and saved.get("_provider_contract"))
-        if reset:
-            saved.clear()
-        value = fn(None, reset)
+        value = fn(None, reset, local_guard=guard_local)
+        local_route()
         estimated_unit = mode == "dry_run"
         if mode == "shadow":
             shadow_call = (fn, unit_key, mid, value, set())
@@ -892,9 +904,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 local_route()
             summary = (repaired["summary"] if same and quality_required and repaired is not None
                        else old["summary"] if same else [] if not facts else infer(
-                lambda backend, reset, metrics=None, comparison=False: patient_context_quality_controller._summary(cfg, facts, deadline,
+                lambda backend, reset, metrics=None, comparison=False, local_guard=None: patient_context_quality_controller._summary(cfg, facts, deadline,
                     generation_admit if backend else lambda: local_admit() and generation_admit(),
-                    source_sig=snapshot["source_sig"], **({"provider": backend} if backend else {}),
+                    source_sig=snapshot["source_sig"], local_guard=local_guard, **({"provider": backend} if backend else {}),
                     **({"metrics": metrics} if metrics is not None else {})),
                 unit_key="summary"))
             meta["scan_backends"] = sorted({
@@ -912,7 +924,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if not context_plan.source_usable(source):
                     continue
                 saved = scans.get(context_plan.source_key(source), {})
-                cloud_pending = lane == "B" and mode == "on" and not saved.get("_provider_contract")
+                cloud_pending = (lane == "B" and mode == "on" and not saved.get("_provider_contract")
+                                 and not saved.get("_source_meta", {}).get("local_fallback"))
                 if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
                 if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
@@ -928,7 +941,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     if lane == 'C' and isinstance(saved.get('_source_meta'), dict):
                         prior_meta = saved['_source_meta']
                         for key in ('contract', 'route_contract', 'provider', 'model', 'source_binding',
-                                    'source_occurrence', 'source_occurrence_version'):
+                                    'source_occurrence', 'source_occurrence_version', 'local_fallback'):
                             if key in prior_meta:
                                 meta[key] = prior_meta[key]
                             else:
@@ -953,9 +966,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             # A past equal input is not a new dispatch right. A
                             # lost checkpoint cannot infer a completed cursor.
                             raise ValueError("nightly_original_unit_unverified")
-                        result = infer(lambda backend, reset, metrics=None, comparison=False: patient_context_quality_controller._scan(cfg, source,
+                        result = infer(lambda backend, reset, metrics=None, comparison=False, local_guard=None: patient_context_quality_controller._scan(cfg, source,
                             {} if reset else {**saved, "facts": []} if comparison else saved, night_id, deadline,
-                            admit if backend else local_admit,
+                            admit if backend else local_admit, local_guard=local_guard,
                             **({"provider": backend} if backend else {}),
                             **({"metrics": metrics} if metrics is not None else {})),
                             unit_key="scan:" + str(context_plan.source_key(source)), mid=source["message_id"] or None, saved=saved)
@@ -1137,6 +1150,15 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
+            for local_unit, local_mid, local_prompt in local_checks:
+                try:
+                    cloud_inference.guard_context_local(ledger, cfg, local_prompt, project_id=pid,
+                        message_id=local_mid, unit_key=local_unit,
+                        owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
+                except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
+                    generation_uncertain = True
+                    ledger.db.rollback()
+                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
             if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
                                                  or ledger.db.total_changes != changes):
                 ledger.db.rollback()

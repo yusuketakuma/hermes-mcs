@@ -366,6 +366,29 @@ class CloudInferenceUnit:
             raise CloudFallback("cloud_unit_failed") from exc
 
 
+
+def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
+    """Check patient-context paid history using the existing pure wire-body builders."""
+    def request():
+        from types import SimpleNamespace
+        settings = resolve_cloud_settings(cfg)
+        selection, errors = cloud_policy.resolve_profile(
+            cfg, route='patient_context', purpose='patient_context', root=HOME)
+        if errors or selection is None:
+            raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
+        tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
+        if selection['provider'] == 'openai':
+            body = openai_client.OpenAIClient.body(
+                SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
+        else:
+            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        candidate = cloud_policy._request_identity(settings, body, route='patient_context',
+            project_id=project_id, message_id=message_id, unit_key=unit_key,
+            owner=owner, selection=selection, input_binding=None)
+        return candidate, body
+    cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=project_id,
+        message_id=message_id, unit_key=unit_key, request_factory=request)
+
 def resolve_cloud_settings(cfg):
     if not cfg:
         # an unreadable config (load_config's {}) never auto-enables the paid

@@ -176,7 +176,7 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
 
 @pytest.mark.parametrize('provider', ['anthropic', 'openai', 'auto'])
 @pytest.mark.parametrize('jev_key', [None, 'synthetic-jev-key'])
-def test_keyless_cloud_uses_local_contract_and_finishes_same_pipeline(runtime, cloud, monkeypatch, provider, jev_key):
+def test_keyless_cloud_keeps_route_identity_and_finishes_same_pipeline(runtime, cloud, monkeypatch, provider, jev_key):
     import cloud_policy
     import extract_llm
     import semantic_jev
@@ -198,7 +198,7 @@ def test_keyless_cloud_uses_local_contract_and_finishes_same_pipeline(runtime, c
         monkeypatch.setattr(semantic_jev, 'JevClient',
                             lambda **kwargs: pytest.fail('keyless Jev must never be constructed'))
     assert extract_llm._cloud_mode(ledger, CFG, 'patient_context', 1) == 'off'
-    assert 'provider' not in state._contract(CFG, 1)
+    assert 'provider' in state._contract(CFG, 1)  # Credential removal is not a new clinical input.
     seed(ledger, body='本人は合成の自宅で生活しています。')
     for _ in range(40):
         result = step(runtime, cfg=CFG)

@@ -682,7 +682,7 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
         return False
 
 
-def _guard_repeated_request(ledger, candidate, *, current_body=None):
+def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],
         project_id=candidate['project_id'], message_id=candidate['message_id'],
@@ -704,6 +704,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
+            if local_fallback and candidate['route'] == 'patient_context' and candidate['unit_key'] == 'summary':
+                new_fp = _context_summary_fallback_fp(current_body, previous) or new_fp
             prompt_verified = False
             if old_fp is not None and new_fp is not None:
                 if old_fp != new_fp:
@@ -748,17 +750,63 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None):
             result = matches[0][0]
             if result.get('disposition'):
                 raise ValueError('discarded')
+            if (local_fallback and result.get('http_class') in {
+                    'http_400', 'http_401', 'http_402', 'http_403', 'http_408', 'http_429',
+                    'http_500', 'http_502', 'http_503', 'http_504'}
+                    and isinstance(result.get('error_kind'), str) and result['error_kind']
+                    and result.get('usage') is None):
+                continue  # The failed HTTP result stays charged; this grants no new cloud send.
             if _confirmed_rejection(result, settled, previous['model']):
                 continue
             # A confirmed successful result may be deliberately reprocessed
             # with another model. An ambiguous send never grants that retry.
-            if (prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
+            if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
             raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
 
+
+
+def _context_summary_fallback_fp(body, previous):
+    # A backend/contract signature alone never makes the same reports a new input.
+    owner = previous.get('owner')
+    signature = owner.get('source_sig') if isinstance(owner, dict) else None
+    if not isinstance(signature, str) or re.fullmatch(r'[0-9a-f]{64}', signature) is None:
+        return None
+    prompt = body.get('input') if isinstance(body, dict) else None
+    if prompt is None and isinstance(body, dict):
+        messages = body.get('messages')
+        if isinstance(messages, list) and len(messages) == 1:
+            prompt = messages[0].get('content')
+    if not isinstance(prompt, str):
+        return None
+    try:
+        payload = strict_json(prompt)
+        if (not isinstance(payload, dict) or set(payload) != {'instruction', 'reports', 'source_identity'}
+                or not isinstance(payload['source_identity'], dict)
+                or set(payload['source_identity']) != {'signature'}):
+            return None
+        payload['source_identity']['signature'] = signature
+        prompt = json.dumps(payload, ensure_ascii=False)
+        changed = ({**body, 'input': prompt} if 'input' in body else
+                   {**body, 'messages': [{**body['messages'][0], 'content': prompt}]})
+        return _logical_request_fp(changed)
+    except (ValueError, TypeError, KeyError, RecursionError):
+        return None
+
+
+def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, request_factory):
+    """Prove local substitution safe without sending, reserving, or changing accounting."""
+    with _accounting_snapshot(ledger.db):
+        rows = _verified_request_history(ledger, route=route, project_id=project_id,
+                                        message_id=message_id, unit_key=unit_key)
+        if _tally(ledger).invalid:
+            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
+        if rows:
+            candidate, body = request_factory()
+            _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True)
 
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
