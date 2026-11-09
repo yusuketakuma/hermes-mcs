@@ -18,7 +18,7 @@ PGREP=/usr/bin/pgrep
 SYSCTL=/usr/sbin/sysctl
 SERVER=http://127.0.0.1:8080            # loopback only, --noproxy '*' on every call
 MODEL=${MCS_BENCH_MODEL:-$HOME/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf}
-LABELS="ai.mcs.extract-drainer ai.mcs.extract-drainer-2"
+LABELS="ai.mcs.extract-drainer ai.mcs.extract-drainer-2 ai.mcs.extract-drainer-night"
 TIMEOUT=300   # = extract_llm.TIMEOUT
 MAX_TOKENS=1600   # = extract_llm.MAX_TOKENS / patient_context_refresh
 REPS=3
@@ -36,8 +36,8 @@ usage() {
 usage: llm_lane_bench.sh --phase bench|e2e --i-stopped-the-workers [--dry-run]
        llm_lane_bench.sh --report
 
-The resident workers must be stopped first (both labels):
-  対象: ai.mcs.extract-drainer, ai.mcs.extract-drainer-2
+The resident workers must be stopped first (all three labels):
+  対象: ai.mcs.extract-drainer, ai.mcs.extract-drainer-2, ai.mcs.extract-drainer-night
   停止: launchctl bootout gui/\$(id -u)/<label>
   復旧: launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/<label>.plist
   bench phase additionally needs the llama-server agent stopped (same commands,

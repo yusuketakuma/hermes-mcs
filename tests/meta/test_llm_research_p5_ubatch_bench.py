@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from service_contract import RESIDENT_LABELS
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/evaluation/llm_lane_bench.sh"
 TOOLS = {"/usr/bin/curl": "curl", "/bin/launchctl": "launchctl",
@@ -58,6 +59,21 @@ def test_refuses_while_a_drainer_is_loaded(tmp_path):
         assert proc.returncode == 3 and "ai.mcs.extract-drainer" in proc.stderr
         assert _called(tmp_path) == ["launchctl"]
 
+
+
+def test_benchmark_worker_guard_matches_shared_service_contract():
+    labels = re.search(r'^LABELS="([^"]+)"$', SCRIPT.read_text(), re.MULTILINE)
+    assert labels and tuple(labels.group(1).split()) == RESIDENT_LABELS
+
+
+@pytest.mark.parametrize('label', RESIDENT_LABELS)
+def test_refuses_when_only_one_resident_is_still_loaded(tmp_path, label):
+    runner = _render(tmp_path, launchctl_body=(
+        f'case "$2" in */{label}) exit 0;; *) exit 113;; esac\n'))
+    result = _run(tmp_path, runner, '--phase', 'e2e', '--i-stopped-the-workers', '--dry-run')
+    assert result.returncode == 3 and label in result.stderr
+    assert not (tmp_path / OUT).exists()
+    assert _called(tmp_path) == ['launchctl']
 
 def test_dry_run_writes_synthetic_prompts_only(tmp_path):
     proc = _run(tmp_path, _render(tmp_path), "--phase", "e2e", "--i-stopped-the-workers", "--dry-run")

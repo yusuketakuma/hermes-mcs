@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "LLM性能測定で常駐worker全3本の停止を確認",
+  "summary": "性能測定用スクリプトが、夜間workerを含む現行の常駐worker全3本の停止を確認するようにしました。停止していないworkerが1本でもある場合は測定を始めず、別処理が混ざった結果で性能を判断することを防ぎます。",
+  "upgrade": "性能測定時は表示される全3本を既存の手順で停止してください。スクリプト自身はサービスを停止・起動せず、通常運用の処理枠やモデル設定も変更しません。",
+  "details": [
+    "確認対象はservice_contract.RESIDENT_LABELSとの一致をテストで固定し、いずれか1本だけが稼働する場合も測定開始前に拒否します。",
+    "既存の明示確認フラグ、サーバー状態確認、合成入力限定と測定不能の扱いは維持します。"
+  ],
+  "refs": [
+    "scripts/evaluation/llm_lane_bench.sh",
+    "mcs/ops/services/service_contract.py",
+    "tests/meta/test_llm_research_p5_ubatch_bench.py"
+  ]
+}
