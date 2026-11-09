@@ -90,7 +90,7 @@ def test_wrapper_forwards_explicit_policy_snapshot_and_redacts_output(tmp_path, 
         "--scheduled", "--keychain", "--state-dir", str(data), *args]
     assert invoked["path"] == "/usr/bin:/bin:/usr/sbin:/sbin"
     assert result.returncode == code
-    assert result.stdout == (f"mcs offsite: backup failed (exit {code})\n".encode()
+    assert result.stdout == (f"mcs offsite: backup or recovery verification requires attention (exit {code})\n".encode()
                              if code else b"")
     assert result.stderr == b""
     assert _logged_output(data) == b"synthetic output must not leak\n"

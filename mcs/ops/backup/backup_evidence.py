@@ -8,7 +8,7 @@ cipher, authenticates a bundle, restores data, starts services or sends anything
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import fcntl
 import hashlib
 import hmac
@@ -28,7 +28,7 @@ from maintenance import MaintenanceError
 from mcs_queries import REPLY_GAP
 from stats_math import finite_number
 from safe_io import atomic_write, fdopen_owned
-from mcs_util import has_sqlite_sidecars
+from mcs_util import has_sqlite_sidecars, strict_json
 
 MAX_RECORD_BYTES = 65536
 READ_CHUNK = 65536
@@ -84,7 +84,8 @@ FAILURE_CODES = frozenset({
     "backup_state_busy", "backup_state_identity_changed",
     "backup_state_lock_not_private", "backup_state_policy_mismatch",
     "backup_static_snapshot_required", "backup_truncated",
-    "backup_trusted_receipt_required",
+    "backup_trusted_receipt_required", "backup_periodic_state_unverified",
+    "backup_periodic_capacity", "backup_periodic_hold",
 })
 
 
@@ -118,7 +119,7 @@ class Records:
             if len(raw) > MAX_RECORD_BYTES:
                 raise BackupError("backup_record_not_private_or_bounded")
             try:
-                value = json.loads(raw)
+                value = strict_json(raw)
             except (ValueError, RecursionError):
                 raise BackupError("backup_record_invalid") from None
         if not isinstance(value, dict) or value.get("v") != 1:
@@ -228,6 +229,12 @@ def status(state_dir: str, policy: BackupPolicy
              else None)
     out["last_failure_code"] = (cause if isinstance(cause, str) and cause in FAILURE_CODES
                                 else None)
+    if policy.periodic_drill is not None:
+        out.update(periodic_drill_status(records, policy, state))
+        attempt = state.get("periodic_drill_attempt")
+        token = attempt.get("id") if isinstance(attempt, dict) else None
+        out["periodic_attempt_id"] = token if (isinstance(token, str)
+            and re.fullmatch(r"[0-9a-f]{32}", token)) else None
     return out
 
 
@@ -253,7 +260,8 @@ def failure_code(exc: BaseException) -> str:
 
 def record_success(records: Records, state, action: str, result, *,
                     key_source: str = "unknown", destination: str | None = None,
-                    escrow_reason: str | None = None) -> None:
+                    escrow_reason: str | None = None,
+                    max_steps: int | None = None, deadline: float | None = None) -> dict:
     if escrow_reason is not None and (action != "drill" or key_source != "key_fd"
             or not isinstance(escrow_reason, str) or not escrow_reason.strip()
             or len(escrow_reason) > 2000):
@@ -278,7 +286,7 @@ def record_success(records: Records, state, action: str, result, *,
             folder.mkdir(mode=0o700, exist_ok=True)
             require_private_directory(folder)
             name = "drills/" + os.urandom(16).hex() + ".json"
-            records.write(name, {"v": 1, "action": action,
+            records.write(name, {"v": 1, "action": action, "completed_at": now,
                                 "policy_id": state["policy_id"], "key_source": key_source,
                                 "recovery_scope": "collect_only", "delivery_policy": "hold_all",
                                 "outbound_attempts": 0,
@@ -286,7 +294,9 @@ def record_success(records: Records, state, action: str, result, *,
                                 "escrow_verified_at": now if escrow_reason is not None else None,
                                 "escrow_reason_sha256": (hashlib.sha256(escrow_reason.encode()).hexdigest()
                                     if escrow_reason is not None else None),
-                                "held_render_count": held_render_count(destination),
+                                "held_render_count": held_render_count(destination, **(
+                                    {"max_steps": max_steps, "deadline": deadline}
+                                    if max_steps is not None else {})),
                                 "report": result})
             if escrow_reason is not None:
                 update["last_escrow_drill_at"] = now
@@ -294,14 +304,16 @@ def record_success(records: Records, state, action: str, result, *,
             update["last_" + action + "_at"] = now
             update["last_" + action + "_record"] = name
     records.write("backup_state.json", update)
+    return update
 
 
 
-def held_render_count(destination: str | None) -> int | None:
+def held_render_count(destination: str | None, *, max_steps: int | None = None,
+                      deadline: float | None = None) -> int | None:
     if destination is None:
         return None
     try:
-        with _inventory_connection((Path(destination) / "ledger.db").resolve(), None, None) as db:
+        with _inventory_connection((Path(destination) / "ledger.db").resolve(), max_steps, deadline) as db:
             columns = {r[1] for r in db.execute("PRAGMA table_info(notification_renders)")}
             if "state" not in columns:
                 return None
@@ -330,6 +342,26 @@ def require_private_directory(path: Path) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class PeriodicDrill:
+    """Owner opt-in to one retained plaintext slot, including incomplete work."""
+
+    interval_seconds: int
+    max_steps: int
+    max_seconds: float
+    max_records: int
+    retain_plaintext: bool
+
+    def validate(self):
+        if (self.retain_plaintext is not True
+                or any(type(value) is not int or value < 1 for value in (
+                    self.interval_seconds, self.max_steps, self.max_records))
+                or not 100 <= self.max_steps <= 1_000_000_000
+                or self.max_records > 1000
+                or not finite_number(self.max_seconds) or not 0 < self.max_seconds <= 3600):
+            raise BackupError("backup_policy_required")
+
+
+@dataclass(frozen=True, slots=True)
 class BackupPolicy:
     """Explicit owner decisions; no destination or authorization defaults."""
 
@@ -344,6 +376,7 @@ class BackupPolicy:
     deletion: str
     max_rpo_seconds: int
     max_snapshot_bytes: int
+    periodic_drill: PeriodicDrill | None = None
 
     def validate(self) -> None:
         if (not isinstance(self.policy_id, str)
@@ -358,6 +391,10 @@ class BackupPolicy:
                 or type(self.destination_device) is not int
                 or type(self.destination_inode) is not int):
             raise BackupError("backup_policy_required")
+        if self.periodic_drill is not None:
+            if not isinstance(self.periodic_drill, PeriodicDrill):
+                raise BackupError("backup_policy_required")
+            self.periodic_drill.validate()
         dest, scratch = Path(self.destination), Path(self.scratch_dir)
         for path in (dest, scratch):
             require_private_directory(path)
@@ -384,7 +421,7 @@ def load_policy(path: str | Path, *, require_scheduled: bool = False) -> tuple[B
         raw = handle.read(MAX_RECORD_BYTES + 1)
         if len(raw) > MAX_RECORD_BYTES:
             raise BackupError("backup_policy_file_not_private_or_bounded")
-        document = json.loads(raw)
+        document = strict_json(raw)
     if not isinstance(document, dict):
         raise BackupError("backup_policy_required")
     scheduled = document.pop("scheduled", False)
@@ -392,8 +429,88 @@ def load_policy(path: str | Path, *, require_scheduled: bool = False) -> tuple[B
         raise BackupError("backup_policy_required")
     if require_scheduled and not scheduled:
         return None, False
+    periodic = document.get("periodic_drill")
+    if periodic is not None:
+        if not isinstance(periodic, dict):
+            raise BackupError("backup_policy_required")
+        document["periodic_drill"] = PeriodicDrill(**periodic)
+        document["periodic_drill"].validate()
     return BackupPolicy(**document), scheduled
 
+
+
+def periodic_drill_fingerprint(policy: BackupPolicy) -> str:
+    """Bind periodic proof to the full owner policy, including the scratch slot."""
+    return hashlib.sha256(json.dumps(asdict(policy), sort_keys=True,
+                                     allow_nan=False).encode()).hexdigest()
+
+
+def periodic_drill_status(records: Records, policy: BackupPolicy, state) -> dict:
+    """Decide due/blocked without opening a bundle or obtaining a key."""
+    settings = policy.periodic_drill
+    if settings is None:
+        return {"periodic_drill_status": "disabled", "periodic_drill_due": False}
+    settings.validate()
+    fingerprint = periodic_drill_fingerprint(policy)
+    attempt = state.get("periodic_drill_attempt")
+    last = state.get("last_periodic_drill_at")
+    now = time.time()
+    result = {"periodic_drill_due": True, "periodic_drill_status": "due"}
+    if not finite_number(now) or (last is not None and (
+            not finite_number(last) or not 0 <= last <= now)):
+        return {"periodic_drill_status": "unverified", "periodic_drill_due": None}
+    if attempt is not None:
+        if (not isinstance(attempt, dict) or attempt.get("policy_fingerprint") != fingerprint
+                or not isinstance(attempt.get("id"), str)
+                or re.fullmatch(r"[0-9a-f]{32}", attempt["id"]) is None
+                or attempt.get("status") != "complete"
+                or attempt.get("completed_at") != last or last is None):
+            return {"periodic_drill_status": "unverified", "periodic_drill_due": None}
+        name = attempt.get("record")
+        if not isinstance(name, str) or re.fullmatch(r"drills/[0-9a-f]{32}\.json", name) is None:
+            return {"periodic_drill_status": "unverified", "periodic_drill_due": None}
+        require_private_directory(records.root / "drills")
+        proof = records.load(name)
+        report = proof.get("report") if proof is not None else None
+        if (not proof or proof.get("action") != "drill" or proof.get("policy_id") != policy.policy_id
+                or proof.get("completed_at") != last
+                or not isinstance(report, dict) or report.get("sha256") != attempt.get("sha256")
+                or report.get("restore_pending") is not True):
+            return {"periodic_drill_status": "unverified", "periodic_drill_due": None}
+        result["periodic_drill_due"] = now - last >= settings.interval_seconds
+    elif last is not None:
+        return {"periodic_drill_status": "unverified", "periodic_drill_due": None}
+    if os.path.lexists(Path(policy.scratch_dir) / "periodic-drill"):
+        result["periodic_drill_status"] = "occupied"
+    elif not result["periodic_drill_due"]:
+        result["periodic_drill_status"] = "not_due"
+    return result
+
+
+def review_periodic_drill(records: Records, policy: BackupPolicy, *, attempt_id: str,
+                          reason: str) -> dict:
+    """Record human review of one interrupted slot after its manual removal."""
+    state = read_state(records, policy)
+    attempt = state.get("periodic_drill_attempt")
+    if (policy.periodic_drill is None or not isinstance(attempt_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None
+            or not isinstance(reason, str) or not reason.strip() or len(reason) > 2000
+            or not isinstance(attempt, dict) or attempt.get("id") != attempt_id
+            or attempt.get("status") not in ("started", "failed")
+            or attempt.get("policy_fingerprint") != periodic_drill_fingerprint(policy)
+            or os.path.lexists(Path(policy.scratch_dir) / "periodic-drill")):
+        raise BackupError("backup_periodic_state_unverified")
+    folder = records.root / "drills"
+    folder.mkdir(mode=0o700, exist_ok=True)
+    require_private_directory(folder)
+    name = "drills/" + os.urandom(16).hex() + ".json"
+    records.write(name, {"v": 1, "action": "periodic_review", "policy_id": policy.policy_id,
+                        "at": time.time(), "human_confirmed": True, "attempt": attempt,
+                        "reason_sha256": hashlib.sha256(reason.encode()).hexdigest()})
+    records.write("backup_state.json", {**state,
+        "periodic_drill_attempt": state.get("last_periodic_drill_success"),
+        "last_periodic_review_record": name})
+    return {"status": "reviewed", "attempt_id": attempt_id, "record": name}
 
 
 def check_fresh(timestamp: float | None, policy: BackupPolicy) -> None:

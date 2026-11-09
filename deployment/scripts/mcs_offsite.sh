@@ -36,6 +36,6 @@ fi
   --state-dir "$DATA" "$@"
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  printf 'mcs offsite: backup failed (exit %d)\n' "$rc"
+  printf 'mcs offsite: backup or recovery verification requires attention (exit %d)\n' "$rc"
 fi
 exit "$rc"

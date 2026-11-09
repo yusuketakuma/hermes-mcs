@@ -31,6 +31,8 @@ be repaired by this format. HMAC holders can forge snapshots.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
+from dataclasses import replace
 import gzip
 import hashlib
 import hmac
@@ -189,12 +191,20 @@ def _key(provider: Callable[[], bytes | None]) -> bytes:
     return key
 
 
-def _openssl(source: Path, target: Path, key: bytes, *, decrypt=False) -> None:
+def _openssl(source: Path, target: Path, key: bytes, *, decrypt=False, deadline=None) -> None:
     """Real OS cipher; secret only via stdin, no inherited secrets/config."""
+    def remaining(limit):
+        if deadline is None:
+            return limit
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise backup_evidence.BackupError("backup_inspection_budget_exhausted")
+        return min(limit, budget)
+
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
     try:
         help_result = subprocess.run(
-            [OPENSSL, "enc", "-help"], capture_output=True, env=env, timeout=10)
+            [OPENSSL, "enc", "-help"], capture_output=True, env=env, timeout=remaining(10))
         salt_args = (["-saltlen", "8"] if b"-saltlen" in
                      help_result.stdout + help_result.stderr else [])
         with target.open("xb") as out:
@@ -205,7 +215,7 @@ def _openssl(source: Path, target: Path, key: bytes, *, decrypt=False) -> None:
                  *salt_args, *(["-d"] if decrypt else []),
                  "-pass", "stdin", "-in", str(source)],
                 input=key.hex().encode("ascii") + b"\n", stdout=out,
-                stderr=subprocess.PIPE, env=env, timeout=120)
+                stderr=subprocess.PIPE, env=env, timeout=remaining(120))
         if result.returncode:
             raise backup_evidence.BackupError("backup_cipher_failed")
     except (OSError, subprocess.TimeoutExpired):
@@ -311,11 +321,14 @@ def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
 
 
 def _decode(bundle: Path, expected_sha256: str, key: bytes,
-            policy: backup_evidence.BackupPolicy, work: Path) -> tuple[Path, Manifest]:
+            policy: backup_evidence.BackupPolicy, work: Path, *,
+            max_steps: int | None = None, deadline: float | None = None) -> tuple[Path, Manifest]:
     """Freeze untrusted input locally, authenticate it, then decrypt/validate."""
     if (not isinstance(expected_sha256, str)
             or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
         raise backup_evidence.BackupError("backup_trusted_receipt_required")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise backup_evidence.BackupError("backup_inspection_budget_exhausted")
     frozen = work / "authenticated.mcsb"
     if (bundle.is_symlink() or not stat.S_ISREG(bundle.stat().st_mode)
             or bundle.stat().st_size > backup_evidence.bundle_ceiling(policy)):
@@ -370,7 +383,8 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
             if src.read(8) != b"Salted__":
                 raise backup_evidence.BackupError("backup_cipher_header_invalid")
         compressed, plain = work / "ledger.gz", work / "ledger.db"
-        _openssl(encrypted, compressed, key, decrypt=True)
+        _openssl(encrypted, compressed, key, decrypt=True,
+                 **({"deadline": deadline} if deadline is not None else {}))
         remaining = manifest["plain_size"]
         with gzip.open(compressed, "rb") as src, plain.open("xb") as dst:
             plain.chmod(0o600)
@@ -384,7 +398,9 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
                 raise backup_evidence.BackupError("backup_plain_size_mismatch")
         if file_sha256(plain) != manifest["plain_sha256"]:
             raise backup_evidence.BackupError("backup_plain_checksum_failed")
-        if backup_evidence.inventory_snapshot(plain) != manifest["inventory"]:
+        if backup_evidence.inventory_snapshot(plain, **(
+                {"max_steps": max_steps, "deadline": deadline}
+                if max_steps is not None else {})) != manifest["inventory"]:
             raise backup_evidence.BackupError("backup_inventory_mismatch")
     except (ValueError, TypeError, KeyError, EOFError, gzip.BadGzipFile, zlib.error):
         raise backup_evidence.BackupError("backup_payload_invalid") from None
@@ -393,20 +409,37 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
 
 def verify(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPolicy,
            passphrase_provider: Callable[[], bytes], *,
-           drill_destination: str | None = None) -> Verification:
+           drill_destination: str | None = None, max_steps: int | None = None,
+           deadline: float | None = None, retained_work_dir: str | None = None) -> Verification:
     """Verify recovery, optionally retaining a NEW isolated held drill copy."""
     policy.validate()
+    if (max_steps is not None and (type(max_steps) is not int or not 100 <= max_steps <= 1_000_000_000)
+            or deadline is not None and (not backup_evidence.finite_number(deadline)
+                                        or max_steps is None)):
+        raise backup_evidence.BackupError("backup_inspection_budget_invalid")
     key = _key(passphrase_provider)
     target = Path(drill_destination) if drill_destination is not None else None
     if target is not None and (
             not target.is_absolute() or target.parent != Path(policy.scratch_dir)
             or target.name in ("", ".", "..") or os.path.lexists(target)):
         raise backup_evidence.BackupError("backup_drill_requires_new_local_directory")
-    with tempfile.TemporaryDirectory(prefix="mcs-verify-", dir=policy.scratch_dir) as work:
+    retained = Path(retained_work_dir) if retained_work_dir is not None else None
+    if retained is not None:
+        if (target is None or not retained.is_absolute() or retained.parent != target.parent
+                or retained == target or os.path.lexists(retained)):
+            raise backup_evidence.BackupError("backup_drill_requires_new_local_directory")
+        retained.mkdir(mode=0o700)
+    work_context = (nullcontext(str(retained)) if retained is not None else
+                    tempfile.TemporaryDirectory(prefix="mcs-verify-", dir=policy.scratch_dir))
+    with work_context as work:
         plain, manifest = _decode(
-            Path(bundle), expected_sha256, key, policy, Path(work))
+            Path(bundle), expected_sha256, key, policy, Path(work), **(
+                {"max_steps": max_steps, "deadline": deadline}
+                if max_steps is not None else {}))
         report = _report(expected_sha256, manifest,
                          restore_pending=target is not None)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise backup_evidence.BackupError("backup_inspection_budget_exhausted")
         if target is not None:
             # Exclusive mkdir reserves ownership; never swap an existing DB.
             target.mkdir(mode=0o700)
@@ -427,7 +460,7 @@ def verify(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPoli
             except (OSError, backup_evidence.BackupError):
                 # A concurrent ledger is not ours to replace or remove. Keep
                 # its consent hold, as on the corresponding restore path.
-                if published or not os.path.lexists(target / "ledger.db"):
+                if retained is None and (published or not os.path.lexists(target / "ledger.db")):
                     shutil.rmtree(target)
                 raise
         return report
@@ -485,13 +518,88 @@ def restore(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPol
             raise
 
 
+def _periodic_drill(records, policy, key, *, key_source):
+    """Run one due held drill under the caller-held record lock; never prune a slot."""
+    state = backup_evidence.read_state(records, policy)
+    decision = backup_evidence.periodic_drill_status(records, policy, state)
+    status = decision["periodic_drill_status"]
+    if status != "due":
+        return {"status": status, "due": decision["periodic_drill_due"]}
+    if (os.path.lexists(records.root / "update_in_progress.marker")
+            or notify_spool.restore_pending(str(records.root)) is not None):
+        return {"status": "held", "due": True}
+    settings = policy.periodic_drill
+    policy.validate()
+    receipt = state.get("receipt")
+    if (not isinstance(receipt, dict) or receipt.get("policy_id") != policy.policy_id
+            or not isinstance(receipt.get("bundle"), str)
+            or Path(receipt["bundle"]).parent != Path(policy.destination)
+            or re.fullmatch(r"snapshot-[0-9a-f]{32}\.mcsb", Path(receipt["bundle"]).name) is None
+            or not isinstance(receipt.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["sha256"]) is None):
+        raise backup_evidence.BackupError("backup_trusted_receipt_required")
+    backup_evidence.check_fresh(receipt.get("created_at"), policy)
+    backup_evidence.check_fresh(receipt.get("last_successful_run"), policy)
+    folder = records.root / "drills"
+    if os.path.lexists(folder):
+        backup_evidence.require_private_directory(folder)
+        with os.scandir(folder) as entries:
+            for count, entry in enumerate(entries, 1):
+                if (count >= settings.max_records or not entry.is_file(follow_symlinks=False)
+                        or re.fullmatch(r"[0-9a-f]{32}\.json", entry.name) is None):
+                    raise backup_evidence.BackupError("backup_periodic_capacity")
+    needed = 3 * backup_evidence.bundle_ceiling(policy) + policy.max_snapshot_bytes
+    if shutil.disk_usage(policy.scratch_dir).free < needed:
+        raise backup_evidence.BackupError("backup_periodic_capacity")
+    slot = Path(policy.scratch_dir) / "periodic-drill"
+    attempt = {"id": os.urandom(16).hex(), "status": "started", "sha256": receipt["sha256"],
+               "policy_fingerprint": backup_evidence.periodic_drill_fingerprint(policy),
+               "started_at": time.time()}
+    pending = {**state, "periodic_drill_attempt": attempt}
+    records.write("backup_state.json", pending)
+    deadline = time.monotonic() + settings.max_seconds
+    try:
+        slot.mkdir(mode=0o700)
+        fsync_dir(slot.parent)
+        identity = slot.stat().st_dev, slot.stat().st_ino
+        target = slot / "held"
+        report = verify(receipt["bundle"], receipt["sha256"],
+                        replace(policy, scratch_dir=str(slot), periodic_drill=None), lambda: key,
+                        drill_destination=str(target), retained_work_dir=str(slot / "work"),
+                        max_steps=settings.max_steps, deadline=deadline)
+        policy.validate()
+        backup_evidence.require_private_directory(slot)
+        if (identity != (slot.stat().st_dev, slot.stat().st_ino)
+                or time.monotonic() >= deadline
+                or report["inventory"]["last_successful_run"] != receipt["last_successful_run"]):
+            raise backup_evidence.BackupError("backup_periodic_state_unverified")
+        updated = backup_evidence.record_success(records, pending, "drill", report,
+                        key_source=key_source, destination=str(target),
+                        max_steps=settings.max_steps, deadline=deadline)
+        if time.monotonic() >= deadline:
+            raise backup_evidence.BackupError("backup_inspection_budget_exhausted")
+        now = updated["last_drill_at"]
+        completed = {**attempt, "status": "complete", "completed_at": now,
+                     "record": updated["last_drill_record"]}
+        records.write("backup_state.json", {**updated, "last_periodic_drill_at": now,
+            "periodic_drill_attempt": completed, "last_periodic_drill_success": completed})
+        return {"status": "complete", "due": False}
+    except (backup_evidence.BackupError, OSError, ValueError, TypeError, sqlite3.Error,
+            RecursionError) as exc:
+        # Evidence may already be committed: reload rather than reverting offsite/drill state.
+        latest = backup_evidence.read_state(records, policy)
+        records.write("backup_state.json", {**latest, "periodic_drill_attempt": {
+            **attempt, "status": "failed", "error": backup_evidence.failure_code(exc)}})
+        return {"status": "failed", "due": True, "error": backup_evidence.failure_code(exc)}
+
+
 def main(argv: list[str] | None = None, *,
          keychain_reader: Callable[[], bytes | None] = _keychain_read,
          keychain_store: KeychainStore = store_keychain) -> int:
     """Local CLI: explicit policy/records, exact raw key-fd or dedicated Keychain."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("keygen", "offsite", "verify",
-                                          "drill", "restore", "status", "plan", "preflight"))
+                                          "drill", "restore", "status", "plan", "preflight", "review-drill"))
     parser.add_argument("--policy", help="explicit owner policy JSON")
     parser.add_argument("--state-dir", required=True, help="private local records directory")
     keys = parser.add_mutually_exclusive_group()
@@ -500,6 +608,7 @@ def main(argv: list[str] | None = None, *,
     snapshots = parser.add_mutually_exclusive_group()
     snapshots.add_argument("--snapshot")
     snapshots.add_argument("--snapshot-dir", help="private daily-backup directory")
+    parser.add_argument("--attempt-id", help="exact interrupted periodic attempt to review")
     parser.add_argument("--bundle")
     parser.add_argument("--sha256", help="receipt pinned outside backup storage")
     parser.add_argument("--destination", help="NEW private restore or drill directory")
@@ -517,6 +626,14 @@ def main(argv: list[str] | None = None, *,
         parser.error("explicit policy required")
     if args.scheduled and args.action != "offsite":
         parser.error("scheduled mode is offsite only")
+    if args.action == "review-drill" and (not args.confirm_human
+            or not isinstance(args.reason, str) or not args.reason.strip()
+            or len(args.reason) > MAX_REASON or args.attempt_id is None
+            or args.key_fd is not None or args.keychain or args.bundle or args.destination
+            or args.snapshot or args.snapshot_dir):
+        parser.error("review-drill requires attempt-id, human confirmation and reason; no keys or restore")
+    if args.attempt_id is not None and args.action != "review-drill":
+        parser.error("attempt-id is review-drill only")
     if args.independent_escrow and (args.action != "drill" or args.key_fd is None
             or not args.confirm_human or not isinstance(args.reason, str)
             or not args.reason.strip() or len(args.reason) > MAX_REASON):
@@ -528,7 +645,7 @@ def main(argv: list[str] | None = None, *,
         parser.error("explicit bundle and separately trusted receipt required")
     if args.action in ("drill", "restore") and not args.destination:
         parser.error("explicit NEW destination required")
-    if args.action not in ("keygen", "status", "plan", "preflight") and args.key_fd is None and not args.keychain:
+    if args.action not in ("keygen", "status", "plan", "preflight", "review-drill") and args.key_fd is None and not args.keychain:
         parser.error("explicit key-fd or dedicated Keychain required")
     if args.action == "keygen" and (args.key_fd is not None or args.keychain):
         parser.error("keygen generates a new key; imported keys are not accepted")
@@ -564,6 +681,11 @@ def main(argv: list[str] | None = None, *,
         records = backup_evidence.open_records(args.state_dir, policy)
         with backup_evidence.record_lock(records):
             state = backup_evidence.read_state(records, policy)
+            if args.action == "review-drill":
+                result = backup_evidence.review_periodic_drill(
+                    records, policy, attempt_id=args.attempt_id, reason=args.reason)
+                print(json.dumps(result, sort_keys=True))
+                return 0
             try:
                 if args.keychain:
                     key = _key(keychain_reader)
@@ -594,7 +716,12 @@ def main(argv: list[str] | None = None, *,
                     RecursionError) as exc:
                 backup_evidence.record_failure(records, state, args.action, exc)
                 raise
+            if args.scheduled and policy.periodic_drill is not None:
+                result = {**result, "periodic_drill": _periodic_drill(
+                    records, policy, key, key_source="keychain" if args.keychain else "key_fd")}
         print(json.dumps(result, sort_keys=True))
+        if result.get("periodic_drill", {}).get("status") in ("failed", "unverified"):
+            return 1
         return 0
     except backup_evidence.BackupError as exc:
         print(json.dumps({"error": backup_evidence.failure_code(exc)}))

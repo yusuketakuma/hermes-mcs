@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "明示設定による定期保存後の隔離復元訓練",
+  "summary": "定期保存の成功後に、明示した周期でDBを隔離復元し、検証と同意待ち配置を行う機能を追加します。作業途中も含めて平文保持を1枠に制限し、失敗や占有を成功扱いにしません。",
+  "upgrade": "既定は無効です。オーナーが平文保持に同意し、既存の定期保存policyへperiodic_drillの周期・検査予算・証跡上限を設定した場合だけ動きます。本番DBへの復元、通知、鍵の登録は行いません。",
+  "details": [
+    "既存のverifyと同意待ち配置を再利用します。独立したローカルreceiptを固定し、媒体側のreceiptへ切り替えません。暗号処理とSQLite検査へ共有期限を渡します。ファイルシステムI/Oの厳密な中断時間は保証しません。",
+    "復号前に試行を永続化し、scratch_dirの固定1枠に作業ファイルと復元物を保持します。中断後は別枠を追加せず、人の確認まで停止します。既存の設定だけで自動復号を有効にしません。",
+    "失敗・中断の確認はreview-drill --attempt-id --confirm-human --reasonで記録します。枠が手動整理され、試行IDが一致する場合に限り受け付け、失敗履歴を保持します。成功日時を作ったり、ファイルを削除したりはしません。",
+    "statusで期限・占有・未確認を区別します。独立保管鍵の訓練や実サービスの復旧受入とは分けます。旧版へ戻す場合は新しいpolicy項目も元に戻してください。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/backup/backup_evidence.py",
+    "deployment/scripts/mcs_offsite.sh",
+    "docs/guides/BACKUP.md",
+    "tests/ops/test_backup_periodic.py"
+  ]
+}

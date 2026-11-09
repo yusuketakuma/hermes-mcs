@@ -257,7 +257,7 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
         state = backup_evidence.open_records(str(root / "data"), policy).load("backup_state.json")
         assert state["receipt"]["last_successful_run"] == NOW
     else:
-        assert result.returncode == 1 and "backup failed (exit 1)" in result.stdout
+        assert result.returncode == 1 and "backup or recovery verification requires attention (exit 1)" in result.stdout
         assert local["last_attempt_failed"] is True and local["last_offsite_at"] is None
         assert local["within_rpo"] is None
         assert not list(Path(policy.destination).glob("snapshot-*.mcsb"))
