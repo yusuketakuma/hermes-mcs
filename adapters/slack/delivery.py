@@ -116,10 +116,19 @@ def _payload(response):
     return data if isinstance(data, Mapping) else {}
 
 
+def _slack_reencodes(file) -> bool:
+    """Hosted media is re-encoded by Slack on ingest, so the stored object's
+    byte count can never equal the sealed upload size. Identity still rests
+    on the exact file id, owner and immutable hosted flags the caller checks."""
+    mime = file.get("mimetype")
+    return isinstance(mime, str) and mime.startswith(("image/", "video/", "audio/"))
+
+
 def _file_problem(file, part):
     if file.get("name") != part.get("name"):
         return "edit_file_name_mismatch"
-    if type(file.get("size")) is not int or file.get("size") != part.get("bytes"):
+    size = file.get("size")
+    if type(size) is not int or (size != part.get("bytes") and not _slack_reencodes(file)):
         return "edit_file_size_mismatch"
     if file.get("sha256") == part.get("sha256"):
         return None

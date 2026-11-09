@@ -108,6 +108,33 @@ def test_verified_private_file_keeps_its_existing_success_contract(tmp_path, pro
     assert client.upload_calls == [] and client.thread_posts == []
 
 
+def test_slack_reencoded_media_size_difference_still_verifies(tmp_path):
+    worker, client, spec, part, file_obj, logs = _world(tmp_path)
+    file_obj.pop("sha256")
+    file_obj["mimetype"] = "image/jpeg"
+    file_obj["size"] = part["bytes"] - 4096
+    result = asyncio.run(worker._attachment_part(spec, part, {}))
+    assert result == {"result": "delivered", "remote_id": part["prior_remote_id"],
+                      "attachment_origin": "edit"}
+    assert logs == []
+    assert client.upload_calls == [] and client.thread_posts == []
+
+
+@pytest.mark.parametrize("mimetype", ["application/pdf", "text/plain", None])
+def test_non_reencoded_size_difference_still_refuses(tmp_path, mimetype):
+    worker, client, spec, part, file_obj, logs = _world(tmp_path)
+    file_obj.pop("sha256")
+    if mimetype is None:
+        file_obj.pop("mimetype", None)
+    else:
+        file_obj["mimetype"] = mimetype
+    file_obj["size"] = part["bytes"] - 4096
+    result = asyncio.run(worker._attachment_part(spec, part, {}))
+    assert result == {"result": "unknown", "error_code": "edit_file_unverified"}
+    assert logs == [("edit_preflight_held", {"reason": "edit_file_size_mismatch"})]
+    assert client.upload_calls == [] and client.thread_posts == []
+
+
 def test_private_file_verification_cancellation_still_propagates(tmp_path):
     worker, client, spec, part, _, logs = _world(tmp_path)
 
