@@ -449,6 +449,9 @@ PYMODE
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
+    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; }; then
+        RUNTIME_MODE=hermes
+    fi
 fi
 # Only a checked bootstrap authority can authorize a later initial choice.
 _bootstrap_runtime_token=""
@@ -464,7 +467,8 @@ if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
     esac
 fi
 # Only a fresh install without saved authority may acquire a new default.
-if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ "$CONFIG_ABSENT" -eq 1 ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { { [ "$CONFIG_ABSENT" -eq 1 ] \
+        && [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
         && [ ! -e "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -L "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
