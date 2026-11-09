@@ -172,14 +172,22 @@ def test_verify_care_detail_binds_fields_to_source():
                 "date_text": "12月1日"}, {"event_type": "intervention_resume",
                 "service_actor": "存在しない事業所"}, "not_a_dict", None):
         assert clinical_events.verify_care_detail(bad, body) is None
-    sparse = clinical_events.verify_care_detail({"event_type": "monitoring"}, body)
+    # The event_type's own cue must appear: a resume sentence cannot carry
+    # a monitoring claim, and an unsupported type is rejected outright.
+    assert clinical_events.verify_care_detail({"event_type": "monitoring"}, body) is None
+    monitored = "本人は月1回モニタリングを実施しています。"
+    sparse = clinical_events.verify_care_detail({"event_type": "monitoring"}, monitored)
     assert sparse == {"event_type": "monitoring", "workflow_status": "unknown",
                       "date_text": "unknown", "service_actor": "unknown"}
+    # Attributes from a different sentence are not adopted.
+    split = "9月1日に退院しました。訪問看護を再開しました。"
+    off = {"event_type": "intervention_resume", "date_text": "9月1日"}
+    assert clinical_events.verify_care_detail(off, split) is None
 
 
 def test_verified_record_keeps_source_bound_care_detail():
-    body = "本人は訪問しました。"
-    quote = "訪問しました"
+    body = "本人は訪問し、サービスを開始しました。"
+    quote = "訪問し、サービスを開始しました"
     start = body.index(quote)
     item = {"kind": "visit", "subject": "patient", "status": "unknown", "negated": None,
             "evidence": quote, "span": {"start": start, "end": start + len(quote)},
@@ -192,6 +200,18 @@ def test_verified_record_keeps_source_bound_care_detail():
     assert record["care_detail"]["workflow_status"] == "performed"
 
 
+def test_other_kind_record_verifies_via_care_detail_cue():
+    body = "本人は訪問看護サービスを再開しました。"
+    quote = "訪問看護サービスを再開しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "patient", "status": "unknown", "negated": None,
+            "evidence": quote, "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_resume"}}
+    record = clinical_events.validate_record(item, body)
+    assert record["kind"] == "other" and not record.get("unverified")
+    assert record["care_detail"]["event_type"] == "intervention_resume"
+
+
 def test_unverified_or_bad_detail_never_attaches_care_detail():
     body = "本人は訪問しました。"
     quote = "訪問しました"
@@ -200,13 +220,31 @@ def test_unverified_or_bad_detail_never_attaches_care_detail():
             "evidence": quote, "span": {"start": start, "end": start + len(quote)}}
     bad_type = dict(base, care_detail={"event_type": "bogus"})
     assert "care_detail" not in clinical_events.validate_record(bad_type, body)
+    # A verified parent record does not adopt an unfounded detail: a single
+    # visit is not evidence that an intervention started.
+    unfounded = dict(base, care_detail={"event_type": "intervention_start"})
+    record = clinical_events.validate_record(unfounded, body)
+    assert not record.get("unverified") and "care_detail" not in record
     other = dict(base, kind="other",
                  care_detail={"event_type": "intervention_resume"})
     assert clinical_events.validate_record(other, body).get("unverified") is True
 
 
+def test_care_detail_workflow_conflict_stays_unknown():
+    body = "本人は来週訪問看護サービスを開始する予定です。"
+    quote = "訪問看護サービスを開始する予定です"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "patient", "status": "unknown", "negated": None,
+            "evidence": quote, "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed"}}
+    record = clinical_events.validate_record(item, body)
+    assert not record.get("unverified")
+    assert record["care_detail"]["workflow_status"] == "unknown"
+
+
 def test_canonical_record_carries_fact_care_detail_when_verified():
-    quote = "本人は本日訪問しました"
+    quote = "本人は本日訪問し、サービスを開始しました"
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1", "start": 0,
                 "end": len(quote), "quote": quote, "atom_id": "a1"}
     fact = v2_fact("f1", kind="care_event", statement=quote, subject="patient:1",
@@ -218,8 +256,20 @@ def test_canonical_record_carries_fact_care_detail_when_verified():
     assert record["care_detail"]["event_type"] == "intervention_start"
 
 
+def test_canonical_record_rejects_unfounded_care_detail():
+    quote = "本人は本日訪問しました"
+    evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1", "start": 0,
+                "end": len(quote), "quote": quote, "atom_id": "a1"}
+    fact = v2_fact("f1", kind="care_event", statement=quote, subject="patient:1",
+                   polarity="affirmed", workflow_status="performed",
+                   evidence_ids=["e1"], care_detail={"event_type": "intervention_start",
+                   "workflow_status": "performed"})
+    record = clinical_events.canonical_record(fact, evidence)
+    assert not record.get("unverified") and "care_detail" not in record
+
+
 def test_normalized_care_detail_is_idempotent_under_revalidation():
-    body = "本人は本日訪問しました。"
+    body = "本人は本日訪問し、サービスを開始しました。"
     once = clinical_events.verify_care_detail(
         {"event_type": "intervention_start", "workflow_status": "performed"}, body)
     assert once["date_text"] == "unknown" and once["service_actor"] == "unknown"

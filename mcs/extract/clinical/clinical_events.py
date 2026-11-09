@@ -22,6 +22,82 @@ CARE_DETAIL_TYPES = (
     'facility_entry', 'facility_exit', 'death', 'acp_discussion',
     'care_policy_change')
 
+# Per-type source cues aggregated in the shared verification path: a
+# care_detail claim is kept only when its own vocabulary appears inside the
+# evidence quote (docs/specs/care-intervention-events.md §2). These are
+# recall cues for meaning support; subject/polarity/status axes are still
+# verified by the shared record path, and generic verbs without the type's
+# distinctive noun (e.g. a bare 開始 for a meeting) do not qualify.
+_SERVICE_CUE = (r'(?:サービス|介護|支援|訪問看護|訪問介護|訪問|看護|'
+                r'リハビリ|ケア|介入)')
+# A date or adverb may sit between the service word and the transition verb
+# (「訪問看護を11月9日に再開」); the gap never crosses a sentence end.
+_GAP = r'[^。！？!?\n]{0,20}'
+CARE_DETAIL_CUES = {
+    'intervention_start': re.compile(
+        _SERVICE_CUE + r'(?:を|の|は)?' + _GAP + r'(?:開始|スタート|始め)'),
+    'intervention_pause': re.compile(
+        _SERVICE_CUE + r'(?:を|の|は)?' + _GAP
+        + r'(?:中断|休止|一時停止|おやすみ|お休み)'),
+    'intervention_resume': re.compile(
+        _SERVICE_CUE + r'(?:を|の|は)?' + _GAP + r'再開'),
+    'intervention_end': re.compile(
+        _SERVICE_CUE + r'(?:を|の|は)?' + _GAP
+        + r'(?:終了|終結|卒業|打ち切り)'),
+    'service_contract_start': re.compile(
+        r'契約(?:を|の|は)?' + _GAP
+        + r'(?:開始|締結|結ぶ|結んだ|成立)'
+        r'|契約(?:を|の|は)?し(?:ました|ている|する)|契約開始'),
+    'pre_discharge_conference': re.compile(
+        r'(?:退院前|退院に向けた)(?:の|に)?'
+        r'(?:カンファレンス|会議|検討会|話し合い)|退院前カンファレンス'),
+    'discharge_joint_guidance': re.compile(
+        r'退院時共同指導|退院時の指導|共同指導'),
+    'care_team_conference': re.compile(
+        r'サービス担当者会議|担当者会議|ケア会議|検討会|担当者会'),
+    'care_plan_change': re.compile(
+        r'(?:ケアプラン|介護計画|計画|プラン)(?:の|を|は)?' + _GAP
+        + r'(?:変更|見直し|修正|改訂)|計画変更'),
+    'monitoring': re.compile(
+        r'モニタリング|経過観察|フォローアップ|目標達成'
+        r'|(?:計画|プラン)(?:の|を|は)?' + _GAP + r'見直し'),
+    'care_need_certification_change': re.compile(
+        r'(?:要介護|要支援|介護度|認定|区分)(?:の|が|を|は)?' + _GAP
+        + r'(?:変更|区分変更|更新|結果|決定)'
+        r'|認定(?:の|が|は)?' + _GAP + r'(?:変更|結果|更新|決定)'),
+    'respite': re.compile(r'レスパイト|短期入所|ショートステイ|短期利用'),
+    'facility_entry': re.compile(
+        r'(?:施設|ホーム|サ高住|グループホーム|特養|老健)(?:へ|に|への)?' + _GAP
+        + r'(?:入所|入居)'
+        r'|(?<!短期)(?<!ショートステイ)入所(?:しました|する|した|している)'
+        r'|(?<!短期)(?<!ショートステイ)入居(?:しました|する|した|している)'),
+    'facility_exit': re.compile(
+        r'(?:施設|ホーム|サ高住|グループホーム|特養|老健)(?:を|から|へ)?' + _GAP
+        + r'(?:退所|退去)'
+        r'|退所(?:しました|する|した|している)'
+        r'|退去(?:しました|する|した|している)'),
+    'death': re.compile(r'死亡|亡くな|お亡くなり|他界|永眠|死去|急逝'),
+    'acp_discussion': re.compile(
+        r'ACP|人生会議|アドバンス・ケア|終末期(?:の|に関する)?話し合い'
+        r'|意向(?:の|を)?(?:確認|表明|変化)|DNAR'),
+    'care_policy_change': re.compile(
+        r'(?:療養|治療|ケア|看取り|延命)(?:の|に関する)?方針'
+        r'(?:を|の|は)?' + _GAP + r'(?:変更|決定|見直し|撤回)'
+        r'|方針(?:を|の|は)?' + _GAP + r'(?:変更|決定|撤回)|DNAR'),
+}
+
+_WORKFLOW_PLANNED = frozenset(
+    ('planned', 'ordered', 'pending', 'considering', 'on_hold'))
+_WORKFLOW_DONE = frozenset(('performed', 'done', 'in_progress'))
+
+
+def _workflow_family(value):
+    if value in _WORKFLOW_PLANNED:
+        return 'planned'
+    if value in _WORKFLOW_DONE:
+        return 'performed'
+    return None
+
 ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
                  r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
                  r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
@@ -174,19 +250,64 @@ def candidate_span(item, body):
     return span if span is not None and cue is not None and len(list(cue.finditer(body[span[0]:span[1]]))) == 1 else None
 
 
-def verify_care_detail(detail, body):
-    """Return a normalized care_detail bound to the source body, or None.
+def _detail_cue_matches(quote, event_type):
+    cue = CARE_DETAIL_CUES.get(event_type)
+    return list(cue.finditer(quote)) if cue is not None and isinstance(quote, str) else []
 
-    event_type must be one of CARE_DETAIL_TYPES; workflow_status shares the
-    semantic_facts axis with 'unknown' fallback; date_text and service_actor
-    must appear verbatim in the body when supplied. Axes that are not
-    explicit stay 'unknown' — nothing is inferred or normalized.
+
+def _sentence_bounds(text, pos):
+    left = max(text.rfind(mark, 0, pos) for mark in _SENTENCE_ENDS) + 1
+    right = min((p for mark in _SENTENCE_ENDS
+                 if (p := text.find(mark, pos)) >= 0), default=len(text))
+    return left, right
+
+
+def _care_detail_workflow(detail, *, status=None, negated=None,
+                          fact_workflow=None):
+    """Demote detail.workflow_status to 'unknown' when axes conflict.
+
+    A performed-family claim cannot ride a planned/negated record, a
+    planned-family claim cannot ride an affirmed current/past record, and a
+    fact-level workflow_status that disagrees is also a conflict. The detail
+    itself stays — only the disputed axis becomes unknown.
     """
-    if not isinstance(detail, dict):
+    workflow = detail.get('workflow_status')
+    family = _workflow_family(workflow)
+    if family is None:
+        return detail
+    conflict = negated is True
+    other = _workflow_family(fact_workflow)
+    if other is not None and other != family:
+        conflict = True
+    if status is not None:
+        if family == 'performed' and status in ('planned', 'conditional'):
+            conflict = True
+        if family == 'planned' and status in ('current', 'past') \
+                and negated is False:
+            conflict = True
+    if conflict:
+        detail = dict(detail, workflow_status='unknown')
+    return detail
+
+
+def verify_care_detail(detail, quote):
+    """Return a normalized care_detail bound to the evidence quote, or None.
+
+    event_type must be one of CARE_DETAIL_TYPES and its own cue must appear
+    inside the quote; date_text and service_actor must appear verbatim in a
+    sentence that carries that cue, so attributes from unrelated sentences or
+    events are not adopted. Axes that are not explicit stay 'unknown' —
+    nothing is inferred or normalized.
+    """
+    if not isinstance(detail, dict) or not isinstance(quote, str):
         return None
     event_type = detail.get('event_type')
     if event_type not in CARE_DETAIL_TYPES:
         return None
+    matches = _detail_cue_matches(quote, event_type)
+    if not matches:
+        return None
+    sentences = {_sentence_bounds(quote, m.start()) for m in matches}
     from semantic_facts import WORKFLOW_STATUSES
     workflow = detail.get('workflow_status', 'unknown')
     if workflow not in WORKFLOW_STATUSES:
@@ -197,13 +318,17 @@ def verify_care_detail(detail, body):
     if date_text == 'unknown':
         date_text = None
     if date_text is not None and (not isinstance(date_text, str)
-                                  or not date_text.strip() or date_text not in body):
+                                  or not date_text.strip()
+                                  or not any(date_text in quote[a:b]
+                                             for a, b in sentences)):
         return None
     service_actor = detail.get('service_actor')
     if service_actor == 'unknown':
         service_actor = None
     if service_actor is not None and (not isinstance(service_actor, str)
-                                      or not service_actor.strip() or service_actor not in body):
+                                      or not service_actor.strip()
+                                      or not any(service_actor in quote[a:b]
+                                                 for a, b in sentences)):
         return None
     return {'event_type': event_type, 'workflow_status': workflow,
             'date_text': date_text if isinstance(date_text, str) and date_text.strip() else 'unknown',
@@ -231,9 +356,16 @@ def validate_record(item, body):
     start, end = located
     quote = body[start:end]
     result.update(evidence=quote, span={'start': start, 'end': end})
-    detail = verify_care_detail(item['care_detail'], body) if 'care_detail' in item else None
-    cue = _DIRECT.get(item['kind'])
-    matches = list(cue.finditer(quote)) if cue is not None else []
+    detail = verify_care_detail(item['care_detail'], quote) if 'care_detail' in item else None
+    if item['kind'] == 'other':
+        # A detail that does not fit a legacy kind carries its own cue as the
+        # anchor instead of depending on _DIRECT (spec §1).
+        matches = _detail_cue_matches(quote, detail['event_type']) \
+            if detail is not None else []
+        matches = matches if len(matches) == 1 else []
+    else:
+        cue = _DIRECT.get(item['kind'])
+        matches = list(cue.finditer(quote)) if cue is not None else []
     if len(matches) != 1:
         result['unverified'] = True
         return result
@@ -261,7 +393,13 @@ def validate_record(item, body):
     if unresolved or actual_subject == 'unknown' or actual_status == 'unknown' or actual_negated is None:
         result['unverified'] = True
     elif detail is not None:
-        result['care_detail'] = detail
+        # The detail claim must share the verified event's sentence; a cue
+        # from a different sentence describes a different event.
+        sent_left, sent_right = _sentence_bounds(quote, match.start())
+        if any(sent_left <= m.start() and m.end() <= sent_right
+               for m in _detail_cue_matches(quote, detail['event_type'])):
+            result['care_detail'] = _care_detail_workflow(
+                detail, status=actual_status, negated=actual_negated)
     return result
 
 
@@ -354,7 +492,14 @@ def canonical_record(fact, evidence, *, disputed=False):
     workflow = fact.get('workflow_status')
     status = 'planned' if workflow in ('planned', 'ordered', 'pending', 'considering', 'on_hold') else 'unknown'
     cue = _DIRECT.get(kind)
-    match = cue.search(quote) if cue is not None else None
+    detail = verify_care_detail(fact.get('care_detail'), quote) \
+        if isinstance(fact.get('care_detail'), dict) else None
+    if kind == 'other' and detail is not None:
+        # kind=other carries the detail's own cue as the anchor (spec §1).
+        detail_matches = _detail_cue_matches(quote, detail['event_type'])
+        match = detail_matches[0] if len(detail_matches) == 1 else None
+    else:
+        match = cue.search(quote) if cue is not None else None
     # A different cue in the quote cannot establish examination for an
     # arrival-only statement.
     mismatch = kind == 'exam' and bool(re.search(OUTPATIENT_CUE, statement))
@@ -391,8 +536,13 @@ def canonical_record(fact, evidence, *, disputed=False):
             or workflow not in ('performed', 'done', 'reported', 'in_progress',
                                 'planned', 'ordered', 'pending', 'considering', 'on_hold')):
         record['unverified'] = True
-    detail = verify_care_detail(fact.get('care_detail'), quote) \
-        if isinstance(fact.get('care_detail'), dict) else None
-    if detail is not None and 'unverified' not in record:
-        record['care_detail'] = detail
+    if detail is not None and 'unverified' not in record and match is not None:
+        # The detail claim must share the verified event's sentence, and its
+        # workflow axis must not contradict the fact-level workflow.
+        sent_left, sent_right = _sentence_bounds(quote, match.start())
+        if any(sent_left <= m.start() and m.end() <= sent_right
+               for m in _detail_cue_matches(quote, detail['event_type'])):
+            record['care_detail'] = _care_detail_workflow(
+                detail, status=status, negated=negated,
+                fact_workflow=workflow)
     return record

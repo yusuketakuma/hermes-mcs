@@ -688,13 +688,13 @@ def test_invalid_care_detail_fails_facts_doc_validation(detail):
 
 def test_care_detail_flows_from_extraction_to_projected_record():
     from semantic_projection import project_v2_doc_legacy
-    body = "本人は本日訪問しました。"
+    body = "本人は本日訪問し、サービスを開始しました。"
     llm = _llm(
         [{"statement": "本人の訪問看護開始", "kind": "care_event",
           "subject_role": "patient", "polarity": "affirmed",
           "epistemic": "asserted",
           "workflow_status": "performed", "importance": "T1",
-          "evidence_quote": "本人は本日訪問しました",
+          "evidence_quote": "本人は本日訪問し、サービスを開始しました",
           "care_detail": {"event_type": "intervention_start",
                           "workflow_status": "performed",
                           "date_text": "本日"}}],
@@ -710,6 +710,64 @@ def test_care_detail_flows_from_extraction_to_projected_record():
                   if r.get("care_detail"))
     assert record["care_detail"]["event_type"] == "intervention_start"
     assert record["care_detail"]["date_text"] == "本日"
+
+
+def test_care_detail_on_non_care_event_kind_fails_validation():
+    from semantic_testkit import v2_doc, v2_fact
+    fact = v2_fact("f1", kind="symptom_state", validation_status="unverified",
+                   care_detail={"event_type": "monitoring"})
+    with pytest.raises(Exception):
+        sf.validate_facts_doc(v2_doc([fact]))
+
+
+def test_merge_dupe_facts_care_detail_conflict_orders():
+    import semantic_assembly as assembly
+    from semantic_testkit import v2_fact
+    a = v2_fact("f1", kind="care_event", validation_status="unverified",
+                care_detail={"event_type": "intervention_start"})
+    b = v2_fact("f1", kind="care_event", validation_status="unverified",
+                care_detail={"event_type": "intervention_end"})
+    plain = v2_fact("f1", kind="care_event", validation_status="unverified")
+    for ordered in ([a, b, a], [b, a, b], [a, b], [b, a]):
+        merged = assembly.merge_dupe_facts([dict(f) for f in ordered])
+        assert len(merged) == 1 and "care_detail" not in merged[0]
+    # Absence is not a conflict: a plain duplicate keeps a single detail.
+    for ordered in ([plain, a], [a, plain]):
+        merged = assembly.merge_dupe_facts([dict(f) for f in ordered])
+        assert merged[0]["care_detail"] == a["care_detail"]
+
+
+def test_repair_merge_does_not_revive_conflicting_care_detail():
+    body = "本人は本日訪問し、サービスを開始しました。個室を希望しています。"
+    item_a = {"statement": "本人の訪問看護開始", "kind": "care_event",
+              "subject_role": "patient", "polarity": "affirmed",
+              "epistemic": "asserted", "workflow_status": "performed",
+              "importance": "T1",
+              "evidence_quote": "本人は本日訪問し、サービスを開始しました",
+              "care_detail": {"event_type": "intervention_start",
+                              "workflow_status": "performed"}}
+    item_p = {"statement": "個室を希望", "kind": "preference",
+              "subject_role": "patient", "polarity": "affirmed",
+              "epistemic": "reported", "workflow_status": "reported",
+              "importance": "T2",
+              "evidence_quote": "個室を希望"}
+    r = extraction.extract_facts_v2(
+        _llm([item_a, item_p], presence={"care_event": "one", "preference": "one"}),
+        _member(body))
+    doc = r["doc"]
+    care = next(f for f in doc["facts"] if f["kind"] == "care_event")
+    pref = next(f for f in doc["facts"] if f["kind"] == "preference")
+    assert care["care_detail"]["event_type"] == "intervention_start"
+    # The care_event fact stays kept while its chunk is re-extracted for the
+    # rejected preference: a repair candidate for the same fact_id carrying a
+    # different detail must not win silently — the merge drops it entirely.
+    item_b = dict(item_a, care_detail={"event_type": "intervention_end",
+                                       "workflow_status": "performed"})
+    out = extraction.repair_facts_v2(
+        _llm([item_b, item_p], presence={"care_event": "one", "preference": "one"}),
+        _member(body), doc, {pref["fact_id"]: "wording"})
+    fact = next(f for f in out["doc"]["facts"] if f["fact_id"] == care["fact_id"])
+    assert "care_detail" not in fact
 
 
 def test_invalid_care_detail_is_omitted_not_attached():

@@ -131,16 +131,17 @@ def test_canonical_presence_never_silently_falls_back_to_local_result(store):
 
 
 def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tamper=None,
-                            care_detail=None):
+                            care_detail=None, body=None, statement=None):
     """Drain one synthetic care_event fact through the real semantic pipeline."""
     import json as _json
     import semantic_testkit as st
     db = st._ledger(tmp_path)
     p = st._patient(db)
-    body = "本人は2026年9月1日に退院しました。"
+    body = body or "本人は2026年9月1日に退院しました。"
     p.messages = [st._message(1, body=body)]
     db.save_patient(p, notify={"source": "unread"}, semantic=True)
-    fact = {"statement": "退院", "kind": "care_event", "subject_role": "patient",
+    fact = {"statement": statement or "退院", "kind": "care_event",
+            "subject_role": "patient",
             "polarity": "affirmed", "epistemic": "asserted",
             "workflow_status": "performed", "importance": "T1",
             "evidence_quote": body}
@@ -190,10 +191,12 @@ def test_audited_canonical_care_event_projects_source_bound_record(tmp_path, mon
         db.close()
 
 
-def test_audited_canonical_care_detail_reaches_projected_event(tmp_path, monkeypatch):
+def test_audited_canonical_unfounded_care_detail_is_dropped(tmp_path, monkeypatch):
+    # 退院の記録だけでは退院前カンファレンスの根拠にならない: detail は
+    # 捨てられ、親の discharge event は検証済みのまま残る。
     detail = {"event_type": "pre_discharge_conference", "workflow_status": "performed",
               "date_text": "2026年9月1日"}
-    db, body = _canonical_care_fixture(tmp_path, monkeypatch, care_detail=detail)
+    db, _body = _canonical_care_fixture(tmp_path, monkeypatch, care_detail=detail)
     try:
         cfg = __import__("semantic_testkit")._canonical_cfg()
         db.db.execute("BEGIN")
@@ -201,7 +204,30 @@ def test_audited_canonical_care_detail_reaches_projected_event(tmp_path, monkeyp
         result = care_event_sources.collect(db.db, 1, cfg=cfg)
         event, = result["events"]
         assert event["kind"] == "discharge" and event["unverified"] is False
-        assert event["care_detail"] == {"event_type": "pre_discharge_conference",
+        assert "care_detail" not in event
+        assert result["coverage"]["canonical_unconfirmed"] == 0
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_audited_canonical_care_detail_reaches_projected_event(tmp_path, monkeypatch):
+    # kind=other: legacy cue に載らない会議記録を detail 自身の cue で検証する。
+    body = "本人は2026年9月1日にサービス担当者会議を実施しました。"
+    detail = {"event_type": "care_team_conference", "workflow_status": "performed",
+              "date_text": "2026年9月1日"}
+    db, _body = _canonical_care_fixture(
+        tmp_path, monkeypatch, care_detail=detail, body=body,
+        statement="サービス担当者会議を実施しました")
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        event, = result["events"]
+        assert event["kind"] == "other" and event["unverified"] is False
+        assert event["care_detail"] == {"event_type": "care_team_conference",
                                         "workflow_status": "performed",
                                         "date_text": "2026年9月1日",
                                         "service_actor": "unknown"}

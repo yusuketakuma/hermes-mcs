@@ -409,6 +409,8 @@ def validate_fact(fact: dict) -> dict:
         out["action"] = fact.get("action", UNKNOWN)
     care_detail = fact.get("care_detail")
     if care_detail is not None:
+        if out["kind"] != "care_event":
+            _fail("fact_care_detail_kind")
         out["care_detail"] = validate_care_detail_fact(care_detail)
     out.update(request_details(fact))
     context = validate_patient_context(fact)

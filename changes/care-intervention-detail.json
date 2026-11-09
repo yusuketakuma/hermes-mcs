@@ -1,17 +1,19 @@
 {
   "category": "added",
   "title": "介護介入イベントへ固定detail契約を追加",
-  "summary": "介護イベントの記録に、仕様で固定した17種のevent_typeとworkflow_status・日付・サービス主体を任意項目care_detailとして保持できるようにしました。本文中に逐語で存在しない日付・主体はunknownへ正規化し、検証を通らない記録や未検証のfactからはdetailを出しません。canonical抽出経路でも同じ契約でfact→投影まで引き継ぎます。",
+  "summary": "介護イベントの記録に、仕様で固定した17種のevent_typeとworkflow_status・日付・サービス主体を任意項目care_detailとして保持できるようにしました。event_typeは証拠引用内に種別ごとの手がかり語彙がある場合だけ採用し、日付・主体はその手がかりを含む文に逐語で存在する場合のみ保持します。根拠のないdetailは付けず、canonical抽出経路でも同じ契約でfactから投影まで引き継ぎます。",
   "upgrade": "追加操作は不要です。LLMがcare_detailを返さない場合は従来どおりのイベント投影のみで、既存の記録形式は変わりません。",
   "details": [
-    "care_detailのevent_typeはdocs/specs/care-intervention-events.mdの固定語彙のみ受理し、それ以外は検証不合格としてdetailを付けません。",
-    "date_textとservice_actorは証拠引用または本文へ一字一句存在する場合のみ保持し、欠落・空白はunknownへ正規化します。workflow_statusの未知値もunknownへ落とします。",
-    "semantic-facts/v2のfactがcare_detailを持つ場合は構造を検証して保存し、投影時に引用へ再束縛します。重複factの統合でdetailが競合した場合はいずれも採用しません。",
-    "kind=otherの記録へdetailだけで検証を通す経路は、event_type別の手がかり語彙が未整備のため今回の範囲外です。"
+    "care_detailのevent_typeはdocs/specs/care-intervention-events.mdの固定語彙のみ受理し、さらにclinical_events.CARE_DETAIL_CUESの種別ごとの手がかり語彙がevidence quote内に出ることを必須とします。親recordが検証済みでも根拠のない種別は採用しません。",
+    "date_textとservice_actorは手がかり語彙を含む文の内部に逐語で存在する場合のみ保持します。非逐語・別文・空白の場合はdetail全体を不採用とし、workflow_statusの未知値はunknownへ正規化、recordやfactの軸と家族（予定系/実施済み系）が食い違う場合もunknownへ落とします。",
+    "semantic-facts/v2のfactがcare_detailを持つ場合はkind=care_eventのみ構造を検証して保存し、投影時に引用へ再束縛します。重複factの統合でdetailが競合した場合はいずれも採用しません。",
+    "kind=otherの記録は_DIRECTに依存せず、detail自身の手がかり語彙をanchorに同じ主体・極性・status検証を受けます。",
+    "extract_llm_promptsとsemantic_llmの既存プロンプトへcare_detailの出力仕様を接続しました。"
   ],
   "refs": [
     "mcs/extract/clinical/clinical_events.py",
     "mcs/extract/llm/extract_schema.py",
+    "mcs/extract/llm/extract_llm_prompts.py",
     "mcs/semantic/semantic_facts.py",
     "mcs/semantic/semantic_assembly.py",
     "mcs/semantic/semantic_llm.py",
