@@ -523,7 +523,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
     output = b''
     deadline = time.monotonic() + 60
     try:
-        prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'2\n'),
+        prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'1\n'),
                    ('この内容で導入する（推奨）'.encode(), b'1\n')]
         for prompt, answer in prompts:
             while prompt not in output:
@@ -608,7 +608,7 @@ def test_interactive_bootstrap_runtime_choice_uses_checked_snapshot(tmp_path, ou
             assert len(output) < 100000
         os.write(master, answer)
     try:
-        answer_when('選択 [1・推奨 / 2 / 0'.encode(), b'2\n')
+        answer_when('選択 [1・推奨 / 2 / 0'.encode(), b'1\n')
         if outcome == 'race':
             config.write_text(json.dumps({**common, 'synthetic_unknown': {'keep': False}}))
         answer_when('この内容で導入する（推奨）'.encode(), b'2\n' if outcome == 'cancel' else b'1\n')

@@ -465,7 +465,8 @@ if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
 fi
 # Only a fresh install without saved authority may acquire a new default.
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ "$CONFIG_ABSENT" -eq 1 ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
-        && [ -z "$_bootstrap_runtime_token" ] \
+        && [ ! -e "$MCS_ROOT/data/.provider-settings-authority.json" ] \
+        && [ ! -L "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
         && [ ! -L "$MCS_ROOT/data/install_options.json" ]; }; }; then
     if [ -z "$ARG_HOME" ]; then

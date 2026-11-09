@@ -384,3 +384,37 @@ def test_new_noninteractive_mode_is_saved_and_reread(tmp_path, empty, explicit):
     assert config.read_bytes() == before
     if expected == 'standalone':
         assert not any(c.startswith('git clone') and 'hermes-agent' in c for c in _calls(stub))
+
+
+@pytest.mark.parametrize('mode', ['--preflight', '--dry-run', None])
+def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install(tmp_path, mode):
+    import hashlib
+    import provider_settings
+    home, _, _, env = _world(tmp_path)
+    root = home / '.mcs'
+    data = root / 'data'
+    providers = data / 'provider_settings'
+    providers.mkdir(mode=0o700, parents=True)
+    data.chmod(0o700)
+    config = root / 'config.json'
+    config.write_text('{}')
+    config.chmod(0o600)
+    hashes = {}
+    for name in provider_settings.PROVIDERS:
+        path = providers / (name + '.json')
+        path.write_text('{}')
+        path.chmod(0o600)
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    authority = data / '.provider-settings-authority.json'
+    authority.write_text(json.dumps({'version': 2, 'state': 'committed',
+        'configuration_state': 'bootstrap', 'files': hashes,
+        'common_policy_sha256': provider_settings.common_policy_digest({})}))
+    authority.chmod(0o600)
+    before = {path: path.read_bytes() for path in [config, authority, *providers.iterdir()]}
+    flags = ['--no-brew', '--no-llm', '--no-recovery', '--no-services']
+    if mode:
+        flags.append(mode)
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '接続方法: hermes' in result.stdout
+    assert {path: path.read_bytes() for path in before} == before
