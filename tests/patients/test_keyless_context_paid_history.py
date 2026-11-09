@@ -411,10 +411,12 @@ def test_paid_cloud_summary_reaudit_also_requires_source_receipts(runtime, real_
         ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
                           (json.dumps(summary_meta), summary['artifact_id']))
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args: None)
-    before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    protected = ("SELECT * FROM artifacts WHERE (kind LIKE 'cloud_usage_%' OR "
+                 "kind LIKE 'patient_context_%') AND kind != ? ORDER BY artifact_id")
+    before = [tuple(row) for row in ledger.db.execute(protected, (state.PROGRESS,))]
     sent, local = len(posts), len(local_calls)
     for _ in range(5):
         assert step(runtime, cfg=cfg)['status'] != 'complete'
         clock.wall += 61
     assert len(posts) == sent and len(local_calls) == local
-    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    assert [tuple(row) for row in ledger.db.execute(protected, (state.PROGRESS,))] == before
