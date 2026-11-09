@@ -63,6 +63,7 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         pytest.fail(f'API fallback did not publish: {result!r}; coverage='
                     f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert sent and local_calls
+    assert json.loads(ledger.artifacts(state.KIND)[-1]["meta"])["local_fallback"] is True
     results = ledger.artifacts('cloud_usage_result')
     assert results
     for row in results:

@@ -845,10 +845,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 same = True
             if same:
                 meta["contract"] = old_meta["contract"]
-                if "route_contract" in old_meta:
-                    meta["route_contract"] = old_meta["route_contract"]
-                if "quality_repair_ref" in old_meta:
-                    meta["quality_repair_ref"] = old_meta["quality_repair_ref"]
+                for key in ("route_contract", "quality_repair_ref", "local_fallback"):
+                    if key in old_meta:
+                        meta[key] = old_meta[key]
             if facts and not same or quality_required:
                 generation_plan['needed'] = True
                 begin_generation()
