@@ -22,9 +22,16 @@ def test_safe_error_code_hides_free_text_value_error():
     "/Users/someone/private/file.txt",
     "SELECT * FROM patients WHERE id=1",
     "unregistered_code_123",             # code-shaped but not registered
+    "slack_setup_",                      # concatenation prefix, not a complete code
+    "bad_page_v2",                       # registered code plus dynamic suffix
 ])
 def test_safe_error_code_never_echoes_unregistered_text(text):
     assert util.safe_error_code(ValueError(text)) == "ValueError"
+
+
+def test_safe_error_code_rejects_dynamic_prefix_concatenation():
+    detail = "workspace"
+    assert util.safe_error_code(ValueError("slack_setup_" + detail)) == "ValueError"
 
 
 def test_safe_error_code_uses_type_name_for_other_errors():
