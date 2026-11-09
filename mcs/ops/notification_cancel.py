@@ -20,7 +20,7 @@ import initial_import_state
 
 from mcs_util import strict_json, valid_text  # noqa: E402
 from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
-from writer_lock import acquire_run_lock
+from writer_lock import acquire_run_lock, code_stamp, wait_run_lock
 from safe_io import atomic_write, fsync_dir  # noqa: E402  # noqa: E402
 from notify_cards import mark_snapshot_dirty  # noqa: E402
 from card_worker_status import REASONS, TRANSPORTS, VERSION  # noqa: E402
@@ -270,8 +270,10 @@ def _withdraw(data, receipt):
                  lambda f: json.dump(receipt, f, ensure_ascii=False, indent=2), mode=0o600)
 
 
-def apply(root, request):
+def apply(root, request, *, wait_seconds=0):
     """Cancel eligible intents with approval, locks, backup and an idempotent receipt."""
+    if type(wait_seconds) is not int or not 0 <= wait_seconds <= 600:
+        raise ValueError("bad_wait_seconds")
     if (not isinstance(request, dict) or request.get("human_confirmed") is not True
             or not valid_uuid(request.get("command_id"))
             or not valid_text(request.get("actor"), 120) or not valid_text(request.get("reason"), 2000)):
@@ -286,7 +288,11 @@ def apply(root, request):
     locks = []
     try:
         for name in ("update.lock", "run.lock"):
+            stamp = code_stamp() if name == "run.lock" and wait_seconds else None
             fd = acquire_run_lock(str(data / name))
+            if fd is None and stamp is not None:
+                fd = wait_run_lock(str(data / name), wait_s=wait_seconds,
+                    expected_code_stamp=stamp, marker_path=str(data / "update_in_progress.marker"))
             if fd is None:
                 raise ValueError("operation_lock_held")
             locks.append(fd)
@@ -410,6 +416,8 @@ def main(argv=None):
     cancel.add_argument("--actor", required=True)
     cancel.add_argument("--reason", required=True)
     cancel.add_argument("--confirm-human", action="store_true")
+    cancel.add_argument("--wait-seconds", type=int, default=0,
+                        help="実行ロックの待機上限（0〜600秒、既定0）。更新ロックは待機しない")
     args = parser.parse_args(argv)
     from mcs_runtime import sqlite_wal_safe
     try:
@@ -424,7 +432,7 @@ def main(argv=None):
             result = apply(args.root, {"command_id": args.command_id, "actor": args.actor,
                                       "reason": args.reason, "human_confirmed": args.confirm_human,
                                       "plan": json.loads(read_regular_nofollow(
-                                          str(args.plan), 65536, ValueError))})
+                                          str(args.plan), 65536, ValueError))}, wait_seconds=args.wait_seconds)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, sqlite3.Error) as error:

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "通知取り下げの実行ロック待機を明示指定できるように修正",
+  "summary": "通知の取り下げ時に、収集処理との実行ロック競合で即座に停止する場合は、待機時間を指定して空きを待てるようにします。既定は従来どおり待機せず、送信結果不明の記録は不明のまま保持します。",
+  "upgrade": "既存の更新手順で適用してください。必要な場合だけnotification_cancel.pyのapplyに--wait-seconds 600などを指定します。人承認・計画照合・バックアップ・操作記録は従来どおり必須です。",
+  "details": [
+    "wait_secondsは0〜600の整数のみ受理し、更新ロックの取得は即時判定する。更新ロックを取得できた操作に限り、共有wait_run_lockで実行ロックを期限付きで待機する。既定0のcallerは従来の動作を維持する。",
+    "待機中のソース変更・更新markerは共有ヘルパーで拒否し、取得後も復元marker・対象の最新状態・計画・人承認を再照合する。待機時間を監査対象の依頼payloadへ混ぜず、同じcommand_idの冪等性を維持する。"
+  ],
+  "refs": [
+    "mcs/ops/notification_cancel.py",
+    "tests/ops/test_notification_retire.py"
+  ]
+}

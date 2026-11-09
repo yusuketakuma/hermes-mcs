@@ -274,7 +274,8 @@ def test_retire_plan_is_readonly_and_hash_bound(case):
     assert not (case.data / "notification_cancellations").exists()
 
 
-def test_cli_plan_then_apply_round_trip(case, capsys):
+@pytest.mark.parametrize('wait_seconds', [0, 20])
+def test_cli_plan_then_apply_round_trip(case, capsys, monkeypatch, wait_seconds):
     """The real CLI entry: plan prints a side-effect-free plan, apply
     re-validates it — covering the subcommand/--action dest split."""
     db = case.led.db
@@ -287,9 +288,17 @@ def test_cli_plan_then_apply_round_trip(case, capsys):
     assert _snapshot(db) == before                     # plan is read-only
     plan_path = case.data / "plan.json"
     plan_path.write_text(json.dumps(plan))
+    original_apply = cancel.apply
+    observed = []
+    def apply(root, request, **kwargs):
+        observed.append(kwargs)
+        return original_apply(root, request, **kwargs)
+    monkeypatch.setattr(cancel, 'apply', apply)
+    extra = ['--wait-seconds', str(wait_seconds)] if wait_seconds else []
     assert cancel.main(["--root", root, "apply", "--plan", str(plan_path),
                         "--command-id", str(uuid.uuid4()), "--actor", "synthetic",
-                        "--reason", "合成の退役", "--confirm-human"]) == 0
+                        "--reason", "合成の退役", "--confirm-human", *extra]) == 0
+    assert observed == [{'wait_seconds': wait_seconds}]
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["action"] == "retire_operational_alert"
     assert receipt["delivery_outcome"] == "unknown"
@@ -329,3 +338,54 @@ def test_cli_plan_then_apply_round_trip(case, capsys):
     assert receipt["kind"] == "ops.notification_cancel_unissued"
     assert receipt["event_ids"] == [digest]
     assert "delivery_outcome" not in receipt
+
+
+def test_explicit_wait_reuses_shared_gate_and_preserves_retire_receipt(case, monkeypatch):
+    request = _request(case, case.events)
+    held = cancel.acquire_run_lock(str(case.data / 'run.lock'))
+    assert held is not None
+    observed = []
+    monkeypatch.setattr(cancel, 'code_stamp', lambda: 123)
+    def wait(path, **kwargs):
+        observed.append((path, kwargs))
+        os.close(held)
+        return cancel.acquire_run_lock(path)
+    monkeypatch.setattr(cancel, 'wait_run_lock', wait)
+    result = cancel.apply(case.root, request, wait_seconds=20)
+    assert result['delivery_outcome'] == 'unknown'
+    assert observed == [(str(case.data / 'run.lock'), {
+        'wait_s': 20, 'expected_code_stamp': 123,
+        'marker_path': str(case.data / 'update_in_progress.marker')})]
+
+
+@pytest.mark.parametrize('marker', [None, 'restore_pending.json'])
+def test_explicit_wait_timeout_or_restore_never_writes(case, monkeypatch, marker):
+    request = _request(case, case.events)
+    held = cancel.acquire_run_lock(str(case.data / 'run.lock'))
+    assert held is not None
+    before = _snapshot(case.led.db)
+    def wait(path, **kwargs):
+        if marker:
+            os.close(held)
+            (case.data / marker).write_text('{}')
+            return cancel.acquire_run_lock(path)
+        return None
+    monkeypatch.setattr(cancel, 'wait_run_lock', wait)
+    try:
+        with pytest.raises(ValueError, match='lifecycle_operation_pending' if marker else 'operation_lock_held'):
+            cancel.apply(case.root, request, wait_seconds=20)
+        assert _snapshot(case.led.db) == before
+        fd = cancel.acquire_run_lock(str(case.data / 'update.lock'))
+        assert fd is not None
+        os.close(fd)
+    finally:
+        if marker is None:
+            os.close(held)
+
+
+@pytest.mark.parametrize('value', [-1, 601, True, 1.0, None])
+def test_invalid_wait_budget_is_rejected_without_writing(case, value):
+    before = _snapshot(case.led.db)
+    with pytest.raises(ValueError, match='bad_wait_seconds'):
+        cancel.apply(case.root, _request(case, case.events), wait_seconds=value)
+    assert _snapshot(case.led.db) == before
