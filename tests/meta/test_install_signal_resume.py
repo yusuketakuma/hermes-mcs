@@ -52,7 +52,8 @@ raise SystemExit(result)
         before = config.read_bytes() if config.exists() else None
         assert (before is not None) == (boundary == "after_config")
         if boundary == "after_config":
-            assert (home / ".mcs/data/.provider-bootstrap-complete.json").is_file()
+            assert not (home / ".mcs/data/.provider-bootstrap-complete.json").exists()
+            assert (home / ".mcs/data/.provider-settings-authority.json").is_file()
             assert not (home / ".mcs/data/.provider-bootstrap-fresh.json").exists()
         os.killpg(process.pid, sig)
         process.wait(timeout=5)
