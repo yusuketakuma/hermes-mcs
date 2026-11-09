@@ -867,7 +867,7 @@ def test_reinstall_runs_install_before_services(updater, prepared_run_log, monke
     rc = updater.apply("v1.2.0", None, None, reinstall=True,
                        install_args=("--no-llm",))
     assert rc == 0, updater.journal_store.load_state(updater.STATE_PATH)["attempts"]
-    assert calls == [["/bin/sh", str(repo / "install.sh"), "--no-llm",
+    assert calls == [["/bin/sh", str(repo / "install.sh"), "--no-brew", "--no-llm",
                       "--no-services"], "services"]
     applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"][-1]
     assert applied["reinstall_done"] is True and applied["sha"] == sha

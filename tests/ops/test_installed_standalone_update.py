@@ -203,6 +203,21 @@ def test_installed_guide_runs_real_apply_and_reinstall_with_fixed_sha(
     assert config.read_bytes() == before
 
 
+@pytest.mark.parametrize('extra', [[], ['--install-arg=--no-recovery']])
+def test_installed_reinstall_retains_saved_options_when_arguments_are_omitted(
+        updater, prepared_run_log, monkeypatch, tmp_path, extra):
+    launcher, repo, base, target, config, installs, _ = _guide_world(
+        updater, monkeypatch, tmp_path, True)
+    before = config.read_bytes()
+    assert launcher.main(['--repo', str(repo), '--installed-standalone', '--no-fetch',
+                          'apply', '--to', 'v1.2.0', '--reinstall', *extra]) == 0
+    expected = ['--no-brew', '--no-llm'] + (['--no-recovery'] if extra else [])
+    assert installs == [['/bin/sh', str(repo / 'install.sh'), *expected, '--no-services']]
+    assert config.read_bytes() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state['applied'][-1]['sha'] == target
+
+
 @pytest.mark.parametrize('change', ['head', 'tag', 'install_options'])
 def test_confirmed_plan_rejects_later_identity_or_option_changes(
         updater, prepared_run_log, monkeypatch, tmp_path, change):

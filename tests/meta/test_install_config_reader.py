@@ -52,3 +52,22 @@ def test_unsafe_config_stops_before_installer_effects(tmp_path, mode, kind):
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
         child.communicate(timeout=5)
+
+
+@pytest.mark.parametrize('raw', [
+    '{"runtime_mode":"hermes","runtime_mode":"standalone"}',
+    '{"nested":{"x":1,"x":2}}', '{"x":NaN}', '{"x":Infinity}', '{"x":1e999}',
+])
+@pytest.mark.parametrize('mode', ['--preflight', '--dry-run'])
+def test_initial_config_reader_rejects_ambiguous_json_before_planning(tmp_path, raw, mode):
+    home, _, stub, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir()
+    config.write_text(raw)
+    result = subprocess.run(['sh', str(INSTALL), mode, '--no-recovery'], env=env,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert '読み取れない' in result.stderr
+    assert config.read_text() == raw
+    assert not any(call.startswith(('git clone', 'uv ', 'brew install', 'venv-hermes', 'launchctl'))
+                   for call in _calls(stub))
