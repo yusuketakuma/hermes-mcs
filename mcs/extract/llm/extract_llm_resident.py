@@ -316,9 +316,9 @@ def _main() -> int:
                          "polling for new work — use --stop-after for a "
                          "bounded run (ignores budget pacing)")
     ap.add_argument("--workers", type=int, default=1,
-                    help="concurrent LLM calls — every call of this "
-                         "process pins to its lane's wire slot, so extra "
-                         "workers only queue server-side on that slot")
+                    help="concurrent worker tasks; shared admission schedules physical "
+                         "slots by day/night and realtime priority; extra workers "
+                         "do not add physical LLM slots")
     ap.add_argument("--stop-after", type=float, default=0,
                     help="with --all: stop after N seconds (bounded run)")
     ap.add_argument("--lane", type=int, default=None,
@@ -404,10 +404,8 @@ def _main() -> int:
         if led is None:
             print(json.dumps({"ok": False, "error": "writer_unavailable", **diagnostic}))
             return 1
-    # T18: under the v4 engine (fact_source=canonical) the legacy
-    # extractor admits nothing: conversion manifests are v4 jobs. The
-    # standalone daemon obeys the same boundary as the tick path, and
-    # an admission read error fails CLOSED (empty set).
+    # Canonical mode admits only explicitly active legacy conversions;
+    # the tick and resident share the same fail-closed admission reader.
     def _admitted():
         # One config read per call serves both the admission gate and the
         # vital-threshold policy, so a resident loop picks up edits to

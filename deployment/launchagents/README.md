@@ -28,8 +28,8 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPathsに加え、StartInterval/ThrottleIntervalを5秒に設定（通常のサービス再配置で反映） | launchd `local.mcs-int` |
 | ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
-| 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer` |
-| 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer-2` |
+| 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer` |
+| 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer-2` |
 
 MCSサーバーの負荷対策として、定期的なMCSアクセスを5分から10分間隔へ変更した。
 ヘルス監視はローカルの保管状態を確認するため5分間隔を維持する。

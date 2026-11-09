@@ -78,11 +78,11 @@ def _llm_call_stats(metas) -> dict | None:
 
 
 def legacy_admissions(ledger, cfg) -> set | None:
-    """Close legacy inference under canonical source and invalid configuration.
+    """Limit canonical legacy inference to explicitly active conversion admissions.
 
     Shared by the tick and drainer: None is unrestricted for a noncanonical
-    fact_source; canonical source returns an empty set. Conversion cohorts
-    do not authorize legacy inference.
+    fact_source; canonical source uses active_legacy_admissions. A conversion
+    cohort alone does not authorize legacy inference.
     A non-dict config, a semantic_config error or any failure fails
     CLOSED (empty set) — an errored canonical block must not fall back
     to legacy and reopen unrestricted v3 inference."""
