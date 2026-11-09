@@ -31,13 +31,15 @@ def _snapshot(db):
             for table in TABLES}
 
 
-def _alert(led, *, progress=None, **overrides):
+def _alert(led, *, progress=None, attempts=0, accepted_ref=None, **overrides):
     eid = led.outbox_add("run_failed", None, {"code": "synthetic_crash"})
     held = {"sending": {"chunk": 0}, "fingerprint": "synthetic-fp",
-            "hold_reason": "send_outcome_unknown"}
+            "sent": {"chunk": 0}, "hold_reason": "send_outcome_unknown"}
     led.db.execute(
-        "UPDATE notify_outbox SET state='failed',next_try=NULL,route='text',progress=? "
-        "WHERE event_id=?", (json.dumps(held if progress is None else progress), eid))
+        "UPDATE notify_outbox SET state='failed',next_try=NULL,route='text',progress=?,"
+        "attempts=?,accepted_ref=? WHERE event_id=?",
+        (json.dumps(held if progress is None else progress), attempts,
+         accepted_ref, eid))
     for column, value in overrides.items():
         led.db.execute(f"UPDATE notify_outbox SET {column}=? WHERE event_id=?",
                        (value, eid))
@@ -58,7 +60,11 @@ def case(tmp_path, monkeypatch):
     root.mkdir()
     led = make_ledger(root, data_dir=True)
     data = root / "data"
-    eligible = [_alert(led), _alert(led, progress={"hold_reason": "restore_text_unverified"})]
+    # One alert carries real-looking evidence (attempts>0, accepted_ref,
+    # sending/sent/fingerprint progress) — retirement must keep every
+    # byte, not just the easy case.
+    eligible = [_alert(led, attempts=2, accepted_ref="synthetic-accepted-ref"),
+                _alert(led, progress={"hold_reason": "restore_text_unverified"})]
     unrelated = _alert(led)
     value = SimpleNamespace(root=root, data=data, led=led,
                             events=eligible, unrelated=unrelated)
@@ -80,6 +86,10 @@ def test_retire_suppresses_eligible_alerts_and_preserves_evidence_bytes(case):
     columns = [d[0] for d in case.led.db.execute("SELECT * FROM notify_outbox LIMIT 0").description]
     prior = {dict(zip(columns, old))["event_id"]: dict(zip(columns, old))
              for old in before["notify_outbox"]}
+    # non-vacuous evidence: attempts>0, accepted_ref, sent/sending progress
+    assert prior[case.events[0]]["attempts"] == 2
+    assert prior[case.events[0]]["accepted_ref"] == "synthetic-accepted-ref"
+    assert json.loads(prior[case.events[0]]["progress"])["sent"] == {"chunk": 0}
     for row in rows:
         for column in preserved:
             assert row[column] == prior[row["event_id"]][column]
@@ -114,8 +124,10 @@ def test_same_command_is_idempotent_but_changed_payload_conflicts(case):
 
 @pytest.mark.parametrize("damage", [
     "project_id", "interactive", "pending", "accepted", "next_try", "other_kind",
-    "progress_broken", "progress_list", "other_hold_reason", "no_hold_reason",
-    "intent_batch", "intent_card", "render",
+    "route_empty", "route_unknown",
+    "progress_broken", "progress_list", "progress_dup_hold", "progress_nested_dup",
+    "progress_nan", "progress_inf", "progress_deep", "other_hold_reason",
+    "no_hold_reason", "intent_batch", "intent_card", "render",
 ])
 def test_retire_rejects_ineligible_events(case, damage):
     db = case.led.db
@@ -132,10 +144,31 @@ def test_retire_rejects_ineligible_events(case, damage):
         db.execute("UPDATE notify_outbox SET next_try=? WHERE event_id=?", (NOW + 60, event))
     elif damage == "other_kind":
         db.execute("UPDATE notify_outbox SET kind='session_expired' WHERE event_id=?", (event,))
+    elif damage == "route_empty":
+        db.execute("UPDATE notify_outbox SET route='' WHERE event_id=?", (event,))
+    elif damage == "route_unknown":
+        db.execute("UPDATE notify_outbox SET route='bogus' WHERE event_id=?", (event,))
     elif damage == "progress_broken":
         db.execute("UPDATE notify_outbox SET progress='{' WHERE event_id=?", (event,))
     elif damage == "progress_list":
         db.execute("UPDATE notify_outbox SET progress='[]' WHERE event_id=?", (event,))
+    elif damage == "progress_dup_hold":
+        # plain json.loads would keep the LAST key and make it eligible
+        db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                   ('{"hold_reason":"resend_exhausted","hold_reason":"send_outcome_unknown"}',
+                    event))
+    elif damage == "progress_nested_dup":
+        db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                   ('{"a":{"x":1,"x":2},"hold_reason":"send_outcome_unknown"}', event))
+    elif damage == "progress_nan":
+        db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                   ('{"hold_reason":"send_outcome_unknown","x":NaN}', event))
+    elif damage == "progress_inf":
+        db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
+                   ('{"hold_reason":"send_outcome_unknown","x":1e1000}', event))
+    elif damage == "progress_deep":
+        deep = "[" * 2000 + "]" * 2000
+        db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?", (deep, event))
     elif damage == "other_hold_reason":
         db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
                    (json.dumps({"hold_reason": "resend_exhausted"}), event))
@@ -239,3 +272,60 @@ def test_retire_plan_is_readonly_and_hash_bound(case):
                                  "reason": "合成", "human_confirmed": True,
                                  "plan": plan})
     assert not (case.data / "notification_cancellations").exists()
+
+
+def test_cli_plan_then_apply_round_trip(case, capsys):
+    """The real CLI entry: plan prints a side-effect-free plan, apply
+    re-validates it — covering the subcommand/--action dest split."""
+    db = case.led.db
+    before = _snapshot(db)
+    root = str(case.root)
+    assert cancel.main(["--root", root, "plan", "--event-id", str(case.events[0]),
+                        "--action", "retire_operational_alert"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["action"] == "retire_operational_alert"
+    assert _snapshot(db) == before                     # plan is read-only
+    plan_path = case.data / "plan.json"
+    plan_path.write_text(json.dumps(plan))
+    assert cancel.main(["--root", root, "apply", "--plan", str(plan_path),
+                        "--command-id", str(uuid.uuid4()), "--actor", "synthetic",
+                        "--reason", "合成の退役", "--confirm-human"]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["action"] == "retire_operational_alert"
+    assert receipt["delivery_outcome"] == "unknown"
+    assert receipt["event_ids"] == [case.events[0]]
+
+    # the legacy two-key cancel plan shape stays accepted by apply —
+    # needs a cancel-eligible daily_digest (failed + resend_exhausted +
+    # only not_sent renders/attempts on one transport)
+    digest = case.led.outbox_add("daily_digest", None, {"date": "2026-11-09"})
+    delivery = str(uuid.uuid4())
+    db.execute("UPDATE notify_outbox SET route='interactive',state='failed',next_try=NULL,"
+               "progress=? WHERE event_id=?",
+               (json.dumps({"hold_reason": "resend_exhausted"}), digest))
+    db.execute("INSERT INTO notification_renders "
+               "(delivery_id,card_id,op,render_rev,route_epoch,transport,"
+               "payload_hash,correlation,state,intent_event_id,created_at,updated_at) "
+               "VALUES(?,NULL,'notice',1,1,'slack','h','c','not_sent',?,?,?)",
+               (delivery, digest, NOW, NOW))
+    db.execute("INSERT INTO notification_delivery_attempts "
+               "(attempt_id,delivery_id,begin_command_id,state,worker_id,"
+               "created_at,finished_at) VALUES(?,?,?,?,?,?,?)",
+               (uuid.uuid4().hex[:16], delivery, str(uuid.uuid4()), "not_sent",
+                "b" * 16, NOW, NOW))
+    witnesses = case.data / "worker_status"
+    witnesses.mkdir(exist_ok=True)
+    (witnesses / "slack-synthetic.json").write_text(json.dumps({
+        "version": cancel.VERSION, "reason": "worker_started", "pid": 999999}))
+    db.commit()
+    assert cancel.main(["--root", root, "plan", "--event-id", str(digest)]) == 0
+    legacy_plan = json.loads(capsys.readouterr().out)
+    assert set(legacy_plan) == {"version", "events"}     # no action key
+    plan_path.write_text(json.dumps(legacy_plan))
+    assert cancel.main(["--root", root, "apply", "--plan", str(plan_path),
+                        "--command-id", str(uuid.uuid4()), "--actor", "synthetic",
+                        "--reason", "合成の取消", "--confirm-human"]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["kind"] == "ops.notification_cancel_unissued"
+    assert receipt["event_ids"] == [digest]
+    assert "delivery_outcome" not in receipt
