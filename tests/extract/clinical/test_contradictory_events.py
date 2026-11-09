@@ -243,6 +243,72 @@ def test_care_detail_workflow_conflict_stays_unknown():
     assert record["care_detail"]["workflow_status"] == "unknown"
 
 
+_CROSS_BODY = ("本人は訪問し、2026年11月9日に介護サービスAを開始しました。"
+               "2026年12月10日に介護サービスBを開始しました。")
+_CROSS_QUOTE = ("訪問し、2026年11月9日に介護サービスAを開始しました。"
+                "2026年12月10日に介護サービスBを開始しました")
+
+
+def _cross_item(detail):
+    start = _CROSS_BODY.index(_CROSS_QUOTE)
+    return {"kind": "visit", "subject": "patient", "status": "unknown",
+            "negated": None, "evidence": _CROSS_QUOTE,
+            "span": {"start": start, "end": start + len(_CROSS_QUOTE)},
+            "care_detail": detail}
+
+
+def test_care_detail_attributes_must_bind_to_the_anchor_instance():
+    # Each attribute binds independently somewhere in the quote, but a
+    # date from one instance paired with a provider from another is a
+    # crossed pair — the detail describes neither event and is dropped.
+    for detail in (
+            {"event_type": "intervention_start", "workflow_status": "performed",
+             "date_text": "2026年11月9日", "service_actor": "介護サービスB"},
+            {"event_type": "intervention_start", "workflow_status": "performed",
+             "date_text": "2026年12月10日", "service_actor": "介護サービスA"},
+            # Both attributes bound — but only to the second instance,
+            # which is not the event this visit record anchors.
+            {"event_type": "intervention_start", "workflow_status": "performed",
+             "date_text": "2026年12月10日", "service_actor": "介護サービスB"}):
+        record = clinical_events.validate_record(_cross_item(detail), _CROSS_BODY)
+        assert not record.get("unverified") and "care_detail" not in record
+    # The pair bound to the anchor's own instance stays attached.
+    good = {"event_type": "intervention_start", "workflow_status": "performed",
+            "date_text": "2026年11月9日", "service_actor": "介護サービスA"}
+    record = clinical_events.validate_record(_cross_item(good), _CROSS_BODY)
+    assert not record.get("unverified")
+    assert record["care_detail"]["date_text"] == "2026年11月9日"
+    assert record["care_detail"]["service_actor"] == "介護サービスA"
+
+
+def test_canonical_record_care_detail_attributes_share_the_anchor_instance():
+    # The canonical quote carries its own subject — unlike the local path,
+    # no surrounding body is available for axis resolution.
+    quote = ("本人は訪問し、2026年11月9日に介護サービスAを開始しました。"
+             "2026年12月10日に介護サービスBを開始しました")
+    evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1",
+                "start": 0, "end": len(quote), "quote": quote,
+                "atom_id": "a1"}
+
+    def fact(detail):
+        return v2_fact("f1", kind="care_event", statement=quote,
+                       subject="patient:1", polarity="affirmed",
+                       workflow_status="performed", evidence_ids=["e1"],
+                       care_detail=detail)
+
+    crossed = clinical_events.canonical_record(fact(
+        {"event_type": "intervention_start", "workflow_status": "performed",
+         "date_text": "2026年11月9日", "service_actor": "介護サービスB"}),
+        evidence)
+    assert not crossed.get("unverified") and "care_detail" not in crossed
+    good = clinical_events.canonical_record(fact(
+        {"event_type": "intervention_start", "workflow_status": "performed",
+         "date_text": "2026年11月9日", "service_actor": "介護サービスA"}),
+        evidence)
+    assert not good.get("unverified")
+    assert good["care_detail"]["service_actor"] == "介護サービスA"
+
+
 def test_canonical_record_carries_fact_care_detail_when_verified():
     quote = "本人は本日訪問し、サービスを開始しました"
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1", "start": 0,
@@ -402,6 +468,62 @@ def test_care_detail_attributes_reject_ambiguous_same_type_instances():
     acp = "本人はACPの意向を11月に確認しました。"
     acp_dated = {"event_type": "acp_discussion", "date_text": "11月"}
     assert clinical_events.verify_care_detail(acp_dated, acp) is not None
+
+
+def test_care_detail_rejects_material_work_as_the_event():
+    # Preparing meeting or service materials is not holding the conference
+    # or starting the service itself.
+    conference = {"event_type": "care_team_conference",
+                  "workflow_status": "performed"}
+    assert clinical_events.verify_care_detail(
+        conference,
+        "本人はサービス担当者会議について資料作成を実施しました。") is None
+    assert clinical_events.verify_care_detail(
+        conference,
+        "本人はサービス担当者会議の資料を作成しました。") is None
+    assert clinical_events.verify_care_detail(
+        conference,
+        "本人はサービス担当者会議を開催しました。") is not None
+    start = {"event_type": "intervention_start",
+             "workflow_status": "performed"}
+    assert clinical_events.verify_care_detail(
+        start, "本人は訪問看護サービスの資料作成を開始しました。") is None
+    assert clinical_events.verify_care_detail(
+        start, "本人は訪問看護について資料作成を開始しました。") is None
+    assert clinical_events.verify_care_detail(
+        start, "本人は訪問看護サービスを開始しました。") is not None
+
+
+def test_same_type_instances_bind_their_own_attributes():
+    # Two separately quoted instances of one event type keep their own
+    # explicit attributes; a crossed pairing or a quote spanning both
+    # instances cannot prove either binding.
+    body = ("本人は訪問看護を11月に開始しました。"
+            "本人は訪問介護を12月に開始しました。")
+
+    def record(quote, date_text):
+        start = body.index(quote)
+        return {"kind": "other", "subject": "patient", "status": "unknown",
+                "negated": None, "evidence": quote,
+                "span": {"start": start, "end": start + len(quote)},
+                "care_detail": {"event_type": "intervention_start",
+                                "workflow_status": "performed",
+                                "date_text": date_text}}
+
+    one = clinical_events.validate_record(
+        record("訪問看護を11月に開始しました", "11月"), body)
+    two = clinical_events.validate_record(
+        record("訪問介護を12月に開始しました", "12月"), body)
+    assert one["care_detail"]["date_text"] == "11月"
+    assert two["care_detail"]["date_text"] == "12月"
+    crossed = clinical_events.validate_record(
+        record("訪問看護を11月に開始しました", "12月"), body)
+    assert crossed.get("unverified") is True and "care_detail" not in crossed
+    merged_quote = ("訪問看護を11月に開始しました。"
+                    "本人は訪問介護を12月に開始しました")
+    merged = clinical_events.validate_record(
+        record(merged_quote, "11月"), body)
+    assert merged.get("unverified") is True and "care_detail" not in merged
 
 
 @pytest.mark.parametrize("body,quote,kind,subject,status,negated,clean", [

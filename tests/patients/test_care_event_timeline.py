@@ -195,6 +195,145 @@ def test_every_care_detail_type_verifies_through_record_projection(
     assert result["coverage"]["state"] == "complete"
 
 
+def test_care_detail_event_day_uses_the_bound_date_text():
+    body = "本人は2026年9月1日にサービス担当者会議を開催しました。"
+    quote = "2026年9月1日にサービス担当者会議を開催しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "patient", "status": "current",
+            "negated": False, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "care_team_conference",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+
+
+@pytest.mark.parametrize("date_text", [
+    # A month/day without a year is never completed into an event day.
+    "9月1日",
+    # Relative wording and the absent sentinel stay undated.
+    "明日", "unknown",
+])
+def test_care_detail_event_day_is_not_inferred(date_text):
+    body = f"本人は{date_text}にサービス担当者会議を開催しました。"
+    quote = f"{date_text}にサービス担当者会議を開催しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "care_team_conference",
+                            "workflow_status": "performed",
+                            "date_text": date_text,
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    # The record itself verifies; only the yearless date stays undated.
+    assert not event["unverified"] and event["event_day"] is None
+
+
+def test_same_type_instances_project_with_their_own_dates():
+    body = ("本人は訪問看護を2026年11月1日に開始しました。"
+            "本人は訪問介護を2026年12月1日に開始しました。")
+    first_quote = "訪問看護を2026年11月1日に開始しました"
+    second_quote = "訪問介護を2026年12月1日に開始しました"
+
+    def item(quote, date_text):
+        start = body.index(quote)
+        return {"kind": "other", "subject": "patient", "status": "current",
+                "negated": False, "evidence": quote,
+                "span": {"start": start, "end": start + len(quote)},
+                "care_detail": {"event_type": "intervention_start",
+                                "workflow_status": "performed",
+                                "date_text": date_text,
+                                "service_actor": "unknown"}}
+
+    result = care_event_timeline.project(
+        1, source(body), 42,
+        {"event_records": [item(first_quote, "2026年11月1日"),
+                           item(second_quote, "2026年12月1日")]})
+    first, second = result["events"]
+    assert not first["unverified"] and first["event_day"] == "2026-11-01"
+    assert not second["unverified"] and second["event_day"] == "2026-12-01"
+    # A date claimed against the other instance's quote never binds.
+    crossed = care_event_timeline.project(
+        1, source(body), 42,
+        {"event_records": [item(first_quote, "2026年12月1日")]})
+    event, = crossed["events"]
+    assert event["unverified"] is True and "care_detail" not in event
+
+
+def test_legacy_kind_record_takes_event_day_from_bound_care_detail():
+    # intervention_start also rides on a legacy visit record: the detail's
+    # bound absolute date reaches the timeline regardless of parent kind.
+    body = "本人は訪問し、2026年9月1日に介護サービスを開始しました。"
+    quote = "訪問し、2026年9月1日に介護サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert event["care_detail"]["event_type"] == "intervention_start"
+
+
+def test_legacy_kind_care_detail_yearless_date_stays_undated():
+    body = "本人は訪問し、9月1日に介護サービスを開始しました。"
+    quote = "訪問し、9月1日に介護サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "9月1日",
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] is None
+    assert event["care_detail"]["date_text"] == "9月1日"
+
+
+def test_crossed_care_detail_attributes_do_not_survive_projection():
+    # The stored detail pairs the first instance's date with the second
+    # instance's provider; revalidation drops it while the visit record
+    # itself stays verified.
+    body = ("本人は訪問し、2026年9月1日に介護サービスAを開始しました。"
+            "2026年10月2日に介護サービスBを開始しました。")
+    quote = ("訪問し、2026年9月1日に介護サービスAを開始しました。"
+             "2026年10月2日に介護サービスBを開始しました")
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "介護サービスB"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and "care_detail" not in event
+    # The correctly paired attributes for the anchor's own instance attach.
+    item["care_detail"] = {"event_type": "intervention_start",
+                           "workflow_status": "performed",
+                           "date_text": "2026年9月1日",
+                           "service_actor": "介護サービスA"}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"]
+    assert event["care_detail"]["service_actor"] == "介護サービスA"
+    assert event["event_day"] == "2026-09-01"
+
+
 @pytest.mark.parametrize("prefix,tail", [
     # A correction two sentences after the quote still fails closed.
     ("", "経過は安定しています。翌日の記録です。訂正：退院の記載は誤りです。"),

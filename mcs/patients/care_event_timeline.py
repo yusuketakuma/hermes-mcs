@@ -36,12 +36,24 @@ def _posted(value):
 def _event_day(record, quote):
     if record.get("unverified") or re.search(r"本日|今日|昨日|明日|翌日", quote):
         return None
+    detail = record.get("care_detail")
+    # A bound care-detail date applies to every kind — intervention_start
+    # also rides on legacy visit/care records — but a detail day that
+    # contradicts the legacy dated-event day is ambiguity, not a fallback.
+    detail_day = (clinical_events.care_detail_event_day(detail, quote)
+                  if isinstance(detail, dict) else None)
     matches = list(_DATED_EVENT.finditer(quote))
     date = written_day(quote)
-    if (len(matches) != 1 or _EVENT_KIND[matches[0].group(2)] != record["kind"]
-            or not date or date[0] != "ymd" or written_day(matches[0].group(1)) != date):
+    legacy_day = (date[1].isoformat()
+                  if len(matches) == 1
+                  and _EVENT_KIND[matches[0].group(2)] == record["kind"]
+                  and date and date[0] == "ymd"
+                  and written_day(matches[0].group(1)) == date
+                  else None)
+    if detail_day is not None and legacy_day is not None \
+            and detail_day != legacy_day:
         return None
-    return date[1].isoformat()
+    return detail_day if detail_day is not None else legacy_day
 
 
 def project(project_id, message, artifact_id, document):
