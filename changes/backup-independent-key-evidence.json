@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "復元訓練の鍵入力と独立保管の確認を区別",
+  "summary": "鍵をFDで渡しただけで独立保管鍵の訓練日時を更新する扱いを修正します。復号成功の記録と、独立した保管先から鍵を取り出したことの明示確認を分けます。",
+  "upgrade": "独立保管鍵の訓練では、drillと--key-fdに加え、--independent-escrow --confirm-human --reasonを指定します。従来のFD入力による復元訓練は継続でき、履歴も保持します。独立保管の確認がない旧日時はstatusで未確認になります。",
+  "details": [
+    "確認理由の本文は保存せず、訓練記録へSHA-256を記録します。独立保管の明示確認と成功日時は同じ訓練記録へ結び付け、状態表示で再照合します。",
+    "Keychainの鍵をFDへ渡しても、FD入力だけでは独立保管の証拠にしません。人の明示確認は物理的な独立性の暗号学的証明にはならず、隔離環境での復旧受入は引き続き必要です。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/backup/backup_evidence.py",
+    "docs/guides/BACKUP.md",
+    "tests/ops/test_mcs_backup.py",
+    "tests/ops/test_backup_evidence_ownership.py"
+  ]
+}

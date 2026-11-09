@@ -95,7 +95,9 @@ def test_drill_evidence_prepares_directory_then_observes_then_publishes(tmp_path
     assert observed == ["count", name, "backup_state.json"]
     saved = json.loads((root / "backup_state.json").read_text())
     proof = json.loads((root / name).read_text())
-    assert saved["last_drill_at"] == saved["last_escrow_drill_at"] == 100
+    assert saved["last_drill_at"] == 100
+    assert "last_escrow_drill_at" not in saved
+    assert proof["escrow_custody_confirmed"] is False
     assert saved["last_verify_at"] == 90 and saved["last_drill_record"] == name
     assert proof["held_render_count"] == 7 and proof["outbound_attempts"] == 0
     assert proof["delivery_policy"] == "hold_all" and proof["report"] == report

@@ -505,6 +505,8 @@ def main(argv: list[str] | None = None, *,
     parser.add_argument("--destination", help="NEW private restore or drill directory")
     parser.add_argument("--show-escrow", action="store_true")
     parser.add_argument("--confirm-human", action="store_true")
+    parser.add_argument("--independent-escrow", action="store_true",
+                        help="attest the drill key was retrieved from independent custody")
     parser.add_argument("--reason")
     parser.add_argument("--max-steps", type=int, help="readonly SQLite VM budget")
     parser.add_argument("--max-seconds", type=float, help="readonly SQLite deadline budget")
@@ -515,6 +517,10 @@ def main(argv: list[str] | None = None, *,
         parser.error("explicit policy required")
     if args.scheduled and args.action != "offsite":
         parser.error("scheduled mode is offsite only")
+    if args.independent_escrow and (args.action != "drill" or args.key_fd is None
+            or not args.confirm_human or not isinstance(args.reason, str)
+            or not args.reason.strip() or len(args.reason) > MAX_REASON):
+        parser.error("independent escrow requires drill, key-fd, human confirmation and reason")
     if args.show_escrow and args.action != "keygen":
         parser.error("escrow display is keygen only")
     if args.action in ("verify", "drill", "restore") and not (
@@ -582,7 +588,8 @@ def main(argv: list[str] | None = None, *,
                                     if args.action == "drill" else None)
                 backup_evidence.record_success(records, state, args.action, result,
                                 key_source="keychain" if args.keychain else "key_fd",
-                                destination=args.destination if args.action in ("drill", "restore") else None)
+                                destination=args.destination if args.action in ("drill", "restore") else None,
+                                escrow_reason=args.reason if args.independent_escrow else None)
             except (backup_evidence.BackupError, OSError, ValueError, TypeError, sqlite3.Error,
                     RecursionError) as exc:
                 backup_evidence.record_failure(records, state, args.action, exc)

@@ -17,7 +17,10 @@
 
 `offsite` 成功は `last_offsite_at`、独立した `verify` は `last_verify_at`、
 訓練は `last_drill_at` です。`--keychain` の訓練を別保管鍵の回復証明には数えません。
-`--key-fd` の訓練だけが `last_escrow_drill_at` を更新します。鍵の物理的な独立保管は
+`--key-fd` の訓練に `--independent-escrow --confirm-human --reason` を指定し、
+独立した保管先から鍵を取り出したことを明示した場合だけ、`last_escrow_drill_at` を更新します。
+FD入力だけの旧記録は保持しますが、独立保管の証拠がない日時を `status` で確定表示しません。
+確認理由は本文を保存せず、訓練記録にSHA-256を残します。鍵の物理的な独立保管は
 記録だけでは証明できないため、対象Keychain項目のない隔離環境・別保管SHA receiptで
 訓練し、使用OSと結果を運用記録へ残してください。秘密値をログや報告書へ書かないでください。
 
@@ -249,6 +252,7 @@ sys.stdout.buffer.write(bytes.fromhex(value))
 }
 
 backup_with_escrow drill \
+  --independent-escrow --confirm-human --reason "独立保管先からの鍵取得を確認" \
   --policy "$POLICY" --state-dir "$STATE_DIR" \
   --bundle "$BUNDLE" --sha256 "$TRUSTED_SHA256" \
   --destination "$NEW_DRILL_DIR"

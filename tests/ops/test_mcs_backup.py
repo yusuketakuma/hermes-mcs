@@ -454,7 +454,8 @@ def test_standard_openssl_interoperability(world, tmp_path, monkeypatch, executa
                          lambda: KEY)["plain_sha256"] == backup.file_sha256(world[0])
 
 
-def test_cli_explicit_policy_fd_receipt_and_drill(world, tmp_path):
+@pytest.mark.parametrize("independent", [False, True])
+def test_cli_explicit_policy_fd_receipt_and_drill(world, tmp_path, independent):
     snapshot, _, _, policy = world
     # Subprocess uses the real clock; make fixture freshness relative to it.
     with closing(sqlite3.connect(snapshot)) as db:
@@ -477,14 +478,24 @@ def test_cli_explicit_policy_fd_receipt_and_drill(world, tmp_path):
     target = Path(policy.scratch_dir) / "cli-drill"
     result = subprocess.run(
         [*command, "drill", "--bundle", receipt["bundle"], "--sha256", receipt["sha256"],
-         "--destination", str(target)], input=KEY, capture_output=True, timeout=30)
+         "--destination", str(target),
+         *(["--independent-escrow", "--confirm-human", "--reason", "synthetic independent retrieval"]
+           if independent else [])], input=KEY, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout.decode()
     assert json.loads(result.stdout)["restore_pending"] is True
     state = json.loads((records / "backup_state.json").read_text())
-    assert state["last_escrow_drill_at"] == state["last_drill_at"]
+    if independent:
+        assert state["last_escrow_drill_at"] == state["last_drill_at"]
+    else:
+        assert "last_escrow_drill_at" not in state
     assert state["last_verify_key_source"] == "key_fd"
     proof = json.loads((records / state["last_drill_record"]).read_text())
     assert proof["key_source"] == "key_fd"
+    status = backup_evidence.status(str(records), policy)
+    assert status["last_escrow_drill_at"] == (state["last_drill_at"] if independent else None)
+    assert proof["escrow_custody_confirmed"] is independent
+    assert (proof["escrow_reason_sha256"] is not None) is independent
+    assert "synthetic independent retrieval" not in json.dumps(proof)
     assert proof["outbound_attempts"] == 0
     assert proof["recovery_scope"] == "collect_only"
     assert notify_spool.restore_awaiting_consent(str(target))
@@ -1022,3 +1033,30 @@ def test_held_render_count_accepts_relative_restore_destination(tmp_path, monkey
         db.execute("INSERT INTO notification_renders VALUES('synthetic-delivery','held')")
     monkeypatch.chdir(tmp_path)
     assert backup_evidence.held_render_count('relative-restored') == 1
+
+
+@pytest.mark.parametrize("flags", [[], ["--confirm-human"], ["--reason", "synthetic"],
+                                      ["--confirm-human", "--reason", " "]])
+def test_independent_escrow_requires_explicit_attestation_before_key_access(tmp_path, flags):
+    with pytest.raises(SystemExit) as stopped:
+        backup.main(["drill", "--policy", str(tmp_path / "unused.json"),
+                     "--state-dir", str(tmp_path), "--key-fd", "0",
+                     "--bundle", "synthetic", "--sha256", "a" * 64,
+                     "--destination", str(tmp_path / "new"), "--independent-escrow", *flags],
+                    keychain_reader=lambda: pytest.fail("key access"))
+    assert stopped.value.code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_legacy_fd_timestamp_does_not_claim_independent_key_custody(world, tmp_path):
+    records = tmp_path / "legacy-records"
+    records.mkdir(mode=0o700)
+    raw = json.dumps({"v": 1, "policy_id": world[3].policy_id,
+                      "last_drill_at": 100, "last_escrow_drill_at": 100})
+    state = records / "backup_state.json"
+    state.write_text(raw)
+    state.chmod(0o600)
+    report = backup_evidence.status(str(records), world[3])
+    assert report["last_drill_at"] == 100
+    assert report["last_escrow_drill_at"] is None
+    assert state.read_text() == raw

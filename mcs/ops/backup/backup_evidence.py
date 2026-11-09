@@ -62,7 +62,8 @@ FAILURE_CODES = frozenset({
     "backup_directory_not_private", "backup_drill_requires_new_local_directory",
     "backup_escrow_already_exists", "backup_explicit_snapshot_required",
     "backup_foreign_key_failed", "backup_format_invalid",
-    "backup_human_escrow_required", "backup_inspection_budget_exhausted",
+    "backup_human_escrow_required", "backup_escrow_attestation_invalid",
+    "backup_inspection_budget_exhausted",
     "backup_inspection_budget_invalid", "backup_inspection_size_or_type_invalid",
     "backup_integrity_failed", "backup_invalid_database", "backup_invalid_metric",
     "backup_inventory_mismatch", "backup_io_or_policy_failed",
@@ -177,7 +178,8 @@ def status(state_dir: str, policy: BackupPolicy
            ) -> dict[str, str | int | float | bool | None]:
     """Read redacted local status without keys, SQLite, writes or service calls."""
     policy.validate()
-    state = read_state(open_records(state_dir, policy), policy)
+    records = open_records(state_dir, policy)
+    state = read_state(records, policy)
     out: dict[str, str | int | float | bool | None] = {
         "v": 1, "policy_id": policy.policy_id,
         "max_rpo_seconds": policy.max_rpo_seconds}
@@ -189,6 +191,18 @@ def status(state_dir: str, policy: BackupPolicy
                 not finite_number(value) or value < 0):
             raise BackupError("backup_record_invalid")
         out[field] = value
+    escrow = state.get("last_escrow_drill_record")
+    proof = None
+    if isinstance(escrow, str) and re.fullmatch(r"drills/[0-9a-f]{32}\.json", escrow):
+        require_private_directory(records.root / "drills")
+        proof = records.load(escrow)
+    if not (proof and proof.get("policy_id") == policy.policy_id
+            and proof.get("action") == "drill" and proof.get("key_source") == "key_fd"
+            and proof.get("escrow_custody_confirmed") is True
+            and proof.get("escrow_verified_at") == out["last_escrow_drill_at"]
+            and isinstance(proof.get("escrow_reason_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", proof["escrow_reason_sha256"])):
+        out["last_escrow_drill_at"] = None
     source_at = out["source_last_successful_run"]
     age = time.time() - source_at if isinstance(source_at, (int, float)) \
         and not isinstance(source_at, bool) else None
@@ -238,7 +252,12 @@ def failure_code(exc: BaseException) -> str:
 
 
 def record_success(records: Records, state, action: str, result, *,
-                    key_source: str = "unknown", destination: str | None = None) -> None:
+                    key_source: str = "unknown", destination: str | None = None,
+                    escrow_reason: str | None = None) -> None:
+    if escrow_reason is not None and (action != "drill" or key_source != "key_fd"
+            or not isinstance(escrow_reason, str) or not escrow_reason.strip()
+            or len(escrow_reason) > 2000):
+        raise BackupError("backup_escrow_attestation_invalid")
     # Caller retains record_lock across the completed action and these writes.
     now = time.time()
     update = {**state, "last_action": action, "last_action_status": "ok",
@@ -254,8 +273,6 @@ def record_success(records: Records, state, action: str, result, *,
         update.update(last_verify_at=result["verified_at"],
                       last_verified_source_at=result["inventory"]["last_successful_run"],
                       last_verify_key_source=key_source)
-        if action == "drill" and key_source == "key_fd":
-            update["last_escrow_drill_at"] = now
         if action in ("drill", "restore"):
             folder = records.root / "drills"
             folder.mkdir(mode=0o700, exist_ok=True)
@@ -265,8 +282,15 @@ def record_success(records: Records, state, action: str, result, *,
                                 "policy_id": state["policy_id"], "key_source": key_source,
                                 "recovery_scope": "collect_only", "delivery_policy": "hold_all",
                                 "outbound_attempts": 0,
+                                "escrow_custody_confirmed": escrow_reason is not None,
+                                "escrow_verified_at": now if escrow_reason is not None else None,
+                                "escrow_reason_sha256": (hashlib.sha256(escrow_reason.encode()).hexdigest()
+                                    if escrow_reason is not None else None),
                                 "held_render_count": held_render_count(destination),
                                 "report": result})
+            if escrow_reason is not None:
+                update["last_escrow_drill_at"] = now
+                update["last_escrow_drill_record"] = name
             update["last_" + action + "_at"] = now
             update["last_" + action + "_record"] = name
     records.write("backup_state.json", update)
