@@ -675,6 +675,7 @@ def care_events(db, project_id, *, cfg=None) -> dict:
     from care_event_timeline import intervention_states
 
     db.execute("SAVEPOINT care_event_view")
+    changes = db.total_changes
     try:
         projected = collect(db, project_id, cfg=cfg)
         items = []
@@ -732,11 +733,10 @@ def care_events(db, project_id, *, cfg=None) -> dict:
                 matched = (speaker["state"] == "matched" and not event.get("date_uncertain")
                            and (self_link or same_facility))
                 item["service_provider"] = {
-                    "state": ("matched" if event.get("event_day") else "observation_link_only")
-                    if matched and member.get("facility") else "unknown",
+                    "state": "observation_link_only" if matched and member.get("facility") else "unknown",
                     "label": member.get("facility") if matched else
                     actor if actor not in (None, "unknown", "") and not self_reference else None,
-                    "professions": member.get("professions") if matched else None,
+                    "professions": None,
                     "basis": "speaker_roster" if matched else "source_text" if actor
                     and actor != "unknown" and not self_reference else "unconfirmed",
                     "roster_artifact_id": speaker["artifact_id"] if matched else None,
@@ -752,8 +752,11 @@ def care_events(db, project_id, *, cfg=None) -> dict:
         result = {"view": "care_events", "items": items, "coverage": projected["coverage"],
                   "order_basis": "event_day_then_posting_time",
                   "intervention_states": intervention_states(items, projected["coverage"])}
+        if db.total_changes != changes:
+            raise RuntimeError("patient_context_read_changed")
     except BaseException:
         try:
+            db.execute("ROLLBACK TO care_event_view")
             db.execute("RELEASE care_event_view")
         except sqlite3.Error:
             pass

@@ -216,7 +216,9 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
         # skip it and revive an older roster as confirmed membership.
         base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
                 "AND CASE WHEN json_valid(content) THEN "
-                "CASE WHEN json_extract(content,'$.dataset')=? THEN "
+                "CASE WHEN EXISTS(SELECT 1 FROM json_tree(content) "
+                "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+                "WHEN json_extract(content,'$.dataset')=? THEN "
                 "CASE WHEN json_extract(content,'$.contract')='project-metadata/1' "
                 "AND json_type(content,'$.entity_id')='integer' "
                 "AND json_extract(content,'$.entity_id')=? "

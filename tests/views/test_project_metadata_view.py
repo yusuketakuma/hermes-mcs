@@ -148,7 +148,7 @@ def test_speaker_link_uses_id_and_type_with_row_evidence(store):
 
 
 @pytest.mark.parametrize("damage", ["missing_dataset", "boolean_entity", "wrong_entity",
-                                    "duplicate_time", "malformed"])
+                                    "duplicate_time", "duplicate_time_crossing_cutoff", "malformed"])
 def test_care_team_cutoff_does_not_revive_an_old_roster_after_invalid_data(store, damage):
     capture(store, now=100)
     row = store.db.execute("SELECT content FROM artifacts ORDER BY artifact_id DESC LIMIT 1").fetchone()
@@ -163,6 +163,8 @@ def test_care_team_cutoff_does_not_revive_an_old_roster_after_invalid_data(store
     raw = json.dumps(payload)
     if damage == "duplicate_time":
         raw = raw[:-1] + ', "attempted_at": 111}'
+    elif damage == "duplicate_time_crossing_cutoff":
+        raw = raw.replace('"attempted_at": 110', '"attempted_at": 200')[:-1] + ', "attempted_at": 110}'
     elif damage == "malformed":
         raw = '{"dataset":"care_team",'
     with store.db:

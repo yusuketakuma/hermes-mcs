@@ -80,12 +80,14 @@ def test_context_surfaces_share_source_bound_intervention_events(store, section)
     care = result["care_events"]
     assert care["items"][0]["quote"] == body
     assert care["items"][0]["service_provider"]["label"] == "合成薬局"
-    state, = care["intervention_states"]["items"]
-    assert state["recorded_state"] == "started" and state["current_state"] == "unknown"
+    provider = care["items"][0]["service_provider"]
+    assert provider["state"] == "observation_link_only" and provider["professions"] is None
+    assert care["intervention_states"]["items"] == []
+    assert care["intervention_states"]["unresolved_records"] == 1
     display = notify_views.patient_context_list(store.db, 1, section, cfg={}, since=0, now=1_790_000_000)
     assert any(body in item["text"] for item in display["items"])
-    assert any("合成薬局" in item["text"] and "開始の記録" in item["text"]
-               for item in display["items"])
+    assert not any("薬剤師" in item["text"] and "開始の記録" in item["text"]
+                   for item in display["items"])
     assert all(item["project_id"] == 1 for item in display["items"])
     assert store.db.total_changes == before and not store.db.in_transaction
 
@@ -266,3 +268,20 @@ def test_uncertain_future_completion_is_not_ordered_or_displayed_as_confirmed_da
     future_row = next(row for row in display["items"] if future in row["text"])
     assert "日付未確認" in future_row["source"] and "2026-12-01" not in future_row["source"]
     assert any("日付未確認" in line for line in display["head"])
+
+
+def test_care_event_read_rolls_back_accidental_writes_on_exception(store, monkeypatch):
+    import care_event_sources
+
+    def corrupting_reader(db, *args, **kwargs):
+        db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+        raise ValueError('synthetic failure')
+    body = "本人は2026年9月1日に退院しました。"
+    _save(store, 1, body, records=[_event(body)])
+    before = [tuple(row) for row in store.db.execute('SELECT * FROM patients')]
+    assert before
+    monkeypatch.setattr(care_event_sources, 'collect', corrupting_reader)
+    with pytest.raises(ValueError, match='synthetic failure'):
+        patient_context_view.care_events(store.db, 1, cfg={})
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM patients')] == before
+    assert not store.db.in_transaction

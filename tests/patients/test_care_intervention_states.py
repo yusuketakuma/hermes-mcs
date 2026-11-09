@@ -57,9 +57,11 @@ def test_unknown_service_end_does_not_apply_to_every_known_service():
     result = project([event("intervention_start", "2026-09-01"),
                       event("intervention_end", "2026-09-02", service=None, mid=2)])
     row, = result["items"]
-    assert row["recorded_state"] == "unknown"
+    assert row["recorded_state"] == "started"
+    assert row["current_state"] == "unknown"
     assert row["references"][0]["message_id"] == 1
     assert result["unresolved_records"] == 1
+    assert result["unresolved"][0]["reference"]["message_id"] == 2
 
 
 @pytest.mark.parametrize("field,value", [("negated", True), ("unverified", True),
@@ -69,3 +71,12 @@ def test_non_adoptable_events_cannot_change_recorded_state(field, value):
     invalid[field] = value
     row, = project([event("intervention_start", "2026-09-01"), invalid])["items"]
     assert row["recorded_state"] == "started"
+
+
+@pytest.mark.parametrize("day", ["2026-08-01", "2026-10-01", None])
+def test_unattributed_transition_retains_its_evidence_and_never_erases_last_proved_record(day):
+    unresolved = event("intervention_end", day, service=None, mid=2)
+    row, = project([event("intervention_start", "2026-09-01"), unresolved])["items"]
+    assert row["recorded_state"] == "started" and row["current_state"] == "unknown"
+    unknown, = project([unresolved])["unresolved"]
+    assert unknown["event_day"] == day and unknown["reference"]["message_id"] == 2

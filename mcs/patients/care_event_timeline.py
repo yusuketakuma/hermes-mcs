@@ -45,7 +45,10 @@ def intervention_states(events, coverage):
                  and not event.get("date_uncertain")
                  and detail.get("workflow_status") in ("performed", "done", "in_progress"))
         if not known:
-            uncertain.append((facility, tuple(professions) if all(professions) else (), service))
+            uncertain.append({"facility": facility, "professions": professions, "service": service,
+                              "recorded_state": transition, "event_day": event.get("event_day"),
+                              "reference": {key: event.get(key) for key in (
+                                  "message_id", "artifact_id", "record_index", "content_hash", "span")}})
             continue
         key = facility, professions[0], service
         groups.setdefault(key, []).append((event["event_day"], transition, event))
@@ -54,18 +57,14 @@ def intervention_states(events, coverage):
         latest_day = max(record[0] for record in records)
         latest = [record for record in records if record[0] == latest_day]
         transitions = {record[1] for record in latest}
-        ambiguous = any((other_facility is None or other_facility == facility)
-                        and (not professions or profession in professions)
-                        and (other_service is None or other_service == service)
-                        for other_facility, professions, other_service in uncertain)
-        state = next(iter(transitions)) if len(transitions) == 1 and not ambiguous else "unknown"
+        state = next(iter(transitions)) if len(transitions) == 1 else "unknown"
         rows.append({"facility": facility, "profession": profession, "service": service,
                      "recorded_state": state, "event_day": latest_day,
                      "current_state": "unknown", "history_complete": coverage.get("source_complete") is True,
                      "references": [{key: event.get(key) for key in (
                          "message_id", "artifact_id", "record_index", "content_hash", "span")}
                          for _, _, event in latest]})
-    return {"items": rows, "unresolved_records": len(uncertain),
+    return {"items": rows, "unresolved_records": len(uncertain), "unresolved": uncertain,
             "scope": "patient_profession_facility_service", "basis": "explicit_recorded_transitions",
             "history_complete": coverage.get("source_complete") is True}
 
