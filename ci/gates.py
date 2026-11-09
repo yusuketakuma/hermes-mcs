@@ -365,6 +365,7 @@ _SPLIT_LEDGER_WRITERS = {
     "ops/update_restore.py": {"_reconcile_restored"},
 }
 _SPLIT_SQLITE_WRITERS = {
+    "ops/ocr_failure_ack.py": {"apply"},
     "ops/update_restore.py": {"_cancel_unsent_notices", "_replace_database"},
 }
 

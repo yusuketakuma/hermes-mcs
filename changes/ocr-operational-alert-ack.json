@@ -1,0 +1,25 @@
+{
+  "category": "added",
+  "title": "過去のOCR警報の受付と未回収の資料を分離して記録",
+  "summary": "自動再試行の上限に達した表セル重複のOCR警報を、人承認で受付記録へ残せるようにします。同じ警報だけの反復通知を停止し、OCRの失敗・未回収件数・原資料への参照は保持します。新しい失敗や照合不能な状態は引き続き警報対象です。",
+  "upgrade": "既存の更新手順で適用してください。対象の失敗artifactを明示してocr_failure_ack.pyのplanを作り、内容を確認した後にapplyで--confirm-human・actor・reason・command-idを指定します。受付は文字回収や原本の臨床確認を意味しません。",
+  "details": [
+    "受付対象は最新のattachment_ocr_v1のうち、現在の原資料・処理契約と一致するoutput_schema_table_overlapの失敗で、attemptsが整数3のものに限定する。1回最大20件の明示対象にし、原資料の版・取得状態・artifact原記録・DBの同一性を計画と適用時に照合する。",
+    "元のOCR記録・試行回数・next_try・処理契約は変更しない。別kindの受付artifactとcommand_receiptsを同じtransactionで保存し、両方の整合性を確認した対象だけ受付済みとする。同じcommand-idの再実行は元のreceiptを返し、新しい失敗を受付済みにしない。",
+    "適用は更新と実行の排他・更新/復元marker・バックアップ・BEGIN IMMEDIATE後の再照合を通す。DB保存後にreceiptファイルの出力が失敗した場合は、未適用と表示せず適用済み/出力待ちとして同じ操作の写しだけを再作成する。",
+    "監視のpending_failed・exhausted_failed・failure_reason_countsは減算しない。受付済み件数と未受付件数を追加し、同じ読取りsnapshotで算出する。完全に観測できた最新の受付済み失敗だけは本文未回収のfailed状態を保ち、同じOCR警報だけの反復を停止する。",
+    "受付による警報停止の前には、期限付きの読取りで最新の原資料とreceiptを再照合する。原資料の訂正/削除/観測済みABA・新しい失敗artifact・処理契約・復元DBの変更、破損・期限切れ・部分観測・現在の処理失敗や他コンポーネントの異常では警報を停止しない。",
+    "上流OCRエンジン・表セルの結合・再試行条件・既定課金は変更しない。原本ファイルの可用性は再検査せず、その確認状況と本文未回収を明示する。表の対応関係そのものの修復は別の課題として残る。",
+    "失敗集合の原記録・出典proof・受付状態から作る識別値を既存watchdog状態に保存する。受付済み状態を監視が見逃した場合も、別の失敗artifactや失効した受付の新しい集合は同じ理由コードの通知履歴に吸収しない。未送信が確定した旧警報だけ送信対象から外し、結果不明の送信記録は不明のまま保全する。",
+    "同じ失敗artifactでも出典proofが変わった場合は、新しい計画とUUIDで再承認できる。正常な旧proofの受付は履歴として残し、現proofの重複・破損・矛盾は照合不能として拒否する。1失敗あたり128件を超える受付履歴も自動処理せず確認を求める。",
+    "healthと操作replayは同じreceipt validatorを使う。元の計画・操作者・理由・人承認を再hashし、targetsと受付artifactの型・一意性・位置対応を検証する。statusは重複キーを拒否し、最後の照合が期限を過ぎた結果は警報停止へ使わない。読取り前後のDB同一性と更新/復元markerも確認する。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_ocr_ack.py",
+    "mcs/extract/attachment_ocr.py",
+    "mcs/ops/ocr_failure_ack.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py",
+    "tests/ops/test_ocr_failure_ack.py"
+  ]
+}
