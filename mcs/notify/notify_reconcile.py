@@ -443,7 +443,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     for ev in db.execute(
             "SELECT * FROM notify_outbox WHERE COALESCE(route,'text')='text' "
             "AND state IN ('pending','failed')").fetchall():
-        if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
+        if ev["kind"] in notify_sender.RESTORE_BYPASS_ALERT_KINDS:
             continue
         if marker and ev["next_try"] is not None and (
                 restored_at is None or ev["created_at"] is None

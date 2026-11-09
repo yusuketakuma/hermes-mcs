@@ -128,10 +128,53 @@ def _cancel_history_tx(db, event_id):
         initial_import_state.cancel_notifications_tx(db, row["project_id"], payload.get("cohort_id"))
 
 
-def build_plan(db, event_ids):
+def _retire_target(db, event_id):
+    """A stale run_failed operational alert: retirable only when its
+    delivery outcome is unknown and no delivery machinery exists. This
+    withdraws the notification — it never claims 'unsent', 'delivered',
+    or a recovered failure."""
+    row = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
+    if (row is None or row["kind"] != "run_failed" or row["project_id"] is not None
+            or (row["route"] or "text") != "text" or row["state"] != "failed"
+            or row["next_try"] is not None):
+        raise ValueError("unsupported_event")
+    try:
+        progress = json.loads(row["progress"] or "{}")
+    except ValueError:
+        raise ValueError("unsupported_event") from None
+    if not isinstance(progress, dict) or progress.get("hold_reason") not in (
+            "send_outcome_unknown", "restore_text_unverified"):
+        raise ValueError("unsupported_event")
+    related = {
+        "batches": db.execute("SELECT * FROM notification_intent_batches "
+                              "WHERE event_id=?", (event_id,)).fetchall(),
+        "coverage": db.execute("SELECT * FROM notification_intent_cards "
+                               "WHERE event_id=?", (event_id,)).fetchall(),
+        "renders": db.execute("SELECT * FROM notification_renders "
+                              "WHERE intent_event_id=?", (event_id,)).fetchall(),
+        "attempts": db.execute("SELECT a.* FROM notification_delivery_attempts a "
+                               "JOIN notification_renders r USING(delivery_id) "
+                               "WHERE r.intent_event_id=?", (event_id,)).fetchall(),
+    }
+    if any(related.values()):
+        raise ValueError("notification_already_issued")
+    state = {"outbox": dict(row),
+             "related": {name: [dict(r) for r in rows] for name, rows in related.items()}}
+    return {"event_id": event_id, "kind": row["kind"],
+            "action": "retire_operational_alert", "delivery_outcome": "unknown",
+            "state_sha256": hashlib.sha256(canonical(state)).hexdigest(),
+            "notice_specs": []}
+
+
+def build_plan(db, event_ids, *, action="cancel"):
     """Return a read-only plan for an explicit, bounded set of eligible events."""
     if (not event_ids or len(event_ids) > 20 or len(set(event_ids)) != len(event_ids)
             or any(type(i) is not int or i <= 0 for i in event_ids)):
+        raise ValueError("bad_event_ids")
+    if action == "retire_operational_alert":
+        return {"version": 1, "action": action,
+                "events": [_retire_target(db, i) for i in sorted(event_ids)]}
+    if action != "cancel":
         raise ValueError("bad_event_ids")
     requested_event_ids = frozenset(event_ids)
     targets = [_target(db, i, requested_event_ids) for i in sorted(event_ids)]
@@ -262,12 +305,17 @@ def apply(root, request):
             else:
                 plan = request["plan"]
                 try:
-                    if not isinstance(plan, dict) or plan.keys() != {"version", "events"}:
+                    if not isinstance(plan, dict) \
+                            or not {"version", "events"} <= plan.keys() \
+                            or plan.keys() - {"version", "events", "action"}:
                         raise ValueError("bad_plan")
                     ids = [e["event_id"] for e in plan["events"]]
                 except (KeyError, TypeError):
                     raise ValueError("bad_plan") from None
-                if build_plan(db, ids) != plan:
+                action = plan.get("action", "cancel")
+                if action not in ("cancel", "retire_operational_alert"):
+                    raise ValueError("bad_plan")
+                if build_plan(db, ids, action=action) != plan:
                     raise ValueError("stale_plan")
                 transports = _transports(db, ids)
                 # An unsealed cohort has no destination, spec or HTTP-capable worker.
@@ -288,29 +336,47 @@ def apply(root, request):
                     if dest.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         raise ValueError("backup_verification_failed")
                 db.execute("BEGIN IMMEDIATE")
-                if build_plan(db, ids) != plan:
+                if build_plan(db, ids, action=action) != plan:
                     raise ValueError("stale_plan")
                 if transports:
                     _workers_stopped(data, transports)
                 cancel_ids = sorted(set(ids).union(*(e.get("unsealed_history", {}).get("event_ids", []) for e in plan["events"])))
                 now = time.time()
-                for event_id in cancel_ids:
-                    _cancel_history_tx(db, event_id)
-                    db.execute("UPDATE notification_intent_cards SET state='suppressed' "
-                               "WHERE event_id=? AND state='pending'", (event_id,))
-                    db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,updated_at=? "
-                               "WHERE event_id=?", (now, event_id))
-                    db.execute("UPDATE notification_cards SET delivery_state='revoked',revoked_at=?,updated_at=? "
-                               "WHERE kind='patient_history' AND message_id IS NULL AND desired_render_rev=0 "
-                               "AND card_id IN (SELECT card_id FROM notification_intent_cards WHERE event_id=?) "
-                               "AND NOT EXISTS(SELECT 1 FROM notification_intent_cards i WHERE i.card_id=notification_cards.card_id "
-                               "AND i.state='pending')", (now, now, event_id))
-                receipt = {"kind": "ops.notification_cancel_unissued", "outcome": "applied",
+                if action == "retire_operational_alert":
+                    # Only the outbox row moves; payload, progress
+                    # (sending/sent/fingerprint/hold_reason), attempts and
+                    # accepted_ref stay byte-identical evidence.
+                    for event_id in cancel_ids:
+                        db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,"
+                                   "updated_at=? WHERE event_id=?", (now, event_id))
+                else:
+                    for event_id in cancel_ids:
+                        _cancel_history_tx(db, event_id)
+                        db.execute("UPDATE notification_intent_cards SET state='suppressed' "
+                                   "WHERE event_id=? AND state='pending'", (event_id,))
+                        db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,updated_at=? "
+                                   "WHERE event_id=?", (now, event_id))
+                        db.execute("UPDATE notification_cards SET delivery_state='revoked',revoked_at=?,updated_at=? "
+                                   "WHERE kind='patient_history' AND message_id IS NULL AND desired_render_rev=0 "
+                                   "AND card_id IN (SELECT card_id FROM notification_intent_cards WHERE event_id=?) "
+                                   "AND NOT EXISTS(SELECT 1 FROM notification_intent_cards i WHERE i.card_id=notification_cards.card_id "
+                                   "AND i.state='pending')", (now, now, event_id))
+                receipt = {"kind": "ops.notification_retire_operational_alert"
+                           if action == "retire_operational_alert"
+                           else "ops.notification_cancel_unissued",
+                           "outcome": "applied",
                            "command_id": request["command_id"], "actor": request["actor"],
                            "reason": request["reason"], "processed_at": now,
                            "event_ids": cancel_ids, "backup": str(backup), "plan": plan,
                            "notice_specs": [s for e in plan["events"] for s in e["notice_specs"]],
                            "remote_operations": 0}
+                if action == "retire_operational_alert":
+                    # Orphan send children may still deliver late — remote
+                    # cancellation, post deletion and child kills are out
+                    # of scope, so the past outcome stays unknown.
+                    receipt["action"] = "retire_operational_alert"
+                    receipt["delivery_outcome"] = "unknown"
+                    receipt["residual"] = "orphan_delivery_unproven"
                 db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                            (request["command_id"], digest, None, None, "applied",
                             canonical(receipt).decode(), now))
@@ -331,6 +397,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action", required=True)
     plan = sub.add_parser("plan", help="対象と状態の照合計画を表示（変更なし）")
     plan.add_argument("--event-id", type=int, action="append", required=True)
+    plan.add_argument("--action", choices=["cancel", "retire_operational_alert"],
+                      default="cancel")
     cancel = sub.add_parser("apply", help="計画に一致する通知を送信せず取消")
     cancel.add_argument("--plan", type=Path, required=True)
     cancel.add_argument("--command-id", required=True)
@@ -346,7 +414,7 @@ def main(argv=None):
             with closing(sqlite3.connect((args.root / "data/ledger.db").resolve().as_uri() + "?mode=ro",
                                          uri=True, timeout=1)) as db:
                 db.row_factory = sqlite3.Row
-                result = build_plan(db, args.event_id)
+                result = build_plan(db, args.event_id, action=args.action)
         else:
             result = apply(args.root, {"command_id": args.command_id, "actor": args.actor,
                                       "reason": args.reason, "human_confirmed": args.confirm_human,

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "復元後に送信結果が不明なまま残る run_failed 通知を、証拠を保持したまま退役できるよう修正",
+  "summary": "復元・整合処理のあと送信できたか不明なまま残る『収集処理の失敗』通知（run_failed）が、復元マーカー中の自動再送対象から外れ、整合処理で送信結果不明（restore_text_unverified）として保留されるようになりました。保留中は自動送信されず、人が確認して明示操作（retire_operational_alert）で通知だけを抑制できます。抑制しても送信履歴・試行回数・payload・証拠はすべて残り、結果は『unknown』のまま記録されます。",
+  "upgrade": "追加操作は不要です。古い run_failed 通知が残っている場合は notification_cancel の retire_operational_alert 操作で個別に抑制できます。対象はテキスト経路・プロジェクト未指定・既に失敗状態かつ再送予定なし・送信結果不明の保留理由を持つ通知だけです。",
+  "details": [
+    "復元マーカー中に自動再送されるシステム通知から run_failed を外しました（update_notice・session_recovered などは従来どおり再送されます）。",
+    "復元前に作られた run_failed は整合処理で restore_text_unverified として保留され、マーカー解除後も自動送信されず明示退役だけが消せます。マーカー中に届いた分は解除後に通常どおり送信できます。",
+    "notification_cancel --action retire_operational_alert は、送信試行・配送記録が一切無い通知だけを対象にし、outbox 行を suppressed へ移すだけで payload・progress・試行回数・受理参照を消しません。",
+    "退役の receipt には delivery_outcome: unknown と orphan_delivery_unproven が残り、送信されたかどうかは不明のまま記録されます。リモート投稿の取消や子プロセスの停止は行いません。"
+  ],
+  "refs": ["mcs/notify/notify_sender.py", "mcs/notify/notify_flush.py", "mcs/notify/notify_reconcile.py", "mcs/ops/notification_cancel.py"]
+}

@@ -1327,7 +1327,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
             ledger.outbox_mark(ev["event_id"], "failed", retry_in=3600)
             res["failed"] += 1
             continue
-        if ev["kind"] not in notify_sender.SYSTEM_ALERT_KINDS:
+        if ev["kind"] not in notify_sender.RESTORE_BYPASS_ALERT_KINDS:
             import notify_spool
             if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
                 flush_group()
