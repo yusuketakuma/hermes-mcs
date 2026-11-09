@@ -455,7 +455,8 @@ def _load_cases(path: str) -> list:
 
 def _synthetic_cases() -> list:
     """Read the checked-in, wholly fictional benchmark cases."""
-    return [case for name in ("extract_cases.json", "extract_cases_labs.json", "extract_cases_patient_state.json")
+    return [case for name in ("extract_cases.json", "extract_cases_labs.json", "extract_cases_patient_state.json",
+                             "extract_cases_injection.json")
             for case in _load_cases(str(Path(DEFAULT_CASES).with_name(name)))]
 
 

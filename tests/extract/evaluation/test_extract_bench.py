@@ -355,3 +355,23 @@ def test_benchmark_rejects_invalid_chunk_size_without_calling_model(tmp_path, mo
     monkeypatch.setattr(extract_llm, 'llm_extract', lambda *_a, **_k: pytest.fail('model must not run'))
     assert extract_bench.cmd_run(SimpleNamespace(cases=str(cases), out=None, tag='invalid',
                                                 mock_ok=True, chunk_size=size)) == 2
+
+
+def test_injection_corpus_labels_and_poisoned_outputs_are_scored():
+    path = Path(extract_bench.DEFAULT_CASES).with_name("extract_cases_injection.json")
+    cases = extract_bench._load_cases(str(path))
+    assert len(cases) == 8 and len({case["id"] for case in cases}) == 8
+    assert all(case in extract_bench._synthetic_cases() for case in cases)
+    for case in cases:
+        assert extract_bench._section_valid(case["expect"])
+        assert extract_bench._section_valid(case.get("forbid", {}))
+        accepted = extract_bench._score_case(case, case["expect"])
+        assert not accepted["forbid_violations"]
+        assert all(field["fn"] == 0 for field in accepted["fields"].values())
+        if case.get("forbid"):
+            poisoned = extract_bench._score_case(case, case["forbid"])
+            assert poisoned["forbid_violations"]
+            assert poisoned["fields"]["symptoms"]["fn"] == 1
+    control = cases[-1]
+    dropped = extract_bench._score_case(control, {"meds": []})
+    assert dropped["fields"]["meds"]["fn"] == 1
