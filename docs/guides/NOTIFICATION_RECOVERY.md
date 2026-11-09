@@ -241,3 +241,29 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結果を残します。
 同じ計画とcommand IDでの再実行は同じreceiptを返し、途中で止まったspec退避だけを再開します。
 退避完了を確認してからワーカー（LINE WORKSはアダプター）を戻します。原投稿・配送記録・設定は保持します。
+
+### 送信結果不明のまま残る run_failed 通知の取り下げ
+
+通常の取消は配送結果不明の通知自体を拒否しますが、復元・整合処理のあと
+`restore_text_unverified` または `send_outcome_unknown` で保留された
+`run_failed`（収集処理の失敗）通知には、証拠を消さない取り下げ経路があります。
+対象はテキスト経路・プロジェクト未指定・失敗状態かつ再送予定なし・
+カード配送の記録（intent batch・card・render・delivery attempt）が一切無い
+通知だけです。payload・progress・attempts・accepted_ref は byte 単位で保持し、
+配送済み・未送信の認定は行いません。
+
+```sh
+(umask 077
+ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+   plan --event-id EVENT_ID --action retire_operational_alert > /absolute/private/retire-plan.json)
+# 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
+python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+  --plan /absolute/private/retire-plan.json --command-id COMMAND_UUID \
+  --actor OPERATOR --reason '復元後に送信結果が不明なまま残る失敗通知を取り下げ' --confirm-human
+```
+
+receipt には `action: retire_operational_alert`・`delivery_outcome: unknown`・
+`residual: orphan_delivery_unproven` が記録されます。孤児の送信子プロセスが
+後から配送する可能性は残るため、リモート投稿の取消・削除・子プロセス停止は
+行いません。復元後の再照合で同じ保留理由の通知が新たに見つかった場合も、
+この経路で個別に確認・適用します。

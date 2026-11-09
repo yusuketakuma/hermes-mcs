@@ -341,6 +341,11 @@ def test_reconcile_quarantines_prerestore_run_failed_and_it_becomes_retirable(te
     assert _row(w.led, fresh)["state"] == "pending"
     notify_flush.flush(w.led)
     assert _row(w.led, fresh)["state"] == "accepted"
+    # same-path contrast: the quarantined alert is never a flush candidate
+    # (state='failed' with next_try NULL is outside the due window), so it
+    # stays 'failed' — only the explicit retire path can suppress it.
+    assert _row(w.led, old)["state"] == "failed"
+    assert _row(w.led, old)["next_try"] is None
 
 
 @pytest.mark.parametrize("kind", ["signal", "new_messages", "attachment_followup"])

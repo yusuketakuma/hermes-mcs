@@ -1,4 +1,5 @@
-"""未発行のSlack・Discord・LINE WORKS通知と未送信が確定した集計通知を、履歴を残して取り消す。"""
+"""未発行のSlack・Discord・LINE WORKS通知と未送信が確定した集計通知を、履歴を残して取り消す。
+送信結果不明のrun_failed通知は証拠を保持したまま取り下げる。"""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +18,7 @@ import _mcs_path  # noqa: F401,E402
 
 import initial_import_state
 
-from mcs_util import valid_text  # noqa: E402
+from mcs_util import strict_json, valid_text  # noqa: E402
 from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
 from writer_lock import acquire_run_lock
 from safe_io import atomic_write, fsync_dir  # noqa: E402  # noqa: E402
@@ -134,13 +135,16 @@ def _retire_target(db, event_id):
     withdraws the notification — it never claims 'unsent', 'delivered',
     or a recovered failure."""
     row = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
+    # route has no CHECK constraint: only an explicit 'text' qualifies —
+    # '' and unknown values are rejected, None keeps the schema default.
+    route = row["route"] if row is not None and row["route"] is not None else "text"
     if (row is None or row["kind"] != "run_failed" or row["project_id"] is not None
-            or (row["route"] or "text") != "text" or row["state"] != "failed"
+            or route != "text" or row["state"] != "failed"
             or row["next_try"] is not None):
         raise ValueError("unsupported_event")
     try:
-        progress = json.loads(row["progress"] or "{}")
-    except ValueError:
+        progress = strict_json(row["progress"] or "{}")
+    except (ValueError, RecursionError):
         raise ValueError("unsupported_event") from None
     if not isinstance(progress, dict) or progress.get("hold_reason") not in (
             "send_outcome_unknown", "restore_text_unverified"):
@@ -397,7 +401,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action", required=True)
     plan = sub.add_parser("plan", help="対象と状態の照合計画を表示（変更なし）")
     plan.add_argument("--event-id", type=int, action="append", required=True)
-    plan.add_argument("--action", choices=["cancel", "retire_operational_alert"],
+    plan.add_argument("--action", dest="plan_action",
+                      choices=["cancel", "retire_operational_alert"],
                       default="cancel")
     cancel = sub.add_parser("apply", help="計画に一致する通知を送信せず取消")
     cancel.add_argument("--plan", type=Path, required=True)
@@ -414,7 +419,7 @@ def main(argv=None):
             with closing(sqlite3.connect((args.root / "data/ledger.db").resolve().as_uri() + "?mode=ro",
                                          uri=True, timeout=1)) as db:
                 db.row_factory = sqlite3.Row
-                result = build_plan(db, args.event_id, action=args.action)
+                result = build_plan(db, args.event_id, action=args.plan_action)
         else:
             result = apply(args.root, {"command_id": args.command_id, "actor": args.actor,
                                       "reason": args.reason, "human_confirmed": args.confirm_human,
