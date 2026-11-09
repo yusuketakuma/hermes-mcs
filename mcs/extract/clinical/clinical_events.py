@@ -11,6 +11,17 @@ EVENT_KINDS = ('visit', 'exam', 'admission', 'discharge', 'transfer', 'fall',
 SUBJECTS = ('patient', 'family', 'other', 'unknown')
 STATUSES = ('current', 'past', 'planned', 'conditional', 'unknown')
 
+# Optional care_detail.event_type values on event_records. The enumeration
+# contract lives in docs/specs/care-intervention-events.md; legacy EVENT_KINDS
+# stay unchanged and a record may carry at most one care_detail.
+CARE_DETAIL_TYPES = (
+    'intervention_start', 'intervention_pause', 'intervention_resume',
+    'intervention_end', 'service_contract_start', 'pre_discharge_conference',
+    'discharge_joint_guidance', 'care_team_conference', 'care_plan_change',
+    'monitoring', 'care_need_certification_change', 'respite',
+    'facility_entry', 'facility_exit', 'death', 'acp_discussion',
+    'care_policy_change')
+
 ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
                  r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
                  r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
