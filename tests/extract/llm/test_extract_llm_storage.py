@@ -624,6 +624,7 @@ def test_llm_call_stats_dedups_shared_meta_and_ignores_junk():
         "first_calls": None, "repair_calls": None, "repair_wins": None,
         "length_stops": None, "length_resplits": None, "probe_runs": None,
         "format_downgrades": None, "checkpoint_reuses": None,
+        "first_pass_evaluated_chunks": None, "first_pass_accepted_chunks": None,
         "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
         "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
     assert stats == {"calls": 3, "prompt_ms": 10, "predicted_ms": 5.5,

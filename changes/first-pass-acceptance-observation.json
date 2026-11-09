@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "抽出の初回受理と修復・再利用を分けて観測",
+  "summary": "抽出処理の記録に、初回回答を検証した区間数と、修復を要せず受理した区間数を追加します。修復後の最終結果だけでは見えなかった初回出力の状態を、入力分割や指示文の評価に使えるようにします。",
+  "upgrade": "追加設定は不要です。抽出の採用条件、修復回数、モデル、課金と未確定処理の保護は変わりません。初回受理は臨床的な正解を保証する指標ではありません。",
+  "details": [
+    "計測対象は、新しく生成され、正常終了を記録した初回回答のうち、既存の検証処理まで到達した区間です。長さ超過の分割・未送信や中断・保存済み回答やcheckpointの再利用・修復の回答は初回の評価件数へ混ぜません。",
+    "受理件数には、既存の構造検証・項目脱落・情報不足・網羅性の条件を通った区間だけを数えます。件数は既存の共通統計に集約し、計測のない値は欠測として保持します。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_engine.py",
+    "mcs/extract/llm/extract_llm_admission.py",
+    "tests/extract/llm/test_llm_research_p4_call_breakdown.py",
+    "tests/extract/llm/test_integrity_partial_metrics.py",
+    "tests/extract/llm/test_extract_llm_storage.py"
+  ]
+}

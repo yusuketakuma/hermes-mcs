@@ -281,6 +281,12 @@ def llm_extract(body: str, *, context: str | None = None,
         thin = piece == body and extract_quality.is_thin(v, body)
         completeness = extract_quality.completeness_issues(v, piece_hints, piece)
 
+        if not quality_status and any(
+                note.get('finish_reason') == 'stop' and note.get('reused_response') is not True
+                for note in notes[call_start:]):
+            bump('first_pass_evaluated_chunks')
+            bump('first_pass_accepted_chunks', int(v is not None and not drops and not thin and not completeness))
+
         quality_record = None
         repair_proof = None
 

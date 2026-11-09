@@ -32,6 +32,7 @@ def test_partial_backend_metrics_do_not_invent_missing_zeros():
         "first_calls": 1, "repair_calls": 0, "repair_wins": None,
         "length_stops": 0, "length_resplits": None, "probe_runs": 0,
         "format_downgrades": 0, "checkpoint_reuses": None,
+        "first_pass_evaluated_chunks": None, "first_pass_accepted_chunks": None,
         "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
         "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
 
@@ -61,6 +62,7 @@ def test_statistics_timing_overflow_is_unknown_without_losing_other_fields():
         "first_calls": None, "repair_calls": None, "repair_wins": None,
         "length_stops": None, "length_resplits": None, "probe_runs": None,
         "format_downgrades": None, "checkpoint_reuses": None,
+        "first_pass_evaluated_chunks": None, "first_pass_accepted_chunks": None,
         "prompt_n": None, "cache_n": None, "repair_prompt_n": None,
         "repair_cache_n": None, "repair_issues": None, "cache_hit_ratio": None}
     json.dumps(stats, allow_nan=False)

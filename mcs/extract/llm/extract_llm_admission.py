@@ -7,7 +7,8 @@ import extract_quality
 
 _COUNT_KEYS = ("calls", "first_calls", "repair_calls", "repair_wins",
                "length_stops", "length_resplits", "probe_runs",
-               "format_downgrades", "checkpoint_reuses")
+               "format_downgrades", "checkpoint_reuses",
+               "first_pass_evaluated_chunks", "first_pass_accepted_chunks")
 
 
 def _llm_call_stats(metas) -> dict | None:

@@ -66,6 +66,8 @@ def test_run_pending_breaks_calls_down_by_reason(db, monkeypatch):
     stats = res["llm_calls"]
     assert (stats["calls"], stats["first_calls"], stats["repair_calls"]) == (4, 3, 1)
     assert (stats["length_stops"], stats["length_resplits"]) == (1, 1)
+    assert stats["first_pass_evaluated_chunks"] == 3
+    assert stats["first_pass_accepted_chunks"] == 2
     assert stats["probe_runs"] == 0 and stats["format_downgrades"] == 0
     assert stats["checkpoint_reuses"] in (None, 0)
     integrity = _integrity(db)
@@ -232,3 +234,16 @@ def test_llm_call_stats_keys_are_fixed_and_unreported_is_none():
         {"calls": 1, "timings": {"prompt_n": 5}, "repair_timings": {"cache_n": 5}}])
     assert one["prompt_n"] is None and one["cache_n"] is None
     assert one["repair_prompt_n"] is None and one["repair_cache_n"] is None
+
+
+@pytest.mark.parametrize('reused', [False, True])
+def test_first_pass_acceptance_excludes_recovered_answers(monkeypatch, reused):
+    response = {**VALID, 'reused_response': reused}
+    calls = _fake_backend(monkeypatch, lambda piece, prompt: response)
+    meta = {}
+    out = extract_llm.llm_extract('合成本文', meta_out=meta)
+    assert isinstance(out, dict) and len(calls) == 1
+    stats = extract_llm._llm_call_stats([meta])
+    assert stats['first_pass_evaluated_chunks'] == (None if reused else 1)
+    assert stats['first_pass_accepted_chunks'] == (None if reused else 1)
+    assert stats['calls'] == (0 if reused else 1)
