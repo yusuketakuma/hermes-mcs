@@ -181,10 +181,10 @@ from patient_context_quality_controller import (
 )
 
 
-def _completed_cloud_receipts(ledger, provider):
+def _completed_cloud_receipts(ledger, provider, *, answered_only=False):
     """Recheck the existing paid receipts before retaining or adopting a unit."""
     import cloud_policy
-    reservations = provider.completed_reservations
+    reservations = provider.answered_reservations if answered_only else provider.completed_reservations
     wanted = {r["reservation_id"]: r for r in reservations}
     rows = ledger.db.execute(
         "SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' AND "
@@ -733,11 +733,28 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         # the unit's record is written under the local backend; a cloud route
         # contract is kept beside it so the selection still recognises the row
         meta.pop("provider", None)
+        meta.pop("cloud_receipts", None)
         if "provider" in snapshot["contract"]:
             meta["route_contract"] = snapshot["contract"]
             meta["local_fallback"] = True
             meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
         meta["model"] = local_llm.resolve(cfg)[1]
+
+    def guard_local_input(unit_key, mid, prompt):
+        nonlocal generation_uncertain
+        try:
+            with cloud_policy._accounting_snapshot(ledger.db):
+                if unit_key == 'summary':
+                    patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
+                        snapshot['contract'], cfg=cfg, deadline=deadline)
+                cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
+                    message_id=mid, unit_key=unit_key,
+                    owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
+        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
+            generation_uncertain = True
+            raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
+        if (unit_key, mid, prompt) not in local_checks:
+            local_checks.append((unit_key, mid, prompt))
 
     def infer(fn, *, unit_key, mid=None, saved=None):
         nonlocal provider, shadow_call, estimated_unit, generation_uncertain, generation_contacted
@@ -754,6 +771,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 guard_provider(provider)
                 meta["provider"] = provider.contract
                 meta["model"] = provider.model
+                if getattr(provider, 'answered_reservations', None):
+                    evidence = _completed_cloud_receipts(ledger, provider, answered_only=True)
+                    meta['cloud_receipts'] = [{'artifact_id': aid, 'witness': proof['witness']}
+                                              for aid, proof in sorted(evidence.items())]
                 return value
             except cloud_client.CloudNotSent as error:
                 generation_contacted = generation_contacted or provider.possibly_sent
@@ -806,16 +827,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         if not local_admit():
             raise patient_context_refresh_state.Deferred("nightly_local_capacity")
         def guard_local(prompt):
-            nonlocal generation_uncertain
-            try:
-                cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
-                    message_id=mid, unit_key=unit_key,
-                    owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
-            except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
-                generation_uncertain = True
-                raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
-            if (unit_key, mid, prompt) not in local_checks:
-                local_checks.append((unit_key, mid, prompt))
+            guard_local_input(unit_key, mid, prompt)
         reset = bool(saved and saved.get("_provider_contract"))
         value = fn(None, reset, local_guard=guard_local)
         local_route()
@@ -845,8 +857,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                        allow_historical=True)):
                 same = True
             if same:
+                if old_meta.get('local_fallback') is True:
+                    payload, _, _, _ = patient_context_quality_controller._summary_input(facts, snapshot['source_sig'])
+                    guard_local_input('summary', None, json.dumps(payload, ensure_ascii=False))
                 meta["contract"] = old_meta["contract"]
-                for key in ("route_contract", "quality_repair_ref", "local_fallback"):
+                for key in ("route_contract", "quality_repair_ref", "local_fallback", "cloud_receipts"):
                     if key in old_meta:
                         meta[key] = old_meta[key]
             if facts and not same or quality_required:
@@ -941,7 +956,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     if lane == 'C' and isinstance(saved.get('_source_meta'), dict):
                         prior_meta = saved['_source_meta']
                         for key in ('contract', 'route_contract', 'provider', 'model', 'source_binding',
-                                    'source_occurrence', 'source_occurrence_version', 'local_fallback'):
+                                    'source_occurrence', 'source_occurrence_version', 'local_fallback', 'cloud_receipts'):
                             if key in prior_meta:
                                 meta[key] = prior_meta[key]
                             else:
@@ -1152,11 +1167,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         try:
             for local_unit, local_mid, local_prompt in local_checks:
                 try:
-                    cloud_inference.guard_context_local(ledger, cfg, local_prompt, project_id=pid,
-                        message_id=local_mid, unit_key=local_unit,
-                        owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
-                except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
-                    generation_uncertain = True
+                    guard_local_input(local_unit, local_mid, local_prompt)
+                except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
             if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version

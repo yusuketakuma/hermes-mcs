@@ -100,6 +100,7 @@ class CloudInferenceUnit:
         self.generation = generation
         self.scope = scope
         self.completed_reservations = []
+        self.answered_reservations = []
         self._children = []
         self.message_id = message_id
         self.owner = owner
@@ -246,6 +247,8 @@ class CloudInferenceUnit:
                 if isinstance(metadata.get('http_class'), str) and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class']):
                     self._unresolved = False
                 self.completed_reservations.append(reservation)
+                if answer is not None:
+                    self.answered_reservations.append(reservation)
                 return value
             return dispatch(write, result=True)
         self.result = record
@@ -323,6 +326,8 @@ class CloudInferenceUnit:
                 self._unresolved = False
                 if evidence['reservation'] not in self.completed_reservations:
                     self.completed_reservations.append(evidence['reservation'])
+                if evidence['reservation'] not in self.answered_reservations:
+                    self.answered_reservations.append(evidence['reservation'])
             else:
                 def send_block_reason():
                     # An exact recovery miss is not proof of no prior send: old

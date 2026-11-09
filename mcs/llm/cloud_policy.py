@@ -800,6 +800,46 @@ def _context_summary_fallback_fp(body, previous):
         return None
 
 
+
+def guard_context_origins(ledger, project_id, origins):
+    """Verify exact retained context-answer receipts without changing their accounting."""
+    expected, legacy = {}, {}
+    with _accounting_snapshot(ledger.db):
+        for mid, unit, model, metadata in origins:
+            binding = mid, unit, model
+            legacy_refs = 'cloud_receipts' not in metadata
+            refs = metadata.get('cloud_receipts')
+            if legacy_refs:
+                # Without a stored pointer, this source's retained sends must all
+                # verify; a missing history cannot establish an adopted answer.
+                if binding not in legacy:
+                    history = _verified_request_history(ledger, route='patient_context',
+                        project_id=project_id, message_id=mid, unit_key=unit)
+                    legacy[binding] = [row['artifact_id'] for row in history
+                        if _receipt_meta(row['meta']).get('route') == 'patient_context'
+                        and _receipt_meta(row['meta']).get('unit_key') == unit]
+                refs = [{'artifact_id': aid, 'witness': None} for aid in legacy[binding]]
+            if (type(refs) is not list or not 1 <= len(refs) <= 128
+                    or any(type(ref) is not dict or set(ref) != {'artifact_id', 'witness'}
+                           or type(ref['artifact_id']) is not int or ref['artifact_id'] <= 0
+                           or (not legacy_refs or ref['witness'] is not None)
+                           and not valid_hash(ref['witness']) for ref in refs)
+                    or len({ref['artifact_id'] for ref in refs}) != len(refs)):
+                raise ValueError('nightly_cloud_source_unverified')
+            for ref in refs:
+                proof = binding, ref['witness']
+                if ref['artifact_id'] in expected and expected[ref['artifact_id']] != proof:
+                    raise ValueError('nightly_cloud_source_unverified')
+                expected[ref['artifact_id']] = proof
+        evidence = reservation_evidence_batch(ledger.db, expected)
+        for aid, ((mid, unit, model), witness) in expected.items():
+            proof = evidence[aid]
+            reservation = proof['reservation']
+            if (reservation.get('route') != 'patient_context' or reservation['project_id'] != project_id
+                    or reservation.get('message_id') != mid or reservation['unit_key'] != unit
+                    or reservation['model'] != model or witness is not None and proof['witness'] != witness):
+                raise ValueError('nightly_cloud_source_unverified')
+
 def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, request_factory):
     """Prove local substitution safe without sending, reserving, or changing accounting."""
     with _accounting_snapshot(ledger.db):

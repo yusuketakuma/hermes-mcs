@@ -363,6 +363,44 @@ def _source_chunk_rows(rows, source, contract, scan):
                 yield {**doc, "_artifact_id": row[2]}
 
 
+
+def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
+    """Revalidate paid origins of the source chunks consumed by context processing."""
+    import cloud_policy
+    origins = []
+    scans = _current_scans(ledger.db, pid, sources, contract, cfg=cfg, check_quality=False)
+    for source in sources:
+        _scan_check(ledger.db)
+        if patient_context_refresh_state.time.monotonic() >= deadline:
+            raise ValueError('nightly_cloud_source_unverified')
+        key = context_plan.source_key(source)
+        scan = scans.get(key, {})
+        if not scan.get('_provider_contract'):
+            continue
+        if not scan.get('complete'):
+            raise ValueError('nightly_cloud_source_unverified')
+        # Accepted repairs retain their existing financial checks as well.
+        list(_source_chunks(ledger.db, pid, source, contract, scan))
+        meta = scan['_source_meta']
+        rows = context_artifacts.original_rows(ledger.db, pid, key, meta, scan,
+            body_size=source.get('body_length'), current_only=True)
+        selected = 0
+        for row in rows:
+            origin = context_artifacts.decode_document(row['meta'], metadata=True)
+            if (patient_context_refresh_state._route_contract(origin) != contract
+                    or {name: origin.get(name) for name in ('contract', 'provider')} != scan.get('_binding')):
+                continue
+            selected += 1
+            unit = 'scan:' + str(key)
+            binding = (source.get('message_id') or None, unit, origin['provider']['model'])
+            origins.append((*binding, origin))
+        if not selected:
+            raise ValueError('nightly_cloud_source_unverified')
+    cloud_policy.guard_context_origins(ledger, pid, origins)
+    if patient_context_refresh_state.time.monotonic() >= deadline:
+        raise ValueError('nightly_cloud_source_unverified')
+
+
 def _scan_facts(db, pid, source, contract, scan):
     if not scan.get("complete"):
         return
