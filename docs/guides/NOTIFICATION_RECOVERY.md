@@ -256,14 +256,19 @@ DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結�
 (umask 077
  python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
    plan --event-id EVENT_ID --action retire_operational_alert > /absolute/private/retire-plan.json)
-# 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
+# update/run の排他ロックと lifecycle marker が空いていることを確認してから実行する。
 python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/retire-plan.json --command-id COMMAND_UUID \
   --actor OPERATOR --reason '復元後に送信結果が不明なまま残る失敗通知を取り下げ' --confirm-human
 ```
 
-receipt には `action: retire_operational_alert`・`delivery_outcome: unknown`・
-`residual: orphan_delivery_unproven` が記録されます。孤児の送信子プロセスが
-後から配送する可能性は残るため、リモート投稿の取消・削除・子プロセス停止は
-行いません。復元後の再照合で同じ保留理由の通知が新たに見つかった場合も、
-この経路で個別に確認・適用します。
+この経路はカード配送の記録を持たないため送信先 transport が空になり、
+通常取消が要求する通知ワーカー・アダプターの停止証跡は不要です。
+適用時には update/run の排他ロック・lifecycle marker・復元保留の不在・
+計画と現在状態の再照合・変更前 DB の検証付き退避・`--confirm-human` の
+承認が引き続き必要です。ただし実際の送信子プロセスの終了は証明しないため、
+孤児の送信子が後から配送する可能性は残ります。receipt には
+`action: retire_operational_alert`・`delivery_outcome: unknown`・
+`residual: orphan_delivery_unproven` が記録され、リモート投稿の取消・
+削除・子プロセス停止は行いません。復元後の再照合で同じ保留理由の通知が
+新たに見つかった場合も、この経路で個別に確認・適用します。
