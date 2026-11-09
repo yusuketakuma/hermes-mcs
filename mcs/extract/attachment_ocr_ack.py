@@ -4,17 +4,66 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+import re
+import time
 
 import attachment_ocr
 import inference_dependency_loss
 from mcs_requests import payload_hash, valid_uuid
-from mcs_util import strict_json, valid_hash
+from mcs_util import strict_json, valid_hash, valid_text
+from stats_math import finite_number
 
 KIND = 'attachment_ocr_alert_ack_v1'
 SCHEMA = 'attachment-ocr-alert-ack/v1'
 ACTION = 'acknowledge_ocr_alert'
 COMMAND = 'ops.attachment_ocr_alert_ack'
 MAX_TARGETS = 20
+
+
+def valid_targets(value):
+    if (type(value) is not list or not 1 <= len(value) <= MAX_TARGETS
+            or any(type(item) is not dict or set(item) != {'artifact_id', 'proof'}
+                   or type(item.get('artifact_id')) is not int or item['artifact_id'] <= 0
+                   or not valid_hash(item.get('proof')) for item in value)):
+        return False
+    ids = [item['artifact_id'] for item in value]
+    return ids == sorted(set(ids))
+
+
+def valid_plan(value):
+    return (type(value) is dict and set(value) == {'version', 'action', 'database_identity', 'targets'}
+            and type(value.get('version')) is int and value['version'] == 1
+            and value.get('action') == ACTION and valid_hash(value.get('database_identity'))
+            and valid_targets(value.get('targets')))
+
+
+def valid_receipt(value):
+    required = {'kind', 'command_id', 'payload_hash', 'outcome', 'actor', 'reason',
+                'human_confirmed', 'processed_at', 'plan', 'targets', 'acknowledgement_ids',
+                'backup', 'ocr_outcome', 'source_coverage', 'clinical_review', 'original_file_availability'}
+    if (type(value) is not dict or set(value) != required or value.get('kind') != COMMAND
+            or value.get('outcome') != 'applied' or not valid_uuid(value.get('command_id'))
+            or not valid_hash(value.get('payload_hash')) or value.get('human_confirmed') is not True
+            or not valid_text(value.get('actor'), 120) or not valid_text(value.get('reason'), 2000)
+            or not finite_number(value.get('processed_at')) or value['processed_at'] < 0
+            or not valid_plan(value.get('plan')) or not valid_targets(value.get('targets'))
+            or value['targets'] != value['plan']['targets']
+            or type(value.get('acknowledgement_ids')) is not list
+            or len(value['acknowledgement_ids']) != len(value['targets'])
+            or any(type(item) is not int or item <= 0 for item in value['acknowledgement_ids'])
+            or len(set(value['acknowledgement_ids'])) != len(value['acknowledgement_ids'])
+            or value.get('ocr_outcome') != 'failed' or value.get('source_coverage') != 'unrecovered'
+            or value.get('clinical_review') != 'not_proven'
+            or value.get('original_file_availability') != 'not_rechecked'
+            or type(value.get('backup')) is not str
+            or re.fullmatch(r'ocr_alert_acknowledgements/' + re.escape(value['command_id'])
+                            + r'/before-[A-Za-z0-9_-]+\.db', value['backup']) is None):
+        return False
+    request = {key: value[key] for key in ('command_id', 'actor', 'reason', 'human_confirmed', 'plan')}
+    try:
+        return payload_hash(request) == value['payload_hash']
+    except (ValueError, TypeError, RecursionError):
+        return False
 
 
 def database_identity(db):
@@ -67,52 +116,60 @@ def target(db, artifact_id):
         attachment_ocr.RUNTIME_CONTRACT])}
 
 
-def acknowledged(db, current):
-    """Require both the bound acknowledgement and the same atomic command receipt."""
-    rows = db.execute("SELECT a.content,a.meta,a.artifact_id FROM artifacts a "
+def acknowledged(db, current, *, deadline=None):
+    """Resolve only exact current proofs; valid older acknowledgements stay as history."""
+    # shortcut: refuse more than 128 records for one failure; extend with a
+    # bounded history reader if real operational review reaches this limit.
+    rows = db.execute("SELECT CASE WHEN typeof(a.content)='text' AND length(a.content)<=65536 "
+                      "THEN a.content END,CASE WHEN typeof(a.meta)='text' AND length(a.meta)<=4096 "
+                      "THEN a.meta END,a.artifact_id FROM artifacts a "
                       "JOIN artifacts f ON f.artifact_id=? AND a.project_id IS f.project_id "
-                      "AND a.message_id IS f.message_id WHERE a.kind=? AND CASE WHEN json_valid(a.meta) "
-                      "THEN json_extract(a.meta,'$.failure_artifact_id') END=? "
-                      "ORDER BY a.artifact_id DESC LIMIT 2",
+                      "AND a.message_id IS f.message_id WHERE a.kind=? AND CASE WHEN typeof(a.meta)='text' "
+                      "AND length(a.meta)<=4096 THEN CASE WHEN json_valid(a.meta) "
+                      "THEN json_extract(a.meta,'$.failure_artifact_id')=? "
+                      "OR json_type(a.meta,'$.failure_artifact_id') IS NULL ELSE 1 END ELSE 1 END "
+                      "ORDER BY a.artifact_id DESC LIMIT 129",
                       (current['artifact_id'], KIND, current['artifact_id'])).fetchall()
-    if len(rows) != 1:
-        return False
-    try:
-        ack = strict_json(rows[0][0])
-        meta = strict_json(rows[0][1])
-        if (type(meta) is not dict or set(meta) != {'failure_artifact_id'}
-                or type(meta['failure_artifact_id']) is not int
-                or meta['failure_artifact_id'] != current['artifact_id']):
-            return False
-        if (type(ack) is not dict or set(ack) != {'schema', 'target', 'command_id', 'request_hash'}
-                or ack['schema'] != SCHEMA or ack['target'] != current
-                or not valid_uuid(ack['command_id']) or not valid_hash(ack['request_hash'])):
-            return False
-        row = db.execute('SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?',
-                         (ack['command_id'],)).fetchone()
-        if row is None or row[0] != ack['request_hash']:
-            return False
-        receipt = strict_json(row[1])
-        return (type(receipt) is dict and receipt.get('kind') == COMMAND
-                and receipt.get('outcome') == 'applied'
-                and receipt.get('command_id') == ack['command_id']
-                and receipt.get('payload_hash') == ack['request_hash']
-                and type(receipt.get('targets')) is list
-                and 1 <= len(receipt['targets']) <= MAX_TARGETS
-                and receipt['targets'].count(current) == 1
-                and type(receipt.get('acknowledgement_ids')) is list
-                and len(receipt['acknowledgement_ids']) == len(receipt['targets'])
-                and receipt['acknowledgement_ids'][receipt['targets'].index(current)] == rows[0][2]
-                and receipt.get('ocr_outcome') == 'failed'
-                and receipt.get('source_coverage') == 'unrecovered')
-    except (ValueError, TypeError, KeyError, RecursionError):
-        return False
+    if len(rows) > 128:
+        raise ValueError('ocr_ack_receipt_unverified')
+    found = 0
+    for row in rows:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ValueError('ocr_ack_observation_incomplete')
+        try:
+            record, meta = strict_json(row[0]), strict_json(row[1])
+            if (type(meta) is not dict or set(meta) != {'failure_artifact_id'}
+                    or type(meta['failure_artifact_id']) is not int
+                    or meta['failure_artifact_id'] != current['artifact_id']
+                    or type(record) is not dict or set(record) != {'schema', 'target', 'command_id', 'request_hash'}
+                    or record['schema'] != SCHEMA or not valid_targets([record['target']])
+                    or record['target']['artifact_id'] != current['artifact_id']
+                    or not valid_uuid(record['command_id']) or not valid_hash(record['request_hash'])):
+                raise ValueError('ocr_ack_receipt_unverified')
+            receipt_row = db.execute("SELECT CASE WHEN typeof(payload_hash)='text' AND length(payload_hash)=64 "
+                "THEN payload_hash END,CASE WHEN typeof(receipt_json)='text' "
+                "AND length(receipt_json)<=65536 THEN receipt_json END,outcome FROM command_receipts "
+                'WHERE command_id=?', (record['command_id'],)).fetchone()
+            if receipt_row is None or receipt_row[0] != record['request_hash'] or receipt_row[2] != 'applied':
+                raise ValueError('ocr_ack_receipt_unverified')
+            receipt = strict_json(receipt_row[1])
+            if (not valid_receipt(receipt) or receipt['command_id'] != record['command_id']
+                    or receipt['payload_hash'] != record['request_hash']
+                    or record['target'] not in receipt['targets']
+                    or receipt['acknowledgement_ids'][receipt['targets'].index(record['target'])] != row[2]):
+                raise ValueError('ocr_ack_receipt_unverified')
+            found += int(record['target'] == current)
+        except (ValueError, TypeError, KeyError, RecursionError):
+            raise ValueError('ocr_ack_receipt_unverified') from None
+    if found > 1:
+        raise ValueError('ocr_ack_receipt_unverified')
+    return found == 1
 
 
-def current_acknowledged(db, artifact_id):
+def current_acknowledged(db, artifact_id, *, deadline=None):
     """Refuse stale, incomplete or damaged evidence without accepting an old alert."""
     try:
-        return acknowledged(db, target(db, artifact_id))
+        return acknowledged(db, target(db, artifact_id), deadline=deadline)
     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
         return False
 
@@ -131,17 +188,17 @@ def build_plan(db, artifact_ids):
 
 def failure_counts(db, *, deadline=None):
     """Observe one bounded failure cohort and verify its receipts on a borrowed snapshot."""
-    import time
     if not db.in_transaction:
         raise ValueError('ocr_ack_snapshot_required')
     counts = {'pending_failed': 0, 'queue_status': 'partial',
               'failure_reason_counts': {}, 'exhausted_failed': 0,
-              'acknowledged_exhausted': 0, 'unacknowledged_pending_failed': 0}
+              'acknowledged_exhausted': 0, 'unacknowledged_pending_failed': 0,
+              'failure_cohort': payload_hash([])}
     if deadline is not None and time.monotonic() >= deadline:
         return counts
     observed = db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
                           'ORDER BY attachment_id LIMIT 257').fetchall()
-    checked = 0
+    checked, cohort = 0, []
     for item in observed[:256]:
         if deadline is not None and time.monotonic() >= deadline:
             break
@@ -150,15 +207,25 @@ def failure_counts(db, *, deadline=None):
         if source is not None and attachment_ocr._matching(prior, source) and prior['state'] in ('failed', 'unavailable'):
             counts['pending_failed'] += 1
             reason = prior.get('reason')
+            proof, accepted = None, False
             if type(reason) is str and reason in attachment_ocr.FAILURE_REASONS:
                 reasons = counts['failure_reason_counts']
                 reasons[reason] = reasons.get(reason, 0) + 1
             if type(prior.get('attempts')) is int and prior['attempts'] == 3:
                 counts['exhausted_failed'] += 1
-                if reason == 'output_schema_table_overlap' and current_acknowledged(db, prior['artifact_id']):
-                    counts['acknowledged_exhausted'] += 1
+                if reason == 'output_schema_table_overlap':
+                    try:
+                        current = target(db, prior['artifact_id'])
+                        proof = current['proof']
+                        if acknowledged(db, current, deadline=deadline):
+                            counts['acknowledged_exhausted'] += 1
+                            accepted = True
+                    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
+                        pass  # Unverified proof is never an acknowledged failure.
+            cohort.append([prior['artifact_id'], payload_hash(prior), proof, accepted])
         checked += 1
     counts['unacknowledged_pending_failed'] = counts['pending_failed'] - counts['acknowledged_exhausted']
-    if checked == len(observed):
+    counts['failure_cohort'] = payload_hash(cohort)
+    if checked == len(observed) and (deadline is None or time.monotonic() < deadline):
         counts['queue_status'] = 'known'
     return counts

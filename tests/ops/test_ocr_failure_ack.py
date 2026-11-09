@@ -279,3 +279,182 @@ def test_ack_never_changes_overlap_rejection(case):
     with pytest.raises(ValueError, match='output_schema_table_overlap'):
         ocr._document_text(document)
     assert observed(case)['acknowledged_exhausted'] == 1
+
+
+@pytest.mark.parametrize('observe_ack', [False, True])
+def test_new_failure_realerts_even_inside_old_episode_or_missed_ack(case, observe_ack):
+    _health(case.root, overall='degraded', reasons=['attachment_ocr_processing_failed'])
+    _status(case.data, **observed(case))
+    first = health_watch.evaluate(str(case.root), 1000, cfg=CFG)
+    assert first['alert']
+    operator.apply(case.root, request(case))
+    _status(case.data, at=1001, **observed(case))
+    if observe_ack:
+        middle = health_watch.evaluate(str(case.root), 1001, cfg=CFG)
+        assert middle['status'] == 'degraded' and not middle['alert']
+    case.ledger.artifact_add(ocr.KIND, json.dumps(case.doc), project_id=1, message_id=1,
+                            meta={'attachment_id': 1})
+    _status(case.data, at=1002, **observed(case))
+    last = health_watch.evaluate(str(case.root), 1002, cfg=CFG)
+    assert last['alert'] and last['attachment_ocr']['unacknowledged_pending_failed'] == 1
+
+
+def test_reacknowledge_current_proof_keeps_valid_old_ack_history(case):
+    first = operator.apply(case.root, request(case))
+    case.ledger.save_messages([_message(1, body='完全合成の別版。')])
+    case.ledger.save_messages([_message(1, body='完全合成の添付を確認しました。')])
+    assert observed(case)['acknowledged_exhausted'] == 0
+    req = request(case)
+    second = operator.apply(case.root, req)
+    assert second['acknowledgement_ids'] != first['acknowledgement_ids']
+    assert observed(case)['acknowledged_exhausted'] == 1
+    assert len(case.ledger.artifacts(ack.KIND)) == 2
+    assert operator.apply(case.root, req)['replayed']
+    assert len(case.ledger.artifacts(ack.KIND)) == 2
+
+
+def test_real_database_replace_invalidates_old_plan_and_allows_new_proof(case):
+    req = request(case)
+    operator.apply(case.root, req)
+    path = case.root / 'replacement.db'
+    with sqlite3.connect(path) as replacement:
+        case.db.backup(replacement)
+    case.ledger.close()
+    os.replace(path, case.data / 'ledger.db')
+    with sqlite3.connect(case.data / 'ledger.db') as db:
+        db.row_factory = sqlite3.Row
+        db.execute('BEGIN')
+        assert not ack.current_acknowledged(db, case.artifact)
+        new_plan = ack.build_plan(db, [case.artifact])
+        db.rollback()
+        with pytest.raises(ValueError, match='stale_plan'):
+            operator.apply(case.root, {**req, 'command_id': str(uuid.uuid4())})
+        fresh = {**req, 'command_id': str(uuid.uuid4()), 'plan': new_plan}
+        operator.apply(case.root, fresh)
+        db.execute('BEGIN')
+        assert ack.current_acknowledged(db, case.artifact)
+        db.rollback()
+
+
+@pytest.mark.parametrize('field,value', [('human_confirmed', False), ('human_confirmed', None),
+    ('actor', None), ('reason', '別の合成理由'), ('ocr_outcome', 'SYNTHETIC_PRIVATE_PATH'),
+    ('source_coverage', 'SYNTHETIC_PRIVATE_PATH'), ('targets', 1), ('targets', None),
+    ('acknowledgement_ids', [True])])
+def test_corrupt_receipt_never_suppresses_or_echoes_private_values(case, capsys, field, value):
+    req = request(case)
+    operator.apply(case.root, req)
+    row = case.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                          (req['command_id'],)).fetchone()
+    receipt = json.loads(row[0])
+    receipt[field] = value
+    with case.db:
+        case.db.execute('UPDATE command_receipts SET receipt_json=? WHERE command_id=?',
+                        (json.dumps(receipt), req['command_id']))
+    assert observed(case)['acknowledged_exhausted'] == 0
+    plan_file = case.data / 'replay-plan.json'
+    plan_file.write_text(json.dumps(req['plan']))
+    rc = operator.main(['--root', str(case.root), 'apply', '--plan', str(plan_file),
+        '--command-id', req['command_id'], '--actor', req['actor'], '--reason', req['reason'], '--confirm-human'])
+    text = capsys.readouterr().out
+    assert rc == 2 and json.loads(text)['error'] == 'ocr_ack_receipt_unverified'
+    assert 'SYNTHETIC_PRIVATE_PATH' not in text
+
+
+@pytest.mark.parametrize('kind', ['ack', 'receipt'])
+def test_oversized_evidence_is_not_parsed_as_current_ack(case, kind):
+    receipt = operator.apply(case.root, request(case))
+    with case.db:
+        if kind == 'ack':
+            raw = case.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                                  (receipt['acknowledgement_ids'][0],)).fetchone()[0]
+            case.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                            (raw + ' ' * 65536, receipt['acknowledgement_ids'][0]))
+        else:
+            raw = case.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                                  (receipt['command_id'],)).fetchone()[0]
+            case.db.execute('UPDATE command_receipts SET receipt_json=? WHERE command_id=?',
+                            (raw + ' ' * 65536, receipt['command_id']))
+    assert observed(case)['acknowledged_exhausted'] == 0
+
+
+@pytest.mark.parametrize('first,last', [(1, 0), (0, 1)])
+def test_duplicate_status_key_cannot_hide_current_failure(case, first, last):
+    operator.apply(case.root, request(case))
+    path = _status(case.data, **observed(case))
+    raw = path.read_text().replace('"failed": 0', '"failed": '+str(first))
+    path.write_text(raw[:-1] + ',"failed":'+str(last)+'}')
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report['state'] == 'unknown' and report['reason'] == 'attachment_ocr_status_corrupt'
+    assert report.get('alert_required') is not False
+
+
+def test_deadline_crossed_by_last_ack_is_not_a_complete_or_suppressible_observation(case, monkeypatch):
+    operator.apply(case.root, request(case))
+    _status(case.data, **observed(case))
+    clock = SimpleNamespace(now=0)
+    fake_time = SimpleNamespace(monotonic=lambda: clock.now)
+    original = ack.acknowledged
+    def overrun(*args, **kwargs):
+        result = original(*args, **kwargs)
+        clock.now = kwargs['deadline'] + 1
+        return result
+    monkeypatch.setattr(ack, 'time', fake_time)
+    monkeypatch.setattr(ack, 'acknowledged', overrun)
+    case.db.execute('BEGIN')
+    counts = ack.failure_counts(case.db, deadline=1)
+    case.db.rollback()
+    assert counts['queue_status'] == 'partial'
+    clock.now = 0
+    monkeypatch.setattr(health_report, 'time', fake_time)
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report['state'] == 'unknown' and report.get('alert_required') is not False
+
+
+@pytest.mark.parametrize('marker', ['update_in_progress.marker', 'restore_pending.json'])
+def test_restore_or_update_fence_blocks_health_suppression(case, marker):
+    operator.apply(case.root, request(case))
+    _status(case.data, **observed(case))
+    (case.data / marker).write_text('{}')
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report['state'] == 'unknown' and report.get('alert_required') is not False
+
+
+def test_unknown_degraded_cause_is_not_relabelled_as_only_acknowledged_ocr(case):
+    operator.apply(case.root, request(case))
+    _status(case.data, **observed(case))
+    _health(case.root, overall='degraded', reasons=[])
+    report = health_watch.evaluate(str(case.root), 1000, cfg=CFG)
+    assert report['status'] == 'degraded' and report['alert']
+    assert 'unknown' in report['state_reasons']
+
+
+def test_relative_root_produces_same_durable_receipt(case, monkeypatch):
+    req = request(case)
+    before = originals(case)
+    monkeypatch.chdir(case.root.parent)
+    receipt = operator.apply(case.root.name, req)
+    assert receipt['outcome'] == 'applied' and receipt['receipt_state'] == 'saved'
+    assert (case.data / receipt['backup']).is_file()
+    assert not receipt['backup'].startswith('/') and originals(case) == before
+
+
+@pytest.mark.parametrize('outcome', ['pending', 'unknown'])
+def test_ack_stops_old_unsent_alert_and_preserves_unknown_delivery(case, outcome):
+    _health(case.root, overall='degraded', reasons=['attachment_ocr_processing_failed'])
+    _status(case.data, **observed(case))
+    report = health_watch.evaluate(str(case.root), 1000, cfg=CFG)
+    assert report['alert']
+    state_file = case.root / health_watch.STATE_REL
+    state = json.loads(state_file.read_text())
+    state['delivery']['outcome'] = outcome
+    state_file.write_text(json.dumps(state))
+    operator.apply(case.root, request(case))
+    _status(case.data, at=1001, **observed(case))
+    report = health_watch.evaluate(str(case.root), 1001, cfg=CFG)
+    assert not report['alert'] and report['status'] == 'degraded'
+    final = json.loads(state_file.read_text())
+    if outcome == 'pending':
+        assert final['delivery']['outcome'] == 'superseded'
+    else:
+        assert final['unknown_deliveries'][-1]['outcome'] == 'unknown'
+        assert final.get('delivery', {}).get('outcome') != 'pending'

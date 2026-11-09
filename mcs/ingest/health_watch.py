@@ -374,6 +374,8 @@ def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
     reasons = [code for code in old or [] if not code.startswith("attachment_ocr_")]
     bad = detail["state"] not in ("ok", "disabled")
     if bad:
+        if obs['status'] == 'degraded' and not old and detail.get('alert_required') is False:
+            reasons.append('unknown')
         reasons.append(detail["reason"])
         if obs["status"] == "ok":
             obs["status"] = "degraded"
@@ -534,6 +536,14 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
                        or any(r.startswith(("standalone_", "attachment_ocr_")) for r in gained)))
+    from mcs_util import valid_hash
+    ocr_detail = obs.get('attachment_ocr') or {}
+    cohort = ocr_detail.get('failure_cohort')
+    if valid_hash(cohort) and ocr_detail.get('queue_status') == 'known':
+        if (ocr_detail.get('reason') == 'attachment_ocr_processing_failed'
+                and cohort != state.get('ocr_failure_cohort')):
+            new_reason = True
+        state['ocr_failure_cohort'] = cohort
     alerted_at = state.get("detected_at", state.get("alerted_at"))
     invalid_alert_at = not finite_number(alerted_at) \
         or alerted_at > now
@@ -553,7 +563,6 @@ def evaluate(home: str = HOME, now: float | None = None,
               and episode_reasons is not None and set(reasons) <= episode_reasons)
     if reflap:
         seen = set(episode_reasons)
-    ocr_detail = obs.get('attachment_ocr') or {}
     acknowledged_ocr_only = (obs['status'] == 'degraded'
         and obs.get('state_reasons') == ['attachment_ocr_acknowledged_gap']
         and ocr_detail.get('reason') == 'attachment_ocr_acknowledged_gap'
@@ -606,7 +615,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                                       else seen)
     delivery = _reconcile_delivery(state, obs["status"], key, alert,
                                    disk_low, disk_alert, transition,
-                                   new_reason or realert, now)
+                                   new_reason or realert, now, alert_active=not acknowledged_ocr_only)
     if delivery:
         state["delivery"] = delivery
         report["delivery"] = dict(delivery)
@@ -636,7 +645,7 @@ def _archive_unknown(state: dict, delivery: dict) -> None:
 def _reconcile_delivery(state: dict, status: str, key: tuple,
                         alert: bool, disk_low: bool, disk_alert: bool,
                         transition: bool, new_reason: bool,
-                        now: float) -> dict:
+                        now: float, *, alert_active: bool = True) -> dict:
     """Carry over or replace the durable send record for this verdict.
 
     pending/not_sent deliveries survive only while their component is
@@ -646,7 +655,7 @@ def _reconcile_delivery(state: dict, status: str, key: tuple,
     send cannot silence a persisting incident forever."""
     delivery = state.get("delivery")
     delivery = delivery if isinstance(delivery, dict) else {}
-    current_alert = bool(delivery.get("alert") and status != "ok")
+    current_alert = bool(delivery.get("alert") and status != "ok" and alert_active)
     current_disk_alert = bool(delivery.get("disk_alert") and disk_low)
     if delivery.get("outcome") == "unknown" and not (current_alert or current_disk_alert):
         # Recovery resolves the incident, not its uncertain send outcome.

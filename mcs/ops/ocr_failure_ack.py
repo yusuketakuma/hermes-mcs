@@ -16,7 +16,7 @@ import _mcs_path  # noqa: E402,F401
 
 import attachment_ocr_ack as ack  # noqa: E402
 from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
-from mcs_util import strict_json, valid_hash, valid_text  # noqa: E402
+from mcs_util import strict_json, valid_text  # noqa: E402
 from notify_cards import mark_snapshot_dirty  # noqa: E402
 from safe_io import atomic_write, fsync_dir, read_regular_nofollow  # noqa: E402
 from writer_lock import acquire_run_lock, code_stamp, wait_run_lock  # noqa: E402
@@ -31,18 +31,9 @@ def _validate(request):
             or not valid_text(request.get('reason'), 2000)):
         raise ValueError('ocr_ack_confirmation_required')
     plan = request['plan']
-    if (type(plan) is not dict or set(plan) != {'version', 'action', 'database_identity', 'targets'}
-            or type(plan.get('version')) is not int or plan['version'] != 1
-            or plan.get('action') != ack.ACTION or not valid_hash(plan.get('database_identity'))
-            or type(plan.get('targets')) is not list or not 1 <= len(plan['targets']) <= ack.MAX_TARGETS
-            or any(type(item) is not dict or set(item) != {'artifact_id', 'proof'}
-                   or type(item.get('artifact_id')) is not int or item['artifact_id'] <= 0
-                   or not valid_hash(item.get('proof')) for item in plan['targets'])):
+    if not ack.valid_plan(plan):
         raise ValueError('ocr_ack_plan_invalid')
-    ids = [item['artifact_id'] for item in plan['targets']]
-    if ids != sorted(set(ids)):
-        raise ValueError('ocr_ack_plan_invalid')
-    return ids
+    return [item['artifact_id'] for item in plan['targets']]
 
 
 def _publish(archive, receipt):
@@ -57,7 +48,9 @@ def _publish(archive, receipt):
 
 
 def _receipt(db, command_id, digest):
-    row = db.execute('SELECT payload_hash,receipt_json FROM command_receipts WHERE command_id=?',
+    row = db.execute("SELECT CASE WHEN typeof(payload_hash)='text' AND length(payload_hash)=64 "
+                     "THEN payload_hash END,CASE WHEN typeof(receipt_json)='text' AND length(receipt_json)<=65536 "
+                     "THEN receipt_json END,outcome FROM command_receipts WHERE command_id=?",
                      (command_id,)).fetchone()
     if row is None:
         return None
@@ -67,9 +60,8 @@ def _receipt(db, command_id, digest):
         receipt = strict_json(row[1])
     except (ValueError, TypeError, RecursionError):
         raise ValueError('ocr_ack_receipt_unverified') from None
-    if (type(receipt) is not dict or receipt.get('kind') != ack.COMMAND
-            or receipt.get('outcome') != 'applied' or receipt.get('payload_hash') != digest
-            or receipt.get('command_id') != command_id):
+    if (not ack.valid_receipt(receipt) or row[2] != 'applied'
+            or receipt['payload_hash'] != digest or receipt['command_id'] != command_id):
         raise ValueError('ocr_ack_receipt_unverified')
     return receipt
 
@@ -79,7 +71,7 @@ def apply(root, request, *, wait_seconds=0):
     ids = _validate(request)
     if type(wait_seconds) is not int or not 0 <= wait_seconds <= 600:
         raise ValueError('bad_wait_seconds')
-    data = Path(root) / 'data'
+    data = Path(root).absolute() / 'data'
     archive = data / 'ocr_alert_acknowledgements' / request['command_id']
     if (data.is_symlink() or (data / 'ledger.db').is_symlink()
             or archive.parent.is_symlink() or archive.is_symlink()):
@@ -143,7 +135,8 @@ def apply(root, request, *, wait_seconds=0):
                     receipt = {'kind': ack.COMMAND, 'command_id': request['command_id'],
                         'payload_hash': digest, 'outcome': 'applied', 'actor': request['actor'],
                         'reason': request['reason'], 'human_confirmed': True, 'processed_at': now,
-                        'targets': request['plan']['targets'], 'acknowledgement_ids': acknowledgement_ids,
+                        'plan': request['plan'], 'targets': request['plan']['targets'],
+                        'acknowledgement_ids': acknowledgement_ids,
                         'backup': str(Path(name).relative_to(data)),
                         'ocr_outcome': 'failed', 'source_coverage': 'unrecovered',
                         'clinical_review': 'not_proven', 'original_file_availability': 'not_rechecked'}
@@ -203,6 +196,7 @@ def main(argv=None):
                 wait_seconds=args.wait_seconds)
             result = {key: receipt[key] for key in ('outcome', 'command_id', 'receipt_state', 'replayed',
                                                     'ocr_outcome', 'source_coverage')}
+            result.update(ocr_outcome='failed', source_coverage='unrecovered')
             result['acknowledged'] = len(receipt['targets'])
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
