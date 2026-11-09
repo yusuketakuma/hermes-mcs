@@ -24,6 +24,12 @@ SYSTEM_ALERT_KINDS = frozenset({
     "health_write_failed",
 })
 
+# Restore-time exemption subset: run_failed keeps its system-alert
+# routing, but a pre-restore operational alert can never prove it was
+# not delivered, so it is quarantined (restore_text_unverified) like any
+# other text event instead of being automatically re-sent.
+RESTORE_BYPASS_ALERT_KINDS = SYSTEM_ALERT_KINDS - {"run_failed"}
+
 
 def _channel_target(value, cfg):
     transport, _, channel = value.partition(':')

@@ -189,20 +189,25 @@ def test_restore_marker_holds_content_but_allows_existing_alerts(text_world, mon
     else:
         notify_spool.mark_restored(str(w.data), phase=phase)
     result = notify_flush.flush(w.led, limit=20)
-    assert len(w.calls) == len(notify_sender.SYSTEM_ALERT_KINDS)
-    assert result["restore_pending"] == 5
+    # run_failed is the only system alert that no longer bypasses the
+    # restore gate — a pre-restore operational alert cannot prove it was
+    # never delivered, so it defers like ordinary content.
+    assert len(w.calls) == len(notify_sender.RESTORE_BYPASS_ALERT_KINDS)
+    assert result["restore_pending"] == 6
     for kind, eid in ids.items():
         row = _row(w.led, eid)
-        assert row["state"] == ("accepted" if kind in notify_sender.SYSTEM_ALERT_KINDS else "pending")
-        if kind not in notify_sender.SYSTEM_ALERT_KINDS:
+        assert row["state"] == (
+            "accepted" if kind in notify_sender.RESTORE_BYPASS_ALERT_KINDS else "pending")
+        if kind not in notify_sender.RESTORE_BYPASS_ALERT_KINDS:
             assert row["progress"] is None and row["attempts"] == 0
     notify_spool.clear_restore_pending(str(w.data))
     # gated content was deferred out of the due window; it resumes after
     monkeypatch.setattr(notify_flush.time, "time",
                         lambda: 1_790_000_000.0 + notify_flush.RERENDER_RETRY_S)
     # Patient signal stays private-thread pending; the four other synthetic
-    # content kinds retain their existing text route.
-    assert notify_flush.flush(w.led, limit=20)["sent"] == 4
+    # content kinds retain their existing text route, and the deferred
+    # run_failed alert also sends once the marker is gone.
+    assert notify_flush.flush(w.led, limit=20)["sent"] == 5
 
 
 def test_reconcile_retains_unverifiable_text_after_marker_clears(text_world):
@@ -286,17 +291,56 @@ def test_reconcile_receipt_failure_keeps_restore_gate(text_world, monkeypatch):
     assert not w.calls
 
 
-def test_restore_marker_defers_content_so_later_alert_is_selected(text_world):
+@pytest.mark.parametrize("kind,expected", [
+    ("update_notice", "accepted"), ("session_recovered", "accepted"),
+    ("run_failed", "pending"),
+])
+def test_restore_marker_defers_content_and_run_failed_but_other_alerts_send(
+        text_world, monkeypatch, kind, expected):
     w = text_world
     content = [w.led.outbox_add_tx("new_messages", None, {}, route="text") for _ in range(12)]
-    alert = w.led.outbox_add_tx("run_failed", None, {}, route="text")
+    alert = w.led.outbox_add_tx(kind, None, {}, route="text")
     w.led.db.commit()
     notify_spool.mark_restored(str(w.data))
     notify_flush.flush(w.led)
     assert _row(w.led, content[0])["attempts"] == 0
     notify_flush.flush(w.led)
-    assert _row(w.led, alert)["state"] == "accepted"
+    assert _row(w.led, alert)["state"] == expected
     assert all(_row(w.led, eid)["state"] == "pending" for eid in content)
+    if expected == "pending":
+        # Deferred without an attempt; once the marker clears it can
+        # still send — the gate only stops an automatic resend.
+        assert _row(w.led, alert)["attempts"] == 0
+        notify_spool.clear_restore_pending(str(w.data))
+        monkeypatch.setattr(notify_flush.time, "time",
+                            lambda: 1_790_000_000.0 + notify_flush.RERENDER_RETRY_S)
+        notify_flush.flush(w.led, limit=20)
+        assert _row(w.led, alert)["state"] == "accepted"
+
+
+def test_reconcile_quarantines_prerestore_run_failed_and_it_becomes_retirable(text_world):
+    import notification_cancel
+    w = text_world
+    old = w.led.outbox_add_tx("run_failed", None, {"code": "synthetic"}, route="text")
+    w.led.db.execute("UPDATE notify_outbox SET created_at=999.0 WHERE event_id=?", (old,))
+    w.led.db.commit()
+    notify_spool.mark_restored(str(w.data), now=1000.0)
+    fresh = w.led.outbox_add_tx("run_failed", None, {"code": "synthetic2"}, route="text")
+    w.led.db.execute("UPDATE notify_outbox SET created_at=1001.0 WHERE event_id=?", (fresh,))
+    w.led.db.commit()
+    notify_reconcile.reconcile_after_restore(w.led, {})
+    old_row = _row(w.led, old)
+    assert old_row["state"] == "failed" and old_row["next_try"] is None
+    assert json.loads(old_row["progress"])["hold_reason"] == "restore_text_unverified"
+    # Quarantined pre-restore alerts are exactly the retire-eligible set.
+    plan = notification_cancel.build_plan(w.led.db, [old],
+                                          action="retire_operational_alert")
+    assert [e["event_id"] for e in plan["events"]] == [old]
+    # A run_failed created after the restore point was never delivered,
+    # stays unquarantined and sends normally.
+    assert _row(w.led, fresh)["state"] == "pending"
+    notify_flush.flush(w.led)
+    assert _row(w.led, fresh)["state"] == "accepted"
 
 
 @pytest.mark.parametrize("kind", ["signal", "new_messages", "attachment_followup"])
