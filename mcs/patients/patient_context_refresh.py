@@ -750,7 +750,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
                     message_id=mid, unit_key=unit_key,
                     owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
-        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
+        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
+                OSError, RecursionError, OverflowError):
             generation_uncertain = True
             raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
         if (unit_key, mid, prompt) not in local_checks:

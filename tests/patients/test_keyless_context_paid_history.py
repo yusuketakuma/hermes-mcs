@@ -365,3 +365,23 @@ def test_verified_partial_local_fallback_keeps_its_cursor_when_cloud_returns(run
     assert not ledger.artifacts('cloud_usage_reserve')
     for row in original:
         assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone()) == row
+
+
+
+@pytest.mark.parametrize('raw', ['not-json', '[' * 1500 + '0' + ']' * 1500])
+def test_unreadable_paid_dependency_stays_held_without_entering_local_llm(runtime, real_cloud, monkeypatch, raw):
+    ledger, clock, local_calls = runtime
+    cfg, posts = real_cloud
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    _finish_sources(runtime, cfg)
+    row = ledger.artifacts('cloud_usage_result')[-1]
+    with ledger.db:
+        ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args: None)
+    monkeypatch.setattr(extract_llm, '_cloud_mode', extract_llm_provider._cloud_mode)
+    sent = len(posts)
+    for _ in range(4):
+        assert step(runtime, cfg=cfg)['status'] != 'complete'
+        clock.wall += 61
+    assert len(posts) == sent and not local_calls and not ledger.artifacts(state.KIND)
+    assert ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()[0] == raw

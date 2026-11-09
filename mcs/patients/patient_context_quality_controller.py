@@ -578,7 +578,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 else:
                     return "unknown", None
             optional_quality = True
-        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error):
+        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
+                OSError, RecursionError, OverflowError):
             return "unknown", None
     if (not cloud_key and not optional_quality or scfg["mode"] == "off" and not optional_quality
             or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
