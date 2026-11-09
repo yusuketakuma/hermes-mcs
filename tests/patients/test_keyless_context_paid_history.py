@@ -11,6 +11,7 @@ import cloud_policy
 import extract_llm
 import extract_llm_provider
 import patient_context_refresh_state as state
+import patient_context_refresh as refresh
 from test_context_cloud_update_identity import real_cloud, runtime, cloud
 from test_patient_context_refresh import seed, step
 
@@ -58,7 +59,9 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
             break
         assert result['status'] in ('progressed', 'deferred'), result
     else:
-        pytest.fail('definite API failure did not reach local context publication')
+        snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
+        pytest.fail(f'API fallback did not publish: {result!r}; coverage='
+                    f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert sent and local_calls
     results = ledger.artifacts('cloud_usage_result')
     assert results
@@ -66,7 +69,6 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
         metadata = json.loads(row['meta'])
         assert metadata['http_class'] == 'http_' + str(status)
         assert Decimal(metadata['cost_usd']) > 0
-    import patient_context_refresh as refresh
     assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
 
 
@@ -81,7 +83,9 @@ def test_budget_refusal_uses_local_without_new_cloud_reservation(runtime, real_c
             break
         assert result['status'] in ('progressed', 'deferred'), result
     else:
-        pytest.fail('budget refusal did not reach local context publication')
+        snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
+        pytest.fail(f'budget fallback did not publish: {result!r}; coverage='
+                    f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert local_calls and not posts
     assert not ledger.artifacts('cloud_usage_reserve')
 
@@ -165,6 +169,5 @@ def test_verified_fallback_supersedes_an_older_failed_cloud_scan(runtime, real_c
     else:
         pytest.fail('older cloud failure shadowed the verified local fallback')
     assert local_calls
-    import patient_context_refresh as refresh
     snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
     assert refresh._inference_coverage(ledger.db, 1, cfg, snapshot)['complete']
