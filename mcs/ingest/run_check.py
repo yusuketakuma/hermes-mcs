@@ -980,6 +980,10 @@ class _VerificationGate:
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from error
         return self
 
+    @staticmethod
+    def _control_exc(exc):
+        return isinstance(exc, (KeyboardInterrupt, SystemExit))
+
     def __exit__(self, exc_type, exc, tb):
         if not self.engaged:
             return False
@@ -988,12 +992,24 @@ class _VerificationGate:
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as secondary:
+            if self._control_exc(exc):
+                # A validator control exception keeps propagating as the
+                # same object; the reacquire failure rides as its cause
+                # (secondary's own context already points back at exc —
+                # cleared to keep the chain acyclic) and writes stay
+                # forbidden.
+                secondary.__context__ = None
+                exc.__cause__ = secondary
+                return False
             # A failed reacquire (updater win, bounded timeout or lock
             # failure) keeps the in-flight exception as cause/context
             # and leaves writes forbidden.
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from (
                 exc if exc is not None else secondary)
         if not self._identity_intact():
+            if self._control_exc(exc):
+                exc.__cause__ = _SnapshotGateUnverified("snapshot_gate_unverified")
+                return False
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from exc
         self._state["allowed"] = True
         return False

@@ -248,6 +248,70 @@ def test_gate_control_exception_is_not_normalized(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize("control", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("losing", ["updater", "held"])
+def test_gate_control_exception_survives_reacquire_failure(
+        tmp_path, monkeypatch, control, losing):
+    """A validator KI/SystemExit stays the propagated object even when the
+    reacquire fails — the RunLockLost rides as its cause, allowed stays
+    False, and the same instance (not a normalized gate error) surfaces."""
+    db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
+    state = {"allowed": False, "attempted": False}
+    sentinel = control()
+    probe = _probe(tmp_path) if losing == "held" else None
+    if losing == "held":
+        monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.05)
+
+    def validating(*args, **kwargs):
+        if losing == "updater":
+            updater["state"] = (True, 7)                 # RunLockLost(held=True)
+        else:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held=False path
+        raise sentinel
+
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+    with pytest.raises(control) as caught:
+        _publish(db, tmp_path, lock_fd, state, baseline)
+    assert caught.value is sentinel                     # same object propagates
+    lost = caught.value.__cause__
+    assert isinstance(lost, writer_lock.RunLockLost)
+    assert lost.held is (losing == "updater")
+    assert state["allowed"] is False
+    assert not os.path.exists(_dest())
+    if probe is not None:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
+    os.close(lock_fd)
+    db.close()
+
+
+@pytest.mark.parametrize("control", [KeyboardInterrupt, SystemExit])
+def test_gate_control_exception_survives_identity_mismatch(
+        tmp_path, monkeypatch, control):
+    """Reacquire succeeds but the DB identity check fails while a control
+    exception is in flight: the control exception still propagates and the
+    gate failure is kept as its cause."""
+    db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
+    state = {"allowed": False, "attempted": False}
+    sentinel = control()
+    db_path = str(tmp_path / "ledger.db")
+
+    def validating(*args, **kwargs):
+        os.replace(db_path, db_path + ".stale")          # inode swap post-copy
+        open(db_path, "wb").close()
+        raise sentinel
+
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+    with pytest.raises(control) as caught:
+        _publish(db, tmp_path, lock_fd, state, baseline)
+    assert caught.value is sentinel
+    assert isinstance(caught.value.__cause__, run_check._SnapshotGateUnverified)
+    assert state["allowed"] is False
+    assert not os.path.exists(_dest())
+    os.close(lock_fd)
+    db.close()
+
+
 def test_gate_non_finite_deadline_is_rejected_without_unlock(tmp_path, monkeypatch):
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     state = {"allowed": False, "attempted": False}
@@ -299,26 +363,36 @@ def test_gate_validator_false_keeps_the_normal_failure_path(tmp_path, monkeypatc
 
 def test_gate_verify_in_budget_but_publish_after_deadline_stays_unpublished(
         tmp_path, monkeypatch):
+    """verified is sampled inside the unlock scope while still in budget;
+    the clock only expires after reacquire, at the publication fence —
+    the run must stop at publish_deadline with no rename."""
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     state = {"allowed": False, "attempted": False}
     clock = [time.monotonic()]
     monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
-    deadline = clock[0] + 5
-    original = snapshots._valid_snapshot_candidate
+    outer_deadline = clock[0] + 5
 
-    def validating(*args, **kwargs):
-        clock[0] = deadline + 1                          # verified in-window, but
-        return original(*args, **kwargs)                 # time runs out afterwards
+    def context_factory(*, deadline):
+        gate = run_check._verification_context_factory(
+            db, lock_fd, state, baseline)(deadline=deadline)
+        confirm = gate.confirm_fence
 
-    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+        def confirm_then_expire(fd, dest_dir):
+            # The unlock window, reacquire and identity checks all ran
+            # in-budget; only the post-window publication sees expiry.
+            clock[0] = outer_deadline + 1
+            return confirm(fd, dest_dir)
+
+        gate.confirm_fence = confirm_then_expire
+        return gate
+
     with snapshots._publication_lock(maintenance.SNAPSHOT_DIR) as fence:
         assert snapshots._publish_snapshot_locked(
             str(tmp_path / "ledger.db"), maintenance.SNAPSHOT_DIR, fence,
-            deadline=deadline,
-            verification_context=run_check._verification_context_factory(
-                db, lock_fd, state, baseline)) is None
-    assert snapshots.last_failure()["reason"] in (
-        "verify_deadline", "verify_deadline_at_start", "publish_deadline")
+            deadline=outer_deadline,
+            verification_context=context_factory) is None
+    assert snapshots.last_failure()["reason"] == "publish_deadline"
+    assert state["allowed"] is True                      # gate itself passed
     assert not os.path.exists(_dest())
     os.close(lock_fd)
     db.close()
@@ -439,6 +513,49 @@ def test_finish_run_gate_failure_keeps_the_dirty_flag(tmp_path, monkeypatch):
     db.close()
 
 
+def test_finish_run_gate_reacquire_with_mid_publish_dirty_mark_keeps_generation(
+        tmp_path, monkeypatch):
+    """Real interleaving: while the gate window has run.lock released, a
+    second connection takes it, marks the snapshot dirty and commits.
+    After reacquire the publish succeeds, and the stale-generation CAS
+    clear must leave the newer mark — the next run republishes."""
+    db, updater, lock_fd, baseline = _finish_env(tmp_path, monkeypatch)
+    db_path = str(tmp_path / "ledger.db")
+    lock_path = str(tmp_path / "run.lock")
+    notify_cards.mark_snapshot_dirty(db.db)
+    db.db.commit()
+    assert notify_cards.snapshot_dirty(db) == 1
+    original = snapshots._valid_snapshot_candidate
+
+    def validating(*args, **kwargs):
+        other = os.open(lock_path, os.O_RDONLY)
+        # Non-vacuous: this flock only succeeds because the gate released
+        # the run lock for the validation window.
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with closing(sqlite3.connect(db_path, timeout=10)) as other_db:
+                notify_cards.mark_snapshot_dirty(other_db)
+                other_db.commit()                    # generation 1 -> 2
+        finally:
+            fcntl.flock(other, fcntl.LOCK_UN)
+            os.close(other)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+    result = {"notify": {}, "errors": [], "incomplete": []}
+    run_id = db.begin_run(None)
+    assert run_check._finish_run(db, {}, result, run_id,
+                                 deadline=time.monotonic() + 60,
+                                 run_lock_fd=lock_fd,
+                                 db_baseline=baseline) == "ok"
+    assert os.path.exists(_dest())                     # publish went through
+    # clear_snapshot_dirty ran for real with the pre-publish generation;
+    # the mid-publish mark bumped it, so the CAS clear was a no-op.
+    assert notify_cards.snapshot_dirty(db) == 2
+    os.close(lock_fd)
+    db.close()
+
+
 def test_finish_run_raises_gate_error_when_writes_left_forbidden(tmp_path, monkeypatch):
     db, updater, lock_fd, baseline = _finish_env(tmp_path, monkeypatch)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda *a: False)
@@ -520,6 +637,12 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     # faulthandler has no fileno under capture — set the watchdog
     # deadline directly so _hard_deadline() stays finite.
     monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 300)
+    # Pre-seed the snapshot reuse marker: a failed publish must leave its
+    # bytes untouched (it is only rewritten after a successful publish).
+    sig_path = maintenance._snapshot_sig_path()
+    os.makedirs(os.path.dirname(sig_path), exist_ok=True)
+    with open(sig_path, "wb") as marker:
+        marker.write(b"synthetic-sig-marker")
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 1
     out = json.loads(capsys.readouterr().out)
@@ -529,6 +652,8 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     assert cleared == []                                 # dirty CAS never ran
     assert not (data / "health.json").exists()           # no health write
     assert not (data / run_check.UPDATE_MARKER_NAME).exists()
+    with open(sig_path, "rb") as marker:
+        assert marker.read() == b"synthetic-sig-marker"  # reuse marker untouched
     assert not os.path.exists(_dest())                   # no rename
     with closing(sqlite3.connect(data / "ledger.db")) as conn:
         assert conn.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0

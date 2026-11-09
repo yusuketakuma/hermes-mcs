@@ -56,11 +56,16 @@ publication fence を unlock 前と再取得後に照合してから公開へ進
 | identity/fence 不一致・非有限 deadline | `_SnapshotGateUnverified` → 結果 `snapshot_gate_unverified` + exit 1 | finish_run は公開前に記録済み。finish_snapshot では health/outbox/実行記録の訂正書込みは行わない |
 | 通常検証失敗 | `validator_false` 等の既存失敗語彙・既存 partial 処理 | gate の reacquire・identity が成功していれば `allowed` は True（通常部分失敗は変えない） |
 
-`allowed` はローカルの共有フラグ（永続化なし・物理 held と分離）で、
-有限 deadline・再取得・updater/restore・DB/runlock identity・
-publication fence の確認がすべて成功したときだけ True になります。
+`allowed` はローカルの共有フラグ（永続化なし・物理 held と分離）です。
+`__exit__` 時点で有限 deadline・再取得・updater/restore・DB/runlock
+identity の確認がすべて成功したときだけ True になります。publication
+fence はその後 `confirm_fence` が別途再確認し、そこで失敗すれば
+`allowed` は False へ戻ります。validator 由来の KeyboardInterrupt/
+SystemExit は制御例外として正規化せず同一 object で伝播し、再取得・
+identity 失敗はその cause/context に保持します（allowed は False のまま）。
 `unchanged` で公開に至らず gate が一度も起動しなかった場合は
 `attempted` が立たず、通常の partial/ok 処理を妨げません。
 `verification_context` 未指定（`deadline=None` や run_check 以外の
-caller）の経路は従来動作のままです。速度効果は合成検証のみで、
-実機確認はしていません。
+caller）の経路は従来動作のままです。安全性（no-write・unlock 窓・
+identity 照合）とロック解放の効果は合成検証で確認済みですが、
+実機での速度効果は未測定です。
