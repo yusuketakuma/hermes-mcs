@@ -751,6 +751,20 @@ def care_detail_event_day(detail, quote):
     return day[1].isoformat() if day is not None and day[0] == 'ymd' else None
 
 
+def care_detail_service(detail, quote):
+    """Return an explicitly written service class; generic support stays unknown."""
+    if not isinstance(detail, dict) or not isinstance(quote, str):
+        return None
+    if detail.get('event_type') not in (
+            'intervention_start', 'intervention_pause', 'intervention_resume', 'intervention_end'):
+        return None
+    matches = _detail_cue_matches(quote, detail['event_type'])
+    if len(matches) != 1:
+        return None
+    service = re.match(r'訪問看護|訪問介護|リハビリ', matches[0].group())
+    return service.group() if service is not None else None
+
+
 def validate_record(item, body):
     """Keep a typed candidate even when its semantic or quotation support is unresolved."""
     if not isinstance(item, dict) or item.get('kind') not in EVENT_KINDS:

@@ -22,6 +22,52 @@ _EVENT_KIND = {
     "受診": "exam", "検査": "exam", "採血": "exam",
 }
 _JST = timezone(timedelta(hours=9))
+_INTERVENTION_STATES = {"intervention_start": "started", "intervention_pause": "paused",
+                        "intervention_resume": "resumed", "intervention_end": "ended"}
+
+
+def intervention_states(events, coverage):
+    """Derive last source-proved transitions by provider, profession and service."""
+    groups, uncertain = {}, []
+    for event in events:
+        detail = event.get("care_detail") or {}
+        transition = _INTERVENTION_STATES.get(detail.get("event_type"))
+        if (transition is None or event.get("subject") != "patient"
+                or event.get("negated") is not False or event.get("unverified") is not False
+                or event.get("status") not in ("current", "past")):
+            continue
+        provider = event.get("service_provider") or {}
+        professions = provider.get("professions") or []
+        facility, service = provider.get("label"), event.get("service")
+        known = (provider.get("state") == "matched" and isinstance(facility, str) and facility
+                 and len(professions) == 1 and isinstance(professions[0], str)
+                 and professions[0] and service and event.get("event_day")
+                 and not event.get("date_uncertain")
+                 and detail.get("workflow_status") in ("performed", "done", "in_progress"))
+        if not known:
+            uncertain.append((facility, tuple(professions) if all(professions) else (), service))
+            continue
+        key = facility, professions[0], service
+        groups.setdefault(key, []).append((event["event_day"], transition, event))
+    rows = []
+    for (facility, profession, service), records in sorted(groups.items()):
+        latest_day = max(record[0] for record in records)
+        latest = [record for record in records if record[0] == latest_day]
+        transitions = {record[1] for record in latest}
+        ambiguous = any((other_facility is None or other_facility == facility)
+                        and (not professions or profession in professions)
+                        and (other_service is None or other_service == service)
+                        for other_facility, professions, other_service in uncertain)
+        state = next(iter(transitions)) if len(transitions) == 1 and not ambiguous else "unknown"
+        rows.append({"facility": facility, "profession": profession, "service": service,
+                     "recorded_state": state, "event_day": latest_day,
+                     "current_state": "unknown", "history_complete": coverage.get("source_complete") is True,
+                     "references": [{key: event.get(key) for key in (
+                         "message_id", "artifact_id", "record_index", "content_hash", "span")}
+                         for _, _, event in latest]})
+    return {"items": rows, "unresolved_records": len(uncertain),
+            "scope": "patient_profession_facility_service", "basis": "explicit_recorded_transitions",
+            "history_complete": coverage.get("source_complete") is True}
 
 
 def _posted(value):

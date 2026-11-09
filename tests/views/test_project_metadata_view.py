@@ -13,7 +13,7 @@ from mcs_view import View, main as view_main
 from writer_lock import acquire_run_lock
 from project_metadata_contract import ARTIFACT_KIND
 from project_metadata import main, sync_metadata
-from project_metadata_view import get_project_metadata
+from project_metadata_view import care_team_speaker, get_project_metadata
 from test_project_metadata import LAB, MEMBER, MEDICATION, adapter, page
 
 
@@ -88,6 +88,88 @@ def test_complete_and_empty_are_distinct_from_unknown(store, rows, state):
     # Then
     assert result["state"] == state and result["current_known"]
     assert result["last_complete_at"] == 100
+
+
+def test_care_team_cutoff_does_not_borrow_later_membership(store):
+    capture(store, now=100)
+    capture(store, rows=[], now=200)
+    before = store.db.total_changes
+    old = get_project_metadata(store.db, 1, "care_team", now=150, care_team_as_of=150)
+    latest = get_project_metadata(store.db, 1, "care_team", now=200)
+    assert old["state"] == "complete" and len(old["rows"]) == 1
+    assert old["last_complete_at"] == 100
+    assert old["attempt_artifact_id"] == old["complete_artifact_id"]
+    assert latest["state"] == "empty" and latest["rows"] == []
+    assert store.db.total_changes == before
+
+
+def test_care_team_cutoff_preserves_a_failed_attempt(store):
+    capture(store, now=100)
+    client, _ = adapter([(401, {})])
+    sync_metadata(store, client, 1, "care_team", enabled=True, now=110)
+    capture(store, rows=[], now=200)
+    result = get_project_metadata(store.db, 1, "care_team", now=150, care_team_as_of=150)
+    assert result["state"] == "failed" and not result["current_known"]
+    assert result["historical"] and len(result["rows"]) == 1
+    assert result["attempt_artifact_id"] != result["complete_artifact_id"]
+
+
+@pytest.mark.parametrize("timestamp", [None, True, float("nan"), float("inf"), "invalid"])
+def test_care_team_cutoff_cannot_skip_an_unverified_timestamp(store, timestamp):
+    capture(store, now=100)
+    row = store.db.execute("SELECT artifact_id,content FROM artifacts ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    payload = json.loads(row["content"])
+    payload["attempted_at"] = timestamp
+    with store.db:
+        store.artifact_add_tx(ARTIFACT_KIND, json.dumps(payload), project_id=1)
+    result = get_project_metadata(store.db, 1, "care_team", now=150, care_team_as_of=150)
+    assert result["state"] == "unknown" and not result["current_known"]
+    assert result["rows"] == []
+
+
+@pytest.mark.parametrize("cutoff", [True, -1, float("nan"), float("inf"), 10 ** 400])
+def test_invalid_care_team_cutoff_is_rejected_before_sql(cutoff):
+    with pytest.raises(ValueError, match="metadata view options"):
+        get_project_metadata(None, 1, "care_team", care_team_as_of=cutoff)
+
+
+def test_speaker_link_uses_id_and_type_with_row_evidence(store):
+    capture(store, now=100, retain_names=True)
+    before = store.db.total_changes
+    linked = care_team_speaker(store.db, 1, MEMBER["id"], MEMBER["type"], 110)
+    assert linked["state"] == "matched"
+    assert linked["member"]["facility"] == "synthetic facility"
+    assert len(linked["row_hash"]) == 64 and linked["artifact_id"] is not None
+    assert "NAME_CANARY" not in json.dumps(linked)
+    assert care_team_speaker(store.db, 1, MEMBER["id"], "different", 110)["state"] == "unknown"
+    assert care_team_speaker(store.db, 1, str(MEMBER["id"]), MEMBER["type"], 110)["state"] == "unknown"
+    assert care_team_speaker(store.db, 1, MEMBER["id"], MEMBER["type"], 90)["state"] == "unknown"
+    assert store.db.total_changes == before
+
+
+@pytest.mark.parametrize("damage", ["missing_dataset", "boolean_entity", "wrong_entity",
+                                    "duplicate_time", "malformed"])
+def test_care_team_cutoff_does_not_revive_an_old_roster_after_invalid_data(store, damage):
+    capture(store, now=100)
+    row = store.db.execute("SELECT content FROM artifacts ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    payload = json.loads(row[0])
+    if damage == "missing_dataset":
+        payload.pop("dataset")
+    elif damage == "boolean_entity":
+        payload["entity_id"] = True
+    elif damage == "wrong_entity":
+        payload["entity_id"] = 2
+    payload["attempted_at"] = 110
+    raw = json.dumps(payload)
+    if damage == "duplicate_time":
+        raw = raw[:-1] + ', "attempted_at": 111}'
+    elif damage == "malformed":
+        raw = '{"dataset":"care_team",'
+    with store.db:
+        store.artifact_add_tx(ARTIFACT_KIND, raw, project_id=1)
+    result = get_project_metadata(store.db, 1, "care_team", now=150, care_team_as_of=150)
+    assert result["state"] == "unknown" and result["rows"] == []
+    assert not result["current_known"]
 
 
 def test_failure_preserves_last_complete_but_current_is_unknown(store):

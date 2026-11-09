@@ -132,9 +132,9 @@ semantic_store.thread_bundle + fingerprint + 対象 member 照合（_member_bund
   └─ スレッド束縛と member 同定だけを行う。doc hash・audit PASS の検証関数ではない
 ```
 
-新しい reader は上記の既存関数をこの責務どおりに組み合わせる計画であり、新しい resolver は作らない。`care_team_as_of` の名簿取得は本段階では未接続であり、§3 の設計上の拡張点に留まる。
+新しい reader は上記の既存関数をこの責務どおりに組み合わせる計画であり、新しい resolver は作らない。`care_team_as_of` は `get_project_metadata` の任意引数として接続し、発言者の照合は `care_team_speaker` が同じ借用snapshot上で行う。`care_events` は投稿時点と出来事以前の観測を区別し、行hashと取得artifactを投影へ含める。
 
-`get_project_metadata` は「Reads ledger or snapshot only」で attempt/complete artifact を SELECT のみで読む。`care_team_as_of` 拡張も同じ SELECT 経路に留める。
+`get_project_metadata` は「Reads ledger or snapshot only」で attempt/complete artifact を SELECT のみで読む。`care_team_as_of` 拡張も同じ SELECT 経路に留める。`care_event_timeline.intervention_states` は純粋な投影で、`recorded_state` に最後の明示記録を持ち、`current_state` は `unknown` として現在継続を断定しない。状態の並びはイベント日によるが、同日の対立は投稿順で解消しない。
 
 ## 7. 検証範囲
 

@@ -645,14 +645,16 @@ class View:
         cfg = load_config()
         ev = pcv.evidence(self.db, pid, cfg=cfg)
         now = self.meta["generated_at"]
+        care = pcv.care_events(self.db, pid, cfg=cfg) if view in (
+            "background", "timeline", "previsit") else None
         if view == "timeline":
             documents, pumps = pcv.document_timelines(self.db, pid, cfg=cfg)
-            return pcv.timeline(ev, documents=documents, pumps=pumps)
+            return pcv.timeline(ev, documents=documents, pumps=pumps, care=care)
         return {
-            "background": lambda: pcv.role_order(pcv.background(ev), role),
+            "background": lambda: pcv.role_order(pcv.background(ev, care=care), role),
             "participants": lambda: pcv.participants(self.db, pid),
             "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
-            "previsit": lambda: pcv.previsit(self.db, ev, now),
+            "previsit": lambda: pcv.previsit(self.db, ev, now, care=care),
             "observations": lambda: pcv.observations(self.db, ev, cfg=cfg),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
             "handoff": lambda: pcv.handoff(self.db, ev),

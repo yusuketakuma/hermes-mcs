@@ -333,7 +333,7 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
                          "inference": inference}}
 
 
-def background(ev) -> dict:
+def background(ev, *, care=None) -> dict:
     """患者さんの全体像: every distinct grounded item per category, newest first and dated —
     a newer post on another topic never hides an older item."""
     sections = {}
@@ -341,7 +341,7 @@ def background(ev) -> dict:
         sections.setdefault(item["category"], []).append(item)
     return {"view": "background", "summary": ev["summary"], "as_of": ev["as_of"],
             "sections": [{"category": c, "items": rows} for c, rows in sections.items()],
-            "coverage": ev["coverage"]}
+            "coverage": ev["coverage"], **({"care_events": care} if care is not None else {})}
 
 
 def _allergy_correction(text, target):
@@ -579,7 +579,7 @@ def replies(db, project_id) -> dict:
         "next_planned": roll.get("next_planned")}
 
 
-def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cursor=None) -> dict:
+def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cursor=None, care=None) -> dict:
     """訪問前の確認ノート: recent changes, then every written item to check — written
     follow-ups first, then requests with no reply found; distinct assertions of one post remain.
     Only quotes what was written — no new clinical instruction is made."""
@@ -602,7 +602,8 @@ def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cu
                 picked[group].append(row)
     return {"view": "previsit", "recent": changes(db, ev, now - days * 86400)["by_discovery"], **picked,
             "next_planned": talk["next_planned"], "interventions": interventions,
-            "as_of": ev["as_of"], "coverage": ev["coverage"]}
+            "as_of": ev["as_of"], "coverage": ev["coverage"],
+            **({"care_events": care} if care is not None else {})}
 
 
 def document_timelines(db, project_id, *, cfg=None):
@@ -632,7 +633,7 @@ def _document_events(items, date_kind):
     return events
 
 
-def timeline(ev, categories=None, *, documents=None, pumps=None) -> dict:
+def timeline(ev, categories=None, *, documents=None, pumps=None, care=None) -> dict:
     """経過タイムライン: oldest first; the written event date stays apart from the posting time
     and adjacent entries carry no causal link."""
     rows = []
@@ -661,20 +662,34 @@ def timeline(ev, categories=None, *, documents=None, pumps=None) -> dict:
     if pumps is not None:
         result.update(pump_events=_document_events(pumps["events"], "pump_measurement"),
                       pump_coverage=pumps["coverage"])
+    if care is not None:
+        result["care_events"] = care
     return result
 
 
 def care_events(db, project_id, *, cfg=None) -> dict:
     """Read source-bound care-event references and quotes on one borrowed snapshot."""
     from care_event_sources import collect
+    from project_metadata_view import care_team_speaker
+    from clinical_events import care_detail_service
+    from care_event_timeline import intervention_states
 
     db.execute("SAVEPOINT care_event_view")
     try:
         projected = collect(db, project_id, cfg=cfg)
         items = []
+        speaker_links = {}
+
+        def speaker_at(sender_id, sender_type, at):
+            # Reuse only inside this borrowed snapshot and patient scope.
+            key = sender_id, sender_type, at
+            if key not in speaker_links:
+                speaker_links[key] = care_team_speaker(db, project_id, sender_id, sender_type, at)
+            return speaker_links[key]
+
         for event in projected["events"]:
             row = db.execute(
-                "SELECT body_text,body_html,content_hash FROM messages "
+                "SELECT body_text,body_html,content_hash,sender_id,sender_type FROM messages "
                 "WHERE project_id=? AND message_id=? AND body_state='full'",
                 (project_id, event["message_id"])).fetchone()
             span = event.get("span")
@@ -692,6 +707,40 @@ def care_events(db, project_id, *, cfg=None) -> dict:
             item = {**event, "source": "chat",
                     "quote": row[0][span[0]:span[1]] if valid else None,
                     "text": None if valid else "出来事に関する記載あり（内容未確認）"}
+            if valid:
+                item["speaker"] = speaker_at(row[3], row[4], event.get("posted_at_ts"))
+                detail = item.get("care_detail") or {}
+                item["service"] = care_detail_service(detail, item["quote"])
+                actor = detail.get("service_actor")
+                speaker = item["speaker"]
+                if (event.get("event_day") and not event.get("date_uncertain")
+                        and event.get("posted_at_ts") is not None):
+                    from mcs_queries import JST
+                    cutoff = min(event["posted_at_ts"], datetime.fromisoformat(
+                        event["event_day"]).replace(tzinfo=JST).timestamp())
+                    # A retrospective report cannot borrow the poster's
+                    # later affiliation as the provider at the event date.
+                    speaker = speaker_at(row[3], row[4], cutoff)
+                member = speaker.get("member") or {}
+                self_reference = actor in ("当院", "当薬局", "当事業所", "当ステーション")
+                same_facility = (actor not in (None, "unknown", "")
+                                 and actor == member.get("facility"))
+                posting = item["speaker"]
+                self_link = (self_reference and posting["state"] == "matched"
+                             and (posting.get("member") or {}).get("facility")
+                             == member.get("facility"))
+                matched = (speaker["state"] == "matched" and not event.get("date_uncertain")
+                           and (self_link or same_facility))
+                item["service_provider"] = {
+                    "state": ("matched" if event.get("event_day") else "observation_link_only")
+                    if matched and member.get("facility") else "unknown",
+                    "label": member.get("facility") if matched else
+                    actor if actor not in (None, "unknown", "") and not self_reference else None,
+                    "professions": member.get("professions") if matched else None,
+                    "basis": "speaker_roster" if matched else "source_text" if actor
+                    and actor != "unknown" and not self_reference else "unconfirmed",
+                    "roster_artifact_id": speaker["artifact_id"] if matched else None,
+                    "roster_row_hash": speaker["row_hash"] if matched else None}
             if not valid:
                 item.update(subject="unknown", status="unknown", negated=None,
                             event_day=None, date_uncertain=True, unverified=True)
@@ -701,7 +750,8 @@ def care_events(db, project_id, *, cfg=None) -> dict:
                                      item.get("posted_at_ts") is None, item.get("posted_at_ts") or 0,
                                      item["message_id"], item["record_index"]))
         result = {"view": "care_events", "items": items, "coverage": projected["coverage"],
-                  "order_basis": "event_day_then_posting_time"}
+                  "order_basis": "event_day_then_posting_time",
+                  "intervention_states": intervention_states(items, projected["coverage"])}
     except BaseException:
         try:
             db.execute("RELEASE care_event_view")
