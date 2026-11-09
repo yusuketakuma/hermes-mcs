@@ -130,6 +130,78 @@ def test_canonical_presence_never_silently_falls_back_to_local_result(store):
     assert result["coverage"]["source_complete"] is False
 
 
+def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tamper=None):
+    """Drain one synthetic care_event fact through the real semantic pipeline."""
+    import json as _json
+    import semantic_testkit as st
+    db = st._ledger(tmp_path)
+    p = st._patient(db)
+    body = "本人は2026年9月1日に退院しました。"
+    p.messages = [st._message(1, body=body)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    fact = {"statement": "退院", "kind": "care_event", "subject_role": "patient",
+            "polarity": "affirmed", "epistemic": "asserted",
+            "workflow_status": "performed", "importance": "T1",
+            "evidence_quote": body}
+
+    def llm(prompt):
+        if "要約器" in prompt:
+            return st._summary_from_facts(prompt)
+        return _json.dumps({"facts": [fact],
+                            "category_presence": dict(st.NO_FACTS, care_event="one")},
+                           ensure_ascii=False)
+    choice_map = {f"has_{c}": "absent" for c in st.sf.MANDATORY_CATEGORIES}
+    choice_map["has_care_event"] = "present"
+    st._drain(db, llm=llm, jev=st._FakeJev(choice_map=choice_map))
+    if audit_status != "PASS":
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content=json_set(content,'$.status',?) "
+                          "WHERE kind='semantic_facts_audit'", (audit_status,))
+    if tamper == "projection":
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content='{' WHERE kind IN "
+                          "('canonical_projection','semantic_facts_v4')")
+    elif tamper == "facts":
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content='{' WHERE kind='semantic_facts_v2'")
+    return db, body
+
+
+def test_audited_canonical_care_event_projects_source_bound_record(tmp_path, monkeypatch):
+    db, body = _canonical_care_fixture(tmp_path, monkeypatch)
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        event, = result["events"]
+        assert event["kind"] == "discharge" and event["event_day"] == "2026-09-01"
+        assert event["subject"] == "patient" and event["negated"] is False
+        assert event["unverified"] is False and body not in json.dumps(result, ensure_ascii=False)
+        assert result["coverage"]["canonical_unconfirmed"] == 0
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("audit_status,tamper", [
+    ("NEEDS_REVIEW", None), ("PASS", "projection"), ("PASS", "facts")])
+def test_canonical_care_event_damaged_proof_never_falls_back(tmp_path, monkeypatch, audit_status, tamper):
+    db, _body = _canonical_care_fixture(tmp_path, monkeypatch, audit_status=audit_status, tamper=tamper)
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] == [] and result["coverage"]["canonical_unconfirmed"] == 1
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
 def test_limits_and_incomplete_sources_are_reported_not_treated_as_zero(store):
     for mid, day in ((1, 1), (2, 2), (3, 3)):
         body = f"本人は2026年9月{day}日に退院しました。"

@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "介護・介入イベントの正規抽出結果を監査済み証拠で表示",
+  "summary": "canonical抽出が監査を通過した投稿では、これまで未確認扱いだった介護イベントを、出典・証拠範囲・ポリシーが一致する場合に限りタイムラインへ表示します。証明が一つでも欠ける場合は従来どおり未確認のままにし、ローカル抽出への黙った代替は行いません。",
+  "upgrade": "追加操作は不要です。canonical抽出が有効な環境でのみ対象となり、従来のローカル抽出経路は変更しません。",
+  "details": [
+    "canonical_projection・semantic_facts_v4の現行行について、source binding・スレッド指紋・ポリシー指紋・監査PASS・文書hash・証拠span・chunk再構成の全連鎖を検証してから投影します。",
+    "検証に失敗した場合はcoverageのcanonical_unconfirmedへ計上し、イベントを出しません。",
+    "読取りのみで、モデル呼出し・書込み・トランザクション所有は行いません。"
+  ],
+  "refs": ["mcs/patients/care_event_sources.py", "tests/patients/test_care_event_sources.py"]
+}
