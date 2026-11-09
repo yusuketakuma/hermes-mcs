@@ -706,8 +706,9 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 if old_identity is not None and new_identity is not None and old_identity != new_identity:
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
-            if local_fallback and candidate['route'] == 'patient_context' and candidate['unit_key'] == 'summary':
-                new_fp = _context_summary_fallback_fp(current_body, previous) or new_fp
+            if (local_fallback and candidate['route'] == 'patient_context'
+                    and candidate['unit_key'] == 'summary' and old_fp != new_fp):
+                new_fp = _context_summary_fallback_fp(current_body, previous)
             prompt_verified = False
             if old_fp is not None and new_fp is not None:
                 if old_fp != new_fp:

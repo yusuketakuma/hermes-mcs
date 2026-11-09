@@ -833,7 +833,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             summary_scans = patient_context_refresh_sources._current_scans(
                 ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
-            same_backend = (not facts or mode != "on" or old_meta.get("provider") == snapshot["contract"].get("provider")
+            same_backend = (not facts or mode != "on" or old_meta.get("local_fallback") is True
+                            or old_meta.get("provider") == snapshot["contract"].get("provider")
                             or not cloud_sources_ready and not old_meta.get("provider"))
             same = (old.get("facts_sig") == changed and old_meta.get("source_sig") == snapshot["source_sig"]
                     and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]

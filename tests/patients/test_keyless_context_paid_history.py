@@ -172,3 +172,85 @@ def test_verified_fallback_supersedes_an_older_failed_cloud_scan(runtime, real_c
     assert local_calls
     snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
     assert refresh._inference_coverage(ledger.db, 1, cfg, snapshot)['complete']
+
+
+
+@pytest.mark.parametrize('discarded', [False, True])
+def test_legacy_summary_without_owner_never_uses_signature_difference_as_fresh_input(runtime, real_cloud, discarded):
+    ledger, _, local_calls = runtime
+    cfg, posts = real_cloud
+    selection, errors = cloud_policy.resolve_profile(cfg, route='patient_context',
+        purpose='patient_context', root=extract_llm.HOME)
+    assert not errors
+    previous = {'instruction': '完全合成の同じ選択', 'reports': [{'id': '1'}],
+                'source_identity': {'signature': 'a' * 64}}
+    reservation = cloud_policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
+        message_id=None, unit_key='summary', owner={}, selection=selection)(
+            anthropic_client.AnthropicClient.body(None, json.dumps(previous, ensure_ascii=False), 1600, None), 120)
+    if discarded:
+        with ledger.db:
+            cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+    current = {**previous, 'source_identity': {'signature': 'b' * 64}}
+    before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    with pytest.raises(cloud_client.CloudError):
+        cloud_inference.guard_context_local(ledger, cfg, json.dumps(current, ensure_ascii=False),
+            project_id=1, message_id=None, unit_key='summary', owner={'source_sig': 'b' * 64})
+    assert not posts and not local_calls
+    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+
+
+def _finish_sources(runtime, cfg):
+    ledger, _, _ = runtime
+    for _ in range(20):
+        step(runtime, cfg=cfg)
+        snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
+        scans = refresh._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        if scans and all(refresh._scan_ready(scan) for scan in scans.values()):
+            assert all(scan.get('_provider_contract') for scan in scans.values())
+            assert not ledger.artifacts(state.KIND)
+            return
+    pytest.fail('synthetic cloud source scans did not become ready before summary')
+
+
+def test_only_summary_falls_back_then_advances_quality_without_repeating_local_generation(runtime, real_cloud, monkeypatch):
+    ledger, _, local_calls = runtime
+    cfg, _ = real_cloud
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    _finish_sources(runtime, cfg)
+    monkeypatch.setattr(cloud_policy, 'budget_block_reason', lambda *args, **kwargs: 'daily_budget')
+    for _ in range(20):
+        result = step(runtime, cfg=cfg)
+        if result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    else:
+        pytest.fail(f'local summary over cloud sources did not finish quality: {result!r}')
+    assert len([call for call in local_calls if 'reports' in call]) == 1
+    assert json.loads(ledger.artifacts(state.KIND)[-1]['meta'])['local_fallback'] is True
+
+
+@pytest.mark.parametrize('discarded', [False, True])
+def test_missing_or_discarded_paid_source_after_quality_cannot_enter_local_summary(runtime, real_cloud, monkeypatch, discarded):
+    ledger, clock, local_calls = runtime
+    cfg, posts = real_cloud
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    _finish_sources(runtime, cfg)
+    if discarded:
+        reservation = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
+        with ledger.db:
+            cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+    else:
+        with ledger.db:
+            ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_result'")
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args: None)
+    monkeypatch.setattr(extract_llm, '_cloud_mode', extract_llm_provider._cloud_mode)
+    before = [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")]
+    sent, local = len(posts), len(local_calls)
+    for _ in range(10):
+        assert step(runtime, cfg=cfg)['status'] != 'complete'
+        clock.wall += 61
+    assert len(local_calls) == local and len(posts) == sent
+    assert not ledger.artifacts(state.KIND)
+    assert [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")] == before
