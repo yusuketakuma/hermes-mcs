@@ -740,13 +740,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
         meta["model"] = local_llm.resolve(cfg)[1]
 
+    def guard_summary_sources():
+        nonlocal generation_uncertain
+        try:
+            with cloud_policy._accounting_snapshot(ledger.db):
+                patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
+                    snapshot['contract'], cfg=cfg, deadline=deadline)
+        except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
+                OSError, RecursionError, OverflowError):
+            generation_uncertain = True
+            raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
+
     def guard_local_input(unit_key, mid, prompt):
         nonlocal generation_uncertain
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
-                if unit_key == 'summary':
-                    patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
-                        snapshot['contract'], cfg=cfg, deadline=deadline)
                 cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
                     message_id=mid, unit_key=unit_key,
                     owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
@@ -840,6 +848,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return value
     try:
         if lane == "A":
+            guard_summary_sources()
             facts, total, projected = patient_context_refresh_sources._all_facts(ledger.db, pid, snapshot, night_id, projected=True, cfg=cfg)
             old, old_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
             changed = patient_context_refresh_state._facts_sig(facts)
@@ -1168,6 +1177,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
+            if lane == 'A':
+                try:
+                    guard_summary_sources()
+                except patient_context_refresh_state.Deferred:
+                    ledger.db.rollback()
+                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
             for local_unit, local_mid, local_prompt in local_checks:
                 try:
                     guard_local_input(local_unit, local_mid, local_prompt)

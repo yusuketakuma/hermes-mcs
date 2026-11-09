@@ -12,7 +12,7 @@ import extract_llm
 import extract_llm_provider
 import patient_context_refresh_state as state
 import patient_context_refresh as refresh
-from test_context_cloud_update_identity import real_cloud, runtime, cloud
+from test_context_cloud_update_identity import real_cloud, runtime, cloud, finish
 from test_patient_context_refresh import seed, step
 
 __all__ = ['real_cloud', 'runtime', 'cloud']
@@ -385,3 +385,36 @@ def test_unreadable_paid_dependency_stays_held_without_entering_local_llm(runtim
         clock.wall += 61
     assert len(posts) == sent and not local_calls and not ledger.artifacts(state.KIND)
     assert ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()[0] == raw
+
+
+@pytest.mark.parametrize('discarded', [False, True])
+def test_paid_cloud_summary_reaudit_also_requires_source_receipts(runtime, real_cloud, monkeypatch, discarded):
+    ledger, clock, local_calls = runtime
+    cfg, posts = real_cloud
+    finish(runtime, cfg)
+    summary = ledger.artifacts(state.KIND)[-1]
+    summary_meta = json.loads(summary['meta'])
+    assert summary_meta['provider'] and summary_meta['cloud_receipts']
+    reserve = next(row for row in ledger.artifacts('cloud_usage_reserve')
+                   if json.loads(row['meta'])['unit_key'].startswith('scan:'))
+    reservation = json.loads(reserve['meta'])
+    with ledger.db:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        if discarded:
+            cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        else:
+            results = ledger.artifacts('cloud_usage_result')
+            result = next(row for row in results
+                          if json.loads(row['meta'])['reservation_id'] == reservation['reservation_id'])
+            ledger.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (result['artifact_id'],))
+        summary_meta['quality_schedule_key'] = 'synthetic-stale-schedule'
+        ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                          (json.dumps(summary_meta), summary['artifact_id']))
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args: None)
+    before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    sent, local = len(posts), len(local_calls)
+    for _ in range(5):
+        assert step(runtime, cfg=cfg)['status'] != 'complete'
+        clock.wall += 61
+    assert len(posts) == sent and len(local_calls) == local
+    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before

@@ -21,7 +21,8 @@ import semantic_jev
 import semantic_runtime
 import semantic_store
 import test_context_completed_carry as completed
-from anthropic_context_testkit import CFG, cloud, runtime
+from anthropic_context_testkit import CFG, cloud, runtime, _REAL_SOURCE_FINANCIAL_GUARD
+import patient_context_refresh_sources as context_sources
 from test_context_summary_sources import _ocr_local
 from test_patient_context_refresh import _raw_proof, _semantic_proof, document, seed, stamp, step
 
@@ -32,6 +33,8 @@ _REAL_WRITER_CURRENT = worker._writer_current
 
 @pytest.fixture
 def real_cloud(runtime, cloud, monkeypatch):
+    monkeypatch.setattr(context_sources, 'guard_cloud_sources', _REAL_SOURCE_FINANCIAL_GUARD)
+    assert context_sources.guard_cloud_sources is _REAL_SOURCE_FINANCIAL_GUARD
     ledger, clock, _ = runtime
     settings, errors = cloud_policy.cloud_config({'cloud_llm': {
         'mode': 'on', 'provider': 'anthropic', 'project_ids': [1],

@@ -20,10 +20,14 @@ import pytest
 import extract_llm as worker
 import cloud_inference
 import patient_context_refresh as context_refresh
+import patient_context_refresh_sources as context_sources
 from test_patient_context_refresh import CFG as BASE_CFG, runtime, seed, step as base_step
 import semantic_jev as _source_repair_jev
 
 __all__ = ["runtime"]
+
+
+_REAL_SOURCE_FINANCIAL_GUARD = context_sources.guard_cloud_sources
 
 
 _SOURCE_REPAIR_PROVIDER = cloud_inference.CloudInferenceUnit
@@ -51,6 +55,8 @@ def step(runtime, **kwargs):
 
 @pytest.fixture
 def cloud(runtime, monkeypatch):
+    # Pure transport fixture; real_cloud restores the financial dependency boundary.
+    monkeypatch.setattr(context_sources, 'guard_cloud_sources', lambda *_a, **_kw: None)
     led, clock, local_calls = runtime
     import semantic_jev
     clock.mono = time.monotonic()
