@@ -343,13 +343,14 @@ def test_canonical_event_records_obey_per_source_limit(tmp_path, monkeypatch):
         db.close()
 
 
-def _canonical_repair_care_fixture(tmp_path, monkeypatch, *, tamper=None):
-    """One care_event carried through a real bounded QC repair.
+def _canonical_repair_care_fixture(tmp_path, monkeypatch):
+    """One care_event carried through real extract/repair/publish functions.
 
-    Original extraction -> NEEDS_REVIEW audit -> reserved repair dispatch
-    -> repaired doc -> PASS re-audit -> projection, with the same
-    stored-answer/receipt contract ``_repaired_projection_producer``
-    replays. ``tamper`` damages one repair-evidence element.
+    ``extract_facts_v2``/``repair_facts_v2`` run for real while the audit,
+    reservation and receipt artifacts are synthesized to the stored-answer
+    contract ``_repaired_projection_producer`` replays, then ``v4.publish``
+    writes the canonical artifact. This is not the ``semantic_drain``
+    orchestrator path.
     """
     import hashlib as _hl
     import mcs_util
@@ -442,8 +443,6 @@ def _canonical_repair_care_fixture(tmp_path, monkeypatch, *, tamper=None):
                      "prompt_sha256": _hl.sha256(prompts[0].encode()).hexdigest(),
                      "reservation_id": rid, "unit_key": "semantic:synthetic",
                      "owner": owner, "contract": contract}
-    if tamper == "answer_text":
-        answer_record["text"] += "changed"
     evidence = {"version": 1, "original_artifact_id": original_id,
                 "audit_artifact_id": audit_id, "started_artifact_id": started_id,
                 "source_binding": binding, "target_revision": member["revision"],
@@ -484,11 +483,31 @@ def _canonical_repair_care_fixture(tmp_path, monkeypatch, *, tamper=None):
     monkeypatch.setattr(__import__("cloud_inference"), "verify_cloud_repair_evidence", verify)
     with db.db:
         v4.publish(db, 1, 1, fp, policy_fp, member, repaired["doc"])
-    return db, body
+    return db, body, prompts
+
+
+def _tamper_stored_repair_answer(db):
+    """Damage one stored repair-answer element after publication."""
+    import json as _json
+    from semantic_policy import KIND_FACT_REPAIR
+    rows = db.db.execute(
+        "SELECT artifact_id, content FROM artifacts WHERE kind=?",
+        (KIND_FACT_REPAIR,)).fetchall()
+    for row in rows:
+        doc = _json.loads(row["content"])
+        proof = doc.get("__mcs_internal_proof_v1")
+        if not isinstance(proof, dict):
+            continue
+        answers = proof.get("answers")
+        if isinstance(answers, list) and answers:
+            answers[0]["text"] += "changed"
+            db.db.execute(
+                "UPDATE artifacts SET content=? WHERE artifact_id=?",
+                (_json.dumps(doc, ensure_ascii=False), row["artifact_id"]))
 
 
 def test_repaired_canonical_care_event_projects_through_collect(tmp_path, monkeypatch):
-    db, _body = _canonical_repair_care_fixture(tmp_path, monkeypatch)
+    db, _body, prompts = _canonical_repair_care_fixture(tmp_path, monkeypatch)
     try:
         cfg = __import__("semantic_testkit")._canonical_cfg()
         db.db.execute("BEGIN")
@@ -499,14 +518,29 @@ def test_repaired_canonical_care_event_projects_through_collect(tmp_path, monkey
         assert result["coverage"]["canonical_unconfirmed"] == 0
         assert db.db.in_transaction and db.db.total_changes == before
         db.db.rollback()
+        # Collect replays stored-answer evidence only; it dispatches no
+        # repair prompt of its own.
+        assert len(prompts) == 1
     finally:
         db.close()
 
 
 def test_repair_evidence_damage_never_projects(tmp_path, monkeypatch):
-    db, _body = _canonical_repair_care_fixture(tmp_path, monkeypatch, tamper="answer_text")
+    db, _body, prompts = _canonical_repair_care_fixture(tmp_path, monkeypatch)
     try:
         cfg = __import__("semantic_testkit")._canonical_cfg()
+        # A clean collect first proves the published projection projects;
+        # the reader's verdict is not cached publish-side success.
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] and result["coverage"]["canonical_unconfirmed"] == 0
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+        # Damaging one stored repair-answer element afterwards must fail the
+        # read-time replay, not be masked by the earlier publish success.
+        with db.db:
+            _tamper_stored_repair_answer(db)
         db.db.execute("BEGIN")
         before = db.db.total_changes
         result = care_event_sources.collect(db.db, 1, cfg=cfg)
@@ -514,6 +548,7 @@ def test_repair_evidence_damage_never_projects(tmp_path, monkeypatch):
         assert result["coverage"]["source_complete"] is False
         assert db.db.in_transaction and db.db.total_changes == before
         db.db.rollback()
+        assert len(prompts) == 1
     finally:
         db.close()
 
@@ -584,6 +619,14 @@ def test_canonical_event_records_real_256_257_boundary(tmp_path, monkeypatch, co
                             lambda *a, **k: calls.append(1) or real_project(*a, **k))
         db.db.execute("BEGIN")
         before = db.db.total_changes
+        # The saved projection keeps every generated record; a future
+        # generation-side drop would surface here before collect's limit.
+        row = db.db.execute(
+            "SELECT content FROM artifacts WHERE project_id=1 AND message_id=1 "
+            "AND kind IN ('canonical_projection','semantic_facts_v4') "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        saved_records = json.loads(row["content"]).get("event_records") or []
+        assert len(saved_records) == count
         result = care_event_sources.collect(db.db, 1, cfg=cfg)
         assert result["coverage"]["oversize"] == oversize
         assert bool(calls) is projected

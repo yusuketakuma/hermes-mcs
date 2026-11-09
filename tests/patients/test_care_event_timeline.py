@@ -97,6 +97,63 @@ def test_correction_within_a_full_quoted_sentence_never_confirms_event(body):
     assert event["event_day"] is None
 
 
+def test_multi_sentence_quote_verifies_only_with_clean_context():
+    body = ("前の記録です。本人は2026年9月1日に退院しました。"
+            "本人はその後通院しています。")
+    quote = "本人は2026年9月1日に退院しました。本人はその後通院しています。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert result["coverage"]["state"] == "complete"
+
+
+@pytest.mark.parametrize("tail", [
+    "訂正：退院の記載は誤りです。",
+    "本人は退院していません。",
+    "家族から退院したと聞きました。",
+    "「退院しました」との記載があります。",
+])
+def test_multi_sentence_quote_still_fails_closed_on_bad_context(tail):
+    body = ("本人は2026年9月1日に退院しました。本人はその後通院しています。"
+            + tail)
+    quote = "本人は2026年9月1日に退院しました。本人はその後通院しています。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert event["unverified"] is True and event["event_day"] is None
+    assert result["coverage"]["state"] == "incomplete"
+
+
+def test_detail_only_record_context_compares_same_service_mentions():
+    body = "本人は訪問看護を開始しました。訪問看護は開始していません。"
+    quote = "訪問看護を開始しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "patient", "status": "current",
+            "negated": False, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "unknown", "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert event["unverified"] is True and "care_detail" not in event
+    other = "本人は訪問看護を開始しました。訪問介護は開始していません。"
+    start = other.index(quote)
+    item = dict(item, span={"start": start, "end": start + len(quote)})
+    event, = care_event_timeline.project(1, source(other), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"]
+    assert event["care_detail"]["event_type"] == "intervention_start"
+
+
 def test_single_full_assertion_remains_verified_when_quote_omits_final_punctuation():
     body = "本人は2026年9月1日に退院しました。"
     quote = body[:-1]

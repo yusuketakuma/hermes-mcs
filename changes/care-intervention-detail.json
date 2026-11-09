@@ -1,13 +1,14 @@
 {
   "category": "added",
   "title": "介護介入イベントへ固定detail契約を追加",
-  "summary": "介護イベントの記録に、仕様で固定した17種のevent_typeとworkflow_status・日付・サービス主体を任意項目care_detailとして保持できるようにしました。event_typeは証拠引用内に種別ごとの手がかり語彙がある場合だけ採用し、日付・主体はその手がかりを含む文に逐語で存在する場合のみ保持します。根拠のないdetailは付けず、canonical抽出経路でも同じ契約でfactから投影まで引き継ぎます。",
-  "upgrade": "追加操作は不要です。LLMがcare_detailを返さない場合は従来どおりのイベント投影のみで、既存の記録形式は変わりません。",
+  "summary": "介護イベントの記録に、仕様で固定した17種のevent_typeとworkflow_status・日付・サービス主体を任意項目care_detailとして保持できるようにしました。event_typeは証拠引用内に種別ごとの手がかり語彙と述語がある場合だけ採用し、日付・主体はその述語へ最近接で結び付く文内の逐語表現のみ保持します。根拠のないdetailは付けず、canonical抽出経路でも同じ契約でfactから投影まで引き継ぎます。あわせてタイムラインの文脈検証を、単一文限定から引用文全体と前後1文の訂正・伝聞・引用符・対立極性の検査へ置き換え、正常な複数文の記録も受理できるようにしました。",
+  "upgrade": "追加操作は不要です。LLMがcare_detailを返さない場合は従来どおりのイベント投影のみで、既存の記録形式は変わりません。文脈検証の置き換えにより、これまで単一文以外として未確認扱いだった複数文の引用は、周辺文脈が安全と確認できた場合に verified へ変わることがあります。",
   "details": [
-    "care_detailのevent_typeはdocs/specs/care-intervention-events.mdの固定語彙のみ受理し、さらにclinical_events.CARE_DETAIL_CUESの種別ごとの手がかり語彙がevidence quote内に出ることを必須とします。親recordが検証済みでも根拠のない種別は採用しません。",
-    "date_textとservice_actorは手がかり語彙を含む文の内部に逐語で存在する場合のみ保持します。非逐語・別文・空白の場合はdetail全体を不採用とし、workflow_statusの未知値はunknownへ正規化、recordやfactの軸と家族（予定系/実施済み系）が食い違う場合もunknownへ落とします。",
-    "semantic-facts/v2のfactがcare_detailを持つ場合はkind=care_eventのみ構造を検証して保存し、投影時に引用へ再束縛します。重複factの統合でdetailが競合した場合はいずれも採用しません。",
+    "care_detailのevent_typeはdocs/specs/care-intervention-events.mdの固定語彙のみ受理し、さらにclinical_events.CARE_DETAIL_CUESの種別ごとの手がかり語彙がevidence quote内に出ることを必須とします。契約開始と提供開始、短期入所と施設入所、退院時共同指導と一般の共同指導、DNAR単独とACP・方針変更は語彙レベルでも区別し、名詞だけの手がかりは同じ文の述語を必須とします。親recordが検証済みでも根拠のない種別は採用しません。",
+    "date_textとservice_actorは手がかり語彙を含む文の内部に逐語で存在し、かつ文内のdetail cueのうち最近接する述語が当該event_typeのものである場合のみ保持します。別イベントの述語へ結び付く属性、「から/より」の出典・紹介元表記は採用せず、workflow_statusの未知値はunknownへ正規化、recordやfactの軸と家族（予定系/実施済み系）が食い違う場合もunknownへ落とします。",
+    "semantic-facts/v2のfactがcare_detailを持つ場合はkind=care_eventのみ構造を検証して保存し、投影時に引用へ再束縛する。重複factの統合でdetailが競合した場合はいずれも採用しない。",
     "kind=otherの記録は_DIRECTに依存せず、detail自身の手がかり語彙をanchorに同じ主体・極性・status検証を受けます。",
+    "タイムラインの文脈検査をclinical_events.context_cleanへ集約し、quoteが触れる全文と前後1文ずつに訂正・不確実・伝聞・引用符がなく、同一主体・同一相の対立極性言及もない場合だけverifiedとします。kind=otherのdetail記録は同一service headの言及のみ比較の対象とします。",
     "extract_llm_promptsとsemantic_llmの既存プロンプトへcare_detailの出力仕様を接続しました。"
   ],
   "refs": [
@@ -19,6 +20,7 @@
     "mcs/semantic/semantic_llm.py",
     "mcs/patients/care_event_timeline.py",
     "tests/extract/clinical/test_contradictory_events.py",
+    "tests/patients/test_care_event_timeline.py",
     "tests/semantic/test_semantic_facts_v2.py"
   ]
 }

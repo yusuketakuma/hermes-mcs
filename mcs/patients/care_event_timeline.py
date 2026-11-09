@@ -22,21 +22,6 @@ _EVENT_KIND = {
     "受診": "exam", "検査": "exam", "採血": "exam",
 }
 _JST = timezone(timedelta(hours=9))
-_CONTEXT_UNCERTAIN = re.compile(r"訂正|撤回|誤り|誤記|間違|取り消|取消|引用|仮定|仮に|"
-                                r"違(?:う|い|った|わ)|事実では|実際には|"
-                                r"(?:ました|した|です|予定)(?:が|けれど|けど|ものの|、|,)|"
-                                r"(?:という|との)(?:記載|報告|話)|と(?:聞き|聞いた|書かれ)")
-
-
-def _isolated_assertion(body, start, end):
-    """Do not promote a fragment whose surrounding statements may qualify it."""
-    before, after = body[:start].strip(), body[end:].strip()
-    if before or after not in ("", "。"):
-        return False
-    text = body.strip()
-    return (not re.search(r"[。！？!?;；\n]\s*\S", text)
-            and not _CONTEXT_UNCERTAIN.search(text)
-            and not any(mark in text for mark in "「」『』\""))
 
 
 def _posted(value):
@@ -107,7 +92,11 @@ def project(project_id, message, artifact_id, document):
                  and type(span.get("end")) is int and 0 <= span["start"] < span["end"] <= len(body)
                  and isinstance(quote, str) and body[span["start"]:span["end"]] == quote)
         unresolved = (not bound or record.get("unverified") is True
-                      or not _isolated_assertion(body, span["start"], span["end"]))
+                      or not clinical_events.context_clean(
+                          body, span["start"], span["end"], kind=record["kind"],
+                          subject=record["subject"], status=record["status"],
+                          negated=record["negated"],
+                          detail=record.get("care_detail")))
         date_uncertain = bound and paired_date_conflict(quote, message.get("posted_at_ts"))
         event_day = None if unresolved or date_uncertain else _event_day(record, quote)
         reported_status = record["status"]

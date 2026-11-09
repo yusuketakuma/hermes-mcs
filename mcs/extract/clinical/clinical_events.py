@@ -52,7 +52,8 @@ CARE_DETAIL_CUES = {
         r'(?:退院前|退院に向けた)(?:の|に)?'
         r'(?:カンファレンス|会議|検討会|話し合い)|退院前カンファレンス'),
     'discharge_joint_guidance': re.compile(
-        r'退院時共同指導|退院時の指導|共同指導'),
+        r'退院時共同指導|退院時の共同指導|退院に際しての共同指導'
+        r'|退院前の共同指導'),
     'care_team_conference': re.compile(
         r'サービス担当者会議|担当者会議|ケア会議|検討会|担当者会'),
     'care_plan_change': re.compile(
@@ -79,11 +80,41 @@ CARE_DETAIL_CUES = {
     'death': re.compile(r'死亡|亡くな|お亡くなり|他界|永眠|死去|急逝'),
     'acp_discussion': re.compile(
         r'ACP|人生会議|アドバンス・ケア|終末期(?:の|に関する)?話し合い'
-        r'|意向(?:の|を)?(?:確認|表明|変化)|DNAR'),
+        r'|意向(?:の|を)?(?:確認|表明|変化)'),
     'care_policy_change': re.compile(
         r'(?:療養|治療|ケア|看取り|延命)(?:の|に関する)?方針'
         r'(?:を|の|は)?' + _GAP + r'(?:変更|決定|見直し|撤回)'
-        r'|方針(?:を|の|は)?' + _GAP + r'(?:変更|決定|撤回)|DNAR'),
+        r'|方針(?:を|の|は)?' + _GAP + r'(?:変更|決定|撤回)'),
+}
+
+# Vocabulary co-occurrence alone does not establish the event: a contract
+# start is not a service-provision start, a short stay is not facility
+# entry, and DNAR/a bare "joint guidance" mention is not a held conference
+# or guidance session. Matches whose own span carries the veto are dropped
+# before uniqueness/anchor checks, so the rejected reading cannot anchor.
+_DETAIL_VETOES = {
+    'intervention_start': re.compile(r'契約'),
+    'intervention_pause': re.compile(r'契約'),
+    'intervention_resume': re.compile(r'契約'),
+    'intervention_end': re.compile(r'契約'),
+    'facility_entry': re.compile(r'短期|ショートステイ|レスパイト'),
+}
+
+# For event types whose cue is only a noun, the same sentence must also
+# carry the event predicate — vocabulary presence alone is not a held
+# conference, a conducted guidance session, a held discussion, or a decided
+# policy change.
+_DETAIL_PREDICATES = {
+    'pre_discharge_conference': re.compile(
+        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)'),
+    'discharge_joint_guidance': re.compile(
+        r'実施|行(?:った|う|います|われ)|指導(?:した|します|している)'
+        r'|説明(?:した|します)|受け'),
+    'care_team_conference': re.compile(
+        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)'),
+    'acp_discussion': re.compile(
+        r'話し合い|話合い|面談|確認|表明|意向|実施|聴取'),
+    'care_policy_change': re.compile(r'変更|決定|見直し|撤回'),
 }
 
 _WORKFLOW_PLANNED = frozenset(
@@ -252,7 +283,11 @@ def candidate_span(item, body):
 
 def _detail_cue_matches(quote, event_type):
     cue = CARE_DETAIL_CUES.get(event_type)
-    return list(cue.finditer(quote)) if cue is not None and isinstance(quote, str) else []
+    if cue is None or not isinstance(quote, str):
+        return []
+    veto = _DETAIL_VETOES.get(event_type)
+    return [m for m in cue.finditer(quote)
+            if veto is None or not veto.search(m.group())]
 
 
 def _sentence_bounds(text, pos):
@@ -290,14 +325,131 @@ def _care_detail_workflow(detail, *, status=None, negated=None,
     return detail
 
 
+# Quote-level context markers shared by timeline projection: corrections,
+# retractions, quotations, suppositions, hearsay and contrastive endings
+# disqualify the surrounding assertion context (moved from
+# care_event_timeline so detail and plain records share one gate).
+_UNCERTAIN_CONTEXT = re.compile(
+    r"訂正|撤回|誤り|誤記|間違|取り消|取消|引用|仮定|仮に|"
+    r"違(?:う|い|った|わ)|事実では|実際には|"
+    r"(?:ました|した|です|予定)(?:が|けれど|けど|ものの|、|,)|"
+    r"(?:という|との)(?:記載|報告|話)|と(?:聞き|聞いた|書かれ)")
+_QUOTE_MARKS = re.compile(r'[「」『』"]')
+
+
+def context_clean(body, start, end, *, kind=None, subject=None,
+                  status=None, negated=None, detail=None):
+    """True when the quote's full context is a clean assertion.
+
+    Every sentence the quote touches — plus one neighbour sentence on each
+    side — must carry no correction/uncertainty/hearsay marker and no
+    quotation marks, so normal multi-sentence evidence verifies while a
+    later-sentence correction, denial or third-party framing still fails
+    closed. Another mention of the same cue inside that range with an
+    opposing polarity for the same subject and phase also disqualifies;
+    ``kind='other'`` detail anchors compare only mentions sharing the same
+    service head, so a different provider's denial stays independent.
+    """
+    if not isinstance(body, str) or not (0 <= start < end <= len(body)):
+        return False
+    sent_left, _ = _sentence_bounds(body, start)
+    _, sent_right = _sentence_bounds(body, end - 1)
+    left = sent_left
+    right = sent_right
+    if left > 0:
+        left = _sentence_bounds(body, left - 1)[0]
+    if right < len(body) and right + 1 < len(body):
+        right = _sentence_bounds(body, right + 1)[1]
+    region = body[left:right]
+    if (_UNCERTAIN_CONTEXT.search(region) or _QUOTE_MARKS.search(region)
+            or _UNCERTAIN.search(region) or _QUESTION.search(region)):
+        return False
+    if subject is None or negated is None or status not in ('current', 'past'):
+        return True
+    if kind == 'other':
+        event_type = (detail or {}).get('event_type')
+        cue = CARE_DETAIL_CUES.get(event_type)
+        anchor = next((m for m in cue.finditer(body, start, end)), None) \
+            if cue is not None else None
+        if anchor is None:
+            return True
+        service = re.search(_SERVICE_CUE, anchor.group())
+        head = service.group() if service else anchor.group()
+        mentions = (m for m in cue.finditer(body, left, right)
+                    if not start <= m.start() < end)
+    else:
+        cue = _DIRECT.get(kind)
+        if cue is None:
+            return True
+        head = None
+        mentions = (m for m in cue.finditer(body, left, right)
+                    if not start <= m.start() < end)
+    for match in mentions:
+        if head is not None:
+            service = re.search(_SERVICE_CUE, match.group())
+            other_head = service.group() if service else match.group()
+            if other_head != head:
+                continue
+        owner, phase = source_axes(body, match.start(), match.end(),
+                                   default='unknown')
+        if owner != subject or phase != status:
+            continue
+        _, clause_end = _clause(body, match.start(), match.end())
+        polarity = _polarity(body, match.start(), clause_end, match.end(),
+                             phase)
+        if polarity is not None and polarity != negated:
+            return False
+    return True
+
+
+def _attribute_bound(quote, value, event_type, *, actor=False):
+    """True when ``value`` binds to this event type's own predicate.
+
+    The verbatim occurrence must sit in a sentence that carries a care
+    detail cue, and among all detail cues in that sentence the nearest
+    predicate must be this event type's — a date or provider belonging to
+    a neighbouring event cannot be adopted. ``actor`` occurrences marked
+    as a transfer/referral source (から/より) describe the predecessor,
+    not the provider, and never bind.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    pos = 0
+    while True:
+        i = quote.find(value, pos)
+        if i < 0:
+            return False
+        end = i + len(value)
+        if actor and quote[end:end + 2] in ('から', 'より'):
+            pos = i + 1
+            continue
+        sent_left, sent_right = _sentence_bounds(quote, i)
+        candidates = []
+        for other_type, cue in CARE_DETAIL_CUES.items():
+            candidates.extend((other_type, m) for m in cue.finditer(
+                quote, sent_left, sent_right))
+        if candidates:
+            distance = min(abs(end - m.end()) for _, m in candidates)
+            nearest = [(t, m) for t, m in candidates
+                       if abs(end - m.end()) == distance]
+            if len(nearest) == 1:
+                other_type, match = nearest[0]
+                veto = _DETAIL_VETOES.get(other_type)
+                if (other_type == event_type
+                        and (veto is None or not veto.search(match.group()))):
+                    return True
+        pos = i + 1
+
+
 def verify_care_detail(detail, quote):
     """Return a normalized care_detail bound to the evidence quote, or None.
 
-    event_type must be one of CARE_DETAIL_TYPES and its own cue must appear
-    inside the quote; date_text and service_actor must appear verbatim in a
-    sentence that carries that cue, so attributes from unrelated sentences or
-    events are not adopted. Axes that are not explicit stay 'unknown' —
-    nothing is inferred or normalized.
+    event_type must be one of CARE_DETAIL_TYPES, its own cue must appear
+    inside the quote, and for noun-only types the same sentence must carry
+    the event predicate. date_text and service_actor must occur verbatim
+    and bind to this event type's nearest predicate — attributes from
+    other sentences or neighbouring events are not adopted. Axes that are
+    not explicit stay 'unknown' — nothing is inferred or normalized.
     """
     if not isinstance(detail, dict) or not isinstance(quote, str):
         return None
@@ -307,7 +459,11 @@ def verify_care_detail(detail, quote):
     matches = _detail_cue_matches(quote, event_type)
     if not matches:
         return None
-    sentences = {_sentence_bounds(quote, m.start()) for m in matches}
+    predicate = _DETAIL_PREDICATES.get(event_type)
+    if predicate is not None and not any(
+            predicate.search(quote[a:b]) for a, b in
+            {_sentence_bounds(quote, m.start()) for m in matches}):
+        return None
     from semantic_facts import WORKFLOW_STATUSES
     workflow = detail.get('workflow_status', 'unknown')
     if workflow not in WORKFLOW_STATUSES:
@@ -317,18 +473,14 @@ def verify_care_detail(detail, quote):
     # re-verified downstream must stay idempotent, not fail the body check.
     if date_text == 'unknown':
         date_text = None
-    if date_text is not None and (not isinstance(date_text, str)
-                                  or not date_text.strip()
-                                  or not any(date_text in quote[a:b]
-                                             for a, b in sentences)):
+    if date_text is not None and not _attribute_bound(
+            quote, date_text, event_type):
         return None
     service_actor = detail.get('service_actor')
     if service_actor == 'unknown':
         service_actor = None
-    if service_actor is not None and (not isinstance(service_actor, str)
-                                      or not service_actor.strip()
-                                      or not any(service_actor in quote[a:b]
-                                                 for a, b in sentences)):
+    if service_actor is not None and not _attribute_bound(
+            quote, service_actor, event_type, actor=True):
         return None
     return {'event_type': event_type, 'workflow_status': workflow,
             'date_text': date_text if isinstance(date_text, str) and date_text.strip() else 'unknown',

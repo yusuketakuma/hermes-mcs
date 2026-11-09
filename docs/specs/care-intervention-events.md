@@ -13,7 +13,7 @@
 | `date_text` | 原文の日付表現をそのまま保持。正規化・補完しない |
 | `service_actor` | 明示された提供者・実施者の原文候補。名簿 ID・hash・verified は LLM が出さない。結合はコード側が行う（§3） |
 
-`verify_care_detail` は `clinical_events` の既存検証経路へ集約する。`event_type` の採用には `CARE_DETAIL_CUES` の種別ごとの手がかり語彙が evidence quote 内に出ることを必須とし、親 record が検証済みでも根拠のない種別は付けない。`date_text`/`service_actor` はその cue を含む文の内部に逐語で出る場合だけ採用し、別文・別イベントの日付や主体を転記しない。`workflow_status` は record/fact の status・negated・workflow_status と家族（予定系/実施済み系）が食い違う場合 `unknown` へ落とし、予定・否定の記録と肯定実施済みを区別する。`kind:"other"` の record は `_DIRECT` に依存せず detail cue を anchor に同じ軸検証を受ける。本人/否定/予定/条件/引用/訂正/伝聞/対象サービスの確認は既存の span・極性・主体・status 検証が担う。detail の検証に旧 `_isolated_assertion`（単一文・全体が安全な場合だけ許可）は使わず、単文・複数文とも全文文脈を検証した場合だけ受理する。複数文では訂正・否定・主体の前後文脈を省略しない。timeline 側の全イベント共通 `_isolated_assertion` ゲートは既存挙動として維持する。detail 競合は request 詳細と同様に保持し、同 fact ID の first/last wins・3 件目で復活は禁止。
+`verify_care_detail` は `clinical_events` の既存検証経路へ集約する。`event_type` の採用には `CARE_DETAIL_CUES` の種別ごとの手がかり語彙が evidence quote 内に出ることを必須とし、語彙共起だけではイベントとしない：契約開始は提供開始と区別し（`_DETAIL_VETOES` で介入系 cue 内の「契約」を拒否）、短期入所は施設入所と区別し、共同指導は退院時に限定し、DNAR 単独は ACP・方針変更の根拠にしない。名詞だけの cue（会議・指導・話合い・方針変更）は同じ文に開催/実施/受け等の `_DETAIL_PREDICATES` を必須とする。`date_text`/`service_actor` は cue を含む文の内部に逐語で出て、かつ文内の全 detail cue のうち最近接する述語が当該 `event_type` のものである場合だけ採用する（`_attribute_bound`）。別イベントの述語へ結び付く日付・主体は採用せず、「から/より」で出典・紹介元として示された組織・人物は `service_actor` にしない。`workflow_status` は record/fact の status・negated・workflow_status と家族（予定系/実施済み系）が食い違う場合 `unknown` へ落とし、予定・否定の記録と肯定実施済みを区別する。`kind:"other"` の record は `_DIRECT` に依存せず detail cue を anchor に同じ軸検証を受ける。本人/否定/予定/条件/引用/訂正/伝聞/対象サービスの確認は既存の span・極性・主体・status 検証が担う。detail の検証に旧 `_isolated_assertion`（単一文・全体が安全な場合だけ許可）は使わず、単文・複数文とも全文文脈を検証した場合だけ受理する。複数文では訂正・否定・主体の前後文脈を省略しない。timeline 側は全イベント共通で `_isolated_assertion` を `clinical_events.context_clean` へ置き換える：quote が触れる全文と前後 1 文ずつに訂正・不確実・伝聞・引用符がなく、同一主体・同一相の対立極性言及もない場合だけ verified とする（`kind:"other"` は detail cue の service head が一致する言及のみ比較）。detail 競合は request 詳細と同様に保持し、同 fact ID の first/last wins・3 件目で復活は禁止。
 
 ## 2. event_type 17 種と語彙対応表
 
@@ -98,9 +98,11 @@ patient_context_view.care_events(db, project_id, cfg)
           │   └─ _projection_provenance（producer complete・repair replay・Jev done）
           └─ extract_llm artifact → care_event_timeline.project
               ├─ clinical_events.validate_record（span 一意・極性・主体・status）
-              │   └─ verify_care_detail（CARE_DETAIL_CUES の quote 内照合・cue 文への属性束縛・workflow 整合）
+              │   └─ verify_care_detail（CARE_DETAIL_CUES の quote 内照合・veto/述語必須・
+              │       文内最近接述語への属性束縛・workflow 整合）
               │       └─ kind=other は detail cue を anchor に同一軸検証（§1）
-              ├─ 既存の _isolated_assertion ゲート（単文・安全文脈のみ verified、全イベント共通）
+              ├─ clinical_events.context_clean（quote 全文＋前後 1 文の訂正/不確実/伝聞/
+              │   引用符・同一主体の対立極性言及を検査。旧 _isolated_assertion を置換）
               └─ event_day / posted_at の分離・date_uncertain
       └─ quote は検証済み span からのみ再構成（本文を返さない）
 ```

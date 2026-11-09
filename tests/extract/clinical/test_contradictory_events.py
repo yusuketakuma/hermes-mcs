@@ -275,3 +275,133 @@ def test_normalized_care_detail_is_idempotent_under_revalidation():
     assert once["date_text"] == "unknown" and once["service_actor"] == "unknown"
     twice = clinical_events.verify_care_detail(once, body)
     assert twice == once
+
+
+@pytest.mark.parametrize("event_type,body,kept", [
+    # A contract start is not a service-provision start, and ordinary
+    # contract wording is not a contract-start event.
+    ("service_contract_start", "本人はサービス契約を締結しました。", True),
+    ("service_contract_start", "本人は訪問看護サービスを開始しました。", False),
+    ("service_contract_start", "契約内容を確認しました。", False),
+    ("intervention_start", "本人はサービス契約を開始しました。", False),
+    # A short stay is respite care, never facility entry.
+    ("respite", "本人は短期入所を利用しました。", True),
+    ("facility_entry", "本人は施設に入所しました。", True),
+    ("facility_entry", "本人は短期入所を利用しました。", False),
+    # Joint guidance stays discharge-specific.
+    ("discharge_joint_guidance", "本人は退院時共同指導を受けました。", True),
+    ("discharge_joint_guidance", "本人は共同指導を受けました。", False),
+    # DNAR alone is not an ACP discussion or a policy change.
+    ("acp_discussion", "本人はDNARを希望しています。", False),
+    ("acp_discussion", "本人とACPについて話し合いました。", True),
+    ("care_policy_change", "本人はDNARとしました。", False),
+    ("care_policy_change", "本人の看取り方針を変更しました。", True),
+    # Noun-only cues still need the event predicate in the same sentence.
+    ("pre_discharge_conference", "退院前カンファレンスを開催しました。", True),
+    ("pre_discharge_conference", "退院前カンファレンスの資料です。", False),
+    ("care_team_conference", "サービス担当者会議を開催しました。", True),
+    ("care_team_conference", "担当者会議の議事録です。", False),
+])
+def test_care_detail_cue_semantics_reject_lookalikes(event_type, body, kept):
+    out = clinical_events.verify_care_detail(
+        {"event_type": event_type, "workflow_status": "performed"}, body)
+    assert (out is not None) is kept
+
+
+@pytest.mark.parametrize("event_type,body", [
+    ("intervention_start", "本人は訪問看護サービスを開始しました。"),
+    ("intervention_pause", "本人は訪問看護サービスを中断しました。"),
+    ("intervention_resume", "本人は訪問看護サービスを再開しました。"),
+    ("intervention_end", "本人は訪問看護サービスを終了しました。"),
+    ("service_contract_start", "本人はサービス契約を締結しました。"),
+    ("pre_discharge_conference", "退院前カンファレンスを開催しました。"),
+    ("discharge_joint_guidance", "本人は退院時共同指導を受けました。"),
+    ("care_team_conference", "サービス担当者会議を開催しました。"),
+    ("care_plan_change", "本人のケアプランを変更しました。"),
+    ("monitoring", "本人はモニタリングを実施しています。"),
+    ("care_need_certification_change",
+     "本人の要介護認定の結果が更新されました。"),
+    ("respite", "本人は短期入所を利用しました。"),
+    ("facility_entry", "本人は施設に入所しました。"),
+    ("facility_exit", "本人は施設を退所しました。"),
+    ("death", "本人が亡くなりました。"),
+    ("acp_discussion", "本人とACPについて話し合いました。"),
+    ("care_policy_change", "本人の看取り方針を変更しました。"),
+])
+def test_every_care_detail_type_has_a_verified_positive(event_type, body):
+    assert set(clinical_events.CARE_DETAIL_TYPES) == {
+        "intervention_start", "intervention_pause", "intervention_resume",
+        "intervention_end", "service_contract_start",
+        "pre_discharge_conference", "discharge_joint_guidance",
+        "care_team_conference", "care_plan_change", "monitoring",
+        "care_need_certification_change", "respite", "facility_entry",
+        "facility_exit", "death", "acp_discussion", "care_policy_change"}
+    out = clinical_events.verify_care_detail(
+        {"event_type": event_type, "workflow_status": "performed"}, body)
+    assert out is not None and out["event_type"] == event_type
+
+
+def test_care_detail_attributes_bind_to_the_nearest_predicate():
+    # A date belonging to a neighbouring event in the same sentence is not
+    # adopted by this event type.
+    mixed = "本人は11月にモニタリングを実施し、訪問看護を再開しました。"
+    off = {"event_type": "intervention_resume", "date_text": "11月"}
+    assert clinical_events.verify_care_detail(off, mixed) is None
+    on = {"event_type": "intervention_resume", "date_text": "11月"}
+    assert clinical_events.verify_care_detail(
+        on, "本人は訪問看護を11月に再開しました。") is not None
+    # An organization named only as a transfer/referral source (から/より)
+    # is not the service actor.
+    sourced = "本人はA病院からの紹介で訪問看護Bを再開しました。"
+    actor = {"event_type": "intervention_resume", "service_actor": "A病院"}
+    assert clinical_events.verify_care_detail(actor, sourced) is None
+    provider = {"event_type": "intervention_resume", "service_actor": "訪問看護B"}
+    assert clinical_events.verify_care_detail(provider, sourced) is not None
+
+
+@pytest.mark.parametrize("body,quote,kind,subject,status,negated,clean", [
+    # A normal multi-sentence quote verifies when the whole touched
+    # context (quote sentences plus one neighbour each side) is clean.
+    ("前の記録です。本人は2026年9月1日に退院しました。"
+     "本人はその後通院しています。",
+     "本人は2026年9月1日に退院しました。本人はその後通院しています。",
+     "discharge", "patient", "current", False, True),
+    # A correction in the neighbouring sentence still fails closed.
+    ("本人は退院しました。本人はその後検査を受けました。"
+     "訂正：退院の記載は誤りです。",
+     "本人は退院しました。本人はその後検査を受けました。",
+     "discharge", "patient", "current", False, False),
+    # Third-party hearsay framing disqualifies the assertion.
+    ("家族から本人が退院したと聞きました。本人は退院しました。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # An opposing same-subject mention in a neighbouring sentence is caught
+    # by the polarity scan even without an explicit correction marker.
+    ("本人は退院しました。本人は退院していません。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # Quotation marks anywhere in the touched context disqualify it.
+    ("本人は退院しました。「確認済み」の記録です。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+])
+def test_context_clean_bounds_quote_context(body, quote, kind, subject,
+                                            status, negated, clean):
+    start = body.index(quote)
+    assert clinical_events.context_clean(
+        body, start, start + len(quote), kind=kind, subject=subject,
+        status=status, negated=negated) is clean
+
+
+def test_context_clean_detail_anchor_compares_same_service_mentions():
+    detail = {"event_type": "intervention_start",
+              "workflow_status": "performed"}
+    denied = "本人は訪問看護を開始しました。訪問看護は開始していません。"
+    span = denied.index("訪問看護を開始しました")
+    end = span + len("訪問看護を開始しました")
+    assert clinical_events.context_clean(
+        denied, span, end, kind="other", subject="patient", status="current",
+        negated=False, detail=detail) is False
+    other_service = "本人は訪問看護を開始しました。訪問介護は開始していません。"
+    span = other_service.index("訪問看護を開始しました")
+    end = span + len("訪問看護を開始しました")
+    assert clinical_events.context_clean(
+        other_service, span, end, kind="other", subject="patient",
+        status="current", negated=False, detail=detail) is True
