@@ -154,6 +154,81 @@ def test_detail_only_record_context_compares_same_service_mentions():
     assert event["care_detail"]["event_type"] == "intervention_start"
 
 
+@pytest.mark.parametrize("event_type,body", [
+    ("intervention_start", "本人は訪問看護サービスを開始しました。"),
+    ("intervention_pause", "本人は訪問看護サービスを中断しました。"),
+    ("intervention_resume", "本人は訪問看護サービスを再開しました。"),
+    ("intervention_end", "本人は訪問看護サービスを終了しました。"),
+    ("service_contract_start", "本人は訪問介護サービスの契約を締結しました。"),
+    ("pre_discharge_conference", "本人の退院前カンファレンスを開催しました。"),
+    ("discharge_joint_guidance", "本人は退院時共同指導を受けました。"),
+    ("care_team_conference", "本人のサービス担当者会議を開催しました。"),
+    ("care_plan_change", "本人のケアプランを変更しました。"),
+    ("monitoring", "本人はモニタリングを実施しました。"),
+    ("care_need_certification_change", "本人の介護度が変更になりました。"),
+    ("respite", "本人はショートステイを利用しました。"),
+    ("facility_entry", "本人は特養に入所しました。"),
+    ("facility_exit", "本人は施設を退所しました。"),
+    ("death", "本人が亡くなりました。"),
+    ("acp_discussion", "本人はACPについて話し合いました。"),
+    ("care_policy_change", "本人の看取り方針を変更しました。"),
+])
+def test_every_care_detail_type_verifies_through_record_projection(
+        event_type, body):
+    # kind=other detail records resolve subject/polarity/status from the
+    # source itself — the stored axes stay 'unknown' on purpose so the
+    # projection proves derivation, not echo.
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": body,
+            "span": {"start": 0, "end": len(body)},
+            "care_detail": {"event_type": event_type,
+                            "workflow_status": "performed",
+                            "date_text": "unknown",
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"]
+    assert event["subject"] == "patient" and event["negated"] is False
+    assert event["status"] == "current"
+    assert event["care_detail"]["event_type"] == event_type
+    assert result["coverage"]["state"] == "complete"
+
+
+@pytest.mark.parametrize("prefix,tail", [
+    # A correction two sentences after the quote still fails closed.
+    ("", "経過は安定しています。翌日の記録です。訂正：退院の記載は誤りです。"),
+    # An opposing mention far from the quote fails the whole-body scan.
+    ("", "食事は全量摂取できています。夜間は良眠でした。本人は退院していません。"),
+    # Third-party framing two sentences before the quote reaches it.
+    ("家族の話では、本人の調子を聞きました。検査は問題ありません。", ""),
+])
+def test_distant_context_markers_fail_closed_through_projection(prefix, tail):
+    body = prefix + "本人は2026年9月1日に退院しました。" + tail
+    quote = "本人は2026年9月1日に退院しました。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert event["unverified"] is True and event["event_day"] is None
+
+
+def test_unrelated_distant_sentences_do_not_block_a_clean_quote():
+    body = ("前の記録です。本人は2026年9月1日に退院しました。"
+            "経過観察を続けています。次回の予定を確認しました。"
+            "退院後の生活について話し合いました。")
+    quote = "本人は2026年9月1日に退院しました。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert result["coverage"]["state"] == "complete"
+
+
 def test_single_full_assertion_remains_verified_when_quote_omits_final_punctuation():
     body = "本人は2026年9月1日に退院しました。"
     quote = body[:-1]

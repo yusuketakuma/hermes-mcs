@@ -69,6 +69,31 @@ def test_source_bound_event_preserves_axes_and_borrowed_snapshot_without_content
     store.db.rollback()
 
 
+def test_local_collect_projects_verified_care_detail_record(store):
+    # kind=other detail record through the local extract path: collect →
+    # project → validate_record → context_clean end to end.
+    body = "本人は2026年9月1日にサービス担当者会議を実施しました。"
+    record = {"kind": "other", "subject": "unknown", "status": "unknown",
+              "negated": None, "evidence": body,
+              "span": {"start": 0, "end": len(body)},
+              "care_detail": {"event_type": "care_team_conference",
+                              "workflow_status": "performed",
+                              "date_text": "2026年9月1日",
+                              "service_actor": "unknown"}}
+    _save(store, 1, body, records=[record])
+    before = store.db.total_changes
+    result = _read(store)
+    event, = result["events"]
+    assert event["kind"] == "other" and event["unverified"] is False
+    assert event["subject"] == "patient" and event["negated"] is False
+    assert event["care_detail"] == {"event_type": "care_team_conference",
+                                    "workflow_status": "performed",
+                                    "date_text": "2026年9月1日",
+                                    "service_actor": "unknown"}
+    assert store.db.in_transaction and store.db.total_changes == before
+    store.db.rollback()
+
+
 def test_borrowed_snapshot_is_required_and_zero_is_not_unparsed(store):
     body = "本人は落ち着いています。"
     _save(store, 1, body)

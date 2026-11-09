@@ -100,22 +100,36 @@ _DETAIL_VETOES = {
     'facility_entry': re.compile(r'短期|ショートステイ|レスパイト'),
 }
 
-# For event types whose cue is only a noun, the same sentence must also
-# carry the event predicate — vocabulary presence alone is not a held
-# conference, a conducted guidance session, a held discussion, or a decided
-# policy change.
+# For event types whose cue is only a noun, the cue must bind to the
+# event's own predicate — vocabulary presence alone is not a held
+# conference, a conducted guidance session, a held discussion, an
+# implemented respite stay, an updated certification, or a decided policy
+# change. care_policy_change needs no entry: its cue already ends in the
+# change word itself.
 _DETAIL_PREDICATES = {
     'pre_discharge_conference': re.compile(
-        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)'),
+        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)|決ま'),
     'discharge_joint_guidance': re.compile(
         r'実施|行(?:った|う|います|われ)|指導(?:した|します|している)'
-        r'|説明(?:した|します)|受け'),
+        r'|説明(?:した|します)|受け|決ま'),
     'care_team_conference': re.compile(
-        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)'),
+        r'開催|実施|行(?:った|う|います|われ)|開(?:いた|かれ|きた)|決ま'),
     'acp_discussion': re.compile(
-        r'話し合い|話合い|面談|確認|表明|意向|実施|聴取'),
-    'care_policy_change': re.compile(r'変更|決定|見直し|撤回'),
+        r'話し合い|話合い|面談|確認|表明|意向|実施|聴取|決ま'),
+    'care_need_certification_change': re.compile(
+        r'変更|区分変更|更新|結果|決定'),
+    'respite': re.compile(r'利用|入所|泊'),
 }
+
+# A noun cue heads the event only through an object/topic particle or a
+# nominalised event noun (「会議を開催」「会議の開催」「指導について実施」).
+# 「会議の資料」「指導の説明」 bind の+non-event noun and never qualify.
+_DETAIL_EVENT_NOUN = (
+    r'開催|実施|話し合い|話合い|指導|面談|確認|表明|意向'
+    r'|決定|変更|見直し|撤回|聴取')
+_DETAIL_BIND = re.compile(
+    r'(?:を|が|は|も|について|に関して)'
+    r'|の(?=' + _DETAIL_EVENT_NOUN + r')')
 
 _WORKFLOW_PLANNED = frozenset(
     ('planned', 'ordered', 'pending', 'considering', 'on_hold'))
@@ -153,7 +167,7 @@ _UNCERTAIN = re.compile(r'否定でき|かもしれ|疑い|不明|未確認|未�
 _NEGATED = re.compile(r'^(?:では(?:ありません|ない|なく)|じゃない|(?:の)?(?:予定|計画)(?:は|が|も)?(?:なし|ない|ありません))')
 _QUESTION = re.compile(r'(?:か|でしょうか)[。！？!?\s]*$|[?？][。！？!?\s]*$|かどうか|'
                        r'とは[^。！？!?\n]{0,80}(?:記載なし|書かれていません|報告されていません)|' + REPORTED_ABSENCE)
-_AFFIRMED = re.compile(r'^(?:は|が|を)?(?:現在|今は)?(?:しました|した|しています|している|し(?=[、,]|$)|中|済み|です|となり|となった|となりました|されました|された|を受けました|を実施しました)')
+_AFFIRMED = re.compile(r'^(?:は|が|を)?(?:現在|今は)?(?:しました|した|しています|している|し(?=[、,]|$)|中|済み|です|となり|となった|となりました|されました|された|を受けました|を実施しました|ました|りました|なりました|なった|になりました|になった)')
 _SENTENCE_ENDS = '。！？!?;；\n'
 _CORRECTION_TAIL = (r'[^。！？!?;；\n]{0,24}(?:'
                     r'(?:誤り|誤記)(?!では(?:ない|ありません|なく)|じゃない)|'
@@ -216,25 +230,27 @@ def _polarity(body, start, end, target_end, status):
 
 
 def _ambiguous_context(body, anchor, target_end, subject):
-    """Find adjacent references that make an event or its subject uncertain."""
+    """Find references that make an event or its subject uncertain.
+
+    Corrected-record phrasing and explicit contradictions invalidate the
+    assertion wherever they appear in the bounded body — a distant
+    correction cannot be proven unrelated. The topic-shift check stays
+    adjacent: only a neighbouring other-person frame can rebind a bare
+    patient mention.
+    """
     left = max(body.rfind(mark, 0, anchor) for mark in _SENTENCE_ENDS) + 1
-    right = min((position for mark in _SENTENCE_ENDS
-                 if (position := body.find(mark, target_end)) >= 0), default=len(body))
     previous_end = left - 1 if left else 0
     previous_left = max(body.rfind(mark, 0, previous_end) for mark in _SENTENCE_ENDS) + 1
-    following_start = right + 1 if right < len(body) else len(body)
-    following_end = min((position for mark in _SENTENCE_ENDS
-                         if (position := body.find(mark, following_start)) >= 0), default=len(body))
-    previous, sentence, following = body[previous_left:previous_end], body[left:right], body[following_start:following_end]
-    correction = (_CORRECTED_FORWARD.search(previous) or _CORRECTED_FORWARD.search(sentence)
-                  or _CORRECTED_BACKWARD.search(sentence) or _CORRECTED_BACKWARD.search(following)
-                  or _CONTRADICTED_EVENT.search(body[target_end:right]))
+    previous = body[previous_left:previous_end]
+    correction = bool(_CORRECTED_FORWARD.search(body)
+                      or _CORRECTED_BACKWARD.search(body)
+                      or _CONTRADICTED_EVENT.search(body))
     # A preceding topic such as "family's story" can make a subsequent bare
     # "the person" refer to that person; a family member merely reporting
     # about the patient does not establish such a conflicting topic.
     ambiguous_subject = (subject == 'patient' and _OTHER_TOPIC.search(previous)
                          and _EXPLICIT_PATIENT.search(body[left:anchor]))
-    return bool(correction), bool(ambiguous_subject)
+    return correction, bool(ambiguous_subject)
 
 
 def _contradictory_event(body, anchor, target_end, subject, kind):
@@ -297,6 +313,52 @@ def _sentence_bounds(text, pos):
     return left, right
 
 
+def _detail_event_target(quote, match, event_type):
+    """Quote offset where this detail event's own predicate ends.
+
+    A noun-only cue qualifies only when it heads the event predicate in
+    its own sentence (「会議を開催」「会議の開催を実施」「指導を受け」),
+    or when the cue match itself already ends in the predicate
+    (「意向を確認」「短期入所」). 「会議の資料を作成」「指導の説明を
+    実施」 describe related material, not the event, and return None.
+    Non-predicate types keep the cue end as the target.
+    """
+    if event_type not in _DETAIL_PREDICATES:
+        return match.end()
+    _, sent_right = _sentence_bounds(quote, match.start())
+    rest = quote[match.end():sent_right]
+    bind = _DETAIL_BIND.match(rest)
+    if bind is not None:
+        found = _DETAIL_PREDICATES[event_type].search(rest, bind.end())
+        if found is not None:
+            return match.end() + found.end()
+    predicate = _DETAIL_PREDICATES[event_type]
+    if re.search(r'(?:' + predicate.pattern + r')$', match.group()):
+        return match.end()
+    return None
+
+
+def _detail_instances(text, event_type):
+    """Cue mentions in ``text`` that can be separate event instances.
+
+    For acp_discussion the compound cues (終末期の話し合い, 意向を確認…)
+    describe the same mention as a bare ACP/人生会議 anchor, so only the
+    bare-noun matches count as potential second instances.
+    """
+    cue = CARE_DETAIL_CUES.get(event_type)
+    if cue is None:
+        return []
+    veto = _DETAIL_VETOES.get(event_type)
+    matches = [m for m in cue.finditer(text)
+               if veto is None or not veto.search(m.group())]
+    if event_type == 'acp_discussion':
+        predicate = _DETAIL_PREDICATES[event_type]
+        matches = [m for m in matches
+                   if not re.search(r'(?:' + predicate.pattern + r')$',
+                                    m.group())]
+    return matches
+
+
 def _care_detail_workflow(detail, *, status=None, negated=None,
                           fact_workflow=None):
     """Demote detail.workflow_status to 'unknown' when axes conflict.
@@ -336,19 +398,35 @@ _UNCERTAIN_CONTEXT = re.compile(
     r"(?:という|との)(?:記載|報告|話)|と(?:聞き|聞いた|書かれ)")
 _QUOTE_MARKS = re.compile(r'[「」『』"]')
 
+# Markers that can retract or reframe an assertion at any distance, so the
+# whole bounded body is scanned for them: corrections, retractions,
+# quotations and third-party attribution. Local-only markers (contrastive
+# endings, uncertainty wording, questions, quotation marks) stay scoped to
+# the quote's own sentences — distant occurrences cannot be proven
+# unrelated only for the classes listed here.
+_GLOBAL_CONTEXT = re.compile(
+    r"訂正|撤回|誤り|誤記|間違|取り消|取消|引用|仮定|仮に|"
+    r"違(?:う|い|った|わ)|事実では|実際には|"
+    r"(?:という|との|の|からの)(?:記載|報告|話|伝聞)|"
+    r"と(?:聞き|聞いた|書かれ)|によると|いわく")
+
 
 def context_clean(body, start, end, *, kind=None, subject=None,
                   status=None, negated=None, detail=None):
-    """True when the quote's full context is a clean assertion.
+    """True when the quote's whole context is a clean assertion.
 
-    Every sentence the quote touches — plus one neighbour sentence on each
-    side — must carry no correction/uncertainty/hearsay marker and no
-    quotation marks, so normal multi-sentence evidence verifies while a
-    later-sentence correction, denial or third-party framing still fails
-    closed. Another mention of the same cue inside that range with an
-    opposing polarity for the same subject and phase also disqualifies;
-    ``kind='other'`` detail anchors compare only mentions sharing the same
-    service head, so a different provider's denial stays independent.
+    The sentences the quote touches — plus one neighbour sentence on each
+    side — must carry no correction/uncertainty/hearsay marker, quotation
+    marks, uncertainty wording or questions, so a correction, denial or
+    third-party framing in the immediate context still fails closed. The
+    entire bounded body is then scanned for markers that retract or
+    reframe an assertion at a distance (corrections, quotations,
+    attribution), and for another mention of the same cue with an
+    opposing polarity for the same subject and phase — relevance cannot
+    be proven otherwise, so the scan is bounded and an exhausted bound
+    fails closed. ``kind='other'`` detail anchors compare only mentions
+    sharing the same service head, so a different provider's denial stays
+    independent.
     """
     if not isinstance(body, str) or not (0 <= start < end <= len(body)):
         return False
@@ -364,8 +442,11 @@ def context_clean(body, start, end, *, kind=None, subject=None,
     if (_UNCERTAIN_CONTEXT.search(region) or _QUOTE_MARKS.search(region)
             or _UNCERTAIN.search(region) or _QUESTION.search(region)):
         return False
+    if _GLOBAL_CONTEXT.search(body):
+        return False
     if subject is None or negated is None or status not in ('current', 'past'):
         return True
+    head = None
     if kind == 'other':
         event_type = (detail or {}).get('event_type')
         cue = CARE_DETAIL_CUES.get(event_type)
@@ -375,21 +456,22 @@ def context_clean(body, start, end, *, kind=None, subject=None,
             return True
         service = re.search(_SERVICE_CUE, anchor.group())
         head = service.group() if service else anchor.group()
-        mentions = (m for m in cue.finditer(body, left, right)
-                    if not start <= m.start() < end)
     else:
         cue = _DIRECT.get(kind)
         if cue is None:
             return True
-        head = None
-        mentions = (m for m in cue.finditer(body, left, right)
-                    if not start <= m.start() < end)
-    for match in mentions:
+    scanned = 0
+    for match in cue.finditer(body):
+        if start <= match.start() < end:
+            continue
         if head is not None:
             service = re.search(_SERVICE_CUE, match.group())
             other_head = service.group() if service else match.group()
             if other_head != head:
                 continue
+        scanned += 1
+        if scanned > _EVENT_CANDIDATE_LIMIT:
+            return False
         owner, phase = source_axes(body, match.start(), match.end(),
                                    default='unknown')
         if owner != subject or phase != status:
@@ -408,9 +490,11 @@ def _attribute_bound(quote, value, event_type, *, actor=False):
     The verbatim occurrence must sit in a sentence that carries a care
     detail cue, and among all detail cues in that sentence the nearest
     predicate must be this event type's — a date or provider belonging to
-    a neighbouring event cannot be adopted. ``actor`` occurrences marked
-    as a transfer/referral source (から/より) describe the predecessor,
-    not the provider, and never bind.
+    a neighbouring event cannot be adopted. Two or more instances of the
+    same event type in that sentence make the binding ambiguous, so the
+    attribute is not adopted either. ``actor`` occurrences marked as a
+    transfer/referral source (から/より) describe the predecessor, not
+    the provider, and never bind.
     """
     if not isinstance(value, str) or not value.strip():
         return False
@@ -424,6 +508,10 @@ def _attribute_bound(quote, value, event_type, *, actor=False):
             pos = i + 1
             continue
         sent_left, sent_right = _sentence_bounds(quote, i)
+        if len(_detail_instances(quote[sent_left:sent_right],
+                                 event_type)) > 1:
+            pos = i + 1
+            continue
         candidates = []
         for other_type, cue in CARE_DETAIL_CUES.items():
             candidates.extend((other_type, m) for m in cue.finditer(
@@ -445,11 +533,15 @@ def verify_care_detail(detail, quote):
     """Return a normalized care_detail bound to the evidence quote, or None.
 
     event_type must be one of CARE_DETAIL_TYPES, its own cue must appear
-    inside the quote, and for noun-only types the same sentence must carry
-    the event predicate. date_text and service_actor must occur verbatim
-    and bind to this event type's nearest predicate — attributes from
-    other sentences or neighbouring events are not adopted. Axes that are
-    not explicit stay 'unknown' — nothing is inferred or normalized.
+    inside the quote, and for noun-only types the cue must head the
+    event's own predicate — a held conference, a conducted guidance, a
+    respite stay actually used, an updated certification — not merely a
+    related noun like meeting materials or a plan sheet. date_text and
+    service_actor must occur verbatim and bind to this event type's
+    nearest predicate instance — attributes from other sentences,
+    neighbouring events or ambiguous same-type pairs are not adopted.
+    Axes that are not explicit stay 'unknown' — nothing is inferred or
+    normalized.
     """
     if not isinstance(detail, dict) or not isinstance(quote, str):
         return None
@@ -459,10 +551,9 @@ def verify_care_detail(detail, quote):
     matches = _detail_cue_matches(quote, event_type)
     if not matches:
         return None
-    predicate = _DETAIL_PREDICATES.get(event_type)
-    if predicate is not None and not any(
-            predicate.search(quote[a:b]) for a, b in
-            {_sentence_bounds(quote, m.start()) for m in matches}):
+    if event_type in _DETAIL_PREDICATES and not any(
+            _detail_event_target(quote, m, event_type) is not None
+            for m in matches):
         return None
     from semantic_facts import WORKFLOW_STATUSES
     workflow = detail.get('workflow_status', 'unknown')
@@ -522,7 +613,16 @@ def validate_record(item, body):
         result['unverified'] = True
         return result
     match = matches[0]
-    anchor, target_end = start + match.start(), start + match.end()
+    anchor = start + match.start()
+    target_end = start + match.end()
+    if item['kind'] == 'other' and detail is not None:
+        # Noun-only detail cues anchor on the event's own predicate, not
+        # the bare noun — polarity and status bind to what was done.
+        extended = _detail_event_target(quote, match, detail['event_type'])
+        if extended is None:
+            result['unverified'] = True
+            return result
+        target_end = start + extended
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)
@@ -647,23 +747,29 @@ def canonical_record(fact, evidence, *, disputed=False):
     detail = verify_care_detail(fact.get('care_detail'), quote) \
         if isinstance(fact.get('care_detail'), dict) else None
     if kind == 'other' and detail is not None:
-        # kind=other carries the detail's own cue as the anchor (spec §1).
+        # kind=other carries the detail's own cue as the anchor (spec §1),
+        # extended through the event's own predicate for noun-only cues.
         detail_matches = _detail_cue_matches(quote, detail['event_type'])
         match = detail_matches[0] if len(detail_matches) == 1 else None
     else:
         match = cue.search(quote) if cue is not None else None
+    target_end = match.end() if match is not None else None
+    if kind == 'other' and detail is not None and match is not None:
+        extended = _detail_event_target(quote, match, detail['event_type'])
+        if extended is not None:
+            target_end = extended
     # A different cue in the quote cannot establish examination for an
     # arrival-only statement.
     mismatch = kind == 'exam' and bool(re.search(OUTPATIENT_CUE, statement))
     if match is not None:
         if kind == 'exam' and re.fullmatch(OUTPATIENT_CUE, match.group()):
             mismatch = True
-        source_subject, source_status = source_axes(quote, match.start(), match.end(), default='unknown')
+        source_subject, source_status = source_axes(quote, match.start(), target_end, default='unknown')
         if source_subject != subject:
             subject = 'unknown'
-        source_negated = _polarity(quote, match.start(), len(quote), match.end(), source_status)
+        source_negated = _polarity(quote, match.start(), len(quote), target_end, source_status)
         mismatch = mismatch or source_negated is None or source_negated != negated
-        if _contradictory_event(quote, match.start(), match.end(), source_subject, kind):
+        if _contradictory_event(quote, match.start(), target_end, source_subject, kind):
             status, negated, mismatch = 'unknown', None, True
         elif source_status == 'unknown':
             status, mismatch = 'unknown', True

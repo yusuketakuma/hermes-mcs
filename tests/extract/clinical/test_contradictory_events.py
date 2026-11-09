@@ -301,6 +301,31 @@ def test_normalized_care_detail_is_idempotent_under_revalidation():
     ("pre_discharge_conference", "退院前カンファレンスの資料です。", False),
     ("care_team_conference", "サービス担当者会議を開催しました。", True),
     ("care_team_conference", "担当者会議の議事録です。", False),
+    # A predicate elsewhere in the sentence does not prove the event:
+    # preparing materials or conducting other guidance is not holding the
+    # conference itself.
+    ("care_team_conference",
+     "本人はサービス担当者会議の資料作成を実施しました。", False),
+    ("pre_discharge_conference",
+     "本人は退院前カンファレンスの資料を確認し、別の指導を実施しました。",
+     False),
+    ("discharge_joint_guidance",
+     "本人は退院時共同指導の説明資料を確認しました。", False),
+    # The event noun bound through an event nominalisation or the
+    # guidance's own receipt does qualify.
+    ("care_team_conference",
+     "本人はサービス担当者会議の開催を実施しました。", True),
+    ("care_team_conference",
+     "本人はサービス担当者会議の開催が決まりました。", True),
+    ("discharge_joint_guidance",
+     "本人は退院時共同指導の実施を受けました。", True),
+    ("acp_discussion", "本人はACPの意向を確認しました。", True),
+    ("respite", "本人はショートステイのパンフレットを確認しました。", False),
+    ("respite", "本人はショートステイを利用しました。", True),
+    ("care_need_certification_change",
+     "本人の要介護認定の結果が更新されました。", True),
+    ("care_need_certification_change",
+     "本人の要介護認定の案内が届きました。", False),
 ])
 def test_care_detail_cue_semantics_reject_lookalikes(event_type, body, kept):
     out = clinical_events.verify_care_detail(
@@ -359,6 +384,26 @@ def test_care_detail_attributes_bind_to_the_nearest_predicate():
     assert clinical_events.verify_care_detail(provider, sourced) is not None
 
 
+def test_care_detail_attributes_reject_ambiguous_same_type_instances():
+    # Two instances of the same event type in one sentence leave the
+    # attribute's instance unprovable — it is not adopted.
+    pair = ("訪問看護Aを11月に開始し、介護保険の更新手続きを行った上で、"
+            "訪問看護Bを12月に開始しました。")
+    dated = {"event_type": "intervention_start", "date_text": "11月"}
+    assert clinical_events.verify_care_detail(dated, pair) is None
+    acted = {"event_type": "intervention_start", "service_actor": "訪問看護A"}
+    assert clinical_events.verify_care_detail(acted, pair) is None
+    # A single instance still binds, and instances in different sentences
+    # stay independent.
+    single = "訪問看護Aを11月に開始しました。訪問看護Bを12月に開始しました。"
+    assert clinical_events.verify_care_detail(dated, single) is not None
+    # acp compound cues describing one mention do not count as a second
+    # instance.
+    acp = "本人はACPの意向を11月に確認しました。"
+    acp_dated = {"event_type": "acp_discussion", "date_text": "11月"}
+    assert clinical_events.verify_care_detail(acp_dated, acp) is not None
+
+
 @pytest.mark.parametrize("body,quote,kind,subject,status,negated,clean", [
     # A normal multi-sentence quote verifies when the whole touched
     # context (quote sentences plus one neighbour each side) is clean.
@@ -381,6 +426,32 @@ def test_care_detail_attributes_bind_to_the_nearest_predicate():
     # Quotation marks anywhere in the touched context disqualify it.
     ("本人は退院しました。「確認済み」の記録です。",
      "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # A correction two or more sentences away still fails closed: the
+    # whole bounded body is scanned for retraction markers.
+    ("本人は退院しました。経過は安定しています。翌日の記録です。"
+     "訂正：退院の記載は誤りです。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # An opposing same-subject mention far from the quote is caught by the
+    # whole-body polarity scan.
+    ("本人は退院しました。食事は全量摂取できています。"
+     "夜間は良眠でした。翌朝の状態も安定しています。"
+     "本人は退院していません。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # Third-party framing persisting from the body opening disqualifies a
+    # quote sentences later.
+    ("家族の話では、本人の調子を聞きました。検査は問題ありません。"
+     "本人は退院しました。",
+     "本人は退院しました。", "discharge", "patient", "current", False, False),
+    # Unrelated clean sentences at any distance do not block the quote.
+    ("前の記録です。本人は退院しました。経過観察を続けています。"
+     "次回の予定を確認しました。退院後の生活について話し合いました。",
+     "本人は退院しました。", "discharge", "patient", "current", False, True),
+    # Distant quotation marks or uncertainty wording without attribution
+    # or opposition are outside the asserted context's guarantee.
+    ("「確認済み」の記録です。前置きです。間の文です。本人は退院しました。",
+     "本人は退院しました。", "discharge", "patient", "current", False, True),
+    ("検査値は不明です。前置きです。間の文です。本人は退院しました。",
+     "本人は退院しました。", "discharge", "patient", "current", False, True),
 ])
 def test_context_clean_bounds_quote_context(body, quote, kind, subject,
                                             status, negated, clean):
