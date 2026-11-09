@@ -368,7 +368,7 @@ def test_preflight_reports_blockers_with_fixes(tmp_path):
     rec.mkdir(mode=0o700)
     (rec / "repo_path").write_text(f"{other}\n")
     r = _run({**env, "STUB_UID": "0", "STUB_DF_KB": "1000",
-              "STUB_CURL_FAIL": "github.com"}, None, "--preflight")
+              "STUB_CURL_FAIL": "github.com"}, None, "--mode", "hermes", "--preflight")
     assert r.returncode == 1
     out = r.stdout
     for text in ("要対処  管理者 root で実行されています", "要対処  Homebrew が未導入です",
@@ -496,7 +496,7 @@ def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     interactive transport needs the plugin, and the final guidance names
     the lineworks_adapter steps (no secret values are printed)."""
     home, hermes_home, stub_root, env = _world(tmp_path)
-    plan = _run(env, None, "--dry-run", "--no-plugin", "--no-llm")
+    plan = _run(env, None, "--mode", "hermes", "--dry-run", "--no-plugin", "--no-llm")
     assert "省略（--no-plugin。LINE WORKS では不要）" in plan.stdout
     r = _run(env, hermes_home, "--no-llm", "--no-plugin", "--no-recovery")
     assert r.returncode == 0, r.stderr

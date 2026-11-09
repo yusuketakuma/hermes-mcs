@@ -323,6 +323,8 @@ def test_config_creation_race_preserves_and_checks_winner(tmp_path, explicit, ra
     flags = (['--mode', 'hermes'] if explicit else []) + [
         '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery']
     result = _run(env, None, *flags)
+    if not explicit:
+        accepted = raw == '{"runtime_mode":"standalone"}'
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
     if accepted:
         assert json.loads((home / '.mcs/config.json').read_text()) == {**json.loads(raw), 'install_args': SAVED_FLAGS}
@@ -433,7 +435,7 @@ def test_config_creation_pins_parent_directory_during_swap(tmp_path):
                   '--no-services', '--no-recovery')
     assert result.returncode != 0
     assert not (home / 'synthetic-alternate/config.json').exists()
-    assert (home / 'synthetic-original/config.json').read_bytes() == b'{}\n'
+    assert json.loads((home / 'synthetic-original/config.json').read_bytes()) == {'runtime_mode': 'standalone'}
 
 
 def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
@@ -493,10 +495,10 @@ def test_failed_later_install_stage_keeps_created_config_for_retry(tmp_path):
     result = _run({**env, 'STUB_FAIL_SERVICES': '1'}, None, *flags)
     assert result.returncode != 0
     config = home / '.mcs/config.json'
-    assert config.read_bytes() == b'{}\n'
+    assert json.loads(config.read_bytes()) == {'runtime_mode': 'standalone'}
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(config.read_text()) == {'install_args': SAVED_FLAGS}
+    assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
 
 
 @pytest.mark.parametrize('race', [False, True])
@@ -512,7 +514,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
                   '--no-plugin', '--no-recovery')
     assert result.returncode != 0
     config = home / '.mcs/config.json'
-    assert config.read_bytes() == b'{}\n'
+    assert json.loads(config.read_bytes()) == {'runtime_mode': 'standalone'}
     winner = '{"runtime_mode":"hermes","synthetic":"kept"}'
     baseline_calls = len(_calls(stub))
     master, slave = pty.openpty()
