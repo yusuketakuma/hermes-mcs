@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "添付の原本削除後も配送済みファイルを再利用して更新を再開",
+  "summary": "通知に添付されたファイルのローカル原本が削除済み（pruned）でも、Slackへ配送済みのファイルIDと内容の記録が一致する場合、カードの更新はそのファイルを再アップロードせず既存IDで共有をやり直せます。これまで更新計画が元のファイル集合と一致せず保留され続けていたカードが、承認済みの復旧操作で正常に再開します。",
+  "upgrade": "追加操作は不要です。file_groupの復旧承認を再試行する場合は、修正版の適用後に同じ承認手順を使ってください。リモート側の実在確認は従来どおりfiles.infoで行い、証明できないファイルは従来どおり保留のままです。",
+  "details": [
+    "pruned状態の添付について、配送済みpartのremote_idとattachments.sha256/bytesが一致する場合だけ、更新renderでunavailable扱いせずprior_remote_idによる再利用entryを作る。ローカルblobは一切読まず、新規uploadも発生しない。",
+    "state=failed/withdrawn、配送証明のないpruned、sha256/bytesの不整合は従来どおりunavailableとして明示開示し、file_group_retry_scope_changed等の拒否条件は緩めない。"
+  ],
+  "refs": ["mcs/notify/notify_parts.py", "tests/adapters/slack/test_file_group_hardening.py"]
+}

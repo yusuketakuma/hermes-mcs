@@ -1033,6 +1033,43 @@ def _provider_visibility(parts):
     return tuple(value)
 
 
+def _slack_pruned_reuse(db, a, *, inherited_attachments, parent_history,
+                        own_history, parent_attachment_ids):
+    """Return ``a`` deliverable-by-reuse when its pruned file has a proven remote.
+
+    Local bytes are gone but the remote identity was already delivered and
+    sealed; FID reuse never reads the blob, so the file group keeps the
+    member instead of disclosing 取得失敗 for a file that is on Slack.
+    """
+    if not a.get("unavailable"):
+        return a
+    part_id = f"attach:{a['attachment_id']:04d}"
+    inherited_part = inherited_attachments and (
+        a["attachment_id"] in parent_attachment_ids
+        or part_id in parent_history[0]
+        or ("part", part_id) in parent_history[4])
+    history = own_history if inherited_attachments and not inherited_part \
+        else parent_history
+    if history is None:
+        return a
+    rid, sha = history[0].get(part_id, (None, None))
+    if not rid:
+        return a
+    row = db.execute(
+        "SELECT sha256,bytes,state FROM attachments WHERE attachment_id=?",
+        (a["attachment_id"],)).fetchone()
+    if (row is None or row["state"] != "pruned" or sha != row["sha256"]
+            or not valid_hash(row["sha256"]) or type(row["bytes"]) is not int
+            or row["bytes"] < 0):
+        return a
+    return {"attachment_id": a["attachment_id"], "name": a["name"],
+            # the seal still requires a path field; the pruned blob is
+            # never read — reuse verifies the remote FID instead. The
+            # marker cannot resolve to a real file anywhere.
+            "path": f"<pruned:{a['attachment_id']}>",
+            "sha256": row["sha256"], "bytes": row["bytes"]}
+
+
 def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                          face_mids=frozenset(), face_posts=(),
                          waiting=frozenset()) -> tuple[dict, str | None]:
@@ -1269,6 +1306,14 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
             value for kind, value in uncertain_attachments if kind == "attachment"}
         _, own_verified, own_identities = _same_thread_delivered_parts(db, card)
         own_history = (*_prior_remote_ids(db, card), own_verified, own_identities)
+    if card["transport"] == "slack" and (update or inherited_attachments):
+        # a pruned file whose remote identity is already proven stays
+        # deliverable by FID reuse — the blob is never read again
+        attachments = [
+            _slack_pruned_reuse(db, a, inherited_attachments=inherited_attachments,
+                                parent_history=parent_history, own_history=own_history,
+                                parent_attachment_ids=parent_attachment_ids)
+            for a in attachments]
     captions = _attachment_captions(db, card, attachments)
     att_entries = []
     for a in attachments:

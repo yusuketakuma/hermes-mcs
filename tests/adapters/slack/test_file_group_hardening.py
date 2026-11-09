@@ -155,6 +155,88 @@ def test_retry_gate_rejects_changed_sealed_file(led, tmp_path, monkeypatch):
     asyncio.run(run())
 
 
+def _issue_update(led):
+    card = led.db.execute("SELECT * FROM notification_cards").fetchone()
+    specs = []
+    with led.db:
+        notify_cards.issue_render(led.db, card["card_id"], SLACK, NOW + 1,
+                                  specs, force=True)
+    assert len(specs) == 1
+    return specs[0]
+
+
+def test_pruned_attachment_reuses_proven_remote_in_update(led, tmp_path, monkeypatch):
+    """A file whose local bytes were pruned still joins the update's file
+    group through its sealed remote identity — reuse never reads the blob,
+    so the member is not disclosed as 取得失敗."""
+    world = _world(led, tmp_path, monkeypatch, count=1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    first = _latest_render(led)
+    stage = next(p for p in json.loads(first["spec_json"])["parts"]["manifest"]
+                 if p["kind"] == "attachment_part")
+    fid = led.db.execute(
+        "SELECT remote_id FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (first["delivery_id"], stage["part_id"])).fetchone()["remote_id"]
+    assert fid
+    led.db.execute("UPDATE attachments SET state='pruned', local_path=NULL")
+    led.db.commit()
+    spec = _issue_update(led)
+    from adapters.slack.cards import validate as _validate_spec
+    _validate_spec(spec)          # the seal contract must accept the reuse entry
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part" and p["part_id"] == stage["part_id"])
+    assert part.get("unavailable") is not True
+    assert part["prior_remote_id"] == fid
+    assert part["sha256"] == stage["sha256"] and part["bytes"] == stage["bytes"]
+    # the group is emitted only while a non-unavailable member exists, and
+    # its seal binds every such member — presence proves membership here
+    assert any(p["kind"] == "file_group" for p in spec["parts"]["manifest"])
+    # end to end: the retry render reuses the sealed FID — no re-upload,
+    # and the group update re-binds the same private file set
+    import notify_spool
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)),
+                               [spec], NOW + 1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert len(world.client.upload_calls) == 1
+    groups = [kw for kind, kw in world.client.calls
+              if kind == "update" and "file_ids" in kw]
+    assert len(groups) == 2 and groups[0] == groups[1]
+
+
+def test_pruned_attachment_without_proof_stays_unavailable(led, tmp_path, monkeypatch):
+    """Pruning alone never invents a remote: with no delivered prior the
+    file is still disclosed as unavailable, never silently reused."""
+    world = _world(led, tmp_path, monkeypatch, count=1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    first = _latest_render(led)
+    stage = next(p for p in json.loads(first["spec_json"])["parts"]["manifest"]
+                 if p["kind"] == "attachment_part")
+    led.db.execute("UPDATE notification_render_parts SET state='not_sent', remote_id=NULL "
+                   "WHERE delivery_id=? AND part_id=?", (first["delivery_id"], stage["part_id"]))
+    led.db.execute("UPDATE attachments SET state='pruned', local_path=NULL")
+    led.db.commit()
+    spec = _issue_update(led)
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part" and p["part_id"] == stage["part_id"])
+    assert part.get("unavailable") is True
+    assert "prior_remote_id" not in part
+
+
+def test_pruned_attachment_with_changed_hash_stays_unavailable(led, tmp_path, monkeypatch):
+    """A pruned row whose recorded hash no longer matches the delivered
+    receipt is never reused — the remote identity must be the same file."""
+    world = _world(led, tmp_path, monkeypatch, count=1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    led.db.execute("UPDATE attachments SET state='pruned', local_path=NULL, "
+                   "sha256=?", ("0" * 64,))
+    led.db.commit()
+    spec = _issue_update(led)
+    part = next(p for p in spec["parts"]["manifest"]
+                if p["kind"] == "attachment_part")
+    assert part.get("unavailable") is True
+    assert "path" not in part and "sha256" not in part
+
+
 def test_normal_update_reuses_private_stages_and_gc_preserves_kind(led, tmp_path, monkeypatch):
     import notify_spool
     world = _world(led, tmp_path, monkeypatch)
