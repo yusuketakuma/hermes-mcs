@@ -117,7 +117,7 @@ def project(project_id, message, artifact_id, document):
         status = ("unknown" if unresolved or (date_uncertain and reported_status == "current"
                                               and record["negated"] is False) else reported_status)
         unverified += unresolved
-        events.append({"project_id": project_id, "message_id": message["message_id"],
+        event = {"project_id": project_id, "message_id": message["message_id"],
                        "artifact_id": artifact_id, "record_index": index,
                        "content_hash": message["content_hash"],
                        "span": [span["start"], span["end"]] if bound else None,
@@ -128,5 +128,8 @@ def project(project_id, message, artifact_id, document):
                        "date_uncertain": date_uncertain,
                        "event_day": event_day,
                        "posted_at": posted.isoformat() if posted else None,
-                       "posted_at_ts": message["posted_at_ts"] if posted else None})
+                       "posted_at_ts": message["posted_at_ts"] if posted else None}
+        if not unresolved and isinstance(record.get("care_detail"), dict):
+            event["care_detail"] = record["care_detail"]
+        events.append(event)
     return result("incomplete" if invalid or unverified else "complete", events, invalid, unverified)

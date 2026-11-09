@@ -174,6 +174,42 @@ def candidate_span(item, body):
     return span if span is not None and cue is not None and len(list(cue.finditer(body[span[0]:span[1]]))) == 1 else None
 
 
+def verify_care_detail(detail, body):
+    """Return a normalized care_detail bound to the source body, or None.
+
+    event_type must be one of CARE_DETAIL_TYPES; workflow_status shares the
+    semantic_facts axis with 'unknown' fallback; date_text and service_actor
+    must appear verbatim in the body when supplied. Axes that are not
+    explicit stay 'unknown' — nothing is inferred or normalized.
+    """
+    if not isinstance(detail, dict):
+        return None
+    event_type = detail.get('event_type')
+    if event_type not in CARE_DETAIL_TYPES:
+        return None
+    from semantic_facts import WORKFLOW_STATUSES
+    workflow = detail.get('workflow_status', 'unknown')
+    if workflow not in WORKFLOW_STATUSES:
+        workflow = 'unknown'
+    date_text = detail.get('date_text')
+    # 'unknown' is this contract's own absent sentinel: a normalized detail
+    # re-verified downstream must stay idempotent, not fail the body check.
+    if date_text == 'unknown':
+        date_text = None
+    if date_text is not None and (not isinstance(date_text, str)
+                                  or not date_text.strip() or date_text not in body):
+        return None
+    service_actor = detail.get('service_actor')
+    if service_actor == 'unknown':
+        service_actor = None
+    if service_actor is not None and (not isinstance(service_actor, str)
+                                      or not service_actor.strip() or service_actor not in body):
+        return None
+    return {'event_type': event_type, 'workflow_status': workflow,
+            'date_text': date_text if isinstance(date_text, str) and date_text.strip() else 'unknown',
+            'service_actor': service_actor if isinstance(service_actor, str) and service_actor.strip() else 'unknown'}
+
+
 def validate_record(item, body):
     """Keep a typed candidate even when its semantic or quotation support is unresolved."""
     if not isinstance(item, dict) or item.get('kind') not in EVENT_KINDS:
@@ -195,6 +231,7 @@ def validate_record(item, body):
     start, end = located
     quote = body[start:end]
     result.update(evidence=quote, span={'start': start, 'end': end})
+    detail = verify_care_detail(item['care_detail'], body) if 'care_detail' in item else None
     cue = _DIRECT.get(item['kind'])
     matches = list(cue.finditer(quote)) if cue is not None else []
     if len(matches) != 1:
@@ -223,6 +260,8 @@ def validate_record(item, body):
     result.update(subject=actual_subject, status=actual_status, negated=actual_negated)
     if unresolved or actual_subject == 'unknown' or actual_status == 'unknown' or actual_negated is None:
         result['unverified'] = True
+    elif detail is not None:
+        result['care_detail'] = detail
     return result
 
 
@@ -352,4 +391,8 @@ def canonical_record(fact, evidence, *, disputed=False):
             or workflow not in ('performed', 'done', 'reported', 'in_progress',
                                 'planned', 'ordered', 'pending', 'considering', 'on_hold')):
         record['unverified'] = True
+    detail = verify_care_detail(fact.get('care_detail'), quote) \
+        if isinstance(fact.get('care_detail'), dict) else None
+    if detail is not None and 'unverified' not in record:
+        record['care_detail'] = detail
     return record

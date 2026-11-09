@@ -130,7 +130,8 @@ def test_canonical_presence_never_silently_falls_back_to_local_result(store):
     assert result["coverage"]["source_complete"] is False
 
 
-def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tamper=None):
+def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tamper=None,
+                            care_detail=None):
     """Drain one synthetic care_event fact through the real semantic pipeline."""
     import json as _json
     import semantic_testkit as st
@@ -143,6 +144,8 @@ def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tampe
             "polarity": "affirmed", "epistemic": "asserted",
             "workflow_status": "performed", "importance": "T1",
             "evidence_quote": body}
+    if care_detail is not None:
+        fact["care_detail"] = care_detail
 
     def llm(prompt):
         if "要約器" in prompt:
@@ -178,6 +181,28 @@ def test_audited_canonical_care_event_projects_source_bound_record(tmp_path, mon
         assert event["kind"] == "discharge" and event["event_day"] == "2026-09-01"
         assert event["subject"] == "patient" and event["negated"] is False
         assert event["unverified"] is False and body not in json.dumps(result, ensure_ascii=False)
+        assert result["coverage"]["canonical_unconfirmed"] == 0
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_audited_canonical_care_detail_reaches_projected_event(tmp_path, monkeypatch):
+    detail = {"event_type": "pre_discharge_conference", "workflow_status": "performed",
+              "date_text": "2026年9月1日"}
+    db, body = _canonical_care_fixture(tmp_path, monkeypatch, care_detail=detail)
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        event, = result["events"]
+        assert event["kind"] == "discharge" and event["unverified"] is False
+        assert event["care_detail"] == {"event_type": "pre_discharge_conference",
+                                        "workflow_status": "performed",
+                                        "date_text": "2026年9月1日",
+                                        "service_actor": "unknown"}
         assert result["coverage"]["canonical_unconfirmed"] == 0
         assert db.db.in_transaction and db.db.total_changes == before
         db.db.rollback()
