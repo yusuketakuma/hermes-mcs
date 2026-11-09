@@ -186,8 +186,10 @@ def test_verify_care_detail_binds_fields_to_source():
 
 
 def test_verified_record_keeps_source_bound_care_detail():
-    body = "本人は訪問し、サービスを開始しました。"
-    quote = "訪問し、サービスを開始しました"
+    # The visit anchor sits inside the detail instance's own
+    # cue-to-predicate span — one event carrying two verbs.
+    body = "本人は介護サービスを訪問し、開始しました。"
+    quote = "介護サービスを訪問し、開始しました"
     start = body.index(quote)
     item = {"kind": "visit", "subject": "patient", "status": "unknown", "negated": None,
             "evidence": quote, "span": {"start": start, "end": start + len(quote)},
@@ -243,9 +245,9 @@ def test_care_detail_workflow_conflict_stays_unknown():
     assert record["care_detail"]["workflow_status"] == "unknown"
 
 
-_CROSS_BODY = ("本人は訪問し、2026年11月9日に介護サービスAを開始しました。"
+_CROSS_BODY = ("本人は介護サービスAを訪問し、2026年11月9日に開始しました。"
                "2026年12月10日に介護サービスBを開始しました。")
-_CROSS_QUOTE = ("訪問し、2026年11月9日に介護サービスAを開始しました。"
+_CROSS_QUOTE = ("介護サービスAを訪問し、2026年11月9日に開始しました。"
                 "2026年12月10日に介護サービスBを開始しました")
 
 
@@ -284,7 +286,7 @@ def test_care_detail_attributes_must_bind_to_the_anchor_instance():
 def test_canonical_record_care_detail_attributes_share_the_anchor_instance():
     # The canonical quote carries its own subject — unlike the local path,
     # no surrounding body is available for axis resolution.
-    quote = ("本人は訪問し、2026年11月9日に介護サービスAを開始しました。"
+    quote = ("本人は介護サービスAを訪問し、2026年11月9日に開始しました。"
              "2026年12月10日に介護サービスBを開始しました")
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1",
                 "start": 0, "end": len(quote), "quote": quote,
@@ -310,7 +312,7 @@ def test_canonical_record_care_detail_attributes_share_the_anchor_instance():
 
 
 def test_canonical_record_carries_fact_care_detail_when_verified():
-    quote = "本人は本日訪問し、サービスを開始しました"
+    quote = "本人は介護サービスを訪問し、開始しました"
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1", "start": 0,
                 "end": len(quote), "quote": quote, "atom_id": "a1"}
     fact = v2_fact("f1", kind="care_event", statement=quote, subject="patient:1",
@@ -341,6 +343,38 @@ def test_normalized_care_detail_is_idempotent_under_revalidation():
     assert once["date_text"] == "unknown" and once["service_actor"] == "unknown"
     twice = clinical_events.verify_care_detail(once, body)
     assert twice == once
+
+
+def test_neighbouring_same_type_event_carries_no_detail():
+    # Same sentence is not the same instance: the visit and the service
+    # start are separate predicates, so the verified visit record keeps no
+    # detail even when the detail verifies against its own mention.
+    body = "本人は訪問し、2026年9月1日に介護サービスを開始しました。"
+    quote = "訪問し、2026年9月1日に介護サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "patient", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    record = clinical_events.validate_record(item, body)
+    assert not record.get("unverified") and "care_detail" not in record
+
+
+def test_independent_acp_mentions_stay_two_instances():
+    # A bare ACP cue and a compound mention with its own predicate are
+    # independent instances — the bare mention must not absorb the
+    # other's date and neither may claim the shared attribute.
+    body = "本人はACPを実施し、終末期の話し合いを11月に行いました。"
+    detail = {"event_type": "acp_discussion", "date_text": "11月"}
+    assert clinical_events.verify_care_detail(detail, body) is None
+    # A bare cue that genuinely explains one mention still merges: the
+    # compound sits inside the bare instance's predicate span.
+    merged = "本人はACPの意向を11月に確認しました。"
+    out = clinical_events.verify_care_detail(detail, merged)
+    assert out is not None and out["date_text"] == "11月"
 
 
 @pytest.mark.parametrize("event_type,body,kept", [

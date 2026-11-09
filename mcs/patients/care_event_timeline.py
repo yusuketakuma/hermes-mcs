@@ -42,14 +42,23 @@ def _event_day(record, quote):
     # contradicts the legacy dated-event day is ambiguity, not a fallback.
     detail_day = (clinical_events.care_detail_event_day(detail, quote)
                   if isinstance(detail, dict) else None)
-    matches = list(_DATED_EVENT.finditer(quote))
-    date = written_day(quote)
-    legacy_day = (date[1].isoformat()
-                  if len(matches) == 1
-                  and _EVENT_KIND[matches[0].group(2)] == record["kind"]
-                  and date and date[0] == "ymd"
-                  and written_day(matches[0].group(1)) == date
-                  else None)
+    # The legacy day comes from the dated-event mention of this record's
+    # own kind, never from the quote's whole date list: unrelated dates
+    # elsewhere in the quote must neither erase it nor hide a mismatch.
+    days, unclear = set(), False
+    for match in _DATED_EVENT.finditer(quote):
+        if _EVENT_KIND[match.group(2)] != record["kind"]:
+            continue
+        day = written_day(match.group(1))
+        if day is None or day[0] != "ymd":
+            unclear = True
+        else:
+            days.add(day[1].isoformat())
+    if unclear or len(days) > 1:
+        # The parent instance's own date binding is unclear or
+        # contradictory — it stays unknown instead of guessing.
+        return None
+    legacy_day = days.pop() if days else None
     if detail_day is not None and legacy_day is not None \
             and detail_day != legacy_day:
         return None

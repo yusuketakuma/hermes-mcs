@@ -155,35 +155,36 @@ def test_detail_only_record_context_compares_same_service_mentions():
 
 
 @pytest.mark.parametrize("event_type,body", [
-    ("intervention_start", "本人は訪問看護サービスを開始しました。"),
-    ("intervention_pause", "本人は訪問看護サービスを中断しました。"),
-    ("intervention_resume", "本人は訪問看護サービスを再開しました。"),
-    ("intervention_end", "本人は訪問看護サービスを終了しました。"),
-    ("service_contract_start", "本人は訪問介護サービスの契約を締結しました。"),
-    ("pre_discharge_conference", "本人の退院前カンファレンスを開催しました。"),
-    ("discharge_joint_guidance", "本人は退院時共同指導を受けました。"),
-    ("care_team_conference", "本人のサービス担当者会議を開催しました。"),
-    ("care_plan_change", "本人のケアプランを変更しました。"),
-    ("monitoring", "本人はモニタリングを実施しました。"),
-    ("care_need_certification_change", "本人の介護度が変更になりました。"),
-    ("respite", "本人はショートステイを利用しました。"),
-    ("facility_entry", "本人は特養に入所しました。"),
-    ("facility_exit", "本人は施設を退所しました。"),
-    ("death", "本人が亡くなりました。"),
-    ("acp_discussion", "本人はACPについて話し合いました。"),
-    ("care_policy_change", "本人の看取り方針を変更しました。"),
+    ("intervention_start", "本人は2026年9月1日に訪問看護サービスを開始しました。"),
+    ("intervention_pause", "本人は2026年9月1日に訪問看護サービスを中断しました。"),
+    ("intervention_resume", "本人は2026年9月1日に訪問看護サービスを再開しました。"),
+    ("intervention_end", "本人は2026年9月1日に訪問看護サービスを終了しました。"),
+    ("service_contract_start", "本人は2026年9月1日に訪問介護サービスの契約を締結しました。"),
+    ("pre_discharge_conference", "本人は2026年9月1日に退院前カンファレンスを開催しました。"),
+    ("discharge_joint_guidance", "本人は2026年9月1日に退院時共同指導を受けました。"),
+    ("care_team_conference", "本人は2026年9月1日にサービス担当者会議を開催しました。"),
+    ("care_plan_change", "本人のケアプランを2026年9月1日に変更しました。"),
+    ("monitoring", "本人は2026年9月1日にモニタリングを実施しました。"),
+    ("care_need_certification_change", "本人の介護度が2026年9月1日に変更になりました。"),
+    ("respite", "本人は2026年9月1日にショートステイを利用しました。"),
+    ("facility_entry", "本人は2026年9月1日に特養に入所しました。"),
+    ("facility_exit", "本人は2026年9月1日に施設を退所しました。"),
+    ("death", "本人が2026年9月1日に亡くなりました。"),
+    ("acp_discussion", "本人は2026年9月1日にACPについて話し合いました。"),
+    ("care_policy_change", "本人の看取り方針を2026年9月1日に変更しました。"),
 ])
 def test_every_care_detail_type_verifies_through_record_projection(
         event_type, body):
     # kind=other detail records resolve subject/polarity/status from the
     # source itself — the stored axes stay 'unknown' on purpose so the
-    # projection proves derivation, not echo.
+    # projection proves derivation, not echo. The bound absolute date
+    # reaches the event day for every type.
     item = {"kind": "other", "subject": "unknown", "status": "unknown",
             "negated": None, "evidence": body,
             "span": {"start": 0, "end": len(body)},
             "care_detail": {"event_type": event_type,
                             "workflow_status": "performed",
-                            "date_text": "unknown",
+                            "date_text": "2026年9月1日",
                             "service_actor": "unknown"}}
     result = care_event_timeline.project(1, source(body), 42,
                                        {"event_records": [item]})
@@ -192,6 +193,7 @@ def test_every_care_detail_type_verifies_through_record_projection(
     assert event["subject"] == "patient" and event["negated"] is False
     assert event["status"] == "current"
     assert event["care_detail"]["event_type"] == event_type
+    assert event["event_day"] == "2026-09-01"
     assert result["coverage"]["state"] == "complete"
 
 
@@ -268,9 +270,10 @@ def test_same_type_instances_project_with_their_own_dates():
 
 def test_legacy_kind_record_takes_event_day_from_bound_care_detail():
     # intervention_start also rides on a legacy visit record: the detail's
-    # bound absolute date reaches the timeline regardless of parent kind.
-    body = "本人は訪問し、2026年9月1日に介護サービスを開始しました。"
-    quote = "訪問し、2026年9月1日に介護サービスを開始しました"
+    # bound absolute date reaches the timeline when the visit anchor and
+    # the detail describe one shared event instance.
+    body = "本人は介護サービスを訪問し、2026年9月1日に開始しました。"
+    quote = "介護サービスを訪問し、2026年9月1日に開始しました"
     start = body.index(quote)
     item = {"kind": "visit", "subject": "unknown", "status": "unknown",
             "negated": None, "evidence": quote,
@@ -286,8 +289,8 @@ def test_legacy_kind_record_takes_event_day_from_bound_care_detail():
 
 
 def test_legacy_kind_care_detail_yearless_date_stays_undated():
-    body = "本人は訪問し、9月1日に介護サービスを開始しました。"
-    quote = "訪問し、9月1日に介護サービスを開始しました"
+    body = "本人は介護サービスを訪問し、9月1日に開始しました。"
+    quote = "介護サービスを訪問し、9月1日に開始しました"
     start = body.index(quote)
     item = {"kind": "visit", "subject": "unknown", "status": "unknown",
             "negated": None, "evidence": quote,
@@ -307,9 +310,9 @@ def test_crossed_care_detail_attributes_do_not_survive_projection():
     # The stored detail pairs the first instance's date with the second
     # instance's provider; revalidation drops it while the visit record
     # itself stays verified.
-    body = ("本人は訪問し、2026年9月1日に介護サービスAを開始しました。"
+    body = ("本人は介護サービスAを訪問し、2026年9月1日に開始しました。"
             "2026年10月2日に介護サービスBを開始しました。")
-    quote = ("訪問し、2026年9月1日に介護サービスAを開始しました。"
+    quote = ("介護サービスAを訪問し、2026年9月1日に開始しました。"
              "2026年10月2日に介護サービスBを開始しました")
     start = body.index(quote)
     item = {"kind": "visit", "subject": "unknown", "status": "unknown",
@@ -332,6 +335,47 @@ def test_crossed_care_detail_attributes_do_not_survive_projection():
     assert not event["unverified"]
     assert event["care_detail"]["service_actor"] == "介護サービスA"
     assert event["event_day"] == "2026-09-01"
+
+
+def test_detail_on_a_neighbouring_event_keeps_the_parents_own_day():
+    # The service start is a different instance from the dated visit, so
+    # the detail never attaches — and the visit keeps its own date instead
+    # of inheriting the neighbouring event's day.
+    body = "本人は2026年9月1日に訪問し、2026年9月2日に介護サービスを開始しました。"
+    quote = "2026年9月1日に訪問し、2026年9月2日に介護サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月2日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and "care_detail" not in event
+    assert event["event_day"] == "2026-09-01"
+
+
+def test_bound_detail_day_conflicting_the_parent_day_stays_unknown():
+    # The detail and the dated visit disagree inside one shared instance —
+    # an ambiguous event day stays unknown rather than picking either.
+    body = ("本人は介護サービスを2026年9月2日に訪問し、開始し、"
+            "2026年9月1日に記録しました。")
+    quote = ("介護サービスを2026年9月2日に訪問し、開始し、"
+             "2026年9月1日に記録しました")
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and "care_detail" in event
+    assert event["event_day"] is None
 
 
 @pytest.mark.parametrize("prefix,tail", [

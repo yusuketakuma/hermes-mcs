@@ -395,16 +395,18 @@ def _detail_event_instances(quote, event_type, left, right):
             continue
         found.append((match, target))
     if event_type == 'acp_discussion' and len(found) > 1:
-        # Compound cues ending in the event predicate (意向を確認,
-        # 終末期の話し合い…) describe the same mention as a bare
-        # ACP/人生会議 anchor wherever it stands in the sentence; without
-        # one, each compound stands as its own instance.
+        # A compound cue (意向を確認, 終末期の話し合い…) is the same mention
+        # as a bare ACP/人生会議 anchor only when it sits inside the bare
+        # instance's span or shares its predicate end — a compound with its
+        # own predicate is an independent instance and stays counted.
         predicate = _DETAIL_PREDICATES[event_type]
         bare = [entry for entry in found
                 if not re.search(r'(?:' + predicate.pattern + r')$',
                                  entry[0].group())]
         if bare:
-            found = bare
+            found = [entry for entry in found if entry in bare or not any(
+                host[0].start() <= entry[0].start() < host[1]
+                or entry[1] == host[1] for host in bare)]
     return found
 
 
@@ -587,13 +589,21 @@ def _detail_shared_instance(detail, quote, anchor):
     """True when the detail provably describes the anchor's own instance.
 
     The anchor's sentence must hold exactly one predicate-bound instance of
-    the detail's event type, and every explicit attribute must bind inside
-    that same sentence — a date or provider that only binds to a different
-    sentence's same-type instance is a crossed pair and does not attach.
+    the detail's event type, and the anchor itself must sit inside that
+    instance's cue-to-predicate span — a neighbouring same-type mention is
+    a different event, so "訪問し、介護サービスを開始" carries no
+    intervention_start detail on the visit record. Every explicit
+    attribute must bind inside that same sentence — a date or provider
+    that only binds to a different sentence's same-type instance is a
+    crossed pair and does not attach.
     """
     sent_left, sent_right = _sentence_bounds(quote, anchor.start())
-    if len(_detail_event_instances(
-            quote, detail['event_type'], sent_left, sent_right)) != 1:
+    instances = _detail_event_instances(
+        quote, detail['event_type'], sent_left, sent_right)
+    if len(instances) != 1:
+        return False
+    cue_match, target_end = instances[0]
+    if anchor.start() >= target_end or cue_match.start() >= anchor.end():
         return False
     for field, actor in (('date_text', False), ('service_actor', True)):
         value = detail.get(field)
