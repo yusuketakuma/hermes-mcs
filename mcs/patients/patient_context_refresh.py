@@ -407,14 +407,18 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 if _scan_covered(reader.db, seen):
                     covered = True
                     break
+    # scan_interrupts counts every early abort (contention, deadline or
+    # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
         scan_interrupts += 1
         best, selected, covered = {}, None, False
     except (sqlite3.Error, OSError):
+        scan_interrupts += 1
         best, selected, covered = {}, None, False
     except ValueError as exc:
         if exc.args != ('patient_scan_bookmark_invalid',) and exc.args != ('patient_scan_source_invalid',):
             raise
+        scan_interrupts += 1
         best, selected, covered = {}, None, False
     return best, selected, rotation, scanned, waiting, covered, scan_reads, scan_interrupts
 

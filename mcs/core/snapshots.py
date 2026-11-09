@@ -374,6 +374,11 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
         except OSError as error:
             _fail("snapshot_setup_oserror", errno=error.errno)
             return None
+        if verification_context is not None:
+            # Writer-identity baseline check before the private copy is
+            # even attempted — a swapped source path is caught while the
+            # lock is still held.
+            verification_context(deadline=deadline).precheck()
         if not _prepare_in_child(db_path, tmp, deadline, fd, state):
             _status.failure.setdefault("copy_s", round(monotonic() - started, 3))
             return None

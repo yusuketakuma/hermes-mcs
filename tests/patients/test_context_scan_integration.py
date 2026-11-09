@@ -233,6 +233,34 @@ def test_scan_stats_split_interrupts_from_ordinary_incompletion(runtime, monkeyp
     assert result['covered'] is False and result['waiting'] == 0
 
 
+def test_scan_read_failure_counts_as_an_interrupt(runtime, monkeypatch):
+    """SQLite/OS aborts end the scan early exactly like contention —
+    they are 'interrupted', not a normal finite-slice 'incomplete'."""
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+
+    def pending(db, pid, cfg, **kwargs):
+        raise sqlite3.OperationalError('synthetic read failure')
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_scan_incomplete'
+    assert result['scan_interrupts'] == 1 and result['covered'] is False
+
+
+def test_scan_bookmark_failure_counts_as_an_interrupt(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+
+    def advance(*args, **kwargs):
+        raise ValueError('patient_scan_bookmark_invalid')
+
+    monkeypatch.setattr(refresh, '_advance_patient_scan', advance)
+    result = step(runtime)
+    assert result['status'] == 'deferred'
+    assert result['scan_interrupts'] == 1
+
+
 def test_finite_slice_incompletion_is_not_an_interrupt(runtime, monkeypatch):
     led, _, _ = runtime
     for pid in range(1, 14):
