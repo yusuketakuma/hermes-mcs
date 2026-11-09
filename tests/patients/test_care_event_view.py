@@ -193,6 +193,10 @@ def test_old_schema_without_patient_name_is_anonymous(store, monkeypatch):
         def in_transaction(self):
             return self.db.in_transaction
 
+        @property
+        def total_changes(self):
+            return self.db.total_changes
+
         def execute(self, sql, params=()):
             result = self.db.execute(sql, params)
             if sql == "PRAGMA table_info(patients)":
