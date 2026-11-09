@@ -172,3 +172,72 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
     else:
         pytest.fail('skipped semantic/QC did not reach patient context')
     assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
+
+
+@pytest.mark.parametrize('provider', ['anthropic', 'openai', 'auto'])
+@pytest.mark.parametrize('jev_key', [None, 'synthetic-jev-key'])
+def test_keyless_cloud_uses_local_contract_and_finishes_same_pipeline(runtime, cloud, monkeypatch, provider, jev_key):
+    import cloud_policy
+    import extract_llm
+    import semantic_jev
+    from anthropic_context_testkit import CFG
+    from test_patient_context_refresh import seed, step
+    import patient_context_refresh_state as state
+
+    ledger, _, local_calls = runtime
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode': 'on', 'provider': provider,
+                                         'project_ids': [1], 'routes': ['patient_context']})
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *args: None)
+    monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings',
+                        lambda cfg: cloud_policy.resolve_settings(cfg, extract_llm.HOME)[0])
+    monkeypatch.setattr(extract_llm, '_cloud_mode', extract_llm_provider._cloud_mode)
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: jev_key)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit',
+                        lambda *args, **kwargs: pytest.fail('keyless cloud must never be constructed'))
+    if jev_key is None:
+        monkeypatch.setattr(semantic_jev, 'JevClient',
+                            lambda **kwargs: pytest.fail('keyless Jev must never be constructed'))
+    assert extract_llm._cloud_mode(ledger, CFG, 'patient_context', 1) == 'off'
+    assert 'provider' not in state._contract(CFG, 1)
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    for _ in range(40):
+        result = step(runtime, cfg=CFG)
+        if result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    else:
+        pytest.fail('keyless local context did not finish')
+    assert local_calls and not cloud[0]
+    assert not ledger.artifacts('cloud_usage_reserve')
+    assert not ledger.artifacts('cloud_usage_result')
+    assert refresh.context_view_input(ledger.db, 1, cfg=CFG)
+    snapshot = refresh._snapshot(ledger.db, 1, CFG, hydrate=False)
+    assert refresh._inference_coverage(ledger.db, 1, CFG, snapshot)['complete']
+    if jev_key is None:
+        assert not ledger.synthetic_jev_requests
+        assert not ledger.artifacts(state.QUALITY_PASS)
+        assert not ledger.artifacts('patient_context_source_quality_pass_v1')
+
+
+def test_missing_jev_key_keeps_cloud_context_and_records_skips(runtime, cloud, monkeypatch):
+    import semantic_jev
+    from anthropic_context_testkit import CFG
+    from test_patient_context_refresh import seed, step
+
+    ledger, _, local_calls = runtime
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: None)
+    monkeypatch.setattr(semantic_jev, 'JevClient',
+                        lambda **kwargs: pytest.fail('missing Jev key must not construct a client'))
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    for _ in range(40):
+        result = step(runtime, cfg=CFG)
+        if result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    else:
+        pytest.fail('cloud context without Jev did not finish')
+    assert cloud[0] and not local_calls and not ledger.synthetic_jev_requests
+    assert ledger.artifacts('patient_context_source_quality_skipped_v1')
+    assert ledger.artifacts(refresh.QUALITY_SKIP)
+    assert not ledger.artifacts(refresh.QUALITY_PASS)
+    assert refresh.context_view_input(ledger.db, 1, cfg=CFG)
