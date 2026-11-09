@@ -1,5 +1,6 @@
 """Removing credentials never releases an unresolved paid context to local inference."""
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -64,7 +65,7 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     for row in results:
         metadata = json.loads(row['meta'])
         assert metadata['http_class'] == 'http_' + str(status)
-        assert metadata['cost_usd'] != '0'
+        assert Decimal(metadata['cost_usd']) > 0
     import patient_context_refresh as refresh
     assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
 
@@ -142,3 +143,28 @@ def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime
     assert result['status'] == 'deferred'
     assert not ledger.artifacts(state.SCAN) and not ledger.artifacts(state.KIND)
     assert not ledger.artifacts('cloud_usage_result')
+
+
+
+def test_verified_fallback_supersedes_an_older_failed_cloud_scan(runtime, real_cloud, monkeypatch):
+    ledger, clock, local_calls = runtime
+    cfg, _ = real_cloud
+    monkeypatch.setattr(anthropic_client.AnthropicClient, 'request',
+                        lambda *args, **kwargs: (503, {}, b'{"error":{}}'))
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    first = step(runtime, cfg=cfg, local_admit=lambda: False)
+    assert first['status'] != 'complete' and not local_calls
+    assert ledger.artifacts(state.SCAN)
+    assert any(json.loads(row['meta']).get('provider') for row in ledger.artifacts(state.SCAN))
+    clock.wall += 1000
+    for _ in range(40):
+        result = step(runtime, cfg=cfg)
+        if result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    else:
+        pytest.fail('older cloud failure shadowed the verified local fallback')
+    assert local_calls
+    import patient_context_refresh as refresh
+    snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
+    assert refresh._inference_coverage(ledger.db, 1, cfg, snapshot)['complete']

@@ -206,7 +206,8 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
             source = by_key.get(key)
             if source and meta.get("source_sig") == context_plan.source_signature(source) and patient_context_refresh_state._route_contract(meta) == contract:
                 prior = stored.get(key)
-                if prior and prior[1].get("provider") and not meta.get("provider"):
+                if (prior and prior[1].get("provider") and not meta.get("provider")
+                        and meta.get("local_fallback") is not True):
                     continue
                 stored[key] = (doc, meta)
     result = {}
