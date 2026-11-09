@@ -208,7 +208,7 @@ def test_signature_sql_progress_expiry_does_not_publish(tmp_path, monkeypatch):
 def test_unreadable_signature_still_requests_fresh_copy(tmp_path, monkeypatch):
     calls = []
 
-    def publish(path, *, deadline, _lock_fd):
+    def publish(path, *, deadline, _lock_fd, verification_context=None):
         assert snapshots._verified_publication_lock(maintenance.SNAPSHOT_DIR, _lock_fd)
         calls.append({"deadline": deadline})
         return False

@@ -899,7 +899,101 @@ def _overdue_housekeeping(result) -> None:
         result["errors"].append(f"housekeeping: {type(e).__name__}")
 
 
-def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
+class _SnapshotGateUnverified(Exception):
+    """A post-unlock reacquire or identity check failed. Terminal run
+    writes (health, outbox, run-record corrections) are forbidden —
+    the run ends with a fixed reason and a nonzero exit."""
+
+
+def _lock_identity(lock_fd):
+    try:
+        info = os.fstat(lock_fd)
+        path = os.stat(LOCKFILE, follow_symlinks=False)
+        return (info.st_dev, info.st_ino) == (path.st_dev, path.st_ino) \
+            and (info.st_dev, info.st_ino)
+    except OSError:
+        return False
+
+
+class _VerificationGate:
+    """Context manager that releases the run lock only while a fenced
+    child validates the snapshot's private copy, then reacquires and
+    re-verifies writer identity. ``state["allowed"]`` stays False until
+    a finite deadline, the reacquire, and every identity check pass."""
+
+    def __init__(self, ledger, lock_fd, state, deadline):
+        self._ledger, self._lock_fd = ledger, lock_fd
+        self._state, self._deadline = state, deadline
+        self.engaged = deadline is not None
+        self._baseline = None
+        self._transport = None
+
+    @staticmethod
+    def _db_identity(ledger):
+        main = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+        info = os.stat(main, follow_symlinks=False)
+        return info.st_dev, info.st_ino
+
+    def __enter__(self):
+        self._state["attempted"] = True
+        if not self.engaged:
+            self._state["allowed"] = True
+            return self
+        # Baseline taken while the writer still owns the lock: the
+        # connection's own main-file inode plus the run.lock fd/path
+        # binding — a path stat alone cannot prove the connection match.
+        try:
+            self._baseline = (self._db_identity(self._ledger), _lock_identity(self._lock_fd))
+        except (OSError, sqlite3.Error):
+            self._baseline = None
+        if not self._baseline or not all(self._baseline):
+            raise _SnapshotGateUnverified("snapshot_gate_unverified") from None
+        self._transport = writer_lock.unlocked_transport(
+            self._ledger.db, self._lock_fd, deadline=self._deadline)
+        self._transport.__enter__()
+        return self
+
+    def _identity_intact(self):
+        try:
+            return (self._db_identity(self._ledger), _lock_identity(self._lock_fd)) \
+                == self._baseline
+        except (OSError, sqlite3.Error):
+            return False
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.engaged:
+            return False
+        try:
+            self._transport.__exit__(exc_type, exc, tb)
+        except BaseException as secondary:
+            # A failed reacquire keeps the original exception as context
+            # and leaves writes forbidden.
+            raise secondary
+        if self._identity_intact():
+            self._state["allowed"] = True
+            return False
+        raise _SnapshotGateUnverified("snapshot_gate_unverified") from exc
+
+    def confirm_fence(self, fd, dest_dir):
+        """Post-window publication-fence recheck. A broken fence flips
+        the shared flag back to False and fails the gate."""
+        import snapshots as _snapshots
+        ok = _snapshots._verified_publication_lock(dest_dir, fd)
+        if self.engaged and not ok:
+            self._state["allowed"] = False
+            raise _SnapshotGateUnverified("snapshot_gate_unverified")
+        return ok
+
+
+def _verification_context_factory(ledger, lock_fd, state):
+    """The optional ``verification_context(*, deadline)`` factory passed
+    through maintenance to the snapshot publisher."""
+    def verification_context(*, deadline):
+        return _VerificationGate(ledger, lock_fd, state, deadline)
+    return verification_context
+
+
+def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None) -> str:
     """Tail drain, run record and snapshot publish — returns the final
     run status for the health write."""
     if result.get("notify", {}).get("failed") \
@@ -936,9 +1030,18 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         hard = _hard_deadline()
         snapshot_deadline = (None if hard is None else
                              hard - health_report.HEALTH_SQL_BUDGET_S - HEALTH_PUBLISH_RESERVE_S)
+        gate_state = None
+        if run_lock_fd is not None and snapshot_deadline is not None:
+            # 'attempted' distinguishes "gate never invoked" (an unchanged
+            # snapshot skips the publisher entirely) from a gate that ran
+            # and left writes forbidden.
+            gate_state = {"allowed": False, "attempted": False}
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
-                               DB, force=dirty, deadline=snapshot_deadline), required=True)
+                               DB, force=dirty, deadline=snapshot_deadline,
+                               verification_context=(
+                                   _verification_context_factory(ledger, run_lock_fd, gate_state)
+                                   if gate_state is not None else None)), required=True)
         result["snapshot"] = state is not None
         result["snapshot_state"] = state
         if state is None:
@@ -949,11 +1052,16 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
             import snapshots
             result["snapshot_timing"] = snapshots.last_timing()
             notify_cards.clear_snapshot_dirty(ledger, dirty)
+    except _SnapshotGateUnverified:
+        raise
     except Exception as e:
         result["errors"].append(f"snapshot: {type(e).__name__}")
         ledger.finish_run(run_id, "partial",
                           "; ".join(result["errors"][:8]))
         status = "partial"
+    if gate_state is not None and gate_state["attempted"] \
+            and not gate_state["allowed"]:
+        raise _SnapshotGateUnverified("snapshot_gate_unverified")
     return status
 
 
@@ -1213,7 +1321,8 @@ def _main() -> int:
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,
                    required=maintenance.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
-                            ledger, cfg, result, run_id, deadline, required=True)
+                            ledger, cfg, result, run_id, deadline,
+                            run_lock_fd=lock_fd, required=True)
         assert isinstance(status, str)
         _require_closed_transaction(ledger, result)
         _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
@@ -1238,6 +1347,16 @@ def _main() -> int:
             _write_health(ledger, result, "partial", run_id=run_id, cfg=cfg)
             if _report_open_transaction(ledger, result):
                 return 1
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
+    except _SnapshotGateUnverified:
+        # The snapshot gate could not prove writer identity after the
+        # unlock window — health/outbox/run-record corrections are all
+        # forbidden. The run record was already written before publish.
+        result["ok"] = False
+        result["errors"].append("snapshot_gate_unverified")
+        if _report_open_transaction(ledger, result):
+            return 1
         print(json.dumps(result, ensure_ascii=False))
         return 1
     except TickTransactionOpen:

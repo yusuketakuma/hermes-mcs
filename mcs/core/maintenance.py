@@ -690,13 +690,17 @@ def _prune_spool_temporaries(data: str, cutoff: float) -> int:
     return removed
 
 
-def publish_snapshot(db_path: str, *, deadline: float | None = None, _lock_fd=None) -> bool:
+def publish_snapshot(db_path: str, *, deadline: float | None = None, _lock_fd=None,
+                     verification_context=None) -> bool:
     """Regenerate the read-only snapshot consumed by the sandboxed CCO
     (backup -> tmp -> DELETE journal -> verify -> atomic rename)."""
     if _lock_fd is not None:
         snapshots._reset_status()
-        return bool(snapshots._publish_snapshot_locked(db_path, SNAPSHOT_DIR, _lock_fd, deadline=deadline))
-    return bool(_publish_snapshot(db_path, SNAPSHOT_DIR, deadline=deadline))
+        return bool(snapshots._publish_snapshot_locked(
+            db_path, SNAPSHOT_DIR, _lock_fd, deadline=deadline,
+            verification_context=verification_context))
+    return bool(_publish_snapshot(db_path, SNAPSHOT_DIR, deadline=deadline,
+                                  verification_context=verification_context))
 
 
 # ---------- H4: publish the snapshot only when it would change ----------
@@ -790,7 +794,8 @@ def _recent(at, now: float, interval: float) -> bool:
 
 def refresh_snapshot(db_path: str, *, force: bool = False,
                      now: float | None = None,
-                     deadline: float | None = None) -> str | None:
+                     deadline: float | None = None,
+                     verification_context=None) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
 
     Every tick used to copy and quick_check the whole ledger (144 full
@@ -811,10 +816,12 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
         if lock_fd is None:
             return None
         return _refresh_snapshot_locked(db_path, force=force, now=now, deadline=deadline,
-                                        lock_fd=lock_fd, total_started=total_started)
+                                        lock_fd=lock_fd, total_started=total_started,
+                                        verification_context=verification_context)
 
 
-def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_fd, total_started):
+def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_fd, total_started,
+                             verification_context=None):
     """Check freshness and save its marker under the same publication fence."""
     now = time.time() if now is None else now
     signature_started = time.perf_counter()
@@ -836,7 +843,8 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_f
             snapshots._fail("signature_deadline")
             return None
         return "unchanged"
-    if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd):
+    if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
+                            verification_context=verification_context):
         return None
     marker_started = time.perf_counter()
     marker_state = "unavailable"

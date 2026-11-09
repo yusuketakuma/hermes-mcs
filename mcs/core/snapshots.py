@@ -328,7 +328,7 @@ def _publication_lock(dest_dir: str):
 
 
 def publish_snapshot(db_path: str, dest_dir: str, *,
-                     deadline: float | None = None) -> str | None:
+                     deadline: float | None = None, verification_context=None) -> str | None:
     """Publish a verified point-in-time copy for read-only consumers.
 
     Preparation and validation run in fenced children. The parent checks the
@@ -344,12 +344,19 @@ def publish_snapshot(db_path: str, dest_dir: str, *,
         if fd is None:
             return None
         return _publish_snapshot_locked(db_path, dest_dir, fd, deadline=deadline, started=started,
-                                        total_started=total_started)
+                                        total_started=total_started,
+                                        verification_context=verification_context)
 
 
 def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
-                             deadline: float | None = None, started=None, total_started=None) -> str | None:
-    """Copy and validate while the caller retains the publication fence."""
+                             deadline: float | None = None, started=None, total_started=None,
+                             verification_context=None) -> str | None:
+    """Copy and validate while the caller retains the publication fence.
+
+    An optional ``verification_context(*, deadline)`` factory gates the
+    child-validation window: the caller's run lock may be released while
+    the fenced child validates, then reacquired and re-identified before
+    publication proceeds."""
     if not _verified_publication_lock(dest_dir, fd):
         return None
     started = monotonic() if started is None else started
@@ -375,12 +382,26 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
             SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
         if deadline is not None:
             verify_by = min(verify_by, deadline)
-        if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
-            _status.failure.setdefault("reason", "validator_false")
-            _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
-                  capped_by_deadline=deadline is not None and verify_by == deadline)
-            return None
-        verified = monotonic()
+        if verification_context is None:
+            if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
+                _status.failure.setdefault("reason", "validator_false")
+                _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
+                      capped_by_deadline=deadline is not None and verify_by == deadline)
+                return None
+            verified = monotonic()
+        else:
+            with verification_context(deadline=verify_by) as gate:
+                inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
+                                                   fence_fd=fd, state=state)
+                # Sampled inside the unlock scope: the reacquire cost is
+                # never charged to verify_s.
+                verified = monotonic()
+            gate.confirm_fence(fd, dest_dir)
+            if not inside:
+                _status.failure.setdefault("reason", "validator_false")
+                _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
+                      capped_by_deadline=deadline is not None and verify_by == deadline)
+                return None
         if verified >= verify_by:
             _fail("verify_deadline", copy_s=round(copied - started, 3),
                   verify_s=round(verified - copied, 3))
