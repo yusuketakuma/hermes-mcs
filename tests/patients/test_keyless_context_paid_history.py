@@ -179,6 +179,7 @@ def test_verified_fallback_supersedes_an_older_failed_cloud_scan(runtime, real_c
 def test_legacy_summary_without_owner_never_uses_signature_difference_as_fresh_input(runtime, real_cloud, discarded):
     ledger, _, local_calls = runtime
     cfg, posts = real_cloud
+    seed(ledger, body='本人は合成の自宅で生活しています。')
     selection, errors = cloud_policy.resolve_profile(cfg, route='patient_context',
         purpose='patient_context', root=extract_llm.HOME)
     assert not errors
