@@ -277,7 +277,7 @@ sh scripts/mcs install --mode standalone               # 依存を導入し、�
 説明図は実画面ではありません。各段階の詳細と止まったときの再開は[導入ガイド](docs/guides/INSTALLATION.md)と[更新・復旧](docs/guides/UPGRADE_AGENT.md)に従います。
 
 事前チェックの「要対処」に表示される`対処:`を確認し、`導入を妨げる問題 0件`になってから導入します。
-共通入口の`sh scripts/mcs install`は既存の`install.sh`を実行します。方式を省略した初回はHermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、Enterの既定は従来どおりHermesです。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
+共通入口の`sh scripts/mcs install`は既存の`install.sh`を実行します。方式を省略した初回はHermes経由かHermesなし（[スタンドアローン](docs/guides/STANDALONE.md)）かを尋ね、新規導入の推奨とEnterの既定はstandalone（MCS単独）です。既存の接続方法は維持します。Hermes連携を選ぶ場合は、上の2コマンドを`--mode hermes`で実行します。
 導入後は、そのまま初期設定へ進むか、後で行うかを選べます。後で行う場合は、完了画面に表示される設定コマンドを使います。
 初期設定の推奨コースは必要な項目を順番に案内し、詳細コースでは全項目を確認できます。分からない必須情報は中止して確認できます。HermesモードのSlack/DiscordではHermesとの同期も行います。[初めての導入・更新・復旧](docs/guides/EASY_SETUP.md)に操作の流れをまとめています。
 本体の初回設定後は、ブラウザーの準備など診断に残った項目を解消します。LINE WORKSの認証・Callback・常駐設定と再診断は[接続ガイド](docs/guides/LINEWORKS.md)で続けます。

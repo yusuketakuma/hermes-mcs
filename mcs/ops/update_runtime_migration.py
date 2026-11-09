@@ -64,7 +64,6 @@ from update_preflight import (
     _refresh_runtime_pin,
     _runtime_python,
     _runtime_venv,
-    recorded_install_args,
 )
 from update_repository import (
     _checkout_git,
@@ -116,8 +115,10 @@ def _reinstall(applying: dict) -> None:
         return
     expected_base = _verify_install_options_base(applying)
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
-    if "--with-yomitoku" in (recorded_install_args() or []) and "--with-yomitoku" not in args:
-        args.append("--with-yomitoku")
+    base, saved_args = _install_options_snapshot()
+    if base != expected_base:
+        raise UpdateError("install_options_changed")
+    args = list(dict.fromkeys([*(saved_args or []), *args]))
     env = os.environ.copy()
     env.pop('MCS_INSTALL_UPDATE_LOCK_FD', None)
     try:

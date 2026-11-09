@@ -114,7 +114,7 @@ def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_text()) == {'install_args': SAVED_FLAGS}
+    assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
     assert config.stat().st_mode & 0o777 == 0o600
     assert 'まだ利用開始前の初期設定が必要' in result.stdout
     before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
@@ -445,7 +445,7 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
     result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
                   '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads((target / 'config.json').read_text()) == {'install_args': SAVED_FLAGS}
+    assert json.loads((target / 'config.json').read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
 
 
 def test_fresh_private_root_link_swap_stops_without_writing_new_target(tmp_path):
@@ -523,7 +523,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
     output = b''
     deadline = time.monotonic() + 60
     try:
-        prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'2\n'),
+        prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'1\n'),
                    ('この内容で導入する（推奨）'.encode(), b'1\n')]
         for prompt, answer in prompts:
             while prompt not in output:
@@ -608,7 +608,7 @@ def test_interactive_bootstrap_runtime_choice_uses_checked_snapshot(tmp_path, ou
             assert len(output) < 100000
         os.write(master, answer)
     try:
-        answer_when('選択 [1・推奨 / 2 / 0'.encode(), b'2\n')
+        answer_when('選択 [1・推奨 / 2 / 0'.encode(), b'1\n')
         if outcome == 'race':
             config.write_text(json.dumps({**common, 'synthetic_unknown': {'keep': False}}))
         answer_when('この内容で導入する（推奨）'.encode(), b'2\n' if outcome == 'cancel' else b'1\n')

@@ -152,7 +152,7 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
 
 ## Phase 2 — 導入形態の選択【ユーザー確認】
 
-今回の初回受入候補はmacOS・Apple silicon・SlackのPath Bです。この候補が指定済みなら確認を繰り返さず、`--mode standalone`を明示してPhase 6へ進みます。既存設定と指定がある場合はそれを維持します。installerのEnter既定はHermesのままで、候補の選択を正式対応・実機受入済みとは扱いません。
+今回の初回受入候補はmacOS・Apple silicon・SlackのPath Bです。この候補が指定済みなら確認を繰り返さず、`--mode standalone`を明示してPhase 6へ進みます。既存設定と指定がある場合はそれを維持します。installerの新規導入の推奨とEnter既定はstandaloneです。既存環境の方式は維持し、この既定変更を正式対応・実機受入済みとは扱いません。
 
 導入形態がまだ決まっていなければ、ユーザーに次を尋ねる:
 

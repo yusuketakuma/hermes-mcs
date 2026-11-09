@@ -6,12 +6,12 @@
 
 ## 初めて導入する場合
 
-今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。正式対応や新しいMacでの受入完了を示すものではなく、既存のHermes設定とinstallerの既定値は維持します。
+今回の初回受入候補はmacOS・Apple silicon・Slackのstandaloneです。正式対応や新しいMacでの受入完了を示すものではなく、既存のHermes設定は維持します。新規導入の推奨・既定はstandaloneです。
 [能力・有効条件と受入の状況](INSTALLATION.md#capabilities-acceptance)は導入ガイドの単一表を参照してください。
 
 [はじめての導入ガイド](EASY_SETUP.md)でMacの準備とリポジトリの取得を済ませ、
-`sh scripts/mcs install --mode standalone`でMCS単独の方式を指定します。方式の選択画面を使う場合は`--mode standalone`を省き、`2) MCS 単独で使う`を選びます。
-Hermes Agentと連携する標準の導入は`1)`です。独立実行ではHermesを導入せず、
+`sh scripts/mcs install --mode standalone`でMCS単独の方式を指定します。方式の選択画面を使う場合は`--mode standalone`を省き、`1)`の推奨を選びます。
+Hermes Agentと連携する導入は`2)`です。独立実行ではHermesを導入せず、
 MCS専用の実行環境がSlack・Discordの接続と定期処理を担当します。
 LINE WORKSの通知先は、どちらの方式でも後の初期設定で選びます。
 

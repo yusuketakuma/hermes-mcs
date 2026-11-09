@@ -14,8 +14,8 @@
 #   --preflight, --check-only  変更せずに確認。問題と対処を表示します。
 #                             導入できない問題があると終了コード1になります。
 #   --dry-run                 変更せず、事前確認と導入予定を表示します。
-#   --mode hermes             Hermes を通じて接続します（既定）。
-#   --mode standalone         Hermes を使わず MCS 単独で接続します。
+#   --mode hermes             Hermes を通じて接続します。
+#   --mode standalone         Hermes を使わず MCS 単独で接続します（新規導入の推奨）。
 #                             専用の Python 環境と公式接続 SDK を導入します。
 #                             省略時は既存の設定を優先します。
 #   --recovery-python PATH    復旧に使う独立した Python の絶対パス。
@@ -69,7 +69,7 @@ choose() {
 }
 
 MODE=install
-RUNTIME_MODE=hermes
+RUNTIME_MODE=standalone
 RUNTIME_EXPLICIT=0
 RECOVERY_OPTION=""
 RECOVERY_PYTHON=""
@@ -371,6 +371,7 @@ EOF
         acquire_install_lock
     fi
 fi
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ -n "$ARG_HOME" ]; then RUNTIME_MODE=hermes; fi
 CONFIG_ABSENT=0
 CONFIG_EMPTY=0
 RESUME_UNCONFIGURED=0
@@ -383,11 +384,30 @@ if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
     "$MODE_PY" - "$MCS_ROOT/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
 import hashlib
+import math
 import os
 import stat
 import sys
 # Keep in sync with mcs_util.CONFIG_MAX_BYTES; this runs before the MCS venv exists.
 config_max_bytes = 1024 * 1024
+# Match mcs_util.strict_json before the runtime and flat imports are available.
+def pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError
+        result[key] = value
+    return result
+
+def constant(_):
+    raise ValueError
+
+def number(value):
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError
+    return result
+
 try:
     fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
@@ -398,7 +418,8 @@ try:
             raw = stream.read(config_max_bytes + 1)
         if len(raw) > config_max_bytes:
             raise ValueError
-        cfg = json.loads(raw.decode("utf-8"))
+        cfg = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+                         parse_constant=constant, parse_float=number)
         ident = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
         if ident(info) != ident(os.fstat(fd)) or ident(info) != ident(os.stat(sys.argv[1], follow_symlinks=False)):
             raise ValueError
@@ -428,6 +449,9 @@ PYMODE
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
+    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; }; then
+        RUNTIME_MODE=hermes
+    fi
 fi
 # Only a checked bootstrap authority can authorize a later initial choice.
 _bootstrap_runtime_token=""
@@ -442,21 +466,33 @@ if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
         *) die "初回設定を確認できません。設定と記録を保持してください" ;;
     esac
 fi
-# An interrupted noninteractive first install can have created only {}.
-# A completed install or any other existing settings retain their mode.
-if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ] \
-        && { [ "$CONFIG_ABSENT" -eq 1 ] || [ -n "$_bootstrap_runtime_token" ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
+# Only a fresh install without saved authority may acquire a new default.
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { { [ "$CONFIG_ABSENT" -eq 1 ] \
+        && [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
+        && [ ! -e "$MCS_ROOT/data/.provider-settings-authority.json" ] \
+        && [ ! -L "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
         && [ ! -L "$MCS_ROOT/data/install_options.json" ]; }; }; then
+    if [ -z "$ARG_HOME" ]; then
+        RUNTIME_MODE=standalone
+        RUNTIME_EXPLICIT=1
+        [ "$CONFIG_ABSENT" -eq 1 ] || RESUME_UNCONFIGURED=1
+    fi
+    _choose_runtime=1
+else
+    _choose_runtime=0
+fi
+if [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ] && [ -z "$ARG_HOME" ] \
+        && { [ "$_choose_runtime" -eq 1 ] || { [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ -n "$_bootstrap_runtime_token" ]; }; }; then
     printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
         "Slack / Discord との連携方式を選んでください。" \
-        "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
-        "  2) MCS 単独で使う — Hermes Agent を導入しない" \
+        "  1) わからないので推奨を使う — MCS 単独で使う（Hermes Agent を導入しない）" \
+        "  2) Hermes Agent と連携する" \
         "LINE WORKS を使う場合も、通知先は後の初期設定で選べます。"
     choose '選択 [1・推奨 / 2 / 0・中止]: '
     case "$_answer" in
-        2) RUNTIME_MODE=standalone ;;
-        1) RUNTIME_MODE=hermes ;;
+        1) RUNTIME_MODE=standalone ;;
+        2) RUNTIME_MODE=hermes ;;
     esac
     RUNTIME_EXPLICIT=1
     [ "$CONFIG_ABSENT" -eq 1 ] || RESUME_UNCONFIGURED=1

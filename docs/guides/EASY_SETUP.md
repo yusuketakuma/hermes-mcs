@@ -34,7 +34,7 @@ Macの「ターミナル」で、画面の質問に番号を入力して進み�
    sh scripts/mcs install --mode standalone
    ```
 
-5. 上のコマンドではMCS単独の方式を選択済みです。表示された依存ソフトと導入段階を確認し、完了まで待ちます。通知先のアプリは後の初期設定で選び、Slackは[独立実行ガイド](STANDALONE.md#slackとdiscordの接続準備)の準備も確認します。Hermes連携を希望する場合は`--mode hermes`を指定します。方式を決めずに選択画面を開く場合は`--mode standalone`を省きます。画面のEnter既定は従来どおりHermesです。
+5. 上のコマンドではMCS単独の方式を選択済みです。表示された依存ソフトと導入段階を確認し、完了まで待ちます。通知先のアプリは後の初期設定で選び、Slackは[独立実行ガイド](STANDALONE.md#slackとdiscordの接続準備)の準備も確認します。Hermes連携を希望する場合は`--mode hermes`を指定します。方式を決めずに選択画面を開く場合は`--mode standalone`を省きます。新規導入の推奨とEnterの既定はstandalone（MCS単独）です。既存環境は現在の方式を維持します。
 6. 導入後の案内で初期設定へ進みます。後で行う場合は、次のコマンドで再開できます。
 
    ```sh

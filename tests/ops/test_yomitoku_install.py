@@ -120,7 +120,8 @@ def test_updater_reinstall_only_for_opted_in_ocr(monkeypatch, opted_in, changed)
                         lambda: ['--with-yomitoku'] if opted_in else [])
     monkeypatch.setattr(update_planning, 'recorded_install_args', mcs_update.recorded_install_args)
     monkeypatch.setattr(update_preflight, 'recorded_install_args', mcs_update.recorded_install_args)
-    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_runtime_migration, '_install_options_snapshot',
+                        lambda: ('synthetic-base', ['--with-yomitoku']))
     calls = []
     def diff(args, **kwargs):
         calls.append(args)
@@ -176,7 +177,8 @@ def test_reinstall_keeps_recorded_yomitoku_selection(monkeypatch):
     monkeypatch.setattr(mcs_update, 'recorded_install_args', lambda: ['--with-yomitoku'])
     monkeypatch.setattr(update_planning, 'recorded_install_args', mcs_update.recorded_install_args)
     monkeypatch.setattr(update_preflight, 'recorded_install_args', mcs_update.recorded_install_args)
-    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', mcs_update.recorded_install_args)
+    monkeypatch.setattr(update_runtime_migration, '_install_options_snapshot',
+                        lambda: ('synthetic-base', ['--with-yomitoku']))
     monkeypatch.setattr(release_apply_owner, '_verify_inherited_lock', lambda *_a: None)
     monkeypatch.setattr(release_apply_checks, '_verify_inherited_lock', release_apply_owner._verify_inherited_lock)
     monkeypatch.setattr(mcs_update.owned_process, '_inherited_fds', inherited)
@@ -184,7 +186,7 @@ def test_reinstall_keeps_recorded_yomitoku_selection(monkeypatch):
     monkeypatch.setenv(mcs_update.UPDATE_LOCK_FD_ENV, '7')
     applying = {'reinstall': True, 'install_args': ['--no-llm']}
     mcs_update._reinstall(applying)
-    assert captured[0][-3:] == ['--no-llm', '--with-yomitoku', '--no-services']
+    assert captured[0][-3:] == ['--with-yomitoku', '--no-llm', '--no-services']
     assert applying['reinstall_done'] is True
 
 

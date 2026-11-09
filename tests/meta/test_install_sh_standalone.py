@@ -1,5 +1,5 @@
 """install.sh runtime selection: --mode standalone installs no Hermes,
-an existing standalone config keeps its mode, non-interactive stays hermes."""
+an existing standalone config keeps its mode, fresh non-interactive installs select standalone."""
 import json
 import shutil
 
@@ -202,8 +202,8 @@ def test_standalone_preflight_and_plan_skip_hermes(tmp_path):
 
 def test_mode_defaults_follow_existing_config(tmp_path):
     home, _, _, env = _world(tmp_path)
-    r = _run(env, None, "--preflight")              # no tty, no config -> hermes
-    assert "接続方法: hermes" in r.stdout
+    r = _run(env, None, "--preflight")              # no tty, no config -> standalone
+    assert "接続方法: standalone" in r.stdout
     (home / ".mcs").mkdir()
     (home / ".mcs" / "config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     r = _run(env, None, "--preflight")
@@ -261,7 +261,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
         try:
             for prompt, answer in [
                 ("選択 [1・推奨 / 2 / 0・中止]: ", b"wrong\n"),
-                ("1 または 2 を入力してください。中止は 0 です。", b"2\n"),
+                ("1 または 2 を入力してください。中止は 0 です。", b"1\n"),
                 ("この内容で導入する（推奨）", b"1\n"),
                 ("続けて初期設定を始める（推奨）", setup_answer),
             ]:
@@ -342,3 +342,86 @@ def test_mode_selection_refuses_a_symlinked_config(tmp_path):
     assert r.returncode == 1 and "config.json を読み取れない" in r.stderr, r.stdout + r.stderr
     assert (home / ".mcs" / "config.json").is_symlink()
     assert json.loads(elsewhere.read_text()) == {"runtime_mode": "hermes"}
+
+
+@pytest.mark.parametrize('prior', ['absent', 'empty', 'legacy', 'standalone', 'saved_empty'])
+def test_default_selection_preserves_existing_runtime_authority(tmp_path, prior):
+    home, _, _, env = _world(tmp_path)
+    root = home / '.mcs'
+    if prior != 'absent':
+        root.mkdir()
+        config = {'legacy': {'mcs_login_id': 'synthetic'},
+                  'standalone': {'runtime_mode': 'standalone'}}.get(prior, {})
+        (root / 'config.json').write_text(json.dumps(config))
+        if prior == 'saved_empty':
+            (root / 'data').mkdir()
+            (root / 'data/install_options.json').write_text('[]')
+    result = _run(env, None, '--preflight', '--no-recovery')
+    expected = 'hermes' if prior in ('legacy', 'saved_empty') else 'standalone'
+    assert f'接続方法: {expected}' in result.stdout, result.stdout + result.stderr
+    if prior != 'absent':
+        assert json.loads((root / 'config.json').read_text()) == config
+
+
+@pytest.mark.parametrize('empty', [False, True])
+@pytest.mark.parametrize('explicit', [None, 'hermes', 'standalone'])
+def test_new_noninteractive_mode_is_saved_and_reread(tmp_path, empty, explicit):
+    home, _, stub, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    if empty:
+        config.parent.mkdir()
+        config.write_text('{}')
+    flags = ['--no-brew', '--no-llm']
+    if explicit:
+        flags += ['--mode', explicit]
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = explicit or 'standalone'
+    assert json.loads(config.read_text())['runtime_mode'] == expected
+    before = config.read_bytes()
+    again = _run(env, None, '--preflight', '--no-llm', '--no-brew')
+    assert f'接続方法: {expected}' in again.stdout
+    assert config.read_bytes() == before
+    if expected == 'standalone':
+        assert not any(c.startswith('git clone') and 'hermes-agent' in c for c in _calls(stub))
+
+
+@pytest.mark.parametrize('mode', ['--preflight', '--dry-run', None])
+def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install(tmp_path, mode):
+    import hashlib
+    import provider_settings
+    home, _, stub, env = _world(tmp_path)
+    root = home / '.mcs'
+    data = root / 'data'
+    providers = data / 'provider_settings'
+    providers.mkdir(mode=0o700, parents=True)
+    data.chmod(0o700)
+    config = root / 'config.json'
+    config.write_text('{}')
+    config.chmod(0o600)
+    hashes = {}
+    for name in provider_settings.PROVIDERS:
+        path = providers / (name + '.json')
+        path.write_text('{}')
+        path.chmod(0o600)
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    authority = data / '.provider-settings-authority.json'
+    authority.write_text(json.dumps({'version': 2, 'state': 'committed',
+        'configuration_state': 'bootstrap', 'files': hashes,
+        'common_policy_sha256': provider_settings.common_policy_digest({})}))
+    authority.chmod(0o600)
+    before = {path: path.read_bytes() for path in [config, authority, *providers.iterdir()]}
+    flags = ['--no-brew', '--no-llm', '--no-recovery', '--no-services']
+    if mode:
+        flags.append(mode)
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if mode:
+        assert '接続方法: hermes' in result.stdout
+        assert {path: path.read_bytes() for path in before} == before
+    else:
+        assert any(call.startswith('venv-hermes') for call in _calls(stub))
+        assert not any('requirements-standalone.txt' in call for call in _calls(stub))
+        assert json.loads(config.read_text()).get('runtime_mode', 'hermes') == 'hermes'
+        assert {path: path.read_bytes() for path in before if path != config} == {
+            path: raw for path, raw in before.items() if path != config}
