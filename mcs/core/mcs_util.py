@@ -15,6 +15,7 @@ import unicodedata
 import urllib.request
 from contextlib import suppress
 
+from error_codes import KNOWN_ERROR_CODES
 from safe_io import read_regular_nofollow
 
 
@@ -445,10 +446,12 @@ def strict_json(raw):
 
 
 def safe_error_code(exc) -> str:
-    """Error code safe to log: a code-shaped ValueError message, else the type name."""
-    # user text/SQL/paths must never be interpolated into error logs
-    return str(exc) if type(exc) is ValueError and \
-        str(exc).replace("_", "").isalnum() else type(exc).__name__
+    """Error code safe to log: a registered fixed ValueError code, else the type name."""
+    # user text/SQL/paths must never be interpolated into error logs —
+    # only literals registered in error_codes.KNOWN_ERROR_CODES echo back
+    return exc.args[0] if type(exc) is ValueError and len(exc.args) == 1 \
+        and type(exc.args[0]) is str and exc.args[0] in KNOWN_ERROR_CODES \
+        else type(exc).__name__
 
 
 def html_to_text(h: str) -> str:

@@ -6,16 +6,30 @@ import pytest
 import mcs_util as util
 
 
-def test_safe_error_code_keeps_code_shaped_value_error():
-    assert util.safe_error_code(ValueError("sample_code_1")) == "sample_code_1"
+def test_safe_error_code_keeps_registered_value_error():
+    assert util.safe_error_code(ValueError("bad_page")) == "bad_page"
 
 
 def test_safe_error_code_hides_free_text_value_error():
     assert util.safe_error_code(ValueError("free text /tmp/x")) == "ValueError"
 
 
+@pytest.mark.parametrize("text", [
+    "患者データが不正です",               # Japanese free text is not a code
+    "xoxb1234567890abcdefghijklmnop",    # ASCII token-shaped secret
+    "bad_page\nINJECTED",                # newline never echoes
+    "https://example.invalid/path?token=abc",
+    "/Users/someone/private/file.txt",
+    "SELECT * FROM patients WHERE id=1",
+    "unregistered_code_123",             # code-shaped but not registered
+])
+def test_safe_error_code_never_echoes_unregistered_text(text):
+    assert util.safe_error_code(ValueError(text)) == "ValueError"
+
+
 def test_safe_error_code_uses_type_name_for_other_errors():
-    assert util.safe_error_code(OSError("sample_code")) == "OSError"
+    assert util.safe_error_code(OSError("bad_page")) == "OSError"
+    assert util.safe_error_code(ValueError("bad_page", "extra")) == "ValueError"
 
 
 def test_unique_pairs_rejects_duplicate_key():
