@@ -390,7 +390,7 @@ def test_new_noninteractive_mode_is_saved_and_reread(tmp_path, empty, explicit):
 def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install(tmp_path, mode):
     import hashlib
     import provider_settings
-    home, _, _, env = _world(tmp_path)
+    home, _, stub, env = _world(tmp_path)
     root = home / '.mcs'
     data = root / 'data'
     providers = data / 'provider_settings'
@@ -416,10 +416,12 @@ def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install
         flags.append(mode)
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '接続方法: hermes' in result.stdout
     if mode:
+        assert '接続方法: hermes' in result.stdout
         assert {path: path.read_bytes() for path in before} == before
     else:
+        assert any(call.startswith('venv-hermes') for call in _calls(stub))
+        assert not any('requirements-standalone.txt' in call for call in _calls(stub))
         assert json.loads(config.read_text()).get('runtime_mode', 'hermes') == 'hermes'
         assert {path: path.read_bytes() for path in before if path != config} == {
             path: raw for path, raw in before.items() if path != config}
