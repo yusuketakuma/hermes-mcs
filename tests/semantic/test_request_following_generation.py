@@ -52,10 +52,10 @@ def test_default_and_explicit_false_share_the_current_plan_generation(source):
     explicit = extract(source, lambda _: pytest.fail("default cache missed"), request_following=False)
     # Then: this is a machine cache identity, not a prose assertion.
     assert extraction._chunk_generation("fictional-model", prompts._FACT_V2_PROMPT) == \
-        "inference:1.0|fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
+        "inference:1.0|fictional-model|84cb8504dca4d861|plan:2|size:3000"
     db, _, _ = source
     meta = json.loads(db.artifacts(extraction.KIND_CHUNK_V2)[0]["meta"])
-    assert meta["generation"] == "inference:1.0|fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
+    assert meta["generation"] == "inference:1.0|fictional-model|84cb8504dca4d861|plan:2|size:3000"
     assert implicit["doc"] == explicit["doc"] and explicit["reused_chunks"] == [0]
     assert "generation" not in implicit and "generation" not in explicit
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"

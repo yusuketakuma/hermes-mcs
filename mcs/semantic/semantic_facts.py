@@ -407,10 +407,45 @@ def validate_fact(fact: dict) -> dict:
     if out["kind"] == "medication_event":
         _enum(fact.get("action", UNKNOWN), "fact_action", MED_ACTIONS)
         out["action"] = fact.get("action", UNKNOWN)
+    care_detail = fact.get("care_detail")
+    if care_detail is not None:
+        if out["kind"] != "care_event":
+            _fail("fact_care_detail_kind")
+        out["care_detail"] = validate_care_detail_fact(care_detail)
     out.update(request_details(fact))
     context = validate_patient_context(fact)
     if context is not None:
         out["patient_context"] = context
+    return out
+
+
+def validate_care_detail_fact(detail):
+    """Structure-check the optional ``care_detail`` carried by a fact.
+
+    Quote binding and axis normalization stay with
+    ``clinical_events.verify_care_detail`` at projection time; this only
+    enforces the stored contract so a malformed detail cannot ride the
+    canonical chain.
+    """
+    from clinical_events import CARE_DETAIL_TYPES
+    if not isinstance(detail, dict) \
+            or set(detail) - {"event_type", "workflow_status",
+                              "date_text", "service_actor"}:
+        _fail("fact_care_detail_invalid")
+    event_type = detail.get("event_type")
+    if event_type not in CARE_DETAIL_TYPES:
+        _fail("fact_care_detail_event_type")
+    out = {"event_type": event_type}
+    workflow = detail.get("workflow_status")
+    if workflow is not None:
+        _enum(workflow, "fact_care_detail_workflow", WORKFLOW_STATUSES)
+        out["workflow_status"] = workflow
+    for key in ("date_text", "service_actor"):
+        value = detail.get(key)
+        if value is not None and not isinstance(value, str):
+            _fail("fact_care_detail_field_type")
+        if isinstance(value, str):
+            out[key] = value
     return out
 
 

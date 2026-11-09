@@ -60,13 +60,86 @@ def _resource_preflight(db, project_id, *, patient_only=False):
     return "bounded"
 
 
+_CANONICAL_KINDS = ("canonical_projection", "semantic_facts_v4")
+
+
+def _canonical_events(db, message, projection_row, cfg):
+    """Project audited canonical care events only under the current source and policy.
+
+    Returns the care_event_timeline.project result, "oversize" when the
+    projected record count exceeds the per-source limit, or None when any
+    link of the evidence chain fails. Read-only: no model dispatch, writes
+    or transaction ownership (the shared provenance path's contract).
+    """
+    import semantic_facts
+    import semantic_policy
+    import semantic_projection
+    import semantic_publication
+    import semantic_store
+    import semantic_transport
+
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("semantic"), dict) \
+            or "mode" not in cfg["semantic"]:
+        return None
+    policy, errors = semantic_policy.runtime_config(cfg)
+    if errors or policy.get("mode") == "off" or policy.get("fact_source") != "canonical":
+        return None
+    meta = loads_dict(projection_row["meta"]) or {}
+    mid, pid = message["message_id"], message["project_id"]
+    binding = inference_dependency_loss.source_binding(db, pid, mid)
+    if not binding or meta.get("source_binding") != binding:
+        return None
+    bundle = semantic_store.thread_bundle(db, pid, message.get("parent_id") or mid,
+                                          local_model=semantic_transport.llm_model(cfg))
+    if (bundle is None or bundle.get("source_fingerprint") != meta.get("fingerprint")
+            or semantic_policy.policy_fingerprint(policy) != meta.get("policy_fingerprint")):
+        return None
+    member = next((item for item in bundle["members"] if item.get("message_id") == mid), None)
+    raw, error = semantic_publication.reproject_doc(db, mid, meta)
+    if member is None or error or raw is None:
+        return None
+    try:
+        clean = semantic_facts.validate_facts_doc(raw)
+    except (semantic_facts.ContractError, KeyError, TypeError, ValueError):
+        return None
+    body = message["body_text"]
+    source = clean["source"]
+    if (member.get("body_state") != "full" or member.get("body_original") != body
+            or member.get("revision") != message.get("content_hash")
+            or source.get("message_id") != str(mid) or source.get("revision") != member.get("revision")
+            or source.get("content_hash") != hashlib.sha256(body.encode("utf-8")).hexdigest()
+            or source.get("body_codepoints") != len(body) or source.get("content_quality") != "full"
+            or source.get("source_fingerprint") != bundle["source_fingerprint"]
+            or loads_dict(projection_row["content"]) != semantic_projection.project_v2_doc_legacy(raw)):
+        return None
+    for evidence in clean["evidence"]:
+        start, end = evidence["start"], evidence["end"]
+        if not 0 <= start < end <= len(body) or body[start:end] != evidence["quote"]:
+            return None
+    content = loads_dict(projection_row["content"])
+    items = content.get("event_records") if isinstance(content, dict) else None
+    if isinstance(items, list) and len(items) > _PER_SOURCE_LIMIT:
+        return "oversize"
+    # Producer and audit evidence come from the shared provenance path:
+    # verified provider chain or a replayed QC repair, bound Jev audit.
+    # rebuild_facts_v2_cached alone also accepts provider-absent legacy
+    # documents, so doc-identity alone is not proof of verified producers.
+    provenance = semantic_publication._projection_provenance(
+        db, pid, mid, meta.get("fingerprint"), meta.get("policy_fingerprint"),
+        member, raw, content)
+    if not isinstance(provenance, dict) or provenance.get("complete") is not True \
+            or provenance.get("jev") != "done":
+        return None
+    return care_event_timeline.project(pid, message, projection_row["artifact_id"], content)
+
+
 def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_EVENTS):
     """Return references and coverage without writing or borrowing another snapshot.
 
-    Only a completed, current source-bound local extraction is eligible. Any
-    canonical artifact is conservatively held until its independent policy and
-    evidence contract can be proved; a legacy extraction never replaces it.
-    The returned records contain neither source bodies nor quotes.
+    A completed, current source-bound local extraction is eligible, and so
+    is a canonical artifact whose independent policy and evidence contract
+    can be proved end to end; a legacy extraction never replaces canonical
+    evidence. The returned records contain neither source bodies nor quotes.
     """
     if (type(project_id) is not int or project_id <= 0 or type(limit) is not int
             or not 1 <= limit <= _MAX_MESSAGES or type(event_limit) is not int
@@ -164,12 +237,12 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
         if not body:
             coverage["empty"] += 1
             continue
-        # Until canonical evidence is implemented, even a stale or incomplete
-        # canonical row requires explicit reconciliation; never fall back.
-        if db.execute("SELECT 1 FROM artifacts WHERE message_id=? AND kind IN "
-                      "('canonical_projection','semantic_facts_v4') LIMIT 1", (m["message_id"],)).fetchone():
-            coverage["canonical_unconfirmed"] += 1
-            continue
+        # A canonical row, current or stale, requires the audited evidence
+        # chain; a good local extraction never replaces it.
+        canonical_present = db.execute(
+            "SELECT 1 FROM artifacts WHERE message_id=? AND kind IN "
+            "('canonical_projection','semantic_facts_v4') LIMIT 1",
+            (m["message_id"],)).fetchone() is not None
         artifact = db.execute(
             "SELECT a.artifact_id,a.kind,a.meta,a.model,octet_length(a.content) AS content_length,"
             "CASE WHEN octet_length(a.content)<=? THEN a.content END AS content FROM artifacts a "
@@ -178,27 +251,40 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
             + current_fact_pred("a", "m") + " ORDER BY a.artifact_id DESC LIMIT 1",
             (_ARTIFACT_LIMIT, project_id, m["message_id"])).fetchone()
         if artifact is None:
-            coverage["not_extracted"] += 1
+            coverage["canonical_unconfirmed" if canonical_present else "not_extracted"] += 1
             continue
-        if artifact["kind"] != "extract_llm":
+        if canonical_present:
+            if artifact["kind"] not in _CANONICAL_KINDS:
+                coverage["canonical_unconfirmed"] += 1
+                continue
+        elif artifact["kind"] != "extract_llm":
             coverage["canonical_unconfirmed"] += 1
             continue
         if type(artifact["content_length"]) is int and artifact["content_length"] > _ARTIFACT_LIMIT:
             coverage["oversize"] += 1
             continue
-        meta, document = loads_dict(artifact["meta"]), loads_dict(artifact["content"])
-        binding = inference_dependency_loss.source_binding(db, project_id, m["message_id"])
-        if (not isinstance(meta, dict) or not isinstance(document, dict) or not isinstance(model, str)
-                or not model or artifact["model"] != model or meta.get("actual_model") != model
-                or not isinstance(binding, str) or meta.get("source_binding") != binding
-                or extract_llm.progress_for_message(db, m, model=model).get("state") != "complete"):
-            coverage["unverified_extraction"] += 1
-            continue
-        items = document.get("event_records")
-        if isinstance(items, list) and len(items) > _PER_SOURCE_LIMIT:
-            coverage["oversize"] += 1
-            continue
-        projected = care_event_timeline.project(project_id, m, artifact["artifact_id"], document)
+        if canonical_present:
+            projected = _canonical_events(db, m, artifact, cfg)
+            if projected == "oversize":
+                coverage["oversize"] += 1
+                continue
+            if projected is None:
+                coverage["canonical_unconfirmed"] += 1
+                continue
+        else:
+            meta, document = loads_dict(artifact["meta"]), loads_dict(artifact["content"])
+            binding = inference_dependency_loss.source_binding(db, project_id, m["message_id"])
+            if (not isinstance(meta, dict) or not isinstance(document, dict) or not isinstance(model, str)
+                    or not model or artifact["model"] != model or meta.get("actual_model") != model
+                    or not isinstance(binding, str) or meta.get("source_binding") != binding
+                    or extract_llm.progress_for_message(db, m, model=model).get("state") != "complete"):
+                coverage["unverified_extraction"] += 1
+                continue
+            items = document.get("event_records")
+            if isinstance(items, list) and len(items) > _PER_SOURCE_LIMIT:
+                coverage["oversize"] += 1
+                continue
+            projected = care_event_timeline.project(project_id, m, artifact["artifact_id"], document)
         pc = projected["coverage"]
         if pc["state"] == "not_recorded":
             coverage["not_recorded"] += 1

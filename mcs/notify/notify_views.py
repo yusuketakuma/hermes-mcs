@@ -1010,7 +1010,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                          intervention_history=False, intervention_cursor=None, measurement=None):
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
-    if section != "care_events":
+    if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                      role=role, page=page, intervention_history=intervention_history,
                                      intervention_cursor=intervention_cursor)
@@ -1076,6 +1076,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
     transports' scope filter keeps them."""
     import patient_context_view as views
     ev = {"coverage": {}} if section == "care_events" else views.evidence(db, project_id, cfg=cfg)
+    care = views.care_events(db, project_id, cfg=cfg) if section in (
+        "background", "timeline", "previsit") else None
     rows, head = [], []
     year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
 
@@ -1367,6 +1369,31 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         view = views.replies(db, project_id) if section == "replies" else views.timeline(ev)
         # one group whose heading would only repeat the view title
         add(view["items"], "")
+    if care is not None:
+        labels = {
+            "intervention_start": "介入開始", "intervention_pause": "介入中断",
+            "intervention_resume": "介入再開", "intervention_end": "介入終了",
+            "service_contract_start": "契約開始", "pre_discharge_conference": "退院前会議",
+            "discharge_joint_guidance": "退院時共同指導", "care_team_conference": "担当者会議",
+            "care_plan_change": "計画変更", "monitoring": "モニタリング",
+            "care_need_certification_change": "介護認定変更", "respite": "レスパイト",
+            "facility_entry": "施設入所", "facility_exit": "施設退所", "death": "死亡の記録",
+            "acp_discussion": "ACPの話合い", "care_policy_change": "療養方針変更"}
+        for event in care["items"]:
+            detail = event.get("care_detail") or {}
+            label = labels.get(detail.get("event_type"))
+            if label:
+                day = event.get("event_day") if not event.get("date_uncertain") else None
+                add([{**event, "event_date_text": day or "日付未確認"}], f"介入・経過 · {label}")
+        states = care["intervention_states"]
+        for state in states["items"]:
+            label = {"started": "開始", "paused": "中断", "resumed": "再開", "ended": "終了",
+                     "unknown": "状態未確認"}[state["recorded_state"]]
+            ref = state["references"][0]
+            text = f"{state['facility']}／{state['profession']}／{state['service']}：{label}の記録（{state['event_day']}）"
+            add([{**ref, "quote": text}], "記録上の介入状況")
+        if not care["coverage"].get("source_complete"):
+            head.append("介入・経過：未取得・未解析などにより、確認できた範囲を表示")
     for row in rows:
         row.pop("message_id", None)
         # text transports: the source rides at the end of the last quote line, not on a line of its own

@@ -143,7 +143,8 @@ def _chat_candidates(db, project_id: int, dataset: str, now: float,
 def get_project_metadata(db, project_id: int, dataset: str, *,
                          item_id: int | None = None, show_names: bool = False,
                          include_chat: bool = False,
-                         now: float | None = None, max_age_s: float = 86400) -> dict[str, JSON]:
+                         now: float | None = None, max_age_s: float = 86400,
+                         care_team_as_of: float | None = None) -> dict[str, JSON]:
     """Show last complete data as historical after failures/expiry, never as current.
 
     Reads ledger or snapshot only. Empty is a complete empty acquisition; unknown
@@ -161,6 +162,9 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
             or not math.isfinite(max_age_s) or max_age_s < 0
             or (now is not None and (type(now) not in (int, float)
                                     or not math.isfinite(now) or now < 0))
+            or (care_team_as_of is not None and (
+                dataset != "care_team" or type(care_team_as_of) not in (int, float)
+                or not math.isfinite(care_team_as_of) or care_team_as_of < 0))
             or (dataset == "observation_values" and not _valid_id(item_id))
             or (dataset != "observation_values" and item_id is not None))
     except OverflowError:
@@ -207,15 +211,43 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
             "AND typeof(json_extract(content,'$.item_id')) IN ('null','integer') "
             "AND json_extract(content,'$.item_id') IS ? ELSE 0 END ")
     params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], item_id)
+    if care_team_as_of is not None:
+        # An unreadable observation may belong before the cutoff; never
+        # skip it and revive an older roster as confirmed membership.
+        base = ("SELECT artifact_id,content FROM artifacts WHERE kind=? AND project_id=? "
+                "AND CASE WHEN json_valid(content) THEN "
+                "CASE WHEN EXISTS(SELECT 1 FROM json_tree(content) "
+                "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+                "WHEN json_extract(content,'$.dataset')=? THEN "
+                "CASE WHEN json_extract(content,'$.contract')='project-metadata/1' "
+                "AND json_type(content,'$.entity_id')='integer' "
+                "AND json_extract(content,'$.entity_id')=? "
+                "AND json_type(content,'$.attempted_at') IN ('integer','real') "
+                "AND abs(json_extract(content,'$.attempted_at'))<=1.7976931348623157e308 "
+                "THEN json_extract(content,'$.attempted_at')<=? ELSE 1 END "
+                "WHEN json_type(content,'$.dataset')='text' THEN 0 ELSE 1 END ELSE 1 END ")
+        params = (ARTIFACT_KIND, project_id, dataset, target["entity_id"], care_team_as_of)
+        result.update(as_of=care_team_as_of, attempt_artifact_id=None, complete_artifact_id=None)
     latest = db.execute(base + "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
-    complete = db.execute(base + "AND json_extract(content,'$.complete')=1 "
+    complete = db.execute(base + "AND CASE WHEN json_valid(content) "
+                          "THEN json_extract(content,'$.complete')=1 ELSE 0 END "
                           "ORDER BY artifact_id DESC LIMIT 1", params).fetchone()
     if latest is None:
         return result
     if provenance is not None:
         provenance["attempt_artifact_id"] = latest["artifact_id"]
+    if care_team_as_of is not None:
+        result["attempt_artifact_id"] = latest["artifact_id"]
     try:
-        attempt = json.loads(latest["content"])
+        from mcs_util import strict_json
+        decode = strict_json if care_team_as_of is not None else json.loads
+        attempt = decode(latest["content"])
+        if care_team_as_of is not None and (
+                attempt.get("dataset") != "care_team"
+                or type(attempt.get("entity_id")) is not int
+                or attempt["entity_id"] != target["entity_id"]
+                or attempt.get("item_id") is not None):
+            raise SchemaError("metadata view: roster scope invalid")
         if dataset == "consultations" and (
                 attempt.get("scope") != "group"
                 or not _valid_id(attempt.get("entity_id"))
@@ -244,7 +276,13 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
         result["http_status"] = attempt.get("http_status")
         result["state"] = attempt_state(dataset, False, attempt["reason"])
         if complete is not None:
-            payload = json.loads(complete["content"])
+            payload = decode(complete["content"])
+            if care_team_as_of is not None and (
+                    payload.get("dataset") != "care_team"
+                    or type(payload.get("entity_id")) is not int
+                    or payload["entity_id"] != target["entity_id"]
+                    or payload.get("item_id") is not None):
+                raise SchemaError("metadata view: roster scope invalid")
             if dataset == "consultations" and (
                     payload.get("scope") != "group"
                     or not _valid_id(payload.get("entity_id"))
@@ -341,12 +379,41 @@ def get_project_metadata(db, project_id: int, dataset: str, *,
             result["historical"] = not result["current_known"]
             if provenance is not None:
                 provenance["complete_artifact_id"] = complete["artifact_id"]
+            if care_team_as_of is not None:
+                result["complete_artifact_id"] = complete["artifact_id"]
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError, SchemaError):
         result.update(state="unknown", reason="artifact_invalid", rows=[],
                       definition=None, http_status=None, attempted_at=None,
                       current_known=False, historical=False, stale=None,
                       last_complete_at=None, age_s=None)
     return result
+
+
+def care_team_speaker(db, project_id, sender_id, sender_type, posted_at):
+    """Link a recorded speaker to one earlier roster observation, never by name."""
+    from mcs_util import payload_hash
+    from stats_math import finite_number
+
+    result = {"state": "unknown", "reason": "speaker_identity_unknown", "member": None,
+              "observed_at": None, "artifact_id": None, "row_hash": None,
+              "membership_period": "not_proven"}
+    if (type(sender_id) is not int or sender_id <= 0 or not isinstance(sender_type, str)
+            or not sender_type or not finite_number(posted_at) or posted_at < 0):
+        return result
+    team = get_project_metadata(db, project_id, "care_team", now=posted_at,
+                                care_team_as_of=posted_at)
+    if not team["current_known"]:
+        result["reason"] = "roster_unconfirmed"
+        return result
+    members = [row for row in team["rows"] if type(row["id"]) is int
+               and row["id"] == sender_id and row.get("type") == sender_type]
+    if len(members) != 1:
+        result["reason"] = "speaker_not_unique"
+        return result
+    member = members[0]
+    return {**result, "state": "matched", "reason": None, "member": member,
+            "observed_at": team["last_complete_at"], "artifact_id": team["complete_artifact_id"],
+            "row_hash": payload_hash(member)}
 
 
 def physician_viewed_status(db, project_id: int, message_id: int, *,

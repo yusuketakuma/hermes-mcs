@@ -1,6 +1,7 @@
 """JSON output shapes and shared medication syntax for extraction validation."""
 import re
 
+from clinical_events import CARE_DETAIL_TYPES
 from patient_context import CATEGORIES, DETAIL_KEYS
 
 SCHEMA = {
@@ -67,6 +68,12 @@ SCHEMA = {
                         "start": {"type": "integer", "minimum": 0},
                         "end": {"type": "integer", "minimum": 1}},
                         "required": ["start", "end"], "additionalProperties": False},
+                    "care_detail": {"type": ["object", "null"], "properties": {
+                        "event_type": {"type": "string", "enum": list(CARE_DETAIL_TYPES)},
+                        "workflow_status": {"type": ["string", "null"]},
+                        "date_text": {"type": ["string", "null"]},
+                        "service_actor": {"type": ["string", "null"]}},
+                        "required": ["event_type"], "additionalProperties": False},
                     "unverified": {"type": "boolean"}},
                 "required": ["kind", "subject", "status", "negated", "evidence"],
                 "additionalProperties": False}},

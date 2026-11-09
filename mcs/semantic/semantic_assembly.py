@@ -463,6 +463,16 @@ def normalise_facts_v2(items: list, member: dict, source: str,
             fact["action"] = _enum_or_unknown(item.get("action"),
                                               sf.MED_ACTIONS)
         fact.update(sf.request_details(item, [ev_rec["quote"]] if ev_rec else []))
+        if kind == "care_event" and isinstance(item.get("care_detail"), dict):
+            try:
+                fact["care_detail"] = sf.validate_care_detail_fact(
+                    item["care_detail"])
+            except sf.ContractError:
+                # Optional enrichment: a malformed detail is omitted, never
+                # attached raw — projection re-binds it to the quote anyway.
+                if omitted is not None:
+                    omitted["care_detail_invalid"] = \
+                        omitted.get("care_detail_invalid", 0) + 1
         if "patient_context" in item and item["patient_context"] is None:
             # an explicit JSON null claims nothing: the same as leaving the
             # optional field out (the prompt asks to omit it), not a defect
@@ -571,6 +581,17 @@ def merge_dupe_facts(facts: list) -> list:
             existing["validation_status"] = "verified"
         if fact.get("_evidence") and not existing.get("_evidence"):
             existing["_evidence"] = fact["_evidence"]
+        detail_seen = conflicted.setdefault(fact["fact_id"], set())
+        new_detail = fact.get("care_detail")
+        if "care_detail" not in detail_seen and new_detail is not None:
+            prior_detail = existing.get("care_detail")
+            if prior_detail is None:
+                existing["care_detail"] = new_detail
+            elif prior_detail != new_detail:
+                # Conflicting optional details on an identical fact: keep
+                # neither rather than guessing which chunk was right.
+                existing.pop("care_detail", None)
+                detail_seen.add("care_detail")
         context = fact.get("patient_context")
         if context and not existing.get("patient_context"):
             existing["patient_context"] = context

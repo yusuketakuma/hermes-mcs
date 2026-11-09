@@ -71,6 +71,18 @@ _FACT_V2_PROMPT = """あなたは在宅医療チャット記録の原子事実�
 - "quantity": 数量表現またはnull
 - "importance": T0（緊急）|T1（重要）|T2（通常）|T3（参考）|unknown
 - "evidence_quote": 根拠となる本文の完全一致引用（必要な範囲を省略しない）
+- "care_detail": kind=care_eventのとき任意。介入の開始/中断/再開/終了、
+  サービス契約開始、退院前カンファレンス、退院時共同指導、サービス担当者会議、
+  ケアプラン変更、モニタリング、要介護認定変更、レスパイト、施設入所/退所、
+  死亡、ACP、ケア方針変更を
+  {"event_type":...,"workflow_status":...,"date_text":...,"service_actor":...}で保持。
+  event_type: intervention_start|intervention_pause|intervention_resume|
+  intervention_end|service_contract_start|pre_discharge_conference|
+  discharge_joint_guidance|care_team_conference|care_plan_change|monitoring|
+  care_need_certification_change|respite|facility_entry|facility_exit|death|
+  acp_discussion|care_policy_change
+  date_text/service_actorは根拠となる原文の完全一致表現のみ。推測・言い換え・
+  本文に無い主体/日付の補完は禁止。根拠がなければ省略する
 - "patient_context": 任意。患者背景・服薬実態・副作用・観測・支援・転帰や次回確認を
   {"category":カテゴリ,"text":根拠引用中の原文,"details":[{"key":属性,"value":原文値,"evidence":属性の完全一致引用}]}で保持。
   category: demographics|diagnoses|history|course|adl|living|care_level|care_services|care_team|contacts|allergies|devices|preferences|medication_management|nutrition|cognition|adverse_events|observations|followup。

@@ -51,6 +51,7 @@ from writer_lock import acquire_run_lock as acquire_run_lock
 from semantic_projection import PROJECTION_VERSION as PROJECTION_VERSION
 from self_identity import normalize_sender_id as normalize_sender_id
 from drug_map import KIND as REF_KIND, current_refs as current_refs, generation_signature as generation_signature
+from stats_math import finite_number as finite_number
 
 
 import rollup_builder as rollup_builder
@@ -659,7 +660,11 @@ def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
         rollup_builder._check_deadline(deadline)
         if valid_until is None:
             raise rollup_builder.RollupSourceUnverified('rollup_expiry_unverified')
-        if not d['generated_at'] <= rollup_builder.time.time() < valid_until:
+        observed = rollup_builder.time.time()
+        if not finite_number(observed) or not finite_number(d['generated_at']) \
+                or not finite_number(valid_until) or not d['generated_at'] <= observed:
+            raise rollup_builder.RollupSourceUnverified('rollup_clock_unverified')
+        if not observed < valid_until:
             raise rollup_builder.RollupSourceChanged('inference_rollup_source_changed')
 
     with ledger.db:

@@ -43,6 +43,21 @@ def _render(db, transport, created_at, state="queued"):
         "updated_at) VALUES(?,'notice',1,1,?,'h',?,?,?,?)",
         (f"d{n}", transport, f"c{n}", state, created_at, created_at))
     db.db.commit()
+    return f"d{n}"
+
+
+def _part(db, delivery_id, updated_at, state="delivered"):
+    db.db.execute(
+        "INSERT INTO notification_render_parts(delivery_id,part_id,kind,idx,"
+        "state,updated_at) VALUES(?,?,?,0,?,?)",
+        (delivery_id, f"part-{delivery_id}", "card", state, updated_at))
+    db.db.commit()
+
+
+def _traced(db):
+    statements = []
+    db.db.set_trace_callback(statements.append)
+    return statements
 
 
 def _sem_job(db, mid, state, updated_at):
@@ -326,3 +341,133 @@ def test_large_backlog_with_recent_delivery_is_not_stalled(db):
     _render(db, 'slack', now - 60, state='delivered')
     assert 'card_delivery_stalled' not in health_report.backlog_stalls(db.db, SLACK, now)
     assert 'card_delivery_stalled' in health_report.backlog_stalls(db.db, SLACK, now + 1900)
+
+
+def test_recent_render_progress_skips_the_parts_join(db):
+    """An old queued render with fresh whole-render progress proves the
+    transport is moving; the per-part MAX read must not run."""
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    _render(db, "slack", now - 60, state="delivered")
+    traced = _traced(db)
+    try:
+        reasons = health_report.backlog_stalls(db.db, SLACK, now)
+    finally:
+        db.db.set_trace_callback(None)
+    assert "card_delivery_stalled" not in reasons
+    assert not any("notification_render_parts" in sql for sql in traced)
+
+
+def test_fresh_queued_render_needs_no_progress_reads(db):
+    """Without an old queued render neither progress query is issued."""
+    now = time.time()
+    _render(db, "slack", now - 60)
+    traced = _traced(db)
+    try:
+        reasons = health_report.backlog_stalls(db.db, SLACK, now)
+    finally:
+        db.db.set_trace_callback(None)
+    assert "card_delivery_stalled" not in reasons
+    reads = [sql for sql in traced if "notification_renders" in sql]
+    assert reads and all("MIN(created_at)" in sql for sql in reads)
+
+
+def test_old_part_delivery_still_rescues_the_stall(db):
+    """Stale whole-render progress falls back to the parts join, whose
+    recent row still proves the transport is moving."""
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    delivered = _render(db, "slack", now - 7200, state="delivered")
+    _part(db, delivered, now - 60)
+    reasons = health_report.backlog_stalls(db.db, SLACK, now)
+    assert "card_delivery_stalled" not in reasons
+
+
+def test_other_transport_progress_does_not_rescue(db):
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    _render(db, "discord", now - 60, state="delivered")
+    assert "card_delivery_stalled" in health_report.backlog_stalls(db.db, SLACK, now)
+
+
+def test_future_progress_is_no_rescue(db):
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    _render(db, "slack", now + 7200, state="delivered")
+    delivered = _render(db, "slack", now - 7200, state="delivered")
+    _part(db, delivered, now + 7200)
+    assert "card_delivery_stalled" in health_report.backlog_stalls(db.db, SLACK, now)
+
+
+def test_restore_hold_check_runs_without_queued_renders(db):
+    # Attempt-scoped holds carry no card_id; the check must still run
+    # with an empty render queue.
+    db.db.execute(
+        "INSERT INTO notification_restore_holds(attempt_id,reason,"
+        "held_at) VALUES('a0','synthetic',?)", (time.time(),))
+    db.db.commit()
+    assert "restore_delivery_held" in health_report.backlog_stalls(db.db, SLACK, time.time())
+
+
+@pytest.mark.parametrize(("needle", "phase"), [
+    ("MIN(created_at) FROM notification_renders", "card_queue_oldest"),
+    ("MAX(updated_at) FROM notification_renders", "card_render_progress"),
+    ("notification_render_parts p", "card_part_progress"),
+    ("notification_restore_holds", "card_restore_holds"),
+])
+def test_stall_observation_phase_marks_the_failed_section(db, needle, phase):
+    """A SQL failure leaves a fixed phase name in the stall observation —
+    no ids, bodies or exception text — and the read still fails."""
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    inner = db.db
+
+    class FailOn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, parameters=()):
+            if isinstance(sql, str) and needle in sql:
+                raise sqlite3.OperationalError("synthetic stall")
+            return inner.execute(sql, parameters)
+
+    proxy = FailOn()
+    observed = {}
+    with pytest.raises(sqlite3.OperationalError):
+        health_report.bounded_health_read(
+            proxy, lambda _check: health_report.backlog_stalls(
+                proxy, SLACK, now, observation=observed),
+            seconds=10.0, observation=observed)
+    assert observed["phase"] == phase
+    assert "synthetic stall" not in str(observed)
+
+
+def test_stall_check_carries_the_failed_phase(db):
+    """End-to-end: a parts-join failure inside build_health leaves its
+    fixed phase in stall_check["observation"]."""
+    now = time.time()
+    _render(db, "slack", now - 7200)
+    inner = db.db
+
+    class FailOn:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def execute(self, sql, parameters=()):
+            if (isinstance(sql, str)
+                    and "JOIN notification_renders r ON r.delivery_id=p.delivery_id" in sql):
+                raise sqlite3.OperationalError("synthetic stall")
+            return inner.execute(sql, parameters)
+
+    health = health_report.build_health(FailOn(), {"errors": [], "notify": {}}, "ok",
+                                        cfg=SLACK)
+    check = health["stall_check"]
+    assert check["status"] == "unknown" and check["reason"] == "observation_unavailable"
+    assert check["observation"]["phase"] == "card_part_progress"
+    assert "synthetic stall" not in str(check)
+
+
+def test_observation_kwarg_records_last_phase_on_success(db):
+    observed = {}
+    health_report.backlog_stalls(db.db, {}, time.time(), observation=observed)
+    assert observed["phase"] == "extract_backlog"

@@ -47,6 +47,10 @@ CATEGORIES = {
     "deferred": ("時間内に終わらず先送り", "deadline", True,
                  "時間内に終わらなかった処理を次回に回しました（異常ではありません）",
                  "対処不要。次回以降に実行されます"),
+    "reevaluate": ("集約の再評価待ち", "incomplete", True,
+                   "集約の途中で元データが更新されたか有効期限を過ぎたため、"
+                   "その時点の集約結果を確定できませんでした",
+                   "対処不要。次回の収集で自動的に再評価されます"),
     "network": ("通信", "network", True,
                 "MCSとの通信に失敗しました",
                 "次回の収集で再試行されます。続く場合はネットワーク接続を確認"),
@@ -97,6 +101,7 @@ _CODES = {
     **dict.fromkeys(("deadline_exceeded", "timeout", "worker_timeout", "budget_exhausted"),
                     "deadline"),
     "deadline_deferred": "deferred",
+    "rollup_source_changed": "reevaluate",
     **dict.fromkeys(("http_error", "network_error", "connection_error", "worker_failed"),
                     "network"),
     **dict.fromkeys(("schema_error", "SchemaError", "invalid_payload", "bad_snapshot_ts"),
@@ -237,7 +242,13 @@ def validated(value, observed_at=None, *, fine=False) -> dict | None:
             return None
         clean_errors = {"state": error_state, "total": total, "scanned": scanned, "reasons": reasons}
         if "categories" in errors:      # absent in health written before 1.1.0
-            categories = _reasons(errors["categories"], CATEGORIES, scanned)
+            stored = errors["categories"]
+            # 'reevaluate' was added later; fill only that key so blocks
+            # saved by older versions still validate. Missing/invalid
+            # entries for every other category keep failing as before.
+            if isinstance(stored, dict) and "reevaluate" not in stored:
+                stored = {**stored, "reevaluate": 0}
+            categories = _reasons(stored, CATEGORIES, scanned)
             projected = dict.fromkeys(ERROR_LABELS, 0)
             for key, n in (categories or {}).items():
                 projected[CATEGORIES[key][1]] += n
@@ -279,7 +290,10 @@ def detail_lines(value, section: str) -> list[str]:
         partial = "（先頭256件の内訳）" if block["state"] == "partial" else ""
         if "categories" in block:
             deferred = block["categories"].get("deferred", 0)
-            summary = f"処理異常{block['scanned'] - deferred}件 / 先送り{deferred}件"
+            reevaluate = block["categories"].get("reevaluate", 0)
+            summary = f"処理異常{block['scanned'] - deferred - reevaluate}件 / 先送り{deferred}件"
+            if reevaluate:
+                summary += f" / 再評価待ち{reevaluate}件"
             if block['scanned'] < block['total']:
                 summary += f" / 未分類{block['total'] - block['scanned']}件"
         else:

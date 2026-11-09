@@ -403,7 +403,7 @@ def _bound_signature_matches(db, pid, cfg, record, snapshot, snapshots):
             and record.get('source_sig') == bound['source_sig'])
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False, source_keys=None):
+def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False, source_keys=None, observed_out=None):
     snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract, source_keys=source_keys)
     snapshots = {patient_context_refresh_sources._source_scope(snapshot.get('source_scope')): snapshot}
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
@@ -417,6 +417,8 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
     stored = patient_context_refresh_sources._scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
+    if observed_out is not None:
+        observed_out["scans"] = stored
     scans, required_scans = [], []
     for source in snapshot["sources"]:
         patient_context_refresh_sources._scan_check(db)

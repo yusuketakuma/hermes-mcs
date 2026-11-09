@@ -76,7 +76,9 @@ def test_patient_selection_resolves_once_after_out_of_scope_patient(runtime, mon
     monkeypatch.setattr(refresh, '_scan_covered', lambda *args: False)
     monkeypatch.setattr(state, '_out_of_scope', lambda snapshot: False)
     monkeypatch.setattr(state, '_published_version', lambda *args: 0)
-    def pending(db, pid, cfg, *, cloud_scan, **kwargs):
+    def pending(db, pid, cfg, *, cloud_scan, observed_out=None, **kwargs):
+        if observed_out is not None:
+            observed_out["scans"] = {}
         observed.append((pid, cloud_scan))
         return {'contract': state._contract(cfg, pid), 'sources': [],
                 'dependencies': {'complete': True}, 'unfinished': False}, {}, {

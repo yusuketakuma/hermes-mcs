@@ -186,7 +186,7 @@ def test_derive_reports_source_changed_without_disclosing_patient_id(tmp_path, m
         assert result['rollups'] == 1
         assert result['rollup_source_changed'] == 1
         assert result['rollup_source_unknown'] == 1
-        assert 'rollup: source_changed' in result['errors']
+        assert 'rollup_source_changed' in result['errors']
         assert 'rollup: source_unknown' in result['errors']
         assert '17' not in str(result['errors']) and '18' not in str(result['errors'])
     finally:

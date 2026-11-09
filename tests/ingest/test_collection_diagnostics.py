@@ -228,6 +228,7 @@ PRODUCER_CODES = [
     # run_check producer prefixes without an id (CodeRabbit round 2)
     ("self_profile: OSError", "auxiliary"), ("cmd_int: OSError", "command"),
     ("stamps: RuntimeError", "command"), ("cmd_int_tail: RuntimeError", "command"),
+    ("rollup_source_changed", "reevaluate"),
 ]
 
 
@@ -299,3 +300,30 @@ def test_command_errors_never_advise_an_unconditional_retry(error):
 def test_developer_contact_guidance_uses_the_share_safe_doctor_output():
     for category in ("schema", "other"):
         assert "doctor --share" in diagnostics.CATEGORIES[category][4]
+
+
+def test_reevaluate_is_transient_and_not_counted_as_an_abnormality(db):
+    block = observe(db, ["rollup_source_changed", "mark 7: network_error"])
+    assert block["errors"]["categories"]["reevaluate"] == 1
+    assert diagnostics.CATEGORIES["reevaluate"][2] is True
+    line = diagnostics.detail_lines(block, "errors")[0]
+    assert line.startswith("処理異常1件") and "再評価待ち1件" in line
+    rows = diagnostics.guidance(block)
+    assert [row[:2] for row in rows] == [("集約の再評価待ち", 1), ("通信", 1)]
+
+
+def test_diagnostics_saved_before_reevaluate_still_validate(db):
+    """Categories blocks written by older versions lack 'reevaluate';
+    it is the only key filled so the old shape keeps validating."""
+    block = observe(db, ["mark 7: network_error"])
+    old = copy.deepcopy(block)
+    del old["errors"]["categories"]["reevaluate"]
+    assert diagnostics.validated(old, fine=True)["errors"]["categories"]["reevaluate"] == 0
+    # missing or malformed entries for every other category stay rejected
+    for key in ("network", "deferred"):
+        bad = copy.deepcopy(block)
+        del bad["errors"]["categories"][key]
+        assert diagnostics.validated(bad, fine=True) is None
+    bad = copy.deepcopy(block)
+    bad["errors"]["categories"]["network"] = "many"
+    assert diagnostics.validated(bad, fine=True) is None

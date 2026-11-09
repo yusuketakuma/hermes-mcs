@@ -655,3 +655,133 @@ def test_repair_keeps_jev_pre_present_obligation_covered():
            if ob["source"] == "jev_pre" and ob["category"] == "preference"]
     assert jev and all(ob["status"] == "covered" and ob["fact_ids"]
                        for ob in jev)
+
+
+def test_care_detail_survives_facts_doc_validation():
+    from semantic_testkit import v2_doc, v2_fact
+    detail = {"event_type": "intervention_resume",
+              "workflow_status": "performed",
+              "date_text": "11月9日", "service_actor": "訪問看護A"}
+    fact = v2_fact("f1", kind="care_event", validation_status="unverified",
+                   care_detail=detail)
+    doc = v2_doc([fact])
+    out = sf.validate_facts_doc(doc)
+    kept = next(f for f in out["facts"] if f["fact_id"] == "f1")
+    assert kept["care_detail"] == detail
+
+
+@pytest.mark.parametrize("detail", [
+    {"event_type": "bogus_type"},
+    {"workflow_status": "performed"},
+    {"event_type": "monitoring", "extra": "x"},
+    {"event_type": "monitoring", "workflow_status": "bogus"},
+    {"event_type": "monitoring", "date_text": 12},
+    "not_a_dict",
+])
+def test_invalid_care_detail_fails_facts_doc_validation(detail):
+    from semantic_testkit import v2_doc, v2_fact
+    doc = v2_doc([v2_fact("f1", kind="care_event", validation_status="unverified",
+                        care_detail=detail)])
+    with pytest.raises(Exception):
+        sf.validate_facts_doc(doc)
+
+
+def test_care_detail_flows_from_extraction_to_projected_record():
+    from semantic_projection import project_v2_doc_legacy
+    body = "本人は本日訪問看護を開始しました。"
+    llm = _llm(
+        [{"statement": "本人のサービス開始", "kind": "care_event",
+          "subject_role": "patient", "polarity": "affirmed",
+          "epistemic": "asserted",
+          "workflow_status": "performed", "importance": "T1",
+          "evidence_quote": "本人は本日訪問看護を開始しました",
+          "care_detail": {"event_type": "intervention_start",
+                          "workflow_status": "performed",
+                          "date_text": "本日"}}],
+        presence={"care_event": "one"})
+    result = extraction.extract_facts_v2(llm, _member(body))
+    assert result["coverage"]["status"] == "complete"
+    doc = result["doc"]
+    sf.validate_facts_doc(doc)
+    fact = next(f for f in doc["facts"] if f["kind"] == "care_event")
+    assert fact["care_detail"]["event_type"] == "intervention_start"
+    projected = project_v2_doc_legacy(doc)
+    record = next(r for r in projected["event_records"]
+                  if r.get("care_detail"))
+    assert record["care_detail"]["event_type"] == "intervention_start"
+    assert record["care_detail"]["date_text"] == "本日"
+
+
+def test_care_detail_on_non_care_event_kind_fails_validation():
+    from semantic_testkit import v2_doc, v2_fact
+    fact = v2_fact("f1", kind="symptom_state", validation_status="unverified",
+                   care_detail={"event_type": "monitoring"})
+    with pytest.raises(Exception):
+        sf.validate_facts_doc(v2_doc([fact]))
+
+
+def test_merge_dupe_facts_care_detail_conflict_orders():
+    import semantic_assembly as assembly
+    from semantic_testkit import v2_fact
+    a = v2_fact("f1", kind="care_event", validation_status="unverified",
+                care_detail={"event_type": "intervention_start"})
+    b = v2_fact("f1", kind="care_event", validation_status="unverified",
+                care_detail={"event_type": "intervention_end"})
+    plain = v2_fact("f1", kind="care_event", validation_status="unverified")
+    for ordered in ([a, b, a], [b, a, b], [a, b], [b, a]):
+        merged = assembly.merge_dupe_facts([dict(f) for f in ordered])
+        assert len(merged) == 1 and "care_detail" not in merged[0]
+    # Absence is not a conflict: a plain duplicate keeps a single detail.
+    for ordered in ([plain, a], [a, plain]):
+        merged = assembly.merge_dupe_facts([dict(f) for f in ordered])
+        assert merged[0]["care_detail"] == a["care_detail"]
+
+
+def test_repair_merge_does_not_revive_conflicting_care_detail():
+    body = "本人は本日訪問看護を開始しました。個室を希望しています。"
+    item_a = {"statement": "本人のサービス開始", "kind": "care_event",
+              "subject_role": "patient", "polarity": "affirmed",
+              "epistemic": "asserted", "workflow_status": "performed",
+              "importance": "T1",
+              "evidence_quote": "本人は本日訪問看護を開始しました",
+              "care_detail": {"event_type": "intervention_start",
+                              "workflow_status": "performed"}}
+    item_p = {"statement": "個室を希望", "kind": "preference",
+              "subject_role": "patient", "polarity": "affirmed",
+              "epistemic": "reported", "workflow_status": "reported",
+              "importance": "T2",
+              "evidence_quote": "個室を希望"}
+    r = extraction.extract_facts_v2(
+        _llm([item_a, item_p], presence={"care_event": "one", "preference": "one"}),
+        _member(body))
+    doc = r["doc"]
+    care = next(f for f in doc["facts"] if f["kind"] == "care_event")
+    pref = next(f for f in doc["facts"] if f["kind"] == "preference")
+    assert care["care_detail"]["event_type"] == "intervention_start"
+    # The care_event fact stays kept while its chunk is re-extracted for the
+    # rejected preference: a repair candidate for the same fact_id carrying a
+    # different detail must not win silently — the merge drops it entirely.
+    item_b = dict(item_a, care_detail={"event_type": "intervention_end",
+                                       "workflow_status": "performed"})
+    out = extraction.repair_facts_v2(
+        _llm([item_b, item_p], presence={"care_event": "one", "preference": "one"}),
+        _member(body), doc, {pref["fact_id"]: "wording"})
+    fact = next(f for f in out["doc"]["facts"] if f["fact_id"] == care["fact_id"])
+    assert "care_detail" not in fact
+
+
+def test_invalid_care_detail_is_omitted_not_attached():
+    body = "本人は本日訪問しました。"
+    llm = _llm(
+        [{"statement": "本人の訪問看護開始", "kind": "care_event",
+          "subject_role": "patient", "polarity": "affirmed",
+          "epistemic": "asserted",
+          "workflow_status": "performed", "importance": "T1",
+          "evidence_quote": "本人は本日訪問しました",
+          "care_detail": {"event_type": "bogus_type"}}],
+        presence={"care_event": "one"})
+    result = extraction.extract_facts_v2(llm, _member(body))
+    doc = result["doc"]
+    sf.validate_facts_doc(doc)
+    fact = next(f for f in doc["facts"] if f["kind"] == "care_event")
+    assert "care_detail" not in fact

@@ -36,6 +36,77 @@ def test_care_events_cli_and_chat_display_source_and_distinct_dates(store):
         ["patient_context", "--project", "1", "--view", "care_events"]).view == "care_events"
 
 
+def test_roster_speaker_does_not_become_a_retrospective_provider(store):
+    from test_project_metadata_view import capture
+
+    body = "本人は2026年9月1日に当薬局の訪問看護を開始しました。"
+    record = _event(body, kind="other", status="unknown", negated=None)
+    record["care_detail"] = {"event_type": "intervention_start",
+                             "workflow_status": "performed",
+                             "date_text": "2026年9月1日", "service_actor": "当薬局"}
+    _save(store, 1, body, records=[record])
+    row = store.db.execute("SELECT sender_id,sender_type,posted_at_ts FROM messages WHERE message_id=1").fetchone()
+    member = {"id": row[0], "type": row[1], "station": {"name": "合成薬局"},
+              "specialist_categories": [{"name": "薬剤師"}]}
+    capture(store, rows=[member], now=row[2] - 60)
+    before = store.db.total_changes
+    event, = patient_context_view.care_events(store.db, 1, cfg={})["items"]
+    assert event["speaker"]["state"] == "matched"
+    assert event["service_provider"]["state"] == "unknown"
+    assert event["service_provider"]["label"] is None
+    assert store.db.total_changes == before and not store.db.in_transaction
+
+
+@pytest.mark.parametrize("section", ["background", "timeline", "previsit"])
+def test_context_surfaces_share_source_bound_intervention_events(store, section):
+    from datetime import datetime
+    from mcs_queries import JST
+    from test_project_metadata_view import capture
+
+    body = "本人は2026年9月1日に当薬局の訪問看護を開始しました。"
+    record = _event(body, kind="other", status="unknown", negated=None)
+    record["care_detail"] = {"event_type": "intervention_start",
+                             "workflow_status": "performed",
+                             "date_text": "2026年9月1日", "service_actor": "当薬局"}
+    _save(store, 1, body, records=[record])
+    row = store.db.execute("SELECT sender_id,sender_type,posted_at_ts FROM messages WHERE message_id=1").fetchone()
+    member = {"id": row[0], "type": row[1], "station": {"name": "合成薬局"},
+              "specialist_categories": [{"name": "薬剤師"}]}
+    capture(store, rows=[member], now=datetime(2026, 9, 1, tzinfo=JST).timestamp() - 60)
+    capture(store, rows=[member], now=row[2] - 60)
+    before = store.db.total_changes
+    view = SimpleNamespace(db=store.db, meta={"generated_at": 1_790_000_000})
+    result = mcs_view.View._patient_context(view, 1, section, None, None, "")
+    care = result["care_events"]
+    assert care["items"][0]["quote"] == body
+    assert care["items"][0]["service_provider"]["label"] == "合成薬局"
+    provider = care["items"][0]["service_provider"]
+    assert provider["state"] == "observation_link_only" and provider["professions"] is None
+    assert care["intervention_states"]["items"] == []
+    assert care["intervention_states"]["unresolved_records"] == 1
+    display = notify_views.patient_context_list(store.db, 1, section, cfg={}, since=0, now=1_790_000_000)
+    assert any(body in item["text"] for item in display["items"])
+    assert not any("薬剤師" in item["text"] and "開始の記録" in item["text"]
+                   for item in display["items"])
+    assert all(item["project_id"] == 1 for item in display["items"])
+    assert store.db.total_changes == before and not store.db.in_transaction
+
+
+def test_missing_posting_time_cannot_link_a_provider(store, monkeypatch):
+    import care_event_sources
+
+    body = "本人は2026年9月1日に退院しました。"
+    _save(store, 1, body, records=[_event(body)])
+    store.db.execute("BEGIN")
+    projected = care_event_sources.collect(store.db, 1, cfg={})
+    store.db.rollback()
+    projected["events"][0].update(posted_at_ts=None, posted_at=None, date_uncertain=True)
+    monkeypatch.setattr(care_event_sources, "collect", lambda *a, **k: projected)
+    event, = patient_context_view.care_events(store.db, 1, cfg={})["items"]
+    assert event["speaker"]["state"] == "unknown"
+    assert event["service_provider"]["state"] == "unknown"
+
+
 def test_same_borrowed_snapshot_and_no_commit_after_concurrent_source_change(store, tmp_path):
     body = "本人は2026年9月1日に退院しました。"
     _save(store, 1, body, records=[_event(body)])
@@ -197,3 +268,20 @@ def test_uncertain_future_completion_is_not_ordered_or_displayed_as_confirmed_da
     future_row = next(row for row in display["items"] if future in row["text"])
     assert "日付未確認" in future_row["source"] and "2026-12-01" not in future_row["source"]
     assert any("日付未確認" in line for line in display["head"])
+
+
+def test_care_event_read_rolls_back_accidental_writes_on_exception(store, monkeypatch):
+    import care_event_sources
+
+    def corrupting_reader(db, *args, **kwargs):
+        db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+        raise ValueError('synthetic failure')
+    body = "本人は2026年9月1日に退院しました。"
+    _save(store, 1, body, records=[_event(body)])
+    before = [tuple(row) for row in store.db.execute('SELECT * FROM patients')]
+    assert before
+    monkeypatch.setattr(care_event_sources, 'collect', corrupting_reader)
+    with pytest.raises(ValueError, match='synthetic failure'):
+        patient_context_view.care_events(store.db, 1, cfg={})
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM patients')] == before
+    assert not store.db.in_transaction

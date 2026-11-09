@@ -1,6 +1,7 @@
 """Synthetic derivation reserves snapshot verification time without hiding unfinished work."""
 import json
 import sqlite3
+import time
 
 import pytest
 
@@ -255,7 +256,8 @@ def test_scan_deferral_keeps_independent_rebuild_source_errors(derive_case, reas
     outcome = {'changed' if reason == 'source_changed' else 'unknown': (1,)}
     result, rebuilt = run(rollup.RollupScan((1,), (2, 3), True, (('deadline', 2),)), **outcome)
     assert rebuilt == [1] and result['rollups'] == 0
-    assert result['errors'] == ['deadline_deferred:rollup_scan', f'rollup: {reason}']
+    expected = 'rollup_source_changed' if reason == 'source_changed' else 'rollup: source_unknown'
+    assert result['errors'] == ['deadline_deferred:rollup_scan', expected]
     assert result[f'rollup_{reason}'] == 1
     assert result['rollup_scan']['state'] == 'unknown'
     assert result['deferred_stages'] == ['rollup_scan']
@@ -300,7 +302,7 @@ def test_rebuild_deadline_does_not_hide_source_changed(derive_case):
                            changed=(1,), unknown=(2,), reasons={'deadline': 1})
     assert result['rollup_source_changed'] == 1
     assert result['rollup_source_unknown_reasons'] == {'deadline': 1}
-    assert result['errors'] == ['rollup: source_changed', 'deadline_deferred:rollup_rebuild']
+    assert result['errors'] == ['rollup_source_changed', 'deadline_deferred:rollup_rebuild']
 
 
 def test_scan_and_rebuild_deadline_use_one_deferred_marker(derive_case):
@@ -363,3 +365,30 @@ def test_rebuild_deadline_stays_partial_and_reaches_existing_health_guidance(
     block = health_report.collection_diagnostics_health(ledger.db, result['errors'], 3700)
     assert block['errors']['categories']['deferred'] == 1
     assert block['errors']['categories']['postprocess'] == 0
+
+
+def test_rollup_source_change_is_reevaluation_pending_not_stage_error(tmp_path, monkeypatch):
+    """A legitimate source change stays a recorded, bounded deferral: the
+    run keeps its partial error entry and the count, yet health does not
+    degrade — the patient is rebuilt on the next scan."""
+    store = _ledger(tmp_path)
+    try:
+        monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda path: 20)
+        monkeypatch.setattr(extract, "run_pending", lambda *a, **k: {"done": 0, "pids": []})
+        monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
+        monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
+        monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
+        monkeypatch.setattr(rollup, "scan_fair_dirty_projects", lambda *a, **k:
+                            rollup.RollupScan((1,), (), False, ()))
+        monkeypatch.setattr(rollup, "rebuild_many", lambda ledger, ids, **kw:
+                            (kw["source_changed"].extend(ids), 0)[1])
+        result = {"errors": []}
+        run_check.stage_derive(store, result, time.monotonic() + 600, {}, llm_budget_cap=0)
+        assert result["errors"] == ["rollup_source_changed"]
+        assert result["rollup_source_changed"] == 1
+        health = health_report.build_health(store.db, result, "partial", cfg={})
+        assert "stage_errors" not in health["state_reasons"]
+        assert health["overall"] == "ok"
+        assert health["collection_diagnostics"]["errors"]["categories"]["reevaluate"] == 1
+    finally:
+        store.close()

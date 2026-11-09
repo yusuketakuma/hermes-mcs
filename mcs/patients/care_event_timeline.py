@@ -22,21 +22,51 @@ _EVENT_KIND = {
     "受診": "exam", "検査": "exam", "採血": "exam",
 }
 _JST = timezone(timedelta(hours=9))
-_CONTEXT_UNCERTAIN = re.compile(r"訂正|撤回|誤り|誤記|間違|取り消|取消|引用|仮定|仮に|"
-                                r"違(?:う|い|った|わ)|事実では|実際には|"
-                                r"(?:ました|した|です|予定)(?:が|けれど|けど|ものの|、|,)|"
-                                r"(?:という|との)(?:記載|報告|話)|と(?:聞き|聞いた|書かれ)")
+_INTERVENTION_STATES = {"intervention_start": "started", "intervention_pause": "paused",
+                        "intervention_resume": "resumed", "intervention_end": "ended"}
 
 
-def _isolated_assertion(body, start, end):
-    """Do not promote a fragment whose surrounding statements may qualify it."""
-    before, after = body[:start].strip(), body[end:].strip()
-    if before or after not in ("", "。"):
-        return False
-    text = body.strip()
-    return (not re.search(r"[。！？!?;；\n]\s*\S", text)
-            and not _CONTEXT_UNCERTAIN.search(text)
-            and not any(mark in text for mark in "「」『』\""))
+def intervention_states(events, coverage):
+    """Derive last source-proved transitions by provider, profession and service."""
+    groups, uncertain = {}, []
+    for event in events:
+        detail = event.get("care_detail") or {}
+        transition = _INTERVENTION_STATES.get(detail.get("event_type"))
+        if (transition is None or event.get("subject") != "patient"
+                or event.get("negated") is not False or event.get("unverified") is not False
+                or event.get("status") not in ("current", "past")):
+            continue
+        provider = event.get("service_provider") or {}
+        professions = provider.get("professions") or []
+        facility, service = provider.get("label"), event.get("service")
+        known = (provider.get("state") == "matched" and isinstance(facility, str) and facility
+                 and len(professions) == 1 and isinstance(professions[0], str)
+                 and professions[0] and service and event.get("event_day")
+                 and not event.get("date_uncertain")
+                 and detail.get("workflow_status") in ("performed", "done", "in_progress"))
+        if not known:
+            uncertain.append({"facility": facility, "professions": professions, "service": service,
+                              "recorded_state": transition, "event_day": event.get("event_day"),
+                              "reference": {key: event.get(key) for key in (
+                                  "message_id", "artifact_id", "record_index", "content_hash", "span")}})
+            continue
+        key = facility, professions[0], service
+        groups.setdefault(key, []).append((event["event_day"], transition, event))
+    rows = []
+    for (facility, profession, service), records in sorted(groups.items()):
+        latest_day = max(record[0] for record in records)
+        latest = [record for record in records if record[0] == latest_day]
+        transitions = {record[1] for record in latest}
+        state = next(iter(transitions)) if len(transitions) == 1 else "unknown"
+        rows.append({"facility": facility, "profession": profession, "service": service,
+                     "recorded_state": state, "event_day": latest_day,
+                     "current_state": "unknown", "history_complete": coverage.get("source_complete") is True,
+                     "references": [{key: event.get(key) for key in (
+                         "message_id", "artifact_id", "record_index", "content_hash", "span")}
+                         for _, _, event in latest]})
+    return {"items": rows, "unresolved_records": len(uncertain), "unresolved": uncertain,
+            "scope": "patient_profession_facility_service", "basis": "explicit_recorded_transitions",
+            "history_complete": coverage.get("source_complete") is True}
 
 
 def _posted(value):
@@ -51,12 +81,33 @@ def _posted(value):
 def _event_day(record, quote):
     if record.get("unverified") or re.search(r"本日|今日|昨日|明日|翌日", quote):
         return None
-    matches = list(_DATED_EVENT.finditer(quote))
-    date = written_day(quote)
-    if (len(matches) != 1 or _EVENT_KIND[matches[0].group(2)] != record["kind"]
-            or not date or date[0] != "ymd" or written_day(matches[0].group(1)) != date):
+    detail = record.get("care_detail")
+    # A bound care-detail date applies to every kind — intervention_start
+    # also rides on legacy visit/care records — but a detail day that
+    # contradicts the legacy dated-event day is ambiguity, not a fallback.
+    detail_day = (clinical_events.care_detail_event_day(detail, quote)
+                  if isinstance(detail, dict) else None)
+    # The legacy day comes from the dated-event mention of this record's
+    # own kind, never from the quote's whole date list: unrelated dates
+    # elsewhere in the quote must neither erase it nor hide a mismatch.
+    days, unclear = set(), False
+    for match in _DATED_EVENT.finditer(quote):
+        if _EVENT_KIND[match.group(2)] != record["kind"]:
+            continue
+        day = written_day(match.group(1))
+        if day is None or day[0] != "ymd":
+            unclear = True
+        else:
+            days.add(day[1].isoformat())
+    if unclear or len(days) > 1:
+        # The parent instance's own date binding is unclear or
+        # contradictory — it stays unknown instead of guessing.
         return None
-    return date[1].isoformat()
+    legacy_day = days.pop() if days else None
+    if detail_day is not None and legacy_day is not None \
+            and detail_day != legacy_day:
+        return None
+    return detail_day if detail_day is not None else legacy_day
 
 
 def project(project_id, message, artifact_id, document):
@@ -107,7 +158,11 @@ def project(project_id, message, artifact_id, document):
                  and type(span.get("end")) is int and 0 <= span["start"] < span["end"] <= len(body)
                  and isinstance(quote, str) and body[span["start"]:span["end"]] == quote)
         unresolved = (not bound or record.get("unverified") is True
-                      or not _isolated_assertion(body, span["start"], span["end"]))
+                      or not clinical_events.context_clean(
+                          body, span["start"], span["end"], kind=record["kind"],
+                          subject=record["subject"], status=record["status"],
+                          negated=record["negated"],
+                          detail=record.get("care_detail")))
         date_uncertain = bound and paired_date_conflict(quote, message.get("posted_at_ts"))
         event_day = None if unresolved or date_uncertain else _event_day(record, quote)
         reported_status = record["status"]
@@ -117,7 +172,7 @@ def project(project_id, message, artifact_id, document):
         status = ("unknown" if unresolved or (date_uncertain and reported_status == "current"
                                               and record["negated"] is False) else reported_status)
         unverified += unresolved
-        events.append({"project_id": project_id, "message_id": message["message_id"],
+        event = {"project_id": project_id, "message_id": message["message_id"],
                        "artifact_id": artifact_id, "record_index": index,
                        "content_hash": message["content_hash"],
                        "span": [span["start"], span["end"]] if bound else None,
@@ -128,5 +183,8 @@ def project(project_id, message, artifact_id, document):
                        "date_uncertain": date_uncertain,
                        "event_day": event_day,
                        "posted_at": posted.isoformat() if posted else None,
-                       "posted_at_ts": message["posted_at_ts"] if posted else None})
+                       "posted_at_ts": message["posted_at_ts"] if posted else None}
+        if not unresolved and isinstance(record.get("care_detail"), dict):
+            event["care_detail"] = record["care_detail"]
+        events.append(event)
     return result("incomplete" if invalid or unverified else "complete", events, invalid, unverified)

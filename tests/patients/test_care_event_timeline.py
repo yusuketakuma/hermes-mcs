@@ -97,6 +97,347 @@ def test_correction_within_a_full_quoted_sentence_never_confirms_event(body):
     assert event["event_day"] is None
 
 
+def test_multi_sentence_quote_verifies_only_with_clean_context():
+    body = ("前の記録です。本人は2026年9月1日に退院しました。"
+            "本人はその後通院しています。")
+    quote = "本人は2026年9月1日に退院しました。本人はその後通院しています。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert result["coverage"]["state"] == "complete"
+
+
+@pytest.mark.parametrize("tail", [
+    "訂正：退院の記載は誤りです。",
+    "本人は退院していません。",
+    "家族から退院したと聞きました。",
+    "「退院しました」との記載があります。",
+])
+def test_multi_sentence_quote_still_fails_closed_on_bad_context(tail):
+    body = ("本人は2026年9月1日に退院しました。本人はその後通院しています。"
+            + tail)
+    quote = "本人は2026年9月1日に退院しました。本人はその後通院しています。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert event["unverified"] is True and event["event_day"] is None
+    assert result["coverage"]["state"] == "incomplete"
+
+
+def test_detail_only_record_context_compares_same_service_mentions():
+    body = "本人は訪問看護を開始しました。訪問看護は開始していません。"
+    quote = "訪問看護を開始しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "patient", "status": "current",
+            "negated": False, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "unknown", "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert event["unverified"] is True and "care_detail" not in event
+    other = "本人は訪問看護を開始しました。訪問介護は開始していません。"
+    start = other.index(quote)
+    item = dict(item, span={"start": start, "end": start + len(quote)})
+    event, = care_event_timeline.project(1, source(other), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"]
+    assert event["care_detail"]["event_type"] == "intervention_start"
+
+
+@pytest.mark.parametrize("event_type,body", [
+    ("intervention_start", "本人は2026年9月1日に訪問看護サービスを開始しました。"),
+    ("intervention_pause", "本人は2026年9月1日に訪問看護サービスを中断しました。"),
+    ("intervention_resume", "本人は2026年9月1日に訪問看護サービスを再開しました。"),
+    ("intervention_end", "本人は2026年9月1日に訪問看護サービスを終了しました。"),
+    ("service_contract_start", "本人は2026年9月1日に訪問介護サービスの契約を締結しました。"),
+    ("pre_discharge_conference", "本人は2026年9月1日に退院前カンファレンスを開催しました。"),
+    ("discharge_joint_guidance", "本人は2026年9月1日に退院時共同指導を受けました。"),
+    ("care_team_conference", "本人は2026年9月1日にサービス担当者会議を開催しました。"),
+    ("care_plan_change", "本人のケアプランを2026年9月1日に変更しました。"),
+    ("monitoring", "本人は2026年9月1日にモニタリングを実施しました。"),
+    ("care_need_certification_change", "本人の介護度が2026年9月1日に変更になりました。"),
+    ("respite", "本人は2026年9月1日にショートステイを利用しました。"),
+    ("facility_entry", "本人は2026年9月1日に特養に入所しました。"),
+    ("facility_exit", "本人は2026年9月1日に施設を退所しました。"),
+    ("death", "本人が2026年9月1日に亡くなりました。"),
+    ("acp_discussion", "本人は2026年9月1日にACPについて話し合いました。"),
+    ("care_policy_change", "本人の看取り方針を2026年9月1日に変更しました。"),
+])
+def test_every_care_detail_type_verifies_through_record_projection(
+        event_type, body):
+    # kind=other detail records resolve subject/polarity/status from the
+    # source itself — the stored axes stay 'unknown' on purpose so the
+    # projection proves derivation, not echo. The bound absolute date
+    # reaches the event day for every type.
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": body,
+            "span": {"start": 0, "end": len(body)},
+            "care_detail": {"event_type": event_type,
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"]
+    assert event["subject"] == "patient" and event["negated"] is False
+    assert event["status"] == "current"
+    assert event["care_detail"]["event_type"] == event_type
+    assert event["event_day"] == "2026-09-01"
+    assert result["coverage"]["state"] == "complete"
+
+
+def test_care_detail_event_day_uses_the_bound_date_text():
+    body = "本人は2026年9月1日にサービス担当者会議を開催しました。"
+    quote = "2026年9月1日にサービス担当者会議を開催しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "patient", "status": "current",
+            "negated": False, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "care_team_conference",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+
+
+@pytest.mark.parametrize("date_text", [
+    # A month/day without a year is never completed into an event day.
+    "9月1日",
+    # Relative wording and the absent sentinel stay undated.
+    "明日", "unknown",
+])
+def test_care_detail_event_day_is_not_inferred(date_text):
+    body = f"本人は{date_text}にサービス担当者会議を開催しました。"
+    quote = f"{date_text}にサービス担当者会議を開催しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "care_team_conference",
+                            "workflow_status": "performed",
+                            "date_text": date_text,
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    # The record itself verifies; only the yearless date stays undated.
+    assert not event["unverified"] and event["event_day"] is None
+
+
+def test_same_type_instances_project_with_their_own_dates():
+    body = ("本人は訪問看護を2026年11月1日に開始しました。"
+            "本人は訪問介護を2026年12月1日に開始しました。")
+    first_quote = "訪問看護を2026年11月1日に開始しました"
+    second_quote = "訪問介護を2026年12月1日に開始しました"
+
+    def item(quote, date_text):
+        start = body.index(quote)
+        return {"kind": "other", "subject": "patient", "status": "current",
+                "negated": False, "evidence": quote,
+                "span": {"start": start, "end": start + len(quote)},
+                "care_detail": {"event_type": "intervention_start",
+                                "workflow_status": "performed",
+                                "date_text": date_text,
+                                "service_actor": "unknown"}}
+
+    result = care_event_timeline.project(
+        1, source(body), 42,
+        {"event_records": [item(first_quote, "2026年11月1日"),
+                           item(second_quote, "2026年12月1日")]})
+    first, second = result["events"]
+    assert not first["unverified"] and first["event_day"] == "2026-11-01"
+    assert not second["unverified"] and second["event_day"] == "2026-12-01"
+    # A date claimed against the other instance's quote never binds.
+    crossed = care_event_timeline.project(
+        1, source(body), 42,
+        {"event_records": [item(first_quote, "2026年12月1日")]})
+    event, = crossed["events"]
+    assert event["unverified"] is True and "care_detail" not in event
+
+
+def test_shared_instance_record_takes_event_day_from_bound_care_detail():
+    # The detail's own cue anchors a shared instance: its bound absolute
+    # date reaches the timeline as the record's event day.
+    body = "本人は訪問看護を2026年9月1日に開始しました。"
+    quote = "訪問看護を2026年9月1日に開始しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert event["care_detail"]["event_type"] == "intervention_start"
+
+
+def test_legacy_visit_shares_the_service_start_predicate():
+    body = "本人は訪問看護を2026年9月1日に開始しました。"
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": body,
+            "span": {"start": 0, "end": len(body)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"]
+    assert event["care_detail"]["event_type"] == "intervention_start"
+    assert event["event_day"] == "2026-09-01"
+
+
+def test_shared_instance_care_detail_yearless_date_stays_undated():
+    body = "本人は訪問看護を9月1日に開始しました。"
+    quote = "訪問看護を9月1日に開始しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "9月1日",
+                            "service_actor": "unknown"}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] is None
+    assert event["care_detail"]["date_text"] == "9月1日"
+
+
+def test_crossed_care_detail_attributes_do_not_survive_projection():
+    # The stored detail pairs the anchored instance's date with a provider
+    # that only exists in a different sentence; the claim fails
+    # verification and the record stays unresolved.
+    body = ("本人は訪問看護Aを2026年9月1日に開始しました。"
+            "2026年10月2日に介護サービスBを開始しました。")
+    quote = "訪問看護Aを2026年9月1日に開始しました"
+    start = body.index(quote)
+    item = {"kind": "other", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "介護サービスB"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert event["unverified"] is True and "care_detail" not in event
+    # The correctly paired attributes for the anchor's own instance attach.
+    item["care_detail"] = {"event_type": "intervention_start",
+                           "workflow_status": "performed",
+                           "date_text": "2026年9月1日",
+                           "service_actor": "訪問看護A"}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"]
+    assert event["care_detail"]["service_actor"] == "訪問看護A"
+    assert event["event_day"] == "2026-09-01"
+
+
+def test_detail_on_a_neighbouring_event_keeps_the_parents_own_day():
+    # The service start is a different instance from the dated visit, so
+    # the detail never attaches — and the visit keeps its own date instead
+    # of inheriting the neighbouring event's day.
+    body = "本人は2026年9月1日に訪問し、2026年9月2日に介護サービスを開始しました。"
+    quote = "2026年9月1日に訪問し、2026年9月2日に介護サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月2日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and "care_detail" not in event
+    assert event["event_day"] == "2026-09-01"
+
+
+def test_bound_detail_day_conflicting_the_parent_day_stays_unknown():
+    # Defensive invariant: if a bound detail day and the record's own
+    # dated mention ever disagree, the event day stays unknown rather
+    # than picking either — fail closed on ambiguity.
+    quote = "2026年9月2日に訪問看護を2026年9月1日に開始"
+    record = {"kind": "visit", "subject": "patient", "status": "current",
+              "negated": False, "evidence": quote,
+              "care_detail": {"event_type": "intervention_start",
+                              "workflow_status": "performed",
+                              "date_text": "2026年9月1日",
+                              "service_actor": "unknown"}}
+    assert care_event_timeline._event_day(record, quote) is None
+
+
+def test_recording_act_date_does_not_reach_the_detail():
+    # The 記録 act's date belongs to a different act — no start instance
+    # exists and the verified visit record keeps neither the detail nor
+    # the unrelated date.
+    body = "本人は介護サービスを訪問し、2026年9月1日に記録しました。"
+    quote = "介護サービスを訪問し、2026年9月1日に記録しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "unknown", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "2026年9月1日",
+                            "service_actor": "unknown"}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert not event["unverified"] and "care_detail" not in event
+    assert event["event_day"] is None
+
+
+@pytest.mark.parametrize("prefix,tail", [
+    # A correction two sentences after the quote still fails closed.
+    ("", "経過は安定しています。翌日の記録です。訂正：退院の記載は誤りです。"),
+    # An opposing mention far from the quote fails the whole-body scan.
+    ("", "食事は全量摂取できています。夜間は良眠でした。本人は退院していません。"),
+    # Third-party framing two sentences before the quote reaches it.
+    ("家族の話では、本人の調子を聞きました。検査は問題ありません。", ""),
+])
+def test_distant_context_markers_fail_closed_through_projection(prefix, tail):
+    body = prefix + "本人は2026年9月1日に退院しました。" + tail
+    quote = "本人は2026年9月1日に退院しました。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    event, = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})["events"]
+    assert event["unverified"] is True and event["event_day"] is None
+
+
+def test_unrelated_distant_sentences_do_not_block_a_clean_quote():
+    body = ("前の記録です。本人は2026年9月1日に退院しました。"
+            "経過観察を続けています。次回の予定を確認しました。"
+            "退院後の生活について話し合いました。")
+    quote = "本人は2026年9月1日に退院しました。"
+    start = body.index(quote)
+    item = {**saved(quote, "discharge", "patient", "current", False),
+            "span": {"start": start, "end": start + len(quote)}}
+    result = care_event_timeline.project(1, source(body), 42,
+                                       {"event_records": [item]})
+    event, = result["events"]
+    assert not event["unverified"] and event["event_day"] == "2026-09-01"
+    assert result["coverage"]["state"] == "complete"
+
+
 def test_single_full_assertion_remains_verified_when_quote_omits_final_punctuation():
     body = "本人は2026年9月1日に退院しました。"
     quote = body[:-1]

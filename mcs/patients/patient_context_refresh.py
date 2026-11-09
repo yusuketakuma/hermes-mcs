@@ -303,6 +303,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
     """Advance a bounded scan before evaluating each patient's current evidence."""
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
+    scan_reads, scan_interrupts = 0, 0
     best, selected = {}, None
     rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
     covered = False
@@ -339,13 +340,18 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                     waiting += 1
                     continue
                 source_keys = list(keys) if keys else None
+                observed = {}
+                scan_reads += 1
                 snapshot, progress, pending = patient_context_refresh_readiness._pending(
-                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=source_keys)
+                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
+                    source_keys=source_keys, observed_out=observed)
                 if patient_context_refresh_state._out_of_scope(snapshot):
                     continue
                 scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
-                scans = patient_context_refresh_sources._current_scans(reader.db, pid, snapshot['sources'],
-                    snapshot['contract'], cfg=cfg)
+                # Same candidate, connection, read transaction, scope,
+                # contract, cfg and estimate: reuse the stored read
+                # _pending just made instead of reading it again.
+                scans = observed["scans"]
                 summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
                     if not context_plan.source_usable(source)
                     or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
@@ -354,6 +360,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                     if summary_keys == source_keys:
                         scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
                     else:
+                        scan_reads += 1
                         summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
                             reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
                         scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
@@ -400,13 +407,20 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete):
                 if _scan_covered(reader.db, seen):
                     covered = True
                     break
-    except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
+    # scan_interrupts counts every early abort (contention, deadline or
+    # read failure) — finite-slice completion keeps it at 0.
+    except patient_context_refresh_sources._ScanInterrupted:
+        scan_interrupts += 1
+        best, selected, covered = {}, None, False
+    except (sqlite3.Error, OSError):
+        scan_interrupts += 1
         best, selected, covered = {}, None, False
     except ValueError as exc:
         if exc.args != ('patient_scan_bookmark_invalid',) and exc.args != ('patient_scan_source_invalid',):
             raise
+        scan_interrupts += 1
         best, selected, covered = {}, None, False
-    return best, selected, rotation, scanned, waiting, covered
+    return best, selected, rotation, scanned, waiting, covered, scan_reads, scan_interrupts
 
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
@@ -442,9 +456,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     started = patient_context_refresh_state.time.monotonic()
-    best, pid, scan_rotation, scanned, waiting, covered = _select_patient(
+    best, pid, scan_rotation, scanned, waiting, covered, scan_reads, scan_interrupts = _select_patient(
         ledger, cfg, now, deadline, admit, complete)
-    stats = {"scanned": scanned, "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
+    stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
+             "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
+             "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
     if scan_rotation is None:
         return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
     rotation = scan_rotation[0]
