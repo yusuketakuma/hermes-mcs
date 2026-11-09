@@ -3,6 +3,7 @@ import pytest
 
 import extract_llm
 import extract_llm_prepare
+import cloud_inference
 import patient_context_refresh_state as state
 from anthropic_context_testkit import cloud, drain, runtime, step
 from test_patient_context_refresh import seed
@@ -15,7 +16,9 @@ def test_cloud_reads_full_original_after_local_checkpoint(runtime, cloud, monkey
     ledger, _, local_calls = runtime
     body = "完全合成の居住記録。" * 170 + "\n\n" + "完全合成の通院記録。" * 170
     seed(ledger, body=body)
+    configured = cloud_inference.resolve_cloud_settings({})
     with monkeypatch.context() as patch:
+        patch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {**configured, "mode": "off"})
         patch.setattr(extract_llm, "_cloud_mode", lambda *args: "off")
         patch.setattr(extract_llm_prepare, "_cloud_mode", extract_llm._cloud_mode)
         if finish_local:

@@ -759,7 +759,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     def infer(fn, *, unit_key, mid=None, saved=None):
         nonlocal provider, shadow_call, estimated_unit, generation_uncertain, generation_contacted
         # A cloud attempt starts from the original; a checked local fallback keeps its own cursor.
-        use_cloud = mode == "on"
+        use_cloud = (mode == "on" and not (saved
+            and saved.get("_source_meta", {}).get("local_fallback") is True))
         local_saved = dict(saved) if saved and not saved.get("_provider_contract") else None
         if use_cloud:
             provider = cloud_for(unit_key, mid)
@@ -828,6 +829,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             raise patient_context_refresh_state.Deferred("nightly_local_capacity")
         def guard_local(prompt):
             guard_local_input(unit_key, mid, prompt)
+            local_route()
         reset = bool(saved and saved.get("_provider_contract"))
         value = fn(None, reset, local_guard=guard_local)
         local_route()

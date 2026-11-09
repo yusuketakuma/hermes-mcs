@@ -341,3 +341,27 @@ def test_cloud_source_receipt_pointer_is_strict_and_legacy_lookup_is_verified(ru
     assert len(posts) == sent
     if damage != 'missing':
         assert not local_calls and not ledger.artifacts(state.KIND)
+
+
+
+def test_verified_partial_local_fallback_keeps_its_cursor_when_cloud_returns(runtime, real_cloud, monkeypatch):
+    import patient_context_plan as plan
+    ledger, _, local_calls = runtime
+    cfg, _ = real_cloud
+    monkeypatch.setattr(plan, 'SCAN_CHUNK', 80)
+    monkeypatch.setattr(cloud_policy, 'budget_block_reason', lambda *args, **kwargs: 'daily_budget')
+    seed(ledger, body=''.join(f'本人は合成施設{index}で生活しています。' for index in range(8)))
+    assert step(runtime, cfg=cfg)['status'] == 'progressed'
+    first = ledger.artifacts(state.SCAN)[-1]
+    assert json.loads(first['meta'])['local_fallback'] is True
+    assert not json.loads(first['content'])['complete']
+    original = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts WHERE kind=?', (state.CHUNK,))]
+    monkeypatch.setattr(cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
+    monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit',
+                        lambda *args, **kwargs: pytest.fail('partial local fallback restarted cloud inference'))
+    assert step(runtime, cfg=cfg)['status'] == 'progressed'
+    assert len(local_calls) == 2
+    assert local_calls[1]['source_identity']['span'][0] == local_calls[0]['source_identity']['span'][1]
+    assert not ledger.artifacts('cloud_usage_reserve')
+    for row in original:
+        assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone()) == row
