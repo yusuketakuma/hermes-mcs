@@ -560,6 +560,12 @@ def _iso_date(d) -> bool:
 
 def cmd_run(args) -> int:
     cases, corpus_sha256 = _load_corpus(args.cases)
+    chunk_size = getattr(args, "chunk_size", None)
+    if chunk_size is not None:
+        import extract_llm
+        if type(chunk_size) is not int or not 1 <= chunk_size <= extract_llm._CHUNK_SIZE:
+            print("extract_chunk_size_invalid", file=sys.stderr)
+            return 2
     if args.mock_ok:
         results = [{"id": c["id"],
                     "validate_ok": _section_valid(c.get("expect", {}))
@@ -598,9 +604,11 @@ def cmd_run(args) -> int:
         print("synthetic_corpus_required", file=sys.stderr)
         return 2
     import extract_llm
+    import clinical_chunking
+    from extract_llm_admission import _llm_call_stats
     mode = getattr(args, "patient_state", "off")
     target = extract_llm._resolved_llm()
-    scores = []
+    scores, metas = [], []
     t0 = time.time()
     durations = []
     for c in cases:
@@ -611,7 +619,9 @@ def cmd_run(args) -> int:
             out = extract_llm.llm_extract(
                 c["body"], meta_out=meta, context=context,
                 **({"references": references} if references else {}),
-                posted_at=c.get("posted_at"))
+                posted_at=c.get("posted_at"),
+                **({"chunk_size": chunk_size} if chunk_size is not None else {}))
+        metas.append(meta)
         elapsed = time.monotonic() - started
         durations.append(elapsed)
         if out is extract_llm._DEFERRED:
@@ -624,7 +634,8 @@ def cmd_run(args) -> int:
         scores[-1]["performance"] = {
             "elapsed_s": elapsed, "calls": meta.get("calls"),
             "repairs": meta.get("repairs", 0),
-            "usage": meta.get("usage"), "timings": meta.get("timings")}
+            "usage": meta.get("usage"), "timings": meta.get("timings"),
+            "call_stats": _llm_call_stats([meta]), "actual_chunk_size": meta.get("chunk_size")}
 
         print(f"  {c['id']}: "
               + ("FAIL" if scores[-1].get("error") else "ok"))
@@ -636,6 +647,9 @@ def cmd_run(args) -> int:
               "model": extract_llm.MODEL,
               "actual_model": target[1],
               "patient_state_mode": mode,
+              "chunk_plan_version": clinical_chunking.PLAN_VERSION,
+              "requested_chunk_size": extract_llm._CHUNK_SIZE if chunk_size is None else chunk_size,
+              "call_stats": _llm_call_stats(metas),
               # head + the thread-context rules (reply cases measure
               # wording that lives only in _CTX_HEAD)
               "prompt_sha256": hashlib.sha256(
@@ -701,6 +715,8 @@ def main() -> int:
     r.add_argument("--cases", default=DEFAULT_CASES)
     r.add_argument("--tag", default="run")
     r.add_argument("--out", help="result JSON (required unless --mock-ok)")
+    r.add_argument("--chunk-size", type=int,
+                   help="evaluation-only chunk ceiling; production settings stay unchanged")
     r.add_argument("--mock-ok", action="store_true",
                    help="offline: only check expectations pass _validate")
     r.add_argument("--patient-state", choices=("off", "on"), default="off",

@@ -296,9 +296,11 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
                         lambda: extract_bench._load_cases(str(cases)))
     seen = {}
     def fake(body, **kwargs):
-        kwargs['meta_out'].update(calls=2, repairs=1, usage={'total_tokens': 12})
+        kwargs['meta_out'].update(calls=2, repairs=1, first_calls=1, repair_calls=1,
+                                  checkpoint_reuses=2, repair_issues={'ev': 2},
+                                  chunk_size=80, usage={'total_tokens': 12})
         seen.update(context=kwargs.get('context'),
-                    posted_at=kwargs.get('posted_at'))
+                    posted_at=kwargs.get('posted_at'), chunk_size=kwargs.get('chunk_size'))
         return {}
     monkeypatch.setattr(extract_llm, 'llm_extract', fake)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
@@ -306,13 +308,13 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
     for tag in ('before', 'after'):
         out = tmp_path / (tag + '.json')
         assert extract_bench.cmd_run(SimpleNamespace(
-            cases=str(cases), out=str(out), tag=tag, mock_ok=False)) == 0
+            cases=str(cases), out=str(out), tag=tag, mock_ok=False, chunk_size=1000)) == 0
         outputs.append(str(out))
     report = json.loads(Path(outputs[0]).read_text())
     # #20 order 2: case context/posted_at reach llm_extract; the run
     # records what produced it (model + prompt head fingerprint)
     assert seen == {'context': '[医師] 合成コンテキスト',
-                    'posted_at': '2026-09-01 10:00'}
+                    'posted_at': '2026-09-01 10:00', 'chunk_size': 1000}
     assert report['model'] == extract_llm.MODEL
     assert report['prompt_sha256'] == hashlib.sha256(
         (extract_llm._PROMPT_HEAD + extract_llm._CTX_HEAD).encode('utf-8')).hexdigest()
@@ -320,6 +322,14 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
     assert report['cases'][0]['performance']['calls'] == 2
     assert report['cases'][0]['performance']['usage']['total_tokens'] == 12
     assert report['performance']['p95_s'] is not None
+    assert report['requested_chunk_size'] == 1000
+    assert report['chunk_plan_version'] == 2
+    assert report['cases'][0]['performance']['actual_chunk_size'] == 80
+    assert report['call_stats']['calls'] == (report['call_stats']['first_calls']
+                                           + report['call_stats']['repair_calls'])
+    assert report['call_stats']['checkpoint_reuses'] == 2
+    assert report['call_stats']['repair_issues']['ev'] == 2
+    assert report['call_stats']['repair_wins'] is None
     assert extract_bench.cmd_report(SimpleNamespace(files=outputs)) == 0
     report['corpus_sha256'] = 'different'
     Path(outputs[0]).write_text(json.dumps(report))
@@ -334,3 +344,14 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
 ])
 def test_benchmark_latency_percentiles(durations, expected):
     assert extract_bench._duration_percentiles(durations) == expected
+
+
+@pytest.mark.parametrize('size', [0, -1, 3001, True, '1000'])
+def test_benchmark_rejects_invalid_chunk_size_without_calling_model(tmp_path, monkeypatch, size):
+    from types import SimpleNamespace
+    import extract_llm
+    cases = tmp_path / 'synthetic.json'
+    cases.write_text('{"cases":[{"id":"synthetic","body":"合成","expect":{}}]}')
+    monkeypatch.setattr(extract_llm, 'llm_extract', lambda *_a, **_k: pytest.fail('model must not run'))
+    assert extract_bench.cmd_run(SimpleNamespace(cases=str(cases), out=None, tag='invalid',
+                                                mock_ok=True, chunk_size=size)) == 2
