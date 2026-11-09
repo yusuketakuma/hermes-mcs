@@ -513,6 +513,8 @@ def test_japanese_help_is_read_only(tmp_path):
     assert result.returncode == 0
     assert '使い方:' in result.stdout
     assert '次の6段階' in result.stdout
+    assert '新規導入の推奨' in result.stdout
+    assert 'MCS 単独接続では使用しません' in result.stdout
     assert 'パスワード・トークンは画面に表示しません' in result.stdout
     assert list(home.iterdir()) == []
     assert _calls(stub_root) == []

@@ -2,13 +2,13 @@
 # MCS の導入に必要なソフトを、次の6段階で準備します。
 #   1. 基本ソフト（Homebrew・Python・Google Chrome など）
 #   2. 実行環境（Hermes 経由、または MCS 単独）
-#   3. Slack／Discord の操作カード用プラグイン
+#   3. Hermes の Slack／Discord 操作カード用プラグイン（MCS 単独では不要）
 #   4. この Mac で動かす AI（llama-server と約5.7 GBのモデル）
 #   5. 定期収集などの常駐サービス
 #   6. 更新に失敗したときの復旧ツールと独立した監視
 #
 # 使い方: ./install.sh [オプション] [HERMES_HOME]
-# HERMES_HOME: Hermes の保存先（省略時 ~/.hermes）
+# HERMES_HOME: Hermes の保存先（指定時は Hermes 接続。省略時 ~/.hermes）
 #
 # 最初は --preflight で準備状況を確認してください。
 #   --preflight, --check-only  変更せずに確認。問題と対処を表示します。
@@ -27,8 +27,9 @@
 #   --no-brew                 基本ソフトの導入を省略（導入済みの場合）。
 #   --no-llm                  ローカル AI の導入を省略。別途 OpenAI 互換
 #                             サーバーを 127.0.0.1:8080 で動かしてください。
-#   --no-plugin               操作カード用プラグインの導入を省略。
-#                             Slack／Discord の操作カードには必要です。
+#   --no-plugin               Hermes の操作カード用プラグインの導入を省略。
+#                             Hermes の Slack／Discord 連携には必要です。
+#                             MCS 単独接続では使用しません。
 #   --no-services             定期収集などの常駐サービスの登録を省略。
 #   --no-recovery             復旧ツールと更新監視の導入を省略。
 #   -h, --help                この説明を表示します。
