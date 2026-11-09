@@ -494,3 +494,22 @@ def test_quality_finishing_past_the_deadline_is_not_complete(tmp_path, monkeypat
     assert out["observation"]["status"] == "partial"
     assert out["current_quality"] == {"available": False,
                                       "reason": "observation_deadline_exceeded"}
+
+
+def test_human_progress_explains_unavailable_eta_without_exposing_unknown_reason(tmp_path, monkeypatch, capsys):
+    path = str(tmp_path / 'synthetic.db')
+    Ledger(path).close()
+    snapshot = semantic_observe.observe(path, cfg=_cfg())
+    assert snapshot['pipeline_progress']['status'] == 'recorded'
+    snapshot['pipeline_progress']['queues']['backfill']['estimate'] = {
+        'status': 'unavailable', 'reason': 'insufficient_samples', 'seconds': None}
+    snapshot['pipeline_progress']['queues']['arrival']['estimate'] = {
+        'status': 'unavailable', 'reason': 'PRIVATE_DIAGNOSTIC_CANARY', 'seconds': None}
+    monkeypatch.setattr(semantic_observe, 'observe', lambda **kw: snapshot)
+    monkeypatch.setattr(semantic_observe.sys, 'argv', ['semantic_observe.py'])
+    assert semantic_observe.main() == 0
+    output = capsys.readouterr()
+    assert '完了件数または観測時間が不足しています' in output.out
+    assert 'insufficient_samples' in output.out
+    assert 'PRIVATE_DIAGNOSTIC_CANARY' not in output.out + output.err
+    assert '理由を確認できません' in output.out

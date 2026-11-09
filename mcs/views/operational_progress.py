@@ -156,6 +156,29 @@ def _metric_bindings(db, metrics, projects, checkpoint):
     return bindings
 
 
+
+_PROGRESS_REASON_LABELS = {
+    'config_not_supplied': '設定が読み込まれていません',
+    'config_invalid': '設定を確認できません',
+    'observation_size_exceeded': '観測範囲の上限に達しました',
+    'processing_disabled': '処理が無効です',
+    'new_arrivals_not_forecast': '新着の追加量は予測しません',
+    'unclassified_jobs': '処理の分類を確認できません',
+    'queue_requires_attention': '失敗・再試行待ち・状態不明の処理があります',
+    'insufficient_samples': '完了件数または観測時間が不足しています',
+    'no_completions': '観測範囲で完了記録がありません',
+    'incomplete_or_legacy_metrics': '欠けた記録や旧形式があり速度を確認できません',
+    'no_recorded_window': '速度を計算する観測記録がありません',
+    'no_matching_generation': '現在の設定・処理世代に一致する記録がありません',
+    'stale_metrics': '観測記録が古くなっています',
+}
+
+
+def progress_reason_label(reason):
+    """Explain a fixed progress reason without echoing arbitrary diagnostic text."""
+    label = _PROGRESS_REASON_LABELS.get(reason) if isinstance(reason, str) else None
+    return f'{label}（{reason}）' if label else '理由を確認できません'
+
 def pipeline_progress(db, cfg, *, now, checkpoint=lambda: None,
                       payload_checkpoint=lambda raw: None):
     """Read within the caller's bounded snapshot; scheduled due is not admission."""

@@ -337,3 +337,19 @@ def test_unhashable_legacy_generation_cannot_verify_completion(led):
     record(led, [metric, {**metric, "job_id": 10**400}])
     rate = snapshot(led)["queues"]["backfill"]["throughput"]
     assert rate["completed"] == 0 and rate["excluded_obsolete_or_out_of_scope"] == 2
+
+
+@pytest.mark.parametrize('reason', [None, 'PRIVATE_DIAGNOSTIC_CANARY', {'secret': 'PRIVATE_DIAGNOSTIC_CANARY'}])
+def test_progress_reason_never_echoes_unknown_data(reason):
+    assert progress.progress_reason_label(reason) == '理由を確認できません'
+
+
+@pytest.mark.parametrize('reason,phrase', [
+    ('insufficient_samples', '完了件数または観測時間'),
+    ('queue_requires_attention', '失敗・再試行待ち・状態不明'),
+    ('no_matching_generation', '現在の設定・処理世代'),
+    ('stale_metrics', '観測記録が古く'),
+])
+def test_progress_reason_keeps_fixed_code_with_plain_explanation(reason, phrase):
+    assert phrase in progress.progress_reason_label(reason)
+    assert reason in progress.progress_reason_label(reason)

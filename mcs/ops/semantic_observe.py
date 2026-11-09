@@ -32,6 +32,7 @@ import _mcs_path  # noqa: F401
 
 from semantic_policy import JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND, SCHED_KIND  # noqa: E402
 
+from operational_progress import progress_reason_label
 from mcs_util import HOME, loads_dict  # noqa: E402 — honours MCS_ROOT
 DB = os.path.join(HOME, "data", "ledger.db")
 
@@ -441,9 +442,9 @@ def main() -> int:
             slot = pipeline["queues"][name]
             rate, estimate = slot["throughput"], slot["estimate"]
             speed = (f"{rate['per_hour']:.1f}件/時（観測{rate['window_s']:.0f}秒）"
-                     if rate["status"] == "recorded" else f"算出不能: {rate['reason']}")
+                     if rate["status"] == "recorded" else f"算出不能: {progress_reason_label(rate['reason'])}")
             eta = (f"{estimate['seconds'] / 3600:.1f}時間（追加なし・条件不変の場合）"
-                   if estimate["status"] == "conditional" else f"算出不能: {estimate['reason']}")
+                   if estimate["status"] == "conditional" else f"算出不能: {progress_reason_label(estimate['reason'])}")
             completed_at = rate["latest_completed_at"]
             completed = (time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(completed_at))
                          if completed_at is not None else "観測範囲では未確認")
@@ -456,7 +457,7 @@ def main() -> int:
                   f"最終完了 {completed} | 最古待機 {waiting} | "
                   f"取得時刻が確認できる待ちの最古 {acquired}（取得時刻不明{slot['acquisition_time_unknown']}件）")
     else:
-        print(f"工程別の進捗: 未確認（{pipeline['reason']}）")
+        print(f"工程別の進捗: 未確認（{progress_reason_label(pipeline['reason'])}）")
     collection = snap["collection_progress"]
     print(f"履歴収集: 記録上の遅延{collection['lagging']}件 / {collection['rooms']}室 "
           f"（理由内訳: {collection['by_reason']}）")
