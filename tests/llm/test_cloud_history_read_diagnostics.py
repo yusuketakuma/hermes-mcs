@@ -108,6 +108,8 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
     expected = {"event": "cloud_history_read_error", "phase": phase, "error_category": kind}
     if kind == "sqlite_error":
         expected["sqlite_primary_code"] = code & 0xff if code is not None else "unknown"
+    if kind == "value_error":
+        expected["error_reason"] = "ValueError"
     assert _events(capsys) == [expected]
 
 
@@ -148,6 +150,28 @@ def test_nonfixed_phase_is_never_logged(capsys, phase):
     assert _events(capsys) == []
 
 
+@pytest.mark.parametrize("detail", [
+    "SyntheticSecret123", "合成の秘密", "synthetic_private_detail",
+    "cloud_future_unknown", ["cloud_result_missing"],
+])
+def test_value_error_reason_is_a_fixed_whitelist(capsys, detail):
+    cloud_inference._history_read_error("recover_response", ValueError(detail))
+    assert _events(capsys) == [{"event": "cloud_history_read_error",
+                               "phase": "recover_response", "error_category": "value_error",
+                               "error_reason": "ValueError"}]
+
+
+def test_value_error_subclass_is_not_formatted(capsys):
+    class PrivateError(ValueError):
+        def __str__(self):
+            pytest.fail("private exception formatted")
+
+    cloud_inference._history_read_error("recover_response", PrivateError("cloud_result_missing"))
+    assert _events(capsys) == [{"event": "cloud_history_read_error",
+                               "phase": "recover_response", "error_category": "value_error",
+                               "error_reason": "ValueError"}]
+
+
 @pytest.mark.parametrize("phase", _READS)
 def test_log_failure_does_not_replace_safe_refusal_or_mutate_paid_history(paid, monkeypatch, capsys, phase):
     path, _cfg, calls, locks, _state, unit, _restart = paid
@@ -185,5 +209,8 @@ def test_paid_answer_proof_failure_remains_recoverable_without_resend(
         recovered = _ask(unit(ledger))
         assert recovered.pop("reused_response") is True and recovered == original
         assert _history(ledger) == before and len(calls) == sent and len(locks) == slots
-    assert _events(capsys) == [{"event": "cloud_history_read_error", "phase": "recover_response",
-                               "error_category": category}]
+    expected = {"event": "cloud_history_read_error", "phase": "recover_response",
+                "error_category": category}
+    if error_class is ValueError:
+        expected["error_reason"] = "ValueError"
+    assert _events(capsys) == [expected]

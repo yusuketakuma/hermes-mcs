@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "支払済み回答の回復失敗を検証済み根拠の固定語彙で区別",
+  "summary": "支払済みクラウド回答の復元読み取りが失敗したとき、結果行がない予約を「結果未確認(cloud_result_missing)」、破棄証跡がある予約を「破棄済み(cloud_result_discarded)」、確定しない結果を「未確定(cloud_result_unsettled)」として障害調査ログへ記録します。送り直しや採用の条件は変わりません。",
+  "upgrade": "追加操作は不要です。障害調査ログのcloud_history_read_errorへ、value_error時だけerror_reasonが追加されます。固定語彙以外の文字列は出力されません。",
+  "details": [
+    "復元処理が既に行う照合で証明できる理由だけを理由語へ写す。重複した結果や整合しない証跡は従来どおり曖昧な受領証(cloud_receipt_invalid)として拒否する。",
+    "確認済みの送信拒否の再試行許可、保存回答の再利用、証跡の一意性・整合性の検証は変更しない。",
+    "回答本文の検証失敗(cloud_answer_invalid)と形状の曖昧さ(cloud_answer_unresolved)の拒否は従来どおり。",
+    "会計のsettled確認、照合鍵、人承認、課金保持、再送拒否の条件は変更しない。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_inference.py"
+  ]
+}

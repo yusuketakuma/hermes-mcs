@@ -1301,12 +1301,29 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             reservation = _receipt_meta(row['meta'])
             maximum = _reserve_valid(reservation, row)
             results = _matching_bound_rows(ledger, KINDS[1], reservation['reservation_id'])
+            dispositions = _matching_bound_rows(ledger, 'cloud_usage_disposition',
+                                                reservation['reservation_id'])
+            # Reasons surfaced below are proven by checks recover_response
+            # already performs; a bare ValueError from the shared settlement
+            # proof stays an ambiguous receipt, never permission to resend.
+            if not results:
+                raise ValueError('cloud_result_discarded' if dispositions
+                                 else 'cloud_result_missing')
             matches = [(_receipt_meta(r['meta']), r) for r in results]
-            _, settled = _settled(reservation, maximum, matches)
+            try:
+                _, settled = _settled(reservation, maximum, matches)
+            except ValueError:
+                raise ValueError('cloud_receipt_invalid') from None
             if (len(matches) == 1 and not matches[0][0].get('disposition')
                     and _confirmed_rejection(matches[0][0], settled, reservation['model'])
-                    and not _matching_bound_rows(ledger, 'cloud_usage_disposition', reservation['reservation_id'])):
+                    and not dispositions):
                 continue
+            if dispositions:
+                raise ValueError('cloud_result_discarded')
+            result_meta = matches[0][0]
+            if (not settled or result_meta.get('http_class') != 'http_200'
+                    or result_meta.get('error_kind') or result_meta.get('disposition')):
+                raise ValueError('cloud_result_unsettled')
             evidence = reservation_evidence(ledger.db, row['artifact_id'])
             raw = ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=? "
                                    "THEN content END FROM artifacts WHERE artifact_id=?",

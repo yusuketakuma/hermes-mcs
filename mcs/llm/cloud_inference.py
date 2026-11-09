@@ -21,6 +21,10 @@ import writer_lock
 from mcs_util import HOME, load_config
 
 COMMIT_MARGIN = 5
+_HISTORY_ERROR_REASONS = frozenset({
+    "cloud_result_missing", "cloud_result_discarded", "cloud_result_unsettled",
+    "cloud_receipt_invalid", "cloud_answer_invalid", "cloud_answer_unresolved",
+})
 
 
 def _history_read_error(phase, error):
@@ -32,6 +36,10 @@ def _history_read_error(phase, error):
             (TypeError, "type_error"), (KeyError, "key_error"),
             (cloud_client.CloudError, "cloud_error")) if isinstance(error, cls)), "read_error")
         values = {"phase": phase, "error_category": category}
+        if isinstance(error, ValueError):
+            reason = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
+            values["error_reason"] = (reason if type(reason) is str
+                                      and reason in _HISTORY_ERROR_REASONS else "ValueError")
         if isinstance(error, sqlite3.Error):
             code = cloud_backlog._exception_observation(error).get("sqlite_errorcode")
             values["sqlite_primary_code"] = code & 0xff if type(code) is int else "unknown"
