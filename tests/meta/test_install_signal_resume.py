@@ -24,12 +24,21 @@ while True:
     time.sleep(0.05)
 ''')
     else:
-        uv = stub / "bin/uv"
-        original = uv.read_text()
-        uv.write_text(original.replace('echo "uv $*"', '''
-touch "$STUB_STATE/signal-ready"
-while [ ! -f "$STUB_STATE/signal-release" ]; do /bin/sleep 0.05; done
-echo "uv $*"''', 1))
+        runner = stub / "install-options-runner.py"
+        original = runner.read_text()
+        marker = "raise SystemExit(install_options.main(sys.argv[index + 1:]))"
+        assert original.count(marker) == 1
+        runner.write_text(original.replace(marker, """
+action = sys.argv[index + 1]
+result = install_options.main(sys.argv[index + 1:])
+ready = Path(os.environ['STUB_STATE'], 'signal-ready')
+if action == 'bootstrap-fresh' and result == 0 and not ready.exists():
+    import time
+    ready.touch()
+    while True:
+        time.sleep(0.05)
+raise SystemExit(result)
+"""))
     process = subprocess.Popen(
         ["sh", str(INSTALL), "--no-llm", "--no-recovery", str(hermes_home)],
         env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -42,6 +51,9 @@ echo "uv $*"''', 1))
         config = home / ".mcs/config.json"
         before = config.read_bytes() if config.exists() else None
         assert (before is not None) == (boundary == "after_config")
+        if boundary == "after_config":
+            assert (home / ".mcs/data/.provider-bootstrap-complete.json").is_file()
+            assert not (home / ".mcs/data/.provider-bootstrap-fresh.json").exists()
         os.killpg(process.pid, sig)
         process.wait(timeout=5)
     finally:
