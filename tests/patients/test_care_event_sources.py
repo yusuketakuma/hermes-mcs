@@ -150,6 +150,8 @@ def _canonical_care_fixture(tmp_path, monkeypatch, *, audit_status="PASS", tampe
     def llm(prompt):
         if "要約器" in prompt:
             return st._summary_from_facts(prompt)
+        import semantic_transport
+        semantic_transport._record_inference("local")
         return _json.dumps({"facts": [fact],
                             "category_presence": dict(st.NO_FACTS, care_event="one")},
                            ensure_ascii=False)
@@ -220,6 +222,94 @@ def test_canonical_care_event_damaged_proof_never_falls_back(tmp_path, monkeypat
         before = db.db.total_changes
         result = care_event_sources.collect(db.db, 1, cfg=cfg)
         assert result["events"] == [] and result["coverage"]["canonical_unconfirmed"] == 1
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def _tamper_canonical_artifact(db, kind, *, meta_update=None, meta_remove=None,
+                               content=None, content_set=None):
+    """Damage every stored artifact of ``kind`` in place.
+
+    ``kind="canonical"`` damages both projection-carrying kinds, since the
+    reader selects whichever row ``current_fact_pred`` prefers.
+    """
+    kinds = care_event_sources._CANONICAL_KINDS if kind == "canonical" else (kind,)
+    rows = [row for k in kinds for row in db.db.execute(
+        "SELECT artifact_id,meta,content FROM artifacts WHERE kind=?", (k,)).fetchall()]
+    assert rows, kind
+    for row in rows:
+        meta = json.loads(row["meta"] or "{}")
+        if meta_update:
+            meta.update(meta_update)
+        for key in meta_remove or ():
+            meta.pop(key, None)
+        new_content = content if content is not None else row["content"]
+        if content_set is not None:
+            doc = json.loads(row["content"])
+            target = doc
+            for key in content_set[0][:-1]:
+                target = target[key]
+            target[content_set[0][-1]] = content_set[1]
+            new_content = json.dumps(doc, ensure_ascii=False)
+        with db.db:
+            db.db.execute("UPDATE artifacts SET meta=?,content=? WHERE artifact_id=?",
+                          (json.dumps(meta, ensure_ascii=False), new_content, row["artifact_id"]))
+
+
+@pytest.mark.parametrize("tamper", [
+    # projection binding: source fingerprint / policy / doc hash
+    ("canonical", {"meta_update": {"source_binding": "wrong"}}),
+    ("canonical", {"meta_update": {"fingerprint": "wrong"}}),
+    ("canonical", {"meta_update": {"policy_fingerprint": "wrong"}}),
+    ("canonical", {"meta_update": {"doc_hash": "wrong"}}),
+    # newest audit verdict binding
+    ("semantic_facts_audit", {"meta_update": {"doc_hash": "wrong"}}),
+    ("semantic_facts_audit", {"content_set": (["evaluated"], False)}),
+    ("semantic_facts_audit", {"content_set": (["status"], "NEEDS_REVIEW")}),
+    # stored facts document and its producer proof
+    ("semantic_facts_v2", {"content": "{"}),
+    ("semantic_facts_v2", {"content_set": (["evidence", 0, "quote"], "x")}),
+    ("semantic_facts_v2", {"meta_remove": ["provider_provenance"]}),
+    ("semantic_facts_v2", {"meta_update": {"provider_provenance": {"version": 1}}}),
+    ("semantic_facts_v2", {"meta_update": {"inference_engine_version": "wrong"}}),
+    # chunk/manifest evidence the rebuild depends on
+    ("semantic_source_manifest", {"content": "{"}),
+    ("semantic_extraction_chunk_v2", {"content": "{"}),
+    # projection payload itself
+    ("canonical", {"content": "{"}),
+    # fake repair claim without a real repair chain
+    ("semantic_facts_v2", {"meta_update": {"repaired": True, "repair_artifact_id": 999999}}),
+])
+def test_each_canonical_evidence_link_damage_never_projects(tmp_path, monkeypatch, tamper):
+    kind, ops = tamper
+    db, _body = _canonical_care_fixture(tmp_path, monkeypatch)
+    try:
+        _tamper_canonical_artifact(db, kind, **ops)
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] == [] and result["coverage"]["canonical_unconfirmed"] == 1
+        assert result["coverage"]["source_complete"] is False
+        assert db.db.in_transaction and db.db.total_changes == before
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_canonical_event_records_obey_per_source_limit(tmp_path, monkeypatch):
+    db, _body = _canonical_care_fixture(tmp_path, monkeypatch)
+    try:
+        cfg = __import__("semantic_testkit")._canonical_cfg()
+        monkeypatch.setattr(care_event_sources, "_PER_SOURCE_LIMIT", 0)
+        db.db.execute("BEGIN")
+        before = db.db.total_changes
+        result = care_event_sources.collect(db.db, 1, cfg=cfg)
+        assert result["events"] == [] and result["coverage"]["oversize"] == 1
+        assert result["coverage"]["canonical_unconfirmed"] == 0
         assert result["coverage"]["source_complete"] is False
         assert db.db.in_transaction and db.db.total_changes == before
         db.db.rollback()

@@ -6,7 +6,7 @@ import extract_llm
 import inference_dependency_loss
 import initial_import_state
 from mcs_queries import FACT_KINDS_SQL, current_fact_pred
-from mcs_util import html_to_text, loads_dict, payload_hash, valid_hash
+from mcs_util import html_to_text, loads_dict, valid_hash
 
 _BODY_LIMIT = 20000
 _HTML_LIMIT = 80000
@@ -66,12 +66,11 @@ _CANONICAL_KINDS = ("canonical_projection", "semantic_facts_v4")
 def _canonical_events(db, message, projection_row, cfg):
     """Project audited canonical care events only under the current source and policy.
 
-    Returns the care_event_timeline.project result, or None when any link of
-    the evidence chain fails. Read-only: no model dispatch, writes or
-    transaction ownership (rebuild_facts_v2_cached contract).
+    Returns the care_event_timeline.project result, "oversize" when the
+    projected record count exceeds the per-source limit, or None when any
+    link of the evidence chain fails. Read-only: no model dispatch, writes
+    or transaction ownership (the shared provenance path's contract).
     """
-    import inference_version
-    import semantic_extraction
     import semantic_facts
     import semantic_policy
     import semantic_projection
@@ -117,39 +116,30 @@ def _canonical_events(db, message, projection_row, cfg):
         start, end = evidence["start"], evidence["end"]
         if not 0 <= start < end <= len(body) or body[start:end] != evidence["quote"]:
             return None
-    # Reproduce the current_artifact selection; the newest matching row is authoritative.
-    canonical_id = None
-    canonical_meta = None
-    for candidate in db.execute("SELECT artifact_id,content,meta,project_id FROM artifacts WHERE kind=? "
-                                "AND message_id=? ORDER BY artifact_id DESC", ("semantic_facts_v2", mid)):
-        candidate_meta = loads_dict(candidate["meta"]) or {}
-        if (not inference_version.is_current(candidate_meta) or candidate_meta.get("invalidated")
-                or candidate_meta.get("fingerprint") != meta.get("fingerprint")):
-            continue
-        if candidate["project_id"] != pid or loads_dict(candidate["content"]) != raw:
-            return None
-        canonical_id, canonical_meta = candidate["artifact_id"], candidate_meta
-        break
-    if canonical_id is None or canonical_meta is None:
+    content = loads_dict(projection_row["content"])
+    items = content.get("event_records") if isinstance(content, dict) else None
+    if isinstance(items, list) and len(items) > _PER_SOURCE_LIMIT:
+        return "oversize"
+    # Producer and audit evidence come from the shared provenance path:
+    # verified provider chain or a replayed QC repair, bound Jev audit.
+    # rebuild_facts_v2_cached alone also accepts provider-absent legacy
+    # documents, so doc-identity alone is not proof of verified producers.
+    provenance = semantic_publication._projection_provenance(
+        db, pid, mid, meta.get("fingerprint"), meta.get("policy_fingerprint"),
+        member, raw, content)
+    if not isinstance(provenance, dict) or provenance.get("complete") is not True \
+            or provenance.get("jev") != "done":
         return None
-    # The stored document must re-assemble identically from cached chunks with
-    # verified producers; a mismatch means the audit PASS does not cover it.
-    rebuilt, rebuild_error = semantic_extraction.rebuild_facts_v2_cached(
-        member, db, meta.get("fingerprint"), pid, raw, canonical_meta)
-    if rebuild_error is not None or rebuilt is None \
-            or payload_hash(rebuilt) != payload_hash(raw):
-        return None
-    return care_event_timeline.project(pid, message, projection_row["artifact_id"],
-                                       loads_dict(projection_row["content"]))
+    return care_event_timeline.project(pid, message, projection_row["artifact_id"], content)
 
 
 def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_EVENTS):
     """Return references and coverage without writing or borrowing another snapshot.
 
-    Only a completed, current source-bound local extraction is eligible. Any
-    canonical artifact is conservatively held until its independent policy and
-    evidence contract can be proved; a legacy extraction never replaces it.
-    The returned records contain neither source bodies nor quotes.
+    A completed, current source-bound local extraction is eligible, and so
+    is a canonical artifact whose independent policy and evidence contract
+    can be proved end to end; a legacy extraction never replaces canonical
+    evidence. The returned records contain neither source bodies nor quotes.
     """
     if (type(project_id) is not int or project_id <= 0 or type(limit) is not int
             or not 1 <= limit <= _MAX_MESSAGES or type(event_limit) is not int
@@ -275,6 +265,9 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
             continue
         if canonical_present:
             projected = _canonical_events(db, m, artifact, cfg)
+            if projected == "oversize":
+                coverage["oversize"] += 1
+                continue
             if projected is None:
                 coverage["canonical_unconfirmed"] += 1
                 continue

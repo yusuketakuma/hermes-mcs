@@ -89,12 +89,13 @@
 
 ```
 patient_context_view.care_events(db, project_id, cfg)
-  └─ SAVEPOINT care_event_view（読取専用・rollback のみ）
+  └─ SAVEPOINT care_event_view で読取範囲を囲み RELEASE（借用中の外側 TX は確定・巻戻ししない）
       └─ care_event_sources.collect(db, project_id, cfg=cfg)
           ├─ db.in_transaction 必須（借用 snapshot）・SELECT のみ
           ├─ 患者 scope/権限/fetch_state/履歴完全性の確認
           ├─ messages 本文 hash 再照合・本文上限・preflight 上限
-          ├─ canonical/canonical_projection artifact → canonical_unconfirmed（§4 で証明後に解放）
+          ├─ canonical artifact → _canonical_events（§4 の証拠連鎖を全て証明した場合のみ投影）
+          │   └─ _projection_provenance（producer complete・repair replay・Jev done）
           └─ extract_llm artifact → care_event_timeline.project
               ├─ clinical_events.validate_record（span 一意・極性・主体・status）
               ├─ _isolated_assertion → care_detail は全文文脈検証へ置換（§1）
