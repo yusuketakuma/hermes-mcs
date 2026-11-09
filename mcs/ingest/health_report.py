@@ -378,7 +378,15 @@ def backup_health(cfg: dict, now: float) -> dict:
             reasons.append("backup_" + field.removeprefix("last_") + "_unknown")
         elif not 0 <= now - at <= interval:
             reasons.append("backup_" + field.removeprefix("last_") + "_stale")
+    periodic_due = recorded.get("periodic_drill_due")
+    if "periodic_drill_status" in recorded:
+        reason = ("backup_drill_at_stale" if periodic_due is True else
+                  "backup_drill_at_unknown" if periodic_due is None else None)
+        if reason is not None and reason not in reasons:
+            reasons.append(reason)
     return {"state": "degraded" if reasons else "ok", "reasons": reasons,
+            **{key: recorded[key] for key in ("periodic_drill_status", "periodic_drill_due")
+               if key in recorded},
             # backup_failed stays the reason; the known fixed code says why
             "failure_code": recorded["last_failure_code"],
             **{key: recorded[key] for key in (

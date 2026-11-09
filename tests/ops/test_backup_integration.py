@@ -315,3 +315,24 @@ def test_hermes_offsite_registration_and_disable_preserve_shared_jobs(
     assert calls[-1] == ["synthetic-hermes", "cron", "remove", "synthetic-offsite"]
     assert entries[-1]["id"] == "shared"
     assert len(entries) == len(scheduled_jobs.CRON_JOBS) + 1
+
+
+@pytest.mark.parametrize("attempt", [None, {"status": "started"}])
+def test_fresh_manual_drill_does_not_hide_due_or_unverified_periodic_drill(backup_settings, attempt):
+    root, config = backup_settings
+    policy_path = Path(config["backup"]["policy"])
+    policy = json.loads(policy_path.read_text())
+    policy["periodic_drill"] = {"interval_seconds": 60, "max_steps": 100000,
+                                "max_seconds": 30, "max_records": 10, "retain_plaintext": True}
+    policy_path.write_text(json.dumps(policy))
+    state = {"v": 1, "policy_id": "fictional", "last_offsite_at": 100,
+             "last_verify_at": 100, "last_drill_at": 100, "source_last_successful_run": 100}
+    if attempt is not None:
+        state["periodic_drill_attempt"] = attempt
+    state_path = root / "data/backup_state.json"
+    state_path.write_text(json.dumps(state))
+    state_path.chmod(0o600)
+    health = health_report.backup_health(config, 100)
+    assert health["state"] == "degraded"
+    assert health["reasons"] == ["backup_drill_at_stale" if attempt is None else "backup_drill_at_unknown"]
+    assert health["periodic_drill_due"] is (True if attempt is None else None)
