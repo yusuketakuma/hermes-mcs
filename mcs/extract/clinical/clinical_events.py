@@ -48,7 +48,13 @@ _DETAIL_EVENT_WORD = (
     + r'|区分変更|更新|結果|修正|改訂|利用|入所|入居|退所|退去'
     + r'|説明|受け')
 _DETAIL_OBJECT = r'[^\sをがはのにへとで、。，,;；！？!?\n]{2,}[をが]'
+# A verb termination followed by a comma ends the act: 「…を訪問し、開始」
+# makes the start a separate act, so the gap never borrows the predicate
+# across the boundary. A comma after a date or particle (「9月1日、開始」)
+# stays inside the same act.
+_ACT_END = re.compile(r'(?:て|で|し|た|ました|する|します)(?=、)')
 _GAP = (r'(?:(?!' + _DETAIL_EVENT_WORD + r'|' + _DETAIL_OBJECT
+        + r'|(?:て|で|し|た|ました|する|します)(?=、)'
         + r')[^。！？!?\n]){0,20}')
 CARE_DETAIL_CUES = {
     'intervention_start': re.compile(
@@ -103,6 +109,31 @@ CARE_DETAIL_CUES = {
         r'(?:を|の|は)?' + _GAP + r'(?:変更|決定|見直し|撤回)'
         r'|方針(?:を|の|は)?' + _GAP + r'(?:変更|決定|撤回)'),
 }
+
+# For cue patterns that continue past the event noun through a gap into
+# the predicate, the instance head is the leading noun only — the anchor
+# must sit inside it to share the instance (「訪問看護を開始」 anchors a
+# visit record; 「サービスを訪問後、開始」 does not). Types absent here
+# keep the whole cue match as the head (noun-only cues like 会議).
+_DETAIL_HEAD = {
+    'intervention_start': _SERVICE_CUE,
+    'intervention_pause': _SERVICE_CUE,
+    'intervention_resume': _SERVICE_CUE,
+    'intervention_end': _SERVICE_CUE,
+    'service_contract_start': r'契約',
+    'care_plan_change': r'(?:ケアプラン|介護計画|計画|プラン)',
+    'monitoring': r'(?:モニタリング|経過観察|フォローアップ|目標達成'
+                  r'|計画|プラン)',
+    'care_need_certification_change': r'(?:要介護|要支援|介護度|認定|区分)',
+    'facility_entry': r'(?:グループホーム|サ高住|特養|老健|施設|ホーム'
+                      r'|入所|入居)',
+    'facility_exit': r'(?:グループホーム|サ高住|特養|老健|施設|ホーム'
+                     r'|退所|退去)',
+    'care_policy_change': r'(?:(?:療養|治療|ケア|看取り|延命)'
+                          r'(?:の|に関する)?方針|方針)',
+}
+_DETAIL_HEAD = {kind: re.compile(pattern)
+                for kind, pattern in _DETAIL_HEAD.items()}
 
 # Vocabulary co-occurrence alone does not establish the event: a contract
 # start is not a service-provision start, a short stay is not facility
@@ -346,6 +377,8 @@ def _sentence_bounds(text, pos):
 _DETAIL_SPINE = re.compile(
     r'について|に関して|として|における|を|が|は|も|に|へ|と|で'
     r'|の(?=' + _DETAIL_EVENT_NOUN + r')'
+    r'|(?:\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|\d{1,2}/\d{1,2})'
+    r'(?:\([^)]*\)|（[^）]*）)?(?:に|の|から|より|、)?'
     r'|(?:' + _DETAIL_EVENT_NOUN + r')')
 
 
@@ -379,21 +412,41 @@ def _detail_event_target(quote, match, event_type):
         pos = token.end()
 
 
+def _detail_clause_left(quote, pos, floor):
+    """Start of the act clause holding ``pos``.
+
+    The clause begins after the last verb+、 boundary before ``pos``, or
+    at ``floor`` when none exists — attributes inside one act never bind
+    to an event in another.
+    """
+    left = floor
+    for marker in _ACT_END.finditer(quote, floor, pos):
+        left = marker.end() + 1
+    return left
+
+
 def _detail_event_instances(quote, event_type, left, right):
     """Predicate-bound same-type instances in ``quote[left:right]``.
 
-    Each entry is ``(cue_match, target_end)``; callers need the count — one
-    entry per provable event mention. A compound cue absorbed into a wider
-    same-type mention is the same instance, not a second one.
+    Each entry is ``(cue_match, head_end, target_end)`` — the head is the
+    leading event noun region the anchor must share. A compound cue
+    absorbed into a wider same-type mention is the same instance, not a
+    second one.
     """
+    head = _DETAIL_HEAD.get(event_type)
     found = []
     for match in _detail_cue_matches(quote, event_type, left, right):
         target = _detail_event_target(quote, match, event_type)
         if target is None:
             continue
-        if any(match.start() < host[1] for host in found):
+        if any(match.start() < host[2] for host in found):
             continue
-        found.append((match, target))
+        head_end = match.end()
+        if head is not None:
+            leading = head.match(quote, match.start())
+            if leading is not None:
+                head_end = leading.end()
+        found.append((match, head_end, target))
     if event_type == 'acp_discussion' and len(found) > 1:
         # A compound cue (意向を確認, 終末期の話し合い…) is the same mention
         # as a bare ACP/人生会議 anchor only when it sits inside the bare
@@ -405,8 +458,8 @@ def _detail_event_instances(quote, event_type, left, right):
                                  entry[0].group())]
         if bare:
             found = [entry for entry in found if entry in bare or not any(
-                host[0].start() <= entry[0].start() < host[1]
-                or entry[1] == host[1] for host in bare)]
+                host[0].start() <= entry[0].start() < host[2]
+                or entry[2] == host[2] for host in bare)]
     return found
 
 
@@ -535,19 +588,19 @@ def context_clean(body, start, end, *, kind=None, subject=None,
     return True
 
 
-def _attribute_bound(quote, value, event_type, *, actor=False, sentence=None):
-    """True when ``value`` binds to this event type's own predicate.
+def _attribute_bound(quote, value, event_type, *, actor=False, bound=None):
+    """True when ``value`` binds to this event type's own instance.
 
-    The verbatim occurrence must sit in a sentence that carries a care
-    detail cue, and among all detail cues in that sentence the nearest
-    predicate must be this event type's — a date or provider belonging to
-    a neighbouring event cannot be adopted. Two or more instances of the
-    same event type in that sentence make the binding ambiguous, so the
-    attribute is not adopted either. ``actor`` occurrences marked as a
-    transfer/referral source (から/より) describe the predecessor, not
-    the provider, and never bind. ``sentence`` optionally restricts the
-    binding to occurrences inside that ``(left, right)`` span, so every
-    attribute is proven against the one instance the record anchors.
+    Without ``bound`` the occurrence's own act clause — bounded by
+    sentence ends and verb+、 boundaries — must hold exactly one
+    predicate-bound instance of this event type: a date or provider in a
+    different act (「開始し、9月1日に記録」), a neighbouring event, or a
+    clause with two same-type instances is never adopted. With ``bound``
+    the occurrence must sit inside the selected instance's
+    ``(clause_left, target_end)`` span, so every attribute is proven
+    against the one instance the record anchors. ``actor`` occurrences
+    marked as a transfer/referral source (から/より) describe the
+    predecessor, not the provider, and never bind.
     """
     if not isinstance(value, str) or not value.strip():
         return False
@@ -561,17 +614,24 @@ def _attribute_bound(quote, value, event_type, *, actor=False, sentence=None):
             pos = i + 1
             continue
         sent_left, sent_right = _sentence_bounds(quote, i)
-        if sentence is not None and (sent_left, sent_right) != sentence:
-            pos = i + 1
-            continue
-        if len(_detail_event_instances(
-                quote, event_type, sent_left, sent_right)) > 1:
+        if bound is not None:
+            left, right = bound
+        else:
+            left = _detail_clause_left(quote, i, sent_left)
+            marker = _ACT_END.search(quote, i)
+            right = min(marker.end() + 1, sent_right) if marker is not None \
+                else sent_right
+            if len(_detail_event_instances(
+                    quote, event_type, left, right)) != 1:
+                pos = i + 1
+                continue
+        if not (left <= i and end <= right):
             pos = i + 1
             continue
         candidates = []
         for other_type, cue in CARE_DETAIL_CUES.items():
             candidates.extend((other_type, m) for m in cue.finditer(
-                quote, sent_left, sent_right))
+                quote, left, right))
         if candidates:
             distance = min(abs(end - m.end()) for _, m in candidates)
             nearest = [(t, m) for t, m in candidates
@@ -586,33 +646,38 @@ def _attribute_bound(quote, value, event_type, *, actor=False, sentence=None):
 
 
 def _detail_shared_instance(detail, quote, anchor):
-    """True when the detail provably describes the anchor's own instance.
+    """Return the shared cue/target span, or None when binding is unproved.
 
-    The anchor's sentence must hold exactly one predicate-bound instance of
-    the detail's event type, and the anchor itself must sit inside that
-    instance's cue-to-predicate span — a neighbouring same-type mention is
-    a different event, so "訪問し、介護サービスを開始" carries no
-    intervention_start detail on the visit record. Every explicit
-    attribute must bind inside that same sentence — a date or provider
-    that only binds to a different sentence's same-type instance is a
-    crossed pair and does not attach.
+    The anchor's sentence must hold exactly one predicate-bound instance
+    of the detail's event type, and the anchor must be that instance's
+    own cue (kind=other records) or sit inside its head noun — a visit
+    record anchored on 訪問 shares 「訪問看護を開始」 but never
+    「サービスを訪問後、開始」 or a neighbouring act's mention. Every
+    explicit attribute must bind inside the selected instance's own act
+    clause — a date or provider belonging to a different act is a crossed
+    pair and does not attach.
     """
     sent_left, sent_right = _sentence_bounds(quote, anchor.start())
     instances = _detail_event_instances(
         quote, detail['event_type'], sent_left, sent_right)
     if len(instances) != 1:
-        return False
-    cue_match, target_end = instances[0]
-    if anchor.start() >= target_end or cue_match.start() >= anchor.end():
-        return False
+        return None
+    cue_match, head_end, target_end = instances[0]
+    own = (anchor.start() == cue_match.start()
+           and anchor.end() == cue_match.end())
+    inside_head = (cue_match.start() <= anchor.start()
+                   and anchor.end() <= head_end)
+    if not (own or inside_head):
+        return None
+    clause_left = _detail_clause_left(quote, cue_match.start(), sent_left)
     for field, actor in (('date_text', False), ('service_actor', True)):
         value = detail.get(field)
         if not isinstance(value, str) or value in ('', 'unknown'):
             continue
         if not _attribute_bound(quote, value, detail['event_type'],
-                                actor=actor, sentence=(sent_left, sent_right)):
-            return False
-    return True
+                                actor=actor, bound=(clause_left, target_end)):
+            return None
+    return cue_match.start(), target_end
 
 
 def verify_care_detail(detail, quote):
@@ -721,6 +786,7 @@ def validate_record(item, body):
         result['unverified'] = True
         return result
     match = matches[0]
+    shared = _detail_shared_instance(detail, quote, match) if detail is not None else None
     anchor = start + match.start()
     target_end = start + match.end()
     if item['kind'] == 'other' and detail is not None:
@@ -731,6 +797,8 @@ def validate_record(item, body):
             result['unverified'] = True
             return result
         target_end = start + extended
+    if shared is not None:
+        target_end = start + shared[1]
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)
@@ -752,7 +820,7 @@ def validate_record(item, body):
     result.update(subject=actual_subject, status=actual_status, negated=actual_negated)
     if unresolved or actual_subject == 'unknown' or actual_status == 'unknown' or actual_negated is None:
         result['unverified'] = True
-    elif detail is not None and _detail_shared_instance(detail, quote, match):
+    elif shared is not None:
         # The detail claim must share the verified event's own instance:
         # one predicate-bound same-type instance in the anchor's sentence,
         # with every explicit attribute bound inside that same sentence.
@@ -860,10 +928,14 @@ def canonical_record(fact, evidence, *, disputed=False):
     else:
         match = cue.search(quote) if cue is not None else None
     target_end = match.end() if match is not None else None
+    shared = (_detail_shared_instance(detail, quote, match)
+              if detail is not None and match is not None else None)
     if kind == 'other' and detail is not None and match is not None:
         extended = _detail_event_target(quote, match, detail['event_type'])
         if extended is not None:
             target_end = extended
+    if shared is not None:
+        target_end = shared[1]
     # A different cue in the quote cannot establish examination for an
     # arrival-only statement.
     mismatch = kind == 'exam' and bool(re.search(OUTPATIENT_CUE, statement))
@@ -900,8 +972,7 @@ def canonical_record(fact, evidence, *, disputed=False):
             or workflow not in ('performed', 'done', 'reported', 'in_progress',
                                 'planned', 'ordered', 'pending', 'considering', 'on_hold')):
         record['unverified'] = True
-    if detail is not None and 'unverified' not in record and match is not None \
-            and _detail_shared_instance(detail, quote, match):
+    if shared is not None and 'unverified' not in record:
         # The detail claim must share the verified event's own instance,
         # and its workflow axis must not contradict the fact-level workflow.
         record['care_detail'] = _care_detail_workflow(

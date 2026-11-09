@@ -688,13 +688,13 @@ def test_invalid_care_detail_fails_facts_doc_validation(detail):
 
 def test_care_detail_flows_from_extraction_to_projected_record():
     from semantic_projection import project_v2_doc_legacy
-    body = "本人は本日介護サービスを訪問し、開始しました。"
+    body = "本人は本日訪問看護を開始しました。"
     llm = _llm(
-        [{"statement": "本人の訪問看護開始", "kind": "care_event",
+        [{"statement": "本人のサービス開始", "kind": "care_event",
           "subject_role": "patient", "polarity": "affirmed",
           "epistemic": "asserted",
           "workflow_status": "performed", "importance": "T1",
-          "evidence_quote": "本人は本日介護サービスを訪問し、開始しました",
+          "evidence_quote": "本人は本日訪問看護を開始しました",
           "care_detail": {"event_type": "intervention_start",
                           "workflow_status": "performed",
                           "date_text": "本日"}}],
@@ -738,12 +738,12 @@ def test_merge_dupe_facts_care_detail_conflict_orders():
 
 
 def test_repair_merge_does_not_revive_conflicting_care_detail():
-    body = "本人は本日訪問し、サービスを開始しました。個室を希望しています。"
-    item_a = {"statement": "本人の訪問看護開始", "kind": "care_event",
+    body = "本人は本日訪問看護を開始しました。個室を希望しています。"
+    item_a = {"statement": "本人のサービス開始", "kind": "care_event",
               "subject_role": "patient", "polarity": "affirmed",
               "epistemic": "asserted", "workflow_status": "performed",
               "importance": "T1",
-              "evidence_quote": "本人は本日訪問し、サービスを開始しました",
+              "evidence_quote": "本人は本日訪問看護を開始しました",
               "care_detail": {"event_type": "intervention_start",
                               "workflow_status": "performed"}}
     item_p = {"statement": "個室を希望", "kind": "preference",

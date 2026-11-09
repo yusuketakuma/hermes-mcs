@@ -186,12 +186,12 @@ def test_verify_care_detail_binds_fields_to_source():
 
 
 def test_verified_record_keeps_source_bound_care_detail():
-    # The visit anchor sits inside the detail instance's own
-    # cue-to-predicate span — one event carrying two verbs.
-    body = "本人は介護サービスを訪問し、開始しました。"
-    quote = "介護サービスを訪問し、開始しました"
+    # The detail's own cue anchors a shared instance — one event carrying
+    # the service name and the start predicate.
+    body = "本人は訪問看護を開始しました。"
+    quote = "訪問看護を開始しました"
     start = body.index(quote)
-    item = {"kind": "visit", "subject": "patient", "status": "unknown", "negated": None,
+    item = {"kind": "other", "subject": "patient", "status": "unknown", "negated": None,
             "evidence": quote, "span": {"start": start, "end": start + len(quote)},
             "care_detail": {"event_type": "intervention_start",
                             "workflow_status": "performed", "date_text": None,
@@ -245,55 +245,53 @@ def test_care_detail_workflow_conflict_stays_unknown():
     assert record["care_detail"]["workflow_status"] == "unknown"
 
 
-_CROSS_BODY = ("本人は介護サービスAを訪問し、2026年11月9日に開始しました。"
+_CROSS_BODY = ("本人は訪問看護Aを2026年11月9日に開始しました。"
                "2026年12月10日に介護サービスBを開始しました。")
-_CROSS_QUOTE = ("介護サービスAを訪問し、2026年11月9日に開始しました。"
-                "2026年12月10日に介護サービスBを開始しました")
+_CROSS_QUOTE = "訪問看護Aを2026年11月9日に開始しました"
 
 
 def _cross_item(detail):
     start = _CROSS_BODY.index(_CROSS_QUOTE)
-    return {"kind": "visit", "subject": "patient", "status": "unknown",
+    return {"kind": "other", "subject": "patient", "status": "unknown",
             "negated": None, "evidence": _CROSS_QUOTE,
             "span": {"start": start, "end": start + len(_CROSS_QUOTE)},
             "care_detail": detail}
 
 
 def test_care_detail_attributes_must_bind_to_the_anchor_instance():
-    # Each attribute binds independently somewhere in the quote, but a
-    # date from one instance paired with a provider from another is a
-    # crossed pair — the detail describes neither event and is dropped.
+    # Each attribute must bind inside the anchored instance's own act —
+    # a date or provider from a different act or a different instance in
+    # the source body cannot be adopted, so the claim fails verification.
     for detail in (
             {"event_type": "intervention_start", "workflow_status": "performed",
              "date_text": "2026年11月9日", "service_actor": "介護サービスB"},
             {"event_type": "intervention_start", "workflow_status": "performed",
-             "date_text": "2026年12月10日", "service_actor": "介護サービスA"},
-            # Both attributes bound — but only to the second instance,
-            # which is not the event this visit record anchors.
+             "date_text": "2026年12月10日", "service_actor": "訪問看護A"},
             {"event_type": "intervention_start", "workflow_status": "performed",
              "date_text": "2026年12月10日", "service_actor": "介護サービスB"}):
         record = clinical_events.validate_record(_cross_item(detail), _CROSS_BODY)
-        assert not record.get("unverified") and "care_detail" not in record
+        assert record.get("unverified") is True and "care_detail" not in record
     # The pair bound to the anchor's own instance stays attached.
     good = {"event_type": "intervention_start", "workflow_status": "performed",
-            "date_text": "2026年11月9日", "service_actor": "介護サービスA"}
+            "date_text": "2026年11月9日", "service_actor": "訪問看護A"}
     record = clinical_events.validate_record(_cross_item(good), _CROSS_BODY)
     assert not record.get("unverified")
     assert record["care_detail"]["date_text"] == "2026年11月9日"
-    assert record["care_detail"]["service_actor"] == "介護サービスA"
+    assert record["care_detail"]["service_actor"] == "訪問看護A"
 
 
 def test_canonical_record_care_detail_attributes_share_the_anchor_instance():
     # The canonical quote carries its own subject — unlike the local path,
     # no surrounding body is available for axis resolution.
-    quote = ("本人は介護サービスAを訪問し、2026年11月9日に開始しました。"
-             "2026年12月10日に介護サービスBを開始しました")
+    quote = "本人は訪問看護Aを2026年11月9日に開始しました"
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1",
                 "start": 0, "end": len(quote), "quote": quote,
                 "atom_id": "a1"}
 
     def fact(detail):
-        return v2_fact("f1", kind="care_event", statement=quote,
+        # A statement without a legacy cue resolves to kind=other, which
+        # carries the detail's own cue as the record's anchor.
+        return v2_fact("f1", kind="care_event", statement="本人のサービス開始",
                        subject="patient:1", polarity="affirmed",
                        workflow_status="performed", evidence_ids=["e1"],
                        care_detail=detail)
@@ -302,20 +300,21 @@ def test_canonical_record_care_detail_attributes_share_the_anchor_instance():
         {"event_type": "intervention_start", "workflow_status": "performed",
          "date_text": "2026年11月9日", "service_actor": "介護サービスB"}),
         evidence)
-    assert not crossed.get("unverified") and "care_detail" not in crossed
+    assert crossed.get("unverified") is True and "care_detail" not in crossed
     good = clinical_events.canonical_record(fact(
         {"event_type": "intervention_start", "workflow_status": "performed",
-         "date_text": "2026年11月9日", "service_actor": "介護サービスA"}),
+         "date_text": "2026年11月9日", "service_actor": "訪問看護A"}),
         evidence)
     assert not good.get("unverified")
-    assert good["care_detail"]["service_actor"] == "介護サービスA"
+    assert good["care_detail"]["service_actor"] == "訪問看護A"
 
 
 def test_canonical_record_carries_fact_care_detail_when_verified():
-    quote = "本人は介護サービスを訪問し、開始しました"
+    quote = "本人は訪問看護を開始しました"
     evidence = {"evidence_id": "e1", "message_id": "m1", "revision": "r1", "start": 0,
                 "end": len(quote), "quote": quote, "atom_id": "a1"}
-    fact = v2_fact("f1", kind="care_event", statement=quote, subject="patient:1",
+    fact = v2_fact("f1", kind="care_event", statement="本人のサービス開始",
+                   subject="patient:1",
                    polarity="affirmed", workflow_status="performed",
                    evidence_ids=["e1"], care_detail={"event_type": "intervention_start",
                    "workflow_status": "performed", "date_text": None, "service_actor": None})
@@ -363,13 +362,74 @@ def test_neighbouring_same_type_event_carries_no_detail():
     assert not record.get("unverified") and "care_detail" not in record
 
 
+def test_separate_acts_do_not_share_an_instance():
+    # 事業所を訪問し、その後サービスを開始 — the visit and the start are
+    # separate predicates in separate acts, so the visit record carries
+    # no intervention_start detail.
+    body = "本人は介護サービス事業所を訪問し、その後サービスを開始しました。"
+    quote = "介護サービス事業所を訪問し、その後サービスを開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "patient", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "unknown",
+                            "service_actor": "unknown"}}
+    record = clinical_events.validate_record(item, body)
+    assert not record.get("unverified") and "care_detail" not in record
+
+
+def test_predicate_across_a_clause_boundary_is_not_shared():
+    # 「介護サービスを訪問し、開始」 borrows the start predicate across a
+    # verb+、 boundary — that is a different act, so no instance forms and
+    # the verified visit record keeps no detail.
+    body = "本人は介護サービスを訪問し、開始しました。"
+    quote = "介護サービスを訪問し、開始しました"
+    start = body.index(quote)
+    item = {"kind": "visit", "subject": "patient", "status": "unknown",
+            "negated": None, "evidence": quote,
+            "span": {"start": start, "end": start + len(quote)},
+            "care_detail": {"event_type": "intervention_start",
+                            "workflow_status": "performed",
+                            "date_text": "unknown",
+                            "service_actor": "unknown"}}
+    record = clinical_events.validate_record(item, body)
+    assert not record.get("unverified") and "care_detail" not in record
+
+
+def test_detail_date_in_another_act_is_not_adopted():
+    detail = {"event_type": "intervention_start",
+              "date_text": "2026年9月1日"}
+    # The date modifies 記録 — the start's own act carries no date.
+    recorded = "本人は訪問看護を開始し、2026年9月1日に記録しました。"
+    assert clinical_events.verify_care_detail(detail, recorded) is None
+    # The same date inside the event's own act binds, whether it precedes
+    # or follows the service cue.
+    for body in ("本人は訪問看護を2026年9月1日に開始しました。",
+                 "本人は2026年9月1日に訪問看護を開始しました。"):
+        assert clinical_events.verify_care_detail(detail, body) is not None
+
+
+def test_event_date_inside_the_noun_cue_spine_binds():
+    detail = {"event_type": "care_team_conference",
+              "date_text": "2026年9月1日"}
+    for body in ("本人はサービス担当者会議を2026年9月1日に開催しました。",
+                 "本人は2026年9月1日にサービス担当者会議を開催しました。"):
+        assert clinical_events.verify_care_detail(detail, body) is not None
+
+
 def test_independent_acp_mentions_stay_two_instances():
     # A bare ACP cue and a compound mention with its own predicate are
     # independent instances — the bare mention must not absorb the
-    # other's date and neither may claim the shared attribute.
+    # other's date, but the date inside the compound's own act binds to
+    # that instance.
     body = "本人はACPを実施し、終末期の話し合いを11月に行いました。"
+    assert len(clinical_events._detail_event_instances(
+        body, 'acp_discussion', 0, len(body))) == 2
     detail = {"event_type": "acp_discussion", "date_text": "11月"}
-    assert clinical_events.verify_care_detail(detail, body) is None
+    out = clinical_events.verify_care_detail(detail, body)
+    assert out is not None and out["date_text"] == "11月"
     # A bare cue that genuinely explains one mention still merges: the
     # compound sits inside the bare instance's predicate span.
     merged = "本人はACPの意向を11月に確認しました。"
@@ -485,14 +545,21 @@ def test_care_detail_attributes_bind_to_the_nearest_predicate():
 
 
 def test_care_detail_attributes_reject_ambiguous_same_type_instances():
-    # Two instances of the same event type in one sentence leave the
+    # Two instances of the same event type inside one act leave the
     # attribute's instance unprovable — it is not adopted.
-    pair = ("訪問看護Aを11月に開始し、介護保険の更新手続きを行った上で、"
-            "訪問看護Bを12月に開始しました。")
+    pair = "訪問看護Aを11月に開始するとともに訪問看護Bを12月に開始しました。"
     dated = {"event_type": "intervention_start", "date_text": "11月"}
     assert clinical_events.verify_care_detail(dated, pair) is None
     acted = {"event_type": "intervention_start", "service_actor": "訪問看護A"}
     assert clinical_events.verify_care_detail(acted, pair) is None
+    # The same attributes inside one instance's own act still bind — a
+    # same-type instance in a different act does not make them ambiguous.
+    split = ("訪問看護Aを11月に開始し、介護保険の更新手続きを行った上で、"
+             "訪問看護Bを12月に開始しました。")
+    out = clinical_events.verify_care_detail(dated, split)
+    assert out is not None and out["date_text"] == "11月"
+    out = clinical_events.verify_care_detail(acted, split)
+    assert out is not None and out["service_actor"] == "訪問看護A"
     # A single instance still binds, and instances in different sentences
     # stay independent.
     single = "訪問看護Aを11月に開始しました。訪問看護Bを12月に開始しました。"
