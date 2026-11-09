@@ -9,6 +9,7 @@ import cloud_inference
 import cloud_policy
 import extract_llm
 import extract_llm_provider
+import patient_context_refresh_state as state
 from test_context_cloud_update_identity import real_cloud, runtime, cloud
 from test_patient_context_refresh import seed, step
 
@@ -98,3 +99,46 @@ def test_unverified_or_answered_request_cannot_be_substituted_locally(runtime, r
         cloud_inference.guard_context_local(ledger, cfg, json.dumps(posts[0], ensure_ascii=False),
             project_id=1, message_id=1, unit_key='scan:1', owner={})
     assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+
+
+def test_unknown_transport_never_starts_local_replacement(runtime, real_cloud, monkeypatch):
+    ledger, _, local_calls = runtime
+    cfg, _ = real_cloud
+    sent = []
+    def unknown(*args, **kwargs):
+        sent.append(True)
+        raise OSError('synthetic uncertain transport')
+    monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', unknown)
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    for _ in range(4):
+        assert step(runtime, cfg=cfg)['status'] != 'complete'
+    assert sent and not local_calls
+    assert ledger.artifacts('cloud_usage_reserve')
+    assert ledger.artifacts('cloud_usage_result')
+    assert not ledger.artifacts(state.KIND)
+
+
+def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime, real_cloud, monkeypatch):
+    import local_llm
+    ledger, _, _ = runtime
+    cfg, posts = real_cloud
+    monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: 'off')
+    original = local_llm.admitted_chat
+    reservations = []
+    def race(owner, prompt, **kwargs):
+        result = original(owner, prompt, **kwargs)
+        selection, errors = cloud_policy.resolve_profile(cfg, route='patient_context',
+            purpose='patient_context', root=extract_llm.HOME)
+        assert not errors and selection is not None
+        reservation = cloud_policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
+            message_id=1, unit_key='scan:1', owner={}, selection=selection)(
+                anthropic_client.AnthropicClient.body(None, prompt, 1600, None), 120)
+        reservations.append(reservation)
+        return result
+    monkeypatch.setattr(local_llm, 'admitted_chat', race)
+    seed(ledger, body='本人は合成の自宅で生活しています。')
+    result = step(runtime, cfg=cfg)
+    assert reservations and not posts
+    assert result['status'] == 'deferred'
+    assert not ledger.artifacts(state.SCAN) and not ledger.artifacts(state.KIND)
+    assert not ledger.artifacts('cloud_usage_result')

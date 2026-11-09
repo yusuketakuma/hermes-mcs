@@ -142,7 +142,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
     scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
     cloud_scanned = (not snapshot["contract"].get("provider") or all(
         (scans.get(context_plan.source_key(source), {}).get("_provider_contract")
-         or scans.get(context_plan.source_key(source), {}).get("_source_meta", {}).get("local_fallback"))
+         or scans.get(context_plan.source_key(source), {}).get("_source_meta", {}).get("local_fallback") is True)
         for source in sources if context_plan.source_usable(source)))
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "skipped", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
@@ -428,7 +428,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             scans.append(scan)
             # Local audits and summaries may advance while raw cloud inspection remains due.
             required_scans.append({} if cloud_scan and not scan.get("_provider_contract")
-                                  and not scan.get("_source_meta", {}).get("local_fallback") else scan)
+                                  and scan.get("_source_meta", {}).get("local_fallback") is not True else scan)
     recheck_available = False
     quality_required = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     if (not estimate and quality_required
@@ -466,7 +466,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or progress.get("summary_pending", False))
     cloud_summary_needed = (cloud_scan and bool(old.get('facts'))
                             and meta.get("provider") != snapshot["contract"].get("provider")
-                            and not meta.get("local_fallback"))
+                            and meta.get("local_fallback") is not True)
     local_ready = (not quality_required
                    or (source_keys is not None or snapshot["acquisition"]["complete"]) and snapshot["dependencies"]["complete"]
                    and patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]
