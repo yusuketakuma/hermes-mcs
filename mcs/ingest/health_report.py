@@ -2,7 +2,6 @@
 from __future__ import annotations
 import llm_availability
 
-import json
 import os
 import shutil
 import sqlite3
@@ -126,7 +125,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
-              **{key: value[key] for key in (*counts, "paid_recovery_pending", 'failure_cohort') if key in value},
+              **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
               **writer_detail, **failure_detail, **ack_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}

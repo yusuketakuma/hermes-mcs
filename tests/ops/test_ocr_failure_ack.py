@@ -287,6 +287,7 @@ def test_new_failure_realerts_even_inside_old_episode_or_missed_ack(case, observ
     _status(case.data, **observed(case))
     first = health_watch.evaluate(str(case.root), 1000, cfg=CFG)
     assert first['alert']
+    assert first['attachment_ocr']['queue_status'] == 'known'
     operator.apply(case.root, request(case))
     _status(case.data, at=1001, **observed(case))
     if observe_ack:
