@@ -129,18 +129,24 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
               **writer_detail, **failure_detail, **ack_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
-    acknowledged_gap = (value.get('acknowledged_exhausted', 0) > 0
-                        and value.get('unacknowledged_pending_failed') == 0
-                        and value.get('queue_status') == 'known' and reason is None
-                        and not any(value.get(key, 0) for key in ('failed', 'deferred', 'local_deferred'))
-                        and value.get('paid_recovery_pending') is not True)
-    if acknowledged_gap:
+    waiting_reasons = (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred")
+    acknowledged_failures = (value.get('acknowledged_exhausted', 0) > 0
+                             and value.get('unacknowledged_pending_failed') == 0
+                             and value.get('queue_status') == 'known'
+                             and not value.get('failed', 0) and reason in waiting_reasons)
+    if acknowledged_failures:
         if not _ocr_ack_current(data, value):
             return {**detail, 'state': 'unknown', 'reason': 'attachment_ocr_ack_unverified'}
-        return {**detail, 'state': 'failed', 'reason': 'attachment_ocr_acknowledged_gap',
-                'alert_required': False, 'source_coverage': 'unrecovered', 'ack_checked_at': now,
-                'clinical_review': 'not_proven', 'original_file_availability': 'not_rechecked'}
-    if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred"):
+        detail.update(source_coverage='unrecovered', ack_checked_at=now,
+                      clinical_review='not_proven', original_file_availability='not_rechecked')
+        if (reason is None and not value.get('deferred', 0)
+                and not value.get('local_deferred', 0)
+                and value.get('paid_recovery_pending') is not True):
+            return {**detail, 'state': 'failed', 'reason': 'attachment_ocr_acknowledged_gap',
+                    'alert_required': False}
+    if (value.get("failed", 0)
+            or value.get("pending_failed", 0) and not acknowledged_failures
+            or reason not in waiting_reasons):
         return {**detail, "state": "failed", "reason": "attachment_ocr_processing_failed"}
     if value.get("paid_recovery_pending") is True:
         return {**detail, "state": "deferred", "reason": "attachment_ocr_accounting_deferred"}

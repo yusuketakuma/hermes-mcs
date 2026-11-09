@@ -493,3 +493,24 @@ def test_new_failure_during_deferred_work_is_not_hidden_by_old_ack(case):
     assert report["reason"] == "attachment_ocr_processing_failed"
     assert report["unacknowledged_pending_failed"] == 1
     assert report.get("alert_required") is not False
+
+
+def test_deferred_work_rechecks_ack_receipt_before_ignoring_historical_failures(case):
+    receipt = operator.apply(case.root, request(case))
+    _status(case.data, **{**observed(case), "local_deferred": 1})
+    with case.db:
+        case.db.execute("DELETE FROM command_receipts WHERE command_id=?", (receipt["command_id"],))
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report["state"] == "unknown"
+    assert report["reason"] == "attachment_ocr_ack_unverified"
+    assert report.get("alert_required") is not False
+
+
+@pytest.mark.parametrize("active", [{"failed": 1}, {"reason": "local_processing_failed"}])
+def test_active_failure_is_not_hidden_by_current_ack_proof(case, active):
+    operator.apply(case.root, request(case))
+    _status(case.data, **{**observed(case), "local_deferred": 1, **active})
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report["state"] == "failed"
+    assert report["reason"] == "attachment_ocr_processing_failed"
+    assert report.get("alert_required") is not False
