@@ -272,3 +272,24 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 `residual: orphan_delivery_unproven` が記録され、リモート投稿の取消・
 削除・子プロセス停止は行いません。復元後の再照合で同じ保留理由の通知が
 新たに見つかった場合も、この経路で個別に確認・適用します。
+
+
+## OCR警報の運用受付と本文未回収
+
+`output_schema_table_overlap` で自動再試行が3回に達した最新の失敗は、
+対象を明示して運用警報を受付できます。受付はOCRの成功、本文回収、
+臨床職による原本確認を意味しません。元の失敗と欠落の表示は残します。
+
+1. 非公開の診断結果から対象の失敗artifactを確認します。患者名・本文・
+   元ファイル名を操作理由や共有する計画へ記載しないでください。
+2. `python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
+   で計画を作成し、非公開ファイルに保存します。対象は1回最大20件です。
+3. 計画を確認後、`python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`
+   で適用します。必要な場合だけ `--wait-seconds 600` で実行ロックの空きを待てます。
+4. receiptの `ocr_outcome=failed` と `source_coverage=unrecovered` を確認します。
+   `receipt_state=pending` はDB保存済み・receiptファイル出力待ちです。
+   同じUUIDと同じ計画・理由で再実行し、新しい受付として実行しないでください。
+
+原資料や失敗記録が変わると、古い受付記録を新しい失敗へ流用しません。
+受付済みOCR以外の異常・照合不能・未観測部分は警報対象のままです。
+同じ表セルの重複が生じる原因や、未回収本文の取得は、この受付では修復しません。

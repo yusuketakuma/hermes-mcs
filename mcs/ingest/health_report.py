@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 import stat
 import time
-from contextlib import suppress
+from contextlib import closing, suppress
 
 from health_policy import HEALTH_REL, STATUS_MAX_BYTES, freshness_deadline
 from stats_math import finite_number
@@ -27,6 +27,25 @@ DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
 DB_MAINT_STATE_MAX_BYTES = 65536
 
 
+def _ocr_ack_current(data, value):
+    """Recheck receipt/source proof with a bounded read before suppressing one historical cause."""
+    import attachment_ocr_ack
+    from pathlib import Path
+    until = time.monotonic() + 2.0
+    try:
+        with closing(sqlite3.connect((Path(data) / 'ledger.db').resolve().as_uri() + '?mode=ro',
+                                     uri=True, timeout=0.2)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            db.set_progress_handler(lambda: int(time.monotonic() >= until), 1000)
+            db.execute('BEGIN')
+            current = attachment_ocr_ack.failure_counts(db, deadline=until)
+            return (current['queue_status'] == 'known'
+                    and all(current[key] == value.get(key) for key in current))
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, RecursionError):
+        return False
+
+
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
     import attachment_ocr
@@ -43,11 +62,12 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
               "local_done", "local_deferred")
     writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
     failure_fields = ("failure_reason_counts", "exhausted_failed")
+    ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
     try:
         value = json.loads(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields}
+                *failure_fields, *ack_fields}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
@@ -76,6 +96,14 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                     or sum(reasons.values()) > observed_limit
                     or type(exhausted) is not int or not 0 <= exhausted <= observed_limit):
                 raise ValueError("ocr_status_invalid")
+        ack_detail = {key: value[key] for key in ack_fields if key in value}
+        if ack_detail:
+            if (len(ack_detail) != len(ack_fields) or len(failure_detail) != len(failure_fields)
+                    or any(type(count) is not int or count < 0 for count in ack_detail.values())
+                    or ack_detail['acknowledged_exhausted'] > value['exhausted_failed']
+                    or ack_detail['acknowledged_exhausted'] > value['failure_reason_counts'].get('output_schema_table_overlap', 0)
+                    or ack_detail['unacknowledged_pending_failed'] != value['pending_failed'] - ack_detail['acknowledged_exhausted']):
+                raise ValueError('ocr_status_invalid')
         writer_detail = {key: value[key] for key in writer_fields if key in value}
         if writer_detail and (len(writer_detail) != len(writer_fields)
                 or any(type(item) is not str for item in writer_detail.values())
@@ -89,9 +117,20 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
               **{key: value[key] for key in (*counts, "paid_recovery_pending") if key in value},
-              **writer_detail, **failure_detail}
+              **writer_detail, **failure_detail, **ack_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
+    acknowledged_gap = (value.get('acknowledged_exhausted', 0) > 0
+                        and value.get('unacknowledged_pending_failed') == 0
+                        and value.get('queue_status') == 'known' and reason is None
+                        and not any(value.get(key, 0) for key in ('failed', 'deferred', 'local_deferred'))
+                        and value.get('paid_recovery_pending') is not True)
+    if acknowledged_gap:
+        if not _ocr_ack_current(data, value):
+            return {**detail, 'state': 'unknown', 'reason': 'attachment_ocr_ack_unverified'}
+        return {**detail, 'state': 'failed', 'reason': 'attachment_ocr_acknowledged_gap',
+                'alert_required': False, 'source_coverage': 'unrecovered',
+                'clinical_review': 'not_proven', 'original_file_availability': 'not_rechecked'}
     if value.get("failed", 0) or value.get("pending_failed", 0) or reason not in (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred"):
         return {**detail, "state": "failed", "reason": "attachment_ocr_processing_failed"}
     if value.get("paid_recovery_pending") is True:
