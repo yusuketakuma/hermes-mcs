@@ -5,7 +5,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 1.0.25の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定版は依存の既知の問題に対処した版です。配布元からの固定SHAの取得と、実SDKによる合成統合テストを別々に確認しています。実サービスへの接続確認は導入後の診断で行います。本番への反映は更新手順で別途行います。
 
 **初めての方は[日本語の対話形式で進める手順](EASY_SETUP.md)を先にお読みください。** このページは設定の詳細と管理担当者向けの補足です。
-今回の初回受入候補であるmacOS・Apple silicon・Slackのstandaloneは、[独立実行ガイド](STANDALONE.md)から進みます。下記Path Aの最短手順はHermes連携用です。installerの既定値と既存の導入方式は変更しません。
+今回の初回受入候補であるmacOS・Apple silicon・Slackのstandaloneは、[独立実行ガイド](STANDALONE.md)から進みます。下記Path Aの最短手順はHermes連携用です。新規導入の推奨・既定はstandaloneです。既存の導入方式は変更しません。
 
 このガイドは現行のinstall/update/setup/doctorと復旧手順に対応します。1.0.25で日本語の対話入口を追加しました。各版の受入状態は版別の受入票で確認してください。
 1.0.25の受入結果は[1.0.25のリリース受入票](../releases/v1.0.25/ACCEPTANCE_1.0.25.md)、1.0.26の受入と公開前の残件は[1.0.26のリリース受入票](../releases/v1.0.26/ACCEPTANCE_1.0.26.md)、版ごとの記録一覧は[リリース記録](../releases/README.md)にあります。過去版の検証記録は[1.0.21のリリース受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)、実機受入の進め方は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)を参照してください。
