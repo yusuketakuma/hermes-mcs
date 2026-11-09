@@ -590,7 +590,7 @@ def main(argv: list[str] | None = None, *,
         print(json.dumps(result, sort_keys=True))
         return 0
     except backup_evidence.BackupError as exc:
-        print(json.dumps({"error": str(exc)}))
+        print(json.dumps({"error": backup_evidence.failure_code(exc)}))
     except (OSError, ValueError, TypeError, sqlite3.Error, RecursionError):
         print(json.dumps({"error": "backup_io_or_policy_failed"}))
     return 1

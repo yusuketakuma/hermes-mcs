@@ -889,7 +889,9 @@ def test_unknown_failure_text_is_never_recorded_as_a_code(world, tmp_path, monke
     monkeypatch.setattr(backup, "offsite", boom)
     assert backup.main(["offsite", *args, "--keychain", "--snapshot", str(world[0])],
                        keychain_reader=lambda: KEY) == 1
-    capsys.readouterr()
+    output = capsys.readouterr()
+    assert "PRIVATE_PATH_CANARY" not in output.out + output.err
+    assert json.loads(output.out)["error"] == "backup_io_or_policy_failed"
     status, state = _failure(tmp_path, world)
     assert status["last_failure_code"] == "backup_io_or_policy_failed"
     assert "PRIVATE_PATH_CANARY" not in json.dumps(state)
