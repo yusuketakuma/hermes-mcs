@@ -1,4 +1,6 @@
 """Attachment notes preserve OCR, clinical processing and unknown states."""
+import sqlite3
+
 import pytest
 
 import notify_views
@@ -25,8 +27,11 @@ def test_attachment_notes_follow_coverage(monkeypatch, attachments, expected):
     monkeypatch.setattr(patient_context_view, 'evidence', lambda *a, **kw: ev)
     monkeypatch.setattr(patient_context_view, 'timeline', lambda *a, **kw: {'items': []})
     monkeypatch.setattr(__import__('patient_context_view'), 'document_timelines', lambda *a, **kw: ({'documents': [], 'events': [], 'coverage': {}}, {'events': [], 'coverage': {}}))
+    monkeypatch.setattr(patient_context_view, 'care_events',
+                        lambda *a, **kw: {'items': [], 'intervention_states': {'items': []},
+                                          'coverage': {'source_complete': True}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
-    view = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=0, now=0)
+    view = notify_views.patient_context_list(sqlite3.connect(":memory:"), 1, 'timeline', cfg={}, since=0, now=0)
     assert f'添付 1件（{expected}）' in view['notes']
     assert all('内容は未解析' not in note for note in view['notes'])
