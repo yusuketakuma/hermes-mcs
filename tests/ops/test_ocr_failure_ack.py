@@ -459,3 +459,37 @@ def test_ack_stops_old_unsent_alert_and_preserves_unknown_delivery(case, outcome
     else:
         assert final['unknown_deliveries'][-1]['outcome'] == 'unknown'
         assert final.get('delivery', {}).get('outcome') != 'pending'
+
+
+@pytest.mark.parametrize("waiting,expected", [
+    ({"local_deferred": 1}, "attachment_ocr_local_inference_deferred"),
+    ({"deferred": 1}, "attachment_ocr_processing_deferred"),
+    ({"reason": "busy"}, "attachment_ocr_processing_deferred"),
+    ({"reason": "memory_deferred"}, "attachment_ocr_memory_deferred"),
+    ({"paid_recovery_pending": True}, "attachment_ocr_accounting_deferred"),
+])
+def test_acknowledged_failure_is_not_realerted_as_a_failure_during_new_work(case, waiting, expected):
+    operator.apply(case.root, request(case))
+    _status(case.data, **{**observed(case), **waiting})
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report["state"] == "deferred" and report["reason"] == expected
+    assert report["source_coverage"] == "unrecovered"
+    assert report["pending_failed"] == report["acknowledged_exhausted"] == 1
+    assert report["unacknowledged_pending_failed"] == 0
+    assert report["clinical_review"] == "not_proven"
+    _health(case.root, overall="degraded", reasons=["attachment_ocr_processing_failed"])
+    watched = health_watch.evaluate(str(case.root), 1000, cfg=CFG)
+    assert "attachment_ocr_processing_failed" not in watched["state_reasons"]
+    assert expected in watched["state_reasons"]
+
+
+def test_new_failure_during_deferred_work_is_not_hidden_by_old_ack(case):
+    operator.apply(case.root, request(case))
+    case.ledger.artifact_add(ocr.KIND, json.dumps(case.doc), project_id=1, message_id=1,
+                            meta={"attachment_id": 1})
+    _status(case.data, **{**observed(case), "local_deferred": 1})
+    report = health_report.attachment_ocr_health(str(case.data), CFG, 1000)
+    assert report["state"] == "failed"
+    assert report["reason"] == "attachment_ocr_processing_failed"
+    assert report["unacknowledged_pending_failed"] == 1
+    assert report.get("alert_required") is not False
