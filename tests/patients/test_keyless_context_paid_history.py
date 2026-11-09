@@ -40,7 +40,7 @@ def test_missing_key_never_replaces_a_paid_context_with_missing_result(runtime, 
         "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")] == before
 
 
-@pytest.mark.parametrize('status', [401, 403, 402, 429, 500, 503])
+@pytest.mark.parametrize('status', [401, 403, 402, 404, 429, 500, 503, 529])
 def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, real_cloud, monkeypatch, status):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud

@@ -7,6 +7,8 @@ import hashlib
 from itertools import chain
 import json
 import math
+
+from llm_retry import http_error
 import re
 import sqlite3
 import time
@@ -750,10 +752,10 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             result = matches[0][0]
             if result.get('disposition'):
                 raise ValueError('discarded')
-            if (local_fallback and result.get('http_class') in {
-                    'http_400', 'http_401', 'http_402', 'http_403', 'http_408', 'http_429',
-                    'http_500', 'http_502', 'http_503', 'http_504'}
-                    and isinstance(result.get('error_kind'), str) and result['error_kind']
+            http_class = result.get('http_class')
+            if (local_fallback and isinstance(http_class, str)
+                    and re.fullmatch(r'http_[45][0-9]{2}', http_class)
+                    and result.get('error_kind') == http_error(int(http_class[5:]))[0]
                     and result.get('usage') is None):
                 continue  # The failed HTTP result stays charged; this grants no new cloud send.
             if _confirmed_rejection(result, settled, previous['model']):
