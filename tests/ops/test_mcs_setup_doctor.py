@@ -133,14 +133,17 @@ def test_explicit_llm_probe_is_bounded_and_other_scopes_stay_unchecked(
                for _, method, body, timeout in calls)
 
 
-def test_failed_probe_is_warning_and_never_echoes_response(local_config, monkeypatch, capsys):
+@pytest.mark.parametrize("output", ["text", "json", "share"])
+def test_failed_probe_is_warning_and_never_echoes_response(local_config, monkeypatch, capsys, output):
     raw = b'{"synthetic-secret":"synthetic-body-and-id"}'
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: (500, {}, raw))
-    assert mcs_setup.main(["doctor", "--probe", "llm", "--json"]) == 0
-    out = capsys.readouterr().out
-    assert json.loads(out)["checks"]["llm"]["status"] == "warning"
-    assert "synthetic-secret" not in out
-    assert "synthetic-body-and-id" not in out
+    args = ["doctor", "--probe", "llm"] + ([] if output == "text" else ["--" + output])
+    assert mcs_setup.main(args) == 0
+    captured = capsys.readouterr()
+    if output != "text":
+        assert json.loads(captured.out)["checks"]["llm"]["status"] == "warning"
+    assert "synthetic-secret" not in captured.out + captured.err
+    assert "synthetic-body-and-id" not in captured.out + captured.err
 
 
 def test_undersized_llm_slots_block(local_config, monkeypatch, capsys):
@@ -159,16 +162,19 @@ def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys
     assert check == {"status": "not_checked", "errors": 0, "warnings": 1}
 
 
-def test_service_probe_excludes_arbitrary_diagnostic_text(local_config, monkeypatch, capsys):
+@pytest.mark.parametrize("output", ["text", "json", "share"])
+def test_service_probe_excludes_arbitrary_diagnostic_text(local_config, monkeypatch, capsys, output):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
                         git_reads_or(lambda *a, **k: SimpleNamespace(returncode=0)))
     monkeypatch.setattr(service_management, 'check_runtime',
                         lambda cfg, **_service_kwargs: (["synthetic-secret/body/123456"], []))
-    assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 1
-    out = capsys.readouterr().out
-    assert json.loads(out)["checks"]["services"]["status"] == "blocked"
-    assert "synthetic-secret/body/123456" not in out
+    args = ["doctor", "--probe", "services"] + ([] if output == "text" else ["--" + output])
+    assert mcs_setup.main(args) == 1
+    captured = capsys.readouterr()
+    if output != "text":
+        assert json.loads(captured.out)["checks"]["services"]["status"] == "blocked"
+    assert "synthetic-secret/body/123456" not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("version,safe", [
