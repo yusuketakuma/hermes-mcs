@@ -387,7 +387,11 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
                   and part["part_id"] == "file_group" and part["state"] == "not_sent"
                   and part["error_code"] == _DEPENDENCY_ERROR
                   and part["attempt_id"] == f"p:{delivery_id.replace('-', '')}:file_group")
-    if part["kind"] == "card" or (part["state"] != "unknown" and not dependency) or not part["attempt_id"]:
+    pending_group = (render["transport"] == "slack" and part["kind"] == "file_group"
+                     and part["part_id"] == "file_group" and part["state"] == "pending"
+                     and part["attempt_id"] is None)
+    if part["kind"] == "card" or (part["state"] != "unknown" and not dependency and not pending_group) \
+            or (not part["attempt_id"] and not pending_group):
         return {"error": "part_not_resolvable"}
     if render["transport"] == "discord" and part["kind"] == "attachment_part":
         try:
@@ -405,7 +409,8 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
             return card_part_resolve_plan(db, delivery_id, group["part_id"], include_related=include_related)
     plan = {"version": 1, "cmd": "ops.card_part_resolve", **stored_scope(render),
             "transport": render["transport"],
-            "delivery_id": delivery_id, "part_id": part_id, "attempt_id": part["attempt_id"],
+            "delivery_id": delivery_id, "part_id": part_id,
+            "attempt_id": part["attempt_id"] or f"p:{delivery_id.replace('-', '')}:{part_id}",
             "manifest_sha256": render["payload_hash"], "payload_sha256": part["payload_sha256"],
             "expected_state": part["state"]}
     if include_related:
@@ -735,7 +740,7 @@ def validate_card_part_resolve(req) -> str | None:
             return "bad_" + key
     if any(not valid_hash(req.get(key)) for key in ("manifest_sha256", "payload_sha256")):
         return "bad_hash"
-    if req.get("expected_state") not in ("unknown", "not_sent") or req.get("result") not in _RESOLVE_RESULTS:
+    if req.get("expected_state") not in ("unknown", "not_sent", "pending") or req.get("result") not in _RESOLVE_RESULTS:
         return "bad_resolution"
     evidence = req.get("evidence")
     if not isinstance(evidence, dict) or evidence.keys() - {"method", "ref", "worker_stopped", "proof", "duplicate_risk_accepted", "files"}:
@@ -752,6 +757,11 @@ def validate_card_part_resolve(req) -> str | None:
         if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
                 or evidence.get("proof") != _DEPENDENCY_PROOF or "remote_id" in req or "related_plans" in req):
             return "bad_dependency_resolution"
+        return None
+    if req["expected_state"] == "pending":
+        if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
+                or evidence.get("proof") != "no_journal_started" or "remote_id" in req or "related_plans" in req):
+            return "bad_pending_resolution"
         return None
     if "related_plans" in req:
         if (transport != "slack" or req["result"] != "mark_not_sent"

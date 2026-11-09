@@ -1,0 +1,10 @@
+{
+  "category": "added",
+  "title": "試行記録がない保留中のファイル共有を承認付きで復旧可能に",
+  "summary": "配送が途中で止まりfile_groupがpendingのまま試行記録を持たない場合、journalがそのpartを開始していないことを証明し、人の承認があれば未送信として確定できます。滞留していたカードの更新が再開し、後続の通知でファイルを再利用できます。",
+  "upgrade": "復旧操作を行う場合は従来どおり人の承認とworker停止の証拠が必要です。journalが失われた・圧縮済みで開始の有無を照合できないものは復旧できません。",
+  "details": [
+    "card_part_resolveがstate=pending・attempt未発行のSlack file_groupを、no_journal_startedの証明がある場合に限りmark_not_sentで解決できる。全添付の配送結果とカード・スレッド・ファイルID集合の照合は従来どおり必須。"
+  ],
+  "refs": ["mcs/notify/notify_recovery.py"]
+}
