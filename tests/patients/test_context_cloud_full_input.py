@@ -13,7 +13,7 @@ __all__ = ["cloud", "runtime"]
 
 @pytest.mark.parametrize("finish_local", [False, True])
 def test_cloud_reads_full_original_after_local_checkpoint(runtime, cloud, monkeypatch, finish_local):
-    ledger, _, local_calls = runtime
+    ledger, clock, local_calls = runtime
     body = "完全合成の居住記録。" * 170 + "\n\n" + "完全合成の通院記録。" * 170
     seed(ledger, body=body)
     configured = cloud_inference.resolve_cloud_settings({})
@@ -25,6 +25,9 @@ def test_cloud_reads_full_original_after_local_checkpoint(runtime, cloud, monkey
             drain(runtime)
         else:
             assert step(runtime)["status"] == "progressed"
+    # Explicit off -> on changes the overview input; keep its three-hour interval.
+    if finish_local:
+        clock.wall += 3 * 3600 + 1
     assert local_calls and not cloud[0]
     originals = [tuple(row) for row in ledger.db.execute(
         "SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id", (state.CHUNK,))]
