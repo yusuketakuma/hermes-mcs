@@ -1,4 +1,4 @@
-# 介護・医療介入イベントの記録契約（1.0.27）
+# 介護・医療介入イベントの記録契約
 
 職種×事業所×判明したサービス単位の開始・中断・再開・終了などの記録を、原文と参加者情報へ結び、患者コンテキストの全体像・経過タイムライン・訪問前ノートから辿れるようにする。公開推論エンジン 1.0 は維持する。新しい状態 DB・所属マスタ・外部検索・依存・queue/cache・既定課金は作らず、既存 record と read projection を再利用する。
 
@@ -13,7 +13,7 @@
 | `date_text` | 原文の日付表現をそのまま保持。正規化・補完しない |
 | `service_actor` | 明示された提供者・実施者の原文候補。名簿 ID・hash・verified は LLM が出さない。結合はコード側が行う（§3） |
 
-`verify_care_detail` は `clinical_events` の既存検証経路へ集約する。原文 span の一意照合に加え、本人/否定/予定/条件/引用/訂正/伝聞/対象サービスまで確認する。旧 `_isolated_assertion`（単一文・全体が安全な場合だけ許可）は削除して全件許可せず、新 detail は全文文脈検証済みの複数文だけ受理する。detail 競合は request 詳細と同様に保持し、同 fact ID の first/last wins・3 件目で復活は禁止。
+`verify_care_detail` は `clinical_events` の既存検証経路へ集約する。原文 span の一意照合に加え、本人/否定/予定/条件/引用/訂正/伝聞/対象サービスまで確認する。旧 `_isolated_assertion`（単一文・全体が安全な場合だけ許可）は削除して全件許可せず、新 detail は単文・複数文とも全文文脈を検証した場合だけ受理する。複数文では訂正・否定・主体の前後文脈を省略しない。detail 競合は request 詳細と同様に保持し、同 fact ID の first/last wins・3 件目で復活は禁止。
 
 ## 2. event_type 17 種と語彙対応表
 
@@ -23,14 +23,14 @@
 |---|---|---|---|
 | `intervention_start` | 継続的なサービス・支援の開始 | 「契約開始」「単発の訪問実施」「予定」と区別。開始の肯定・実施済み記述のみ | S1, S2, S6 |
 | `intervention_pause` | 支援の中断（一時休止） | 単発訪問の中止・キャンセルと区別。LIFE の「利用中断」に相当。30 日等の加算提出条件は状態遷移へ転用しない | S6, S7 問14 |
-| `intervention_resume` | 中断後の再開 | 中断の存在と再開の肯定を別々に確認。中断なしの「再開」表現は採用しない | S6, S7 問14 |
+| `intervention_resume` | 中断後の再開 | 本人・対象サービスが明示された実施済み「再開」の肯定は、中断記録が未取得・不在でもイベントとして保持する。再開の根拠と中断履歴・現在継続状態の証明は分離し、未知履歴から現在継続や過去の中断日時を補完しない。予定・否定・第三者の再開は区別 | S6, S7 問14 |
 | `intervention_end` | 支援の終了 | 「終了したときの理由分類」（軽快/施設等/医療機関/死亡/その他）は理由であり「入院なら全支援終了」の含意ではない。契約終了・会議・入所・死亡から自動生成しない | S3, S6 |
 | `service_contract_start` | サービス契約の開始（契約手続） | 説明・同意・契約成立とサービス提供開始は別イベント。チャット記録を法的有効性の確定として扱わない。S7 問24 は提供開始前の説明同意の根拠に限定し「契約開始そのもの」の根拠を過大に担わせない | S7 問24, S10 |
-| `pre_discharge_conference` | 退院前カンファレンス・退院前会議 | 「退院」と「退院前の会議」を区別。会議の開催記録であり退院実施ではない | S1 第4表 |
+| `pre_discharge_conference` | 退院前カンファレンス・退院前会議 | 「退院」と「退院前の会議」を区別。会議・情報共有の開催記録であり、退院実施や退院時共同指導の実施と自動同一視しない。S11 は語彙・場面の根拠に限定し、2024 年の算定値・条件を現行判断へ移植しない | S1 第4表, S11 |
 | `discharge_joint_guidance` | 退院時共同指導 | 退院時共同指導と初回訪問を区別。指導の実施記録 | S2 |
-| `care_team_conference` | サービス担当者会議 | S1 第4表の構成（日時/所属・職種/検討/結論/残課題）を参考。「担当者会議」一般も同型だが、開催記録と介入状態を混同しない | S1 第4表 |
-| `care_plan_change` | ケアプラン・計画の変更 | 計画変更と時系列・情報源の記録。変更の決定と実施を区別 | S1 |
-| `monitoring` | モニタリング（計画の評価・見直し） | S1 第5表。目標評価・調整の記録。算定要件の充足を断定しない | S1 第5表 |
+| `care_team_conference` | サービス担当者会議 | S1 第4表「サービス担当者会議の要点」の構成（日時/所属・職種/検討/結論/残課題）を参考。「担当者会議」一般も同型だが、開催記録と介入状態を混同しない | S1 第4表 |
+| `care_plan_change` | ケアプラン・計画の変更 | S1 第5表「居宅介護支援経過」の計画変更記録。変更の決定と実施を区別 | S1 第5表 |
+| `monitoring` | モニタリング（計画の評価・見直し） | S1 第5表「居宅介護支援経過」に含まれるモニタリング・目標達成・調整の記録。第5表自体を「モニタリング」とは呼ばない。算定要件の充足を断定しない | S1 第5表 |
 | `care_need_certification_change` | 介護度・要介護認定の変更・区分変更 | 認定/区分欄の記録。申請中・更新予定と認定結果を区別 | S1 認定/区分欄 |
 | `respite` | レスパイト（介護者の休息目的の短期利用） | 死亡・全支援終了ではない。医療型/生活介護型を同一視しない。期間限定の入所で長期入所と区別 | S4, S5 |
 | `facility_entry` | 施設への入所（長期含む） | 医療機関への入院（legacy `admission`）と介護施設への入所を区別。短期入所（`respite`）と区別 | S4 |
@@ -49,7 +49,7 @@
 
 ### 一次資料一覧（2026-11-09 TinyFish 確認済み）
 
-- S1 居宅サービス計画書標準様式・記載要領 https://www.mhlw.go.jp/content/000764680.pdf：第4表=サービス担当者会議、第5表=モニタリング、目標評価、計画変更と時系列・情報源、認定/区分欄
+- S1 居宅サービス計画書標準様式・記載要領 https://www.mhlw.go.jp/content/000764680.pdf：第4表=サービス担当者会議の要点、第5表=居宅介護支援経過（モニタリング・目標達成・調整・計画変更と時系列・情報源を含む）、認定/区分欄
 - S2 2026 訪問看護留意事項 https://www.mhlw.go.jp/content/12400000/001686845.pdf：利用開始、退院時共同指導と初回訪問の区別、複数事業所の連携
 - S3 2026 訪問看護請求記載要領 https://www.mhlw.go.jp/content/12400000/001754612.pdf：訪問終了の状況（軽快/施設等/医療機関/死亡/その他）と死亡年月日等を別記
 - S4 短期入所生活介護 https://www.kaigokensaku.mhlw.go.jp/publish/group12.html / 短期入所療養介護 https://www.kaigokensaku.mhlw.go.jp/publish/group13.html：期間限定の入所、医療/生活介護の区別
@@ -59,6 +59,7 @@
 - S8 ACP 決定プロセス解説 https://www.mhlw.go.jp/file/06-Seisakujouhou-10800000-Iseikyoku/0000197722.pdf：本人/家族/多職種の話合い、意向の変化、都度の記録共有
 - S9 居宅療養管理指導概況 https://www.mhlw.go.jp/content/12300000/001123921.pdf：医師/歯科医師/薬剤師/栄養/歯科衛生等、職種とサービスの区別
 - S10 介護予防サービス解釈通知（2026-03-13 改正） https://www.mhlw.go.jp/content/001673837.pdf：説明/同意/契約成立とサービス提供の区別
+- S11 令和6年度診療報酬改定の概要【同時改定】 https://www.mhlw.go.jp/content/12400000/001252073.pdf：退院前カンファレンス・退院前カンファレンスにおける情報共有の語彙と場面。2024 年の算定値・条件は現行判断へ移植しない
 
 ## 3. 参加者と発言の結合
 
@@ -101,13 +102,24 @@ patient_context_view.care_events(db, project_id, cfg)
       └─ quote は検証済み span からのみ再構成（本文を返さない）
 ```
 
-canonical 側の読取証拠（§4）は次のとおり。
+canonical 側の既存読取関数の実際の呼出関係と責務は次のとおり。
 
 ```
-semantic_publication.reproject_doc / _projection_provenance
-  └─ semantic_extraction.rebuild_facts_v2_cached（no model/preflight dispatch・writes・TX ownership）
-      └─ _member_bundle（保存 doc hash・audit PASS・投影一致の確認）
+semantic_publication.reproject_doc(db, mid, meta)
+  └─ current_artifact(semantic_facts_v2) で保存 doc を選択
+      ├─ doc_hash 一致・coverage complete・published_quantity_findings
+      └─ fact_audit_verdict(semantic_facts_audit) == PASS を確認して doc を返す
+         （rebuild_facts_v2_cached も _member_bundle も呼ばない）
+
+semantic_publication._projection_provenance(..., v2_doc, content)
+  └─ 条件成立時のみ semantic_extraction.rebuild_facts_v2_cached(member, ...)
+      （model/preflight dispatch・writes・TX ownership なし。member は引数で受ける）
+
+semantic_store.thread_bundle + fingerprint + 対象 member 照合（_member_bundle 相当）
+  └─ スレッド束縛と member 同定だけを行う。doc hash・audit PASS の検証関数ではない
 ```
+
+新しい reader は上記の既存関数をこの責務どおりに組み合わせる計画であり、新しい resolver は作らない。`care_team_as_of` の名簿取得は本段階では未接続であり、§3 の設計上の拡張点に留まる。
 
 `get_project_metadata` は「Reads ledger or snapshot only」で attempt/complete artifact を SELECT のみで読む。`care_team_as_of` 拡張も同じ SELECT 経路に留める。
 
