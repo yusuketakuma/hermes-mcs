@@ -1,13 +1,18 @@
 {
   "category": "fixed",
   "title": "復元後に送信結果が不明なまま残る run_failed 通知を、証拠を保持したまま取り下げられるよう修正",
-  "summary": "復元・整合処理のあと送信できたか不明なまま残る『収集処理の失敗』通知（run_failed）が、復元マーカー中の自動送信対象から外れ、整合処理で送信結果不明（restore_text_unverified）として保留されるようになりました。保留中は自動送信されず、人が確認して notification_cancel の plan --action retire_operational_alert → apply の2段階操作で通知だけを suppressed にできます。取り下げても送信履歴・試行回数・payload・証拠はすべて残り、結果は『unknown』のまま記録されます。",
+  "summary": "復元・整合処理のあと送信できたか不明なまま残る『収集処理の失敗』通知（run_failed）が、復元マーカー中の自動送信対象から外れ、整合処理で送信結果不明（restore_text_unverified）として保留されるようになりました。保留中は自動送信されず、人の確認による取り下げ操作で通知だけを suppressed にできます。取り下げても送信履歴・試行回数・payload・証拠はすべて残り、結果は『unknown』のまま記録されます。",
   "upgrade": "追加操作は不要です。古い run_failed 通知が残っている場合は notification_cancel の plan --action retire_operational_alert で計画を作り、apply --plan で適用できます。対象はテキスト経路・プロジェクト未指定・失敗状態かつ再送予定なし・送信結果不明の保留理由を持ち、カード配送の記録（intent batch・card・render・delivery attempt）が一切無い通知だけです。",
   "details": [
     "復元マーカー中に自動送信されるシステム通知から run_failed を外しました（update_notice・session_recovered などは従来どおり送信されます）。",
-    "復元前に作られた run_failed は整合処理で restore_text_unverified として保留され、自動では送信されません。マーカー中に作られた分は解除後に通常どおり送信できます。",
+    "復元前に作られた run_failed は整合処理で restore_text_unverified として保留され、自動では送信されません。復元時点（restored_at）が確認でき、その時点より後に作られた通知は通常の送信条件で処理されます。復元時点が不明な場合は作成時刻に関わらず保留側へ倒します。",
     "retire_operational_alert は outbox 行を suppressed にするだけで、payload・progress（sending/sent/fingerprint/hold_reason）・attempts・accepted_ref を含む全証拠を byte 単位で保持します。削除ではありません。",
     "取り下げの receipt には delivery_outcome: unknown と orphan_delivery_unproven が残り、送信されたかどうかは不明のまま記録されます。リモート投稿の取消や子プロセスの停止は行いません。遅れて届く配送の可能性は receipt の residual に明記されます。"
   ],
-  "refs": ["mcs/notify/notify_sender.py", "mcs/notify/notify_flush.py", "mcs/notify/notify_reconcile.py", "mcs/ops/notification_cancel.py"]
+  "refs": [
+    "mcs/notify/notify_sender.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_reconcile.py",
+    "mcs/ops/notification_cancel.py"
+  ]
 }
