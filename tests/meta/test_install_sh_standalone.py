@@ -417,4 +417,9 @@ def test_empty_bootstrap_keeps_legacy_runtime_in_plan_and_noninteractive_install
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '接続方法: hermes' in result.stdout
-    assert {path: path.read_bytes() for path in before} == before
+    if mode:
+        assert {path: path.read_bytes() for path in before} == before
+    else:
+        assert json.loads(config.read_text()).get('runtime_mode', 'hermes') == 'hermes'
+        assert {path: path.read_bytes() for path in before if path != config} == {
+            path: raw for path, raw in before.items() if path != config}
