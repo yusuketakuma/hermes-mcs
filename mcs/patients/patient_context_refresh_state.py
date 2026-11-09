@@ -236,7 +236,8 @@ def _contract(cfg, pid=None):
     if pid is not None:
         settings = cloud_inference.resolve_cloud_settings(cfg)
         if (settings["mode"] == "on"
-                and cloud_policy.eligible(settings, "patient_context", pid)):
+                and cloud_policy.eligible(settings, "patient_context", pid)
+                and cloud_policy.selected_key(extract_llm.HOME, cfg)):
             contract["provider"] = cloud_inference.cloud_provider_contract(cfg, route="patient_context", purpose="patient_context")
     return contract
 
