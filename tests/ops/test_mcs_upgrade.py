@@ -86,7 +86,7 @@ def test_reconciliation_launcher_runs_verified_target_helper_without_fetch(
 def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_path, monkeypatch, capfd):
     repo, bare = _make_repo(tmp_path)
     files = ('mcs/_mcs_path.py', 'mcs/core/safe_io.py', 'mcs/core/mcs_util.py',
-             'mcs/core/provider_settings.py',
+             'mcs/core/error_codes.py', 'mcs/core/provider_settings.py',
              'mcs/core/install_options_contract.py', 'mcs/ops/setup/config_edit.py',
              'mcs/ops/install_options.py', 'mcs/ops/update/settings_migration_receipt.py',
              'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update/update_journal.py',
