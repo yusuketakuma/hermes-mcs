@@ -114,19 +114,33 @@ def _check_monotonic(before, after):
     spent/outcomesはexact recordのappend-only: 同operation_id(+attempt_key)の
     既存recordは全値一致を要求し、削除・フィールド改変・重複keyを拒否する。
     """
+    # spent/outcomesはexact recordのappend-onlyかつkey一意:
+    # 同operation_id/attempt_keyの既存recordは全値一致を要求し、
+    # 削除・フィールド改変・key再利用・同op別attempt/同attempt別opを拒否する。
+    spent_ops, spent_keys = set(), set()
+    for s in after['spent']:
+        _check(s['operation_id'] not in spent_ops and s['attempt_key'] not in spent_keys,
+               'SPENT_REGRESSION')
+        spent_ops.add(s['operation_id'])
+        spent_keys.add(s['attempt_key'])
     for old in before['spent']:
         match = [n for n in after['spent']
                  if n['operation_id'] == old['operation_id'] and n['attempt_key'] == old['attempt_key']]
         _check(len(match) == 1 and match[0] == old, 'SPENT_REGRESSION')
+    outcome_ops = set()
+    for o in after['outcomes']:
+        _check(o['operation_id'] not in outcome_ops, 'OUTCOME_REGRESSION')
+        outcome_ops.add(o['operation_id'])
     for old in before['outcomes']:
         _check(any(n == old for n in after['outcomes']), 'OUTCOME_REGRESSION')
-    seen = set()
+    # bindingsはcode_seq→release_idの一意写像(02_DEVICE_PROTOCOL §3/SEM29):
+    # 旧seqのrelease_id固定・同seq別ID/重複pair拒否・新seq追加のみ許可。
+    seq_map = {}
     for b in after['bindings']:
-        key = (b['code_seq'], b['release_id'])
-        _check(key not in seen, 'BINDINGS_REGRESSION')
-        seen.add(key)
+        _check(b['code_seq'] not in seq_map, 'BINDINGS_REGRESSION')
+        seq_map[b['code_seq']] = b['release_id']
     for old in before['bindings']:
-        _check((old['code_seq'], old['release_id']) in seen, 'BINDINGS_REGRESSION')
+        _check(seq_map.get(old['code_seq']) == old['release_id'], 'BINDINGS_REGRESSION')
     for name in _HIGH_WATER:
         _check(_ref_not_regressed(before[name], after[name]), 'HIGH_WATER_REGRESSION')
         # 同code_seq+release_idのrefは全値一致のみ許可(artifact/commit差替えを拒否)
@@ -152,6 +166,10 @@ def save(store, value):
         changed = {k for k in set(current) | set(value) if current.get(k) != value.get(k)}
         changed -= {'revision', 'execution_revision'}
         _check(not (changed & set(_IMMUTABLE_KEYS)), 'IMMUTABLE_FIELD')
+        # VERIFIEDはfinalize_verifiedのatomic確定経路のみ。save()経由の新規VERIFIED
+        # outcome追加は原子的確定(outbox/baseline/active終結)を伴わないため拒否。
+        _check(all(o['state'] != 'VERIFIED' or o in current['outcomes']
+                   for o in value['outcomes']), 'VERIFIED_REQUIRES_FINALIZE')
         outbox_delta = _check_monotonic(current, value)
         safety = bool(changed & set(_SAFETY_KEYS)) or outbox_delta == 'append'
         if safety:
@@ -217,12 +235,13 @@ def record_spent(store, record):
 
 
 def record_terminal(store, record):
-    """TerminalRecordをoutcomesへ耐久化する。operation_id一意・安全項目としてexecution_revision前進。"""
+    """非VERIFIEDのTerminalRecordをoutcomesへ耐久化する。VERIFIEDはfinalize_verifiedの
+    atomic確定経路のみが記録し、ここでは拒否する(原子的確定の証明を分離)。"""
     try:
         checked = contract.parse_document(_dumps(record), 'TerminalRecord', max_bytes=MAX_OWNER_BYTES)
     except contract.ContractError:
         raise OwnerStateError('INVALID') from None
-    _check(checked['state'] in TERMINAL_STATES, 'INVALID')
+    _check(checked['state'] in TERMINAL_STATES and checked['state'] != 'VERIFIED', 'INVALID')
     with store.release_owner_lock():
         value = load(store)
         _check(all(o['operation_id'] != checked['operation_id'] for o in value['outcomes']), 'TERMINAL_DUPLICATE')
@@ -242,10 +261,15 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
 
     - terminalはTerminalRecord VERIFIEDで、active.op/attemptと一致必須
     - spentの同op/attempt記録(grant証拠)が存在必須
-    - outcome_rawはOutcome契約で、ID一致・sha256==terminal.outcome_sha256
-    - 同一terminalが既にoutcomesへあれば現stateをそのまま返す(再送・巻戻しなし)
+    - outcome_rawはOutcome契約でstate=verified/readiness=ready、scope・
+      operation/attempt/grant/runtime_generation/rollout/targetを
+      active・SPENTの独立記録へ束縛し、sha256==terminal.outcome_sha256
+    - 同一terminalが既にoutcomesへあれば、outbox/baseline/verified_installedが
+      整合する場合のみ現stateをそのまま返す(再送・巻戻しなし)
     - expected_execution_revision不一致はstaleとして拒否
     - outbox未ACK・pause/同意撤回/旧grant期限は観測的終端を阻害しない
+    - source_manifest_sha256は呼出し側(M6等)が認証済みtarget観測から供給する。
+      本関数はその真正性を再検証しないため、認証caller接続まではpartial。
     """
     try:
         term = contract.parse_document(_dumps(terminal), 'TerminalRecord', max_bytes=MAX_OWNER_BYTES)
@@ -256,7 +280,10 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
         outcome = contract.parse_typed(outcome_raw.encode('utf-8'), 'Outcome')
     except (contract.ContractError, UnicodeEncodeError, AttributeError):
         raise OwnerStateError('INVALID') from None
-    _check(outcome['operation_id'] == term['operation_id'], 'OUTCOME_MISMATCH')
+    _check(outcome['operation_id'] == term['operation_id']
+           and outcome['attempt_key'] == term['attempt_key']
+           and outcome['state'] == 'verified' and outcome['readiness'] == 'ready',
+          'OUTCOME_MISMATCH')
     outcome_sha = hashlib.sha256(outcome_raw.encode('utf-8')).hexdigest()
     _check(outcome_sha == term['outcome_sha256'], 'OUTCOME_HASH')
     entry = {'report_id': outcome['report_id'], 'operation_id': outcome['operation_id'],
@@ -269,23 +296,56 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
         current = load(store)
         prior = next((o for o in current['outcomes'] if o['operation_id'] == term['operation_id']), None)
         if prior is not None:
-            # exact finalize再送: 現在state(Cが進んだ後を含む)をそのまま返し巻き戻さない
+            # exact finalize再送: durable記録がatomic確定と整合する場合のみ
+            # 現在state(Cが進んだ後を含む)をそのまま返し巻き戻さない
             _check(prior == term, 'TERMINAL_CONFLICT')
+            durable = (
+                current['installed_source_manifest_sha256'] == source_manifest_sha256
+                and current['verified_source_manifest_sha256'] == source_manifest_sha256
+                and outcome['verified_installed'] == current['verified_installed']
+                and any(e['report_id'] == entry['report_id']
+                        and e['operation_id'] == entry['operation_id']
+                        and e['raw'] == entry['raw'] and e['sha256'] == entry['sha256']
+                        for e in current['outbox']))
+            _check(durable, 'TERMINAL_INCONSISTENT')
             return current
         _check(current['execution_revision'] == expected_execution_revision, 'STALE_EXECUTION')
         active = current['active']
         _check(active is not None and active['operation_id'] == term['operation_id']
                and active['attempt_key'] == term['attempt_key'], 'ACTIVE_MISMATCH')
-        _check(any(s['operation_id'] == term['operation_id'] and s['attempt_key'] == term['attempt_key']
-                   for s in current['spent']), 'SPENT_MISSING')
-        _check(outcome['target'] == active['target'], 'OUTCOME_MISMATCH')
+        spent = next((s for s in current['spent']
+                      if s['operation_id'] == term['operation_id']
+                      and s['attempt_key'] == term['attempt_key']), None)
+        _check(spent is not None, 'SPENT_MISSING')
+        # Outcomeをactive/SPENTの独立記録へ相関束縛する。
+        # runtime_generationは更新後の新しいruntime世代が観測した証拠なので、
+        # preflight時点・現在owner記録の双方より大きいことを要求する。
+        _check(outcome['scope'] == current['scope']
+               and outcome['grant_id'] == spent['grant_id']
+               and outcome['runtime_generation'] > spent['public_preflight']['runtime_generation']
+               and outcome['runtime_generation'] > current['runtime_generation']
+               and outcome['rollout'] == active['rollout']
+               and outcome['rollout'] == spent['public_preflight']['rollout']
+               and outcome['target'] == active['target']
+               and outcome['verified_installed'] == active['target'], 'OUTCOME_MISMATCH')
         _check(_ref_not_regressed(current['verified_installed'], active['target']), 'TARGET_REGRESSION')
         new = copy.deepcopy(current)
         new['outcomes'].append(term)
-        new['verified_installed'] = copy.deepcopy(active['target'])
+        target = copy.deepcopy(active['target'])
+        new['installed'] = copy.deepcopy(target)
+        new['verified_installed'] = copy.deepcopy(target)
+        if _ref_not_regressed(current['highest_installed'], target):
+            new['highest_installed'] = copy.deepcopy(target)
         new['installed_source_manifest_sha256'] = source_manifest_sha256
         new['verified_source_manifest_sha256'] = source_manifest_sha256
+        new['runtime_generation'] = outcome['runtime_generation']
         new['active'] = None
+        bound = next((b for b in new['bindings'] if b['code_seq'] == target['code_seq']), None)
+        if bound is None:
+            new['bindings'].append({'code_seq': target['code_seq'],
+                                    'release_id': target['release_id']})
+        else:
+            _check(bound['release_id'] == target['release_id'], 'BINDING_CONFLICT')
         existing = next((e for e in new['outbox'] if e['report_id'] == entry['report_id']), None)
         if existing is None:
             new['outbox'].append(entry)

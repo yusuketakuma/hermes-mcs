@@ -230,29 +230,47 @@ def test_retire_intent_requires_durable_terminal_evidence(store):
     state.open_intent(store, intent)
     # 証拠未保存ではfence保持
     with pytest.raises(state.OwnerStateError, match='INTENT_EVIDENCE'):
-        state.retire_intent(store, operation_id=U, terminal_record=terminal_record(U, H))
+        state.retire_intent(store, operation_id=U,
+                            terminal_record=terminal_record(U, H, state_name='DEFERRED'))
     # 別operationの記録では拒否
-    state.record_terminal(store, terminal_record('92345678-1234-4234-8234-123456789abc', H))
+    state.record_terminal(store, terminal_record('92345678-1234-4234-8234-123456789abc', H,
+                                                 state_name='DEFERRED'))
     with pytest.raises(state.OwnerStateError, match='INTENT_EVIDENCE'):
-        state.retire_intent(store, operation_id=U, terminal_record=terminal_record(U, H))
+        state.retire_intent(store, operation_id=U,
+                            terminal_record=terminal_record(U, H, state_name='DEFERRED'))
     # 対象operationの記録を耐久化
-    state.record_terminal(store, terminal_record(U, H))
+    state.record_terminal(store, terminal_record(U, H, state_name='DEFERRED'))
     # 改竄した引数(proof/attempt_key違い)ではfenceを保持したまま拒否
-    forged = terminal_record(U, H)
+    forged = terminal_record(U, H, state_name='DEFERRED')
     forged['proof_sha256'] = '0' * 64
     with pytest.raises(state.OwnerStateError, match='INTENT_EVIDENCE'):
         state.retire_intent(store, operation_id=U, terminal_record=forged)
     with pytest.raises(state.OwnerStateError, match='INTENT_EVIDENCE'):
-        state.retire_intent(store, operation_id=U, terminal_record=terminal_record(U, 'c' * 64))
+        state.retire_intent(store, operation_id=U,
+                            terminal_record=terminal_record(U, 'c' * 64, state_name='DEFERRED'))
     # 完全一致の記録でのみ退役
-    retired = state.retire_intent(store, operation_id=U, terminal_record=terminal_record(U, H))
+    retired = state.retire_intent(store, operation_id=U,
+                                  terminal_record=terminal_record(U, H, state_name='DEFERRED'))
     assert retired['phase'] == 'retired'
     assert retired['terminal_outcome_sha256'] == '8' * 64
     # 重複terminal記録と二重retireを拒否
     with pytest.raises(state.OwnerStateError, match='TERMINAL_DUPLICATE'):
-        state.record_terminal(store, terminal_record(U, H))
+        state.record_terminal(store, terminal_record(U, H, state_name='DEFERRED'))
     with pytest.raises(state.OwnerStateError, match='INTENT_PHASE'):
-        state.retire_intent(store, operation_id=U, terminal_record=terminal_record(U, H))
+        state.retire_intent(store, operation_id=U,
+                            terminal_record=terminal_record(U, H, state_name='DEFERRED'))
+
+
+def test_verified_terminal_requires_finalize_path(store):
+    """R22: VERIFIEDはfinalize_verifiedのatomic確定経路のみ。record_terminal/save()での
+    単独追記は原子的確定を伴わないため拒否する。"""
+    seed(store)
+    with pytest.raises(state.OwnerStateError, match='INVALID'):
+        state.record_terminal(store, terminal_record(U, H))
+    base = state.load(store)
+    with pytest.raises(state.OwnerStateError, match='VERIFIED_REQUIRES_FINALIZE'):
+        state.save(store, dict(base, revision=2, execution_revision=2,
+                               outcomes=[terminal_record(U, H)]))
 
 
 def active_operation(**over):
@@ -272,23 +290,25 @@ def active_operation(**over):
     return op
 
 
-def finalize_fixture(store, op_suffix=''):
+def finalize_fixture(store, doc_over=None, preflight_gen=None):
     """outcome-verified fixtureをactive/spent/terminalへ整合させてseedする。"""
     doc = _example('outcome-verified.json')
-    if op_suffix:
-        doc['operation_id'] = '9' + op_suffix + doc['operation_id'][10:]
-        doc['report_id'] = '8' + op_suffix + doc['report_id'][10:]
-        doc['attempt_key'] = hashlib.sha256(op_suffix.encode()).hexdigest()
-        doc['grant_id'] = '7' + op_suffix + doc['grant_id'][10:]
+    if doc_over:
+        doc.update(doc_over)
     raw = json.dumps(doc, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
     outcome_sha = hashlib.sha256(raw.encode('utf-8')).hexdigest()
     term = terminal_record(doc['operation_id'], doc['attempt_key'], outcome_sha256=outcome_sha)
-    seed(store, active=active_operation(operation_id=doc['operation_id'],
-                                        attempt_key=doc['attempt_key'],
-                                        target=doc['target']),
-         spent=[spent_record(operation_id=doc['operation_id'],
-                             attempt_key=doc['attempt_key'], grant_id=doc['grant_id'])],
-         verified_installed=release_ref(1))
+    preflight = _example('prepared-public.json')
+    if preflight_gen is not None:
+        preflight['runtime_generation'] = preflight_gen
+    spent = spent_record(operation_id=doc['operation_id'],
+                         attempt_key=doc['attempt_key'], grant_id=doc['grant_id'])
+    spent['public_preflight'] = preflight
+    seed(store, scope=doc['scope'],
+         active=active_operation(operation_id=doc['operation_id'],
+                                 attempt_key=doc['attempt_key'],
+                                 target=doc['target'], rollout=doc['rollout']),
+         spent=[spent], verified_installed=release_ref(1))
     return doc, raw, term
 
 
@@ -302,6 +322,11 @@ def test_finalize_verified_atomic_and_replay(store):
     value = result
     assert value['outcomes'] == [term]
     assert value['verified_installed'] == doc['target']
+    assert value['installed'] == doc['target']
+    assert value['highest_installed'] == doc['target']
+    assert value['runtime_generation'] == doc['runtime_generation']
+    assert {'code_seq': doc['target']['code_seq'],
+            'release_id': doc['target']['release_id']} in value['bindings']
     assert value['installed_source_manifest_sha256'] == manifest
     assert value['verified_source_manifest_sha256'] == manifest
     assert value['active'] is None
@@ -309,11 +334,16 @@ def test_finalize_verified_atomic_and_replay(store):
     assert entry['raw'] == raw and entry['sha256'] == term['outcome_sha256']
     assert entry['acknowledged'] is False
     assert value['revision'] == 2 and value['execution_revision'] == 2
-    # exact再送は現stateを返し巻き戻さない
+    # exact再送はdurable記録が整合する場合のみ現stateを返す
     again = state.finalize_verified(store, term, outcome_raw=raw,
-                                    source_manifest_sha256='8' * 64,
+                                    source_manifest_sha256=manifest,
                                     expected_execution_revision=99)
     assert again['revision'] == 2
+    # 別manifestを伴う再送は同一finalizeとみなさず拒否
+    with pytest.raises(state.OwnerStateError, match='TERMINAL_INCONSISTENT'):
+        state.finalize_verified(store, term, outcome_raw=raw,
+                                source_manifest_sha256='8' * 64,
+                                expected_execution_revision=99)
     # 同一opの別terminalはconflict
     forged = dict(term, proof_sha256='0' * 64)
     with pytest.raises(state.OwnerStateError, match='TERMINAL_CONFLICT'):
@@ -330,14 +360,15 @@ def test_finalize_verified_rejects_invalid(store):
         state.finalize_verified(store, term, outcome_raw=raw,
                                 source_manifest_sha256=manifest,
                                 expected_execution_revision=2)
-    # 別attempt_keyのterminal
+    # activeのattempt_keyがterminal/outcomeと不一致
+    base = state.load(store)
+    store.write(state.OWNER_NAME, dict(base, active=dict(base['active'], attempt_key='c' * 64)))
     with pytest.raises(state.OwnerStateError, match='ACTIVE_MISMATCH'):
-        state.finalize_verified(store, terminal_record(doc['operation_id'], 'c' * 64,
-                                                       outcome_sha256=term['outcome_sha256']),
-                                outcome_raw=raw, source_manifest_sha256=manifest,
+        state.finalize_verified(store, term, outcome_raw=raw,
+                                source_manifest_sha256=manifest,
                                 expected_execution_revision=1)
-    # spent欠落(saveのappend-only検査を通さずraw writeで欠落stateを作る)
-    store.write(state.OWNER_NAME, dict(state.load(store), spent=[]))
+    # spent欠落(activeは正常値へ戻してからraw writeで欠落stateを作る)
+    store.write(state.OWNER_NAME, dict(base, spent=[]))
     with pytest.raises(state.OwnerStateError, match='SPENT_MISSING'):
         state.finalize_verified(store, term, outcome_raw=raw,
                                 source_manifest_sha256=manifest,
@@ -376,42 +407,65 @@ def test_finalize_verified_outcome_binding(store):
 
 
 def test_finalize_verified_ack_loss_allows_next_update(store):
-    """R20: outbox未ACKのまま次operation(A→B→C)を開始・終端できる。"""
+    """R20/R25: outbox未ACKのまま異なるtargetへの次更新(A→B→C)を完遂できる。"""
     doc_b, raw_b, term_b = finalize_fixture(store)
     state.finalize_verified(store, term_b, outcome_raw=raw_b,
                             source_manifest_sha256='7' * 64,
                             expected_execution_revision=1)
-    # Bのoutboxは未ACKのまま。C operationをactive+spentへ進める
+    # CはBと異なるrelease_id/code_seq/commit/artifactを持つ真の後続target
+    target_c = {'release_id': 'e' * 64, 'code_seq': 3, 'source_commit': 'd' * 40,
+                'artifact_sha256': 'f' * 64, 'artifact_size': 8192}
     doc_c = dict(doc_b)
-    doc_c['operation_id'] = '6' + doc_b['operation_id'][1:]
-    doc_c['report_id'] = '5' + doc_b['report_id'][1:]
-    doc_c['attempt_key'] = hashlib.sha256(b'c-op').hexdigest()
-    doc_c['grant_id'] = '4' + doc_b['grant_id'][1:]
+    doc_c.update({
+        'operation_id': '62345678-1234-4234-8234-123456789abc',
+        'report_id': '72345678-1234-4234-8234-123456789abc',
+        'attempt_key': hashlib.sha256(b'c-attempt').hexdigest(),
+        'grant_id': '82345678-1234-4234-8234-123456789abc',
+        'target': target_c, 'installed': target_c, 'verified_installed': target_c,
+        'runtime_generation': doc_b['runtime_generation'] + 1,
+    })
     raw_c = json.dumps(doc_c, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
     sha_c = hashlib.sha256(raw_c.encode()).hexdigest()
     base = state.load(store)
+    preflight_c = _example('prepared-public.json')
+    preflight_c['runtime_generation'] = doc_b['runtime_generation']
     state.save(store, dict(base, revision=base['revision'] + 1,
                            execution_revision=base['execution_revision'] + 1,
                            active=active_operation(operation_id=doc_c['operation_id'],
                                                    attempt_key=doc_c['attempt_key'],
-                                                   target=doc_c['target']),
-                           spent=base['spent'] + [spent_record(
-                               operation_id=doc_c['operation_id'],
-                               attempt_key=doc_c['attempt_key'], grant_id=doc_c['grant_id'])]))
+                                                   target=target_c, rollout=doc_c['rollout']),
+                           spent=base['spent'] + [dict(
+                               spent_record(operation_id=doc_c['operation_id'],
+                                            attempt_key=doc_c['attempt_key'],
+                                            grant_id=doc_c['grant_id']),
+                               public_preflight=preflight_c)]))
     state.finalize_verified(store, terminal_record(doc_c['operation_id'],
                                                    doc_c['attempt_key'],
                                                    outcome_sha256=sha_c),
                             outcome_raw=raw_c, source_manifest_sha256='9' * 64,
                             expected_execution_revision=3)
     value = state.load(store)
-    assert value['verified_installed'] == doc_c['target']
+    # BをbaseにCが採用され、installed/verified/baselineが全てCを指す
+    assert value['verified_installed'] == target_c
+    assert value['installed'] == target_c
+    assert value['highest_installed'] == target_c
+    assert value['verified_source_manifest_sha256'] == '9' * 64
+    assert value['runtime_generation'] == doc_c['runtime_generation']
     assert len(value['outcomes']) == 2 and len(value['outbox']) == 2
     assert value['outbox'][0]['acknowledged'] is False  # BのACK喪失を保持
+    # Bの遅延ACK後もCのbaselineは戻らない
+    state.ack_outbox(store, report_id=doc_b['report_id'],
+                     outcome_sha256=term_b['outcome_sha256'])
+    value = state.load(store)
+    assert value['verified_installed'] == target_c
+    assert value['outbox'][0]['acknowledged'] is True
 
 
 def test_spent_outcome_highwater_exact_append_only(store):
-    """R11残件: 同key別bytesのspent改変・outcomes削除/改変・high-water差替えを拒否。"""
-    seed(store, spent=[spent_record()], outcomes=[terminal_record(U, H)])
+    """R11残件: 同key別bytesのspent改変・outcomes削除/改変/同op別terminal・
+    high-water差替えを拒否。"""
+    seed(store, spent=[spent_record()],
+         outcomes=[terminal_record(U, H, state_name='DEFERRED')])
     base = state.load(store)
 
     def attempt(**over):
@@ -422,16 +476,34 @@ def test_spent_outcome_highwater_exact_append_only(store):
     forged = dict(base['spent'][0], grant_sha256='0' * 64)
     with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
         attempt(spent=[forged])
-    # outcomes削除・改変
+    # outcomes削除・改変・同op別terminal追加
     with pytest.raises(state.OwnerStateError, match='OUTCOME_REGRESSION'):
         attempt(outcomes=[])
     with pytest.raises(state.OwnerStateError, match='OUTCOME_REGRESSION'):
         attempt(outcomes=[dict(base['outcomes'][0], proof_sha256='0' * 64)])
+    with pytest.raises(state.OwnerStateError, match='OUTCOME_REGRESSION'):
+        attempt(outcomes=base['outcomes'] + [terminal_record(
+            U, 'c' * 64, state_name='CANCELLED_NO_EFFECT')])
+    # spent同op別attempt・同attempt別opの追加
+    with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
+        attempt(spent=base['spent'] + [spent_record(operation_id=U, attempt_key='d' * 64)])
+    with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
+        attempt(spent=base['spent'] + [spent_record(
+            operation_id='a2345678-1234-4234-8234-123456789abc', attempt_key='5' * 64)])
+    # bindings同seq別release_id・重複pair拒否、新seq追加は許可
+    with pytest.raises(state.OwnerStateError, match='BINDINGS_REGRESSION'):
+        attempt(bindings=[{'code_seq': 1, 'release_id': '0' * 64}])
+    with pytest.raises(state.OwnerStateError, match='BINDINGS_REGRESSION'):
+        attempt(bindings=base['bindings'] + [dict(base['bindings'][0])])
     # high-water同seq+idのartifact差替え
     mutated = release_ref(1)
     mutated['artifact_sha256'] = '0' * 64
     with pytest.raises(state.OwnerStateError, match='HIGH_WATER_MUTATION'):
         attempt(highest_seen=mutated)
+    # bindings新seq追加は許可(最後に実施しstore状態を進める)
+    state.save(store, dict(base, revision=base['revision'] + 1,
+                           execution_revision=base['execution_revision'] + 1,
+                           bindings=base['bindings'] + [{'code_seq': 2, 'release_id': '1' * 64}]))
 
 
 def migration_intent(store, **over):
