@@ -117,5 +117,5 @@ def test_competing_connection_bookmark_write_reports_cas_refusal(runtime):
         assert refresh._advance_patient_scan(
             led, expected, schedule.advance_turn(None), clock.mono + 600,
             lambda: True, observed_out=observed) is None
-    assert observed['scan_fence'] == 'bookmark_cas'
+    assert observed['scan_refusal'] == 'bookmark_cas'
     assert state._latest(led.db, state.PROGRESS, 0)[0]['cursor'] == 9

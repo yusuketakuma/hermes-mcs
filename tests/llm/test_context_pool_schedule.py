@@ -94,26 +94,26 @@ def test_context_pass_omits_counts_outside_the_real_unit_limits(key, value):
         "status": "deferred", "reason": "unclassified"}
 
 
-def test_context_pass_reports_scan_fence_and_bounded_scan_stats():
+def test_context_pass_reports_scan_refusal_and_bounded_scan_stats():
     result = {"status": "deferred", "reason": "patient_context_scan_incomplete",
-              "scan_fence": "bookmark_cas", "covered": False,
+              "scan_refusal": "bookmark_cas", "covered": False,
               "waiting": 3, "scan_reads": 2, "scan_interrupts": 1,
               "project_id": 123, "error": "synthetic private source"}
     assert cloud_backlog._context_pass_observation(result) == {
         "status": "deferred", "reason": "patient_context_scan_incomplete",
-        "scan_fence": "bookmark_cas", "covered": False,
+        "scan_refusal": "bookmark_cas", "covered": False,
         "waiting": 3, "scan_reads": 2, "scan_interrupts": 1}
 
 
-@pytest.mark.parametrize("value", ["synthetic-private", 1, True, ["bookmark_cas"], {"x": 1}])
-def test_context_pass_rejects_arbitrary_scan_fences(value):
-    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_fence": value})
-    assert record["scan_fence"] == "unclassified"
+@pytest.mark.parametrize("value", ["synthetic-private", "合成の未知理由", 1, True, ["bookmark_cas"], {"x": 1}])
+def test_context_pass_rejects_arbitrary_scan_refusals(value):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": value})
+    assert record["scan_refusal"] == "unclassified"
 
 
-def test_context_pass_omits_absent_scan_fence():
-    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_fence": None})
-    assert "scan_fence" not in record
+def test_context_pass_omits_absent_scan_refusal():
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": None})
+    assert "scan_refusal" not in record
 
 
 @pytest.mark.parametrize("key,value", [

@@ -614,7 +614,7 @@ _CONTEXT_PASS_REASONS = frozenset({
               for state in ("pending", "deferred", "held", "failed", "budget", "disabled"))
 
 
-_SCAN_FENCE_CODES = frozenset({
+_SCAN_REFUSALS = frozenset({
     "deadline", "admission", "writer_generation", "bookmark_cas",
     "scan_interrupted", "read_sqlite", "read_io",
     "invalid_bookmark", "invalid_source",
@@ -636,9 +636,9 @@ def _context_pass_observation(result):
     lane = result.get("lane")
     if type(lane) is str and lane in ("A", "B", "C"):
         record["lane"] = lane
-    fence = result.get("scan_fence")
-    if fence is not None:
-        record["scan_fence"] = fence if type(fence) is str and fence in _SCAN_FENCE_CODES else "unclassified"
+    refusal = result.get("scan_refusal")
+    if refusal is not None:
+        record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered

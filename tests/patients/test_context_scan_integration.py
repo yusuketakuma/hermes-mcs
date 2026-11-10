@@ -290,29 +290,29 @@ def _advance_observed(led, clock, *, deadline=None, admit=lambda: True, observed
     return result, out
 
 
-def test_advance_scan_fence_classifies_each_denial(runtime, monkeypatch):
+def test_advance_scan_refusal_classifies_each_denial(runtime, monkeypatch):
     import extract_llm
     led, clock, _ = runtime
     seed(led, mid=1, pid=1)
 
     _, out = _advance_observed(led, clock, deadline=clock.mono - 1)
-    assert out['scan_fence'] == 'deadline'
+    assert out['scan_refusal'] == 'deadline'
 
     _, out = _advance_observed(led, clock, admit=lambda: False)
-    assert out['scan_fence'] == 'admission'
+    assert out['scan_refusal'] == 'admission'
 
     monkeypatch.setattr(extract_llm, '_writer_current', lambda full: False)
     _, out = _advance_observed(led, clock)
-    assert out['scan_fence'] == 'writer_generation'
+    assert out['scan_refusal'] == 'writer_generation'
 
     # The post-write recheck reports the same fixed writer reason.
     seq = iter([True, False])
     monkeypatch.setattr(extract_llm, '_writer_current', lambda full: next(seq, False))
     _, out = _advance_observed(led, clock)
-    assert out['scan_fence'] == 'writer_generation'
+    assert out['scan_refusal'] == 'writer_generation'
 
 
-def test_advance_scan_fence_bookmark_cas_on_stale_expected(runtime):
+def test_advance_scan_refusal_bookmark_cas_on_stale_expected(runtime):
     led, clock, _ = runtime
     seed(led, mid=1, pid=1)
     expected = patient_context_refresh_state._latest(
@@ -326,20 +326,20 @@ def test_advance_scan_fence_bookmark_cas_on_stale_expected(runtime):
     assert refresh._advance_patient_scan(
         led, expected, schedule.advance_turn(None), clock.mono + 600,
         lambda: True, observed_out=observed) is None
-    assert observed['scan_fence'] == 'bookmark_cas'
+    assert observed['scan_refusal'] == 'bookmark_cas'
     assert global_state(led)['cursor'] == 9
 
 
-def test_select_scan_fence_distinguishes_interrupt_kinds(runtime, monkeypatch):
+def test_select_scan_refusal_distinguishes_interrupt_kinds(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
     monkeypatch.setattr(refresh, '_advance_patient_scan', lambda *a, **k: None)
     result = step(runtime)
-    assert result['scan_fence'] == 'scan_interrupted'
+    assert result['scan_refusal'] == 'scan_interrupted'
     assert result['scan_interrupts'] == 1
 
 
-def test_select_scan_fence_classifies_read_failures(runtime, monkeypatch):
+def test_select_scan_refusal_classifies_read_failures(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
 
@@ -348,11 +348,11 @@ def test_select_scan_fence_classifies_read_failures(runtime, monkeypatch):
 
     monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     result = step(runtime)
-    assert result['scan_fence'] == 'read_io'
+    assert result['scan_refusal'] == 'read_io'
     assert result['scan_interrupts'] == 1
 
 
-def test_select_scan_fence_classifies_bookmark_value_errors(runtime, monkeypatch):
+def test_select_scan_refusal_classifies_bookmark_value_errors(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, mid=1, pid=1)
 
@@ -361,11 +361,11 @@ def test_select_scan_fence_classifies_bookmark_value_errors(runtime, monkeypatch
 
     monkeypatch.setattr(refresh, '_advance_patient_scan', advance)
     result = step(runtime)
-    assert result['scan_fence'] == 'invalid_source'
+    assert result['scan_refusal'] == 'invalid_source'
     assert result['scan_interrupts'] == 1
 
 
-def test_select_scan_fence_absent_on_finite_completion(runtime, monkeypatch):
+def test_select_scan_refusal_absent_on_finite_completion(runtime, monkeypatch):
     led, _, _ = runtime
     for pid in range(1, 14):
         seed(led, mid=pid, pid=pid)
@@ -379,4 +379,4 @@ def test_select_scan_fence_absent_on_finite_completion(runtime, monkeypatch):
     monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     result = step(runtime)
     assert result['status'] == 'deferred'
-    assert result['scan_interrupts'] == 0 and 'scan_fence' not in result
+    assert result['scan_interrupts'] == 0 and 'scan_refusal' not in result
