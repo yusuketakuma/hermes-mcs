@@ -372,6 +372,107 @@ def verify_apply_envelope(raw, *, purpose, pins, expected, now_ms, allow_expired
         raise SignatureError() from None
 
 
+AUTO_V3_PURPOSES = frozenset({
+    'mcs-auto-offer-v3', 'mcs-auto-compatibility-v3', 'mcs-auto-grant-v3', 'mcs-auto-ack-v3',
+    'mcs-auto-status-v3', 'mcs-publication-plan-v3', 'mcs-release-acceptance-v3',
+    'mcs-auto-health-ack-v3', 'mcs-auto-consent-preview-v3', 'mcs-auto-consent-receipt-v3',
+    'mcs-rollout-policy-v3',
+})
+_AUTO_V3_KID = re.compile(r'[0-9a-f]{64}')
+
+
+def _auto_v3_pin_set(pins):
+    """v3 pin一覧の閉じたrecord検査。kidはsha256hex、用途はv3 allowlistに限定する。"""
+    _require(type(pins) is list and 1 <= len(pins) <= 16)
+    seen = set()
+    for pin in pins:
+        _require(type(pin) is dict and set(pin) == {'kid', 'purposes', 'spki', 'not_before', 'expires_at'})
+        _require(type(pin['kid']) is str and _AUTO_V3_KID.fullmatch(pin['kid']) and pin['kid'] not in seen)
+        seen.add(pin['kid'])
+        uses = pin['purposes']
+        _require(type(uses) is list and 1 <= len(uses) <= len(AUTO_V3_PURPOSES)
+                 and len(set(uses)) == len(uses)
+                 and all(type(use) is str and use in AUTO_V3_PURPOSES for use in uses))
+        start, end = pin['not_before'], pin['expires_at']
+        _require(type(start) is int and type(end) is int and 0 <= start < end <= MAX_SAFE_INTEGER)
+        _spki(_b64(pin['spki'], 2048))
+
+
+def _auto_v3_pin(pins, kid, purpose, payload, now_ms, historical):
+    """payloadのissued_at/expires_atがpin有効期間を内包するかを確認して鍵を返す。"""
+    selected = next((pin for pin in pins if pin['kid'] == kid), None)
+    _require(selected is not None and purpose in selected['purposes'])
+    issued = payload.get('issued_at') if type(payload.get('issued_at')) is int else now_ms
+    expires = payload.get('expires_at') if type(payload.get('expires_at')) is int else None
+    _require(selected['not_before'] <= issued
+             and (expires is None or expires <= selected['expires_at'])
+             and (historical or now_ms < selected['expires_at']))
+    return _spki(_b64(selected['spki'], 2048))
+
+
+def _auto_v3_time_order(payload):
+    issued, before, expires = payload.get('issued_at'), payload.get('not_before'), payload.get('expires_at')
+    if all(type(value) is int for value in (issued, before, expires)):
+        _require(issued <= before < expires)
+
+
+def validate_auto_v3_pins(pins, *, purpose, now_ms):
+    """v3専用の公開pin集合を検査する。旧purposeとの共用と期限外のみのpinを拒否する。"""
+    try:
+        _require(type(purpose) is str and purpose in AUTO_V3_PURPOSES)
+        _require(type(now_ms) is int and 0 <= now_ms <= MAX_SAFE_INTEGER)
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        _auto_v3_pin_set(pinned)
+        _require(any(purpose in pin['purposes'] and pin['not_before'] <= now_ms < pin['expires_at']
+                     for pin in pinned))
+        return canonical(pinned, max_bytes=16384).encode('ascii')
+    except SignatureError:
+        raise
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, binascii.Error):
+        raise SignatureError() from None
+
+
+def verify_v3_envelope(raw, *, purpose, pins, expected, now_ms, historical=False):
+    """v3 purposeの署名・payload契約・独立expected照合を検証する。実行権限は与えない。
+
+    expectedは呼出側が独立に保持する記録で、payloadの部分集合keyをcanonical一致で照合する。
+    historical=Trueは過去記録の証拠検証専用で、現在の実行権限を与えない。
+    """
+    try:
+        from adapters.sdc import release_auto_contract as auto
+        _require(type(raw) is bytes and 0 < len(raw) <= 16384 and raw.isascii())
+        _require(type(purpose) is str and purpose in AUTO_V3_PURPOSES)
+        _require(type(now_ms) is int and 0 <= now_ms <= MAX_SAFE_INTEGER)
+        _require(type(historical) is bool)
+        envelope = strict_json(raw)
+        _require(type(envelope) is dict and set(envelope) == {'alg', 'kid', 'purpose', 'payload', 'signature'})
+        _require(envelope['alg'] == 'PS256' and envelope['purpose'] == purpose)
+        kid = envelope['kid']
+        _require(type(kid) is str and _AUTO_V3_KID.fullmatch(kid))
+        payload_raw = _b64(envelope['payload'], 10923)
+        payload = parse_canonical(payload_raw, max_bytes=8192)
+        _require(type(payload) is dict)
+        signature = _b64(envelope['signature'], 512)
+        _require(len(signature) == 384)
+        definition = auto.AUTO_PURPOSE_DEFINITIONS[purpose]
+        _require(auto.canonical_typed(payload, definition) == payload_raw)
+        _auto_v3_time_order(payload)
+        bindings = parse_canonical(canonical(expected, max_bytes=8192), max_bytes=8192)
+        _require(type(bindings) is dict and len(bindings) >= 1)
+        _require(all(key in payload and canonical(value, max_bytes=8192) == canonical(payload[key], max_bytes=8192)
+                     for key, value in bindings.items()))
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        _auto_v3_pin_set(pinned)
+        key = _auto_v3_pin(pinned, kid, purpose, payload, now_ms, historical)
+        message = b'SDC-SIGNED-v1\n' + purpose.encode('ascii') + b'\n' + kid.encode('ascii') + b'\n' + payload_raw
+        _verify_pss(key, signature, message)
+        return payload
+    except SignatureError:
+        raise
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, binascii.Error, ImportError):
+        raise SignatureError() from None
+
+
 class ReleaseSignatureError(ValueError):
     """リリース署名の固定拒否コードだけを公開する。"""
     def __init__(self, code='RELEASE_SIGNATURE_INVALID'):
