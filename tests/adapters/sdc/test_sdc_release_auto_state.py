@@ -452,6 +452,21 @@ def test_finalize_verified_generation_binding(store):
                                                        outcome_sha256=old_sha),
                                 outcome_raw=old_raw, source_manifest_sha256=manifest,
                                 expected_execution_revision=1)
+    # r38: preflight/currentより大きいがcandidateと異なる世代も拒否する
+    # (等値束縛の反証。旧>preflight条件では通ってしまうケース)
+    doc2b = finalize_fixture(store)[0]
+    future = dict(doc2b, runtime_generation=doc2b['runtime_generation'] + 1)
+    future_raw = json.dumps(future, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
+    future_sha = hashlib.sha256(future_raw.encode()).hexdigest()
+    base = state.load(store)
+    store.write(state.OWNER_NAME, dict(base, active=dict(
+        base['active'], candidate_generation=doc2b['runtime_generation'])))
+    with pytest.raises(state.OwnerStateError, match='OUTCOME_MISMATCH'):
+        state.finalize_verified(store, terminal_record(doc2b['operation_id'],
+                                                       doc2b['attempt_key'],
+                                                       outcome_sha256=future_sha),
+                                outcome_raw=future_raw, source_manifest_sha256=manifest,
+                                expected_execution_revision=1)
     # runtime_proofがある場合はoperation/release/世代の一致を追加要求
     doc3, raw3, term3 = finalize_fixture(store)
     base = state.load(store)
@@ -545,12 +560,12 @@ def test_finalize_verified_ack_loss_allows_next_update(store):
     assert value['verified_installed'] == target_c
     assert value['outbox'][0]['acknowledged'] is True
     # C採用後のB exact finalize再送は過去opの耐久証拠で照合し、
-    # 現在Cをreceipt条件にせず無変更で現stateを返す
+    # 現在Cをreceipt条件にせず無変更で現stateを返す(r29/r37)
+    before = state.load(store)
     replay_b = state.finalize_verified(store, term_b, outcome_raw=raw_b,
                                        source_manifest_sha256='7' * 64,
                                        expected_execution_revision=99)
-    assert replay_b['verified_installed'] == target_c
-    assert replay_b['revision'] == value['revision']
+    assert replay_b == before  # Cのstate/revision/基線/outboxが一切変わらない
 
 
 def test_spent_outcome_highwater_exact_append_only(store):

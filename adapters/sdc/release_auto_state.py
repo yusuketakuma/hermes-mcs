@@ -266,8 +266,10 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
     - outcome_rawはOutcome契約でstate=verified/readiness=ready、scope・
       operation/attempt/grant/runtime_generation/rollout/targetを
       active・SPENTの独立記録へ束縛し、sha256==terminal.outcome_sha256
-    - 同一terminalが既にoutcomesへあれば、outbox/baseline/verified_installedが
-      整合する場合のみ現stateをそのまま返す(再送・巻戻しなし)
+    - 同一terminalが既にoutcomesへあれば、過去op自身の耐久証拠(SPENT・
+      binding・outbox)が整合する場合のみ現stateをそのまま返す
+      (再送・巻戻しなし)。この読取り専用再送ではsource_manifest_sha256
+      引数は使用されず、新しいmanifest採用やeffectは生じない(r37)
     - expected_execution_revision不一致はstaleとして拒否
     - outbox未ACK・pause/同意撤回/旧grant期限は観測的終端を阻害しない
     - source_manifest_sha256は呼出し側(M6等)が認証済みtarget観測から供給する。
