@@ -551,9 +551,39 @@ def _collected_attachment_identity(row):
         return None
 
 
+def _part_resolution_request(saved, receipt, row, *, part_state):
+    """Reconstruct only an exact validated human request for the stored outcome."""
+    from notify_recovery import validate_card_part_resolve
+    try:
+        if (part_state not in ('delivered', 'not_sent')
+                or receipt['kind'] != 'ops.card_part_resolve' or receipt['outcome'] != 'applied'
+                or receipt['part_state'] != part_state or receipt['command_id'] != saved['command_id']
+                or receipt['attempt_id'] != row['part_attempt']
+                or receipt['manifest_sha256'] != row['payload_hash']
+                or receipt['payload_sha256'] != row['payload_sha256']
+                or receipt['delivery_id'] != row['delivery_id'] or receipt['part_id'] != row['part_id']
+                or not scope_matches(row, receipt['scope'])):
+            return None
+        base = {'version': 1, 'cmd': 'ops.card_part_resolve', 'human_confirmed': True,
+                'result': 'mark_' + part_state, **receipt['scope'], **{k: receipt[k] for k in (
+                    'command_id', 'actor', 'reason', 'delivery_id', 'part_id', 'attempt_id',
+                    'manifest_sha256', 'payload_sha256', 'evidence')}}
+        # The original receipt omits expected_state. Its digest proves which
+        # allowed request was approved; this never infers a delivery outcome.
+        states = ('unknown',) if part_state == 'delivered' else ('unknown', 'pending', 'not_sent')
+        for expected in states:
+            remotes = ({'remote_id': row['remote_id']},) if part_state == 'delivered' else ({}, {'remote_id': None})
+            for remote in remotes:
+                req = {**base, 'expected_state': expected, **remote}
+                if validate_card_part_resolve(req) is None and payload_hash(req) == saved['payload_hash']:
+                    return req
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        pass
+    return None
+
+
 def _manual_edit_receipts(db, rows):
     """Bind a manual caption edit to the exact human-approved command digest."""
-    from notify_recovery import validate_card_part_resolve
     if not any(row["part_error"] == "operator_part_resolve" for row in rows):
         return {}
     matches = {}
@@ -580,23 +610,8 @@ def _manual_edit_receipts(db, rows):
         if len(candidates) != 1:
             continue
         saved, receipt = candidates[0]
-        try:
-            if (receipt["outcome"] != "applied" or receipt["part_state"] != "delivered"
-                    or receipt["command_id"] != saved["command_id"]
-                    or receipt["attempt_id"] != row["part_attempt"]
-                    or receipt["manifest_sha256"] != row["payload_hash"]
-                    or receipt["payload_sha256"] != row["payload_sha256"]
-                    or not scope_matches(row, receipt["scope"])):
-                continue
-            req = {"version": 1, "cmd": "ops.card_part_resolve", "human_confirmed": True,
-                   "expected_state": "unknown", "result": "mark_delivered", "remote_id": row["remote_id"],
-                   **receipt["scope"], **{k: receipt[k] for k in (
-                       "command_id", "actor", "reason", "delivery_id", "part_id", "attempt_id",
-                       "manifest_sha256", "payload_sha256", "evidence")}}
-            if validate_card_part_resolve(req) is None and payload_hash(req) == saved["payload_hash"]:
-                verified[key] = True
-        except (ValueError, TypeError, KeyError, AttributeError):
-            continue
+        if _part_resolution_request(saved, receipt, row, part_state='delivered') is not None:
+            verified[key] = True
     return verified
 
 

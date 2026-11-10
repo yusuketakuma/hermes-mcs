@@ -1,4 +1,4 @@
-"""Close exact historical length-rejection incidents without settling or replaying delivery."""
+"""Close proven historical non-deliveries without settling or replaying delivery."""
 from __future__ import annotations
 
 import time
@@ -15,9 +15,37 @@ _TARGET_KEYS = {"delivery_id", "part_id", "successor_id", "proof"}
 
 
 def _valid_target(value):
-    return (type(value) is dict and set(value) == _TARGET_KEYS
+    return (type(value) is dict and set(value) in (_TARGET_KEYS, _TARGET_KEYS | {'resolution_command_id'})
             and valid_uuid(value["delivery_id"]) and valid_uuid(value["successor_id"])
-            and valid_text(value["part_id"], 64) and valid_hash(value["proof"]))
+            and valid_text(value["part_id"], 64) and valid_hash(value["proof"])
+            and ('resolution_command_id' not in value or valid_uuid(value['resolution_command_id'])))
+
+
+def _negative_resolution(db, render, part, command_id):
+    from notify_parts import _part_resolution_request
+    rows = db.execute(
+        "SELECT command_id,payload_hash,receipt_json FROM command_receipts WHERE outcome='applied' "
+        + ("AND command_id=? " if command_id is not None else "")
+        + "AND CASE WHEN length(receipt_json)<=16384 AND json_valid(receipt_json) THEN "
+        "json_extract(receipt_json,'$.kind')='ops.card_part_resolve' AND "
+        "json_extract(receipt_json,'$.delivery_id')=? AND json_extract(receipt_json,'$.part_id')=? ELSE 0 END "
+        "LIMIT 33", ((command_id,) if command_id is not None else ())
+        + (render['delivery_id'], part['part_id'])).fetchall()
+    if len(rows) > 32:
+        return None
+    bound = {**dict(render), 'part_id': part['part_id'], 'part_attempt': part['attempt_id'],
+             'payload_sha256': part['payload_sha256'], 'remote_id': part['remote_id']}
+    witnesses = []
+    for saved in rows:
+        try:
+            receipt = strict_json(saved['receipt_json'])
+            if (not valid_uuid(saved['command_id']) or not finite_number(receipt.get('processed_at'))
+                    or _part_resolution_request(saved, receipt, bound, part_state='not_sent') is None):
+                continue
+        except (ValueError, TypeError, AttributeError, RecursionError):
+            continue
+        witnesses.append([saved['command_id'], saved['payload_hash'], receipt])
+    return witnesses[0] if len(witnesses) == 1 else None
 
 
 def validate(req):
@@ -39,10 +67,11 @@ def validate(req):
     return None
 
 
-def target(db, delivery_id, part_id, *, cfg, successor_id=None):
+def target(db, delivery_id, part_id, *, cfg, successor_id=None, resolution_command_id=None):
     """Prove one old not-sent part and a concrete same-scope delivered successor."""
     if (not valid_uuid(delivery_id) or not valid_text(part_id, 64)
-            or successor_id is not None and not valid_uuid(successor_id)):
+            or successor_id is not None and not valid_uuid(successor_id)
+            or resolution_command_id is not None and not valid_uuid(resolution_command_id)):
         return {"error": "tracking_ack_targets_invalid"}
     render = notify_scope.render_row(db, delivery_id)
     sealed = notify_scope._body_render_identity(render)
@@ -61,11 +90,17 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None):
         return {"error": "tracking_ack_restore_held"}
     part = db.execute("SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
                       (delivery_id, part_id)).fetchone()
-    if (part is None or part["kind"] != "body_part" or part["state"] != "not_sent"
-            or part["error_code"] not in notify_scope._LENGTH_ERRORS
+    if (part is None or part["state"] != "not_sent"
             or part["remote_id"] is not None or part["remote_file_id"] is not None
             or not valid_hash(part["payload_sha256"])
             or part["attempt_id"] != "p:" + delivery_id.replace("-", "") + ":" + part_id):
+        return {"error": "tracking_ack_part_ineligible"}
+    length_failure = part['kind'] == 'body_part' and part['error_code'] in notify_scope._LENGTH_ERRORS
+    resolution = None
+    if (part['kind'] in ('attachment_part', 'file_group') and part['error_code'] == 'operator_part_resolve'):
+        resolution = _negative_resolution(db, render, part, resolution_command_id)
+    if ((not length_failure and resolution is None)
+            or (length_failure and resolution_command_id is not None)):
         return {"error": "tracking_ack_part_ineligible"}
     attempt = db.execute("SELECT * FROM notification_delivery_attempts WHERE delivery_id=? "
                          "AND state='delivered' ORDER BY finished_at DESC,attempt_id LIMIT 1",
@@ -102,10 +137,16 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None):
         "card_id", "card_key", "kind", "project_id", "root_message_id", "anchor_key",
         "transport", "profile", "application_id", "team_id", "guild_id", "channel_id",
         "message_id", "thread_id", "thread_state")}
-    proof = payload_hash([COMMAND, 1, dict(part), dict(attempt), sealed,
-                          stable_card, successor, root, notify_scope.route_epoch(cfg)])
+    # Keep existing length-ack proofs byte-compatible with stored receipts.
+    evidence = [COMMAND, 1, dict(part), dict(attempt), sealed,
+                stable_card, successor, root, notify_scope.route_epoch(cfg)]
+    if resolution is not None:
+        evidence[1] = 2
+        evidence.append(resolution)
+    proof = payload_hash(evidence)
     return {"delivery_id": delivery_id, "part_id": part_id,
-            "successor_id": successor["delivery_id"], "proof": proof}
+            "successor_id": successor["delivery_id"], "proof": proof,
+            **({'resolution_command_id': resolution[0]} if resolution is not None else {})}
 
 
 def build_plan(db, delivery_id, part_id, *, cfg):
@@ -153,7 +194,8 @@ def receipt_targets(db):
 def acknowledged(db, row, index, *, cfg):
     """Reprove each stored target; an old applied receipt never substitutes for current evidence."""
     return any(target(db, item["delivery_id"], item["part_id"], cfg=cfg,
-                      successor_id=item["successor_id"]) == item
+                      successor_id=item["successor_id"],
+                      resolution_command_id=item.get('resolution_command_id')) == item
                for item in index.get((row["delivery_id"], row["part_id"]), ()))
 
 
@@ -183,7 +225,8 @@ def apply(ledger, req, cfg=None, now=None):
         if error is None:
             for item in req["targets"]:
                 current = target(db, item["delivery_id"], item["part_id"], cfg=cfg,
-                                 successor_id=item["successor_id"])
+                                 successor_id=item["successor_id"],
+                                 resolution_command_id=item.get('resolution_command_id'))
                 if current != item:
                     error = "tracking_ack_stale_plan"
                     break
