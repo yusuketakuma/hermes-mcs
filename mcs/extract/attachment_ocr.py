@@ -502,6 +502,7 @@ def _runtime(executable, source, output, timeout):
            "TMPDIR": str(source.parent), "HF_HOME": str(Path(cache) / "huggingface"),
            "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1",
            "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+           "ORT_DISABLE_TELEMETRY": "1",
            "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
            "VECLIB_MAXIMUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1", "TOKENIZERS_PARALLELISM": "false"}
     # Models remain readable; the runtime cannot write anywhere outside its private snapshot.

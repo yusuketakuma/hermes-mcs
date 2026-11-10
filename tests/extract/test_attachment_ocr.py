@@ -274,6 +274,7 @@ def test_runtime_timeout_kills_group_without_capturing_private_output(tmp_path, 
         assert "(deny file-read*)" in command[2]
         assert kwargs["stdout"] == subprocess.DEVNULL and kwargs["stderr"] == subprocess.DEVNULL
         assert kwargs["env"]["HF_HUB_OFFLINE"] == "1"
+        assert kwargs["env"]["ORT_DISABLE_TELEMETRY"] == "1"
         assert "TOKEN" not in kwargs["env"] and kwargs["start_new_session"]
         return process
 
