@@ -1,0 +1,117 @@
+# 自動更新 v2.0 — 実装タスク分解（Devin作業用）
+
+作成: 2026-11-10。対象仕様: `docs/specs/auto-update-v2.md`（統合読取り版を保存）。
+作業worktree: `~/.mcs-wt/auto-update-v2-20261110`（HEAD `5337981c`、detached）。
+仕様基準SHA `e85763b5` はHEADの祖先（126 commits差）。両repoで実装。push/PR/merge/tag/公開/配備/実機操作は行わない。
+
+## 1. パッケージ欠落（要ユーザー確認）
+
+貼付されたのは統合版 `FULL_SPEC.md` のみ。以下の機械可読ファイルは未受領:
+
+- `contracts/contracts-v2.schema.json`（JSON Schema Draft2020-12 正本）
+- `interfaces.pyi`（関数境界stub）
+- `contracts/acceptance-tests.json`（98項目の機械可読正本）
+- 正常11例・否定15例の合成fixture
+- `deployment-parameters.example.json`
+- `validation/check_package.py` 一式
+
+FIELD_CATALOGは全70 $defsのfield一覧を持つが、**primitive $defs（`Uuid`/`Sha256`/`Token`/`Slug`/`Commit`/`Tag`/`Uint`/`UInt64Decimal`/`RawJson`/`Positive`）のpattern・境界は未定義**。schemaはcatalog+本文から再構成可能だが、厳密なregex/上限は推測になる。実装着手前に原本ZIPの所在を確認するか、再構成したschemaを「暫定・原本照合待ち」として扱う。
+
+## 2. 基準SHA→現HEAD差分（仕様関連pathのみ）
+
+`git diff e85763b5..5337981c` の仕様関連pathは9ファイルのみ。SRC02–16の参照先は実質不変:
+
+- `mcs/core/error_codes.py` +150行（固定エラーコードregistry新設。v2の`mcs.release-error.v2`コード体系と統合要検討）
+- `mcs/core/{maintenance,mcs_util,snapshots}.py`、`mcs/ops/update_runtime_migration.py` 軽微
+- `deployment/sdc-release-owner.json` 1行、`deployment/launchagents/README.md`、`deployment/scripts/mcs_offsite.sh`
+- `adapters/sdc/`・`mcs/ops/{update_apply,update_cli,mcs_update,release_apply_owner,release_apply_checks,release_owner_source,sdc_support_signatures}.py`・`mcs/core/writer_lock.py`・`mcs/ops/update_services.py`・`.github/workflows/`：**差分ゼロ**
+
+→ 仕様のSRC根拠は現HEADでそのまま有効。P0対応表は「差分なし確認済み」として簡略化できる。
+
+## 3. repo役割分担
+
+|repo | worktree/場所 | 担当 |
+|---|---|---|
+| hermes-mcs | `~/.mcs-wt/auto-update-v2-20261110` | W01–W12, W14, W15（端末側・publisher・CI） |
+| csdc（SDC中央） | `/Users/yusuke/workspace/csdc` | W13（中央backend API・永続化・publisher OIDC面） |
+
+csdc側の既存資産: `fleet/releases/{contracts,apply-wire,apply,signatures,registration}.js`（R5a/b契約・署名・登録）、`fleet/support/`（support/restart契約）、`src/security.js`（HttpError/strictJSON/exactFields）、`fleet/access.js`（JWKS/OIDC系）、`fleet/migrations/`+`migrations/`。W13は新規 `/v2/mcs/...` 面として追加し、既存device HMAC認証を拡張する。実backend repoはcsdcで確定（要Plans.md記録）。
+
+## 4. タスク分解
+
+### Phase 0 — P0棚卸し（仕様必須・読取り中心）
+
+|ID|内容|成果物|
+|---|---|---|
+|P0-a|`apply`/`_apply_pipeline`/`cmd_check`/`--post-merge`/`rollback`/`recover`/`_run_native_release`/`install.sh`/`mcs_upgrade`/`reinstall_done`/`settings_migration_receipt`の全caller列挙。file/function/profile/親process/lock/実data変更/外部送信/再起動/借用FDを記録|`docs/dev-records/auto-update-inventory.md`|
+|P0-b|writer_lock全acquire・unlocked_transport・wait_run_lock、SQLite境界、通知sender、課金、OCR、backup/offsite、手動CLI入口。Hermes/standalone/LINE WORKSをprofile別一覧|同上|
+|P0-c|`config_edit._edit_lock`実配置を`git ls-files`/`git grep`で解決（`mcs/ops/config_edit.py`の存在を仮定しない）。lock DAGと目標`G→U→Q→R→C→A→M→O`の逆行edge特定|同上|
+|P0-d|`adapters/sdc/storage.py`の`NAMES`/`LIMITS`（L20–36確認済）と全callerからfilename表生成。`deployment/sdc-release-lock.json`は欠損→「実profile準備待ち」と記録（fixtureで隠さない）|同上|
+
+P0完了条件: 経路対応表・実lock DAG・bridge対象・backend integration slots・非対象機能が明確。
+
+### Phase 1 — 契約基盤（W01–W03、RED試験先行）
+
+|ID|作業|依存|主な検証|
+|---|---|---|---|
+|W01|新`adapters/sdc/release_auto_contract.py`＋contracts JSON再構成。`parse_typed`/`canonical_typed`/`hash_v2`、ENC01–04、SEM01–34、v1 dispatch保持|P0|AT036–041の構造/意味vector、v1未知schema拒否、purpose分離|
+|W02|`mcs/ops/sdc_support_signatures.py`へv2 purpose wrapper。独立pins/expected、historical分離|W01|AT037。旧用途受入集合不変|
+|W03|新`adapters/sdc/release_auto_state.py`＋`storage.py`の`NAMES`/`LIMITS`追加（start-intent/migration-v2/auto-private/runtime-proof/runtime-entry.lock/evidence/）。OwnerState load/validate/CAS、capacity、intent/spent/terminal/outbox|W01|AT075–083 fault injection、連続2更新、ACK遅延でexecution_revision不変|
+
+### Phase 2 — 端末bootstrap・drain・effect（W04–W06, W08–W10）
+
+|ID|作業|依存|主な検証|
+|---|---|---|---|
+|W04|新`mcs/ops/release_auto_bridge.py`＋既存recovery一式。ControlManifest/MigrationIntent/初期baseline/v1→v2明示移行|W03|AT086–090。pending/unknown拒否、crash各点、旧入口閉鎖、`.prev`維持|
+|W05|新`mcs/core/runtime_entry.py`＋各launcher。Q寿命gate、prepared fence、世代/boot、quarantine admission|W03|AT055,068–073。import途中切替禁止、全入口coverage|
+|W06|`update_services.py`/service_management/standalone/Hermes/LINE WORKS入口。profile別drain/退役/起動観測、独立owner起動|W05|AT049–052。R外drain、強制kill非流用、deadlockなし|
+|W08|新`mcs/ops/release_auto_owner.py`＋既存owner private dispatch。stage→prepare→grant→consume→effect→proof、clock/nonce/budgets|W04–W06|正常経路前進、未知時証拠保持。AT046–065|
+|W09|`mcs/ops/update_apply.py`へprivate `apply_code_only_v2(capability)`。forward-only policy分離|W08|AT066,084。post-merge失敗でreset/DBrestoreゼロ、v1回帰|
+|W10|新`mcs/ops/release_runtime_proof.py`＋独立recovery generation。quarantine/activation/proof/観測的終結|W08|AT070–079。HEAD/PIDだけ不可、boot/loadedsource/heartbeat束縛|
+
+### Phase 3 — transport・publisher・中央（W07, W11–W13）
+
+|ID|作業|repo|依存|主な検証|
+|---|---|---|---|---|
+|W07|新`adapters/sdc/release_auto_transport.py`。固定JSON v2 path＋artifact stream（256MiB/300s/no-redirect）|MCS|W01|AT042–045|
+|W11|新`scripts/development/release_publish.py`＋`.github/workflows/release-publish.yml`。identify/package/authorize/publish/verify-register|MCS|W13|AT001–028,029–035。fork拒否、samebytes retry、OIDC/ID検証|
+|W12|`ci.yml`/`release-notes.yml`/release generators。request/evidence出力、ノート維持、draft責任移管|MCS|W11|AT026。新旧workflow競合なし|
+|W13|csdc中央backend。`/v2/mcs/releases/{select,metadata,artifact,start,status,cancel-prestart,result}`＋`/v2/mcs/publications/{reserve,objects/{sha256},finalize,register}`。10 table・TX-PUBLISH/START/ABORT/RESULT・CAS/cohort/grant/result・OIDC publisher面|CSDC|W01契約共有|client共通vector、tenant分離、署名key分離、rate budgets。AT016–025,092–095の中央側|
+
+W13のcsdc設計メモ: 既存`fleet/`に新module（仮`fleet/auto-update/`）＋migration追加。device面は既存HMAC device authを専用pathへ拡張、publisher面は`fleet/access.js`系OIDCを再利用し`reserve_publication`/`freeze_assets`/`sign_release`/`register_publication`のみ許可。既存release契約（R5a/b）validatorを再利用し、wire schemaはW01と共有vectorで一致させる。**中央は署名鍵を持たず認証済み内容だけをsignする**（外部signer段階分け）。
+
+### Phase 4 — 結線・受入（W14, W15）
+
+|ID|作業|依存|
+|---|---|---|
+|W14|`update_cli.py`/scheduler/status/doctor。顧客v2ルーティング、legacy auto抑止、固定状態/理由、outbox retry|W08–W10＋v1回帰・連続2更新・fault injection通過後。既定OFF|
+|W15|tests/docs/changes記録。05の98項目受入票、既存回帰、現行受入票|全W|
+
+並列化（仕様§5準拠）: W07・W11/W12はW01–W03完了後に独立着手可。W13は契約確定後にcsdc側で独立着手可。W14は最後。
+
+## 5. AT分類→W対応（98項目）
+
+- PUB(28): W11/W12/W13 — GitHub公開・受入・OIDC・公開順序
+- ART(7): W04/W11 — manifest/lock/closure/pack検査
+- CON(6): W01/W02 — strict parse/署名purpose/境界
+- NET(4): W07/W13 — transport上限・stream・redirect
+- DEV(40): W03–W10 — 状態機械・lock・一回性・crash・連続更新
+- MIG(5): W04 — v1→v2移行・復旧器世代
+- OPS(8): W13/W14/W15 — 運用gate・容量・ACK・回帰
+
+## 6. ブロッカー・未決事項
+
+1. **機械可読パッケージ未受領**（§1）。schema/pyi/acceptance JSON/fixturesがないと厳密照合不可。
+2. GitHub repo設定（PUB01–06: ruleset/tag作成制限/Immutable/environment `mcs-release-publish`/権限）は別承認の実設定。実装はfixture/mockで進める。
+3. 実鍵pin・issuer/toolchain/publisher policy・中央URL・各profile・保守窓・人同意は未確定→`AUTO_ELIGIBLE=false`維持。
+4. `deployment/sdc-release-lock.json`欠損＝実profile準備待ち（P0-dで記録、fixtureで隠さない）。
+5. macOS native試験（L4）は別承認の検証機が必要。Linux stubで代替しない。
+6. csdc側W13は中央の既存release/apply契約面に依存。TypeError修正（進行中）はその前提堅牢化。
+7. `mcs/core/error_codes.py`新設（+150行）とv2 `mcs.release-error.v2`コード体系の統合方針をW01で確認。
+
+## 7. csdc側の進行中作業（本タスクと並行）
+
+- `fleet/releases/contracts.js`: options/null→TypeError修正済み（`opts`ガード、`releasePlanBlockers`のTypeError→400変換、`deriveReleaseModes` state検査）
+- 未完: `apply-wire.js`/`signatures.js`/`registration.js`の同種修正、回帰テスト、`npm run check`
+- T40(thread/subprocess終了)・`maximum_now` HTTP入口の確認
+- stale文書（implementation-matrix/production-gates/readiness）更新
