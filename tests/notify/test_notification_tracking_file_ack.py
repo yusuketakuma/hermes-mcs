@@ -12,7 +12,7 @@ import notify_tracking_ack as tracking
 import notify_transport
 import present_slack
 from adapters.common import envelopes
-from notify_testkit import NOW, _attach, _latest_render, _uuid, led as led
+from notify_testkit import NOW, _latest_render, _uuid, led as led
 from slack_testkit import ROOT_TS, SLACK
 from test_card_preflight_file_groups import group_unknown
 from test_notification_tracking_ack import originals
@@ -40,7 +40,11 @@ def history(led, monkeypatch, request):
     assert receipt['outcome'] == 'applied', receipt
     # A new source file changes the next group; no later exact-payload
     # receipt can falsely stand in for the old undelivered group.
-    _attach(led, 100, name='synthetic-third.pdf')
+    with led.db:
+        led.db.execute(
+            "INSERT INTO attachments(message_id,file_id,name,local_path,bytes,sha256,state,downloaded_at,created_at) "
+            "VALUES(100,'synthetic-third','synthetic-third.pdf','/tmp/fake-third.txt',10,?,'downloaded',?,?)",
+            ('ab' * 32, NOW, NOW))
     with led.db:
         assert notify_cards.issue_render(led.db, old['card_id'], SLACK, NOW + 2, [], force=True)
     successor = _latest_render(led)
