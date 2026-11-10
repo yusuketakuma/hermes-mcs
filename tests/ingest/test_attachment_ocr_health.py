@@ -13,6 +13,8 @@ CFG = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"},
        "backup": {"enabled": False}}
 WRITER_DIAGNOSTIC = {'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock',
                      'writer_job_stage': 'ocr'}
+GENERATION_FENCE = {'writer_reason': 'source_generation_changed', 'writer_stage': 'generation_fence',
+                    'writer_job_stage': 'local'}
 
 
 def _status(data, **updates):
@@ -372,6 +374,48 @@ def test_writer_diagnostic_does_not_override_health_outcome(tmp_path, updates, n
     _status(tmp_path, **updates, **WRITER_DIAGNOSTIC)
     assert health_report.attachment_ocr_health(str(tmp_path), CFG, now) == {
         **prior, **WRITER_DIAGNOSTIC}
+
+
+@pytest.mark.parametrize('job_stage', ['local', 'ocr'])
+def test_verified_generation_fence_writer_blocked_is_deferred_not_failed(tmp_path, job_stage):
+    fence = {**GENERATION_FENCE, 'writer_job_stage': job_stage}
+    _status(tmp_path, reason='writer_blocked', local_deferred=1, **fence)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'deferred'
+    assert report['reason'] == 'attachment_ocr_processing_deferred'
+    assert report['failed'] == 0
+    assert {key: report[key] for key in fence} == fence
+
+
+@pytest.mark.parametrize('updates', [
+    {'reason': 'writer_blocked'},
+    {'reason': 'writer_blocked', **WRITER_DIAGNOSTIC},
+    {'reason': 'writer_blocked', 'writer_reason': 'source_generation_changed',
+     'writer_stage': 'generation_fence', 'writer_job_stage': 'local', 'failed': 1},
+    {'reason': 'writer_blocked', 'writer_reason': 'source_generation_changed',
+     'writer_stage': 'generation_fence', 'writer_job_stage': 'local', 'pending_failed': 1},
+])
+def test_writer_blocked_without_verified_fence_or_with_failure_stays_failed(tmp_path, updates):
+    _status(tmp_path, **updates)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == 'failed'
+    assert report['reason'] == 'attachment_ocr_processing_failed'
+
+
+def test_generation_fence_status_still_obeys_freshness(tmp_path):
+    _status(tmp_path, at=0, reason='writer_blocked', local_deferred=1, **GENERATION_FENCE)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 3000)
+    assert report['state'] == 'unknown'
+    assert report['reason'] == 'attachment_ocr_status_stale'
+
+
+def test_generation_fence_recovers_on_next_cycle(tmp_path):
+    _status(tmp_path, reason='writer_blocked', local_deferred=1, **GENERATION_FENCE)
+    fenced = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert fenced['state'] == 'deferred'
+    _status(tmp_path, at=1001)
+    recovered = health_report.attachment_ocr_health(str(tmp_path), CFG, 1001)
+    assert recovered['state'] == 'ok'
 
 
 def test_validated_partial_failure_snapshot_reaches_cause_specific_alert(tmp_path):

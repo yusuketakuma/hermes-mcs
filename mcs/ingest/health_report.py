@@ -144,9 +144,12 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                 and value.get('paid_recovery_pending') is not True):
             return {**detail, 'state': 'failed', 'reason': 'attachment_ocr_acknowledged_gap',
                     'alert_required': False}
+    writer_fence_wait = (reason == "writer_blocked" and writer_detail
+                         and writer_detail["writer_reason"] == "source_generation_changed"
+                         and writer_detail["writer_stage"] == "generation_fence")
     if (value.get("failed", 0)
             or value.get("pending_failed", 0) and not acknowledged_failures
-            or reason not in waiting_reasons):
+            or reason not in waiting_reasons and not writer_fence_wait):
         return {**detail, "state": "failed", "reason": "attachment_ocr_processing_failed"}
     if value.get("paid_recovery_pending") is True:
         return {**detail, "state": "deferred", "reason": "attachment_ocr_accounting_deferred"}

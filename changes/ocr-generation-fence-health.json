@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "更新直後のOCR保留が処理失敗として誤警報される問題を修正",
+  "summary": "MCS更新の適用直後、添付OCRの実行が世代確認（generation fence）で一時保留になった場合に、ヘルス監視がこれを処理失敗として誤って警報していました。検証済みの固定コード組（writer_reason=source_generation_changed・writer_stage=generation_fence）の writer_blocked に限り、処理保留（processing_deferred）として分類するよう修正しました。実際の失敗・未確認の失敗・状態不明は従来どおり失敗または不明のままです。",
+  "upgrade": "追加操作は不要です。次回のOCR周期から、更新直後の一時保留は失敗警報ではなく保留表示になります。",
+  "details": [
+    "対象は reason=writer_blocked かつ writer_detail が既存の許可表検証を通り、writer_reason=source_generation_changed・writer_stage=generation_fence の組に一致する状態のみです。writer_job_stage は local/ocr のどちらも既存検証どおり対象とします。",
+    "failed が 1 以上・未確認の pending_failed・writer_detail を欠く・未知または不一致の writer 診断・config_invalid・status stale・receipt 不正は従来どおり失敗または不明を維持します。臨床 coverage の未回復や queue 未確認を正常扱いにはしません。",
+    "writer_blocked 全般を正常扱いに広げる変更ではなく、検証済みの世代フェンス保留だけを既存の processing_deferred 分類へ写像します。"
+  ],
+  "refs": [
+    "mcs/ingest/health_report.py",
+    "tests/ingest/test_attachment_ocr_health.py"
+  ]
+}
