@@ -42,7 +42,7 @@ def test_scan_requests_grounded_attributes_and_rejects_invented_values(tmp_path,
         ledger.save_messages([_message(body=body)])
         source = next(mcs_queries.patient_context_sources(ledger.db, 1, mid=1))
         calls = []
-        def ask(cfg, payload, *args):
+        def ask(cfg, payload, *args, local_guard=None):
             calls.append(payload)
             assert 'details:[{key,value,evidence}]' in payload['instruction']
             assert 'valueはevidence内の連続した原文' in payload['instruction']
@@ -120,7 +120,7 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
         assert "raw_extra" not in json.dumps(source["items"], ensure_ascii=False)
         assert json.dumps(source["items"], ensure_ascii=False) == json.dumps(expected_with_reference, ensure_ascii=False)
         calls = []
-        def ask(cfg, payload, *args):
+        def ask(cfg, payload, *args, local_guard=None):
             calls.append(copy.deepcopy(payload))
             return {"patient_context": []}
         monkeypatch.setattr(patient_context_quality_controller, "_ask", ask)
