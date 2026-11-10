@@ -8,6 +8,7 @@ v1 owner fileをv3として読み替えない。移行は明示のOwnerMigration
 load/load_intent等の読取りはlockを取らない。lock保持中に別のlock取得関数を
 呼ばない(同process再入はdeadlock)。
 """
+import copy
 import hashlib
 import json
 
@@ -108,13 +109,29 @@ def _outbox_delta(before, after):
 
 
 def _check_monotonic(before, after):
-    """履歴の削除・後退を両分類で拒否する。"""
-    _check(all(any(old['operation_id'] == new['operation_id'] and old['attempt_key'] == new['attempt_key']
-                   for new in after['spent']) for old in before['spent']), 'SPENT_REGRESSION')
-    _check(all(any(old['code_seq'] == new['code_seq'] and old['release_id'] == new['release_id']
-                   for new in after['bindings']) for old in before['bindings']), 'BINDINGS_REGRESSION')
+    """履歴の削除・後退・同key別bytes改変を両分類で拒否する。
+
+    spent/outcomesはexact recordのappend-only: 同operation_id(+attempt_key)の
+    既存recordは全値一致を要求し、削除・フィールド改変・重複keyを拒否する。
+    """
+    for old in before['spent']:
+        match = [n for n in after['spent']
+                 if n['operation_id'] == old['operation_id'] and n['attempt_key'] == old['attempt_key']]
+        _check(len(match) == 1 and match[0] == old, 'SPENT_REGRESSION')
+    for old in before['outcomes']:
+        _check(any(n == old for n in after['outcomes']), 'OUTCOME_REGRESSION')
+    seen = set()
+    for b in after['bindings']:
+        key = (b['code_seq'], b['release_id'])
+        _check(key not in seen, 'BINDINGS_REGRESSION')
+        seen.add(key)
+    for old in before['bindings']:
+        _check((old['code_seq'], old['release_id']) in seen, 'BINDINGS_REGRESSION')
     for name in _HIGH_WATER:
         _check(_ref_not_regressed(before[name], after[name]), 'HIGH_WATER_REGRESSION')
+        # 同code_seq+release_idのrefは全値一致のみ許可(artifact/commit差替えを拒否)
+        if after[name]['code_seq'] == before[name]['code_seq']:
+            _check(after[name] == before[name], 'HIGH_WATER_MUTATION')
     delta = _outbox_delta(before['outbox'], after['outbox'])
     _check(delta != 'mutated', 'OUTBOX_REGRESSION')
     return delta
@@ -214,6 +231,73 @@ def record_terminal(store, record):
         value['execution_revision'] += 1
         _write(store, value)
         return value
+
+
+def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
+                      expected_execution_revision):
+    """VERIFIED終端の線形化点（02_DEVICE_PROTOCOL §9-10、r16 Oracle照合設計）。
+
+    O lock下で最新stateへ outcome・verified_installed・source successor
+    baseline・active終結・fixed outbox を一つのatomic保存で確定する。
+
+    - terminalはTerminalRecord VERIFIEDで、active.op/attemptと一致必須
+    - spentの同op/attempt記録(grant証拠)が存在必須
+    - outcome_rawはOutcome契約で、ID一致・sha256==terminal.outcome_sha256
+    - 同一terminalが既にoutcomesへあれば現stateをそのまま返す(再送・巻戻しなし)
+    - expected_execution_revision不一致はstaleとして拒否
+    - outbox未ACK・pause/同意撤回/旧grant期限は観測的終端を阻害しない
+    """
+    try:
+        term = contract.parse_document(_dumps(terminal), 'TerminalRecord', max_bytes=MAX_OWNER_BYTES)
+    except contract.ContractError:
+        raise OwnerStateError('INVALID') from None
+    _check(term['state'] == 'VERIFIED' and term['outcome_sha256'] is not None, 'INVALID')
+    try:
+        outcome = contract.parse_typed(outcome_raw.encode('utf-8'), 'Outcome')
+    except (contract.ContractError, UnicodeEncodeError, AttributeError):
+        raise OwnerStateError('INVALID') from None
+    _check(outcome['operation_id'] == term['operation_id'], 'OUTCOME_MISMATCH')
+    outcome_sha = hashlib.sha256(outcome_raw.encode('utf-8')).hexdigest()
+    _check(outcome_sha == term['outcome_sha256'], 'OUTCOME_HASH')
+    entry = {'report_id': outcome['report_id'], 'operation_id': outcome['operation_id'],
+             'raw': outcome_raw, 'sha256': outcome_sha, 'acknowledged': False}
+    try:
+        entry = contract.parse_document(_dumps(entry), 'OutboxEntry', max_bytes=MAX_OWNER_BYTES)
+    except contract.ContractError:
+        raise OwnerStateError('INVALID') from None
+    with store.release_owner_lock():
+        current = load(store)
+        prior = next((o for o in current['outcomes'] if o['operation_id'] == term['operation_id']), None)
+        if prior is not None:
+            # exact finalize再送: 現在state(Cが進んだ後を含む)をそのまま返し巻き戻さない
+            _check(prior == term, 'TERMINAL_CONFLICT')
+            return current
+        _check(current['execution_revision'] == expected_execution_revision, 'STALE_EXECUTION')
+        active = current['active']
+        _check(active is not None and active['operation_id'] == term['operation_id']
+               and active['attempt_key'] == term['attempt_key'], 'ACTIVE_MISMATCH')
+        _check(any(s['operation_id'] == term['operation_id'] and s['attempt_key'] == term['attempt_key']
+                   for s in current['spent']), 'SPENT_MISSING')
+        _check(outcome['target'] == active['target'], 'OUTCOME_MISMATCH')
+        _check(_ref_not_regressed(current['verified_installed'], active['target']), 'TARGET_REGRESSION')
+        new = copy.deepcopy(current)
+        new['outcomes'].append(term)
+        new['verified_installed'] = copy.deepcopy(active['target'])
+        new['installed_source_manifest_sha256'] = source_manifest_sha256
+        new['verified_source_manifest_sha256'] = source_manifest_sha256
+        new['active'] = None
+        existing = next((e for e in new['outbox'] if e['report_id'] == entry['report_id']), None)
+        if existing is None:
+            new['outbox'].append(entry)
+        else:
+            _check(existing['operation_id'] == entry['operation_id']
+                   and existing['raw'] == entry['raw'] and existing['sha256'] == entry['sha256'],
+                  'OUTBOX_CONFLICT')
+        _check_monotonic(current, new)
+        new['revision'] += 1
+        new['execution_revision'] += 1
+        _write(store, new)
+        return new
 
 
 def open_intent(store, intent):
