@@ -1,7 +1,7 @@
 """The scheduled OCR job drains saved local work without collection or duplicate ownership."""
 import fcntl
 import os
-import sqlite3
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -300,21 +300,20 @@ def real_job(tmp_path, monkeypatch):
 
 def test_real_publisher_verifies_past_five_seconds_within_deadline(real_job, monkeypatch):
     """mcs_ocr.run reaches the real refresh_snapshot/publish_snapshot path; a
-    ledger whose validation exceeds the old ~5s cap still publishes inside
-    the same absolute drain deadline."""
-    con = sqlite3.connect(str(real_job.database))
-    con.execute("INSERT INTO messages(message_id,project_id,sender_id,"
-                "posted_at,body_html,first_seen) VALUES(1,1,'s',1.0,'b',1.0)")
-    # Without the unique (message_id,file_id) index the contract's
-    # duplicate-key fence sorts every pair; that scan is what pushes real
-    # validation past five seconds.
-    con.execute("DROP INDEX IF EXISTS uq_attachments_msg_file")
-    con.execute("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c"
-                " WHERE x<12000000) INSERT INTO attachments(message_id,file_id,"
-                "name,state,created_at) SELECT 1,'F'||x,'n','downloaded',1.0"
-                " FROM c")
-    con.commit()
-    con.close()
+    small real ledger publishes inside the same absolute drain deadline while
+    the recorded verify window deterministically exceeds the historical ~5s
+    cap. Only the post-validation clock sample is advanced — the real copy
+    and validator subprocess run unmodified."""
+    clock = [time.monotonic()]
+    real_candidate = snapshots._valid_snapshot_candidate
+
+    def verified_then_slow(*args, **kwargs):
+        ok = real_candidate(*args, **kwargs)
+        clock[0] += 6.0
+        return ok
+
+    monkeypatch.setattr(snapshots, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(snapshots, '_valid_snapshot_candidate', verified_then_slow)
     monkeypatch.setattr(attachment_inference, 'run_pending', _local_once())
     monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
                         lambda *args, **kwargs: {'complete': 0})
