@@ -235,5 +235,5 @@ def test_observer_global_unknown_cannot_be_hidden_by_zero_current_parts(tmp_path
                                'notify': {'incomplete_parts': parts}}))
     report = health_watch.classify_health(str(path), now=NOW, deadline_s=900)
     assert report['status'] == 'degraded'
-    assert 'notification_parts_incomplete' in report['reasons']
+    assert 'notification_parts_incomplete' in report['state_reasons']
     assert report['notify_unknown_part_outcomes'] == 1
