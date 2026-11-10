@@ -682,10 +682,17 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
         clock.wall = stamp('2026-10-17T23:00:00') + attempt * 86400
         assert step(runtime)['status'] == 'failed'
     assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
-    clock.wall += 86400
-    step(runtime)
+    before = document(led, patient_context_refresh_state.PROGRESS)
+    clock.wall = before['last_attempt'] + 86400 - 1
+    assert step(runtime)['status'] == 'deferred'
     assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
-    # Changed semantic checks create a fresh source/contract generation; unchanged checks stay exhausted.
+    clock.wall += 1
+    assert step(runtime)['status'] == 'failed'
+    after = document(led, patient_context_refresh_state.PROGRESS)
+    assert after['attempts'] == 6 and after['next_try'] == clock.wall + 86400
+    assert after['last_attempt'] == clock.wall
+    assert step(runtime)['status'] == 'deferred'
+    # New semantic checks still start a fresh retry generation; the same input gets daily retries.
     monkeypatch.setattr(patient_context_refresh_state, '_CHECKS', 'synthetic-changed-checks')
     clock.wall += 86400
     # Stored scans reopen before lane A gets its first attempt under the new checks.
@@ -1467,3 +1474,30 @@ def test_initial_context_unit_can_start_at_any_hour(runtime, at):
     assert len(calls) == before_calls + 1 and document(led) is not None
     progress = document(led, patient_context_refresh_state.PROGRESS)
     assert progress['night_id'] == '2026-10-17'
+
+
+@pytest.mark.parametrize('field', ['held', '_quality_held'])
+def test_daily_retry_never_releases_protected_holds(field):
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+                'failure': 'nightly_timeout', 'next_try': 1000, 'last_attempt': 1000, field: True}
+    assert not patient_context_refresh_readiness._ready(progress, 1000 + 10 * 86400)
+
+
+@pytest.mark.parametrize('attempts', [5, 6, 100])
+def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
+    progress = {'attempts': attempts, 'checks': patient_context_refresh_state._CHECKS,
+                'failure': 'nightly_timeout', 'next_try': 1000}
+    assert not patient_context_refresh_readiness._ready(progress, 1000 + 86400 - 1)
+    assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
+    progress.update(last_attempt=500, next_try=500 + 86400)
+    assert not patient_context_refresh_readiness._ready(progress, 500 + 86400 - 1)
+    assert patient_context_refresh_readiness._ready(progress, 500 + 86400)
+
+
+@pytest.mark.parametrize('field,value', [('attempts', True), ('next_try', float('nan')),
+    ('next_try', float('inf')), ('next_try', True), ('last_attempt', float('inf')),
+    ('last_attempt', True), ('last_attempt', '1000'), ('last_attempt', 10**1000)])
+def test_daily_retry_keeps_unverified_dates_and_counters_waiting(field, value):
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+                'failure': 'nightly_timeout', 'next_try': 1000, 'last_attempt': 1000, field: value}
+    assert not patient_context_refresh_readiness._ready(progress, 1e9)

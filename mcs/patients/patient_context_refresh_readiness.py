@@ -362,8 +362,20 @@ def _context_view_input(db, pid, *, cfg, proof_for):
 def _ready(progress, now):
     if progress.get("held") or progress.get("_quality_held"):
         return False
-    return now is None or ((progress.get("attempts", 0) < 5 or progress.get("checks") != patient_context_refresh_state._CHECKS)
-                           and progress.get("next_try", 0) <= now)
+    if now is None:
+        return True
+    attempts, next_try = progress.get("attempts", 0), progress.get("next_try", 0)
+    if (type(attempts) is not int or attempts < 0 or type(next_try) not in (int, float)
+            or next_try < 0 or type(next_try) is float and not math.isfinite(next_try)):
+        return False
+    if attempts >= 5 and progress.get("checks") == patient_context_refresh_state._CHECKS:
+        last_attempt = progress.get("last_attempt", next_try)
+        if (not progress.get("failure") or type(last_attempt) not in (int, float)
+                or last_attempt < 0 or type(last_attempt) is float and not math.isfinite(last_attempt)):
+            return False
+        # Legacy source scans lack last_attempt; wait a full day beyond their stored retry time.
+        next_try = max(next_try, last_attempt + 86400)
+    return next_try <= now
 
 
 def _cloud_scan_for(ledger, cfg):
