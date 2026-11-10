@@ -1,9 +1,13 @@
 """The scheduled OCR job drains saved local work without collection or duplicate ownership."""
+import fcntl
+import os
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
 
 import attachment_inference
+import ledger
 import maintenance
 import mcs_ocr
 import snapshots
@@ -265,3 +269,116 @@ def test_local_page_budget_completes_two_slow_chunks_in_one_drain(page_store, mo
     assert result['local_done'] == 1 and result['local_deferred'] == 0
     assert len(calls) == 2
     assert attachment_inference.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
+
+
+def _local_once():
+    calls = []
+
+    def local(*args, **kwargs):
+        calls.append(True)
+        return {'done': 1 if len(calls) == 1 else 0, 'deferred': 0}
+
+    return local
+
+
+@pytest.fixture
+def real_job(tmp_path, monkeypatch):
+    """A real ledger file reaches the real maintenance/snapshots publisher;
+    only the OCR work units and writer-lock probes stay synthetic."""
+    database = tmp_path / 'ledger.db'
+    db = ledger.Ledger(str(database))
+    db.ensure_patient(1)
+    db.close()
+    monkeypatch.setattr(mcs_ocr, 'DB', str(database))
+    monkeypatch.setattr(mcs_ocr, 'DATA', str(tmp_path))
+    monkeypatch.setattr(maintenance, 'SNAPSHOT_DIR', str(tmp_path / 'snapshots'))
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'wait_run_lock',
+                        lambda path, **kwargs: mcs_ocr.acquire_run_lock(path))
+    return SimpleNamespace(database=database)
+
+
+def test_real_publisher_verifies_past_five_seconds_within_deadline(real_job, monkeypatch):
+    """mcs_ocr.run reaches the real refresh_snapshot/publish_snapshot path; a
+    ledger whose validation exceeds the old ~5s cap still publishes inside
+    the same absolute drain deadline."""
+    con = sqlite3.connect(str(real_job.database))
+    con.execute("INSERT INTO messages(message_id,project_id,sender_id,"
+                "posted_at,body_html,first_seen) VALUES(1,1,'s',1.0,'b',1.0)")
+    # Without the unique (message_id,file_id) index the contract's
+    # duplicate-key fence sorts every pair; that scan is what pushes real
+    # validation past five seconds.
+    con.execute("DROP INDEX IF EXISTS uq_attachments_msg_file")
+    con.execute("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c"
+                " WHERE x<12000000) INSERT INTO attachments(message_id,file_id,"
+                "name,state,created_at) SELECT 1,'F'||x,'n','downloaded',1.0"
+                " FROM c")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(attachment_inference, 'run_pending', _local_once())
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
+                        lambda *args, **kwargs: {'complete': 0})
+    result = mcs_ocr.run(CFG)
+    assert result.get('reason') != 'snapshot_deferred' and result['local_done'] == 1
+    published = os.path.join(maintenance.SNAPSHOT_DIR, 'ledger-snapshot.db')
+    assert os.path.isfile(published)
+    assert snapshots.last_timing()['verify_s'] > 5
+
+
+def test_real_publisher_defers_on_busy_publication_lock(real_job, monkeypatch):
+    out_dir = maintenance.SNAPSHOT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    fd = os.open(os.path.join(out_dir, '.snapshot.lock'),
+                 os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        monkeypatch.setattr(attachment_inference, 'run_pending', _local_once())
+        monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
+                            lambda *args, **kwargs: {'complete': 0})
+        result = mcs_ocr.run(CFG)
+        assert result['reason'] == 'snapshot_deferred'
+        assert result['snapshot_failure']['reason'] == 'snapshot_lock_busy'
+        assert not os.path.exists(os.path.join(out_dir, 'ledger-snapshot.db'))
+    finally:
+        os.close(fd)
+
+
+def test_snapshot_deferred_reports_writer_lock_wait(job, monkeypatch):
+    held, calls = [], []
+    run_lock = os.path.join(mcs_ocr.DATA, 'run.lock')
+
+    def local(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            fd = os.open(run_lock, os.O_WRONLY | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(fd)
+        return {'done': 1 if len(calls) == 1 else 0, 'deferred': 0}
+
+    try:
+        monkeypatch.setattr(attachment_inference, 'run_pending', local)
+        result = mcs_ocr.run(CFG)
+        assert result['reason'] == 'snapshot_deferred'
+        assert result['snapshot_failure'] == {'reason': 'writer_lock_wait'}
+        assert job.snapshots == 0
+    finally:
+        for fd in held:
+            os.close(fd)
+
+
+def test_snapshot_deferred_reports_exhausted_publish_window(job, monkeypatch):
+    monkeypatch.setattr(mcs_ocr, 'DRAIN_BUDGET_S', 200)
+    calls = []
+
+    def local(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            with open(mcs_ocr.DB, 'r+b') as stream:
+                stream.truncate(600 * 1024 * 1024)
+        return {'done': 1 if len(calls) == 1 else 0, 'deferred': 0}
+
+    monkeypatch.setattr(attachment_inference, 'run_pending', local)
+    result = mcs_ocr.run(CFG)
+    assert result['reason'] == 'snapshot_deferred'
+    assert result['snapshot_failure'] == {'reason': 'publish_window_exhausted'}
+    assert job.snapshots == 0

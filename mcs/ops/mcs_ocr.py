@@ -152,6 +152,8 @@ def run(cfg=None):
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
             if fd is None:
                 result['reason'] = 'snapshot_deferred'
+                result['snapshot_failure'] = {'reason': ('publish_window_exhausted'
+                                                         if remaining <= 0 else 'writer_lock_wait')}
             else:
                 try:
                     if writer_lock.updater_state() != generation:
@@ -161,6 +163,12 @@ def run(cfg=None):
                         if maintenance.refresh_snapshot(DB, force=True,
                                 deadline=deadline) is None:
                             result['reason'] = 'snapshot_deferred'
+                            failure = snapshots.last_failure()
+                            if failure:
+                                result['snapshot_failure'] = failure
+                            timing = snapshots.last_timing()
+                            if timing:
+                                result['snapshot_timing'] = timing
                 finally:
                     os.close(fd)
         return result
