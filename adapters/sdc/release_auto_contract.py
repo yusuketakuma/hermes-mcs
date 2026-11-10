@@ -298,6 +298,26 @@ def parse_typed(raw, definition, *, max_bytes=AUTO_INPUT_BYTES):
     return _validate(definition, value)
 
 
+def parse_document(raw, definition, *, max_bytes):
+    """wire上限を超えるlocal耐久文書(owner state等)用。depth/node検査は同一。"""
+    _check(type(max_bytes) is int and AUTO_INPUT_BYTES < max_bytes <= 8 * 1024 * 1024)
+    data = raw.encode('utf-8') if isinstance(raw, str) else bytes(raw)
+    _check(len(data) <= max_bytes)
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ContractError('CONTRACT_INVALID') from None
+    try:
+        value = json.loads(text, parse_int=_parse_int, parse_float=_parse_float,
+                           parse_constant=_reject_constant, object_pairs_hook=_object_pairs)
+    except ContractError:
+        raise
+    except Exception:
+        raise ContractError('CONTRACT_INVALID') from None
+    _scan_value(value, 0, {'n': 0})
+    return _validate(definition, value)
+
+
 def canonical_typed(value, definition):
     """definition適合値のcanonical CJSON bytesを返す。"""
     _validate(definition, value)
