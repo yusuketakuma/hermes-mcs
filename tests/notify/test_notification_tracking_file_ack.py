@@ -54,6 +54,15 @@ def history(led, monkeypatch, request, tmp_path):
             "VALUES(100,'synthetic-third','synthetic-third.pdf','/tmp/fake-third.txt',10,?,'downloaded',?,?)",
             ('ab' * 32, NOW, NOW))
     with led.db:
+        queued = _latest_render(led)
+        if queued['delivery_id'] != old['delivery_id']:
+            # The resolver already issued an unclaimed retry. Supersede it
+            # through normal cancellation before modeling the later file set.
+            assert queued['state'] == 'queued'
+            assert led.db.execute(
+                'SELECT 1 FROM notification_delivery_attempts WHERE delivery_id=?',
+                (queued['delivery_id'],)).fetchone() is None
+            notify_cards._cancel_render(led.db, queued['delivery_id'], NOW + 2)
         assert notify_cards.issue_render(led.db, old['card_id'], SLACK, NOW + 2, [], force=True)
     successor = _latest_render(led)
     spec = json.loads(successor['spec_json'])
