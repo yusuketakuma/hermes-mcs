@@ -115,3 +115,19 @@ W13のcsdc設計メモ: 既存`fleet/`に新module（仮`fleet/auto-update/`）�
 - 未完: `apply-wire.js`/`signatures.js`/`registration.js`の同種修正、回帰テスト、`npm run check`
 - T40(thread/subprocess終了)・`maximum_now` HTTP入口の確認
 - stale文書（implementation-matrix/production-gates/readiness）更新
+
+## 8. v3.1パッケージ実施状況（2026-11-10時点）
+
+正本: `~/dev/csdc-autoupdate-spec/hermes_csdc_autoupdate_devin_v3_1/`（SHA256SUMS検証済み）。
+csdc側は `feat/mcs-autoupdate-v3-central`（worktree `~/workspace/csdc-autoupdate-v3`）、
+MCS側は `feat/mcs-autoupdate-v3-client`（本worktree）で実装。
+
+- C1契約層 `732cae5` / M1 Python契約+署名wrapper `4adb2d70`,`e256740b` / I1 parity実測済み
+- C2永続化 `a25450b`（migration 0020/0021、AutoRepository、slot guard）
+- C3 consent `cb3738e`+レビューR1–R7修正 `457392b`,`112c3a9`,`9d9333b`（policy guard・receipt束縛）
+- C4前半: artifact台帳・publication予約 `881e6b3`,`11c52fd`,`87ef9a3`
+- C8一部: policy admin `112c3a9`（preview/approve/revoke+専用grant）
+- M2前半: owner state基盤 `231ea529`、migration intent `724c13f7`
+- 未完: C4 finalize/register（metadata asset生成方式はCodex確認中）、enrollment provisioning、
+  C5–C8、M2残り（bridge/runtime）、M3–M9、I2–I7
+- flagは全て既定OFF。`run_sandbox.py`未実行
