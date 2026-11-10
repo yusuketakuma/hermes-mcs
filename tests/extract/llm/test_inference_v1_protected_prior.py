@@ -102,3 +102,28 @@ def test_same_source_reanchoring_can_restore_protected_axes_without_normal_repai
     assert not any(item.get('unverified') for item in current['symptoms'])
     assert quality.protected_lost(prior, current, body) == {}
     assert quality.improves(current, initial)
+
+
+@pytest.mark.parametrize("restorable", [True, False])
+def test_protected_loss_uses_existing_single_repair_without_weakening_retention(monkeypatch, restorable):
+    import extract_llm_engine as engine
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    original = copy.deepcopy(prior)
+    prompts = []
+
+    def call(prompt, **kwargs):
+        prompts.append(prompt)
+        assert len(prompts) <= 2, "protected repair must share the existing one-call slot"
+        return copy.deepcopy(first if len(prompts) == 1 or not restorable else repaired)
+
+    monkeypatch.setattr(engine, "_llm_call", call)
+    result = engine.llm_extract(body, protected_prior=prior)
+    assert result is not None and len(prompts) == 2
+    assert quality.protected_lost(prior, result, body) == ({} if restorable else {"symptoms": 1})
+    assert all(value in prompts[1] for value in ("咳", "family", "ongoing"))
+    assert prior == original
