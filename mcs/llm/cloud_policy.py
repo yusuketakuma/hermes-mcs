@@ -8,7 +8,6 @@ from itertools import chain
 import json
 import math
 
-from llm_retry import http_error
 import re
 import sqlite3
 import time
