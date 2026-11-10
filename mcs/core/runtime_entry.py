@@ -148,6 +148,33 @@ def _legacy():
     return RuntimeEntry()
 
 
+# ActiveOperation phases where release-start-intent.json must exist as an open
+# record bound to the same operation (02_DEVICE_PROTOCOL §2/§7).
+_INTENT_REQUIRED_PHASES = ('START_INTENT', 'STARTED', 'APPLIED', 'CANDIDATE_READY',
+                           'ACTIVATING')
+
+
+def _fence_consistent(store, owner, intent):
+    """owner.active と start-intent の相互整合。単独marker消失を許可とみなさない。
+
+    open intent は同一 operation/prepare_nonce の live active を要求し、
+    intent必須phaseの active は対応する open intent を要求する。
+    retired intent は終端証拠hashを持ち、より新しい in-flight operation を代理しない。
+    """
+    active = owner.get('active')
+    active_phase = active.get('phase') if isinstance(active, dict) else None
+    if intent is None:
+        return active_phase not in _INTENT_REQUIRED_PHASES
+    if intent.get('root_fingerprint') != store.root_fingerprint():
+        return False
+    if intent.get('phase') == 'retired':
+        return (intent.get('terminal_outcome_sha256') is not None
+                and active_phase not in _INTENT_REQUIRED_PHASES)
+    return (isinstance(active, dict)
+            and active.get('operation_id') == intent.get('operation_id')
+            and active.get('prepare_nonce') == intent.get('prepare_nonce'))
+
+
 def _hold(entry):
     global _CURRENT
     _CURRENT = entry
@@ -193,6 +220,8 @@ def acquire(runtime_home=None, *, shared=True, wait_s=Q_WAIT_S):
         try:
             owner = release_auto_state.load(store)
             intent = release_auto_state.load_intent(store)
+            if not _fence_consistent(store, owner, intent):
+                raise RuntimeEntryError('FENCE_INCONSISTENT')
         except Exception as error:
             lock_ctx.__exit__(None, None, None)
             if isinstance(error, release_auto_state.OwnerStateError):
@@ -244,6 +273,8 @@ def adopt(runtime_home=None, env=None):
         try:
             owner = release_auto_state.load(store)
             intent = release_auto_state.load_intent(store)
+            if not _fence_consistent(store, owner, intent):
+                raise RuntimeEntryError('FENCE_INCONSISTENT')
         except Exception as error:
             if isinstance(error, release_auto_state.OwnerStateError):
                 raise RuntimeEntryError(error.code) from error

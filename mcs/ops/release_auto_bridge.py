@@ -35,6 +35,32 @@ class BridgeError(RuntimeError):
         self.code = code
 
 
+# m3-autoupdate-design.md §6: every prerequisite must be explicitly measured.
+# The evaluator never guesses — a missing or non-True measurement is a blocker.
+_ELIGIBILITY_PREREQUISITES = (
+    'profile_measured',               # 実機profileが実測済み
+    'lock_profile_present',           # deployment/sdc-release-lock.json が実profile値で存在
+    'unmanaged_processes_cleared',    # 旧worker/別checkout/旧watchdogの適格性確認済み(AT090)
+    'hermes_contract_applicable',     # Hermes起動経路へbootstrap契約を適用可能
+    'lineworks_lock_verified',        # lineworks_adapterのrun.lock遵守を確認済み
+    'lock_dag_verified',              # C↔release lock交差・_apply_pipeline DAGを網羅済み
+    'bridge_completed',               # v1→v3 bridgeが verified まで完了
+)
+
+
+def evaluate_eligibility(measurements):
+    """§6の全前提を明示測定値だけで評価する。AUTO_ELIGIBLEの唯一の導出点。
+
+    measurementsは {前提名: True} のみを適格と認める。dict以外・欠落・
+    True以外の値(1/'yes'等)は全てblockerとしてfail-closedに倒す。
+    """
+    if not isinstance(measurements, dict):
+        measurements = {}
+    blockers = [name for name in _ELIGIBILITY_PREREQUISITES
+                if measurements.get(name) is not True]
+    return {'auto_eligible': not blockers, 'blockers': list(blockers)}
+
+
 def _check(ok, code='BRIDGE_HOLD'):
     if not ok:
         raise BridgeError(code)

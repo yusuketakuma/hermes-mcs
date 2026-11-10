@@ -1,0 +1,11 @@
+{
+  "category": "added",
+  "title": "v3自動更新の起動fence整合検査と適格性評価",
+  "summary": "v3管理下の業務プロセス起動時に、owner状態とstart-intent記録の相互整合を検査し、不整合なら起動を拒否します。また自動更新の適格性を明示測定値だけで評価する判定関数を追加しました。v3未移行の既存端末では従来どおり起動します。",
+  "upgrade": "追加操作は不要です。v3移行済み端末でのみ有効で、適格性が揃うまで自動更新は有効になりません。",
+  "details": [
+    "acquire/adoptがowner.activeとrelease-start-intent.jsonのoperation_id・prepare_nonce・終端証拠を相互照合し、単独marker消失やorphaned fenceをFENCE_INCONSISTENTで拒否する。",
+    "evaluate_eligibilityが§6の7前提（実profile測定・lock profile・非管理process排除・Hermes契約・lineworks lock・lock DAG・bridge完了）をTrue厳密値のみで評価し、AUTO_ELIGIBLEの唯一の導出点となる。"
+  ],
+  "refs": ["mcs/core/runtime_entry.py", "mcs/ops/release_auto_bridge.py"]
+}
