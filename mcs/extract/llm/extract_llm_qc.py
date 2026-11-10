@@ -67,6 +67,14 @@ def _prior_identity(prior):
     return tuple(prior[key] for key in ("artifact_id", "project_id", "message_id", "content", "model", "meta"))
 
 
+def _prior_matches(db, r, expected):
+    """Match a caller-pinned prior artifact before dispatch or a guarded write."""
+    if expected is None:
+        return True
+    prior = _prior_extract(db, r)
+    return prior is not None and _prior_identity(prior) == expected
+
+
 def _hold_sql(*, human=False, released=False):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
     ``released`` matches the same receipt minted under an older code contract."""

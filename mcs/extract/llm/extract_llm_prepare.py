@@ -12,6 +12,7 @@ from clinical_chunking import plan_chunks
 import inference_dependency_loss
 import extraction_context
 import extraction_medications
+import extract_quality
 from mcs_queries import (current_extract_pred,
                          json_or_null)
 from mcs_util import HOME, load_config, loads_dict
@@ -37,6 +38,8 @@ from extract_llm_provider import (
 )
 from extract_llm_qc import (
     _qc_feedback,
+    _prior_extract,
+    _prior_identity,
     _verify_created_artifact_tx,
     pending_pred,
 )
@@ -331,6 +334,12 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             block(_prepare_context_rejection(stage, error))
             continue
         context = r["_context"] = r["_frame"]["text"]
+        r.pop("_protected_prior", None)
+        r.pop("_expected_prior", None)
+        prior = _prior_extract(ledger.db, r)
+        if prior is not None and extract_quality.protected_assertions(loads_dict(prior["content"]), r["body_text"]):
+            r["_protected_prior"] = dict(prior)
+            r["_expected_prior"] = _prior_identity(prior)
         saved = {}
         if load_checkpoints:
             r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
