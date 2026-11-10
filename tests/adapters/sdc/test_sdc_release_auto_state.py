@@ -307,7 +307,8 @@ def finalize_fixture(store, doc_over=None, preflight_gen=None):
     seed(store, scope=doc['scope'],
          active=active_operation(operation_id=doc['operation_id'],
                                  attempt_key=doc['attempt_key'],
-                                 target=doc['target'], rollout=doc['rollout']),
+                                 target=doc['target'], rollout=doc['rollout'],
+                                 candidate_generation=doc['runtime_generation']),
          spent=[spent], verified_installed=release_ref(1))
     return doc, raw, term
 
@@ -339,11 +340,12 @@ def test_finalize_verified_atomic_and_replay(store):
                                     source_manifest_sha256=manifest,
                                     expected_execution_revision=99)
     assert again['revision'] == 2
-    # 別manifestを伴う再送は同一finalizeとみなさず拒否
-    with pytest.raises(state.OwnerStateError, match='TERMINAL_INCONSISTENT'):
-        state.finalize_verified(store, term, outcome_raw=raw,
-                                source_manifest_sha256='8' * 64,
-                                expected_execution_revision=99)
+    # manifest引数は再送時のreceipt条件ではない(現在baselineは進み得る)ため、
+    # 異なる値でもdurable証拠が整合する限り無変更で現stateを返す
+    replay_diff_manifest = state.finalize_verified(store, term, outcome_raw=raw,
+                                                   source_manifest_sha256='8' * 64,
+                                                   expected_execution_revision=99)
+    assert replay_diff_manifest['revision'] == 2
     # 同一opの別terminalはconflict
     forged = dict(term, proof_sha256='0' * 64)
     with pytest.raises(state.OwnerStateError, match='TERMINAL_CONFLICT'):
@@ -406,6 +408,88 @@ def test_finalize_verified_outcome_binding(store):
                                 expected_execution_revision=1)
 
 
+def runtime_proof(operation_id, target, generation, **over):
+    """RuntimeProof v3 fixture(services最小1件)。"""
+    proof = {'schema_version': 'mcs.runtime-proof.v3',
+             'proof_id': '92345678-1234-4234-8234-123456789abc',
+             'operation_id': operation_id, 'release': target,
+             'profile_sha256': 'a' * 64, 'control_closure_sha256': 'b' * 64,
+             'runtime_generation': generation, 'boot_id': 'c' * 64,
+             'startup_nonce': 'd' * 64,
+             'services': [{'service_id': 'svc-a', 'desired_kind': 'resident',
+                           'proof_id': 'a2345678-1234-4234-8234-123456789abc',
+                           'process_instance_id': None, 'pid': None,
+                           'birth_witness': None, 'loaded_source_sha256': None,
+                           'state': 'running', 'observed_at': 100,
+                           'previous_heartbeat_at': None}],
+             'activation_receipt_id': 'b2345678-1234-4234-8234-123456789abc',
+             'observed_at': 100}
+    proof.update(over)
+    return proof
+
+
+def test_finalize_verified_generation_binding(store):
+    """r29: outcome.runtime_generationはactive.candidate_generation(認証済み
+    target世代)への一致を要求し、未記録・旧世代・proof不整合を拒否する。"""
+    doc, raw, term = finalize_fixture(store)
+    manifest = '7' * 64
+    # candidate_generation未記録は相関先が無いため拒否
+    base = state.load(store)
+    store.write(state.OWNER_NAME,
+                dict(base, active=dict(base['active'], candidate_generation=None)))
+    with pytest.raises(state.OwnerStateError, match='OUTCOME_MISMATCH'):
+        state.finalize_verified(store, term, outcome_raw=raw,
+                                source_manifest_sha256=manifest,
+                                expected_execution_revision=1)
+    # 旧世代(preflight世代)のoutcomeはcandidate世代と一致せず拒否
+    doc2, raw2, term2 = finalize_fixture(store)
+    old = dict(doc2, runtime_generation=1)
+    old_raw = json.dumps(old, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
+    old_sha = hashlib.sha256(old_raw.encode()).hexdigest()
+    with pytest.raises(state.OwnerStateError, match='OUTCOME_MISMATCH'):
+        state.finalize_verified(store, terminal_record(doc2['operation_id'],
+                                                       doc2['attempt_key'],
+                                                       outcome_sha256=old_sha),
+                                outcome_raw=old_raw, source_manifest_sha256=manifest,
+                                expected_execution_revision=1)
+    # runtime_proofがある場合はoperation/release/世代の一致を追加要求
+    doc3, raw3, term3 = finalize_fixture(store)
+    base = state.load(store)
+    good = runtime_proof(doc3['operation_id'], doc3['target'], doc3['runtime_generation'])
+    store.write(state.OWNER_NAME,
+                dict(base, active=dict(base['active'], runtime_proof=good)))
+    result = state.finalize_verified(store, term3, outcome_raw=raw3,
+                                     source_manifest_sha256=manifest,
+                                     expected_execution_revision=1)
+    assert result['runtime_generation'] == doc3['runtime_generation']
+    # proof世代不一致は拒否
+    doc4, raw4, term4 = finalize_fixture(store)
+    base = state.load(store)
+    bad = runtime_proof(doc4['operation_id'], doc4['target'],
+                        doc4['runtime_generation'] + 1)
+    store.write(state.OWNER_NAME,
+                dict(base, active=dict(base['active'], runtime_proof=bad)))
+    with pytest.raises(state.OwnerStateError, match='RUNTIME_PROOF_MISMATCH'):
+        state.finalize_verified(store, term4, outcome_raw=raw4,
+                                source_manifest_sha256=manifest,
+                                expected_execution_revision=1)
+
+
+def test_spent_grant_id_unique(store):
+    """SEM29/r30: grant_idはspent全体で一意。同grant再利用を両入口で拒否。"""
+    grant = '62345678-1234-4234-8234-123456789abc'
+    seed(store, spent=[spent_record(operation_id=U, attempt_key='a' * 64,
+                                    grant_id=grant)])
+    dup = spent_record(operation_id='72345678-1234-4234-8234-123456789abc',
+                       attempt_key='b' * 64, grant_id=grant)
+    with pytest.raises(state.OwnerStateError, match='GRANT_REUSE'):
+        state.record_spent(store, dup)
+    base = state.load(store)
+    with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
+        state.save(store, dict(base, revision=2, execution_revision=2,
+                               spent=base['spent'] + [dup]))
+
+
 def test_finalize_verified_ack_loss_allows_next_update(store):
     """R20/R25: outbox未ACKのまま異なるtargetへの次更新(A→B→C)を完遂できる。"""
     doc_b, raw_b, term_b = finalize_fixture(store)
@@ -433,7 +517,8 @@ def test_finalize_verified_ack_loss_allows_next_update(store):
                            execution_revision=base['execution_revision'] + 1,
                            active=active_operation(operation_id=doc_c['operation_id'],
                                                    attempt_key=doc_c['attempt_key'],
-                                                   target=target_c, rollout=doc_c['rollout']),
+                                                   target=target_c, rollout=doc_c['rollout'],
+                                                   candidate_generation=doc_c['runtime_generation']),
                            spent=base['spent'] + [dict(
                                spent_record(operation_id=doc_c['operation_id'],
                                             attempt_key=doc_c['attempt_key'],
@@ -459,6 +544,13 @@ def test_finalize_verified_ack_loss_allows_next_update(store):
     value = state.load(store)
     assert value['verified_installed'] == target_c
     assert value['outbox'][0]['acknowledged'] is True
+    # C採用後のB exact finalize再送は過去opの耐久証拠で照合し、
+    # 現在Cをreceipt条件にせず無変更で現stateを返す
+    replay_b = state.finalize_verified(store, term_b, outcome_raw=raw_b,
+                                       source_manifest_sha256='7' * 64,
+                                       expected_execution_revision=99)
+    assert replay_b['verified_installed'] == target_c
+    assert replay_b['revision'] == value['revision']
 
 
 def test_spent_outcome_highwater_exact_append_only(store):
@@ -486,10 +578,13 @@ def test_spent_outcome_highwater_exact_append_only(store):
             U, 'c' * 64, state_name='CANCELLED_NO_EFFECT')])
     # spent同op別attempt・同attempt別opの追加
     with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
-        attempt(spent=base['spent'] + [spent_record(operation_id=U, attempt_key='d' * 64)])
+        attempt(spent=base['spent'] + [spent_record(
+            operation_id=U, attempt_key='d' * 64,
+            grant_id='72345678-1234-4234-8234-123456789abc')])
     with pytest.raises(state.OwnerStateError, match='SPENT_REGRESSION'):
         attempt(spent=base['spent'] + [spent_record(
-            operation_id='a2345678-1234-4234-8234-123456789abc', attempt_key='5' * 64)])
+            operation_id='a2345678-1234-4234-8234-123456789abc', attempt_key='5' * 64,
+            grant_id='82345678-1234-4234-8234-123456789abc')])
     # bindings同seq別release_id・重複pair拒否、新seq追加は許可
     with pytest.raises(state.OwnerStateError, match='BINDINGS_REGRESSION'):
         attempt(bindings=[{'code_seq': 1, 'release_id': '0' * 64}])

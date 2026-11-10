@@ -117,12 +117,13 @@ def _check_monotonic(before, after):
     # spent/outcomesはexact recordのappend-onlyかつkey一意:
     # 同operation_id/attempt_keyの既存recordは全値一致を要求し、
     # 削除・フィールド改変・key再利用・同op別attempt/同attempt別opを拒否する。
-    spent_ops, spent_keys = set(), set()
+    spent_ops, spent_keys, spent_grants = set(), set(), set()
     for s in after['spent']:
-        _check(s['operation_id'] not in spent_ops and s['attempt_key'] not in spent_keys,
-               'SPENT_REGRESSION')
+        _check(s['operation_id'] not in spent_ops and s['attempt_key'] not in spent_keys
+               and s['grant_id'] not in spent_grants, 'SPENT_REGRESSION')
         spent_ops.add(s['operation_id'])
         spent_keys.add(s['attempt_key'])
+        spent_grants.add(s['grant_id'])
     for old in before['spent']:
         match = [n for n in after['spent']
                  if n['operation_id'] == old['operation_id'] and n['attempt_key'] == old['attempt_key']]
@@ -227,6 +228,7 @@ def record_spent(store, record):
         value = load(store)
         _check(all(s['operation_id'] != record['operation_id'] for s in value['spent']), 'SPENT_DUPLICATE')
         _check(all(s['attempt_key'] != record['attempt_key'] for s in value['spent']), 'ATTEMPT_REUSE')
+        _check(all(s['grant_id'] != record['grant_id'] for s in value['spent']), 'GRANT_REUSE')
         value['spent'].append(record)
         value['revision'] += 1
         value['execution_revision'] += 1
@@ -296,13 +298,27 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
         current = load(store)
         prior = next((o for o in current['outcomes'] if o['operation_id'] == term['operation_id']), None)
         if prior is not None:
-            # exact finalize再送: durable記録がatomic確定と整合する場合のみ
-            # 現在state(Cが進んだ後を含む)をそのまま返し巻き戻さない
+            # exact finalize再送: 過去op自身の耐久証拠(SPENT・binding・outbox)
+            # で確定を照合する。現在baselineは後続updateで進み得るため
+            # receipt条件にせず、C採用後のB再送を拒否しない。
             _check(prior == term, 'TERMINAL_CONFLICT')
+            spent_prior = next((s for s in current['spent']
+                                if s['operation_id'] == term['operation_id']
+                                and s['attempt_key'] == term['attempt_key']), None)
+            bound = next((b for b in current['bindings']
+                          if b['code_seq'] == outcome['target']['code_seq']), None)
             durable = (
-                current['installed_source_manifest_sha256'] == source_manifest_sha256
-                and current['verified_source_manifest_sha256'] == source_manifest_sha256
-                and outcome['verified_installed'] == current['verified_installed']
+                spent_prior is not None
+                and outcome['scope'] == current['scope']
+                and outcome['grant_id'] == spent_prior['grant_id']
+                and outcome['rollout'] == spent_prior['public_preflight']['rollout']
+                and outcome['runtime_generation']
+                    > spent_prior['public_preflight']['runtime_generation']
+                and outcome['verified_installed'] == outcome['target']
+                and bound is not None
+                and bound['release_id'] == outcome['target']['release_id']
+                and _ref_not_regressed(outcome['verified_installed'],
+                                       current['verified_installed'])
                 and any(e['report_id'] == entry['report_id']
                         and e['operation_id'] == entry['operation_id']
                         and e['raw'] == entry['raw'] and e['sha256'] == entry['sha256']
@@ -318,16 +334,26 @@ def finalize_verified(store, terminal, *, outcome_raw, source_manifest_sha256,
                       and s['attempt_key'] == term['attempt_key']), None)
         _check(spent is not None, 'SPENT_MISSING')
         # Outcomeをactive/SPENTの独立記録へ相関束縛する。
-        # runtime_generationは更新後の新しいruntime世代が観測した証拠なので、
-        # preflight時点・現在owner記録の双方より大きいことを要求する。
+        # runtime_generationは認証済みtarget世代(active.candidate_generation、
+        # runtime_proof存在時はそのruntime_generation)への一致を要求する。
+        # preflight時点・現在owner記録より大きいことも単調性として維持する。
+        candidate = active['candidate_generation']
         _check(outcome['scope'] == current['scope']
                and outcome['grant_id'] == spent['grant_id']
+               and candidate is not None
+               and outcome['runtime_generation'] == candidate
                and outcome['runtime_generation'] > spent['public_preflight']['runtime_generation']
                and outcome['runtime_generation'] > current['runtime_generation']
                and outcome['rollout'] == active['rollout']
                and outcome['rollout'] == spent['public_preflight']['rollout']
                and outcome['target'] == active['target']
                and outcome['verified_installed'] == active['target'], 'OUTCOME_MISMATCH')
+        proof = active['runtime_proof']
+        if proof is not None:
+            _check(proof['operation_id'] == term['operation_id']
+                   and proof['release'] == active['target']
+                   and proof['runtime_generation'] == outcome['runtime_generation'],
+                  'RUNTIME_PROOF_MISMATCH')
         _check(_ref_not_regressed(current['verified_installed'], active['target']), 'TARGET_REGRESSION')
         new = copy.deepcopy(current)
         new['outcomes'].append(term)
