@@ -2,7 +2,7 @@
 
 作成: Devin、2026-11-10。対象spec: `hermes_csdc_autoupdate_devin_v3_1` 02§1.1/1.2/4/11.1、04 W04–W06、09 M3行。
 前提: P0棚卸し（`docs/dev-records/p0-auto-update-inventory.md`）の実測DAG・caller証拠を正本とする。C0契約mirror済み。
-**本書は設計案であり製品コード未着手。** 実profile未測定・`deployment/sdc-release-lock.json`欠損のため `AUTO_ELIGIBLE=false` を維持する。bridge実実行・実機・外部変更は未承認。
+**M3実装完了（合成試験GREEN・126件）。** 実profile未測定・`deployment/sdc-release-lock.json`欠損のため `AUTO_ELIGIBLE=false` を維持する。bridge実実行・実機・外部変更は未承認。`-I -S` launcher形態のdeployment側強制と世代別pycache prefix実配線はM5/M6へ繰越（公開面 `pycache_prefix`/`child_env`/`pass_fds`/`adopt` は契約test済み）。
 
 ## 1. 成果物と配置
 
@@ -153,13 +153,15 @@ P0で判明した`_run_native_release`/`_issue_planning_consent`/`_prepare_nativ
 
 ## 7. RED試験構成（合成・実装後に有効化）
 
-| test file案 | 対象 | 主なcase（AT対応） |
-|---|---|---|
-| `tests/adapters/sdc/test_release_auto_bridge.py` | bridge検証/manifest/migration拒否 | manifest hash循環拒否、closure digest不一致、未列挙sidecar拒否、pending/unknown/spent/successor移行拒否（AT086）、crash各点resume（AT087）、`.prev`世代維持 |
-| `tests/mcs_ops/test_runtime_entry.py` | bootstrap/Q/pycache | import前Q SH取得、Q EX中の新process SH拒否/待機（AT055）、import途中切替禁止（AT068）、旧pyc不採用（AT069）、start-intent不整合起動拒否、sourceless pyc/shadowing/PYTHONPATH拒否 |
-| `tests/mcs_ops/test_q_lock_dag.py` | lock順序 | `Q→C`順序強制、C→Q逆順なし、Q EX取得=SH保持者0の証明、FD継承（子/孫）、borrowed FD identity照合 |
-| `tests/mcs_ops/test_launcher_coverage.py` | 入口coverage | 全launcherがbootstrap経由、`--role`引数のみでgate迂回不可、独立slot起動の親identity検証、未対応profileのAUTO_ELIGIBLE=false |
-| `tests/mcs_ops/test_bridge_eligibility.py` | 適格性 | §6の各条件でfalse、旧worker/別checkout/旧watchdog検出でfalse（AT090） |
+| test file（実配置） | 対象 | 主なcase（AT対応） | 状態 |
+|---|---|---|---|
+| `tests/ops/test_release_auto_bridge.py` | bridge検証/manifest/migration拒否 | manifest hash循環拒否、closure digest不一致、未列挙sidecar拒否、pending/unknown/spent/successor移行拒否（AT086）、crash各点resume（AT087）、`.prev`世代維持 | 24件 GREEN |
+| `tests/core/test_runtime_entry.py` | bootstrap/Q/pycache | import前Q SH取得、Q EX中の新process SH拒否/待機（AT055）、start-intent不整合起動拒否、sourceless pyc/shadowing/PYTHONPATH拒否（AT069段階的） | 18件 GREEN |
+| `tests/core/test_q_lock_dag.py` | lock順序 | `Q→C`順序・C→Q逆順なし、Q EX取得=SH保持者0の証明、FD継承（子）、borrowed FD identity照合、fence不整合起動拒否 | 6件 GREEN |
+| `tests/core/test_launcher_coverage.py` | 入口coverage | 全`__main__.py`分類、managed入口acquire/role迂回なし、子process継承面契約 | 6件 GREEN |
+| `tests/ops/test_bridge_eligibility.py` | 適格性 | §6の各条件でfalse、旧worker/別checkout/旧watchdog検出でfalse（AT090） | 24件 GREEN |
+
+配置差異: 案の`tests/mcs_ops/`はrepo慣行に合わせ`tests/core/`（runtime_entry系）と`tests/ops/`（bridge系）へ。import途中切替禁止（AT068）はQ SH寿命で構造的に担保済みだが専用caseはM6のpycache実配線時に追加。
 
 全て一時HOME/DB/Git/署名fixture・偽transport/偽service。実機・実サービス・実鍵不使用。`run_sandbox.py`は別途。
 
