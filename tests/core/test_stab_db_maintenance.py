@@ -276,6 +276,19 @@ def test_snapshot_verify_budget_grows_with_size(tmp_path, monkeypatch):
     assert snapshots.snapshot_verify_timeout_s(str(small)) >= 90
 
 
+def test_snapshot_work_deadline_reserves_verify_budget_and_tail(tmp_path, monkeypatch):
+    db = tmp_path / "ledger.db"
+    db.write_bytes(b"x")
+    deadline = 1000.0
+    monkeypatch.setattr(ledger.os.path, "getsize", lambda _p: 0)
+    assert snapshots.snapshot_work_deadline(deadline, str(db)) == pytest.approx(
+        deadline - snapshots.SNAPSHOT_VERIFY_TIMEOUT_S - snapshots.SNAPSHOT_WORK_TAIL_S)
+    monkeypatch.setattr(ledger.os.path, "getsize", lambda _p: 4 * 1024 ** 3)
+    assert snapshots.snapshot_work_deadline(deadline, str(db)) == pytest.approx(
+        deadline - snapshots.SNAPSHOT_VERIFY_TIMEOUT_S - snapshots.SNAPSHOT_VERIFY_EXTRA_MAX_S
+        - snapshots.SNAPSHOT_WORK_TAIL_S)
+
+
 # ---------- M7: backup respects the hard deadline ----------
 
 def test_backup_copy_stops_at_the_deadline(tmp_path, monkeypatch):

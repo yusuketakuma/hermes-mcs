@@ -6,6 +6,7 @@ import pytest
 import attachment_inference
 import maintenance
 import mcs_ocr
+import snapshots
 from test_attachment_inference import page_store  # noqa: F401
 from test_attachment_inference_checkpoints import _long_page
 from test_cloud_after_local import local_then_cloud  # noqa: F401
@@ -175,6 +176,62 @@ def test_live_config_failure_stops_units_without_erasing_saved_counts(job, monke
     result = mcs_ocr.run()
     assert result['local_done'] == 1 and result['reason'] == 'config_invalid'
     assert job.snapshots == 0 and job.closed
+
+
+def test_snapshot_publication_keeps_absolute_deadline_behind_size_reserve(job, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(mcs_ocr.time, 'monotonic', lambda: clock[0])
+    work_deadline = snapshots.snapshot_work_deadline(
+        clock[0] + mcs_ocr.DRAIN_BUDGET_S, mcs_ocr.DB)
+    local_deadlines, raw_deadlines, refresh_deadlines = [], [], []
+    local_calls = []
+
+    def local(*args, **kwargs):
+        local_deadlines.append(kwargs['deadline'])
+        local_calls.append(True)
+        return {'done': 1 if len(local_calls) == 1 else 0, 'deferred': 0}
+
+    def raw(*args, **kwargs):
+        raw_deadlines.append(kwargs['deadline'])
+        return {'complete': 0}
+
+    def refresh(*args, **kwargs):
+        refresh_deadlines.append(kwargs['deadline'])
+        return 'published'
+
+    monkeypatch.setattr(attachment_inference, 'run_pending', local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending', raw)
+    monkeypatch.setattr(maintenance, 'refresh_snapshot', refresh)
+    result = mcs_ocr.run(CFG)
+    assert result.get('reason') != 'snapshot_deferred'
+    assert local_deadlines and all(d <= work_deadline - 5 for d in local_deadlines)
+    assert raw_deadlines == [work_deadline - 5]
+    assert refresh_deadlines == [clock[0] + mcs_ocr.DRAIN_BUDGET_S]
+
+
+@pytest.mark.parametrize('grow', [True, False])
+def test_snapshot_budget_reevaluates_source_size_before_publish(job, monkeypatch, grow):
+    clock = [100.0]
+    monkeypatch.setattr(mcs_ocr.time, 'monotonic', lambda: clock[0])
+    grown, calls = [], []
+
+    def local(*args, **kwargs):
+        clock[0] = 850.0
+        calls.append(True)
+        if grow and not grown:
+            grown.append(True)
+            with open(mcs_ocr.DB, 'r+b') as stream:
+                stream.truncate(800 * 1024 * 1024)
+        return {'done': 1 if len(calls) == 1 else 0, 'deferred': 0}
+
+    monkeypatch.setattr(attachment_inference, 'run_pending', local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending',
+                        lambda *args, **kwargs: {'complete': 0})
+    result = mcs_ocr.run(CFG)
+    if grow:
+        assert result['reason'] == 'snapshot_deferred' and job.snapshots == 0
+    else:
+        assert result.get('reason') is None and job.snapshots == 1
 
 
 def test_local_page_budget_completes_two_slow_chunks_in_one_drain(page_store, monkeypatch):

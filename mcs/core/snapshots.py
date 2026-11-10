@@ -26,6 +26,9 @@ SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
 # leaves several times the measured read speed as headroom.
 SNAPSHOT_VERIFY_RATE_BPS = 4 * 1024 * 1024
 SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
+# Fixed room every caller keeps after the size-based verify budget: the
+# copy, the marker write and the caller's own tail all draw from it.
+SNAPSHOT_WORK_TAIL_S = 30.0
 
 
 def snapshot_verify_timeout_s(path: str) -> float:
@@ -36,6 +39,15 @@ def snapshot_verify_timeout_s(path: str) -> float:
         size = 0
     return SNAPSHOT_VERIFY_TIMEOUT_S + min(
         SNAPSHOT_VERIFY_EXTRA_MAX_S, size / SNAPSHOT_VERIFY_RATE_BPS)
+
+
+def snapshot_work_deadline(deadline: float, source_db: str) -> float:
+    """Latest monotonic time optional work may run until: ``deadline``
+    minus the source-size snapshot verification budget and the fixed tail,
+    so a needed publish still fits inside the same absolute deadline."""
+    return deadline - snapshot_verify_timeout_s(source_db) - SNAPSHOT_WORK_TAIL_S
+
+
 class _PublicationStatus(threading.local):
     def __init__(self):
         self.failure = {}

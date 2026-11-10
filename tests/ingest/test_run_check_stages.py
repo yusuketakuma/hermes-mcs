@@ -657,6 +657,16 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     db.close()
 
 
+def test_snapshot_work_deadline_delegates_to_shared_helper(tmp_path):
+    import snapshots
+    db = _ledger(tmp_path)
+    deadline = time.monotonic() + 400
+    source_db = db.db.execute("PRAGMA database_list").fetchone()[2]
+    assert run_check._snapshot_work_deadline(db, deadline) == (
+        snapshots.snapshot_work_deadline(deadline, source_db))
+    db.close()
+
+
 def test_semantic_run_defers_when_size_reserve_exceeds_window(tmp_path, monkeypatch):
     """Large source DBs reserve more than the fixed floor: once the shared
     work deadline leaves under SEMANTIC_MIN_WORK_S the drain must not start,

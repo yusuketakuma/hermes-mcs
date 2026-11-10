@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "添付OCR処理がスナップショット検証に必要な時間をサイズに応じて確保",
+  "summary": "添付OCRの独立処理が、読み取り専用スナップショットの公開に必要な検証時間をデータベースサイズに応じてあらかじめ確保するようになりました。これまで公開処理には約5秒しか割り当てられず、大きなデータベースでは検証が期限内に終わらず公開が繰り返し延期されていました。処理と公開は同じ絶対期限を共有し、公開直前にサイズ変化を再評価して足りなければ従来どおり延期します。",
+  "upgrade": "追加操作は不要です。OCR・ローカル解析の処理順、失敗時の理由区分（writer_blocked・config_invalid・disabled・busy・writer_busy・snapshot_deferred・local_processing_failed など）は従来どおりです。",
+  "details": [
+    "snapshots.snapshot_work_deadline を追加し、run_check の派生処理・意味解析と添付OCR処理が同じ「検証予算＋固定余白」を使うよう共通化しました。",
+    "mcs_ocr は作業系（run.lock 待機・ローカル解析・OCR呼出）へ work_deadline を渡し、スナップショット公開には残り全量の絶対期限を渡します。公開前にデータベースサイズを再評価し、予算が足りなければ snapshot_deferred で安全に見送ります。"
+  ],
+  "refs": [
+    "mcs/core/snapshots.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ops/mcs_ocr.py",
+    "tests/ops/test_ocr_independent_drain.py",
+    "tests/ops/test_mcs_ocr_entry.py",
+    "tests/core/test_stab_db_maintenance.py",
+    "tests/ingest/test_run_check_stages.py"
+  ]
+}

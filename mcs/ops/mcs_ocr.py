@@ -120,9 +120,13 @@ def run(cfg=None):
     ledger = None
     deadline = time.monotonic() + DRAIN_BUDGET_S
     try:
+        import snapshots
+        # Work yields the size-based verify budget plus the fixed tail so a
+        # needed snapshot publish still fits inside the same absolute deadline.
+        work_deadline = snapshots.snapshot_work_deadline(deadline, DB)
         fd = acquire_run_lock(os.path.join(DATA, 'run.lock'))
         if fd is None:
-            remaining = deadline - time.monotonic() - 5
+            remaining = work_deadline - time.monotonic() - 5
             fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
@@ -131,15 +135,18 @@ def run(cfg=None):
         try:
             if writer_lock.updater_state() != generation:
                 return {'reason': 'writer_blocked'}
-            if time.monotonic() >= deadline - 5:
+            if time.monotonic() >= work_deadline - 5:
                 return {'reason': 'writer_busy'}
             ledger = Ledger(DB)
         finally:
             os.close(fd)
-        result = _drain(ledger, cfg, generation, deadline, live_config=live_config)
+        result = _drain(ledger, cfg, generation, work_deadline, live_config=live_config)
         if result.get('reason') != 'config_invalid' and (
                 result.get('complete', 0) or result.get('empty', 0) or result['local_done']):
-            remaining = min(5, deadline - time.monotonic())
+            now = time.monotonic()
+            remaining = min(5, deadline - now)
+            if snapshots.snapshot_work_deadline(deadline, DB) <= now:
+                remaining = 0
             fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
@@ -152,7 +159,7 @@ def run(cfg=None):
                     else:
                         import maintenance
                         if maintenance.refresh_snapshot(DB, force=True,
-                                deadline=min(deadline, time.monotonic() + 5)) is None:
+                                deadline=deadline) is None:
                             result['reason'] = 'snapshot_deferred'
                 finally:
                     os.close(fd)

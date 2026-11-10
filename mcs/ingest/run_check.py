@@ -201,7 +201,7 @@ def _snapshot_work_deadline(ledger, deadline: float) -> float:
     minus the source-size snapshot verification budget and the fixed tail."""
     import snapshots
     source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
-    return deadline - snapshots.snapshot_verify_timeout_s(source_db) - 30
+    return snapshots.snapshot_work_deadline(deadline, source_db)
 
 
 def stage_derive(ledger, result, deadline, cfg=None,

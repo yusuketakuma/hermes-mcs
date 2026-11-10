@@ -6,6 +6,7 @@ import pytest
 import attachment_inference
 import mcs_config
 import mcs_ocr
+import snapshots
 
 
 
@@ -248,6 +249,8 @@ def test_ocr_call_deadline_is_the_job_residual_not_runtime_window(tmp_path, monk
     monkeypatch.setattr(mcs_ocr, 'DATA', str(tmp_path))
     monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(mcs_ocr, 'Ledger', lambda path: SimpleNamespace(close=lambda: None))
+    now = [1000.0]
+    monkeypatch.setattr(mcs_ocr.time, 'monotonic', lambda: now[0])
     received = []
     monkeypatch.setattr(attachment_inference, 'run_pending',
                         lambda *args, **kwargs: {'done': 0, 'deferred': 0})
@@ -255,7 +258,9 @@ def test_ocr_call_deadline_is_the_job_residual_not_runtime_window(tmp_path, monk
                         lambda *args, **kwargs: received.append(kwargs['deadline']) or {'complete': 0})
     mcs_ocr.run(cfg)
     assert len(received) == 1
-    assert received[0] - mcs_ocr.time.monotonic() > mcs_ocr.DRAIN_BUDGET_S - 6
+    work_deadline = snapshots.snapshot_work_deadline(
+        now[0] + mcs_ocr.DRAIN_BUDGET_S, str(database))
+    assert received == [work_deadline - 5]
 
 
 @pytest.mark.parametrize("outcome", ["ready", "busy", "updated", "deadline", "cancelled"])
@@ -270,6 +275,8 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: generation[0])
     closed, waits, opened, drained = [], [], [], []
+    work_deadline = snapshots.snapshot_work_deadline(
+        now[0] + mcs_ocr.DRAIN_BUDGET_S, str(database))
     locks = iter((101, None))
     monkeypatch.setattr(mcs_ocr, "acquire_run_lock", lambda path: next(locks))
     monkeypatch.setattr(mcs_ocr.os, "close", closed.append)
@@ -278,7 +285,7 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     def wait(path, *, wait_s, expected_code_stamp, marker_path):
         waits.append(path)
         assert path == str(tmp_path / "run.lock")
-        assert wait_s == mcs_ocr.DRAIN_BUDGET_S - 5
+        assert wait_s == work_deadline - now[0] - 5
         assert expected_code_stamp == 7
         assert marker_path == str(tmp_path / "update_in_progress.marker")
         if outcome == "cancelled":
@@ -300,7 +307,7 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     def drain(ledger, settings, state, deadline, *, live_config):
         assert closed == [102]
         assert settings is cfg and state == (False, 7) and live_config is False
-        assert deadline == 100 + mcs_ocr.DRAIN_BUDGET_S
+        assert deadline == work_deadline
         drained.append(deadline)
         return {"local_done": 0, "local_deferred": 0}
 
