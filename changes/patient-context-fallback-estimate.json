@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "ローカル代替で完了した資料を未走査件数へ重ねて数えない",
+  "summary": "患者コンテキストをローカル代替で処理した後、進捗の見積りに処理済み資料が未走査として残る問題を修正します。",
+  "upgrade": "追加設定は不要です。既存の更新手順で適用してください。クラウドへの明示的な切替時に必要な走査や、課金履歴・品質の確認条件は維持します。",
+  "details": [
+    "走査の実行、完了範囲、待機判定、件数見積りで、検証済みローカル代替の再利用条件を共通の関数へまとめます。ローカル代替の記録は厳密にtrueの場合だけ再利用し、文字列や整数は同じ扱いにしません。",
+    "ローカル専用の契約からクラウドへ切り替えた資料は、従来どおり原文の再走査を必要とします。推論・品質確認・公開・概況生成の回数制限は変更しません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_refresh.py",
+    "tests/patients/test_context_pending_cloud_coverage.py",
+    "tests/patients/test_context_fallback_cloud_progress.py"
+  ]
+}

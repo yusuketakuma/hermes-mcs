@@ -2,6 +2,8 @@
 from contextlib import contextmanager
 import copy
 
+import pytest
+
 import cloud_policy
 import extract_llm
 import patient_context_refresh as refresh
@@ -124,3 +126,11 @@ def test_pinned_estimate_never_resolves_availability(runtime, monkeypatch):
         AssertionError('pinned estimate must not resolve credentials')))
     result = readiness.pending_estimate(led.db, 1, CFG, contract=contract)
     assert result['scan_sources'] == 1
+
+
+@pytest.mark.parametrize('marker,required', [(True, False), (False, True), (1, True), ('true', True), (None, True)])
+def test_cloud_scan_fallback_marker_is_strict_and_shared(marker, required):
+    scan = {'_source_meta': {'local_fallback': marker}}
+    assert readiness._needs_cloud_scan(scan, True) is required
+    assert readiness._needs_cloud_scan(scan, False) is False
+    assert readiness._needs_cloud_scan({**scan, '_provider_contract': {'backend': 'cloud'}}, True) is False

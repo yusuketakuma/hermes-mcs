@@ -137,12 +137,17 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
         return False
 
 
+def _needs_cloud_scan(scan, cloud_scan):
+    """Keep verified local fallback eligibility identical for scheduling and progress."""
+    return (cloud_scan and not scan.get('_provider_contract')
+            and scan.get('_source_meta', {}).get('local_fallback') is not True)
+
+
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=None):
     sources = snapshot["sources"]
     scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
     cloud_scanned = (not snapshot["contract"].get("provider") or all(
-        (scans.get(context_plan.source_key(source), {}).get("_provider_contract")
-         or scans.get(context_plan.source_key(source), {}).get("_source_meta", {}).get("local_fallback") is True)
+        not _needs_cloud_scan(scans.get(context_plan.source_key(source), {}), True)
         for source in sources if context_plan.source_usable(source)))
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "skipped", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
@@ -427,8 +432,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             scan = stored.get(context_plan.source_key(source), {})
             scans.append(scan)
             # Local audits and summaries may advance while raw cloud inspection remains due.
-            required_scans.append({} if cloud_scan and not scan.get("_provider_contract")
-                                  and scan.get("_source_meta", {}).get("local_fallback") is not True else scan)
+            required_scans.append({} if _needs_cloud_scan(scan, cloud_scan) else scan)
     recheck_available = False
     quality_required = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     if (not estimate and quality_required
@@ -509,7 +513,7 @@ def pending_estimate(db, pid, cfg, *, now=None, contract=None):
         if pending["A"]:
             totals["input_chars"] += size
         saved = scans.get(context_plan.source_key(source), {})
-        if cloud_scan and not saved.get("_provider_contract"):
+        if _needs_cloud_scan(saved, cloud_scan):
             saved = {}
         if saved.get("complete") or not _ready(saved, now):
             continue

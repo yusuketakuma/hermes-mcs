@@ -1035,8 +1035,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if not context_plan.source_usable(source):
                     continue
                 saved = scans.get(context_plan.source_key(source), {})
-                cloud_pending = (lane == "B" and mode == "on" and not saved.get("_provider_contract")
-                                 and saved.get("_source_meta", {}).get("local_fallback") is not True)
+                cloud_pending = (lane == "B" and patient_context_refresh_readiness._needs_cloud_scan(
+                    saved, mode == "on"))
                 if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
                 if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
