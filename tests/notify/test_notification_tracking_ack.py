@@ -167,7 +167,6 @@ def test_forged_receipt_cannot_quiet_the_failure(past):
 
 def test_new_failures_are_active_after_historical_ack(past, monkeypatch):
     assert tracking.apply(past.ledger, past.req, SLACK, NOW + 3)['outcome'] == 'applied'
-    from adapters.common import present_slack
     from adapters.slack import delivery
     import notify_spool
     body = MULTIBYTE + '完全合成の新しい失敗。'
