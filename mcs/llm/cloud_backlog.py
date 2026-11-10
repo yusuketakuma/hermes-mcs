@@ -604,6 +604,7 @@ def worker(parent, *, index=None, context_only=False):
 _CONTEXT_PASS_REASONS = frozenset({
     "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete",
     "patient_context_readiness_unverified", "patient_context_generation_changed", "run_lock",
+    "patient_context_selection_busy", "patient_context_selection_unavailable",
     "nightly_completed_expired", "nightly_capacity_or_deadline", "nightly_admission_deferred",
     "nightly_turn_busy", "nightly_local_capacity", "nightly_source_changed", "nightly_cloud_budget",
     "nightly_cloud_not_sent", "nightly_cloud_pending", "nightly_cloud_source_changed",

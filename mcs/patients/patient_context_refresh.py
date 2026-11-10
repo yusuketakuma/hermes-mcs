@@ -471,6 +471,31 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     return result
 
 
+def _selection_lock(db):
+    """Non-blocking per-database mutex covering patient selection and claim.
+
+    Returns ``(fd, None)`` while held or ``(None, reason)`` carrying a fixed
+    code: ``patient_context_selection_busy`` when another worker holds the
+    lock, ``patient_context_selection_unavailable`` when the database path
+    or the lock file cannot be established. The lock file lives beside the
+    canonical database path, is never unlinked and survives database swaps.
+    """
+    try:
+        row = next((item for item in db.execute("PRAGMA database_list") if item[1] == "main"), None)
+        path = row[2] if row is not None else ""
+        lock_path = (os.path.join(os.path.dirname(os.path.realpath(path)), ".patient_context_selection.lock")
+                     if path else None)
+    except (sqlite3.Error, OSError, ValueError):
+        lock_path = None
+    if lock_path is None:
+        return None, "patient_context_selection_unavailable"
+    try:
+        fd = acquire_run_lock(lock_path)
+    except (OSError, sqlite3.Error):
+        return None, "patient_context_selection_unavailable"
+    return (fd, None) if fd is not None else (None, "patient_context_selection_busy")
+
+
 def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned):
     import extract_llm
     import cloud_inference
@@ -486,77 +511,83 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     night_id, _ = window
     if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
-    started = patient_context_refresh_state.time.monotonic()
-    scan_observed = {}
-    best, pid, scan_rotation, scanned, waiting, covered, scan_reads, scan_interrupts = _select_patient(
-        ledger, cfg, now, deadline, admit, complete, observed_out=scan_observed)
-    stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
-             "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
-             "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
-    if scan_observed.get('scan_refusal') is not None:
-        stats['scan_refusal'] = scan_observed['scan_refusal']
-    if scan_rotation is None:
-        return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
-    rotation = scan_rotation[0]
-    lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
-    if lane is None:
-        return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
-                **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
-                   if waiting or not covered else {}), **stats}
-    snapshot, progress, frozen_ver = best[lane]
-    source_keys = snapshot.get('source_scope')
-    generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
-    selected_proof = snapshot.pop("_readiness_proof", None)
-    # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
+    selection_fd, selection_reason = _selection_lock(ledger.db)
+    if selection_fd is None:
+        return {"status": "deferred", "done": 0, "reason": selection_reason}
     try:
-        with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
-            ledger.db.execute("BEGIN IMMEDIATE")
-            ready, actual, _ = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, selected_proof,
-                deadline=deadline, complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
-            latest_rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
-            try:
-                context_schedule._bookmark(latest_rotation[0].get('patient_scan'))
-            except ValueError:
-                ledger.db.rollback()
-                return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
-            # Another patient's scan may advance without consuming this lane's turn.
-            same_rotation = (latest_rotation[1] == scan_rotation[1]
-                and {k: v for k, v in latest_rotation[0].items() if k != 'patient_scan'}
-                    == {k: v for k, v in scan_rotation[0].items() if k != 'patient_scan'})
-            current = (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline and admit()
-                and extract_llm._writer_current(full=True)
-                and patient_context_refresh_state._published_version(ledger.db, pid) == frozen_ver
-                and same_rotation
-                and ready == "verified" and actual is not None and actual['source_sig'] == snapshot['source_sig'])
-            if not current:
-                ledger.db.rollback()
-                changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
-                return {"status": "source_changed" if changed else "deferred", "done": 0,
-                        **({"reason": "patient_context_readiness_unverified"} if not changed else {}), **stats}
-            rotation = latest_rotation[0]
-            if lane != "A":
-                # B/C may use a wider cohort than the last overview attempt.
-                # Keep that attempt's retry state bound to its original input.
-                progress, _ = patient_context_refresh_state._latest(
-                    ledger.db, patient_context_refresh_state.PROGRESS, pid)
-            progress = {**progress, "last_attempt": now,
-                        "last_attempt_unit": rotation.get("units", 0) + 1,
-                        "night_id": night_id,
-                        **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
-            patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
-            patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
-            if not extract_llm._writer_current(full=True):
-                ledger.db.rollback()
-                return {"status": "source_changed", "done": 0, **stats}
-            ledger.db.commit()
-        # Our scheduling write participates in the same publisher fence as later work.
-        frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
-    except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
-        ledger.db.rollback()
-        return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
-    except BaseException:
-        ledger.db.rollback()
-        raise
+        started = patient_context_refresh_state.time.monotonic()
+        scan_observed = {}
+        best, pid, scan_rotation, scanned, waiting, covered, scan_reads, scan_interrupts = _select_patient(
+            ledger, cfg, now, deadline, admit, complete, observed_out=scan_observed)
+        stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
+                 "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
+                 "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
+        if scan_observed.get('scan_refusal') is not None:
+            stats['scan_refusal'] = scan_observed['scan_refusal']
+        if scan_rotation is None:
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        rotation = scan_rotation[0]
+        lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
+        if lane is None:
+            return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
+                    **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
+                       if waiting or not covered else {}), **stats}
+        snapshot, progress, frozen_ver = best[lane]
+        source_keys = snapshot.get('source_scope')
+        generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
+        selected_proof = snapshot.pop("_readiness_proof", None)
+        # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
+        try:
+            with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
+                ledger.db.execute("BEGIN IMMEDIATE")
+                ready, actual, _ = patient_context_refresh_readiness._readiness_for_write(ledger, pid, cfg, selected_proof,
+                    deadline=deadline, complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys)
+                latest_rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+                try:
+                    context_schedule._bookmark(latest_rotation[0].get('patient_scan'))
+                except ValueError:
+                    ledger.db.rollback()
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+                # Another patient's scan may advance without consuming this lane's turn.
+                same_rotation = (latest_rotation[1] == scan_rotation[1]
+                    and {k: v for k, v in latest_rotation[0].items() if k != 'patient_scan'}
+                        == {k: v for k, v in scan_rotation[0].items() if k != 'patient_scan'})
+                current = (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline and admit()
+                    and extract_llm._writer_current(full=True)
+                    and patient_context_refresh_state._published_version(ledger.db, pid) == frozen_ver
+                    and same_rotation
+                    and ready == "verified" and actual is not None and actual['source_sig'] == snapshot['source_sig'])
+                if not current:
+                    ledger.db.rollback()
+                    changed = actual is not None and actual['source_sig'] != snapshot['source_sig']
+                    return {"status": "source_changed" if changed else "deferred", "done": 0,
+                            **({"reason": "patient_context_readiness_unverified"} if not changed else {}), **stats}
+                rotation = latest_rotation[0]
+                if lane != "A":
+                    # B/C may use a wider cohort than the last overview attempt.
+                    # Keep that attempt's retry state bound to its original input.
+                    progress, _ = patient_context_refresh_state._latest(
+                        ledger.db, patient_context_refresh_state.PROGRESS, pid)
+                progress = {**progress, "last_attempt": now,
+                            "last_attempt_unit": rotation.get("units", 0) + 1,
+                            "night_id": night_id,
+                            **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
+                if not extract_llm._writer_current(full=True):
+                    ledger.db.rollback()
+                    return {"status": "source_changed", "done": 0, **stats}
+                ledger.db.commit()
+            # Our scheduling write participates in the same publisher fence as later work.
+            frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
+        except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
+            ledger.db.rollback()
+            return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        except BaseException:
+            ledger.db.rollback()
+            raise
+    finally:
+        os.close(selection_fd)
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
