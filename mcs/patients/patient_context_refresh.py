@@ -230,7 +230,7 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
 
     def _mark(reason):
         if observed_out is not None:
-            observed_out['scan_refusal'] = reason
+            observed_out['scan_fence'] = reason
 
     with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
         try:
@@ -427,18 +427,18 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
         scan_interrupts += 1
-        if observed_out is not None and 'scan_refusal' not in observed_out:
-            observed_out['scan_refusal'] = 'scan_interrupted'
+        if observed_out is not None and 'scan_fence' not in observed_out:
+            observed_out['scan_fence'] = 'scan_interrupted'
         best, selected, covered = {}, None, False
     except sqlite3.Error:
         scan_interrupts += 1
         if observed_out is not None:
-            observed_out['scan_refusal'] = 'read_sqlite'
+            observed_out['scan_fence'] = 'read_sqlite'
         best, selected, covered = {}, None, False
     except OSError:
         scan_interrupts += 1
         if observed_out is not None:
-            observed_out['scan_refusal'] = 'read_io'
+            observed_out['scan_fence'] = 'read_io'
         best, selected, covered = {}, None, False
     except ValueError as exc:
         if exc.args == ('patient_scan_bookmark_invalid',):
@@ -449,7 +449,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
             raise
         scan_interrupts += 1
         if observed_out is not None:
-            observed_out['scan_refusal'] = refusal
+            observed_out['scan_fence'] = refusal
         best, selected, covered = {}, None, False
     return best, selected, rotation, scanned, waiting, covered, scan_reads, scan_interrupts
 
@@ -493,8 +493,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
              "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
              "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
-    if scan_observed.get('scan_refusal') is not None:
-        stats['scan_refusal'] = scan_observed['scan_refusal']
+    if scan_observed.get('scan_fence') is not None:
+        stats['scan_fence'] = scan_observed['scan_fence']
     if scan_rotation is None:
         return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
     rotation = scan_rotation[0]

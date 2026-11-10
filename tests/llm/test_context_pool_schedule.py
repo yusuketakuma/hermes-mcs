@@ -94,31 +94,31 @@ def test_context_pass_omits_counts_outside_the_real_unit_limits(key, value):
         "status": "deferred", "reason": "unclassified"}
 
 
-def test_context_pass_reports_scan_refusal_and_bounded_scan_stats():
+def test_context_pass_reports_scan_fence_and_bounded_scan_stats():
     result = {"status": "deferred", "reason": "patient_context_scan_incomplete",
-              "scan_refusal": "bookmark_cas", "covered": False,
+              "scan_fence": "bookmark_cas", "covered": False,
               "waiting": 3, "scan_reads": 2, "scan_interrupts": 1,
               "project_id": 123, "error": "synthetic private source"}
     assert cloud_backlog._context_pass_observation(result) == {
         "status": "deferred", "reason": "patient_context_scan_incomplete",
-        "scan_refusal": "bookmark_cas", "covered": False,
+        "scan_fence": "bookmark_cas", "covered": False,
         "waiting": 3, "scan_reads": 2, "scan_interrupts": 1}
 
 
 @pytest.mark.parametrize("value", ["synthetic-private", 1, True, ["bookmark_cas"], {"x": 1}])
-def test_context_pass_rejects_arbitrary_scan_refusals(value):
-    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": value})
-    assert record["scan_refusal"] == "unclassified"
+def test_context_pass_rejects_arbitrary_scan_fences(value):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_fence": value})
+    assert record["scan_fence"] == "unclassified"
 
 
-def test_context_pass_omits_absent_scan_refusal():
-    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": None})
-    assert "scan_refusal" not in record
+def test_context_pass_omits_absent_scan_fence():
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_fence": None})
+    assert "scan_fence" not in record
 
 
 @pytest.mark.parametrize("key,value", [
-    ("waiting", 1001), ("waiting", -1), ("waiting", True), ("waiting", 1.5), ("waiting", "3"),
-    ("scan_reads", 17), ("scan_reads", -1), ("scan_interrupts", 9), ("scan_interrupts", True),
+    ("waiting", 17), ("waiting", -1), ("waiting", True), ("waiting", 1.5), ("waiting", "3"),
+    ("scan_reads", 17), ("scan_reads", -1), ("scan_interrupts", 2), ("scan_interrupts", True),
     ("covered", 1), ("covered", "true"), ("covered", 0),
 ])
 def test_context_pass_omits_scan_stats_outside_type_or_bounds(key, value):
@@ -127,7 +127,7 @@ def test_context_pass_omits_scan_stats_outside_type_or_bounds(key, value):
 
 
 @pytest.mark.parametrize("key,value", [
-    ("waiting", 0), ("waiting", 1000), ("scan_reads", 16), ("scan_interrupts", 8),
+    ("waiting", 0), ("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
     ("covered", True), ("covered", False),
 ])
 def test_context_pass_accepts_scan_stats_at_real_bounds(key, value):

@@ -614,7 +614,7 @@ _CONTEXT_PASS_REASONS = frozenset({
               for state in ("pending", "deferred", "held", "failed", "budget", "disabled"))
 
 
-_SCAN_REFUSALS = frozenset({
+_SCAN_FENCE_CODES = frozenset({
     "deadline", "admission", "writer_generation", "bookmark_cas",
     "scan_interrupted", "read_sqlite", "read_io",
     "invalid_bookmark", "invalid_source",
@@ -636,13 +636,16 @@ def _context_pass_observation(result):
     lane = result.get("lane")
     if type(lane) is str and lane in ("A", "B", "C"):
         record["lane"] = lane
-    refusal = result.get("scan_refusal")
-    if refusal is not None:
-        record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
+    fence = result.get("scan_fence")
+    if fence is not None:
+        record["scan_fence"] = fence if type(fence) is str and fence in _SCAN_FENCE_CODES else "unclassified"
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
-    for key, limit in (("waiting", 1000), ("scan_reads", 16), ("scan_interrupts", 8)):
+    # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
+    # waiting additions (quota-fail double count or two single-count scopes),
+    # and at most 2 pending reads per candidate.
+    for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
             record[key] = value
