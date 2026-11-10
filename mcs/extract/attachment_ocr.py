@@ -169,6 +169,25 @@ def _source(db, attachment_id, project_id=None):
     return row if row["body_state"] != "deleted" else None
 
 
+
+def _source_occurrence(db, source):
+    """Bind one acquisition and parent revision in a borrowed read snapshot."""
+    import inference_dependency_loss
+    downloaded = source.get("downloaded_at")
+    if (type(downloaded) not in (int, float) or downloaded < 0
+            or type(downloaded) is float and not math.isfinite(downloaded)):
+        return None
+    db.execute("SAVEPOINT ocr_source_occurrence")
+    try:
+        latest = _source(db, source["attachment_id"], source["project_id"])
+        if latest != source:
+            return None
+        parent = inference_dependency_loss.source_binding(db, source["project_id"], source["message_id"])
+        return _hash(json.dumps([source, parent], sort_keys=True, ensure_ascii=False)) if valid_hash(parent) else None
+    finally:
+        db.execute("RELEASE ocr_source_occurrence")
+
+
 def _latest(db, source):
     row = db.execute("SELECT artifact_id,project_id,message_id,created_at,CASE WHEN length(content)<=4194304 "
                      "THEN content END AS content FROM artifacts WHERE kind=? "
@@ -560,6 +579,8 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None):
                 latest = _source(ledger.db, source["attachment_id"], source["project_id"])
                 if (latest is None or latest["state"] != "downloaded"
                         or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
+                        or doc.get("input_occurrence") is not None
+                        and doc["input_occurrence"] != _source_occurrence(ledger.db, latest)
                         or not _due(_latest(ledger.db, latest), latest)):
                     return False
                 dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
@@ -567,7 +588,8 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None):
                                   "VALUES(?,?,?,?,?,?,?)", (KIND, source["project_id"], source["message_id"],
                                   json.dumps(doc, ensure_ascii=False), "yomitoku", json.dumps({
                                       "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
-                                      "runtime_contract": RUNTIME_CONTRACT}), time.time()))
+                                      "runtime_contract": RUNTIME_CONTRACT,
+                                      "input_occurrence": doc.get("input_occurrence")}), time.time()))
                 record_dependencies_tx(ledger.db, dependencies)
                 import notify_cards
                 notify_cards.mark_snapshot_dirty(ledger.db)
@@ -642,6 +664,10 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
             prior = _latest(ledger.db, source)
             if not _due(prior, source):
                 continue
+            occurrence = _source_occurrence(ledger.db, source)
+            if "downloaded_at" in source and source["downloaded_at"] is not None and occurrence is None:
+                counts["deferred"] += 1
+                continue
             timeout = settings.get("timeout_seconds", 120)
             if deadline is not None:
                 timeout = min(timeout, deadline - time.monotonic())
@@ -681,7 +707,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
             attempts = min(attempts + 1, 3) if type(attempts) is int and 0 <= attempts <= 3 else 1
             methods = {page["engine"] for page in pages}
             doc = {"schema": SCHEMA, "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
-                   "input_bytes": source["bytes"], "engine": "yomitoku", "engine_version": ENGINE_VERSION if pages else None,
+                   "input_bytes": source["bytes"], "input_occurrence": occurrence, "engine": "yomitoku", "engine_version": ENGINE_VERSION if pages else None,
                    "method": "mixed" if len(methods) > 1 else next(iter(methods), None),
                    "runtime_contract": RUNTIME_CONTRACT, "state": state, "pages": pages,
                    "text_hash": _hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)),
