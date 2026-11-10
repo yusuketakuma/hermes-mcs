@@ -628,7 +628,8 @@ def test_scheduled_tick_and_deep_share_shadow_after_semantic(
         result["metadata_shadow"] = {"mode": "shadow"}
 
     monkeypatch.setattr(collection_stages, 'stage_metadata_shadow', shadow)
-    monkeypatch.setattr(run_check, "_finish_run", lambda *args: "ok")
+    monkeypatch.setattr(run_check, "_finish_run",
+                        lambda *args, run_lock_fd=None, db_baseline=None: "ok")
     assert run_check._main() == 0
     result = json.loads(capsys.readouterr().out)
     assert events == ["delivery", "semantic"] + (["shadow"] if enabled else [])
