@@ -77,8 +77,8 @@ def database_identity(db):
     return payload_hash([info.st_dev, info.st_ino])
 
 
-def target(db, artifact_id):
-    """Observe one latest exhausted failure on the caller's borrowed snapshot."""
+def _failure_target(db, artifact_id):
+    """Bind one latest structural failure and its exact retry stage."""
     if not db.in_transaction:
         raise ValueError('ocr_ack_snapshot_required')
     if type(artifact_id) is not int or artifact_id <= 0:
@@ -101,7 +101,7 @@ def target(db, artifact_id):
             or meta.get('attachment_id') != source['attachment_id']
             or not attachment_ocr._matching(doc, source)
             or doc.get('state') != 'failed' or doc.get('reason') != 'output_schema_table_overlap'
-            or type(doc.get('attempts')) is not int or doc['attempts'] != 3):
+            or type(doc.get('attempts')) is not int or not 1 <= doc['attempts'] <= 3):
         raise ValueError('ocr_ack_target_invalid')
     latest = attachment_ocr._latest(db, source)
     if latest is None or latest['artifact_id'] != artifact_id:
@@ -113,7 +113,20 @@ def target(db, artifact_id):
     # distinguish observed ABA; hashes alone cannot prove an occurrence.
     return {'artifact_id': artifact_id, 'proof': payload_hash([
         SCHEMA, database_identity(db), dict(row), source, occurrence,
-        attachment_ocr.RUNTIME_CONTRACT])}
+        attachment_ocr.RUNTIME_CONTRACT])}, doc['attempts']
+
+
+def failure_target(db, artifact_id):
+    """Observe exact failed-source evidence without granting an operational acknowledgement."""
+    return _failure_target(db, artifact_id)[0]
+
+
+def target(db, artifact_id):
+    """Observe one latest exhausted failure on the caller's borrowed snapshot."""
+    value, attempts = _failure_target(db, artifact_id)
+    if attempts != 3:
+        raise ValueError('ocr_ack_target_invalid')
+    return value
 
 
 def acknowledged(db, current, *, deadline=None):
@@ -196,7 +209,8 @@ def failure_counts(db, *, cfg=None, deadline=None):
               'failure_cohort': payload_hash([])}
     policy = attachment_ocr.rejection_policy(cfg)
     if policy:
-        counts.update(policy_binding=policy, policy_rejected_exhausted=0, policy_rejected_unacknowledged=0)
+        counts.update(policy_binding=policy, policy_rejected_failed=0,
+                      policy_rejected_exhausted=0, policy_rejected_unacknowledged=0)
     verified = True
     if deadline is not None and time.monotonic() >= deadline:
         return counts
@@ -233,9 +247,10 @@ def failure_counts(db, *, cfg=None, deadline=None):
             if policy:
                 rejection = attachment_ocr.rejected_failure(db, source['attachment_id'], source['project_id'], cfg=cfg)
                 if rejection is not None:
-                    counts['policy_rejected_exhausted'] += 1
+                    counts['policy_rejected_failed'] += 1
+                    counts['policy_rejected_exhausted'] += int(prior.get('attempts') == 3)
                     counts['policy_rejected_unacknowledged'] += int(not accepted)
-                elif reason == 'output_schema_table_overlap' and prior.get('attempts') == 3:
+                elif reason == 'output_schema_table_overlap':
                     verified = False
                 item.append(rejection)
             cohort.append(item)
