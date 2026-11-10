@@ -223,9 +223,10 @@ def _semantic_pure(definition, v):
     if definition == 'MaintenanceWindow':  # SEM11の窓順序
         _check(v['start_minute'] < v['end_minute'])
         return
-    if definition == 'FileIdentity':  # SEM16のUInt64範囲
+    if definition == 'FileIdentity':  # SEM16のUInt64範囲とinode非零(ENC02)
         for k in ('device', 'inode', 'mtime_ns', 'ctime_ns'):
             _check(int(v[k]) <= _UINT64_MAX)
+        _check(v['inode'] != '0')
         return
     # SEM11: windows配列内のweekday一意とstart<end
     windows = v.get('windows') if type(v) is dict else None
