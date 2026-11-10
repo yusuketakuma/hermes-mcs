@@ -1018,7 +1018,7 @@ def test_daily_failure_retry_adopts_only_verified_new_result(setup, monkeypatch)
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("recorded_at", [None, True, -1, float("inf"), float("nan"), "1000"])
+@pytest.mark.parametrize("recorded_at", [None, True, -1, float("inf"), float("nan"), "1000", 10**1000])
 def test_daily_retry_rejects_unverified_record_time(setup, monkeypatch, recorded_at):
     ledger, _, _, _, _ = setup
     source = ocr._source(ledger.db, 1)

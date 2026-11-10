@@ -499,12 +499,13 @@ def _due(doc, source):
         return False
     attempts, next_try = doc.get("attempts"), doc.get("next_try")
     if (type(attempts) is not int or not 1 <= attempts <= 3
-            or type(next_try) not in (int, float) or not math.isfinite(next_try) or next_try < 0):
+            or type(next_try) not in (int, float) or next_try < 0
+            or type(next_try) is float and not math.isfinite(next_try)):
         return False
     if attempts == 3:
         recorded_at = doc.get("_recorded_at")
-        if (type(recorded_at) not in (int, float) or not math.isfinite(recorded_at)
-                or recorded_at < 0):
+        if (type(recorded_at) not in (int, float) or recorded_at < 0
+                or type(recorded_at) is float and not math.isfinite(recorded_at)):
             return False
         next_try = max(next_try, recorded_at + FAILURE_RETRY_S)
     return next_try <= time.time()
