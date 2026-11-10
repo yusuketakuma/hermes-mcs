@@ -33,6 +33,9 @@ LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
 NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json', 'runtime-entry.lock'}
+_RELEASE_SIDECAR_NAMES = frozenset({'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json',
+                                    'release-planning.json', 'release-plan.json', 'release-change.json',
+                                    'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json'})
 LIMITS.update({'release-successor.json': 2 * 1024 * 1024 + 65536, 'release-change.json': 131072, 'release-plan.json': 65536, 'release-planning.json': 16384, 'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
                'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0,
                'release-start-intent.json': 32 * 1024, 'release-migration-v3.json': 65536, 'runtime-entry.lock': 0})
@@ -277,6 +280,20 @@ class Store:
         if self._keychain_store is None:
             self._keychain_store = self._keychain_factory(self._keychain_account)
         return self._keychain_store
+
+    def read_migration_raw(self, name):
+        """Exact stored bytes of a release sidecar for migration evidence; None when absent."""
+        if name not in _RELEASE_SIDECAR_NAMES:
+            raise ValueError('SDC_INVALID_FILE')
+        try:
+            fd = self._open(name)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, 'rb') as stream:
+            raw = stream.read(LIMITS[name] + 1)
+        if len(raw) > LIMITS[name]:
+            raise ValueError('SDC_FILE_TOO_LARGE')
+        return raw
 
     def read(self, name, default=None):
         self._name(name)
