@@ -120,3 +120,51 @@ def test_spent_dedup_and_intent_lifecycle(store):
         state.open_intent(store, intent)
     state.retire_intent(store, operation_id=U, terminal_outcome_sha256='8' * 64)
     assert state.load_intent(store)['phase'] == 'retired'
+
+
+def migration_intent(store, **over):
+    value = {
+        'schema_version': 'mcs.release-owner-migration.v3',
+        'migration_id': '82345678-1234-4234-8234-123456789abc',
+        'root_fingerprint': store.root_fingerprint(),
+        'repository_fingerprint': 'd' * 64,
+        'source_schema': 'mcs.release-owner.v1',
+        'target_schema': 'mcs.release-owner.v3',
+        'bridge_sha256': '9' * 64, 'control_closure_sha256': 'f' * 64,
+        'recovery_generation_sha256': 'ab' * 32,
+        'external_floor_sha256': 'ac' * 32,
+        'files': [{'logical_id': 'release-owner.json', 'before_sha256': 'b' * 64,
+                   'size': 4096, 'disposition': 'archive_exact'}],
+        'human_receipt_id': '92345678-1234-4234-8234-123456789abc',
+        'created_at': 1000, 'phase': 'prepared',
+    }
+    value.update(over)
+    return value
+
+
+def test_migration_intent_monotonic_phases(store):
+    from adapters.sdc import release_auto_migration as migration
+    assert migration.load(store) is None
+    migration.prepare(store, migration_intent(store))
+    with pytest.raises(migration.MigrationError, match='INTENT_EXISTS'):
+        migration.prepare(store, migration_intent(store))
+    with pytest.raises(migration.MigrationError, match='PHASE_REGRESSION'):
+        migration.advance(store, migration_id='82345678-1234-4234-8234-123456789abc', phase='prepared')
+    with pytest.raises(migration.MigrationError, match='INTENT_MISMATCH'):
+        migration.advance(store, migration_id='a2345678-1234-4234-8234-123456789abc', phase='old_archived')
+    migration.advance(store, migration_id='82345678-1234-4234-8234-123456789abc', phase='old_archived')
+    with pytest.raises(migration.MigrationError, match='PHASE_REGRESSION'):
+        migration.advance(store, migration_id='82345678-1234-4234-8234-123456789abc', phase='verified')
+    migration.advance(store, migration_id='82345678-1234-4234-8234-123456789abc', phase='owner_replaced')
+    migration.advance(store, migration_id='82345678-1234-4234-8234-123456789abc', phase='verified')
+    assert migration.load(store)['phase'] == 'verified'
+    migration.require_v3_ready(store)
+
+
+def test_migration_pending_blocks_v3(store):
+    from adapters.sdc import release_auto_migration as migration
+    migration.prepare(store, migration_intent(store))
+    with pytest.raises(migration.MigrationError, match='MIGRATION_PENDING'):
+        migration.require_v3_ready(store)
+    with pytest.raises(migration.MigrationError, match='ROOT_MISMATCH'):
+        migration.prepare(store, migration_intent(store, root_fingerprint='9' * 64))
