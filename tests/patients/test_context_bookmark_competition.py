@@ -100,3 +100,22 @@ def test_other_patient_bookmark_does_not_reject_selected_source(runtime, monkeyp
     assert scan['complete'] and scan['audited'] == (lane == 'C')
     assert document(led, state.PROGRESS, pid=2) is None
     assert document(led, state.SCAN, pid=2) is None
+
+
+def test_competing_connection_bookmark_write_reports_cas_refusal(runtime):
+    """A real second-connection bookmark write makes the stale expected
+    tuple fail the CAS check with the fixed bookmark_cas reason."""
+    led, clock, _ = runtime
+    seed(led, mid=1, pid=1)
+    expected = state._latest(led.db, state.PROGRESS, 0)
+    db_path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    with closing(Ledger(db_path)) as other:
+        content, meta = state._latest(other.db, state.PROGRESS, 0)
+        state._replace(other, state.PROGRESS, 0, {**content, 'cursor': 9}, meta)
+        other.db.commit()
+        observed = {}
+        assert refresh._advance_patient_scan(
+            led, expected, schedule.advance_turn(None), clock.mono + 600,
+            lambda: True, observed_out=observed) is None
+    assert observed['scan_refusal'] == 'bookmark_cas'
+    assert state._latest(led.db, state.PROGRESS, 0)[0]['cursor'] == 9

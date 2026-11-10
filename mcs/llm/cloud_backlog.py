@@ -614,6 +614,13 @@ _CONTEXT_PASS_REASONS = frozenset({
               for state in ("pending", "deferred", "held", "failed", "budget", "disabled"))
 
 
+_SCAN_REFUSALS = frozenset({
+    "deadline", "admission", "writer_generation", "bookmark_cas",
+    "scan_interrupted", "read_sqlite", "read_io",
+    "invalid_bookmark", "invalid_source",
+})
+
+
 def _context_pass_observation(result):
     """Report bounded context progress and fixed reasons without source or exception values."""
     status = result.get("status")
@@ -629,6 +636,16 @@ def _context_pass_observation(result):
     lane = result.get("lane")
     if type(lane) is str and lane in ("A", "B", "C"):
         record["lane"] = lane
+    refusal = result.get("scan_refusal")
+    if refusal is not None:
+        record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
+    covered = result.get("covered")
+    if type(covered) is bool:
+        record["covered"] = covered
+    for key, limit in (("waiting", 1000), ("scan_reads", 16), ("scan_interrupts", 8)):
+        value = result.get(key)
+        if type(value) is int and 0 <= value <= limit:
+            record[key] = value
     return record
 
 

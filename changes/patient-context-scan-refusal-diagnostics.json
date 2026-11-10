@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "患者コンテキスト走査の中断理由を固定コードで記録",
+  "summary": "夜間の患者コンテキスト更新で走査が完了しなかった場合に、延期・待機・読み取り中断の内訳と、走査が拒否された固定理由（期限・受付・書き込み世代・ブックマーク競合・読み取り失敗・不正ブックマーク/ソース）を処理状況の記録へ追加します。例外文・患者ID・本文は記録しません。",
+  "upgrade": "追加設定は不要です。処理の順序・ロック・再試行・公開条件は変わりません。走査が正常に有限区切りで終わった場合は従来どおり中断として数えず、拒否理由の項目も出ません。",
+  "details": [
+    "走査の前進処理が拒否した場合だけ、理由を deadline・admission・writer_generation・bookmark_cas の固定値で内部へ記録し、選択処理が scan_interrupted・read_sqlite・read_io・invalid_bookmark・invalid_source に分類します。拒否判定の順序と短絡は従来どおりです。",
+    "処理状況の観測は許可リスト内の値だけを出し、未知の値は unclassified に丸めます。待機・走査読み取り数・中断数・ブックマーク競合などの件数は実ループの上限内の整数だけを記録し、真偽値を整数として扱いません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/patients/test_context_scan_integration.py",
+    "tests/patients/test_context_bookmark_competition.py",
+    "tests/patients/test_context_pending_cloud_coverage.py",
+    "tests/llm/test_context_pool_schedule.py"
+  ]
+}
