@@ -384,7 +384,13 @@ def test_matching_malformed_scope_cannot_resolve_an_old_part(stored, transport, 
     assert report['total'] == report['cards'] == 1
     assert report['by_state']['unknown'] == 1 and stored.total_changes == before
     assert set(report) == {'total', 'cards', 'by_state', 'by_plan',
-                           'oldest_age_s', 'observed_at'}
+                           'oldest_age_s', 'observed_at', 'active_total', 'active_cards',
+                           'active_by_state', 'active_by_plan', 'active_oldest_age_s',
+                           'acknowledged_unresolved_total', 'unknown_parts_total'}
+    assert report['active_total'] == report['total'] and report['active_cards'] == report['cards']
+    assert report['active_by_state'] == report['by_state'] and report['active_by_plan'] == report['by_plan']
+    assert report['active_oldest_age_s'] == report['oldest_age_s']
+    assert report['acknowledged_unresolved_total'] == 0 and report['unknown_parts_total'] == 1
     assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'unknown'
 
 
