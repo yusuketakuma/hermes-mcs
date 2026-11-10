@@ -13,7 +13,7 @@ select = ["E4", "E7", "E9", "F"]
 [tool.ruff.lint.per-file-ignores]
 # adapters/sdc/contracts/ は CSDC 契約の byte 一致固定コピー（contracts/README.md）。
 # byte 一致が要件で手修正できない interfaces.pyi の class 一行定義スタイル
-# （E701）のみを対象外とする。契約 tree 全体・他 rule は対象外のまま。
+# （E701）のみを対象外とする。他のファイル・他の rule は引き続き検査対象。
 "adapters/sdc/contracts/mcs-auto/v3/interfaces.pyi" = ["E701"]
 
 [tool.pytest.ini_options]
