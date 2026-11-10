@@ -268,8 +268,8 @@ def test_first_proven_failure_is_excluded_and_real_selection_still_retries_to_su
     saved = originals(case)
     assert ocr.run_pending(case.ledger, cfg)['failed'] == 0 and len(calls) == 1
     clock[0] = failed['next_try']
-    # The bounded activity cursor may spend one pass wrapping to its start.
-    for _ in range(2):
+    # Activity and attachment-ID cursors each get a bounded wrap before reuse.
+    for _ in range(3):
         recovered = ocr.run_pending(case.ledger, cfg)
         if recovered['complete']:
             break
