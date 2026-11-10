@@ -15,7 +15,7 @@ NEGATIVES = json.loads((EXAMPLES / 'negative-vectors.json').read_text())['vector
 # context照合(SEM02–11,14–17,19–23,27–34)は機能module実装時に個別vectorで固定する。
 # ReleaseAcceptanceの4件はSEM04–06の署名・実測・承認証拠との照合が必要で、publication側で固定する。
 SEMANTIC_COVERED = {'Offer', 'StartGrant', 'Outcome', 'FileIdentity', 'MaintenanceWindow',
-                    'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'}
+                    'RolloutPolicy', 'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'}
 PENDING = {'duplicate_lane', 'full_run_wrong_sha', 'reused_without_review', 'unresolved_failure'}
 
 
@@ -85,11 +85,14 @@ def test_file_identity_inode_boundaries_and_nested_semantics():
     parse('1')
     parse('18446744073709551615')  # 2^64-1
     parse('18446744073709551614')  # positive fixture値
-    for bad in ('0', '18446744073709551616', '00', '-1'):
+    for bad in ('0', '18446744073709551616', '00', '-1', '0\n', '1\n', ' 1', '1 ', '1\t'):
         with pytest.raises(contract.ContractError):
             parse(bad)
         with pytest.raises(contract.ContractError):
             parse(bad, wrap=True)
+    # inode以外のUInt64Decimal項目(device等)も同じ型経路で末尾LFを拒否する
+    with pytest.raises(contract.ContractError):
+        contract.parse_typed(json.dumps(dict(fx, device='1\n')).encode(), 'FileIdentity')
     parse('1', wrap=True)
     parse('18446744073709551615', wrap=True)
 
@@ -106,3 +109,33 @@ def test_contract_error_carries_code():
     with pytest.raises(contract.ContractError) as ei:
         contract.parse_typed(b'{}', 'Offer')
     assert ei.value.code == 'CONTRACT_INVALID'
+
+
+def test_rollout_policy_semantics_direct_and_nested():
+    """R21: stage厳密順序/bp/health関係/時刻を直接・PolicyPreviewRequest入れ子で拒否。"""
+    fx = next(f for f in FIXTURES if f['definition'] == 'RolloutPolicy')['data']
+
+    def parse(over, wrap=False):
+        policy = dict(fx, **over)
+        doc = ({'schema_version': 'mcs.policy-preview-request.v3',
+                'request_id': '10000000-0000-4000-8000-000000000099',
+                'request_nonce': 'a' * 64, 'action': 'approve', 'policy': policy,
+                'expected_policy_revision': 0} if wrap else policy)
+        return contract.parse_typed(json.dumps(doc).encode(), 'PolicyPreviewRequest' if wrap else 'RolloutPolicy')
+
+    parse({})
+    parse({}, wrap=True)
+    bad = [
+        {'stages': list(reversed(fx['stages']))},
+        {'stages': [fx['stages'][0], fx['stages'][0], *fx['stages'][2:]]},
+        {'stages': fx['stages'][:4]},
+        {'stages': [dict(s, cumulative_basis_points=999) if i == 2 else s for i, s in enumerate(fx['stages'])]},
+        {'max_health_gap_ms': fx['health_interval_ms'] - 1, 'max_health_observation_age_ms': 200000},
+        {'max_health_gap_ms': 700000, 'max_health_observation_age_ms': 800000},
+        {'issued_at': fx['expires_at']},
+    ]
+    for over in bad:
+        with pytest.raises(contract.ContractError):
+            parse(over)
+        with pytest.raises(contract.ContractError):
+            parse(over, wrap=True)

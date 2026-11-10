@@ -103,6 +103,10 @@ def _match_node(d, v):
     if ref is not None:
         name = ref.rsplit('/', 1)[-1]
         _check(name in DEFS)
+        # UInt64Decimalは末尾改行等を含まない厳密な10進数字列のみ受理する
+        # (re.searchの$は末尾LF直前にも一致するため、型契約の共通経路で閉じる)。
+        if name == 'UInt64Decimal' and (type(v) is not str or re.fullmatch(r'[0-9]+', v) is None):
+            return False
         return _match_node(DEFS[name], v)
     for key, want in (('allOf', all), ('anyOf', any)):
         if isinstance(d.get(key), list) and not want(_match_node(x, v) for x in d[key]):
@@ -223,10 +227,19 @@ def _semantic_pure(definition, v):
     if definition == 'MaintenanceWindow':  # SEM11の窓順序
         _check(v['start_minute'] < v['end_minute'])
         return
+    if definition == 'RolloutPolicy':  # 03_CONTRACTS §7: stage厳密順序/bp/health関係/時刻
+        order = ('self', 'pilot', 'pct10', 'pct50', 'general')
+        bps = (0, 0, 1000, 5000, 10000)
+        for i, s in enumerate(v['stages']):
+            _check(s['stage'] == order[i] and s['cumulative_basis_points'] == bps[i])
+        _check(v['max_health_gap_ms'] >= v['health_interval_ms']
+               and v['max_health_observation_age_ms'] <= v['max_health_gap_ms']
+               and v['issued_at'] < v['expires_at'])
+        return
     if definition == 'FileIdentity':  # SEM16のUInt64範囲とinode非零(ENC02)
         for k in ('device', 'inode', 'mtime_ns', 'ctime_ns'):
             _check(int(v[k]) <= _UINT64_MAX)
-        _check(v['inode'] != '0')
+        _check(int(v['inode']) != 0)
         return
     # SEM11: windows配列内のweekday一意とstart<end
     windows = v.get('windows') if type(v) is dict else None
@@ -243,7 +256,7 @@ def _semantic_pure(definition, v):
 # 再帰適用する。適用は_match_node通過時のみで、combinator循環は(node,value)対で打ち切る。
 _SEMANTIC_DEFS = frozenset((
     'Offer', 'StartGrant', 'Outcome', 'FileIdentity', 'MaintenanceWindow',
-    'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'))
+    'RolloutPolicy', 'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'))
 
 
 def _semantic_deep(node, v, seen):
