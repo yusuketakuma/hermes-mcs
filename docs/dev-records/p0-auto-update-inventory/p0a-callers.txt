@@ -1,3 +1,77 @@
+=== apply (update_apply.apply wrapper) callers ===
+--- module importers ---
+tests/core/test_supported_schema_upgrade.py:9:import update_apply
+tests/meta/test_mcs_recover_restore.py:2:import update_apply
+tests/ops/test_installed_standalone_update.py:15:import update_apply
+tests/ops/test_git_timeout_cleanup.py:4:import update_apply
+tests/ops/test_runtime_compatibility.py:3:import update_apply
+tests/ops/test_update_recovery_classification.py:2:import update_apply
+tests/ops/test_mcs_update_restore.py:2:import update_apply
+tests/ops/test_update_child_reaping.py:2:import update_apply
+tests/ops/test_update_environment_agents_dir.py:4:import update_apply
+tests/ops/test_lifecycle_standalone.py:3:import update_apply
+tests/ops/test_release_apply_owner_planning.py:2:import update_apply
+tests/ops/test_update_candidate.py:2:import update_apply
+tests/ops/test_release_apply_owner_native_apply.py:2:import update_apply
+tests/ops/test_update_backup_capacity.py:2:import update_apply
+tests/ops/test_update_failure_cleanup.py:2:import update_apply
+tests/ops/test_restart_runtime_boundary.py:3:import update_apply
+tests/ops/test_update_error_output.py:2:import update_apply
+tests/ops/test_update_log_migration.py:2:import update_apply
+tests/ops/test_restore_evidence.py:2:import update_apply
+tests/ops/test_mcs_update_recovery.py:2:import update_apply
+tests/ops/ops_testkit.py:7:import update_apply
+tests/ops/test_update_rollback_guards.py:3:import update_apply
+tests/ops/mcs_update_testkit.py:2:import update_apply
+tests/ops/test_mcs_update_services.py:2:import update_apply
+tests/ops/test_ops_owned_fd_closeout.py:2:import update_apply
+tests/ops/test_backup_restore_consent.py:2:import update_apply
+tests/ops/test_yomitoku_install.py:2:import update_apply
+tests/ops/test_update_failure_diagnostics.py:3:import update_apply
+tests/ops/test_audit_ops_notify.py:3:import update_apply
+tests/ops/test_mcs_update_apply.py:2:import update_apply
+tests/ops/test_update_lock_wait.py:2:import update_apply
+tests/ops/test_update_recovery_stability.py:3:import update_apply
+tests/ops/test_mcs_update_release_boundary.py:3:import update_apply
+tests/ops/test_mcs_update_rollback_floor.py:3:import update_apply
+tests/ops/test_update_service_stop_verification.py:2:import update_apply
+tests/ops/test_environment_diagnostics_boundary.py:2:import update_apply
+tests/ops/test_provider_rollback_source_witness.py:2:import update_apply
+tests/ops/test_python314_runtime_migration.py:2:import update_apply
+tests/ops/test_update_receipt_boundary.py:2:import update_apply
+tests/ops/test_supported_update_paths.py:2:import update_apply
+tests/ops/test_mcs_upgrade.py:4:import update_apply
+tests/ops/test_restore_control_boundaries.py:2:import update_apply
+tests/ops/test_drug_info.py:2:import update_apply
+tests/ops/test_update_loaded_rollback_closure.py:2:import update_apply
+tests/ops/test_run_log_failure_diagnostics.py:2:import update_apply
+tests/ops/test_mcs_update.py:2:import update_apply
+mcs/ops/update_cli.py:28:from update_apply import (
+mcs/ops/mcs_update.py:308:from update_apply import (
+--- apply( call sites in importers ---
+192:        return apply(picked["tag"], picked["target_sha"],
+195:        return apply(auto[0], auto[1], None)
+212:    return apply(args.tag, args.sha, args.command_id,
+309:    apply as apply,
+329:    cmd_apply as cmd_apply,
+--- facade re-export callers (mcs_update.apply / _apply_pipeline / rollback) ---
+mcs/ops/release_apply_owner.py:1047:                result = mcs_update._apply_pipeline(None, core['commit'], None,
+tests/ops/test_mcs_update_restore.py:681:    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == expected
+tests/ops/test_mcs_update_restore.py:778:    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
+tests/ops/test_mcs_update_restore.py:806:    assert mcs_update.rollback() == 0
+tests/ops/test_release_apply_owner_native_apply.py:648:    assert mcs_update._apply_pipeline(*arguments[:6], candidate_sha=arguments[6],
+tests/ops/test_mcs_update_apply.py:323:    assert mcs_update.apply("v1.1.0", sha, "cid") == 1
+tests/ops/test_mcs_update.py:947:    assert mcs_update.rollback(command_id="synthetic-empty-rollback") == 0
+integration/test_mcs_recovery_narrative.py:852:        rc = mcs_update.rollback("cid-rb")
+integration/test_mcs_recovery_narrative.py:1087:    assert mcs_update.rollback("cid-rb") == 2
+--- update_cli.apply name patching / direct refs ---
+tests/ops/test_mcs_update_apply.py:168:    monkeypatch.setattr(update_cli, 'apply', updater.apply)
+tests/ops/test_mcs_update.py:745:    monkeypatch.setattr(update_cli, 'apply', mcs_update.apply)
+--- apply subcommand dispatch ---
+211:def cmd_apply(args) -> int:
+271:    ap_p = sub.add_parser("apply", help="指定した版へ更新する")
+284:    ap_p.set_defaults(fn=lambda args: cmd_apply(args))
+
 === _apply_pipeline callers ===
 mcs/ops/mcs_update.py:310:    _apply_pipeline as _apply_pipeline,
 mcs/ops/release_apply_owner.py:1047:                result = mcs_update._apply_pipeline(None, core['commit'], None,
