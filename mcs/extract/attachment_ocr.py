@@ -539,7 +539,10 @@ def _runtime(executable, source, output, timeout):
     if process.returncode:
         raise ValueError({21: "engine_version", 22: "input_limits", 23: "output_limits",
                           24: "engine_load_failed", 25: "engine_inference_failed",
-                          26: "input_decode_failed"}.get(process.returncode, "engine_failed"))
+                          26: "input_decode_failed", -signal.SIGKILL: "engine_killed",
+                          -signal.SIGTERM: "engine_terminated", -signal.SIGHUP: "engine_terminated",
+                          -signal.SIGINT: "engine_terminated", -signal.SIGABRT: "engine_crashed",
+                          -signal.SIGSEGV: "engine_crashed"}.get(process.returncode, "engine_failed"))
     fd = os.open(output, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
@@ -605,7 +608,8 @@ def _settings_current(settings):
 
 
 _RUNTIME_REASONS = frozenset({
-    "engine_failed", "engine_version", "input_limits",
+    "engine_failed", "engine_killed", "engine_terminated", "engine_crashed",
+    "engine_version", "input_limits",
     "output_limits", "output_schema", "runtime_symlink_loop",
     "engine_load_failed", "engine_inference_failed", "input_decode_failed",
     "output_schema_table_overlap",

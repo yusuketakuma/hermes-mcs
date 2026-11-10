@@ -2,6 +2,7 @@
 import extract_llm_resident
 import hashlib
 import json
+import signal
 import os
 from pathlib import Path
 import sqlite3
@@ -947,7 +948,11 @@ def test_bootstrap_failure_reports_only_fixed_phase(tmp_path, monkeypatch, phase
 
 @pytest.mark.parametrize("code,reason", [
     (24, "engine_load_failed"), (25, "engine_inference_failed"),
-    (26, "input_decode_failed"), (1, "engine_failed"), (-9, "engine_failed"),
+    (26, "input_decode_failed"), (1, "engine_failed"), (127, "engine_failed"),
+    (-signal.SIGKILL, "engine_killed"), (-signal.SIGTERM, "engine_terminated"),
+    (-signal.SIGHUP, "engine_terminated"), (-signal.SIGINT, "engine_terminated"),
+    (-signal.SIGABRT, "engine_crashed"), (-signal.SIGSEGV, "engine_crashed"),
+    (-99, "engine_failed"),
 ])
 def test_runtime_failure_exit_maps_only_fixed_reason(tmp_path, monkeypatch, code, reason):
     process = SimpleNamespace(pid=1234, returncode=code, wait=lambda **kwargs: None)
