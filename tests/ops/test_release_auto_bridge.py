@@ -332,17 +332,18 @@ def test_real_hooks_full_migration(store, tmp_path):
     assert os.path.exists(os.path.join(generation, 'mcs/core/runtime_entry.py'))
 
 
-def test_run_migration_cli_end_to_end(store, tmp_path, capsys):
+def _cli_spec(store, tmp_path):
+    """run_migration CLI用のspec JSONを構築して書き出す。v1 ownerを配置済みにする。"""
     put(store, 'release-owner.json', {'schema_version': 'mcs.release-owner.v1',
                                     'spent': [], 'outbox': []})
     manifest, source_root = _manifest_for(tmp_path, {'mcs/core/runtime_entry.py': b'print(1)\n'})
+    kwargs = owner_kwargs(store)
     spec = {
         'control_root': str(store.root), 'source_root': str(source_root),
         'recovery_root': str(tmp_path / 'recovery'),
-        'scope': owner_kwargs(store)['scope'], 'baseline': owner_kwargs(store)['baseline'],
+        'scope': kwargs['scope'], 'baseline': kwargs['baseline'],
         'repository_fingerprint': 'd' * 64, 'activation_sha256': 'e' * 64,
-        'profile': owner_kwargs(store)['profile'],
-        'lock_fingerprints': owner_kwargs(store)['lock_fingerprints'],
+        'profile': kwargs['profile'], 'lock_fingerprints': kwargs['lock_fingerprints'],
         'installed_source_manifest_sha256': '1' * 64,
         'verified_source_manifest_sha256': '2' * 64,
         'manifest': {'entrypoints': manifest['manifest']['entrypoints'],
@@ -354,6 +355,11 @@ def test_run_migration_cli_end_to_end(store, tmp_path, capsys):
     }
     spec_path = tmp_path / 'spec.json'
     spec_path.write_text(json.dumps(spec))
+    return spec, spec_path
+
+
+def test_run_migration_cli_end_to_end(store, tmp_path, capsys):
+    _, spec_path = _cli_spec(store, tmp_path)
     assert bridge.main(['migrate', '--spec', str(spec_path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out['ok'] is True and out['phase'] == 'verified'
@@ -362,6 +368,42 @@ def test_run_migration_cli_end_to_end(store, tmp_path, capsys):
     # second run refuses: already v3
     assert bridge.main(['migrate', '--spec', str(spec_path)]) == 2
     assert json.loads(capsys.readouterr().out)['code'] == 'ALREADY_V3'
+
+
+def test_run_migration_holds_q_ex_during_drive(store, tmp_path, monkeypatch, capsys):
+    """install_q成功後〜drive終了までQ EXを保持し、別StoreからのSH取得を拒否する。"""
+    _, spec_path = _cli_spec(store, tmp_path)
+    observed = {}
+    real_drive = bridge.drive
+
+    def spy_drive(store_arg, intent_arg, **hooks):
+        base_install_q = hooks['install_q']
+
+        def wrapped_install_q():
+            base_install_q()
+            probe = Store(store_arg.root)
+            try:
+                try:
+                    with probe.runtime_entry_lock(shared=True):
+                        observed['sh_during_ex'] = True
+                except OSError:
+                    observed['sh_during_ex'] = False
+            finally:
+                probe.close()
+
+        hooks['install_q'] = wrapped_install_q
+        return real_drive(store_arg, intent_arg, **hooks)
+
+    monkeypatch.setattr(bridge, 'drive', spy_drive)
+    assert bridge.main(['migrate', '--spec', str(spec_path)]) == 0
+    assert observed['sh_during_ex'] is False
+    # EX解放後はSH取得できる（migration verified済みの正常状態）
+    probe = Store(store.root)
+    try:
+        with probe.runtime_entry_lock(shared=True):
+            pass
+    finally:
+        probe.close()
 
 
 def test_run_migration_cli_spec_unreadable(store, tmp_path, capsys):

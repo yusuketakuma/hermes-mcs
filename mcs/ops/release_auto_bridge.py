@@ -458,7 +458,27 @@ def run_migration(spec):
             canonical=manifest['canonical'], source_root=spec['source_root'],
             recovery_root=spec['recovery_root'], archive_root=archive_root,
             migration_id=intent['migration_id'])
-        result = drive(store, intent, **hooks)
+        # Bridge runs as a maintenance frame: once the Q inode exists, hold it
+        # EX for the rest of drive() so no business entry can start mid-migration.
+        q_ex = None
+        base_install_q = hooks['install_q']
+
+        def install_q_and_hold():
+            nonlocal q_ex
+            base_install_q()
+            q_ex = store.runtime_entry_lock(shared=False)
+            try:
+                q_ex.__enter__()
+            except OSError as error:
+                q_ex = None
+                raise BridgeError('Q_EX_BUSY') from error
+
+        hooks['install_q'] = install_q_and_hold
+        try:
+            result = drive(store, intent, **hooks)
+        finally:
+            if q_ex is not None:
+                q_ex.__exit__(None, None, None)
     finally:
         store.close()
     return {'phase': result['phase'], 'migration_id': intent['migration_id'],
