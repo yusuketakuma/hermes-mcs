@@ -12,6 +12,7 @@ import extract_llm_source_contract
 import extract_llm_store
 
 import patient_context_refresh_state
+import patient_context_refresh
 from contextlib import contextmanager
 import copy
 import hashlib
@@ -145,7 +146,16 @@ def test_completed_cloud_unit_resumes_only_save_after_sixty_second_lock_wait(
     pending = _completed(runtime, cloud, monkeypatch, lane)
     count = len(pending["posts"])
     pending["blocked"][0] = False
-    outcome = step(runtime, cfg=pending["cfg"], local_admit=lambda: False)
+    # A paid suspension owns no selection mutex; its save-only resume bypasses it.
+    selection_fd, reason = patient_context_refresh._selection_lock(pending["led"].db)
+    assert selection_fd is not None and reason is None
+    def no_selection(*_args, **_kwargs):
+        pytest.fail("completed paid unit must not reenter patient selection")
+    monkeypatch.setattr(patient_context_refresh, "_selection_lock", no_selection)
+    try:
+        outcome = step(runtime, cfg=pending["cfg"], local_admit=lambda: False)
+    finally:
+        os.close(selection_fd)
     assert outcome["status"] == "progressed" and outcome["lane"] == lane
     assert len(pending["posts"]) == count
     assert "_patient_context_completed" not in pending["led"].__dict__
