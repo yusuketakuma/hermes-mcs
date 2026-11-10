@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "事実がない概況の再確認を容量不足として扱わない",
+  "summary": "資料の確認後に記録すべき事実が0件だった場合、空の概況を再確認する処理が容量不足で失敗する問題を修正します。",
+  "upgrade": "追加設定は不要です。既存の更新手順で適用してください。出典の品質確認、課金履歴の照合、概況生成の回数制限は維持します。",
+  "details": [
+    "概況の課金履歴を再照合する入力を構成する際、事実が0件なら出典の署名と空のreportsを保持します。事実があるのに入力の文字数上限へ収まる項目がない場合は、従来どおりnightly_summary_capacityで拒否します。",
+    "空入力のために新たな推論を行う処理は追加しません。出典や過去の品質不合格、未確定の課金履歴を確認する既存の処理も省略しません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_quality_controller.py",
+    "tests/patients/test_context_quality_input_identity.py",
+    "tests/patients/test_context_empty_overview.py"
+  ]
+}

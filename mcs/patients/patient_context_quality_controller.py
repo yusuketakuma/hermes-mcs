@@ -904,7 +904,8 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
 
 def _summary_input(facts, source_sig=None):
     """Build the same source-bound selection input for inference and saved-result rechecks."""
-    reports = context_plan.summary_reports(facts)
+    # Empty summaries still need an input identity for financial rechecks.
+    reports = context_plan.summary_reports(facts) if facts else []
     # Short transport IDs keep selection separate from the immutable evidence IDs.
     aliases = {str(index): report['id'] for index, report in enumerate(reports, 1)}
     offered = [{**report, 'id': alias} for alias, report in zip(aliases, reports)]
