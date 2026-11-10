@@ -72,6 +72,28 @@ def test_enc01_input_guards():
         contract.parse_typed(deep, 'Offer')
 
 
+def test_file_identity_inode_boundaries_and_nested_semantics():
+    """R10: inode=0拒否・UInt64境界・PrivateFileWitness入れ子でのsemantic適用。"""
+    fx = next(f for f in FIXTURES if f['definition'] == 'FileIdentity')['data']
+
+    def parse(inode, wrap=False):
+        identity = dict(fx, inode=inode)
+        doc = ({'logical_id': 'release-owner.json', 'identity': identity, 'sha256': 'a' * 64}
+               if wrap else identity)
+        return contract.parse_typed(json.dumps(doc).encode(), 'PrivateFileWitness' if wrap else 'FileIdentity')
+
+    parse('1')
+    parse('18446744073709551615')  # 2^64-1
+    parse('18446744073709551614')  # positive fixture値
+    for bad in ('0', '18446744073709551616', '00', '-1'):
+        with pytest.raises(contract.ContractError):
+            parse(bad)
+        with pytest.raises(contract.ContractError):
+            parse(bad, wrap=True)
+    parse('1', wrap=True)
+    parse('18446744073709551615', wrap=True)
+
+
 def test_hash_v3_domain_separated():
     value = {'b': [1, 'x'], 'a': None}
     expected = hashlib.sha256(('MCS-AUTO-v3\nprobe\n' + canonical(value, max_bytes=contract.AUTO_INPUT_BYTES)).encode('ascii')).hexdigest()

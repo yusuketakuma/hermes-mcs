@@ -238,9 +238,61 @@ def _semantic_pure(definition, v):
             _check(w['start_minute'] < w['end_minute'])
 
 
+# context非依存semanticを持つdef。$refで入れ子になるdef(PrivateFileWitness内の
+# FileIdentity、ConsentConfirmRequest/OwnerState内のStandingConsent等)にも同じ検査を
+# 再帰適用する。適用は_match_node通過時のみで、combinator循環は(node,value)対で打ち切る。
+_SEMANTIC_DEFS = frozenset((
+    'Offer', 'StartGrant', 'Outcome', 'FileIdentity', 'MaintenanceWindow',
+    'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'))
+
+
+def _semantic_deep(node, v, seen):
+    if not isinstance(node, dict) or v is None or not isinstance(v, (dict, list)):
+        return
+    mark = (id(node), id(v))
+    if mark in seen:
+        return
+    seen.add(mark)
+    ref = node.get('$ref')
+    if isinstance(ref, str):
+        name = ref.rsplit('/', 1)[-1]
+        d = DEFS.get(name)
+        if d is None:
+            return
+        if name in _SEMANTIC_DEFS and _match_node(d, v):
+            _semantic_pure(name, v)
+        _semantic_deep(d, v, seen)
+        return
+    props = node.get('properties')
+    if isinstance(props, dict) and type(v) is dict:
+        for k, sub in props.items():
+            if k in v:
+                _semantic_deep(sub, v[k], seen)
+    items = node.get('items')
+    prefix = node.get('prefixItems')
+    if isinstance(v, list):
+        if isinstance(prefix, list):
+            for i, sub in enumerate(prefix):
+                if i < len(v):
+                    _semantic_deep(sub, v[i], seen)
+            rest = v[len(prefix):]
+            if isinstance(items, dict):
+                for x in rest:
+                    _semantic_deep(items, x, seen)
+        elif isinstance(items, dict):
+            for x in v:
+                _semantic_deep(items, x, seen)
+    for key in ('allOf', 'anyOf', 'oneOf'):
+        branches = node.get(key)
+        if isinstance(branches, list):
+            for sub in branches:
+                _semantic_deep(sub, v, seen)
+
+
 def _validate(definition, value):
     _check(_match_node(_definition(definition), value))
     _semantic_pure(definition, value)
+    _semantic_deep(_definition(definition), value, set())
     return value
 
 
