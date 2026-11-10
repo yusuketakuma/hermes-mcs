@@ -97,7 +97,8 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None, resolution_comma
         return {"error": "tracking_ack_part_ineligible"}
     length_failure = part['kind'] == 'body_part' and part['error_code'] in notify_scope._LENGTH_ERRORS
     resolution = None
-    if (part['kind'] in ('attachment_part', 'file_group') and part['error_code'] == 'operator_part_resolve'):
+    if (part['kind'] in ('attachment_part', 'file_group')
+            and part['error_code'] in ('operator_part_resolve', 'stage_receipt_missing')):
         resolution = _negative_resolution(db, render, part, resolution_command_id)
     if ((not length_failure and resolution is None)
             or (length_failure and resolution_command_id is not None)):
