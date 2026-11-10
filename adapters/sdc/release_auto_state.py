@@ -182,6 +182,26 @@ def save(store, value):
         return value
 
 
+def install_initial(store, value):
+    """bridgeのv3初期owner配置。O lock下で既存docを分類し原子的に置く。
+
+    既存v3がvalueと完全一致なら冪等no-op、異なるv3は拒否。v1/missingは置換対象。
+    """
+    with store.release_owner_lock():
+        raw = store.read(OWNER_NAME)
+        if raw is not None:
+            try:
+                current = contract.parse_document(_dumps(raw), 'OwnerState',
+                                                  max_bytes=MAX_OWNER_BYTES)
+            except contract.ContractError:
+                current = None
+            if isinstance(current, dict) and current.get('schema_version') == SCHEMA:
+                _check(current == _validate(value), 'ALREADY_V3')
+                return current
+        _write(store, value)
+        return value
+
+
 def ack_outbox(store, *, report_id, outcome_sha256):
     """配信ACKの反映。revisionのみ進め、execution_revisionは据え置く。
     既ACKのreplayでもhash不一致は拒否する。"""

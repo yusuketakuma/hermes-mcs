@@ -2,10 +2,12 @@
 import hashlib
 import json
 import os
+import stat
 import uuid
 
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_migration as migration
+from adapters.sdc import release_auto_state as auto_state
 
 MAX_OWNER_BYTES = 8 * 1024 * 1024
 MAX_INTENT_BYTES = 32 * 1024
@@ -209,3 +211,197 @@ def drive(store, intent, *, archive, install_owner, install_q, verify):
             value = migration.advance(store, migration_id=value['migration_id'],
                                       phase='verified')
     return value
+
+
+# --- real side-effect hooks for drive() -------------------------------------
+#
+# archive_root defaults to a sibling of the control root so migration evidence
+# never appears inside the Store-managed directory (classify_sidecars would
+# refuse unknown entries). recovery_root is the existing independent recovery
+# area; the closure lands in a content-addressed runtime-<sha256> generation.
+
+_CLOSURE_DESCRIPTOR = 'sdc-update-control.json'
+_MODE_TO_PERMISSION = {'100644': 0o644, '100755': 0o755}
+
+
+def _fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _read_file(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _write_private(path, raw, permission):
+    """Private file write: O_EXCL create + fchmod + fsync; unlinks on failure."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.fchmod(fd, permission)
+        view = memoryview(raw)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        os.unlink(path)
+        raise
+    else:
+        os.close(fd)
+
+
+def _ensure_private_dir(path):
+    """Create path and every missing ancestor with 0700, up to the first existing dir."""
+    missing = []
+    current = path
+    while not os.path.isdir(current):
+        missing.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    for directory in reversed(missing):
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            pass
+        os.chmod(directory, 0o700)
+
+
+def _safe_relpath(path):
+    _check(isinstance(path, str) and 0 < len(path) <= 4096, 'MANIFEST_INVALID')
+    _check(not path.startswith('/') and '\\' not in path
+           and all(part not in ('', '.', '..') for part in path.split('/')),
+           'MANIFEST_INVALID')
+    return path
+
+
+def archive_exact(store, archive_root, migration_id):
+    """drive()のarchive hook実体: 旧sidecar bytesをmigration_id配下へ不変保存する。
+
+    再開時は既存fileのbytesがbefore_sha256と一致することを確認してskipする。
+    """
+    target_dir = os.path.join(archive_root, migration_id)
+    os.makedirs(target_dir, mode=0o700, exist_ok=True)
+    os.chmod(target_dir, 0o700)
+
+    def archive(name, before_sha256):
+        raw = store.read_migration_raw(name)
+        _check(raw is not None, 'ARCHIVE_MISSING')
+        _check(_sha256(raw) == before_sha256, 'ARCHIVE_HASH_MISMATCH')
+        dest = os.path.join(target_dir, name)
+        if os.path.lexists(dest):
+            _check(_sha256(_read_file(dest)) == before_sha256, 'ARCHIVE_CONFLICT')
+            return
+        _write_private(dest, raw, 0o600)
+        _fsync_dir(target_dir)
+
+    return archive
+
+
+def install_owner(store, owner_value):
+    """drive()のinstall_owner hook実体: v3 baselineをO lock下で原子的に配置する。"""
+    def install():
+        auto_state.install_initial(store, owner_value)
+    return install
+
+
+def install_q(store):
+    """drive()のinstall_q hook実体: Q inodeを一度だけ作成する。既存は再利用。"""
+    def install():
+        try:
+            os.stat('runtime-entry.lock', dir_fd=store.fd, follow_symlinks=False)
+            return
+        except FileNotFoundError:
+            pass
+        store.install_runtime_entry_lock()
+    return install
+
+
+def deploy_closure(manifest_value, canonical, source_root, recovery_root):
+    """ControlManifestのclosureをcontent-addressed generationへ配備する。
+
+    generation dirは `<recovery_root>/runtime-<closure_sha256>`。全fileを
+    path/mode/sha256照合で配置し、manifest canonicalを`sdc-update-control.json`
+    として同梱する。冪等: 同名同bytesはskip、異bytesはtmp+renameで修復する。
+    """
+    closure_sha = hashlib.sha256(canonical).hexdigest()
+    generation = os.path.join(recovery_root, 'runtime-' + closure_sha)
+    _ensure_private_dir(generation)
+    for entry in manifest_value['files']:
+        rel = _safe_relpath(entry['path'])
+        source = os.path.join(source_root, *rel.split('/'))
+        raw = _read_file(source)
+        _check(_sha256(raw) == entry['sha256'], 'CLOSURE_SOURCE_HASH')
+        _check(entry['mode'] in _MODE_TO_PERMISSION, 'MANIFEST_INVALID')
+        dest = os.path.join(generation, *rel.split('/'))
+        _ensure_private_dir(os.path.dirname(dest))
+        permission = _MODE_TO_PERMISSION[entry['mode']]
+        if os.path.lexists(dest):
+            st = os.lstat(dest)
+            if (stat.S_ISREG(st.st_mode) and (st.st_mode & 0o777) == permission
+                    and _sha256(_read_file(dest)) == entry['sha256']):
+                continue
+        tmp = dest + '.tmp-' + os.urandom(8).hex()
+        _write_private(tmp, raw, permission)
+        os.replace(tmp, dest)
+        _fsync_dir(os.path.dirname(dest))
+    desc = os.path.join(generation, _CLOSURE_DESCRIPTOR)
+    if not (os.path.lexists(desc) and not os.path.islink(desc)
+            and _read_file(desc) == canonical):
+        tmp = desc + '.tmp-' + os.urandom(8).hex()
+        _write_private(tmp, canonical, 0o600)
+        os.replace(tmp, desc)
+        _fsync_dir(generation)
+    return generation
+
+
+def verify_closure(manifest_value, canonical, source_root, recovery_root):
+    """drive()のverify hook実体: 配備を冪等に整えてからclosureを再検証する。"""
+    generation = deploy_closure(manifest_value, canonical, source_root, recovery_root)
+    expected = {_safe_relpath(e['path']): e for e in manifest_value['files']}
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(generation):
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+        for filename in filenames:
+            full = os.path.join(dirpath, filename)
+            rel = os.path.relpath(full, generation)
+            st = os.lstat(full)
+            _check(stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode),
+                   'VERIFY_FAILED')
+            if rel == _CLOSURE_DESCRIPTOR:
+                _check(_read_file(full) == canonical, 'VERIFY_FAILED')
+                continue
+            _check(rel in expected, 'VERIFY_FAILED')
+            entry = expected[rel]
+            _check((st.st_mode & 0o777) == _MODE_TO_PERMISSION[entry['mode']],
+                   'VERIFY_FAILED')
+            _check(_sha256(_read_file(full)) == entry['sha256'], 'VERIFY_FAILED')
+            seen.add(rel)
+    _check(seen == set(expected), 'VERIFY_FAILED')
+    return True
+
+
+def real_hooks(store, *, owner_value, manifest_value, canonical,
+               source_root, recovery_root, archive_root, migration_id):
+    """drive()へ渡す実副作用hook一式を束ねる。"""
+    return {
+        'archive': archive_exact(store, archive_root, migration_id),
+        'install_owner': install_owner(store, owner_value),
+        'install_q': install_q(store),
+        'verify': lambda: verify_closure(manifest_value, canonical,
+                                         source_root, recovery_root),
+    }

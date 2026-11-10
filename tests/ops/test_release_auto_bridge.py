@@ -194,3 +194,138 @@ def test_drive_verify_failure_holds(store):
                      install_q=lambda: store.install_runtime_entry_lock(),
                      verify=lambda: False)
     assert migration.load(store)['phase'] == 'owner_replaced'
+
+
+# --- real side-effect hooks -------------------------------------------------
+
+
+def _manifest_for(tmp_path, files):
+    source_root = tmp_path / 'source'
+    entries = []
+    for rel, content in files.items():
+        path = source_root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        entries.append({'path': rel, 'mode': '100644',
+                        'sha256': hashlib.sha256(content).hexdigest()})
+    result = bridge.build_control_manifest(
+        entrypoints=['mcs_update.py'], files=entries,
+        dependency_policy_sha256='b' * 64, recovery_generation_sha256='c' * 64)
+    return result, source_root
+
+
+def test_archive_exact_preserves_and_resumes(store, tmp_path):
+    put(store, 'release-plan.json', {'pending': True})
+    before = hashlib.sha256(store.read_migration_raw('release-plan.json')).hexdigest()
+    archive = bridge.archive_exact(store, str(tmp_path / 'archive'), 'mid-1')
+    archive('release-plan.json', before)
+    dest = tmp_path / 'archive' / 'mid-1' / 'release-plan.json'
+    assert dest.read_bytes() == store.read_migration_raw('release-plan.json')
+    assert oct(dest.stat().st_mode & 0o777) == '0o600'
+    archive('release-plan.json', before)  # idempotent
+    dest.write_bytes(b'corrupted')
+    with pytest.raises(bridge.BridgeError, match='ARCHIVE_CONFLICT'):
+        archive('release-plan.json', before)
+
+
+def test_install_owner_replaces_v1_and_is_idempotent(store):
+    put(store, 'release-owner.json', {'schema_version': 'mcs.release-owner.v1'})
+    owner_doc = bridge.initial_owner_value(**owner_kwargs(store))
+    install = bridge.install_owner(store, owner_doc)
+    install()
+    installed = auto_state.load(store)
+    assert installed['schema_version'] == 'mcs.release-owner.v3'
+    install()  # same doc -> no-op
+    other = dict(owner_doc, revision=2)
+    with pytest.raises(auto_state.OwnerStateError, match='ALREADY_V3'):
+        bridge.install_owner(store, other)()
+
+
+def test_install_q_creates_inode_once(store):
+    install = bridge.install_q(store)
+    install()
+    st = os.stat('runtime-entry.lock', dir_fd=store.fd)
+    assert st.st_ino != 0
+    install()  # existing inode is reused, never recreated
+    assert os.stat('runtime-entry.lock', dir_fd=store.fd).st_ino == st.st_ino
+
+
+def test_deploy_and_verify_closure(store, tmp_path):
+    source_root = tmp_path / 'source'
+    entries = []
+    for rel, mode, content in [
+            ('mcs/core/runtime_entry.py', '100644', b'print(1)\n'),
+            ('mcs/ops/tool.sh', '100755', b'#!/bin/sh\n')]:
+        path = source_root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        entries.append({'path': rel, 'mode': mode,
+                        'sha256': hashlib.sha256(content).hexdigest()})
+    manifest = bridge.build_control_manifest(
+        entrypoints=['mcs_update.py'], files=entries,
+        dependency_policy_sha256='b' * 64, recovery_generation_sha256='c' * 64)
+    canonical = manifest['canonical']
+    recovery = tmp_path / 'recovery'
+    generation = bridge.deploy_closure(manifest['manifest'], canonical,
+                                       str(source_root), str(recovery))
+    assert os.path.basename(generation).startswith('runtime-')
+    assert (tmp_path / 'recovery' / os.path.basename(generation)
+            / 'mcs/core/runtime_entry.py').read_bytes() == b'print(1)\n'
+    assert oct(os.stat(os.path.join(generation, 'mcs/ops/tool.sh')).st_mode & 0o777) == '0o755'
+    descriptor = os.path.join(generation, 'sdc-update-control.json')
+    assert open(descriptor, 'rb').read() == canonical
+    assert bridge.verify_closure(manifest['manifest'], canonical,
+                                 str(source_root), str(recovery)) is True
+    # extra unlisted file refuses verification
+    open(os.path.join(generation, 'extra.bin'), 'wb').write(b'x')
+    with pytest.raises(bridge.BridgeError, match='VERIFY_FAILED'):
+        bridge.verify_closure(manifest['manifest'], canonical,
+                              str(source_root), str(recovery))
+    os.unlink(os.path.join(generation, 'extra.bin'))
+    # tampered member is healed by the idempotent deploy, then verified
+    target = os.path.join(generation, 'mcs/core/runtime_entry.py')
+    open(target, 'wb').write(b'evil')
+    assert bridge.verify_closure(manifest['manifest'], canonical,
+                                 str(source_root), str(recovery)) is True
+    assert open(target, 'rb').read() == b'print(1)\n'
+
+
+def test_deploy_closure_rejects_unsafe_path(store, tmp_path):
+    bad = bridge.build_control_manifest(
+        entrypoints=['x'],
+        files=[{'path': '../escape.py', 'mode': '100644', 'sha256': H}],
+        dependency_policy_sha256='b' * 64, recovery_generation_sha256='c' * 64)
+    with pytest.raises(bridge.BridgeError, match='MANIFEST_INVALID'):
+        bridge.deploy_closure(bad['manifest'], bad['canonical'],
+                              str(tmp_path), str(tmp_path / 'rec'))
+
+
+def test_real_hooks_full_migration(store, tmp_path):
+    put(store, 'release-owner.json', {'schema_version': 'mcs.release-owner.v1',
+                                    'spent': [], 'outbox': []})
+    put(store, 'release-plan.json', {'pending': True})
+    owner_doc = bridge.initial_owner_value(**owner_kwargs(store))
+    files = {'mcs/core/runtime_entry.py': b'print(1)\n'}
+    manifest, source_root = _manifest_for(tmp_path, files)
+    archive_root = tmp_path / 'archive'
+    recovery = tmp_path / 'recovery'
+    sidecars = bridge.classify_sidecars(store)
+    intent = bridge.plan_migration(
+        root_fingerprint=store.root_fingerprint(), repository_fingerprint='d' * 64,
+        source_schema='mcs.release-owner.v1', bridge_sha256='e' * 64,
+        control_closure_sha256=manifest['sha256'],
+        recovery_generation_sha256='0' * 64, external_floor_sha256='9' * 64,
+        files=sidecars, human_receipt_id=U, created_at=1000)
+    hooks = bridge.real_hooks(
+        store, owner_value=owner_doc, manifest_value=manifest['manifest'],
+        canonical=manifest['canonical'], source_root=str(source_root),
+        recovery_root=str(recovery), archive_root=str(archive_root),
+        migration_id=intent['migration_id'])
+    result = bridge.drive(store, intent, **hooks)
+    assert result['phase'] == 'verified'
+    assert auto_state.load(store)['schema_version'] == 'mcs.release-owner.v3'
+    os.stat('runtime-entry.lock', dir_fd=store.fd)
+    archived = tmp_path / 'archive' / intent['migration_id'] / 'release-plan.json'
+    assert archived.read_bytes() == store.read_migration_raw('release-plan.json')
+    generation = os.path.join(str(recovery), 'runtime-' + manifest['sha256'])
+    assert os.path.exists(os.path.join(generation, 'mcs/core/runtime_entry.py'))
