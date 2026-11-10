@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "v3自動更新の端末transport基盤（未配線）",
+  "summary": "v3自動更新が中央と通信するための固定path限定transportを追加しました。現時点では呼び出し側（owner orchestration）が未実装のため実行経路には未接続で、既存の更新・監視通信には影響しません。",
+  "upgrade": "追加操作は不要です。AUTO_ELIGIBLE=falseのまま機能は無効です。",
+  "details": [
+    "adapters/sdc/release_auto_transport.py: api-contract.jsonのdevice routeからpath・byte上限を導出し、JSON制御（16KiB要求/16KiB応答）とartifact stream（256MiB上限・64KiB chunk・総deadline300秒・Content-Encoding identity・redirect禁止・size/digest不一致で即中止）を実装。",
+    "protocol.sign_release_auto: 既存device HMAC契約を/v3/mcs/releases/*の11固定pathへ拡張。body/path/method bindingを維持し、v2・admin・未登録pathは署名拒否。",
+    "応答は200のみ成功。202・3xx・HTML・過大body・mcs.release-error.v3以外のerror形状は全てfail-closed。"
+  ],
+  "refs": ["adapters/sdc/release_auto_transport.py", "adapters/sdc/protocol.py"]
+}
