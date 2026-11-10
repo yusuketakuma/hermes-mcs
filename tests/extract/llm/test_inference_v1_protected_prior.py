@@ -127,3 +127,22 @@ def test_protected_loss_uses_existing_single_repair_without_weakening_retention(
     assert quality.protected_lost(prior, result, body) == ({} if restorable else {"symptoms": 1})
     assert all(value in prompts[1] for value in ("咳", "family", "ongoing"))
     assert prior == original
+
+
+def test_protected_assertions_keep_every_raw_axis_without_revalidation_or_truncation(monkeypatch):
+    items = [{**FAMILY, "text": f"合成症状{index}", "status": "ongoing",
+              "evidence": f"家族には合成症状{index}があります。"} for index in range(12)]
+    body = "".join(item["evidence"] for item in items)
+    prior = {"symptoms": items}
+    before = copy.deepcopy(prior)
+    monkeypatch.setattr(quality.extract_validation, "validate", lambda *args, **kwargs:
+                        pytest.fail("the protection baseline must not be revalidated"))
+    assert quality.protected_assertions(prior, body) == prior
+    assert prior == before
+
+
+def test_protected_assertions_share_the_existing_grounding_boundary():
+    prior = {"symptoms": [FAMILY, NEGATIVE, {**FAMILY, "evidence": "原文にはない引用"}]}
+    assert quality.protected_assertions(prior, BODY) == {"symptoms": [FAMILY, NEGATIVE]}
+    assert quality.protected_assertions(prior, None) == {}
+    assert quality.protected_assertions(prior, BODY * 2) == {}
