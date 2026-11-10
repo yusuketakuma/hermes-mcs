@@ -1113,6 +1113,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                           ('処理待ち', states['pending']), ('保留', states['held'])]
                 extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
                           + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+            unknown = report.get('notify_unknown_part_outcomes')
+            if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
+                extra += f"／結果不明の全記録 {unknown}件"
             closed = report.get('notify_tracking_closed_parts')
             if _count(closed) and closed:
                 extra += f"／別に運用終了・未回収 {closed}件"

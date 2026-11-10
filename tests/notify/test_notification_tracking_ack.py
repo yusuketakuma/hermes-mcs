@@ -242,3 +242,4 @@ def test_observer_global_unknown_cannot_be_hidden_by_zero_current_parts(tmp_path
     assert report['status'] == 'degraded'
     assert 'notification_parts_incomplete' in report['state_reasons']
     assert report['notify_unknown_part_outcomes'] == 1
+    assert '結果不明の全記録 1件' in '\n'.join(health_watch._reason_rows(report, report['state_reasons']))
