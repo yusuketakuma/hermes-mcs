@@ -10,6 +10,11 @@ target-version = "py314"
 # rule set.
 select = ["E4", "E7", "E9", "F"]
 
+[tool.ruff.lint.per-file-ignores]
+# adapters/sdc/contracts/ は CSDC 契約の byte 一致固定コピー（contracts/README.md）。
+# byte 一致が要件で手修正できないため lint 対象外とする。
+"adapters/sdc/contracts/**" = ["ALL"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "integration"]
 addopts = "-q"
