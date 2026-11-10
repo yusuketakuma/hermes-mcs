@@ -862,11 +862,37 @@ def resume(store, deps):
     return {'phase': phase, 'action': 'observe_only'}
 
 
+def _maybe_apply_effect(store, deps, info):
+    """consume直後の同一processでだけeffectを試す任意hook。
+
+    deps.apply_effect(store)があれば呼ぶ(本番はrelease_auto_applyの
+    issue_effect_capability→apply_code_only_v3を束ねたcallable)。
+    capabilityはRAMのみなのでcrash後のresumeからは再発行しない。
+    """
+    apply_effect = getattr(deps, 'apply_effect', None)
+    if apply_effect is None:
+        return info
+    try:
+        result = apply_effect(store)
+    except (OwnerError, auto_state.OwnerStateError) as e:
+        # effect失敗時の実phase(UNKNOWN等)を正本から読み直して報告する
+        try:
+            phase = auto_state.load(store)['active']
+            phase = phase['phase'] if phase else None
+        except Exception:
+            phase = info.get('phase')
+        return {'phase': phase, 'action': 'hold', 'code': e.code}
+    if isinstance(result, dict) and result.get('phase'):
+        info = dict(info, phase=result['phase'], action=result.get('action', 'applied'))
+    return info
+
+
 def tick(store, deps):
-    """1 tick: outbox配送→active観測→(無ければoffer→stage)→prepare→grant→consume。
+    """1 tick: outbox配送→active観測→(無ければoffer→stage)→prepare→grant→consume→effect。
 
     各段階は独立に再開可能。OwnerErrorはholdとして記録し例外を外へ流さない
     (失敗しても安全側: DEFERRED済み・pending outbox・active保持のいずれか)。
+    effectはdeps.apply_effect設定時のみ同一tick内で実行する。
     """
     try:
         deliver_outbox(store, deps)
@@ -886,6 +912,7 @@ def tick(store, deps):
                 grant = request_start(store, deps)
                 consume_start(store, deps, grant)
                 info = {'phase': 'STARTED', 'action': 'consumed'}
+                info = _maybe_apply_effect(store, deps, info)
         except (OwnerError, auto_state.OwnerStateError) as e:
             info = {'phase': info.get('phase'), 'action': 'hold', 'code': e.code}
         return info
@@ -912,6 +939,9 @@ def tick(store, deps):
     try:
         grant = request_start(store, deps)
         consume_start(store, deps, grant)
+        info = _maybe_apply_effect(store, deps,
+                                   {'phase': 'STARTED', 'action': 'consumed',
+                                    'operation_id': operation_id})
     except (OwnerError, auto_state.OwnerStateError) as e:
         return {'action': 'hold', 'code': e.code, 'operation_id': operation_id}
-    return {'action': 'consumed', 'operation_id': operation_id}
+    return info
