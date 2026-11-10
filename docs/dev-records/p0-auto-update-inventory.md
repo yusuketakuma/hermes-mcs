@@ -146,7 +146,7 @@
 | U | `data/update.lock` | `mcs/ops/update_lifecycle_context.py` `UPDATE_LOCK`/`acquire_update_lock()` | 既存journal/更新排他 |
 | Q | `runtime-entry.lock` | **未存在**（v3新設予定） | code切替/全業務process寿命 |
 | R | `data/run.lock` | `mcs/core/writer_lock.py` `RUN_LOCK`/`acquire_run_lock` | 既存writer排他 |
-| C | `config.json.edit.lock` | **`mcs/ops/setup/config_edit.py` `_edit_lock`**（L131付近。`mcs/ops/config_edit.py`は存在しない — 仕様の警告どおり実配置を解決）。`provider_settings._verify_lock`も同一file | private設定snapshot最終整合 |
+| C | `config.json.edit.lock` | **`mcs/ops/setup/config_edit.py` `_edit_lock`**（L131付近。`mcs/ops/config_edit.py`は存在しない — 仕様の警告どおり実配置を解決）。**同一fileへの第2取得経路**: `mcs/core/provider_settings.py` `_edit_lock_at`（L685、root handleのdir_fd経由でopen）+ `_verify_lock`（L671、`LOCK_EX\|LOCK_NB` flockとidentity検証） | private設定snapshot最終整合 |
 | A | `release-authority.lock` | `storage.py` `release_authority_lock()` L659 | 同意/取消/bootstrap/currentness |
 | M | `tick.lock` | `storage.py` `_file_lock('tick.lock')` L602（`Store.lock()`/tick経路） | 端末identity/credential snapshot、monitor tick寿命 |
 | O | `release-owner.lock` | `storage.py` `release_owner_lock()` L669 | 短いowner state CAS |
@@ -155,7 +155,7 @@
 ### C-2. `_edit_lock` の実装（`mcs/ops/setup/config_edit.py`）
 
 - `os.open(path, O_NOFOLLOW|O_NONBLOCK, 0o600)`→fstat検証（regular file・owner・mode 0600・link count 1・size 0）→`fcntl.flock(LOCK_EX|LOCK_NB)`→lock後identity再検証。`ConfigConflict("config_busy")`/`("config_lock_changed")`。
-- caller: `adapters/slack/provision.py`, `mcs/medications/drug_alias.py`, `mcs/ops/cloud_cli.py`, `mcs/ops/install_options.py`（+`provider_settings._verify_lock`同一file経路）。
+- caller: `adapters/slack/provision.py`, `mcs/medications/drug_alias.py`, `mcs/ops/cloud_cli.py`, `mcs/ops/install_options.py`。**同一`config.json.edit.lock`への並行取得経路**として `mcs/core/provider_settings.py` の `_edit_lock_at`/`_verify_lock` があり、split provider設定のapply()（L815 `with _edit_lock_at(...) if lock_fd is None else nullcontext(lock_fd)`）はこちらを使用。lock fileは共通だが取得helperが2系統ある点をM3のC-lock接続設計で考慮する。
 - **C lockとG/U/R/A/M/Oの間に直接の取得関係は確認されず** — config writerはrelease lockを取らない。specの「Cの実体・別設定fileのwriter・support lockとの関係はP0で全callerを照合」に対し、現時点の実測では**逆順edgeは未検出**。ただし「全caller網羅」は本表の列挙範囲であり、動的import経路・test以外の実運用callerの最終確認はM3で継続。
 
 ### C-3. 実測した取得順序（`_run_native_release`内、release_apply_owner.py L888–930）
