@@ -859,6 +859,20 @@ def resume(store, deps):
         return {'phase': phase, 'action': 'await_grant'}
     if phase == 'STAGED':
         return {'phase': phase, 'action': 'await_window'}
+    # APPLIED/CANDIDATE_READY/ACTIVATING: runtime proof前進はdeps注入hook
+    # (release_runtime_proof.advance_runtimeを束ねたcallable)へ委譲する。
+    # hook未設定・UNKNOWNは観測のみで状態を進めない。
+    advance = getattr(deps, 'runtime_advance', None)
+    if advance is not None and phase in ('APPLIED', 'CANDIDATE_READY',
+                                         'ACTIVATING'):
+        try:
+            result = advance(store)
+        except (OwnerError, auto_state.OwnerStateError) as e:
+            return {'phase': phase, 'action': 'hold', 'code': e.code}
+        if isinstance(result, dict):
+            return {'phase': phase,
+                    'action': result.get('action') or result.get('phase',
+                                                                 'advanced')}
     return {'phase': phase, 'action': 'observe_only'}
 
 
