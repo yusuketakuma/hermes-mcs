@@ -1,5 +1,6 @@
 """Serialize patient selection and claim behind a per-database mutex."""
 import os
+import select
 import subprocess
 import sys
 
@@ -54,8 +55,12 @@ def test_selection_lock_alias_and_swap_keep_same_path(runtime, tmp_path):
     alias_ledger = Ledger(str(alias / os.path.basename(db_path)))
     try:
         fd, reason = refresh._selection_lock(alias_ledger.db)
-        assert reason is None
-        os.close(fd)
+        assert reason is None and fd is not None
+        try:
+            other, reason = refresh._selection_lock(led.db)
+            assert other is None and reason == 'patient_context_selection_busy'
+        finally:
+            os.close(fd)
         expected = os.path.join(os.path.dirname(os.path.realpath(db_path)),
                                 '.patient_context_selection.lock')
         held = writer_lock.acquire_run_lock(expected)
@@ -186,12 +191,14 @@ def test_two_processes_exclude_selection_lock(runtime, tmp_path):
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)
     try:
+        assert select.select([owner.stdout], [], [], 10)[0], 'selection owner did not become ready'
         assert owner.stdout.readline().strip() == 'held'
         busy = step(runtime)
         assert busy.get('reason') == 'patient_context_selection_busy'
         assert busy['done'] == 0
         owner.stdin.write('\n')
         owner.stdin.flush()
+        assert select.select([owner.stdout], [], [], 10)[0], 'selection owner did not release'
         assert owner.stdout.readline().strip() == 'released'
         owner.wait(timeout=10)
         assert owner.returncode == 0, owner.stderr.read()
