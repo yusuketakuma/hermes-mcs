@@ -48,3 +48,21 @@ def test_git_wrapper_redacts_failed_process_diagnostics(monkeypatch):
         update_discovery.detect_latest(checkout=mcs_update.REPO, environment=mcs_update.os.environ)
     assert 'ls-remote' in str(error.value)
     assert canary not in str(error.value)
+
+
+@pytest.mark.parametrize('canary', [
+    'SYNTHETIC_PRIVATE_SPAWN /synthetic/private/path token=synthetic',
+    '合成の非公開起動情報\n合成の資格情報',
+])
+def test_git_spawn_failure_uses_fixed_code_at_both_entry_points(monkeypatch, canary):
+    def refused(*args, **kwargs):
+        raise OSError(canary)
+
+    monkeypatch.setattr(owned_process, 'run_owned', refused)
+    with pytest.raises(update_discovery.DiscoveryError) as discovery:
+        update_discovery.git(['status'], checkout='/synthetic/repo', environment={})
+    assert str(discovery.value) == 'git_spawn_failed'
+    with pytest.raises(mcs_update.UpdateError) as updater:
+        mcs_update._git(['status'])
+    assert str(updater.value) == 'git_spawn_failed'
+    assert canary not in str(discovery.value) + str(updater.value)

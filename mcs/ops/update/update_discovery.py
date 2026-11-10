@@ -29,7 +29,7 @@ def git(args: list[str], timeout: int = LOCAL_TIMEOUT_S, *,
     except subprocess.TimeoutExpired as e:
         raise DiscoveryError("git_timeout: " + " ".join(args[:1])) from e
     except OSError as e:
-        raise DiscoveryError(f"git_spawn_failed: {e}") from e
+        raise DiscoveryError("git_spawn_failed") from e
 
 
 def git_output(args: list[str], timeout: int = LOCAL_TIMEOUT_S, *,
