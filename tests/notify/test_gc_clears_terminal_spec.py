@@ -1,4 +1,4 @@
-"""Keep recoverable Slack caption plans; unrelated terminal specs still lose their text."""
+"""Keep sealed plans until every uncertain delivery outcome has been resolved."""
 import json
 from pathlib import Path
 
@@ -110,17 +110,20 @@ def test_gc_retains_slack_caption_specs_until_unknown_is_resolved(led, monkeypat
     (CFG, "edit_target_unverified", "attachment_part"),
     (CFG, "edit_history_unverified", "attachment_part"),
 ])
-def test_gc_still_clears_other_terminal_unknown_specs(led, monkeypatch, cfg, error, kind):
+def test_gc_retains_all_terminal_unknown_specs(led, monkeypatch, cfg, error, kind):
     render, _, target, path = caption_update(led, monkeypatch, cfg, error, kind)
+    sealed = path.read_bytes()
+    parts = [tuple(row) for row in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY part_id",
+        (render["delivery_id"],))]
     notify_cards.gc(led, cfg, now=NOW + 2)
     current = _latest_render(led)
-    if cfg is SLACK and kind == "body_part":
-        assert "attachment_identity" in json.loads(current["spec_json"])
-        assert "synthetic.pdf" not in current["spec_json"]
-    else:
-        assert current["spec_json"] is None
-    assert current["spec_published"] == 0
+    assert current["spec_json"] == render["spec_json"]
+    assert current["spec_published"] == 1
     assert current["payload_hash"] == render["payload_hash"]
-    assert not path.exists()
+    assert path.read_bytes() == sealed
+    assert [tuple(row) for row in led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY part_id",
+        (render["delivery_id"],))] == parts
     assert led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
                           (render["delivery_id"], target["part_id"])).fetchone()[0] == "unknown"

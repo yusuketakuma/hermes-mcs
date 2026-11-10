@@ -1273,8 +1273,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     recover) republish queued/held renders or delivered plans with
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
-    keeps. Slack attachment edits rejected before writing keep both specs
-    until their unknown result is resolved. Definitive Slack body length
+    keeps. Any part with an unknown outcome keeps both specs across all
+    transports until its result is resolved. Definitive Slack body length
     rejections keep both sealed copies until matching delivery proof exists. Rows, hashes,
     correlations and part metadata stay for audit. Each clearing pass examines
     at most limit candidates; a private restart-safe cursor rotates past
@@ -1348,10 +1348,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                        WHERE ic.delivery_id=r.delivery_id AND ic.state='pending')
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_render_parts p
-                       WHERE p.delivery_id=r.delivery_id AND r.transport='slack'
-                         AND p.state='unknown' AND (p.kind='file_group'
-                           OR (p.kind='attachment_part'
-                             AND p.error_code IN ('edit_target_unverified','edit_history_unverified'))))
+                       WHERE p.delivery_id=r.delivery_id AND p.state='unknown')
                      AND ((r.card_id IS NULL AND r.op='notice'
                            AND r.state IN ('cancelled','not_sent'))
                           OR (r.state IN ('cancelled','not_sent')
@@ -1399,9 +1396,7 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
                 "WHERE p.delivery_id=r.delivery_id AND p.state='pending') "
                 "AND NOT EXISTS (SELECT 1 FROM notification_render_parts p "
-                "WHERE p.delivery_id=r.delivery_id AND r.transport='slack' "
-                "AND p.state='unknown' AND (p.kind='file_group' OR (p.kind='attachment_part' "
-                "AND p.error_code IN ('edit_target_unverified','edit_history_unverified')))) ",
+                "WHERE p.delivery_id=r.delivery_id AND p.state='unknown') ",
                 "spec_files"):
             path = os.path.join(dirs[r["transport"] + "_render"],
                                 r["delivery_id"] + ".json")

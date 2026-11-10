@@ -1,4 +1,4 @@
-"""A mixed incomplete plan still needs its worker spec while any part remains pending."""
+"""A mixed incomplete plan still needs its worker spec while any part remains pending or unknown."""
 from pathlib import Path
 
 import notify_cards
@@ -12,7 +12,7 @@ pytestmark = pytest.mark.usefixtures("v1_thread_bodies")
 
 
 
-def test_incomplete_render_keeps_spec_until_all_pending_parts_settle(led):
+def test_incomplete_render_keeps_spec_until_all_uncertain_parts_settle(led):
     _seed_thread(led)
     _dispatch(led, _intent(led))
     render = _latest_render(led)
@@ -38,5 +38,11 @@ def test_incomplete_render_keeps_spec_until_all_pending_parts_settle(led):
     assert pending
     for row in pending:
         assert _part_receipt(led, render, row[0])["applied"]
-    assert notify_cards.gc(led, CFG, now=NOW + 2)["spec_files"] == 1
+    assert notify_cards.gc(led, CFG, now=NOW + 2)["spec_files"] == 0
+    assert spec.read_bytes() == sealed
+    current = _latest_render(led)
+    assert current["spec_json"] == render["spec_json"]
+    assert current["payload_hash"] == render["payload_hash"]
+    assert _part_receipt(led, render, body)["applied"]
+    assert notify_cards.gc(led, CFG, now=NOW + 3)["spec_files"] == 1
     assert not spec.exists()
