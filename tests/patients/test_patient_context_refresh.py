@@ -686,11 +686,12 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     clock.wall = before['failure_at'] + 86400 - 1
     assert step(runtime)['status'] == 'deferred'
     assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
-    clock.wall += 1
+    retry_at = before['failure_at'] + 86400
+    clock.wall = retry_at
     assert step(runtime)['status'] == 'failed'
     after = document(led, patient_context_refresh_state.PROGRESS)
-    assert after['attempts'] == 6 and after['next_try'] == clock.wall + 86400
-    assert after['failure_at'] == after['last_attempt'] == clock.wall
+    assert after['attempts'] == 6 and after['next_try'] == retry_at + 86400
+    assert after['failure_at'] == after['last_attempt'] == retry_at
     assert step(runtime)['status'] == 'deferred'
     # New semantic checks still start a fresh retry generation; the same input gets daily retries.
     monkeypatch.setattr(patient_context_refresh_state, '_CHECKS', 'synthetic-changed-checks')
