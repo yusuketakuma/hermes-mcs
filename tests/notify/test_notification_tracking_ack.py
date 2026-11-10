@@ -222,3 +222,18 @@ def test_observer_never_accepts_arbitrary_active_count_reductions(past):
     bad.update(active_total=0, acknowledged_unresolved_total=1, unknown_parts_total=1)
     bad['active_by_plan'] = {'current': 0, 'superseded': 0}
     assert health_watch._tracking_parts(bad) is None
+
+
+def test_observer_global_unknown_cannot_be_hidden_by_zero_current_parts(tmp_path):
+    states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
+    plans = {'current': 0, 'superseded': 0}
+    parts = {'total': 0, 'cards': 0, 'by_state': states, 'by_plan': plans,
+             'active_total': 0, 'active_cards': 0, 'active_by_state': states,
+             'active_by_plan': plans, 'acknowledged_unresolved_total': 0, 'unknown_parts_total': 1}
+    path = tmp_path / 'health.json'
+    path.write_text(json.dumps({'at': NOW, 'overall': 'ok', 'state_reasons': [],
+                               'notify': {'incomplete_parts': parts}}))
+    report = health_watch.classify_health(str(path), now=NOW, deadline_s=900)
+    assert report['status'] == 'degraded'
+    assert 'notification_parts_incomplete' in report['reasons']
+    assert report['notify_unknown_part_outcomes'] == 1

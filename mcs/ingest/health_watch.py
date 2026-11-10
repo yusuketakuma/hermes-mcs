@@ -189,7 +189,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
     parts_unknown = (isinstance(parts, dict) and parts.get('status') == 'unknown'
                      or tracking_present and tracking is None)
-    if parts_unknown and report['status'] == 'ok':
+    parts_active = parts_unknown or bool(tracking and (tracking['total'] or tracking['unknown']))
+    if parts_active and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
     cards_unknown = isinstance(cards, dict) and cards.get('status') == 'unknown'
@@ -214,7 +215,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         reasons = list(reasons)
         if "unread_collection_unknown" not in reasons:
             reasons.append("unread_collection_unknown")
-    if reasons is not None and parts_unknown and report['status'] in ('degraded', 'failed'):
+    if reasons is not None and parts_active and report['status'] in ('degraded', 'failed'):
         reasons = list(reasons)
         if 'notification_parts_incomplete' not in reasons:
             reasons.append('notification_parts_incomplete')
