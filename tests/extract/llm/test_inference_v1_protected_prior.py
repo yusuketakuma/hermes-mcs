@@ -77,3 +77,28 @@ def test_malformed_nested_assertion_keys_do_not_crash_comparison(monkeypatch):
 @pytest.mark.parametrize("body", [None, [], 3])
 def test_missing_source_body_never_supplies_a_protection_baseline(body):
     assert quality.protected_lost({"symptoms": [FAMILY]}, {}, body) == {}
+
+
+def test_same_source_reanchoring_can_restore_protected_axes_without_normal_repair_trigger():
+    import extract_validation
+    from extract_llm_prompts import _response_has_required_fields
+    from extract_llm_source_contract import _rule_hints
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    assert _response_has_required_fields(first) and _response_has_required_fields(repaired)
+    drops = {}
+    initial = extract_validation.validate(first, body, drops=drops)
+    current = extract_validation.validate(repaired, body)
+    assert quality.protected_lost(prior, prior, body) == {"symptoms": 1}
+    assert initial is not None and not drops
+    assert not quality.is_thin(initial, body)
+    assert not quality.completeness_issues(initial, _rule_hints(body), body)
+    assert quality.protected_lost(prior, initial, body) == {"symptoms": 1}
+    assert current is not None and not current.get('_items_dropped') and not current.get('_evidence_dropped')
+    assert not any(item.get('unverified') for item in current['symptoms'])
+    assert quality.protected_lost(prior, current, body) == {}
+    assert quality.improves(current, initial)
