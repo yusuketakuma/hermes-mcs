@@ -96,15 +96,18 @@ def test_duplicate_approvals_count_targets_once_and_survive_sweep_time_and_spec_
     assert health['active_total'] == 0
 
 
-@pytest.mark.parametrize('fault', ['part_hash', 'attempt_unknown', 'successor_scope', 'card_scope', 'restore_hold'])
+@pytest.mark.parametrize('fault', ['part_hash', 'part_attempt', 'attempt_unknown', 'successor_scope', 'card_scope', 'restore_hold'])
 def test_changed_plan_is_rejected_without_mutating_transport_facts(past, fault):
     with past.db:
         if fault == 'part_hash':
             past.db.execute('UPDATE notification_render_parts SET payload_sha256=? WHERE delivery_id=? AND part_id=?',
                             ('b' * 64, past.part['delivery_id'], past.part['part_id']))
+        elif fault == 'part_attempt':
+            past.db.execute("UPDATE notification_render_parts SET attempt_id='synthetic-mismatched' WHERE delivery_id=? AND part_id=?",
+                            (past.part['delivery_id'], past.part['part_id']))
         elif fault == 'attempt_unknown':
-            past.db.execute("UPDATE notification_delivery_attempts SET state='unknown' WHERE attempt_id=?",
-                            (past.part['attempt_id'],))
+            past.db.execute("UPDATE notification_delivery_attempts SET state='unknown' WHERE delivery_id=?",
+                            (past.part['delivery_id'],))
         elif fault == 'successor_scope':
             past.db.execute('UPDATE notification_renders SET channel_id=? WHERE delivery_id=?',
                             ('C_OTHER_SYNTHETIC', past.successor['delivery_id']))

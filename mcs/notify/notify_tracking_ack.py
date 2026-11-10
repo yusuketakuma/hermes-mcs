@@ -64,11 +64,13 @@ def target(db, delivery_id, part_id, *, cfg, successor_id=None):
     if (part is None or part["kind"] != "body_part" or part["state"] != "not_sent"
             or part["error_code"] not in notify_scope._LENGTH_ERRORS
             or part["remote_id"] is not None or part["remote_file_id"] is not None
-            or not valid_hash(part["payload_sha256"]) or not valid_text(part["attempt_id"], 128)):
+            or not valid_hash(part["payload_sha256"])
+            or part["attempt_id"] != "p:" + delivery_id.replace("-", "") + ":" + part_id):
         return {"error": "tracking_ack_part_ineligible"}
-    attempt = db.execute("SELECT * FROM notification_delivery_attempts WHERE attempt_id=? "
-                         "AND delivery_id=?", (part["attempt_id"], delivery_id)).fetchone()
-    if (attempt is None or attempt["state"] not in ("delivered", "not_sent")
+    attempt = db.execute("SELECT * FROM notification_delivery_attempts WHERE delivery_id=? "
+                         "AND state='delivered' ORDER BY finished_at DESC,attempt_id LIMIT 1",
+                         (delivery_id,)).fetchone()
+    if (attempt is None or attempt["state"] != "delivered"
             or not finite_number(attempt["finished_at"])
             or db.execute("SELECT 1 FROM notification_delivery_attempts WHERE delivery_id=? "
                           "AND state IN ('granted','unknown') LIMIT 1", (delivery_id,)).fetchone()):
