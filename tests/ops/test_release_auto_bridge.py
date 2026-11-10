@@ -1,5 +1,6 @@
 """release_auto_bridge のsidecar分類・v1 blocker・manifest/baseline/intent・drive位相を合成Storeで検証する。"""
 import hashlib
+import json
 import os
 
 import pytest
@@ -329,3 +330,40 @@ def test_real_hooks_full_migration(store, tmp_path):
     assert archived.read_bytes() == store.read_migration_raw('release-plan.json')
     generation = os.path.join(str(recovery), 'runtime-' + manifest['sha256'])
     assert os.path.exists(os.path.join(generation, 'mcs/core/runtime_entry.py'))
+
+
+def test_run_migration_cli_end_to_end(store, tmp_path, capsys):
+    put(store, 'release-owner.json', {'schema_version': 'mcs.release-owner.v1',
+                                    'spent': [], 'outbox': []})
+    manifest, source_root = _manifest_for(tmp_path, {'mcs/core/runtime_entry.py': b'print(1)\n'})
+    spec = {
+        'control_root': str(store.root), 'source_root': str(source_root),
+        'recovery_root': str(tmp_path / 'recovery'),
+        'scope': owner_kwargs(store)['scope'], 'baseline': owner_kwargs(store)['baseline'],
+        'repository_fingerprint': 'd' * 64, 'activation_sha256': 'e' * 64,
+        'profile': owner_kwargs(store)['profile'],
+        'lock_fingerprints': owner_kwargs(store)['lock_fingerprints'],
+        'installed_source_manifest_sha256': '1' * 64,
+        'verified_source_manifest_sha256': '2' * 64,
+        'manifest': {'entrypoints': manifest['manifest']['entrypoints'],
+                     'files': manifest['manifest']['files'],
+                     'dependency_policy_sha256': 'b' * 64,
+                     'recovery_generation_sha256': 'c' * 64},
+        'source_schema': 'mcs.release-owner.v1', 'bridge_sha256': 'e' * 64,
+        'external_floor_sha256': '9' * 64, 'human_receipt_id': U, 'created_at': 1000,
+    }
+    spec_path = tmp_path / 'spec.json'
+    spec_path.write_text(json.dumps(spec))
+    assert bridge.main(['migrate', '--spec', str(spec_path)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['ok'] is True and out['phase'] == 'verified'
+    assert out['auto_eligible'] is False
+    assert auto_state.load(store)['schema_version'] == 'mcs.release-owner.v3'
+    # second run refuses: already v3
+    assert bridge.main(['migrate', '--spec', str(spec_path)]) == 2
+    assert json.loads(capsys.readouterr().out)['code'] == 'ALREADY_V3'
+
+
+def test_run_migration_cli_spec_unreadable(store, tmp_path, capsys):
+    assert bridge.main(['migrate', '--spec', str(tmp_path / 'missing.json')]) == 2
+    assert json.loads(capsys.readouterr().out)['code'] == 'SPEC_UNREADABLE'

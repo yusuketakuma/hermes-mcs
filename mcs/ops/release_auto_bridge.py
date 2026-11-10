@@ -8,6 +8,7 @@ import uuid
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_migration as migration
 from adapters.sdc import release_auto_state as auto_state
+from adapters.sdc.storage import Store
 
 MAX_OWNER_BYTES = 8 * 1024 * 1024
 MAX_INTENT_BYTES = 32 * 1024
@@ -405,3 +406,94 @@ def real_hooks(store, *, owner_value, manifest_value, canonical,
         'verify': lambda: verify_closure(manifest_value, canonical,
                                          source_root, recovery_root),
     }
+
+
+# --- one-shot CLI (DEV01: separate approved maintenance operation) -----------
+
+_SPEC_REQUIRED = ('control_root', 'source_root', 'recovery_root', 'scope',
+                  'baseline', 'repository_fingerprint', 'activation_sha256',
+                  'profile', 'lock_fingerprints',
+                  'installed_source_manifest_sha256',
+                  'verified_source_manifest_sha256', 'manifest',
+                  'source_schema', 'bridge_sha256', 'external_floor_sha256',
+                  'human_receipt_id', 'created_at')
+
+
+def run_migration(spec):
+    """spec dictからbridge全工程を駆動する。戻り値は結果summary dict。
+
+    specは人間が用意する証拠bundle。構造・schema・hashはここで検証するが、
+    baseline/profile/lock_fingerprints等の実値の真正性は上位の承認経路が担う。
+    """
+    missing = [key for key in _SPEC_REQUIRED if key not in spec]
+    _check(not missing, 'SPEC_INCOMPLETE:' + ','.join(missing))
+    store = Store(spec['control_root'])
+    try:
+        check_v1_blockers(store)
+        files = classify_sidecars(store)
+        manifest = build_control_manifest(**spec['manifest'])
+        owner = initial_owner_value(
+            scope=spec['scope'], root_fingerprint=store.root_fingerprint(),
+            repository_fingerprint=spec['repository_fingerprint'],
+            activation_sha256=spec['activation_sha256'],
+            control_closure_sha256=manifest['sha256'],
+            profile=spec['profile'], lock_fingerprints=spec['lock_fingerprints'],
+            installed_source_manifest_sha256=spec['installed_source_manifest_sha256'],
+            verified_source_manifest_sha256=spec['verified_source_manifest_sha256'],
+            baseline=spec['baseline'])
+        intent = plan_migration(
+            root_fingerprint=store.root_fingerprint(),
+            repository_fingerprint=spec['repository_fingerprint'],
+            source_schema=spec['source_schema'],
+            bridge_sha256=spec['bridge_sha256'],
+            control_closure_sha256=manifest['sha256'],
+            recovery_generation_sha256=spec['manifest']['recovery_generation_sha256'],
+            external_floor_sha256=spec['external_floor_sha256'],
+            files=files, human_receipt_id=spec['human_receipt_id'],
+            created_at=spec['created_at'])
+        archive_root = spec.get('archive_root') or os.path.join(
+            os.path.dirname(store.root), store.root.name + '.migration-archive')
+        hooks = real_hooks(
+            store, owner_value=owner, manifest_value=manifest['manifest'],
+            canonical=manifest['canonical'], source_root=spec['source_root'],
+            recovery_root=spec['recovery_root'], archive_root=archive_root,
+            migration_id=intent['migration_id'])
+        result = drive(store, intent, **hooks)
+    finally:
+        store.close()
+    return {'phase': result['phase'], 'migration_id': intent['migration_id'],
+            'control_closure_sha256': manifest['sha256'],
+            'auto_eligible': False,
+            'note': 'AUTO_ELIGIBLE remains false until external profile/worker/lock prerequisites are measured'}
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='v3 bridge: migrate release-owner v1 state to v3 (separate approved maintenance op)')
+    sub = parser.add_subparsers(dest='command', required=True)
+    migrate = sub.add_parser('migrate', help='run the one-shot v1->v3 bridge from a spec JSON')
+    migrate.add_argument('--spec', required=True, help='path to the bridge evidence spec JSON')
+    args = parser.parse_args(argv)
+    if args.command == 'migrate':
+        try:
+            with open(args.spec, 'rb') as fh:
+                raw = fh.read(1024 * 1024)
+            spec = json.loads(raw)
+            _check(isinstance(spec, dict), 'SPEC_INVALID')
+            summary = run_migration(spec)
+        except BridgeError as error:
+            print(json.dumps({'ok': False, 'code': error.code}))
+            return 2
+        except (OSError, ValueError):
+            print(json.dumps({'ok': False, 'code': 'SPEC_UNREADABLE'}))
+            return 2
+        print(json.dumps({'ok': True, **summary}, ensure_ascii=False))
+        return 0
+    return 2
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())
