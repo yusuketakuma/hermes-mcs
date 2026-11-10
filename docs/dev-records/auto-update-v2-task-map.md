@@ -129,7 +129,8 @@ MCS側は `feat/mcs-autoupdate-v3-client`（本worktree）で実装。
 - C8一部: policy admin `112c3a9`（preview/approve/revoke+専用grant）
 - M2前半: owner state基盤 `231ea529`、migration intent `724c13f7`
 - P0棚卸し `docs/dev-records/p0-auto-update-inventory.md` 生成＋r47指摘反映改訂（P0-a〜d: 更新経路caller・writer_lock/runtime・実lock DAG・Store filename表。raw grep証拠5fileを`p0-auto-update-inventory/`へ非切詰め保存。`_run_native_release`/`_issue_planning_consent`/`_prepare_native_plan`全てtest専用dormant・Q未実装・2 store root跨ぎlock DAG・A→M→O実証・C-FD借用・`release-owner.json` v1/v3共有を記録）
-- M3設計案 `docs/dev-records/m3-autoupdate-design.md`（bridge/runtime_entry/Q lock/lock DAG統合。Q=`runtime-entry.lock`をcontrol root新設・SH=業務process寿命/EX=code切替、C参加は`Q→C`案、dormant v1はv3新規経路提案、AUTO_ELIGIBLE=false条件7項、RED試験構成5file、Codex判断依頼6件。製品コード未着手・設計レビュー待ち）
+- M3設計案 `docs/dev-records/m3-autoupdate-design.md`（bridge/runtime_entry/Q lock/lock DAG統合。Q=`runtime-entry.lock`をcontrol root新設・SH=業務process寿命/EX=code切替、C参加は`Q→C`案、dormant v1はv3新規経路提案、AUTO_ELIGIBLE=false条件7項、RED試験構成5file、Codex判断依頼6件。Devin単独開発へ移行し6判断を自前確定 `e12927fd`）
+- M3実装（進行中）: Q lock `0647ef75`（Store.runtime_entry_lock・install一度のみO_EXCL・NAMES 33→34）、runtime bootstrap `6ddecb84`＋FD継承 `adopt()/child_env()/pass_fds()/current()`、bridge核 `c1275567`（classify_sidecars/check_v1_blockers/build_control_manifest/initial_owner_value/plan_migration/drive — 副作用は注入hook）、入口配線（mcs_standalone・lineworks_adapter・adapters.lineworks・hermes_plugin.register — app import前acquire。updater/CLI多重化層はQ EX循環待ち回避でQ非保持へ設計変更、§3.3確定版参照）
 - 未完: C4 finalize/register（metadata asset生成方式はCodex確認中）、enrollment provisioning、
-  C5–C8、M2残り（bridge/runtime）、M3実装（設計レビュー後）、M4–M9、I2–I7
+  C5–C8、M2残り（bridge CLI/closure配備実体）、M3残り（`-I -S` launcher形態・pycache両検証・RED残件・実archive/install_owner/closure配備接続）、M4–M9、I2–I7
 - flagは全て既定OFF。`run_sandbox.py`未実行

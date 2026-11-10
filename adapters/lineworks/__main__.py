@@ -21,6 +21,10 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     __package__ = "adapters.lineworks"
 
+if __name__ == "__main__":
+    import runtime_entry as _runtime_entry  # noqa: E402
+    _RUNTIME_ENTRY = _runtime_entry.acquire()  # noqa: E402  (Q SH; canonical entry lineworks_adapter also holds it)
+
 from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
 from safe_io import fdopen_owned, read_regular_nofollow

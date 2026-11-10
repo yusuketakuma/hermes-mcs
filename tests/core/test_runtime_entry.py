@@ -1,5 +1,6 @@
 """runtime_entry.acquire のv3判定・Q SH保持・fence読取りを合成control rootで検証する。"""
 import os
+from pathlib import Path
 
 import pytest
 
@@ -110,3 +111,116 @@ def test_two_shared_entries_coexist(runtime_home):
     finally:
         first.close()
         second.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_current():
+    yield
+    runtime_entry._CURRENT = None
+
+
+def test_current_tracks_last_acquire(runtime_home):
+    assert runtime_entry.current() is None
+    seed_v3(runtime_home)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert runtime_entry.current() is entry
+        env = entry.child_env()
+        fd = entry.pass_fds()
+        assert fd == (entry.fd,)
+        spec = env[runtime_entry.CHILD_FDS_ENV].split(':')
+        assert int(spec[0]) == entry.fd
+        assert (int(spec[1]), int(spec[2])) == entry.lock_fingerprint
+    finally:
+        entry.close()
+    assert entry.child_env() == {} and entry.pass_fds() == ()
+
+
+def test_unmanaged_entry_spawn_kwargs_are_empty(runtime_home):
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert runtime_entry.current() is entry
+        assert entry.child_env() == {} and entry.pass_fds() == ()
+    finally:
+        entry.close()
+
+
+def _dup_env(entry):
+    """Simulate a child process: dup the Q fd and describe it for adopt()."""
+    fd = os.dup(entry.fd)
+    dev, ino = entry.lock_fingerprint
+    return fd, {runtime_entry.CHILD_FDS_ENV: f'{fd}:{dev}:{ino}'}
+
+
+def test_adopt_rejects_foreign_fd(runtime_home):
+    seed_v3(runtime_home)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        fd, env = _dup_env(entry)
+        adopted = runtime_entry.adopt(runtime_home, env=env)
+        try:
+            assert adopted.adopted and adopted.managed
+            assert adopted.fd == fd
+            assert adopted.lock_fingerprint == entry.lock_fingerprint
+            assert adopted.allowed_generation == 7
+        finally:
+            adopted.close()
+        dev, ino = entry.lock_fingerprint
+        bogus = {runtime_entry.CHILD_FDS_ENV: f'{fd + 1000}:{dev}:{ino}'}
+        with pytest.raises(runtime_entry.RuntimeEntryError, match='RUNTIME_HOLD'):
+            runtime_entry.adopt(runtime_home, env=bogus)
+        wrong_inode = {runtime_entry.CHILD_FDS_ENV: f'{os.dup(entry.fd)}:{dev}:{ino + 1}'}
+        with pytest.raises(runtime_entry.RuntimeEntryError, match='RUNTIME_HOLD'):
+            runtime_entry.adopt(runtime_home, env=wrong_inode)
+    finally:
+        entry.close()
+
+
+def test_adopt_without_marker_is_legacy(runtime_home):
+    seed_v3(runtime_home)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        adopted = runtime_entry.adopt(runtime_home, env={})
+        try:
+            assert not adopted.managed and not adopted.adopted
+        finally:
+            adopted.close()
+    finally:
+        entry.close()
+
+
+def test_adopted_close_releases_only_own_reference(runtime_home):
+    seed_v3(runtime_home)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        _fd, env = _dup_env(entry)
+        adopted = runtime_entry.adopt(runtime_home, env=env)
+        adopted.close()
+        # Parent still holds SH: a fresh exclusive attempt must still fail.
+        with Store(runtime_entry.control_root(runtime_home)) as store:
+            with pytest.raises(BlockingIOError):
+                with store.runtime_entry_lock(shared=False):
+                    pass
+    finally:
+        entry.close()
+
+
+def test_wired_entries_acquire_before_app_imports():
+    """各業務入口がapp importより前にruntime_entry.acquireを通ることを静的に固定する。"""
+    root = Path(__file__).resolve().parents[2]
+    cases = {
+        'mcs_standalone/__main__.py': [
+            'import mcs_standalone', '_runtime_entry.acquire()',
+            'from adapters.common.paths import'],
+        'lineworks_adapter/__main__.py': [
+            'import _mcs_path', '_runtime_entry.acquire()',
+            'from adapters.lineworks.__main__ import main'],
+        'adapters/lineworks/__main__.py': [
+            '_runtime_entry.acquire()', 'from adapters.common import'],
+        'hermes_plugin/__init__.py': [
+            'runtime_entry.acquire()', 'ctx.register_command'],
+    }
+    for rel, markers in cases.items():
+        text = (root / rel).read_text()
+        positions = [text.index(marker) for marker in markers]
+        assert positions == sorted(positions), f'{rel}: acquire must precede app imports'

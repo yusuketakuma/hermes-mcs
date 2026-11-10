@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "v3自動更新の実行入口ロック（Q）を業務プロセスへ適用",
+  "summary": "v3へ移行した端末では、常駐・定期の業務プロセスが起動時にruntime-entry.lockの共有ロックをプロセス寿命中保持します。これによりコード切替の排他制御が業務プロセスへ及びます。v3未移行の既存端末では制御ルートが存在しないため何も変わりません。",
+  "upgrade": "追加操作は不要です。v3移行（別承認のbridge作業）が完了した端末でのみ有効になり、それ以前は従来どおり起動します。",
+  "details": [
+    "mcs_standalone・LINE WORKSアダプター・Hermesプラグインの各入口で、アプリimport前にQ共有ロックを取得するbootstrapを追加した。",
+    "standaloneが起こす定期ジョブ子プロセスへはQのFDをpass_fdsで継承させ、子・孫の退役までロック寿命を延ばす。",
+    "更新・復旧・保守系CLI（mcs_update・mcs_recover・install.sh・bridge等）は業務プロセスではないためQ共有を保持せず、コード切替側の独立枠で動く設計を維持する。"
+  ],
+  "refs": ["mcs/core/runtime_entry.py", "mcs_standalone/__main__.py", "mcs_standalone/runtime.py", "lineworks_adapter/__main__.py", "adapters/lineworks/__main__.py", "hermes_plugin/__init__.py"]
+}

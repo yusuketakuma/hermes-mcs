@@ -22,6 +22,7 @@ import time
 import threading
 import uuid
 
+import runtime_entry
 import update_journal
 from run_log_install import helper_path, LogInstallError
 from xml.sax.saxutils import escape
@@ -705,11 +706,14 @@ class Runtime:
             helper = helper_path(self.root, directory, require_installed=True)
             if inherited and inherited != helper:
                 raise LogInstallError("run_log_helper_unverified")
+            entry = runtime_entry.current()
             child = subprocess.Popen(
                 [sys.executable,
                  "-I", helper, "exec", "--data-dir", str(self.data), "--", *self.argv[job]],
-                cwd=REPO, env={**os.environ, "MCS_ROOT": str(self.root)},
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+                cwd=REPO, env={**os.environ, "MCS_ROOT": str(self.root),
+                               **(entry.child_env() if entry is not None else {})},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                close_fds=True, pass_fds=entry.pass_fds() if entry is not None else ())
         except (OSError, LogInstallError):
             self.restarting = True
             log("child_start_failed", job=job)

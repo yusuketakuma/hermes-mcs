@@ -64,20 +64,26 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 - OwnerState v3の`active`/StartIntent（`release-start-intent.json`、M2実装済み）と整合しない起動を拒否。単独marker消失を許可とみなさない（v2 spec §2）。
 - **許可generationの供給源（確定）**: `OwnerState.runtime_generation`。`finalize_verified`（release_auto_state.py L367）がVERIFIED終端でのみ`outcome.runtime_generation`へ更新する単調fieldであり、「現在認可されたruntime世代」の正本として適格。`active.candidate_generation`は未認可の候補でありbootstrapは許可しない。v3未移行（control root/owner不存在）のdeviceはlegacy modeとしてQを取得せず通常起動 — Qの存在自体がv3適用済みの印。
 
-### 3.3 入口coverage（P0 inventory A-1/B-7より）
+### 3.3 入口coverage（P0 inventory A-1/B-7より）— M3実装で確定
 
-| 入口 | 種別 | Q適用 |
-|---|---|---|
-| `mcs/ops/mcs_update.py`全subcommand | CLI | SH（業務入口） |
-| `mcs_update.sh` cron | 定期 | SH |
-| `install.sh` | 保守（code適用側） | Q EX — code面を変更する保守操作。別承認の保守作業としてのみ実行（§8決定4） |
-| `mcs_standalone` 独立実行 | 常駐 | SH |
-| `hermes_plugin` gateway | 常駐 | SH — **Hermes起動経路へ契約を適用できないprofileはauto不適格**（02§1.2） |
-| `lineworks_adapter` | 独立CLI/常駐 | SH＋run.lock遵守確認（W06、P0未確認#2） |
-| recovery入口（`org.mcs.recovery`） | 独立slot | Q非保持・code切替時EX（02§1.2「owner/復旧CLIは独立実行枠」） |
-| `mcs_cli` 手動command | CLI | SH（B-6の全commandが対象 — config書込みもQ SH内側でCへ進む） |
+| 入口 | 種別 | Q適用 | 実装状態 |
+|---|---|---|---|
+| `mcs_standalone/__main__.py`（`-m`・script両経路） | 常駐 | SH — `__name__=="__main__"`時のみapp import前に取得。`runtime.sh`の`_sdk_problem` import等module importでは取得しない | **配線済み** |
+| `lineworks_adapter/__main__.py` | 独立CLI/常駐 | SH — repo/mcsをpath登録→`_mcs_path`→acquireを`adapters.lineworks` app importより前に実行 | **配線済み** |
+| `adapters/lineworks/__main__.py`（`-m adapters.lineworks`代替経路） | 独立/代替 | SH — `__name__=="__main__"`時のみ。canonical入口はlineworks_adapter側でpre-import達成済み | **配線済み** |
+| `hermes_plugin.register()` | 常駐（Hermes gateway内） | SH — standalone_owned早期returnの後・command登録前に取得。gateway process寿命をカバーするがHermes worker/launcher契約は未適用のためprofileはauto不適格のまま | **配線済み（部分）** |
+| `mcs/ops/mcs_update.py`全subcommand＋`mcs_update.sh` cron | updater側 | **Q非保持** — 更新器自身がcode切替でQ EXを必要とするため、SH保持は自己deadlock（祖先SH保持→子孫EX待ち→親が子を待つ循環）。02§1.2「owner/復旧CLIは独立実行枠」と同型 | 未配線（設計変更・下記注） |
+| `mcs_cli` 手動command | operator多重化CLI | **Q非保持** — update/install等updater・保守経路へ委譲するため、SHを持ったまま子孫のQ EX要求を待つ循環待ちを将来のcode切替で生じ得る。業務coverageは配下の常駐入口が担う | 未配線（設計変更・下記注） |
+| `mcs/ops/sdc_cli.py` | operator/monitor CLI | **Q非保持** — connect/disconnect/enroll等の保守操作とbridge系が同居。tickは短命monitorでM8で役割確定時に再検討 | 未配線 |
+| `install.sh` | 保守（code適用側） | Q EX — code面を変更する保守操作。別承認の保守作業としてのみ実行（§8決定4） | 未配線（M4以降） |
+| recovery入口（`org.mcs.recovery`） | 独立slot | Q非保持・code切替時EX（02§1.2「owner/復旧CLIは独立実行枠」） | 未配線（M7） |
+| `release_auto_bridge` CLI | 保守 | Q EX相当 — bridge自体がcode面・owner状態を変更する単発保守 | 未実装（CLI未作成） |
 
-各launcherは`python -I -S`推奨形態で固定bootstrapを読み、Q取得・runtime検証後にsite/flat-import pathを明示設定。`-B`単独・sourceless pyc・shadowing・未許可PYTHONPATHを拒否（AT069）。
+**初版§3.3からの設計変更（実装時確定）**: 初版は`mcs_update.py`/`mcs_update.sh`/`mcs_cli`をSH（業務入口）としていたが、updater・保守委譲経路がQ EXを必要とする以上、これらがSHを保持すると「SH保持process→EX必要な子孫→親が子をwait」の循環待ちが成立する。flockのEXは全SH解放を待つためdeadlockとなる。業務processのQ coverageは実際に常駐する入口（standalone・lineworks・hermes gateway）で達成し、CLI多重化層は保持しない方がDAG安全。`mcs_cli`の個別business subcommand（doctor/drug等）を将来個別bootstrap化する場合も、updater委譲を含むcommandは同じ循環待ち制約を受けるため、command単位ではなくprocess単位の分類を維持する。
+
+各launcherは`python -I -S`推奨形態で固定bootstrapを読み、Q取得・runtime検証後にsite/flat-import pathを明示設定。`-B`単独・sourceless pyc・shadowing・未許可PYTHONPATHを拒否（AT069）— `-I -S`形態の強制はdeployment側launcher改修としてM5/M6で実施（現行launcherは通常`sys.executable`起動のため、pycache拒否はruntime_entry側の検査で段階的に担保）。
+
+**子processへのQ寿命継承（実装済み）**: `RuntimeEntry.child_env()`/`pass_fds()`/`adopt()`を提供。`mcs_standalone/runtime.py`の定期job子生成で`pass_fds`＋`MCS_RUNTIME_ENTRY_FDS`環境変数を付与し、bootstrapを通れない子孫も親のQ寿命でカバーする。`adopt()`は継承fdのdev/inoをcontrol rootの`runtime-entry.lock`実inodeと照合してからfence snapshotを読み、自己申告を資格にしない。
 
 ### 3.4 pycache policy
 
