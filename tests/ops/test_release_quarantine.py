@@ -68,7 +68,8 @@ def deps(tmp_path):
         state_dir=str(state_dir), services_path=str(services),
         generation_root=str(gen_root), bootstrap='/boot/entry.py',
         python='/usr/bin/python3', spawner=spawner, proc_info=proc_info,
-        now_ms=lambda: 2000, pycache_prefix='/tmp/pyc-gen7', boot_id=BOOT)
+        now_ms=lambda: 2000, pycache_prefix='/tmp/pyc-gen7', boot_id=BOOT,
+        runtime_home=str(tmp_path / 'runtime'))
     d._births = births
     d._state_dir = state_dir
     return d
@@ -355,7 +356,7 @@ def test_end_to_end_applied_to_verified_with_real_deps(tmp_path):
             python='/usr/bin/python3', spawner=spawner,
             proc_info=lambda pid: births.get(pid),
             now_ms=lambda: ot.NOW_MS, pycache_prefix='/tmp/pc',
-            boot_id=BOOT)
+            boot_id=BOOT, runtime_home=str(tmp_path / 'runtime'))
         base = at.ApplyDeps()
         deps = IntegratedDeps(qdeps, base)
         op_id, _ = at.started(store, deps)

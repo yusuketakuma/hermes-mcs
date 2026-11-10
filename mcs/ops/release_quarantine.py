@@ -71,7 +71,7 @@ class QuarantineDeps:
 
     def __init__(self, *, state_dir, services_path, generation_root,
                  bootstrap, python, spawner, proc_info, now_ms,
-                 pycache_prefix, boot_id, fence_path=None):
+                 pycache_prefix, boot_id, runtime_home, fence_path=None):
         self.state_dir = state_dir
         self.services_path = services_path
         self.generation_root = generation_root
@@ -82,6 +82,7 @@ class QuarantineDeps:
         self.now_ms = now_ms
         self.pycache_prefix = pycache_prefix
         self._boot_id = boot_id
+        self.runtime_home = runtime_home
         self.fence_path = fence_path
 
     # -- services / fences ----------------------------------------------------
@@ -130,6 +131,9 @@ class QuarantineDeps:
             'MCS_Q_GENERATION': str(active['candidate_generation']),
             'MCS_Q_BOOT_ID': self._boot_id,
             'MCS_Q_PYCACHE_PREFIX': self.pycache_prefix,
+            'MCS_Q_RUNTIME_HOME': self.runtime_home,
+            'MCS_Q_STATE_DIR': self.state_dir,
+            'MCS_Q_SOURCE_ROOT': self.generation_root,
             'PYTHONPATH': '', 'PYTHONHOME': '',
         }
         return env
