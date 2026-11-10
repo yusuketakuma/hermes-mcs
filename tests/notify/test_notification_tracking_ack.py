@@ -16,6 +16,7 @@ import mcs_view
 import notify_cards
 import notify_scope
 import notify_tracking_ack as tracking
+import present_slack
 from notify_testkit import NOW, _latest_render, _uuid
 from slack_testkit import SLACK, _granted_card
 from slack_testkit import isolated_slack_ledger as led
@@ -23,9 +24,13 @@ from test_card_part_cli import snapshot
 from test_slack_body_limits_hotfix import MULTIBYTE, _old_failed_update
 
 __all__ = ["led"]
-pytestmark = pytest.mark.thread_bodies
 TABLES = ('notification_cards', 'notification_renders', 'notification_render_parts',
           'notification_delivery_attempts', 'notify_outbox', 'artifacts', 'fetch_jobs')
+
+
+@pytest.fixture(autouse=True)
+def legacy_thread_bodies(monkeypatch):
+    monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
 
 
 def originals(db):
