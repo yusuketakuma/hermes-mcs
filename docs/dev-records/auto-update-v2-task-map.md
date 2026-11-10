@@ -129,6 +129,7 @@ MCS側は `feat/mcs-autoupdate-v3-client`（本worktree）で実装。
 - C8一部: policy admin `112c3a9`（preview/approve/revoke+専用grant）
 - M2前半: owner state基盤 `231ea529`、migration intent `724c13f7`
 - P0棚卸し `docs/dev-records/p0-auto-update-inventory.md` 生成＋r47指摘反映改訂（P0-a〜d: 更新経路caller・writer_lock/runtime・実lock DAG・Store filename表。raw grep証拠5fileを`p0-auto-update-inventory/`へ非切詰め保存。`_run_native_release`/`_issue_planning_consent`/`_prepare_native_plan`全てtest専用dormant・Q未実装・2 store root跨ぎlock DAG・A→M→O実証・C-FD借用・`release-owner.json` v1/v3共有を記録）
+- M3設計案 `docs/dev-records/m3-autoupdate-design.md`（bridge/runtime_entry/Q lock/lock DAG統合。Q=`runtime-entry.lock`をcontrol root新設・SH=業務process寿命/EX=code切替、C参加は`Q→C`案、dormant v1はv3新規経路提案、AUTO_ELIGIBLE=false条件7項、RED試験構成5file、Codex判断依頼6件。製品コード未着手・設計レビュー待ち）
 - 未完: C4 finalize/register（metadata asset生成方式はCodex確認中）、enrollment provisioning、
-  C5–C8、M2残り（bridge/runtime）、M3–M9、I2–I7
+  C5–C8、M2残り（bridge/runtime）、M3実装（設計レビュー後）、M4–M9、I2–I7
 - flagは全て既定OFF。`run_sandbox.py`未実行
