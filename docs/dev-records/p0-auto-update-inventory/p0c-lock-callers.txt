@@ -195,3 +195,90 @@ mcs/ops/release_apply_owner.py:1024:                    published = release_stat
 mcs/ops/release_apply_owner.py:1108:        value = release_state._read(control)
 mcs/ops/release_apply_owner.py:1282:            saved = release_state._read(entry.store)
 mcs/ops/release_apply_owner.py:1375:        owner = release_state._read(entry.store)
+
+=== legacy G-gate chain (_call_legacy/_legacy_entry/_release_legacy_scope/_legacy_scope/_open_release_gate) ===
+mcs/ops/update_recovery.py:46:    _legacy_entry,
+mcs/ops/update_recovery.py:94:@_legacy_entry
+mcs/ops/update_recovery.py:232:@_legacy_entry
+mcs/ops/update_lifecycle_context.py:44:    from release_apply_owner import _legacy_scope as _release_legacy_scope  # noqa: E402
+mcs/ops/update_lifecycle_context.py:46:    _release_legacy_scope = None  # Preserve diagnostic startup; never reload from a switched tree.
+mcs/ops/update_lifecycle_context.py:224:        if _release_legacy_scope is None:
+mcs/ops/update_lifecycle_context.py:226:        with _release_legacy_scope(HOME) as current:
+mcs/ops/update_lifecycle_context.py:257:            if _release_legacy_scope is None:
+mcs/ops/update_lifecycle_context.py:259:            fd = stack.enter_context(_release_legacy_scope(HOME))
+mcs/ops/update_lifecycle_context.py:308:        return _call_legacy(function, *args, **kwargs)
+mcs/ops/update_cli.py:41:    _call_legacy,
+mcs/ops/update_cli.py:43:    _legacy_entry,
+mcs/ops/update_cli.py:88:@_legacy_entry
+mcs/ops/update_cli.py:259:    return _call_legacy(_legacy_post_merge, state)
+mcs/ops/mcs_update.py:107:    _release_legacy_scope as _release_legacy_scope,
+mcs/ops/mcs_update.py:157:    _call_legacy as _call_legacy,
+mcs/ops/mcs_update.py:161:    _legacy_entry as _legacy_entry,
+mcs/ops/update_apply.py:55:    _call_legacy,
+mcs/ops/update_apply.py:58:    _legacy_entry,
+mcs/ops/update_apply.py:125:    return _call_legacy(_apply_pipeline, tag, sha, command_id, base_sha, reinstall, install_args,
+mcs/ops/update_apply.py:615:@_legacy_entry
+--- _legacy_scope/_open_release_gate definitions & callers ---
+mcs/ops/settings_migration_reconcile.py:143:    with release_apply_owner._legacy_scope(str(root)):
+mcs/ops/update_lifecycle_context.py:44:    from release_apply_owner import _legacy_scope as _release_legacy_scope  # noqa: E402
+mcs/ops/update_lifecycle_context.py:46:    _release_legacy_scope = None  # Preserve diagnostic startup; never reload from a switched tree.
+mcs/ops/update_lifecycle_context.py:224:        if _release_legacy_scope is None:
+mcs/ops/update_lifecycle_context.py:226:        with _release_legacy_scope(HOME) as current:
+mcs/ops/update_lifecycle_context.py:257:            if _release_legacy_scope is None:
+mcs/ops/update_lifecycle_context.py:259:            fd = stack.enter_context(_release_legacy_scope(HOME))
+mcs/ops/release_apply_owner.py:32:    _open_release_gate as _open_release_gate,
+mcs/ops/release_apply_owner.py:33:    _legacy_scope as _legacy_scope,
+mcs/ops/mcs_update.py:107:    _release_legacy_scope as _release_legacy_scope,
+mcs/ops/release_apply_checks.py:457:def _open_release_gate(runtime_home):
+mcs/ops/release_apply_checks.py:497:def _legacy_scope(runtime_home):
+mcs/ops/release_apply_checks.py:499:    fd = _open_release_gate(runtime_home)
+mcs/ops/sdc_support_signatures.py:526:def _release_scope(v, expected):
+mcs/ops/sdc_support_signatures.py:641:    _release_scope(trust, bindings)
+mcs/ops/sdc_support_signatures.py:653:    _release_scope(current, bindings)
+mcs/ops/sdc_support_signatures.py:659:        _release_scope(candidate, bindings)
+mcs/ops/sdc_support_signatures.py:686:    _release_scope(authority, bindings)
+mcs/ops/sdc_support_signatures.py:687:    _release_scope(entry['payload'], bindings)
+scripts/mcs_upgrade.py:61:def _open_release_gate(runtime_home):
+scripts/mcs_upgrade.py:101:def _release_scope(runtime_home):
+scripts/mcs_upgrade.py:103:    fd = _open_release_gate(runtime_home)
+scripts/mcs_upgrade.py:567:                scope.enter_context(_release_scope(runtime_home))
+--- lifetime_fds/_inherited_fds/_POST_MERGE_UPDATE_FD ---
+mcs/ops/update_execution.py:46:    _POST_MERGE_UPDATE_FD,
+mcs/ops/update_execution.py:217:    update_fd = _POST_MERGE_UPDATE_FD.get()
+mcs/ops/update_execution.py:220:    with owned_process._inherited_fds(tuple(fd for fd in (run_fd, update_fd) if fd is not None)) as inherited:
+mcs/ops/update_lifecycle_context.py:164:_POST_MERGE_UPDATE_FD = ContextVar('mcs_post_merge_update_fd', default=None)
+mcs/ops/update_lifecycle_context.py:260:            stack.enter_context(owned_process.lifetime_fds((fd,)))
+mcs/ops/update_lifecycle_context.py:294:    with owned_process._inherited_fds(kwargs.pop('pass_fds', ())) as inherited:
+mcs/ops/update_cli.py:248:            from release_apply_owner import CHILD_FDS_ENV, _adopt_post_merge
+mcs/ops/update_cli.py:249:            locators = os.environ.get(CHILD_FDS_ENV, '').split(':')
+mcs/ops/update_cli.py:257:        with owned_process.lifetime_fds(tuple(locks)), _release_git_scope():
+mcs/ops/update_runtime_migration.py:145:        with owned_process._inherited_fds(fds) as inherited:
+mcs/ops/update_runtime_migration.py:355:        with owned_process.lifetime_fds((update_fd, run_fd)), _release_git_scope(), \
+mcs/ops/release_apply_owner.py:42:CHILD_FDS_ENV = 'MCS_RELEASE_CHILD_FDS'
+mcs/ops/release_apply_owner.py:911:            lifetime.enter_context(owned_process.lifetime_fds(locks))
+mcs/ops/release_apply_owner.py:1212:    with os.fdopen(os.dup(frame.descriptor), 'rb') as bundle, owned_process.lifetime_fds(entry.locks):
+mcs/ops/release_apply_owner.py:1361:    with owned_process.lifetime_fds(entry.locks):
+mcs/ops/release_apply_owner.py:1393:        with owned_process._inherited_fds((reader, *entry.locks)) as inherited:
+mcs/ops/release_apply_owner.py:1394:            env[CHILD_FDS_ENV] = ':'.join(str(inherited[fd]) for fd in (reader, *entry.locks))
+mcs/ops/mcs_update.py:142:    _POST_MERGE_UPDATE_FD as _POST_MERGE_UPDATE_FD,
+mcs/ops/owned_process.py:12:_LIFETIME_FDS = ContextVar('mcs_owned_process_lifetime_fds', default=())
+mcs/ops/owned_process.py:75:    with _inherited_fds() as inherited:
+mcs/ops/update_apply.py:50:    _POST_MERGE_UPDATE_FD,
+mcs/ops/update_apply.py:156:            lifetime.enter_context(owned_process.lifetime_fds(borrowed.locks))
+mcs/ops/update_apply.py:574:                token = _POST_MERGE_UPDATE_FD.set(upd_fd)
+mcs/ops/update_apply.py:578:                    _POST_MERGE_UPDATE_FD.reset(token)
+--- acquire_update_lock / acquire_run_lock callers (update entries) ---
+mcs/ops/update_apply.py:65:    acquire_update_lock,
+mcs/ops/update_apply.py:380:                upd_fd = acquire_update_lock()
+mcs/ops/update_apply.py:630:    upd_fd = acquire_update_lock()
+mcs/ops/update_cli.py:47:    acquire_update_lock,
+mcs/ops/update_cli.py:117:    upd_fd = acquire_update_lock()
+mcs/ops/update_lifecycle_context.py:38:from writer_lock import RUN_LOCK_POLL_S, UPDATE_MARKER_NAME, acquire_run_lock
+mcs/ops/update_lifecycle_context.py:314:    return acquire_run_lock(UPDATE_LOCK)
+mcs/ops/update_lifecycle_context.py:322:        fd = acquire_run_lock(RUN_LOCK)
+mcs/ops/update_lifecycle_context.py:488:        fd = acquire_run_lock(RUN_LOCK)
+mcs/ops/update_recovery.py:54:    acquire_update_lock,
+mcs/ops/update_recovery.py:100:    fd = acquire_update_lock()
+mcs/ops/update_recovery.py:246:    upd_fd = acquire_update_lock()
+mcs/ops/release_apply_owner.py:889:            update_fd = mcs_update.acquire_update_lock()
+mcs/ops/release_apply_owner.py:902:                run_fd = mcs_update.acquire_run_lock(mcs_update.RUN_LOCK)

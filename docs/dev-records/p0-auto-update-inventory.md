@@ -27,25 +27,24 @@
 
 | 入口（仕様指定） | 実装本体 | caller（grep全件、`p0a-callers.txt`参照） | profile | 親process | 入口時点の保持lock | 入口内の取得 | 解放 | FD継承/借用 | 外部callback/待機 |
 |---|---|---|---|---|---|---|---|---|---|
-| `check`（既定） | `update_cli.cmd_check` L89 → auto/picked判定 → **`update_apply.apply`直呼出** L192（picked: `apply(picked["tag"],picked["target_sha"],picked["command_id"],picked.get("base_sha"))`）/ L195（auto: `apply(auto[0],auto[1],None)`）→ `apply` L116 → `_call_legacy` → `_apply_pipeline` L129 | `deployment/scripts/mcs_update.sh`（exec `mcs_update.py check`）、`update_cli`既定（L269）/`check` sub（L291）。**同名別関数注意**: `mcs_setup.py cmd_check`（setup診断 L836、`cmd_check(args)`）と`notify_cmds._human_cmd_check`は別物。picked.rollback時はL190で`rollback()`へ分岐 | hermes cron | cron/launchd | なし（pipeline進入前はGit fetch・`_drug_info_notices`通知待機のみ） | pipeline内でU→R | pipeline終了時 | post-merge子へU/R FD | Git fetch・通知・pre-check待機 |
-| `apply` | `update_cli.cmd_apply` L211 → `apply()` L212 → `apply` L116 → `_apply_pipeline` | `apply` subcommand dispatch L271/284（`mcs_update.py apply` — 手動実行 + `scripts/mcs_upgrade.py` subprocess）。**`cmd_check`は`cmd_apply`を経由せず`apply()`を直呼出**（L192/L195 — check行参照）。facade `mcs_update.apply`（L309 re-export）のcallerはtest専用: `test_mcs_update_restore.py` L681/778、`test_mcs_update_apply.py` L323、`test_mcs_update.py` L745（`update_cli.apply`をmonkeypatch）。`release_apply_owner._run_native_release` L1047は`apply()`を通らず`mcs_update._apply_pipeline`を`_release_cap`付きで直呼出 | manual/hermes | ユーザー端末 or cron | mcs_upgrade経由時はG(SH)を`_release_scope`で保持 | U→R（`_apply_pipeline`内） | 同上 | 同上 | `--confirm-human`/`--reason`は未公開候補のみ |
+| `check`（既定） | `update_cli.cmd_check` L89（**`@_legacy_entry` L88で全工程を`_call_legacy` wrap**）→ auto/picked判定 → **`update_apply.apply`直呼出** L192（picked）/ L195（auto）→ `apply` L116 → `_call_legacy`（nested G再取得）→ `_apply_pipeline` L129 | `deployment/scripts/mcs_update.sh`（exec `mcs_update.py check`）、`update_cli`既定（L269）/`check` sub（L291）。**同名別関数注意**: `mcs_setup.py cmd_check`（setup診断 L836、`cmd_check(args)`）と`notify_cmds._human_cmd_check`は別物。picked.rollback時はL190で`rollback()`へ分岐、`held`時は`recover_interrupted()`へ分岐 | hermes cron | cron/launchd | **入口時点でG(SH)取得済み**（`@_legacy_entry`→`_call_legacy`→`_release_legacy_scope(HOME)`→`_open_release_gate` `LOCK_SH\|LOCK_NB`＋owner file存在で`release_entry_hold`拒否）。Git fetch・通知待機もG保持下 | state判断用にU取得（L117 `acquire_update_lock`）→apply呼出前に`os.close(upd_fd)`で解放 → apply内でnested G(SH)+U→R | U(L117)はapply前解放、pipeline内U→Rはpipeline終了時 | post-merge子へlifetime_fds全体（G含む）+extra(R,U)をdup継承 | Git fetch・通知・pre-check待機（全てG(SH)保持下） |
+| `apply` | `update_cli.cmd_apply` L211 → `apply()` L212 → `apply` L116 → `_call_legacy` → `_apply_pipeline` | `apply` subcommand dispatch L271/284（`mcs_update.py apply` — 手動実行 + `scripts/mcs_upgrade.py` subprocess）。**`cmd_check`は`cmd_apply`を経由せず`apply()`を直呼出**（L192/L195 — check行参照）。facade `mcs_update.apply`（L309 re-export）のcallerはtest専用: `test_mcs_update_restore.py` L681/778、`test_mcs_update_apply.py` L323、`test_mcs_update.py` L745（`update_cli.apply`をmonkeypatch）。`release_apply_owner._run_native_release` L1047は`apply()`を通らず`mcs_update._apply_pipeline`を`_release_cap`付きで直呼出 | manual/hermes | ユーザー端末 or cron | **apply()が`_call_legacy`でG(SH)を必ず取得**（引数検証後L125、lifetime_fdsへ登録・`_RELEASE_GATE_FD`設定）。mcs_upgrade経由時は更に外側で`_release_scope`のG(SH)を保持（二重SHは両立） | U→R（`_apply_pipeline`内、G(SH)は外側で保持済み） | pipeline終了時にU/R解放、`_call_legacy` ExitStack終了でG(SH)解放 | post-merge子へlifetime_fds全体（G含む）+extra(R,U)をdup継承 | `--confirm-human`/`--reason`は未公開候補のみ |
 | `plan` | `cmd_plan` L218 | `mcs_upgrade.py` subprocess（`--no-fetch`併用） | manual | ユーザー端末 | G(SH)（`_release_scope`内） | なし（読取り） | G(SH)解放 | G FDを`_lifetime_fds`でgit子へpass_fds | Git fetch抑止時はlocalのみ |
-| `--post-merge` | `cmd_post_merge` L237 → `_adopt_post_merge` L248 or `_legacy_post_merge` | `update_execution._run_post_merge` L227 が**NEW code**でsubprocess spawn（唯一のproduction caller） | 更新子process | updater | **借用**: `CHILD_FDS_ENV`経由で親FDを`_adopt_post_merge`が検証・採用。標準経路はU+Rの2FD、release経路はG/U/Rの3FD | なし（親が保持したまま） | 子終了で親がreap | **本質的にFD借用**: `MCS_UPDATE_RUN_LOCK_FD`/`MCS_UPDATE_LOCK_FD` env + `pass_fds` + `owned_process._inherited_fds` | `start_new_session=True`、timeout=T_POST_MERGE(+T_INSTALL if reinstall)、`_stop_update_child`でkillpg |
-| `rollback` | `update_cli` L296 → `update_apply.rollback` L616 | `mcs_cli.py update rollback`→`os.execv mcs_update.py rollback`、`cmd_check`のpicked.rollback経路 | manual/cron | ユーザー端末 or cron | なし | U→R（L630/655） | 同上 | なし | restore時は人承認receipt経路 |
-| `recover` | `recover_interrupted` `update_recovery.py` L233 | `mcs_update.py recover` 手動（`_resume_provider_migration=True`）。**別系統**: `mcs_cli.py recover`→`~/.mcs-recovery/mcs_recover.py` exec、`org.mcs.recovery` launchd 900s→`deployment/recovery/mcs_recover.py` | manual/独立 | ユーザー端末 / launchd | なし | U(L100/246)→R(`_acquire_run_lock_wait(tries=2)` L254) | journal収束後 | なし | `_report`でrecovery_report.jsonへ記録、通知送信 |
-| `reinstall-done` | `update_recovery.reinstall_done` L95 | `mcs_update.py reinstall-done` 手動のみ | manual | ユーザー端末 | なし | なし | — | なし | journal `reinstall_done` flag更新+通知 |
-| `_apply_pipeline` | `update_apply.py` L129 | `update_apply.apply` L125（`_call_legacy`）、`release_apply_owner._run_native_release` L1047（`_release_cap`付きin-process、借用locks） | 両方 | updater or release owner | `_release_cap`時はG/U/R借用、通常時はなし | 通常: U(L380)→R(L468 `_acquire_run_lock_wait` 40tries×30s=20min)。借用時は`_claim_effect_entry`で既保持FDを検証 | pipeline終了 | release借用時は`_EFFECT_*` in-memory capability+`owned_process.lifetime_fds` | settings_migration_receipt.pending gate L145、`_run_post_merge` L581 |
+| `--post-merge` | `cmd_post_merge` L237 → release_ref有: `_adopt_post_merge` L248（`CHILD_FDS_ENV`検証）or 無: `_call_legacy(_legacy_post_merge)` L259 | 標準経路: `update_execution._run_post_merge` L227がsubprocess spawn（唯一のproduction caller）。release経路: `release_apply_owner._run_effect_post_merge` L1396 | 更新子process | updater | **借用**: 親保持lock FDを`pass_fds`でdup継承。**pass_fds構成は固定本数ではない** — `owned_process._inherited_fds`（owned_process.py L35–50）が**現在activeな全`_LIFETIME_FDS` lease descriptor＋`extra`引数**をmerge・dup・identity検証してyield。標準経路: `_call_legacy`登録のG(SH) lifetime_fd＋extra=(R,U) → 実質G+U+R（env名は`MCS_UPDATE_RUN_LOCK_FD`=R・`MCS_UPDATE_LOCK_FD`=Uのみ、Gは無名でopen継承）。release経路: `lifetime_fds(entry.locks)`でG/U/R登録＋extra=(reader,*locks) → env `MCS_RELEASE_CHILD_FDS`がreader+3lockの4値明示 | なし（親が保持したまま） | 子終了で親がreap。子側dup FDが残る限りflockは解放されない（lock寿命のFD束縛） | **本質的にFD借用**: env名付きはR/U（標準）or CHILD_FDS_ENV 4値（release）、pass_fdsはlifetime_fds全体のdupで親所有・子寿命へ延長 | `start_new_session=True`、timeout=T_POST_MERGE(+T_INSTALL if reinstall)、`_stop_update_child`でkillpg。子cmd_post_mergeはrelease_ref無なら`_call_legacy`で自身もG(SH)取得 |
+| `rollback` | `update_cli` L296 → `update_apply.rollback` L616（**`@_legacy_entry` L615**） | `mcs_cli.py update rollback`→`os.execv mcs_update.py rollback`、`cmd_check`のpicked.rollback経路 | manual/cron | ユーザー端末 or cron | **入口時点でG(SH)取得済み**（`@_legacy_entry`→`_call_legacy`） | U(L630)→R(L655 `_acquire_run_lock_wait`)（G(SH)は外側保持） | 同上 | post-merge子spawn無し（restore経路） | restore時は人承認receipt経路 |
+| `recover` | `recover_interrupted` `update_recovery.py` L233（**`@_legacy_entry` L232**） | `mcs_update.py recover` 手動（`_resume_provider_migration=True`）。**別系統**: `mcs_cli.py recover`→`~/.mcs-recovery/mcs_recover.py` exec、`org.mcs.recovery` launchd 900s→`deployment/recovery/mcs_recover.py`。`cmd_check`の`held`分岐からも呼出 | manual/独立 | ユーザー端末 / launchd | **入口時点でG(SH)取得済み**（`@_legacy_entry`→`_call_legacy`） | U(L246 `acquire_update_lock`)→R(L254 `_acquire_run_lock_wait(tries=2)` — bounded poll) | journal収束後 | なし | `_report`でrecovery_report.jsonへ記録、通知送信 |
+| `reinstall-done`/`reinstall_done` | `update_recovery.reinstall_done` L95（**`@_legacy_entry` L94**） | `mcs_update.py reinstall-done` 手動のみ | manual | ユーザー端末 | **入口時点でG(SH)取得済み**（`@_legacy_entry`→`_call_legacy`） | U取得（L100 `acquire_update_lock`）→journal `reinstall_done`更新→L122 `os.close(fd)`でU解放→`applying`有なら`recover_interrupted`へ委譲（nested G(SH)+U→R） | UはL122で解放、G(SH)は関数終了時 | なし | journal `reinstall_done` flag更新+通知 |
+| `_apply_pipeline` | `update_apply.py` L129 | `update_apply.apply` L125（`_call_legacy` — apply()経由なら外側G(SH)保持済み）、`release_apply_owner._run_native_release` L1047（`_release_cap`付きin-process、借用locks — pipeline内部はU/Rを取得しない） | 両方 | updater or release owner | apply()経由: G(SH)を`_call_legacy`が外側保持。`_release_cap`時: G/U/R借用。`_apply_pipeline`直接呼出（test/release）: caller依存 | 通常: U(L380)→R(L468 `_acquire_run_lock_wait` 40tries×30s=20min — **bounded poll待機**)。借用時は`_claim_effect_entry`で既保持FDを検証 | pipeline終了 | release借用時は`_EFFECT_*` in-memory capability+`owned_process.lifetime_fds`（L156）。post-merge子へのFD伝播は`_run_post_merge`側 | settings_migration_receipt.pending gate L145、`_run_post_merge` L581 |
 | `_run_native_release` | `release_apply_owner.py` L826 | **production caller無し** — `git grep`全件で定義+test呼出し（`test_release_apply_owner_native_apply.py:461,507`）のみ。v1署名release apply owner機構全体（`_issue_planning_consent` L142・`_prepare_native_plan` L469・本関数）がtest専用でdormant | — | — | — | G(L888 `release_entry_lock()`)→U(L890 `acquire_update_lock`)→R(L895 `acquire_run_lock` bounded loop)→preflight→A(L913/923 `release_authority_lock`)→O(L929 `release_owner_lock`) | lifetime ExitStack | G/U/R FDを`_verify_inherited_lock`検証後`lifetime_fds`で子寿命へ束縛、`_StartedEffect.locks/lock_identities`記録 | `_run_effect_post_merge`へ3FD借用 |
 | `install.sh` | repo root shell | `mcs_cli.py install`→`os.execv`、手動実行。updater自体は呼ばない | install | ユーザー端末 | `data/update.lock`を`_lock_file`で確認(L210/276) — 更新中は拒否/待機 | `install_options.py bootstrap-runtime-apply`（settings移行） | — | `MCS_UPDATE_REINSTALL`尊重、runtime.sh L664でrun.lock継承を要求する経路あり | venv構築・launchd job render |
-| `mcs_upgrade` | `scripts/mcs_upgrade.py` | `mcs_cli.py update`（guide/plan/apply）→subprocess。`--installed-standalone`対応 | manual | ユーザー端末 | **`_release_scope`でG(SH)を保持**（`_open_release_gate` L61–98: `release-entry.lock`へ`LOCK_SH|LOCK_NB`、`release-owner.json`/`release-owner-activation.json`存在時は`release_entry_hold`で拒否） | なし（子へ委譲） | `_release_scope`終了時 | `_lifetime_fds()`でG FDを全subprocessへ`pass_fds` | 対話guide・`subprocess.run` timeout=600 |
-| `reinstall_done` | `update_recovery.py` L95 | `mcs_update.py reinstall-done` のみ | manual | ユーザー端末 | なし | なし | — | なし | `update_state.json`のapplying.reinstall_done更新 |
-| `settings_migration_receipt` | `mcs/ops/settings_migration_receipt.py` | `install_options.py`（L153,176,542,558,591,600,660,670,796 — split移行可否を広くgate）、`update_apply.py` L145,486、`update_lifecycle_context.py` L238,252、`update_planning.py` L143,195、`update_runtime_migration.py`経路、`settings_migration_reconcile.py` | install/update両方 | 各親process | `_legacy_scope`（G SH gate）経由のcallerあり | receipt `pending()`判定のみ（lock取得なし） | — | — | pending中はapply/updateを拒否（fail-closed） |
+| `mcs_upgrade` | `scripts/mcs_upgrade.py` | `mcs_cli.py update`（guide/plan/apply）→subprocess。`--installed-standalone`対応 | manual | ユーザー端末 | **`_release_scope`でG(SH)を保持**（`_open_release_gate` L61–98: `release-entry.lock`へ`LOCK_SH\|LOCK_NB`、`release-owner.json`/`release-owner-activation.json`存在時は`release_entry_hold`で拒否） | なし（子へ委譲） | `_release_scope`終了時 | `_lifetime_fds()`でG FDを全subprocessへ`pass_fds` | 対話guide・`subprocess.run` timeout=600 |
+| `settings_migration_receipt` | `mcs/ops/update/settings_migration_receipt.py` | `install_options.py`（L153,176,542,558,591,600,660,670,796 — split移行可否を広くgate）、`update_apply.py` L145,486、`update_lifecycle_context.py` L238,252、`update_planning.py` L143,195、`update_runtime_migration.py`経路、`settings_migration_reconcile.py` | install/update両方 | 各親process | `_legacy_scope`（G SH gate）経由のcallerあり | receipt `pending()`判定のみ（lock取得なし） | — | — | pending中はapply/updateを拒否（fail-closed） |
 
 ### A-2. 標準apply pipelineのlock規律（`update_apply._apply_pipeline` docstring+実測）
 
 - `update.lock`(U)を**最初のjournal write前**に取得しpipeline全体で保持 → 「journal存在+lock空き=writer死亡」が成立
 - `run.lock`(R)は長いpre-check後に取得（`_acquire_run_lock_wait`: 40tries×30s interval=最大20分、`RUN_LOCK_TRIES`/`RUN_LOCK_INTERVAL`）
-- lock順序は **U→R**（Gは標準経路に無し — Gはrelease owner経路のみ）
+- pipeline**内部**が取得するlock順序は **U→R**。ただし呼出全体には外側 **G(SH)** が存在する — `apply()`は`_call_legacy`（update_lifecycle_context L250–268）経由で`_release_legacy_scope(HOME)`→`release_apply_checks._legacy_scope`→`_open_release_gate`の`LOCK_SH|LOCK_NB`を取得し`owned_process.lifetime_fds`へ登録したまま`_apply_pipeline`を実行する（r50指摘1: 「pipeline内部がU/Rだけ取得」と「呼出全体にGが無い」は別物）。`rollback`/`recover_interrupted`/`reinstall_done`/`cmd_check`は`@_legacy_entry`（同L305–309）で同じwrap。`release_apply_owner._run_native_release`の`_release_cap`借用経路はこの`_call_legacy`を通らずG(EX)を自前取得
 - `_release_cap`借用時: `release_apply_owner._claim_effect_entry`が`_EFFECT_CAPS`/`_EFFECT_PARENTS`/`_EFFECT_ARTIFACTS`のin-memory registryから`_StartedEffect`を検証・借用。`type(_release_entry) is _StartedEffect`・`sha==reference.target_commit`・`len(locks)==3`・`run_lock_fd==locks[2]`を`_run_post_merge`冒頭で再検証（`update_execution.py` L208–212）
 - release経路のpost-merge spawnは`release_apply_owner._run_effect_post_merge`（L1333）が担当し、内部で`mcs_update.py --post-merge`をsubprocess spawn（L1396）。標準経路の`update_execution._run_post_merge`（L200–）と対になる
 
@@ -54,6 +53,16 @@
 - `_open_release_gate`（L61–98）: `~/.mcs-release-control/<ns>/release-entry.lock`を`O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK`でopen→fstat検証（regular/owner/nlink=1/size=0/mode0600）→`LOCK_SH|LOCK_NB`→**`release-owner.json`/`release-owner-activation.json`が存在すれば`release_entry_hold`で拒否**（v1 release owner状態の存在中はupgrade guideを起動しない）
 - `_release_scope` contextmanagerが`_RELEASE_GATE_FD` globalへ保持、`_lifetime_fds()`が全`subprocess.run`/`Popen`へ`pass_fds`で継承
 - 同一ロジックが`release_apply_checks._open_release_gate`/`_legacy_scope`（stdlib-only複製、「Copied into the independent 3.9/3.10 closures」comment）にも存在し、`settings_migration_reconcile.py`等が使用
+
+### A-3b. `_call_legacy`/`_legacy_entry` — 標準更新入口の外側G(SH)機構（r50指摘1/2対応）
+
+- **`_call_legacy(function,...)`**（`update_lifecycle_context.py` L250–268）: `settings_migration_receipt.pending(DATA)`を先に検査（pending時はprint+return 2）→ ExitStackで`_release_legacy_scope(HOME)`をenter（= `release_apply_owner._legacy_scope` → `release_apply_checks._legacy_scope` L497 → `_open_release_gate` L457の`LOCK_SH|LOCK_NB`＋owner file存在拒否）→ 得たfdを`owned_process.lifetime_fds((fd,))`へ登録 → `_RELEASE_GATE_FD` ContextVar設定 → `function(*args,**kwargs)`実行 → ExitStack終了でG(SH)解放。**呼出全体がG(SH)保持下で動く**
+- **`_release_legacy_scope`** は `update_lifecycle_context.py` L44で`release_apply_owner._legacy_scope`をimport（L46でimport失敗時None→L257で`release gate unavailable`→return 2のfail-closed）。`release_apply_owner.py` L33は`release_apply_checks`からのre-export
+- **`@_legacy_entry` decorator**（同L305–309）: `guarded(*a,**kw) → _call_legacy(function,...)`。付与箇所（`p0c-lock-callers.txt`証拠）: `update_cli.cmd_check` L88、`update_recovery.reinstall_done` L94、`update_recovery.recover_interrupted` L232、`update_apply.rollback` L615
+- **`_call_legacy`直接呼出**（decorator非経由）: `update_apply.apply` L125（引数検証後にpipelineへ）、`update_cli.cmd_post_merge` L259（`_legacy_post_merge` — post-merge子のlegacy分岐）
+- **nested G(SH)は両立**: `cmd_check`が`@_legacy_entry`でG保持中に`apply()`→`_call_legacy`が別fdで再取得しても`LOCK_SH`同士は競合しない（`_open_release_gate`は毎回新規open→flock SH|NB）
+- **`_lifetime_fds`伝播**: `owned_process.lifetime_fds`が登録したfdは`_inherited_fds`（owned_process.py L35–50）経由で全`pass_fds`付きsubprocessへdup継承。`_run_with_lifetime`（update_lifecycle_context L293–）も`kwargs['pass_fds']`へlifetime_fdsをmerge — **G(SH)はgit fetch等の全子processへ伝播する**
+- **`_RELEASE_GATE_FD`**: `_call_legacy`が設定するContextVar（L247 `mcs_update_release_gate_fd`）。`_release_legacy_blocked`（L218–235）が`_release_legacy_scope(HOME)`を別途enterし、保持中fdと現scope fdの`(st_dev,st_ino)`一致を検証 — journal/stateに`release_ref`痕跡またはgate file不一致なら`_release_legacy_hold`（L237–245）がTrueを返し、update_apply L385/639・update_cli L122・update_recovery各所がreturn 2でfail-closed（v1 release owner状態の存在中は通常更新・復旧を停止）
 
 ### A-4. 独立recovery系（updaterではないが更新を左右）
 
@@ -67,7 +76,7 @@
 ### A-5. 「送信・自己再起動」集約
 
 - 外部送信: Git fetch（check/plan/applyのtag確認）、通知spool経由の人向け通知（`notify_spool`/`notify_flush`）、launchd bootout/bootstrap（services再起動）
-- 自己再起動: post-merge子がNEW codeで`--post-merge`実行→services再起動→親reap。標準経路はU+Rの2FD継承、release経路はG/U/Rの3FD継承
+- 自己再起動: post-merge子がNEW codeで`--post-merge`実行→services再起動→親reap。FD継承は`_inherited_fds`が**全active lifetime_fds+extraをdup**するため固定本数ではない — 標準経路は実質G(SH)+U+R（Gは`_call_legacy`のlifetime_fd経由・env無名）、release経路はreader+G/U/Rを`MCS_RELEASE_CHILD_FDS`で明示（A-1 `--post-merge`行参照）
 - dormant経路（`_run_native_release`系）: 同じ`_apply_pipeline`+`_release_cap`借用構造、post-mergeは`release_apply_owner._run_effect_post_merge`
 
 ---
@@ -190,13 +199,17 @@
 | `_prepare_native_plan` | L479,522 | `control.release_authority_lock()`(A) **→** `monitor.lock()`(M)。A→M |
 | `_run_native_release` | L888–930 | `control.release_entry_lock()`(G,EX) **→** `acquire_update_lock()`(U) **→** `acquire_run_lock` loop(R) **→** preflight **→** `control.release_authority_lock()`(A)×2 **→** `control.release_owner_lock()`(O)。**G→U→R→A→O** |
 
-**標準update pipeline（data/のみ、control store不使用）:**
+**標準update pipeline（data/ + 外側G(SH) gate、control storeのlockは不使用 — G file自体はcontrol root配下）:**
 
-| 関数 | file:line | 取得順序 |
+| 関数 | file:line | 実効取得順序（外側wrap込み） |
 |---|---|---|
-| `_apply_pipeline` | update_apply.py L380,468 | `acquire_update_lock()`(U) **→** `_acquire_run_lock_wait()`(R、最大20分poll) |
-| `rollback` | update_apply.py L630,655 | U **→** R（同順） |
-| `recover_interrupted` | update_recovery.py L100/246,254 | U **→** R（`_acquire_run_lock_wait(tries=2)`） |
+| `cmd_check` | update_cli.py L88–89 | `@_legacy_entry`→G(SH) **→** Git fetch/通知待機 **→** U(L117 state判断用、apply前に`os.close`解放) **→** 分岐: apply()→nested G(SH)+U→R / rollback()→G(SH)+U→R / recover_interrupted()→G(SH)+U→R |
+| `apply`→`_apply_pipeline` | update_apply.py L125/L129,L380,468 | `_call_legacy`→G(SH) **→** `_apply_pipeline`内部で U(L380) **→** R(L468 `_acquire_run_lock_wait` 40tries×30s=最大20分poll) |
+| `rollback` | update_apply.py L615–616,L630,655 | `@_legacy_entry`→G(SH) **→** U(L630) **→** R(L655) |
+| `recover_interrupted` | update_recovery.py L232–233,L246,254 | `@_legacy_entry`→G(SH) **→** U(L246) **→** R(L254 `_acquire_run_lock_wait(tries=2)`) |
+| `reinstall_done` | update_recovery.py L94–95,L100,122 | `@_legacy_entry`→G(SH) **→** U(L100) **→** L122でU解放 **→**（applying有なら）`recover_interrupted`へnested委譲 |
+
+注意（r50指摘1）: 上表のG(SH)は`_call_legacy`/`_legacy_entry`が取得する**外側gate**で、`_apply_pipeline`/`rollback`/`recover_interrupted`の関数本体内部が取るのはU→Rのみ。`_apply_pipeline`を`apply()`経由せず直接呼ぶcaller（`release_apply_owner`の`_release_cap`経路・test）はこの外側G(SH)を持たない — 代わりにrelease経路はG(EX)を自前取得済み。
 
 **SDC store内family lock（monitor root内、`p0c-lock-callers.txt`全件）:**
 
@@ -226,11 +239,13 @@
 ### C-5. 実DAGまとめ（確認済みedge）
 
 ```
-release owner経路（control+monitor跨ぎ、全てLOCK_NB非待機）:
-  G(EX) → U → R → [preflight] → A → M → O   （_run_native_release / _issue_planning_consent / _prepare_native_plan）
+release owner経路（control+monitor跨ぎ、flock自体は全てLOCK_NB — ただしR取得はbounded pollで待機経路あり）:
+  G(EX) → U → R(bounded poll) → [preflight] → A → M → O   （_run_native_release / _issue_planning_consent / _prepare_native_plan）
 
-標準update経路（data/のみ）:
-  U → R → [post-merge子がU/R FD借用]
+標準update経路（data/ + 外側G(SH) gate、control storeのlockは不使用）:
+  G(SH)@_call_legacy/_legacy_entry → U → R(bounded poll: _acquire_run_lock_wait最大20分)
+  → [post-merge子がlifetime_fds全体（G含む）+extra(R,U)をdup継承 — pass_fds構成は固定本数でなくactive lease依存]
+  cmd_checkは入口でU(L117)を短期取得→apply前解放→apply内でnested G(SH)+U→R
 
 SDC store内family（monitor root内）:
   support-state.lock → tick.lock(M)
@@ -238,11 +253,13 @@ SDC store内family（monitor root内）:
   support-state.lock → restart-state.lock → tick.lock(M)  (restart_planning L217)
   diagnostic-state.lock（独立、tick.lockとnestしない）
 
-G共有gate（upgrade/settings reconcile）:
-  G(SH) — release-owner file存在で拒否、子へFD継承
+G共有gate（upgrade/settings reconcile + _call_legacy/_legacy_entry経由の全標準更新入口）:
+  G(SH) — release-owner file存在で拒否、lifetime_fds経由で子processへFD継承
+  （mcs_upgrade._release_scope・update_lifecycle_context._call_legacy・
+    release_apply_checks._legacy_scopeの3実装が同一gate意味論）
 ```
 
-仕様目標`G→U→Q→R→C→A→M→O`に対し、現行確認済みは`G→U→R→A→M→O`（release経路）と`U→R`（標準経路）とfamily内`state.lock→M`。**Q未実装、CのDAG位置は未確定**（C lockはrelease lockと無関係に動作 — snapshot境界分離が必要かはM3設計事項）。
+仕様目標`G→U→Q→R→C→A→M→O`に対し、現行確認済みは`G(EX)→U→R→A→M→O`（release経路）と`G(SH)→U→R`（標準経路 — r50で外側G(SH)を実測確認）とfamily内`state.lock→M`。**Q未実装、CのDAG位置は未確定**（C lockはrelease lockと無関係に動作 — snapshot境界分離が必要かはM3設計事項）。flock取得自体は概ね`LOCK_NB`だが、Rの`_acquire_run_lock_wait`/`acquire_run_lock`系はbounded pollの待機経路を持つ（C-2の「全てnon-blocking即失敗」は個別flock呼出の性質で、caller側のretry loopは別物）。
 
 ### C-6. 未確認・要M3継続の点
 
@@ -257,7 +274,7 @@ G共有gate（upgrade/settings reconcile）:
 
 ## P0-d baseline/移行物のfilename表
 
-### D-1. `adapters/sdc/storage.py` `NAMES`/`LIMITS`（L20–38、実測全35 name）
+### D-1. `adapters/sdc/storage.py` `NAMES`/`LIMITS`（L20–38、実測全33 name — L20 frozenset 21 + L35追加12）
 
 | filename | LIMIT | 分類 | 主なaccessor（`p0d-store-access.txt`/`p0c-lock-callers.txt`） |
 |---|---|---|---|
@@ -312,7 +329,7 @@ G共有gate（upgrade/settings reconcile）:
 ### D-4. v1→v3共有fileの正確な記述（r47指摘4修正）
 
 - `release-owner.json`: v1(`release_state.py`、schema `mcs.release-owner.v1`)とv3(`release_auto_state.py`、schema `mcs.release-owner.v3`)が**同名fileを共用**（共にcontrol root配下）
-- `release_auto_state.load`（L63–72）の実際の拒否分類: **missing→`UNKNOWN_BASELINE`**（L65 `_check(raw is not None)`）、**v1 document等のparse/structural不一致→`INVALID`**（L68–69 `contract.parse_document`失敗時）、**schema_version不一致→`SCHEMA_MISMATCH`**（L70）。→ v1 fileは`UNKNOWN_BASELINE`ではなく`INVALID`/`SCHEMA_MISMATCH`で拒否（前版記述を修正）
+- `release_auto_state.load`（L63–72）の実際の拒否分類: **missing→`UNKNOWN_BASELINE`**（L65 `_check(raw is not None)`）、**v1 documentを含むparse失敗→`INVALID`**（L67–69 `contract.parse_document`がschema const不一致でContractError→`INVALID` — v1の`schema_version`値はv3 constと不一致のためここで落ちる）、**`SCHEMA_MISMATCH`**（L70 `_check(value['schema_version'] == SCHEMA)`）はparse成功後の防御checkで、v1 documentは通常ここへ到達しない。→ v1 fileは`INVALID`で拒否（`SCHEMA_MISMATCH`はparse通過後の別防御 — r50指摘4の区別）
 - `release-owner-activation.json`: v1専用（`mcs.release-owner-activation.v1`）
 - `release-start-intent.json`/`release-migration-v3.json`: v3新設（v1対応物なし）
 
