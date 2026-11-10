@@ -1,4 +1,4 @@
-"""Verified local fallback advances without claiming coverage of raw cloud input."""
+"""Verified local fallback covers original input without redundant cloud replay."""
 import json
 
 import cloud_policy
@@ -12,7 +12,7 @@ from test_patient_context_refresh import seed, step
 __all__ = ['runtime', 'cloud', 'real_cloud']
 
 
-def test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_every_input(runtime, real_cloud, monkeypatch):
+def test_verified_local_context_covers_every_input_without_cloud_replay_after_recovery(runtime, real_cloud, monkeypatch):
     ledger, _, local_calls = runtime
     cfg, posts = real_cloud
     body = '本人は合成の自宅で生活しています。' * 170 + '\n\n' + '合成の通院記録です。' * 170
@@ -34,11 +34,11 @@ def test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_ever
         else:
             raise AssertionError('verified local context never became usable')
         assert local_calls and not posts and not receipts(ledger)
-        assert not readiness.inference_coverage(ledger.db, 1, cfg)['complete']
-        assert readiness.pending_estimate(ledger.db, 1, cfg)['scan_sources'] == 1
+        assert readiness.inference_coverage(ledger.db, 1, cfg)['complete']
+        assert readiness.pending_estimate(ledger.db, 1, cfg)['scan_sources'] == 0
         before = len(local_calls)
         for _ in range(3):
-            assert step(runtime, cfg=cfg)['status'] != 'complete'
+            assert step(runtime, cfg=cfg)['status'] == 'complete'
         assert len(local_calls) == before and not posts and not receipts(ledger)
     old_local = [tuple(row) for row in ledger.db.execute(
         'SELECT * FROM artifacts WHERE kind=? ORDER BY artifact_id', (state.CHUNK,))]
@@ -50,8 +50,8 @@ def test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_ever
             break
     else:
         raise AssertionError(repr((outcomes[-10:], len(posts), readiness.inference_coverage(ledger.db, 1, cfg)['status'])))
-    observed = [payload for payload in posts if 'source' in payload]
-    # Supplemental pages may repeat their raw chunk; each original span still reaches the real unit.
+    observed = [payload for payload in local_calls if 'source' in payload]
+    # The local path must cover the same original spans and supplemental pages.
     spans = {tuple(payload['source_identity']['span']): payload['source'] for payload in observed}
     assert ''.join(spans[span] for span in sorted(spans)) == body
     pages = {tuple(page['span']): page['text'] for payload in observed
@@ -62,7 +62,7 @@ def test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_ever
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
     assert len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == len(posts)
     saved, count = receipts(ledger), len(posts)
-    assert saved and count
+    assert not saved and count == 0
     for _ in range(3):
         assert step(runtime, cfg=cfg)['status'] == 'complete'
     assert len(posts) == count and receipts(ledger) == saved

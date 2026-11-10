@@ -1,4 +1,4 @@
-"""Known cloud backfill preserves an overview's same-input retry boundary."""
+"""Cloud recovery preserves verified local scans and the overview retry boundary."""
 import json
 
 import pytest
@@ -24,7 +24,7 @@ _REAL_SETTINGS = cloud_inference.resolve_cloud_settings
 
 
 @pytest.mark.parametrize('attempts', [1, 5])
-def test_known_cloud_backfill_does_not_rearm_same_scope_overview_retry(
+def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
         runtime, real_cloud, monkeypatch, attempts):
     led, clock, local_calls = runtime
     cfg, posts = real_cloud
@@ -67,15 +67,8 @@ def test_known_cloud_backfill_does_not_rearm_same_scope_overview_retry(
             return {'status': 200, 'finish_reason': 'length', 'text': '{}'}
         return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(known_answer(payload))}
 
-    wire = anthropic_client.AnthropicClient.request
-
-    def cloud_wire(client, method, body, timeout, *, deadline):
-        payload = json.loads(body['messages'][0]['content'])
-        assert 'source' in payload and 'reports' not in payload
-        status, headers, raw = wire(client, method, body, timeout, deadline=deadline)
-        response = json.loads(raw)
-        response['content'] = [{'type': 'text', 'text': json.dumps(known_answer(payload))}]
-        return status, headers, json.dumps(response).encode()
+    def cloud_wire(*args, **kwargs):
+        pytest.fail('verified local fallback must not restart cloud inspection')
 
     monkeypatch.setattr(refresh.local_llm, 'admitted_chat', local)
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', cloud_wire)
@@ -91,6 +84,7 @@ def test_known_cloud_backfill_does_not_rearm_same_scope_overview_retry(
         pytest.fail('real source scan and quotation audit did not become ready')
     scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
     assert sources._scan_ready(scans[1]) and not scans[1].get('_provider_contract')
+    assert scans[1]['_source_meta']['local_fallback'] is True
     assert led.synthetic_jev_requests and not posts
     local_chunks = led.artifacts(state.CHUNK, project_id=1)
     assert local_chunks
@@ -116,10 +110,10 @@ def test_known_cloud_backfill_does_not_rearm_same_scope_overview_retry(
     selected, progress, pending = readiness._pending(
         led.db, 1, cfg, now=clock.wall, cloud_scan=True, source_keys=[1])
     assert selected['source_sig'] == snapshot['source_sig'] and selected['contract'] == snapshot['contract']
-    assert not pending['A'] and pending['B'] and progress['attempts'] == attempts
+    assert not pending['A'] and not pending['B'] and progress['attempts'] == attempts
     result = step(runtime, cfg=cfg, local_admit=lambda: False)
-    assert result['status'] == 'progressed' and result['lane'] == 'B'
-    assert len(posts) == len(led.artifacts('cloud_usage_reserve')) == len(led.artifacts('cloud_usage_result')) == 1
+    assert result['status'] == 'deferred' and result['done'] == 0
+    assert len(posts) == len(led.artifacts('cloud_usage_reserve')) == len(led.artifacts('cloud_usage_result')) == 0
     scan = document(led, state.SCAN)
     assert scan['complete'] and scan['facts']
     assert {fact['id'] for fact in scan['facts']} == known_ids
