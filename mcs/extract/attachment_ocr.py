@@ -27,6 +27,7 @@ MAX_INPUT = 64 * 1024 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024
 MAX_PAGES = 30
 MAX_TABLE_ENTRIES = 10000
+FAILURE_RETRY_S = 86400
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
 EXCLUDED_STATES = frozenset({"unsupported"})
 
@@ -169,7 +170,7 @@ def _source(db, attachment_id, project_id=None):
 
 
 def _latest(db, source):
-    row = db.execute("SELECT artifact_id,project_id,message_id,CASE WHEN length(content)<=4194304 "
+    row = db.execute("SELECT artifact_id,project_id,message_id,created_at,CASE WHEN length(content)<=4194304 "
                      "THEN content END AS content FROM artifacts WHERE kind=? "
                      "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) "
                      "THEN json_extract(meta,'$.attachment_id') END=? ORDER BY artifact_id DESC LIMIT 1",
@@ -183,7 +184,7 @@ def _latest(db, source):
     if not isinstance(value, dict):
         return None
     return {**value, "artifact_id": row["artifact_id"], "project_id": row["project_id"],
-            "message_id": row["message_id"]}
+            "message_id": row["message_id"], "_recorded_at": row["created_at"]}
 
 
 def _matching(doc, source):
@@ -496,8 +497,17 @@ def _due(doc, source):
         return not _completed(doc)
     if doc["state"] == "unsupported":
         return False
-    return (type(doc.get("attempts")) is int and doc["attempts"] < 3
-            and type(doc.get("next_try")) in (int, float) and doc["next_try"] <= time.time())
+    attempts, next_try = doc.get("attempts"), doc.get("next_try")
+    if (type(attempts) is not int or not 1 <= attempts <= 3
+            or type(next_try) not in (int, float) or not math.isfinite(next_try) or next_try < 0):
+        return False
+    if attempts == 3:
+        recorded_at = doc.get("_recorded_at")
+        if (type(recorded_at) not in (int, float) or not math.isfinite(recorded_at)
+                or recorded_at < 0):
+            return False
+        next_try = max(next_try, recorded_at + FAILURE_RETRY_S)
+    return next_try <= time.time()
 
 
 def _settings_current(settings):
@@ -667,14 +677,15 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                 reason = (str(error) if isinstance(error, ValueError) and str(error) in _RUNTIME_REASONS
                           else "local_processing_failed")
             attempts = prior.get("attempts", 0) if _matching(prior, source) else 0
-            attempts = attempts + 1 if type(attempts) is int and 0 <= attempts < 3 else 1
+            attempts = min(attempts + 1, 3) if type(attempts) is int and 0 <= attempts <= 3 else 1
             methods = {page["engine"] for page in pages}
             doc = {"schema": SCHEMA, "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
                    "input_bytes": source["bytes"], "engine": "yomitoku", "engine_version": ENGINE_VERSION if pages else None,
                    "method": "mixed" if len(methods) > 1 else next(iter(methods), None),
                    "runtime_contract": RUNTIME_CONTRACT, "state": state, "pages": pages,
                    "text_hash": _hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)),
-                   "attempts": attempts, "next_try": time.time() + 3600, "reason": reason}
+                   "attempts": attempts, "next_try": time.time() + (FAILURE_RETRY_S if attempts == 3 else 3600),
+                   "reason": reason}
             if _settle(ledger, source, doc, root, generation, settings, deadline=deadline):
                 counts[state] += 1
             else:

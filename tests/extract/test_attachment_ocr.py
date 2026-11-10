@@ -843,6 +843,26 @@ def test_failure_diagnostics_keep_history_and_exhausted_attempts(setup, monkeypa
     assert len(calls) == 3
     assert ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall() == before
     assert ocr.current(ledger.db, 1) is None
+    last_at = before[-1]["created_at"]
+    clock[0] = last_at + ocr.FAILURE_RETRY_S - 1
+    for _ in range(3):
+        assert ocr.run_pending(ledger, cfg)["failed"] == 0
+    assert len(calls) == 3
+    clock[0] += 1
+    for _ in range(3):
+        result = ocr.run_pending(ledger, cfg)
+        if result["failed"]:
+            break
+    assert result["failed"] == 1 and result["exhausted_failed"] == 1
+    assert len(calls) == 4
+    after = ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall()
+    assert after[:-1] == before
+    assert json.loads(after[-1]["content"])["attempts"] == 3
+    assert json.loads(after[-1]["content"])["next_try"] == clock[0] + ocr.FAILURE_RETRY_S
+    for _ in range(3):
+        assert ocr.run_pending(ledger, cfg)["failed"] == 0
+    assert len(calls) == 4
+    assert ocr.current(ledger.db, 1) is None
 
 
 @pytest.mark.parametrize("state,reason,attempts", [
@@ -969,3 +989,41 @@ def test_bootstrap_image_decode_phase_checks_bounds_first(tmp_path, monkeypatch,
     assert failure.value.code == expected
     assert loaded == ([True] if pixels == 1 else [])
     assert not (tmp_path / "result.json").exists()
+
+
+def test_daily_failure_retry_adopts_only_verified_new_result(setup, monkeypatch):
+    ledger, cfg, pages, calls, _ = setup
+    runtime = ocr._runtime
+    clock = [1000]
+    monkeypatch.setattr(ocr.time, "time", lambda: clock[0])
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: (_ for _ in ()).throw(ValueError("timeout")))
+    for _ in range(3):
+        for _ in range(3):
+            if ocr.run_pending(ledger, cfg)["failed"]:
+                break
+        clock[0] += 3601
+    before = ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall()
+    clock[0] = before[-1]["created_at"] + ocr.FAILURE_RETRY_S
+    monkeypatch.setattr(ocr, "_runtime", runtime)
+    for _ in range(3):
+        result = ocr.run_pending(ledger, cfg)
+        if result["complete"]:
+            break
+    assert result["complete"] == 1 and len(calls) == 1
+    assert ocr.current(ledger.db, 1)["pages"] == pages
+    assert ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id").fetchall()[:-1] == before
+    clock[0] += 3 * ocr.FAILURE_RETRY_S
+    for _ in range(3):
+        assert ocr.run_pending(ledger, cfg)["complete"] == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("recorded_at", [None, True, -1, float("inf"), float("nan"), "1000"])
+def test_daily_retry_rejects_unverified_record_time(setup, monkeypatch, recorded_at):
+    ledger, _, _, _, _ = setup
+    source = ocr._source(ledger.db, 1)
+    doc = {"schema": ocr.SCHEMA, "runtime_contract": ocr.RUNTIME_CONTRACT,
+           "attachment_id": 1, "input_sha256": source["sha256"], "input_bytes": source["bytes"],
+           "state": "failed", "attempts": 3, "next_try": 0, "_recorded_at": recorded_at}
+    monkeypatch.setattr(ocr.time, "time", lambda: 1e9)
+    assert not ocr._due(doc, source)
