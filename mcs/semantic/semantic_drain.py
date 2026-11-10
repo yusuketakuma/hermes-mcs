@@ -638,12 +638,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                             result['errors'].append(
                                 f'semantic_reprocess_job: {type(_error).__name__}')
                         _repair_status = _repair.get('status')
-                        # Only a committed adoption spends the one-root
-                        # repair slot; read-only evaluations (paused,
-                        # excluded, off, deadline, not_stale, rolled-back
-                        # outcomes) leave it for a later stale root.
-                        if _repair.get('adopted'):
-                            repair_attempted = True
+                        # One repair evaluation per pass, whatever the
+                        # outcome: read-only results (paused, excluded,
+                        # targets_current, errors, rollbacks) still spent
+                        # the BEGIN IMMEDIATE and classification work, so
+                        # later stale roots take the bounded held cursor
+                        # and current-generation jobs keep their slots.
+                        repair_attempted = True
                         _repair_gen = _repair.get(
                             'generation',
                             runtime.execution_generation(scfg))

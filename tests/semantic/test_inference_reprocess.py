@@ -1789,3 +1789,169 @@ def test_drain_holds_unverifiable_execution_contract(store, monkeypatch,
     assert processed == []
     assert output.get('payload_hold_count') == 1
     assert json.loads(_job(store, 1)['payload']) == pl
+
+
+def _set_execution_marker(store, mid, pid=1, **markers):
+    """Rewrite only the execution marker keys of the seeded job payload."""
+    row = _job(store, mid, pid)
+    assert row is not None
+    pl = json.loads(row['payload'])
+    for key in ('execution_contract', 'execution_generation'):
+        pl.pop(key, None)
+    pl.update(markers)
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                         (json.dumps(pl, ensure_ascii=False, sort_keys=True),
+                          row['job_id']))
+    return row['job_id']
+
+
+@pytest.mark.parametrize('markers', [
+    {'execution_contract': True, 'execution_generation': 'CUR'},
+    {'execution_contract': 1.0, 'execution_generation': 'CUR'},
+    {'execution_contract': '1', 'execution_generation': 'CUR'},
+    {'execution_contract': [1], 'execution_generation': 'CUR'},
+    {'execution_contract': 2, 'execution_generation': 'CUR'},
+    {'execution_contract': 0, 'execution_generation': 'CUR'},
+    {'execution_contract': None, 'execution_generation': 'CUR'},
+    {'execution_generation': 'CUR'},
+])
+def test_drain_holds_explicit_malformed_execution_marker(
+        store, monkeypatch, markers):
+    """An explicit marker fragment that is not the contract form is
+    unknown evidence even when its generation equals the expected one:
+    held on the bounded cursor, never repaired, processed, or charged."""
+    from semantic_testkit import _FakeJev
+    _save(store)
+    _wait_bulk(store)
+    resolved = {key: (_current_execution() if value == 'CUR' else value)
+                for key, value in markers.items()}
+    _set_execution_marker(store, 1, 1, **resolved)
+    before = _job(store, 1)
+    payload_before, attempts_before = before['payload'], before['attempts']
+    processed, repair_calls = [], []
+    real_reprocess = drain.reprocess_job
+
+    def spy(*args, **kwargs):
+        repair_calls.append(True)
+        return real_reprocess(*args, **kwargs)
+
+    monkeypatch.setattr(drain, 'reprocess_job', spy)
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        processed.append(job['job_id'])
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    output = drain.run_due(store, _cfg(loop_mode='off'), result,
+                           time.monotonic() + 300, jev_client=_FakeJev(),
+                           llm_fn=lambda *a, **kw: None, max_jobs=4)
+    assert processed == []
+    assert repair_calls == []
+    assert output.get('payload_hold_count') == 1
+    after = _job(store, 1)
+    assert after['payload'] == payload_before
+    assert after['attempts'] == attempts_before
+
+
+def test_drain_processes_legacy_and_current_execution_markers(
+        store, monkeypatch):
+    """Controls: a payload with no marker keys (legitimate legacy) and a
+    well-formed contract=1 row bound to the expected generation both
+    proceed to the processor."""
+    from semantic_testkit import _FakeJev
+    _save(store, 1)
+    _save(store, 2)
+    _wait_bulk(store)
+    _set_execution_marker(store, 1, 1)
+    _set_execution_marker(store, 2, 1, execution_contract=1,
+                          execution_generation=_current_execution())
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        processed.append(job['message_id'])
+        assert runtime.transition(
+            ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    drain.run_due(store, _cfg(loop_mode='off'), result,
+                  time.monotonic() + 300, jev_client=_FakeJev(),
+                  llm_fn=lambda *a, **kw: None, max_jobs=4)
+    assert sorted(processed) == [1, 2]
+
+
+def test_drain_caps_repair_evaluations_at_one_per_pass(store, monkeypatch):
+    """A read-only repair outcome still spends the single per-pass
+    evaluation: the first stale root's paused verdict holds it, later
+    stale roots defer without another reprocess call, and a
+    current-generation job still processes."""
+    from semantic_testkit import _FakeJev
+    _patient(store, 2)
+    for mid in (1, 2, 3):
+        _save(store, mid, pid=2)
+    _save(store, 4)
+    _wait_bulk(store)
+    for mid in (1, 2, 3):
+        _stale_contract(store, mid, pid=2)
+    store.artifact_add('semantic_control', 'paused', project_id=2)
+    current_id = _job(store, 4, 1)['job_id']
+    repair_calls, processed = [], []
+    real_reprocess = drain.reprocess_job
+
+    def spy(*args, **kwargs):
+        repair_calls.append(True)
+        return real_reprocess(*args, **kwargs)
+
+    monkeypatch.setattr(drain, 'reprocess_job', spy)
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        processed.append(job['job_id'])
+        assert runtime.transition(
+            ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    drain.run_due(store, _cfg(loop_mode='off'), result,
+                  time.monotonic() + 300, jev_client=_FakeJev(),
+                  llm_fn=lambda *a, **kw: None, max_jobs=8)
+    assert len(repair_calls) == 1
+    assert processed == [current_id]
+    assert 'semantic: execution_repair_paused' in result['errors']
+    assert 'semantic: execution_repair_deferred' in result['errors']
+    for mid in (1, 2, 3):
+        row = _job(store, mid, 2)
+        assert row['state'] == 'pending'
+        assert json.loads(row['payload'])['execution_generation'] == 'f' * 64
+
+
+def test_guard_rejects_malformed_execution_marker(store):
+    """The final side-effect guard treats any explicit non-contract
+    marker as stale evidence even when its generation matches, while
+    legitimate legacy and valid current payloads pass."""
+    _save(store)
+    _wait_bulk(store)
+    expected = _current_execution()
+    guard_kw = dict(deadline=time.monotonic() + 60,
+                    expected_config_generation=None, expected_mode='shadow',
+                    expected_execution_generation=expected)
+    for markers in [
+            {'execution_contract': True, 'execution_generation': expected},
+            {'execution_contract': 1.0, 'execution_generation': expected},
+            {'execution_contract': '1', 'execution_generation': expected},
+            {'execution_contract': [1], 'execution_generation': expected},
+            {'execution_contract': 2, 'execution_generation': expected},
+            {'execution_contract': None, 'execution_generation': expected},
+            {'execution_generation': expected}]:
+        _set_execution_marker(store, 1, 1, **markers)
+        token = runtime.JobToken.from_row(_job(store, 1))
+        with pytest.raises(runtime.RuntimeStale, match='execution'):
+            runtime.guard(store, token, **guard_kw)
+    _set_execution_marker(store, 1, 1)
+    runtime.guard(store, runtime.JobToken.from_row(_job(store, 1)), **guard_kw)
+    _set_execution_marker(store, 1, 1, execution_contract=1,
+                          execution_generation=expected)
+    runtime.guard(store, runtime.JobToken.from_row(_job(store, 1)), **guard_kw)

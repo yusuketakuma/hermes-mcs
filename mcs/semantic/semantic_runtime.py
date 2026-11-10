@@ -17,7 +17,7 @@ import time
 import uuid
 from contextlib import suppress
 
-from mcs_util import loads_dict, payload_hash, strict_json
+from mcs_util import loads_dict, payload_hash, strict_json, valid_hash
 from semantic_usage_receipts import (
     MAX_SQL_INTEGER as MAX_SQL_INTEGER,
     JevReservation as JevReservation,
@@ -835,6 +835,33 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
     return reserve
 
 
+def execution_marker_state(payload_pl, expected_generation):
+    """Classify a job payload's explicit execution-binding marker.
+
+    'legacy' — neither marker key is present (pre-contract rows). 'current'
+    — contract is exactly int 1 and the stored generation is a valid hash
+    equal to expected_generation. 'stale' — contract int 1 with a
+    well-formed generation that differs, or no expected generation to
+    compare against: verified outdated. 'unverifiable' — contract int 1
+    with a missing/malformed generation, any other explicit marker
+    fragment (non-int-1 contract, a lone generation), or a non-dict
+    payload: unknown evidence."""
+    if not isinstance(payload_pl, dict):
+        return 'unverifiable'
+    if ('execution_contract' not in payload_pl
+            and 'execution_generation' not in payload_pl):
+        return 'legacy'
+    contract = payload_pl.get('execution_contract')
+    stored = payload_pl.get('execution_generation')
+    if type(contract) is int and contract == 1:
+        if not valid_hash(stored):
+            return 'unverifiable'
+        if expected_generation is not None and stored == expected_generation:
+            return 'current'
+        return 'stale'
+    return 'unverifiable'
+
+
 def guard(ledger, token: JobToken, *, deadline: float,
           expected_config_generation: str | None,
           expected_mode: str, cfg_path: str | None = None,
@@ -848,13 +875,8 @@ def guard(ledger, token: JobToken, *, deadline: float,
     if paused(ledger.db, token.project_id):
         raise RuntimeOff(stage)
     payload_pl = parse_payload({'payload': token.payload_raw})
-    execution = payload_pl.get('execution_generation')
-    contract = payload_pl.get('execution_contract')
-    if ((execution is not None and expected_execution_generation is not None
-            and execution != expected_execution_generation)
-            or (type(contract) is int and contract == 1
-                and (expected_execution_generation is None
-                     or execution != expected_execution_generation))):
+    if execution_marker_state(payload_pl, expected_execution_generation) in (
+            'stale', 'unverifiable'):
         raise RuntimeStale(stage + ':execution')
     scope = ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=?',
                               (token.project_id,)).fetchone()

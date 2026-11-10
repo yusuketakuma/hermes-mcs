@@ -106,25 +106,18 @@ def _reprocess_execution_stale(pl, generation):
     Only int 1 (never True/1.0) and a stored generation that is itself a
     valid hash qualify; anything else is unknown evidence and is kept,
     never auto-repaired."""
-    if not isinstance(pl, dict):
-        return False
-    contract = pl.get('execution_contract')
-    stored = pl.get('execution_generation')
-    return (type(contract) is int and contract == 1
-            and mcs_util.valid_hash(stored) and stored != generation)
+    return runtime.execution_marker_state(pl, generation) == 'stale'
 
 
 def _reprocess_execution_unverifiable(pl):
-    """contract=1 payload whose stored generation is absent or malformed.
+    """Explicit execution marker that cannot be verified.
 
-    The contract marker asserts an execution binding but the evidence
-    needed to verify it is missing, so the row is unknown — held, never
-    processed and never auto-repaired."""
-    if not isinstance(pl, dict):
-        return False
-    return (type(pl.get('execution_contract')) is int
-            and pl.get('execution_contract') == 1
-            and not mcs_util.valid_hash(pl.get('execution_generation')))
+    Covers contract=1 with an absent/malformed generation AND every other
+    explicit marker fragment (non-int-1 contract, a lone generation):
+    unknown evidence — held, never processed and never auto-repaired.
+    A payload with neither marker key is legitimate legacy and returns
+    False."""
+    return runtime.execution_marker_state(pl, None) == 'unverifiable'
 
 
 def _job_identity_same(token, current):
