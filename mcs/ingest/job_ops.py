@@ -189,7 +189,10 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False
             # derived from the stored render/coverage — so it must branch
             # before the common apply_command validation would reject it.
             try:
-                if req["cmd"] == "ops.card_part_resolve":
+                if req["cmd"] == "ops.card_part_tracking_ack":
+                    import notify_tracking_ack
+                    receipt = notify_tracking_ack.apply(ledger, req)
+                elif req["cmd"] == "ops.card_part_resolve":
                     import notify_recovery
                     receipt = notify_recovery.apply_card_part_resolve(ledger, req)
                 elif req["cmd"] == "ops.attachment_identity_confirm":

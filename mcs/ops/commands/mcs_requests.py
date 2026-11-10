@@ -138,6 +138,9 @@ def _request_extras(req):
 def validate(req):
     if not isinstance(req, dict):
         return "bad_command"
+    if req.get("cmd") == "ops.card_part_tracking_ack":
+        from notify_tracking_ack import validate as validate_tracking_ack
+        return validate_tracking_ack(req)
     if req.get("cmd") == "ops.card_part_resolve":
         from notify_recovery import validate_card_part_resolve
         return validate_card_part_resolve(req)

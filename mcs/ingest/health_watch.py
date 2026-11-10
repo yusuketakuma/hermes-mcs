@@ -184,7 +184,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
             report["status"] = "degraded"
     notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
     parts = notify.get('incomplete_parts')
-    parts_unknown = isinstance(parts, dict) and parts.get('status') == 'unknown'
+    tracking = _tracking_parts(parts)
+    tracking_present = isinstance(parts, dict) and any(key in parts for key in (
+        'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
+    parts_unknown = (isinstance(parts, dict) and parts.get('status') == 'unknown'
+                     or tracking_present and tracking is None)
     if parts_unknown and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
@@ -252,6 +256,12 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         and _count(parts.get('total')) and all(_count(n) for n in states.values())
         and sum(states.values()) == parts['total'] else None)
     report['notify_parts_breakdown'] = _part_breakdown(parts, report['notify_incomplete_parts'])
+    report['notify_active_incomplete_parts'] = (tracking['total'] if tracking else
+        None if tracking_present else report['notify_incomplete_parts'])
+    report['notify_tracking_closed_parts'] = tracking['closed'] if tracking else None
+    report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
+    report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
+        if tracking else report['notify_parts_breakdown'])
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -906,6 +916,28 @@ def _part_breakdown(parts, total):
     return {'by_state': dict(states), 'by_plan': dict(plans)}
 
 
+
+def _tracking_parts(parts):
+    """Validate a separate operational population without changing undelivered facts."""
+    if not isinstance(parts, dict) or not _count(parts.get('total')):
+        return None
+    total, active, closed, unknown = (parts.get(key) for key in (
+        'total', 'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
+    raw = _part_breakdown(parts, total)
+    current = {'by_state': parts.get('active_by_state'), 'by_plan': parts.get('active_by_plan')}
+    observed = _part_breakdown(current, active)
+    if (raw is None or observed is None or not all(_count(n) for n in (active, closed, unknown))
+            or active + closed != total or not _count(parts.get('active_cards'))
+            or not _count(parts.get('cards')) or parts['active_cards'] > parts['cards']
+            or unknown < raw['by_state']['unknown']
+            or any(observed['by_state'][key] != raw['by_state'][key] for key in ('pending', 'unknown', 'held'))
+            or any(observed['by_state'][key] > raw['by_state'][key] for key in raw['by_state'])
+            or observed['by_plan']['current'] != raw['by_plan']['current']
+            or observed['by_plan']['superseded'] > raw['by_plan']['superseded']):
+        return None
+    return {'total': active, **observed, 'closed': closed, 'unknown': unknown}
+
+
 def _collection_known_empty(report: dict) -> bool:
     from collection_diagnostics import validated
 
@@ -1071,15 +1103,18 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
         elif base == "notification_parts_incomplete":
-            n = report.get('notify_incomplete_parts')
+            n = report.get('notify_active_incomplete_parts', report.get('notify_incomplete_parts'))
             extra = f" {n}件" if _count(n) else ""
-            detail = _part_breakdown(report.get('notify_parts_breakdown'), n)
+            detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
             if detail is not None:
                 states, plans = detail['by_state'], detail['by_plan']
                 labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
                           ('処理待ち', states['pending']), ('保留', states['held'])]
                 extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
                           + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+            closed = report.get('notify_tracking_closed_parts')
+            if _count(closed) and closed:
+                extra += f"／別に運用終了・未回収 {closed}件"
         elif base in ("backup_not_verified", "backup_deferred_deadline"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))

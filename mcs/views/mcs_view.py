@@ -902,6 +902,10 @@ def _parser():
     plan.add_argument("--part-id", required=True)
     plan.add_argument("--include-related", action="store_true",
                       help="Include every unresolved attachment in the same latest Slack update; never approve it")
+    tracking = subs.add_parser("card_part_tracking_plan",
+                               help="Local operator: inspect one historical confirmed length rejection")
+    tracking.add_argument("--delivery-id", required=True)
+    tracking.add_argument("--part-id", required=True)
     plan2 = subs.add_parser("attachment_identity_plan",
                             help="Local operator: inspect a held attachment identity without approving a write")
     plan2.add_argument("--delivery-id", required=True)
@@ -921,7 +925,7 @@ def _parser():
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
             action_names = ("scan", "retry", "pause", "resume", "adopt_summary", "signal_dismiss",
-                            "signal_policy", "refstat_approve", "card_resolve", "card_part_resolve",
+                            "signal_policy", "refstat_approve", "card_resolve", "card_part_resolve", "card_part_tracking_ack",
                             "attachment_identity_confirm")
             parsers = [actions.add_parser(action) for action in action_names]
             for write in parsers:
@@ -945,7 +949,7 @@ def _parser():
             # and wrong; notification_receipt keys on command_id only
             projectless = (kind in ("status", "signals", "cross_lists", "response_observations",
                                     "notification_receipt", "read_model")
-                           or (kind == "control" and action_names[index] in ("card_resolve", "card_part_resolve",
+                           or (kind == "control" and action_names[index] in ("card_resolve", "card_part_resolve", "card_part_tracking_ack",
                                                "attachment_identity_confirm")))
             child.add_argument("--project", type=int,
                                required=not projectless)
@@ -1040,6 +1044,10 @@ def main(argv=None):
             from notify_recovery import card_part_resolve_plan
             result = card_part_resolve_plan(view.db, args["delivery_id"], args["part_id"],
                                             include_related=args["include_related"])
+        elif args["kind"] == "card_part_tracking_plan":
+            from mcs_util import load_config_checked
+            from notify_tracking_ack import build_plan
+            result = build_plan(view.db, args["delivery_id"], args["part_id"], cfg=load_config_checked())
         elif args["kind"] == "attachment_identity_plan":
             if (not requests.valid_uuid(args["delivery_id"])
                     or not valid_text(args["part_id"], 64)):
@@ -1074,7 +1082,7 @@ def main(argv=None):
                 version = TRANSPORT_VERSIONS[transport]
             req = {**req, "cmd": command, "version": version,
                    "human_confirmed": confirmed}
-            if action not in ("card_resolve", "card_part_resolve", "attachment_identity_confirm"):
+            if action not in ("card_resolve", "card_part_resolve", "card_part_tracking_ack", "attachment_identity_confirm"):
                 req["project_id"] = args["project"]
             result = requests.enqueue(req, cmd_dir)
         elif args["kind"] == "notification_receipt":
@@ -1091,7 +1099,7 @@ def main(argv=None):
             result = view.read(**args)
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 1 if (result.get("outcome") == "unknown" or
-                     (args["kind"] in ("card_part_plan", "attachment_identity_plan",
+                     (args["kind"] in ("card_part_plan", "card_part_tracking_plan", "attachment_identity_plan",
                                        "card_part_check") and "error" in result) or
                      (args["kind"] == "card_part_check"
                       and result.get("journal_check") == "unknown")) else 0

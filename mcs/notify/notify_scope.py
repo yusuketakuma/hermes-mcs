@@ -733,9 +733,13 @@ def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
 
 def incomplete_parts_health(db, now: float, cfg=None) -> dict:
     """Read unfinished parts, excluding only matching later delivery evidence."""
+    import notify_tracking_ack
+    index = notify_tracking_ack.receipt_targets(db)
     states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
     by_plan = {"current": 0, "superseded": 0}
-    cards, oldest = set(), None
+    active_states = dict(states)
+    active_plans = dict(by_plan)
+    cards, oldest, active_cards, active_oldest, closed = set(), None, set(), None, 0
     for row in _incomplete_part_rows(db, cfg):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
@@ -743,7 +747,21 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         at = _finite(row['oldest'])
         if at is not None:
             oldest = min(oldest, at) if oldest is not None else at
-    return {"total": sum(states.values()), "cards": len(cards),
+        if notify_tracking_ack.acknowledged(db, row, index, cfg=cfg):
+            closed += 1
+            continue
+        active_states[row['state']] += 1
+        active_plans["superseded" if row['superseded'] else "current"] += 1
+        active_cards.add(row['card_id'])
+        if at is not None:
+            active_oldest = min(active_oldest, at) if active_oldest is not None else at
+    unknown = db.execute("SELECT COUNT(*) FROM notification_render_parts "
+                         "WHERE kind!='card' AND state='unknown'").fetchone()[0]
+    return {"active_total": sum(active_states.values()), "active_cards": len(active_cards),
+            "acknowledged_unresolved_total": closed, "unknown_parts_total": unknown,
+            "active_by_state": active_states, "active_by_plan": active_plans,
+            "active_oldest_age_s": max(0.0, now - active_oldest) if active_oldest is not None else None,
+            "total": sum(states.values()), "cards": len(cards),
             "by_state": states, "by_plan": by_plan,
             "oldest_age_s": max(0.0, now - oldest) if oldest is not None else None,
             "observed_at": now}

@@ -301,3 +301,22 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 原資料や失敗記録が変わると、古い受付記録を新しい失敗へ流用しません。
 受付済みOCR以外の異常・照合不能・未観測部分は警報対象のままです。
 同じ表セルの重複が生じる原因や、未回収本文の取得は、この受付では修復しません。
+
+
+## 過去の長文部品の運用追跡を終了する
+
+Slackで長文を拒否された過去の本文部品は、同じ配送先で後続のカードが配送済みであることを確認して、運用上の追跡を終了できます。対象は確定した `not_sent` の長文拒否だけです。現行部品、送信結果不明、処理中、保留、復元保留中は対象になりません。過去の本文は未回収のままです。
+
+ローカル管理者は、スナップショットから対象ごとの計画を作ります。
+
+```bash
+python3 mcs/views/mcs_view.py card_part_tracking_plan --delivery-id DELIVERY_ID --part-id PART_ID
+```
+
+返された `targets` に `actor` と `reason` を添えたJSONを、標準入力から次のコマンドへ渡します。`version` と `cmd` は計画を確認するための項目で、入力JSONからは除いてください。`command_id` は省略すると生成されます。1回につき最大20対象です。
+
+```bash
+python3 mcs/views/mcs_view.py control card_part_tracking_ack --confirm-human < approved-targets.json
+```
+
+既存のコマンド処理が採用時に証拠を再照合し、receiptを残します。配送部品・試行・送信権限は変更せず、再送もしません。後続カードの配送は過去の本文の回収を証明しません。未配送総数は保持し、監視の対象件数と「運用終了・未回収」の件数を分けます。結果不明は別に全件集計し、追跡終了では隠しません。配送先や証拠が変われば、古いreceiptだけで監視対象から除外しません。

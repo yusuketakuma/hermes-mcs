@@ -143,6 +143,8 @@ KNOWN_ERROR_CODES = frozenset({
     "unsafe_data_path", "unsafe_spec_path", "unsupported_event", "unsupported_transport", "until_invalid", "until_needs_offset", "update_busy", "update_in_progress",
     "update_journal_unverified", "update_lock_missing", "wait_fn_invalid", "wait_s_invalid", "watchdog_grace_config_invalid", "witness_columns", "witness_inconsistent", "witness_limit",
     "witness_params", "witness_row", "witness_sql", "witness_value", "worker_not_stopped", "worker_reason_invalid", "worker_status_path_invalid", "worker_stop_unverified",
+    "tracking_ack_observation_incomplete",
+    "tracking_ack_receipt_unverified",
     "worker_transport_invalid",
 })
 

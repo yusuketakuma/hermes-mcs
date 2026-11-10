@@ -904,7 +904,9 @@ def build_health(db, result: dict, status: str,
     cards_health["observation"] = card_observation
     cards_unknown = cards_health.get("status") == "unknown"
     incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
-    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
+    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
+        incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
+        incomplete_parts.get('unknown_parts_total', 0))
     part_holds = part_holds_health(db, now, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     outbox = pending_health(db, now, seconds=remaining())
     # an unmeasurable pending count can never read as delivered work

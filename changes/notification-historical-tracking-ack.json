@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "過去の確定未送信を証拠付きで運用追跡から分離",
+  "summary": "Slackで長文を拒否された過去の本文部品について、同じ配送先の後続カードが配送済みと確認できる場合に、人承認で運用追跡を終了できます。未配送の事実は保持し、監視の対象件数と運用終了・未回収の件数を分けます。結果不明は全件集計を続けます。",
+  "upgrade": "既定で自動適用しません。ローカルのcard_part_tracking_planで計画を作り、actor・reasonを添えてcontrol card_part_tracking_ack --confirm-humanから承認してください。対象は1回20件まで。配送状態・再送権限・既存証跡は変更しません。",
+  "details": [
+    "過去のSlack本文の確定not_sent長文拒否、終端試行、同じ正規配送先の後続delivered、復元保留なしを採用時に再照合する。",
+    "receiptだけを追加し、部品・試行・原本・課金記録を保持する。現行・unknown・pending・heldは対象外。",
+    "未配送総数と内訳を維持し、active_totalと運用終了未回収を別集計する。全unknownは既存の未完了抽出とは独立に集計する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_tracking_ack.py",
+    "mcs/notify/notify_scope.py",
+    "docs/guides/NOTIFICATION_RECOVERY.md"
+  ]
+}
