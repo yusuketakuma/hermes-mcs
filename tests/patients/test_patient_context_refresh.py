@@ -1490,7 +1490,7 @@ def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
                 'failure': 'nightly_timeout', 'next_try': 1000}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 86400 - 1)
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
-    progress.update(last_attempt=500, next_try=500 + 86400)
+    progress.update(failure_at=500, next_try=500 + 86400)
     assert not patient_context_refresh_readiness._ready(progress, 500 + 86400 - 1)
     assert patient_context_refresh_readiness._ready(progress, 500 + 86400)
 
