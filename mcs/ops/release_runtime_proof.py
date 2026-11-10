@@ -7,10 +7,10 @@ APPLIED_UNVERIFIED/UNKNOWNを保持しコードを戻さない。
 deps契約(全て冪等必須・副作用はlock外):
 - quarantine_launch(active, receipt_id): receipt_idで冪等起動/再装着。
   成功時のみreturn、失敗は例外。起動だけでなく観測probeを可能にする責務。
-- probe_runtime() -> {'boot_id','loaded_source_sha256','services':{sid:obs}}
+- probe_runtime(active) -> {'boot_id','loaded_source_sha256','services':{sid:obs}}
 - service_desires() -> {service_id: 'resident'|'timer'|'disabled'}
 - loaded_source_expect(active) -> 起動source検証済みの期待loaded sha256
-- heartbeat_observations() -> [{'service_id','heartbeat_at'}]
+- heartbeat_observations(active) -> [{'service_id','heartbeat_at'}]
 - release_update_fence(generation): 自分の更新fenceを冪等解放
 - measure_source_manifest() -> 認証済みtarget観測のsource manifest sha256
 """
@@ -114,7 +114,7 @@ def _collect_service_proofs(store, deps, owner, active):
     desires = deps.service_desires()
     if not isinstance(desires, dict) or not desires:
         raise OwnerError('SERVICE_SET_UNKNOWN')
-    probe = deps.probe_runtime()
+    probe = deps.probe_runtime(active)
     if not isinstance(probe, dict):
         raise OwnerError('RUNTIME_PROBE_MISSING')
     raw_services = probe.get('services')
@@ -156,7 +156,7 @@ def _begin_activation(store, deps, owner, active):
         raise OwnerError('RUNTIME_PROOF_MISMATCH')
     # proof内のservice証拠を現在観測と再照合(起動後の差替えを検出)
     desires = deps.service_desires()
-    probe = deps.probe_runtime()
+    probe = deps.probe_runtime(active)
     raw_services = probe.get('services') if isinstance(probe, dict) else None
     if not isinstance(raw_services, dict):
         raise OwnerError('RUNTIME_PROBE_INSUFFICIENT')
@@ -182,9 +182,9 @@ def _begin_activation(store, deps, owner, active):
     return {'phase': 'ACTIVATING'}
 
 
-def _heartbeat_ok(deps, proof):
+def _heartbeat_ok(deps, active, proof):
     """fresh heartbeat 2回(間隔>=5秒)をresident serviceごとに要求する。"""
-    observations = deps.heartbeat_observations()
+    observations = deps.heartbeat_observations(active)
     if not isinstance(observations, list):
         raise OwnerError('HEARTBEAT_MISSING')
     by_service = {}
@@ -236,10 +236,10 @@ def _complete_verified(store, deps, owner, active):
     proof = active.get('runtime_proof')
     if proof is None:
         raise OwnerError('RUNTIME_PROOF_MISSING')
-    _heartbeat_ok(deps, proof)
+    _heartbeat_ok(deps, active, proof)
     # 全necessary serviceとsourceを再照合(起動後の改変を検出)
     desires = deps.service_desires()
-    probe = deps.probe_runtime()
+    probe = deps.probe_runtime(active)
     raw_services = probe.get('services') if isinstance(probe, dict) else None
     if not isinstance(raw_services, dict):
         raise OwnerError('RUNTIME_PROBE_INSUFFICIENT')

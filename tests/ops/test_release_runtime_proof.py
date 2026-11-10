@@ -57,7 +57,7 @@ class RuntimeDeps(at.ApplyDeps):
     def release_update_fence(self, generation):
         self.fence_calls.append(generation)
 
-    def probe_runtime(self):
+    def probe_runtime(self, active=None):
         services = {}
         for sid, kind in self.desires.items():
             if kind == 'resident':
@@ -72,7 +72,7 @@ class RuntimeDeps(at.ApplyDeps):
     def loaded_source_expect(self, active):
         return self.loaded
 
-    def heartbeat_observations(self):
+    def heartbeat_observations(self, active=None):
         return list(self.heartbeats)
 
     def measure_source_manifest(self):
@@ -125,7 +125,7 @@ def test_applied_collects_proofs_and_reaches_candidate_ready(store):
 
 def test_resident_proof_requires_process_evidence(store):
     op_id, deps = _applied(store)
-    deps.probe_runtime = lambda: {
+    deps.probe_runtime = lambda active=None: {
         'boot_id': BOOT, 'loaded_source_sha256': LOADED,
         'services': {'svc-a': {'state': 'running', 'pid': 4321},
                      'svc-b': {'state': 'armed'},
@@ -141,8 +141,8 @@ def test_loaded_source_mismatch_holds(store):
     deps.loaded = '9' * 64  # expect側もprobe側も同じ値→一致してしまうのでprobeだけ変える
     orig = deps.probe_runtime
 
-    def bad_probe():
-        p = orig()
+    def bad_probe(active=None):
+        p = orig(active)
         p['loaded_source_sha256'] = '8' * 64
         return p
     deps.probe_runtime = bad_probe
@@ -237,8 +237,8 @@ def test_service_drift_at_verification_rejected(store):
     _advance_to(store, deps, 'ACTIVATING')
     orig = deps.probe_runtime
 
-    def drifted():
-        p = orig()
+    def drifted(active=None):
+        p = orig(active)
         p['services']['svc-a'] = {'state': 'stopped'}
         return p
     deps.probe_runtime = drifted
