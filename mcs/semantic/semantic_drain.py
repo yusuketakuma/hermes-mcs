@@ -118,6 +118,8 @@ from semantic_reprocess import (
     _reprocess_bookmark_sealed as _reprocess_bookmark_sealed,
     reprocess_step as reprocess_step,
     reprocess_job as reprocess_job,
+    _reprocess_execution_stale as _reprocess_execution_stale,
+    _reprocess_execution_unverifiable as _reprocess_execution_unverifiable,
     _REPROCESS_PROOF_CONTRACT as _REPROCESS_PROOF_CONTRACT,
     _REALTIME_ORDER as _REALTIME_ORDER,
     _REALTIME_KEY as _REALTIME_KEY,
@@ -232,12 +234,6 @@ _BACKLOG_INVALIDATE_S = 300.0
 # cursor, so a short slice each drain still advances it without letting one
 # pass consume the window the model jobs and the snapshot tail need.
 REPROCESS_STEP_BUDGET_S = 5.0
-# Single-job repair outcomes that route the row to the bounded held cursor
-# instead of the normal token/model path. Guard-owned statuses (not_stale,
-# paused, excluded, off, deadline) fall through to the existing guards.
-_REPAIR_HOLD = frozenset({
-    'unverified', 'held', 'intake_hold_unverified', 'invalid_source_epoch',
-    'source_changed', 'error'})
 # A backlog worker releases the run lock around every model/Jev call and
 # must retake it before persisting the result. The tick (run_check) can
 # hold that lock for its whole RUN_DEADLINE_S (480 s) after waiting
@@ -607,41 +603,80 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     break
                 if job is None:
                     continue
-            if job['kind'] == JOB_KIND and not repair_attempted:
+            if job['kind'] == JOB_KIND:
                 _repair_pl = runtime.parse_payload(job)
-                if (_repair_pl.get('execution_contract') == 1
-                        and _repair_pl.get('execution_generation') is not None
-                        and _repair_pl.get('execution_generation')
-                            != runtime.execution_generation(scfg)):
-                    repair_attempted = True
+                if (is_current(_repair_pl)
+                        and _reprocess_execution_stale(
+                            _repair_pl, runtime.execution_generation(scfg))):
+                    if repair_attempted:
+                        hold_job(job, mutation,
+                                 'semantic: execution_repair_deferred')
+                        continue
                     _fresh = ledger.db.execute(
                         'SELECT * FROM fetch_jobs WHERE job_id=?',
                         (job['job_id'],)).fetchone()
                     if (_fresh is None or _fresh['payload'] != job['payload']
                             or _fresh['state'] != job['state']):
-                        continue
-                    try:
-                        _repair = reprocess_job(ledger, cfg, dict(_fresh),
-                                                deadline=deadline)
-                    except Exception as _error:
-                        _repair = {'status': 'error'}
-                        result['errors'].append(
-                            f'semantic_reprocess_job: {type(_error).__name__}')
-                    if _repair.get('status') == 'repaired':
-                        job = ledger.db.execute(
-                            'SELECT * FROM fetch_jobs WHERE job_id=?',
-                            (job['job_id'],)).fetchone()
-                        if job is None:
+                        if _fresh is None:
                             continue
-                    elif _repair.get('status') in _REPAIR_HOLD:
-                        hold_job(job, mutation,
-                                 'semantic: execution_repair_'
-                                 + str(_repair.get('status')))
-                        continue
-                    # Other statuses fall through: the normal guards below
-                    # (paused / out-of-scope / stale) own those rows.
+                        job = _fresh
+                        _repair_pl = runtime.parse_payload(job)
+                        if (is_current(_repair_pl)
+                                and _reprocess_execution_stale(
+                                    _repair_pl,
+                                    runtime.execution_generation(scfg))):
+                            hold_job(job, mutation,
+                                     'semantic: execution_repair_deferred')
+                            continue
+                    else:
+                        try:
+                            _repair = reprocess_job(
+                                ledger, cfg, dict(_fresh), deadline=deadline,
+                                cfg_path=cfg_path)
+                        except Exception as _error:
+                            _repair = {'status': 'error'}
+                            result['errors'].append(
+                                f'semantic_reprocess_job: {type(_error).__name__}')
+                        _repair_status = _repair.get('status')
+                        # Only a committed adoption spends the one-root
+                        # repair slot; read-only evaluations (paused,
+                        # excluded, off, deadline, not_stale, rolled-back
+                        # outcomes) leave it for a later stale root.
+                        if _repair.get('adopted'):
+                            repair_attempted = True
+                        _repair_gen = _repair.get(
+                            'generation',
+                            runtime.execution_generation(scfg))
+                        if _repair_status in ('repaired', 'targets_current',
+                                              'not_stale'):
+                            job = ledger.db.execute(
+                                'SELECT * FROM fetch_jobs WHERE job_id=?',
+                                (job['job_id'],)).fetchone()
+                            if job is None:
+                                continue
+                            _repair_pl = runtime.parse_payload(job)
+                            if (is_current(_repair_pl)
+                                    and _reprocess_execution_stale(
+                                        _repair_pl, _repair_gen)):
+                                hold_job(job, mutation,
+                                         'semantic: execution_repair_'
+                                         + str(_repair_status))
+                                continue
+                        else:
+                            hold_job(job, mutation,
+                                     'semantic: execution_repair_'
+                                     + str(_repair_status))
+                            continue
             token = runtime.JobToken.from_row(job)
             payload = runtime.parse_payload(job)
+            if (job['kind'] == JOB_KIND and is_current(payload)
+                    and _reprocess_execution_unverifiable(payload)):
+                # contract=1 without a verifiable stored generation is
+                # unknown evidence: hold it on the bounded cursor instead
+                # of letting it burn attempts in the model path.
+                hold_job(job, mutation,
+                         'semantic: execution_contract_unverified')
+                continue
             limit = runtime.attempt_limit(payload)
             job_skip = None
             if runtime.circuit_open(ledger):

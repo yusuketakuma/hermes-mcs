@@ -847,9 +847,14 @@ def guard(ledger, token: JobToken, *, deadline: float,
     from mcs_queries import paused
     if paused(ledger.db, token.project_id):
         raise RuntimeOff(stage)
-    execution = parse_payload({'payload': token.payload_raw}).get('execution_generation')
-    if (execution is not None and expected_execution_generation is not None
-            and execution != expected_execution_generation):
+    payload_pl = parse_payload({'payload': token.payload_raw})
+    execution = payload_pl.get('execution_generation')
+    contract = payload_pl.get('execution_contract')
+    if ((execution is not None and expected_execution_generation is not None
+            and execution != expected_execution_generation)
+            or (type(contract) is int and contract == 1
+                and (expected_execution_generation is None
+                     or execution != expected_execution_generation))):
         raise RuntimeStale(stage + ':execution')
     scope = ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=?',
                               (token.project_id,)).fetchone()

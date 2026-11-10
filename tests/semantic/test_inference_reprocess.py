@@ -1409,8 +1409,9 @@ def test_reprocess_job_reply_only_targets_are_not_expanded(store):
     with store.db:
         store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
                          (json.dumps(pl), row['job_id']))
+    row = dict(_job(store, 1))
     report = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'),
-                                              dict(row), deadline=time.monotonic() + 60)
+                                              row, deadline=time.monotonic() + 60)
     assert report['status'] == 'repaired'
     after = json.loads(_job(store, 1)['payload'])
     assert after['targets'] == [2]
@@ -1495,9 +1496,15 @@ def test_drain_repairs_at_most_one_root_per_pass(store, monkeypatch):
     _wait_bulk(store)
     _stale_contract(store, 1)
     _stale_contract(store, 2)
+    held_before = tuple(_job(store, 2))
     processed = []
 
     def fake_process(ledger, scfg, job, *args, **kwargs):
+        pl = runtime.parse_payload(job)
+        assert not (pl.get('execution_contract') == 1
+                    and pl.get('execution_generation')
+                    != runtime.execution_generation(scfg)), \
+            'stale-execution job reached processing'
         processed.append(job['job_id'])
         assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
         return 'done'
@@ -1510,7 +1517,9 @@ def test_drain_repairs_at_most_one_root_per_pass(store, monkeypatch):
             for m in (1, 2)}
     assert sorted(gens.values()).count('f' * 64) == 1
     assert _current_execution() in gens.values()
-    assert len(processed) == 2
+    assert len(processed) == 1
+    assert 'semantic: execution_repair_deferred' in result['errors']
+    assert tuple(_job(store, 2)) == held_before
 
 
 def test_drain_holds_unverified_repair_candidate(store, monkeypatch):
@@ -1533,3 +1542,250 @@ def test_drain_holds_unverified_repair_candidate(store, monkeypatch):
     assert output.get('payload_hold_count') == 1
     assert 'semantic: execution_repair_unverified' in result['errors']
     assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64
+
+
+def test_drain_repairs_one_root_and_defers_nine_stale(store, monkeypatch):
+    """Ten stale-execution heads must not starve later current-generation
+    jobs: one repair per pass, the rest take the bounded held cursor."""
+    from semantic_testkit import _FakeJev
+    for mid in range(1, 13):
+        _save(store, mid)
+    _wait_bulk(store)
+    for mid in range(1, 11):
+        _stale_contract(store, mid)
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        pl = runtime.parse_payload(job)
+        assert not (pl.get('execution_contract') == 1
+                    and pl.get('execution_generation')
+                    != runtime.execution_generation(scfg)), \
+            'stale-execution job reached processing'
+        processed.append(job['job_id'])
+        assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    output = drain.run_due(store, _cfg(loop_mode='off'), result,
+                           time.monotonic() + 300, jev_client=_FakeJev(),
+                           llm_fn=lambda *a, **kw: None, max_jobs=12)
+    assert len(processed) == 3
+    assert output.get('payload_hold_count') == 9
+    gens = {m: json.loads(_job(store, m)['payload'])['execution_generation']
+            for m in range(1, 11)}
+    assert sorted(gens.values()).count('f' * 64) == 9
+    assert sorted(gens.values()).count(_current_execution()) == 1
+
+
+def test_drain_repairs_one_stale_root_per_pass_with_max_jobs_one(store, monkeypatch):
+    """max_jobs=1 across repeated passes repairs exactly one stale root each
+    pass and never lets a stale row reach processing."""
+    from semantic_testkit import _FakeJev
+    for mid in range(1, 4):
+        _save(store, mid)
+    _wait_bulk(store)
+    for mid in range(1, 4):
+        _stale_contract(store, mid)
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        pl = runtime.parse_payload(job)
+        assert not (pl.get('execution_contract') == 1
+                    and pl.get('execution_generation')
+                    != runtime.execution_generation(scfg)), \
+            'stale-execution job reached processing'
+        processed.append(job['job_id'])
+        assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    for _ in range(3):
+        result = {'errors': []}
+        drain.run_due(store, _cfg(loop_mode='off'), result,
+                      time.monotonic() + 300, jev_client=_FakeJev(),
+                      llm_fn=lambda *a, **kw: None, max_jobs=1)
+    assert len(processed) == 3
+    for mid in range(1, 4):
+        assert (json.loads(_job(store, mid)['payload'])
+                ['execution_generation'] == _current_execution())
+
+
+def test_reprocess_job_cfg_path_rereads_config_inside_transaction(store, monkeypatch):
+    """cfg_path is re-read inside the adoption transaction: a config flip
+    between the entry check and the write stops the seed."""
+    import mcs_util
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    calls = []
+
+    def fake_load(path):
+        calls.append(path)
+        if len(calls) == 1:
+            return _cfg(loop_mode='off')
+        return _cfg(mode='off')
+
+    monkeypatch.setattr(mcs_util, 'load_config', fake_load)
+    report = semantic_reprocess.reprocess_job(
+        store, _cfg(loop_mode='off'), row, deadline=time.monotonic() + 60,
+        cfg_path='/synthetic/config.json')
+    assert report['status'] == 'off'
+    assert len(calls) == 2
+    assert (json.loads(_job(store, 1)['payload'])
+            ['execution_generation'] == 'f' * 64)
+
+
+def test_reprocess_job_second_connection_write_fences_adoption(store, tmp_path):
+    """A committed write on a second connection between the pre-transaction
+    snapshot and lock acquisition must fence the adoption."""
+    import ledger as ledger_mod
+    import threading
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    locked = threading.Event()
+
+    def holder():
+        other = ledger_mod.Ledger(str(tmp_path / 'ledger.db'))
+        try:
+            other.db.execute('BEGIN IMMEDIATE')
+            other.db.execute(
+                "UPDATE fetch_jobs SET next_try=next_try+1 "
+                "WHERE kind='semantic_sched' AND project_id=0 AND message_id=0")
+            locked.set()
+            time.sleep(0.4)
+            other.db.commit()
+        finally:
+            other.close()
+
+    worker = threading.Thread(target=holder)
+    worker.start()
+    assert locked.wait(timeout=10)
+    report = semantic_reprocess.reprocess_job(
+        store, _cfg(loop_mode='off'), row, deadline=time.monotonic() + 60)
+    worker.join(timeout=30)
+    assert report['status'] == 'source_changed'
+    assert (json.loads(_job(store, 1)['payload'])
+            ['execution_generation'] == 'f' * 64)
+
+
+def test_reprocess_job_deadline_covers_lock_wait(store, tmp_path):
+    """BEGIN IMMEDIATE may wait behind another writer; the deadline is
+    re-checked after the lock is held so an expired wait never seeds."""
+    import ledger as ledger_mod
+    import threading
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    locked = threading.Event()
+
+    def holder():
+        other = ledger_mod.Ledger(str(tmp_path / 'ledger.db'))
+        try:
+            other.db.execute('BEGIN IMMEDIATE')
+            locked.set()
+            time.sleep(0.6)
+            other.db.commit()
+        finally:
+            other.close()
+
+    worker = threading.Thread(target=holder)
+    worker.start()
+    assert locked.wait(timeout=10)
+    report = semantic_reprocess.reprocess_job(
+        store, _cfg(loop_mode='off'), row, deadline=time.monotonic() + 0.3)
+    worker.join(timeout=30)
+    assert report['status'] == 'deadline'
+    assert (json.loads(_job(store, 1)['payload'])
+            ['execution_generation'] == 'f' * 64)
+
+
+def test_reprocess_job_deadline_mid_adoption_rolls_back(store, monkeypatch):
+    """A deadline expiring after the first adopt write must roll the whole
+    adoption back — never commit a partially re-seeded job."""
+    _save(store, 1)
+    _save(store, 2, parent=1)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    pl_before = row['payload']
+    base_changes = store.db.total_changes
+    real_monotonic = time.monotonic
+
+    def expire_after_first_write():
+        if store.db.total_changes > base_changes:
+            return real_monotonic() + 10000
+        return real_monotonic()
+
+    monkeypatch.setattr(time, 'monotonic', expire_after_first_write)
+    report = semantic_reprocess.reprocess_job(
+        store, _cfg(loop_mode='off'), row,
+        deadline=real_monotonic() + 60)
+    assert report['status'] == 'deadline'
+    after = _job(store, 1)
+    assert after['payload'] == pl_before
+    assert after['state'] == 'pending'
+
+
+@pytest.mark.parametrize('contract,generation', [
+    (True, 'f' * 64), (1.0, 'f' * 64), ('1', 'f' * 64),
+    (1, ['not-a-hash']), (1, 'not-a-hash'), (1, None), (1, 12345)])
+def test_reprocess_job_strict_contract_boundary(store, contract, generation):
+    """Only int contract 1 plus a well-formed stored generation is
+    auto-repaired; bool/float/string contracts and broken generations are
+    unknown evidence and must be kept untouched."""
+    _save(store)
+    _wait_bulk(store)
+    row = _job(store, 1)
+    pl = json.loads(row['payload'])
+    pl['execution_contract'] = contract
+    pl['execution_generation'] = generation
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                         (json.dumps(pl), row['job_id']))
+    fresh = dict(_job(store, 1))
+    report = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'),
+                                              fresh, deadline=time.monotonic() + 60)
+    assert report['status'] == 'not_stale'
+    after = json.loads(_job(store, 1)['payload'])
+    assert after['execution_contract'] == contract
+    assert after['execution_generation'] == generation
+
+
+@pytest.mark.parametrize('generation', [None, ['x'], 'not-a-hash', 12345])
+def test_drain_holds_unverifiable_execution_contract(store, monkeypatch,
+                                                     generation):
+    """contract=1 without a verifiable stored generation is unknown
+    evidence: the bounded held cursor keeps it away from the processor
+    and the row is left untouched."""
+    from semantic_testkit import _FakeJev
+    _save(store)
+    _wait_bulk(store)
+    row = _job(store, 1)
+    pl = json.loads(row['payload'])
+    pl['execution_contract'] = 1
+    if generation is None:
+        pl.pop('execution_generation', None)
+    else:
+        pl['execution_generation'] = generation
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                         (json.dumps(pl), row['job_id']))
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        processed.append(job['job_id'])
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    output = drain.run_due(store, _cfg(loop_mode='off'), result,
+                           time.monotonic() + 300, jev_client=_FakeJev(),
+                           llm_fn=lambda *a, **kw: None, max_jobs=4)
+    assert processed == []
+    assert output.get('payload_hold_count') == 1
+    assert json.loads(_job(store, 1)['payload']) == pl

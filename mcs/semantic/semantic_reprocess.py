@@ -101,9 +101,49 @@ def _reprocess_proof_time_valid(progress, now):
 
 
 def _reprocess_execution_stale(pl, generation):
-    """contract=1 payload bound to a different execution generation."""
-    return (isinstance(pl, dict) and pl.get('execution_contract') == 1
-            and pl.get('execution_generation') != generation)
+    """contract=1 payload bound to a different, well-formed execution generation.
+
+    Only int 1 (never True/1.0) and a stored generation that is itself a
+    valid hash qualify; anything else is unknown evidence and is kept,
+    never auto-repaired."""
+    if not isinstance(pl, dict):
+        return False
+    contract = pl.get('execution_contract')
+    stored = pl.get('execution_generation')
+    return (type(contract) is int and contract == 1
+            and mcs_util.valid_hash(stored) and stored != generation)
+
+
+def _reprocess_execution_unverifiable(pl):
+    """contract=1 payload whose stored generation is absent or malformed.
+
+    The contract marker asserts an execution binding but the evidence
+    needed to verify it is missing, so the row is unknown — held, never
+    processed and never auto-repaired."""
+    if not isinstance(pl, dict):
+        return False
+    return (type(pl.get('execution_contract')) is int
+            and pl.get('execution_contract') == 1
+            and not mcs_util.valid_hash(pl.get('execution_generation')))
+
+
+def _job_identity_same(token, current):
+    """Full fetch_jobs identity captured before adoption, mirroring
+    runtime.job_matches field coverage plus the raw payload."""
+    return (token.kind == current.kind
+            and token.project_id == current.project_id
+            and token.message_id == current.message_id
+            and token.state == current.state
+            and token.attempts == current.attempts
+            and token.payload_digest == current.payload_digest
+            and token.generation == current.generation
+            and token.source_generation == current.source_generation
+            and token.payload_raw == current.payload_raw)
+
+
+# Target states the bulk pass may replay; current/current_skipped and
+# every unlisted judgment are never re-seeded by repair.
+_REPAIR_REPLAY_STATES = frozenset({'pending', 'repair_required', 'held', 'failed'})
 
 
 def _reprocess_arrival_event(db, project_id, message_ids, state, pl):
@@ -467,19 +507,23 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     return {'status': progress['phase'], 'processed': len(planned), **progress}
 
 
-def reprocess_job(ledger, cfg, job, *, deadline=None):
+def reprocess_job(ledger, cfg, job, *, deadline=None, cfg_path=None):
     """Repair one stale-execution job through the shared reprocess contract.
 
     The drain calls this under the per-job lock before token, model or paid
     reservations. Only a pending contract=1 job whose stored execution
-    generation is certainly outdated is re-seeded — with exactly its stored
-    targets — through the same fenced adoption as the bulk pass. Every other
+    generation is certainly outdated is re-seeded — classified per target
+    through the same reprocess_target_state the bulk pass uses — through
+    the same fenced adoption. cfg_path, when given, is re-read inside the
+    adoption transaction so a mid-run config flip is honoured. Every other
     outcome returns a fixed status; the caller re-reads the fresh row.
     """
     if ledger.db.in_transaction:
         raise ValueError('inference_reprocess_transaction_active')
     if deadline is not None and time.monotonic() >= deadline:
         return {'status': 'deadline', 'complete': False}
+    if cfg_path is not None:
+        cfg = mcs_util.load_config(cfg_path)
     cfg = copy.deepcopy(cfg)
     scfg, errors = runtime_config(cfg)
     if errors or scfg['mode'] == 'off':
@@ -491,17 +535,17 @@ def reprocess_job(ledger, cfg, job, *, deadline=None):
         'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
         (_REPROCESS_JOB_MAX_BYTES + 1, job_id, JOB_KIND, pid, root)).fetchone()
     if row is None or row['state'] != 'pending':
-        return {'status': 'not_stale', 'complete': False}
+        return {'status': 'not_stale', 'complete': False, 'generation': generation}
     pl = semantic_store._reprocess_job_payload(ledger, row, pid, root)
     if pl is None:
-        return {'status': 'unverified', 'complete': False}
-    if (not is_current(pl) or not _reprocess_execution_stale(pl, generation)
-            or pl.get('execution_generation') is None):
-        return {'status': 'not_stale', 'complete': False}
+        return {'status': 'unverified', 'complete': False, 'generation': generation}
+    if not is_current(pl) or not _reprocess_execution_stale(pl, generation):
+        return {'status': 'not_stale', 'complete': False, 'generation': generation}
     targets = pl.get('targets')
     if (not isinstance(targets, list) or not targets
             or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
-        return {'status': 'unverified', 'complete': False}
+        return {'status': 'unverified', 'complete': False, 'generation': generation}
+    want = runtime.JobToken.from_row(job)
     import semantic_intake_hold
     from mcs_queries import paused
     original = _sched_state(ledger)
@@ -512,48 +556,103 @@ def reprocess_job(ledger, cfg, job, *, deadline=None):
         epochs['intake_hold_epoch'] = semantic_intake_hold.hold_epoch(ledger.db)
         epochs['intake_unstored_epoch'] = semantic_intake_hold.unstored_epoch(ledger.db)
     except sqlite3.Error:
-        return {'status': 'intake_hold_unverified', 'complete': False}
+        return {'status': 'intake_hold_unverified', 'complete': False,
+                'generation': generation}
     if any(original.get(field + '_invalid') or type(value) is not int
            or not 0 <= value < 2**63 for field, value in epochs.items()):
-        return {'status': 'invalid_source_epoch', 'complete': False}
+        return {'status': 'invalid_source_epoch', 'complete': False,
+                'generation': generation}
     version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
     changes = ledger.db.total_changes
     source_generation = ledger._semantic_source_generation(pid, root)
-    arrival = _reprocess_arrival_event(ledger.db, pid, targets, row['state'], pl)
-    snapshot = (row['payload'], row['state'], row['attempts'])
     if deadline is not None and time.monotonic() >= deadline:
-        return {'status': 'deadline', 'complete': False}
+        return {'status': 'deadline', 'complete': False, 'generation': generation}
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
+        if deadline is not None and time.monotonic() >= deadline:
+            return {'status': 'deadline', 'complete': False, 'generation': generation}
         try:
             sched, _ = _reservation_sched(ledger)
         except ValueError:
-            return {'status': 'invalid_source_epoch', 'complete': False}
+            return {'status': 'invalid_source_epoch', 'complete': False,
+                    'generation': generation}
         if not _reprocess_adoption_fences(ledger, sched,
                 old_progress=old_progress, epochs=epochs,
                 version=version, changes=changes):
-            return {'status': 'source_changed', 'complete': False, 'processed': 0}
+            return {'status': 'source_changed', 'complete': False,
+                    'processed': 0, 'generation': generation}
         current = ledger.db.execute(
-            'SELECT substr(payload,1,?) AS payload,state,attempts FROM fetch_jobs '
-            'WHERE job_id=?', (_REPROCESS_JOB_MAX_BYTES + 1, job_id)).fetchone()
+            'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone()
         if (current is None
-                or (current['payload'], current['state'], current['attempts'])
-                != snapshot):
-            return {'status': 'source_changed', 'complete': False, 'processed': 0}
-        if scfg['project_ids'] is not None and pid not in scfg['project_ids']:
-            return {'status': 'excluded', 'complete': False}
+                or not _job_identity_same(want, runtime.JobToken.from_row(current))):
+            return {'status': 'source_changed', 'complete': False,
+                    'processed': 0, 'generation': generation}
+        live_cfg, live_scfg, live_generation = cfg, scfg, generation
+        if cfg_path is not None:
+            live_cfg = mcs_util.load_config(cfg_path)
+            live_scfg, live_errors = runtime_config(live_cfg)
+            if live_errors or live_scfg['mode'] == 'off':
+                return {'status': 'off', 'complete': False,
+                        'generation': generation}
+            live_generation = runtime.execution_generation(live_scfg)
+            if pl.get('execution_generation') == live_generation:
+                return {'status': 'not_stale', 'complete': False,
+                        'generation': live_generation}
+        if (live_scfg['project_ids'] is not None
+                and pid not in live_scfg['project_ids']):
+            return {'status': 'excluded', 'complete': False,
+                    'generation': live_generation}
         patient = ledger.db.execute(
             'SELECT fetch_reason FROM patients WHERE project_id=?', (pid,)).fetchone()
         if patient is not None and patient['fetch_reason'] in (
                 'forbidden', 'permission_denied', 'access_revoked'):
-            return {'status': 'excluded', 'complete': False}
+            return {'status': 'excluded', 'complete': False,
+                    'generation': live_generation}
         if paused(ledger.db, pid):
-            return {'status': 'paused', 'complete': False}
+            return {'status': 'paused', 'complete': False,
+                    'generation': live_generation}
         if (semantic_intake_hold.has_unstored(ledger.db, pid)
                 or semantic_intake_hold.has_held_root(ledger.db, pid, root)):
-            return {'status': 'held', 'complete': False}
-        _reprocess_adopt(ledger, pid, targets, generation, arrival,
-                         source_generation)
+            return {'status': 'held', 'complete': False,
+                    'generation': live_generation}
+        extra = ({'deadline': deadline}
+                 if live_scfg['summary_mode'] == 'off'
+                 and live_scfg['loop_mode'] != 'off' else {})
+        replay = []
+        for mid in targets:
+            trow = ledger.db.execute(
+                'SELECT m.message_id,m.project_id,m.parent_id,m.body_state,'
+                'm.body_text,p.project_id AS patient_id,p.fetch_reason '
+                'FROM messages m LEFT JOIN patients p ON p.project_id=m.project_id '
+                'WHERE m.project_id=? AND m.message_id=?', (pid, mid)).fetchone()
+            if trow is None:
+                return {'status': 'unverified', 'complete': False,
+                        'generation': live_generation}
+            if deadline is not None and time.monotonic() >= deadline:
+                return {'status': 'deadline', 'complete': False,
+                        'generation': live_generation}
+            tstate = semantic_store.reprocess_target_state(
+                ledger, trow, live_scfg, cfg=live_cfg, **extra)
+            if tstate in _REPAIR_REPLAY_STATES:
+                replay.append(mid)
+        if not replay:
+            return {'status': 'targets_current', 'complete': False,
+                    'generation': live_generation}
+        if deadline is not None and time.monotonic() >= deadline:
+            return {'status': 'deadline', 'complete': False,
+                    'generation': live_generation}
+        for mid in replay:
+            if deadline is not None and time.monotonic() >= deadline:
+                # Adoption is all-or-nothing: a partial re-seed would leave
+                # the job bound to the live generation with mixed target
+                # freshness, so expire before committing any of it.
+                ledger.db.rollback()
+                return {'status': 'deadline', 'complete': False,
+                        'generation': live_generation}
+            arrival = _reprocess_arrival_event(ledger.db, pid, [mid],
+                                               'pending', pl)
+            _reprocess_adopt(ledger, pid, [mid], live_generation, arrival,
+                             source_generation)
         after = ledger.db.execute(
             'SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE job_id=?',
             (_REPROCESS_JOB_MAX_BYTES + 1, job_id)).fetchone()
@@ -561,12 +660,19 @@ def reprocess_job(ledger, cfg, job, *, deadline=None):
                     if after is not None else None)
         if (after is not None and after['state'] == 'pending'
                 and isinstance(pl_after, dict) and is_current(pl_after)
+                and type(pl_after.get('execution_contract')) is int
                 and pl_after.get('execution_contract') == 1
-                and pl_after.get('execution_generation') == generation):
-            return {'status': 'repaired', 'complete': False, 'processed': 1}
+                and pl_after.get('execution_generation') == live_generation):
+            return {'status': 'repaired', 'complete': False, 'processed': 1,
+                    'generation': live_generation, 'adopted': True}
         if semantic_intake_hold.has_held_root(ledger.db, pid, root):
-            return {'status': 'held', 'complete': False}
-        return {'status': 'unverified', 'complete': False}
+            # A legitimate intake-hold record written by semantic_seed_tx
+            # commits with this transaction per the existing seed contract.
+            return {'status': 'held', 'complete': False,
+                    'generation': live_generation, 'adopted': True}
+        ledger.db.rollback()
+        return {'status': 'unverified', 'complete': False,
+                'generation': live_generation}
 
 
 _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
