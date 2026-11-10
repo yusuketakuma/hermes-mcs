@@ -92,7 +92,6 @@ def capacity(updater, tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "recorded_install_args", lambda: [])
     monkeypatch.setattr(update_planning, 'recorded_install_args', updater.recorded_install_args)
     monkeypatch.setattr(update_preflight, 'recorded_install_args', updater.recorded_install_args)
-    monkeypatch.setattr(update_runtime_migration, 'recorded_install_args', updater.recorded_install_args)
     monkeypatch.setattr(updater, "upgrade_notes", lambda *a: [])
     monkeypatch.setattr(update_planning, 'upgrade_notes', updater.upgrade_notes)
     monkeypatch.setattr(updater, "_recovery_notes", lambda *a: [])
