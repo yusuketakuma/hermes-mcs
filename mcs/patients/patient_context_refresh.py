@@ -313,8 +313,16 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     return {'input_key': key, 'catchup': catchup, 'needed': bool(facts) and not same or quality}
 
 
+_WAIT_COUNTER_KEYS = (
+    'wait_no_eligible_sources', 'wait_no_due_lane', 'wait_generation_quota',
+    'wait_readiness_unverified', 'wait_dependency_incomplete',
+)
+
+
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None):
     """Advance a bounded scan before evaluating each patient's current evidence."""
+    if observed_out is not None:
+        observed_out.update(dict.fromkeys(_WAIT_COUNTER_KEYS, 0))
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
     scan_reads, scan_interrupts = 0, 0
@@ -353,6 +361,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
                 keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
                 if not keys and whole['sources']:
+                    if observed_out is not None:
+                        observed_out['wait_no_eligible_sources'] += 1
                     waiting += 1
                     continue
                 source_keys = list(keys) if keys else None
@@ -387,6 +397,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                             and not any(context_plan.source_usable(source) for source in candidate['sources'])):
                         due['A'] = False
                     if not any(due[lane] for lane in lanes):
+                        if observed_out is not None:
+                            observed_out['wait_no_due_lane'] += 1
                         waiting += int(candidate['unfinished'])
                         continue
                     if 'A' in lanes and due['A']:
@@ -398,6 +410,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                             generation, quota = None, {'allowed': False}
                         candidate['_generation_plan'] = generation
                         if not quota['allowed']:
+                            if observed_out is not None:
+                                observed_out['wait_generation_quota'] += 1
                             due['A'] = False
                             waiting += 1
                             if not any(due[lane] for lane in lanes):
@@ -413,7 +427,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     candidate['_readiness_proof'] = proof
                     patient_context_refresh_sources._scan_check(reader.db)
                     if not candidate['dependencies']['complete']:
+                        if observed_out is not None:
+                            observed_out['wait_dependency_incomplete'] += 1
                         due['A'] = False
+                    if not ready and observed_out is not None:
+                        observed_out['wait_readiness_unverified'] += 1
                     waiting += int(candidate['unfinished'] or not ready)
                     if ready:
                         best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
@@ -522,6 +540,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
+        stats.update({key: scan_observed[key] for key in _WAIT_COUNTER_KEYS if key in scan_observed})
         if scan_observed.get('scan_refusal') is not None:
             stats['scan_refusal'] = scan_observed['scan_refusal']
         if scan_rotation is None:

@@ -380,3 +380,49 @@ def test_select_scan_refusal_absent_on_finite_completion(runtime, monkeypatch):
     result = step(runtime)
     assert result['status'] == 'deferred'
     assert result['scan_interrupts'] == 0 and 'scan_refusal' not in result
+
+
+def test_wait_counter_records_no_eligible_source_without_pending_read(runtime, monkeypatch):
+    led, _, calls = runtime
+    seed(led, mid=1, pid=1)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_eligible_source_keys', lambda *a, **k: ())
+    result = step(runtime)
+    assert result['wait_no_eligible_sources'] == result['scanned'] == 1
+    assert result['scan_reads'] == 0 and not calls
+    assert result['wait_no_due_lane'] == result['wait_readiness_unverified'] == 0
+
+
+@pytest.mark.parametrize('refusal', ['no_due_lane', 'readiness_unverified', 'dependency_incomplete'])
+def test_wait_counters_follow_existing_branches_and_can_overlap(runtime, monkeypatch, refusal):
+    led, _, calls = runtime
+    seed(led, mid=1, pid=1)
+    original = patient_context_refresh_readiness._pending
+
+    def pending(*args, **kwargs):
+        snapshot, progress, _ = original(*args, **kwargs)
+        snapshot['unfinished'] = True
+        if refusal == 'dependency_incomplete':
+            snapshot['dependencies']['complete'] = False
+        return snapshot, progress, {'A': False, 'B': refusal != 'no_due_lane', 'C': False}
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness',
+                        lambda *a, **k: (False, None, None))
+    result = step(runtime)
+    assert result['status'] == 'deferred' and not calls
+    assert result['wait_' + refusal] == 1
+    assert result['wait_no_eligible_sources'] == result['wait_generation_quota'] == 0
+    if refusal == 'dependency_incomplete':
+        assert result['wait_readiness_unverified'] == 1
+        assert result['waiting'] == 1  # Branch hits overlap; they are not a partition.
+
+
+def test_wait_counter_records_generation_quota_without_inference(runtime, monkeypatch):
+    led, _, calls = runtime
+    seed(led, body='', proof=False)
+    monkeypatch.setattr(refresh, '_generation_plan', lambda *a, **k: {
+        'needed': True, 'input_key': 'a' * 64, 'catchup': False})
+    monkeypatch.setattr(refresh.context_quota, 'inspect', lambda *a, **k: {'allowed': False})
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['wait_generation_quota'] == 1
+    assert result['wait_readiness_unverified'] == 0 and not calls

@@ -190,3 +190,17 @@ def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, r
     assert not posts and not document(ledger)
     assert not ledger.artifacts("cloud_usage_reserve") and not ledger.artifacts("cloud_usage_result")
     assert "synthetic-prior-generation" not in json.dumps(events)
+
+
+@pytest.mark.parametrize('key,limit', [
+    ('wait_no_eligible_sources', 8), ('wait_no_due_lane', 16),
+    ('wait_generation_quota', 8), ('wait_readiness_unverified', 16),
+    ('wait_dependency_incomplete', 16),
+])
+def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
+    for valid in (0, limit):
+        assert cloud_backlog._context_pass_observation({'status': 'deferred', key: valid})[key] == valid
+    for invalid in (True, False, -1, limit + 1, 1.0, '合成の非公開値', None, [], {}):
+        assert key not in cloud_backlog._context_pass_observation({'status': 'deferred', key: invalid})
+    assert 'wait_unregistered' not in cloud_backlog._context_pass_observation({
+        'status': 'deferred', 'wait_unregistered': 1})
