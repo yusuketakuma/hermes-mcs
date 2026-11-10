@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "重複リスクの承認不足を固定コードで表示",
+  "summary": "通知復旧で重複リスクの承認が不足している場合に、一般的な例外名ではなく専用の固定エラーコードを表示します。承認不足による拒否と、自由文を出力しない制約は維持します。",
+  "upgrade": "追加操作は不要です。復旧操作の人承認条件、配送状態、再送権限は変わりません。",
+  "details": [
+    "notify_recoveryが返す固定リテラルduplicate_risk_acknowledgement_requiredをsafe_error_codeの許可表へ明示登録する。動的な例外文や未登録の値を表示する条件は追加しない。"
+  ],
+  "refs": [
+    "mcs/core/error_codes.py",
+    "mcs/notify/notify_recovery.py",
+    "tests/views/test_card_part_cli.py"
+  ]
+}

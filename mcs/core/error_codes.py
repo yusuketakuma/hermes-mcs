@@ -3,7 +3,8 @@
 Contains every code-shaped string literal that runtime code raises as the
 sole complete ``ValueError`` message (directly or via the ``_err``
 helper), extracted by AST so concatenation prefixes and dynamic
-messages are excluded. ``safe_error_code`` echoes a message only on an
+messages are excluded. Audited fixed validation-return codes are also
+registered explicitly. ``safe_error_code`` echoes a message only on an
 exact match; anything else collapses to the exception type name so user
 text, paths, SQL and secrets can never reach logs or CLI output. Non-code
 literal messages (sentences, non-ASCII text) stay unregistered and return
@@ -143,6 +144,7 @@ KNOWN_ERROR_CODES = frozenset({
     "unsafe_data_path", "unsafe_spec_path", "unsupported_event", "unsupported_transport", "until_invalid", "until_needs_offset", "update_busy", "update_in_progress",
     "update_journal_unverified", "update_lock_missing", "wait_fn_invalid", "wait_s_invalid", "watchdog_grace_config_invalid", "witness_columns", "witness_inconsistent", "witness_limit",
     "witness_params", "witness_row", "witness_sql", "witness_value", "worker_not_stopped", "worker_reason_invalid", "worker_status_path_invalid", "worker_stop_unverified",
+    "duplicate_risk_acknowledgement_required",
     "tracking_ack_observation_incomplete",
     "tracking_ack_receipt_unverified",
     "worker_transport_invalid",
