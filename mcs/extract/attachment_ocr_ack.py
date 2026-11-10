@@ -186,7 +186,7 @@ def build_plan(db, artifact_ids):
     return {'version': 1, 'action': ACTION, 'database_identity': database_identity(db), 'targets': targets}
 
 
-def failure_counts(db, *, deadline=None):
+def failure_counts(db, *, cfg=None, deadline=None):
     """Observe one bounded failure cohort and verify its receipts on a borrowed snapshot."""
     if not db.in_transaction:
         raise ValueError('ocr_ack_snapshot_required')
@@ -194,6 +194,10 @@ def failure_counts(db, *, deadline=None):
               'failure_reason_counts': {}, 'exhausted_failed': 0,
               'acknowledged_exhausted': 0, 'unacknowledged_pending_failed': 0,
               'failure_cohort': payload_hash([])}
+    policy = attachment_ocr.rejection_policy(cfg)
+    if policy:
+        counts.update(policy_binding=policy, policy_rejected_exhausted=0, policy_rejected_unacknowledged=0)
+    verified = True
     if deadline is not None and time.monotonic() >= deadline:
         return counts
     observed = db.execute("SELECT attachment_id FROM attachments WHERE state='downloaded' "
@@ -204,6 +208,8 @@ def failure_counts(db, *, deadline=None):
             break
         source = attachment_ocr._source(db, item[0])
         prior = attachment_ocr._latest(db, source) if source is not None else None
+        if prior is not None and not attachment_ocr._matching(prior, source):
+            verified = False
         if source is not None and attachment_ocr._matching(prior, source) and prior['state'] in ('failed', 'unavailable'):
             counts['pending_failed'] += 1
             reason = prior.get('reason')
@@ -221,11 +227,21 @@ def failure_counts(db, *, deadline=None):
                             counts['acknowledged_exhausted'] += 1
                             accepted = True
                     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
-                        pass  # Unverified proof is never an acknowledged failure.
-            cohort.append([prior['artifact_id'], payload_hash(prior), proof, accepted])
+                        if policy:
+                            verified = False
+            item = [prior['artifact_id'], payload_hash(prior), proof, accepted]
+            if policy:
+                rejection = attachment_ocr.rejected_failure(db, source['attachment_id'], source['project_id'], cfg=cfg)
+                if rejection is not None:
+                    counts['policy_rejected_exhausted'] += 1
+                    counts['policy_rejected_unacknowledged'] += int(not accepted)
+                elif reason == 'output_schema_table_overlap' and prior.get('attempts') == 3:
+                    verified = False
+                item.append(rejection)
+            cohort.append(item)
         checked += 1
     counts['unacknowledged_pending_failed'] = counts['pending_failed'] - counts['acknowledged_exhausted']
     counts['failure_cohort'] = payload_hash(cohort)
-    if checked == len(observed) and (deadline is None or time.monotonic() < deadline):
+    if verified and checked == len(observed) and (deadline is None or time.monotonic() < deadline):
         counts['queue_status'] = 'known'
     return counts

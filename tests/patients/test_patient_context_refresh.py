@@ -683,14 +683,14 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
         assert step(runtime)['status'] == 'failed'
     assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
     before = document(led, patient_context_refresh_state.PROGRESS)
-    clock.wall = before['last_attempt'] + 86400 - 1
+    clock.wall = before['failure_at'] + 86400 - 1
     assert step(runtime)['status'] == 'deferred'
     assert document(led, patient_context_refresh_state.PROGRESS)['attempts'] == 5
     clock.wall += 1
     assert step(runtime)['status'] == 'failed'
     after = document(led, patient_context_refresh_state.PROGRESS)
     assert after['attempts'] == 6 and after['next_try'] == clock.wall + 86400
-    assert after['last_attempt'] == clock.wall
+    assert after['failure_at'] == after['last_attempt'] == clock.wall
     assert step(runtime)['status'] == 'deferred'
     # New semantic checks still start a fresh retry generation; the same input gets daily retries.
     monkeypatch.setattr(patient_context_refresh_state, '_CHECKS', 'synthetic-changed-checks')
@@ -1479,7 +1479,7 @@ def test_initial_context_unit_can_start_at_any_hour(runtime, at):
 @pytest.mark.parametrize('field', ['held', '_quality_held'])
 def test_daily_retry_never_releases_protected_holds(field):
     progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'next_try': 1000, 'last_attempt': 1000, field: True}
+                'failure': 'nightly_timeout', 'next_try': 1000, 'failure_at': 1000, field: True}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 10 * 86400)
 
 
@@ -1495,9 +1495,18 @@ def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
 
 
 @pytest.mark.parametrize('field,value', [('attempts', True), ('next_try', float('nan')),
-    ('next_try', float('inf')), ('next_try', True), ('last_attempt', float('inf')),
-    ('last_attempt', True), ('last_attempt', '1000'), ('last_attempt', 10**1000)])
+    ('next_try', float('inf')), ('next_try', True), ('failure_at', float('inf')),
+    ('failure_at', True), ('failure_at', '1000'), ('failure_at', 10**1000)])
 def test_daily_retry_keeps_unverified_dates_and_counters_waiting(field, value):
     progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'next_try': 1000, 'last_attempt': 1000, field: value}
+                'failure': 'nightly_timeout', 'next_try': 1000, 'failure_at': 1000, field: value}
     assert not patient_context_refresh_readiness._ready(progress, 1e9)
+
+
+def test_other_lanes_cannot_postpone_an_exhausted_summary_daily_retry():
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+                'failure': 'nightly_timeout', 'failure_at': 1000,
+                'next_try': 1000 + 86400, 'last_attempt': 1000 + 86399}
+    assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
+    progress['last_attempt'] += 86400
+    assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)

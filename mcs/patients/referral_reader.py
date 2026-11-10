@@ -19,6 +19,7 @@ def project(snapshot):
     coverage = {**snapshot['coverage'], 'documents': 0}
     result = {'view': 'referral_timeline', 'project_id': snapshot['project_id'],
               'documents': [], 'events': [], 'coverage': coverage}
+    result['excluded_documents'] = snapshot.get('excluded_documents', [])
     for entry in snapshot['documents']:
         document, sources = entry['document'], entry['sources']
         projected = referral_document.project(document['pages'])

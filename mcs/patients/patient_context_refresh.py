@@ -1382,7 +1382,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             attempts = prior.get("attempts", 0) + 1 if failure else 0
             retry = {"failure": failure, "held": failure in ("nightly_unsplittable_assertion", "nightly_original_unit_unverified"),
                      "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
-                     "last_attempt": now,
+                     "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
             progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
                         "night_id": night_id,

@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 from pathlib import Path
 import signal
 import stat
@@ -17,7 +18,7 @@ from ocr_model_contract import ENGINE_VERSION, MODELS, RUNTIME_CONTRACT
 import writer_lock
 import patient_priority
 from safe_io import atomic_write, read_json_nofollow
-from mcs_util import ProviderSettingsUnreadable, load_config, valid_hash
+from mcs_util import ProviderSettingsUnreadable, load_config, valid_hash, strict_json
 from patient_read_scope import patient_scope_valid
 from worker_process import reap_worker
 
@@ -29,7 +30,7 @@ MAX_PAGES = 30
 MAX_TABLE_ENTRIES = 10000
 FAILURE_RETRY_S = 86400
 _STATES = {"complete", "empty", "failed", "unavailable", "unsupported"}
-EXCLUDED_STATES = frozenset({"unsupported"})
+EXCLUDED_STATES = frozenset({"unsupported", "rejected_by_policy"})
 
 # Optional packages are imported only in the separate, network-denied runtime.
 _BOOTSTRAP = f'MODELS = {MODELS!r}\nENGINE_VERSION = {ENGINE_VERSION!r}\n' + r'''
@@ -134,10 +135,12 @@ with open(output, "xb") as stream:
 def config_error(cfg):
     """Return a fixed reason for an invalid optional OCR configuration."""
     value = cfg.get("attachment_ocr", {}) if isinstance(cfg, dict) else None
-    if not isinstance(value, dict) or set(value) - {"enabled", "executable", "timeout_seconds"}:
+    if not isinstance(value, dict) or set(value) - {"enabled", "executable", "timeout_seconds", "reject_uncertain"}:
         return "attachment_ocr_config"
     if type(value.get("enabled", False)) is not bool:
         return "attachment_ocr_enabled"
+    if type(value.get("reject_uncertain", False)) is not bool:
+        return "attachment_ocr_reject_uncertain"
     executable = value.get("executable", "")
     if (not isinstance(executable, str) or "\x00" in executable
             or executable and not os.path.isabs(executable)
@@ -197,11 +200,11 @@ def _latest(db, source):
     if row is None:
         return None
     try:
-        value = json.loads(row["content"])
-    except (ValueError, TypeError):
-        return None
+        value = strict_json(row["content"])
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        value = None
     if not isinstance(value, dict):
-        return None
+        return {"artifact_id": row["artifact_id"], "_invalid": True}
     return {**value, "artifact_id": row["artifact_id"], "project_id": row["project_id"],
             "message_id": row["message_id"], "_recorded_at": row["created_at"]}
 
@@ -251,7 +254,53 @@ def current(db, attachment_id, project_id=None):
     return {**doc, "original_available": source["state"] == "downloaded"}
 
 
-def view(db, attachment_id, project_id=None, include_text=False):
+
+def rejection_policy(cfg):
+    """Identify an explicit reversible exclusion policy, independently of OCR retries."""
+    if (not isinstance(cfg, dict) or config_error(cfg)
+            or cfg.get("attachment_ocr", {}).get("enabled") is not True
+            or cfg["attachment_ocr"].get("reject_uncertain") is not True):
+        return None
+    return _hash("ocr-reject-table-overlap/v1/" + RUNTIME_CONTRACT)
+
+
+def rejected_failure(db, attachment_id, project_id=None, *, cfg=None):
+    """Observe a source-proven structural rejection without editing its failed artifact."""
+    policy = rejection_policy(cfg)
+    if policy is None:
+        return None
+    import attachment_ocr_ack
+    from mcs_contract import project_url
+    db.execute("SAVEPOINT ocr_rejection_read")
+    try:
+        source = _source(db, attachment_id, project_id)
+        prior = _latest(db, source) if source is not None else None
+        if (source is None or source["state"] != "downloaded" or not _matching(prior, source)
+                or prior["state"] != "failed" or prior.get("reason") != "output_schema_table_overlap"
+                or type(prior.get("attempts")) is not int or prior["attempts"] != 3
+                or not valid_hash(prior.get("input_occurrence"))
+                or prior["input_occurrence"] != _source_occurrence(db, source)):
+            return None
+        row = db.execute("SELECT CASE WHEN length(meta)<=32768 THEN meta END FROM artifacts "
+                         "WHERE artifact_id=?", (prior["artifact_id"],)).fetchone()
+        meta = strict_json(row[0]) if row else None
+        if not isinstance(meta, dict) or meta.get("input_occurrence") != prior["input_occurrence"]:
+            return None
+        proof = attachment_ocr_ack.target(db, prior["artifact_id"])
+        return {"state": "rejected_by_policy", "page_count": 0,
+                "artifact_id": prior["artifact_id"], "attachment_id": attachment_id,
+                "parent_message_id": source["message_id"], "project_id": source["project_id"],
+                "reason": "output_schema_table_overlap", "policy_binding": policy,
+                "proof": proof["proof"], "original_project_url": project_url(source["project_id"]),
+                "source_coverage": "unrecovered", "clinical_review": "not_proven",
+                "original_file_availability": "not_rechecked"}
+    except (ValueError, TypeError, KeyError, sqlite3.Error, OSError, RecursionError, OverflowError):
+        return None
+    finally:
+        db.execute("RELEASE ocr_rejection_read")
+
+
+def view(db, attachment_id, project_id=None, include_text=False, *, cfg=None):
     """Expose status without attachment text outside an explicit detail read."""
     source = _source(db, attachment_id, project_id)
     if source is None or source["state"] not in ("downloaded", "pruned"):
@@ -265,6 +314,9 @@ def view(db, attachment_id, project_id=None, include_text=False):
             result["pages"] = doc["pages"]
             result["medical"] = medical_document.extract(doc["pages"])
         return result
+    rejection = rejected_failure(db, attachment_id, project_id, cfg=cfg)
+    if rejection is not None:
+        return rejection
     prior = _latest(db, source)
     if source['state'] == 'pruned':
         return {'state': 'unavailable', 'page_count': 0, 'original_available': False}
@@ -509,7 +561,7 @@ def _data_root(ledger):
     return Path(path).resolve().parent
 
 
-def _due(doc, source):
+def _due(doc, source, *, retry_failed_before=None):
     if not _matching(doc, source):
         return True
     if doc["state"] in ("complete", "empty"):
@@ -521,6 +573,15 @@ def _due(doc, source):
             or type(next_try) not in (int, float) or next_try < 0
             or type(next_try) is float and not math.isfinite(next_try)):
         return False
+    if retry_failed_before is not None:
+        recorded_at = doc.get("_recorded_at")
+        if (type(retry_failed_before) not in (int, float) or retry_failed_before < 0
+                or type(retry_failed_before) is float and not math.isfinite(retry_failed_before)
+                or type(recorded_at) not in (int, float) or recorded_at < 0
+                or type(recorded_at) is float and not math.isfinite(recorded_at)):
+            return False
+        if recorded_at < retry_failed_before:
+            return True
     if attempts == 3:
         recorded_at = doc.get("_recorded_at")
         if (type(recorded_at) not in (int, float) or recorded_at < 0
@@ -539,7 +600,8 @@ def _settings_current(settings):
     return (not config_error(live) and current.get('enabled') is True
             and settings.get('enabled') is True
             and current.get('executable') == settings.get('executable')
-            and current.get('timeout_seconds', 120) == settings.get('timeout_seconds', 120))
+            and current.get('timeout_seconds', 120) == settings.get('timeout_seconds', 120)
+            and current.get('reject_uncertain', False) is settings.get('reject_uncertain', False))
 
 
 _RUNTIME_REASONS = frozenset({
@@ -551,7 +613,7 @@ _RUNTIME_REASONS = frozenset({
 FAILURE_REASONS = _RUNTIME_REASONS | {"timeout", "local_processing_failed"}
 
 
-def _settle(ledger, source, doc, root, generation, settings, deadline=None):
+def _settle(ledger, source, doc, root, generation, settings, deadline=None, *, retry_failed_before=None):
     while True:
         if (deadline is not None and deadline - time.monotonic() <= 1
                 or writer_lock.updater_state() != generation or generation[0]
@@ -581,7 +643,8 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None):
                         or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
                         or doc.get("input_occurrence") is not None
                         and doc["input_occurrence"] != _source_occurrence(ledger.db, latest)
-                        or not _due(_latest(ledger.db, latest), latest)):
+                        or not _due(_latest(ledger.db, latest), latest, **({"retry_failed_before": retry_failed_before}
+                            if retry_failed_before is not None else {}))):
                     return False
                 dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
                 ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
@@ -598,7 +661,7 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None):
             os.close(fd)
 
 
-def run_pending(ledger, cfg, *, deadline=None, limit=1):
+def run_pending(ledger, cfg, *, deadline=None, limit=1, retry_failed_before=None):
     """Run bounded local attachment text extraction without holding the shared writer lock."""
     counts = {"complete": 0, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0}
     if config_error(cfg):
@@ -662,7 +725,8 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
             if source is None:
                 continue
             prior = _latest(ledger.db, source)
-            if not _due(prior, source):
+            if not _due(prior, source, **({"retry_failed_before": retry_failed_before}
+                    if retry_failed_before is not None else {})):
                 continue
             occurrence = _source_occurrence(ledger.db, source)
             if "downloaded_at" in source and source["downloaded_at"] is not None and occurrence is None:
@@ -703,7 +767,8 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
             except (OSError, ValueError, ImportError) as error:
                 reason = (str(error) if isinstance(error, ValueError) and str(error) in _RUNTIME_REASONS
                           else "local_processing_failed")
-            attempts = prior.get("attempts", 0) if _matching(prior, source) else 0
+            attempts = (prior.get("attempts", 0) if _matching(prior, source)
+                        and (occurrence is None or prior.get("input_occurrence") == occurrence) else 0)
             attempts = min(attempts + 1, 3) if type(attempts) is int and 0 <= attempts <= 3 else 1
             methods = {page["engine"] for page in pages}
             doc = {"schema": SCHEMA, "attachment_id": source["attachment_id"], "input_sha256": source["sha256"],
@@ -711,9 +776,11 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
                    "method": "mixed" if len(methods) > 1 else next(iter(methods), None),
                    "runtime_contract": RUNTIME_CONTRACT, "state": state, "pages": pages,
                    "text_hash": _hash(json.dumps(pages, ensure_ascii=False, sort_keys=True)),
+                   **({"retry_requested_before": retry_failed_before} if retry_failed_before is not None else {}),
                    "attempts": attempts, "next_try": time.time() + (FAILURE_RETRY_S if attempts == 3 else 3600),
                    "reason": reason}
-            if _settle(ledger, source, doc, root, generation, settings, deadline=deadline):
+            if _settle(ledger, source, doc, root, generation, settings, deadline=deadline,
+                       **({"retry_failed_before": retry_failed_before} if retry_failed_before is not None else {})):
                 counts[state] += 1
             else:
                 counts["deferred"] += 1
@@ -722,7 +789,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1):
         import attachment_ocr_ack
         ledger.db.execute('BEGIN')
         try:
-            counts.update(attachment_ocr_ack.failure_counts(ledger.db, deadline=deadline))
+            counts.update(attachment_ocr_ack.failure_counts(ledger.db, cfg=cfg, deadline=deadline))
         finally:
             ledger.db.rollback()
         return counts

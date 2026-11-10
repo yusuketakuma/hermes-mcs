@@ -1027,3 +1027,34 @@ def test_daily_retry_rejects_unverified_record_time(setup, monkeypatch, recorded
            "state": "failed", "attempts": 3, "next_try": 0, "_recorded_at": recorded_at}
     monkeypatch.setattr(ocr.time, "time", lambda: 1e9)
     assert not ocr._due(doc, source)
+
+
+def test_explicit_retry_cutoff_reprocesses_failed_attachment_once_without_overwriting_history(setup, monkeypatch):
+    ledger, cfg, _, _, _ = setup
+    clock, calls = [1000], []
+    monkeypatch.setattr(ocr.time, 'time', lambda: clock[0])
+    def fail(*args):
+        calls.append(clock[0])
+        raise ValueError('output_schema_table_overlap')
+    monkeypatch.setattr(ocr, '_runtime', fail)
+    assert ocr.run_pending(ledger, cfg)['failed'] == 1
+    before = ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall()
+    clock[0] = 1100
+    assert ocr.run_pending(ledger, cfg)['failed'] == 0
+    for _ in range(3):
+        result = ocr.run_pending(ledger, cfg, retry_failed_before=1100)
+        if result['failed']:
+            break
+    assert result['failed'] == 1 and len(calls) == 2
+    for _ in range(3):
+        assert ocr.run_pending(ledger, cfg, retry_failed_before=1100)['failed'] == 0
+    assert len(calls) == 2
+    assert ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall()[:-1] == before
+
+
+def test_explicit_retry_never_reopens_a_successful_result(setup):
+    ledger, cfg, _, calls, _ = setup
+    assert ocr.run_pending(ledger, cfg)['complete'] == 1
+    for _ in range(3):
+        assert ocr.run_pending(ledger, cfg, retry_failed_before=10**1000)['complete'] == 0
+    assert len(calls) == 1

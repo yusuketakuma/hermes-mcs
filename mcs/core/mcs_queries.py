@@ -1339,6 +1339,9 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
         result.update(complete=False, mode="invalid")
     elif cfg.get("attachment_ocr", {}).get("enabled") is True:
         result["mode"] = "on"
+    policy = attachment_ocr.rejection_policy(cfg)
+    if policy:
+        result.update(policy_binding=policy, policy_rejected=0, clinical_review="not_proven")
     identities = []
     if result["mode"] == "on" and table_exists(db, "attachments"):
         import attachment_extraction
@@ -1352,11 +1355,15 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
                 (pid, mid) if mid is not None else (pid, json.dumps(message_ids)) if message_ids is not None else (pid,)):
             result["total"] += 1
             document = attachment_ocr.current(db, row["attachment_id"], project_id=pid)
-            state = attachment_ocr.view(db, row["attachment_id"], project_id=pid)["state"]
+            status = attachment_ocr.view(db, row["attachment_id"], project_id=pid, cfg=cfg)
+            state = status["state"]
             identity = [row["attachment_id"], "retained" if row["state"] in ("downloaded", "pruned") else row["state"],
                         row["sha256"], row["bytes"], row["downloaded_at"], state]
             if state in attachment_ocr.EXCLUDED_STATES:
                 result["excluded"] += 1
+                if state == "rejected_by_policy":
+                    result["policy_rejected"] += 1
+                    identity.extend([status["artifact_id"], status["proof"], policy])
             else:
                 result["eligible"] += 1
                 if document is None:

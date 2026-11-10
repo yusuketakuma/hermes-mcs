@@ -564,8 +564,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     if reflap:
         seen = set(episode_reasons)
     acknowledged_ocr_only = (obs['status'] == 'degraded'
-        and obs.get('state_reasons') == ['attachment_ocr_acknowledged_gap']
-        and ocr_detail.get('reason') == 'attachment_ocr_acknowledged_gap'
+        and ocr_detail.get('reason') in ('attachment_ocr_acknowledged_gap', 'attachment_ocr_policy_excluded')
+        and obs.get('state_reasons') == [ocr_detail['reason']]
         and ocr_detail.get('alert_required') is False)
     alert = not acknowledged_ocr_only and obs["status"] != "ok" and (
         (transition and not reflap) or realert or new_reason)
@@ -738,6 +738,8 @@ _BACKUP_FAILURE_JA = {
 _REASON_JA = {
     'attachment_ocr_acknowledged_gap': ('過去のOCR警報は受付済みですが、本文は未回収です',
         '原本の確認状況は未確認です。必要な情報は元の添付で確認してください'),
+    'attachment_ocr_policy_excluded': ('表構造を検証できない添付を設定に従ってOCR採用対象から除外しています',
+        '原本内容は未評価です。元の投稿から確認してください。日次の再処理は継続します'),
     'attachment_ocr_ack_unverified': ('OCR警報の受付記録を現在の原資料と照合できません',
         '次回の処理後も続く場合は診断結果と照会コードを開発元へ連絡してください'),
 

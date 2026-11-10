@@ -658,7 +658,8 @@ def timeline(ev, categories=None, *, documents=None, pumps=None, care=None) -> d
               "coverage": ev.get("coverage")}
     if documents is not None:
         result.update(document_events=_document_events(documents["events"], "referral_event"),
-                      referral_documents=documents["documents"], document_coverage=documents["coverage"])
+                      referral_documents=documents["documents"], document_coverage=documents["coverage"],
+                      document_exclusions=documents.get("excluded_documents", []))
     if pumps is not None:
         result.update(pump_events=_document_events(pumps["events"], "pump_measurement"),
                       pump_coverage=pumps["coverage"])

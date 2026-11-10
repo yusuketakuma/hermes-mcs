@@ -325,3 +325,15 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     assert len(opened) == len(drained) == int(outcome == "ready")
     assert closed == ([102, "ledger", 101] if outcome == "ready" else
                       [102, 101] if outcome in ("updated", "deadline") else [101])
+
+
+def test_cli_explicit_retry_errors_reaches_only_the_bounded_job(tmp_path, monkeypatch, capsys):
+    calls = []
+    def run(cfg, *, retry_errors=False):
+        calls.append((cfg, retry_errors))
+        return {'reason': 'disabled'}
+    monkeypatch.setattr(mcs_ocr, 'DATA', str(tmp_path))
+    monkeypatch.setattr(mcs_ocr, 'run', run)
+    monkeypatch.setattr(mcs_ocr.sys, 'argv', ['mcs_ocr', '--run', '--retry-errors'])
+    assert mcs_ocr.main() == 0 and calls == [(None, True)]
+    assert 'disabled' in capsys.readouterr().out

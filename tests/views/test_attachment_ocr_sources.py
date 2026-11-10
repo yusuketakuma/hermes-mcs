@@ -47,7 +47,7 @@ def ocr_reader(monkeypatch):
                     "project_id": 1, "pages": pages, "state": "complete"}
         return None
 
-    def view(db, attachment_id, project_id=None, include_text=False):
+    def view(db, attachment_id, project_id=None, include_text=False, *, cfg=None):
         doc = current(db, attachment_id, project_id)
         return ({"state": "unprocessed", "page_count": 0} if doc is None else
                 {"state": doc["state"], "page_count": len(pages), "artifact_id": 7,

@@ -11,10 +11,11 @@ SCAN_LIMIT = 64
 READ_SECONDS = 1.0
 
 
-def _cursor(value):
+def _cursor(value, policy=None):
     if value is None:
         return 'after', None
-    if (not isinstance(value, dict) or set(value) != {'direction', 'attachment_id', 'page'}
+    if (not isinstance(value, dict) or set(value) != ({'direction', 'attachment_id', 'page'} | ({'policy_binding'} if policy else set()))
+            or policy is not None and value.get('policy_binding') != policy
             or value['direction'] not in ('after', 'before')
             or not positive(value['attachment_id']) or value['attachment_id'] >= 2**63
             or type(value['page']) is not int or not 0 <= value['page'] <= attachment_ocr.MAX_PAGES):
@@ -22,15 +23,18 @@ def _cursor(value):
     return value['direction'], (value['attachment_id'], value['page'])
 
 
-def _pin(direction, position):
-    return {'direction': direction, 'attachment_id': position[0], 'page': position[1]}
+def _pin(direction, position, policy=None):
+    return {'direction': direction, 'attachment_id': position[0], 'page': position[1], **({'policy_binding': policy} if policy else {})}
 
 
 def _read(db, pid, mids, cfg, cursor, limit):
-    direction, boundary = _cursor(cursor)
+    policy = attachment_ocr.rejection_policy(cfg)
+    direction, boundary = _cursor(cursor, policy)
     result = {'sources': [], 'prev_cursor': None, 'next_cursor': None,
               'scanned': 0, 'pending': 0, 'excluded': 0, 'limited': False,
-              'state': 'unknown', 'range_complete': False}
+              'state': 'unknown', 'range_complete': False, 'excluded_documents': []}
+    if policy:
+        result.update(policy_binding=policy, policy_rejected=0, clinical_review='not_proven')
     if (attachment_ocr.config_error(cfg)
             or not cfg.get('attachment_ocr', {}).get('enabled', False)
             or not patient_scope_valid(db, pid)):
@@ -59,6 +63,7 @@ def _read(db, pid, mids, cfg, cursor, limit):
     deadline = time.monotonic() + READ_SECONDS
     result['state'] = 'observed'
     selected, first_seen, last_seen, more = [], None, None, False
+    displayed = []
 
     def exhausted():
         return (result['scanned'] >= SCAN_LIMIT
@@ -72,8 +77,21 @@ def _read(db, pid, mids, cfg, cursor, limit):
         document = attachment_ocr.current(db, aid, project_id=pid)
         if document is None or not document['pages']:
             position = (aid, attachment_ocr.MAX_PAGES if ascending else 0)
+            status = attachment_ocr.view(db, aid, project_id=pid, cfg=cfg)
+            state = status['state']
+            if state == 'rejected_by_policy':
+                position = (aid, attachment_ocr.MAX_PAGES)
+                if boundary is not None and (position <= boundary if ascending else position >= boundary):
+                    result['scanned'] += 1
+                    first_seen, last_seen = first_seen or position, position
+                    continue
+                if len(selected) + len(result['excluded_documents']) == limit:
+                    more = True
+                    break
+                result['excluded_documents'].append(status)
+                result['policy_rejected'] += 1
+                displayed.append(position)
             result['scanned'] += 1
-            state = attachment_ocr.view(db, aid, project_id=pid)['state']
             result['excluded' if state in attachment_ocr.EXCLUDED_STATES else 'pending'] += 1
             first_seen, last_seen = first_seen or position, position
             continue
@@ -98,24 +116,25 @@ def _read(db, pid, mids, cfg, cursor, limit):
                 source = attachment_extraction.source(db, pid, key, cfg=cfg)
                 if source is None:
                     result['pending'] += 1
-                elif len(selected) == limit:
+                elif len(selected) + len(result['excluded_documents']) == limit:
                     more = True
                     break  # The lookahead remains beyond the next token's displayed boundary.
                 else:
                     selected.append(source)
+                    displayed.append(position)
             first_seen, last_seen = first_seen or position, position
         if more:
             break
     sources = selected if ascending else list(reversed(selected))
     result['sources'] = sources
-    first = ((sources[0]['attachment_id'], sources[0]['page']) if sources
-             else (first_seen if ascending else last_seen) or boundary)
-    last = ((sources[-1]['attachment_id'], sources[-1]['page']) if sources
-            else (last_seen if ascending else first_seen) or boundary)
+    if not ascending:
+        result['excluded_documents'].reverse()
+    first = min(displayed) if displayed else (first_seen if ascending else last_seen) or boundary
+    last = max(displayed) if displayed else (last_seen if ascending else first_seen) or boundary
     if first and (boundary is not None if ascending else more):
-        result['prev_cursor'] = _pin('before', first)
+        result['prev_cursor'] = _pin('before', first, policy)
     if last and (more if ascending else boundary is not None):
-        result['next_cursor'] = _pin('after', last)
+        result['next_cursor'] = _pin('after', last, policy)
     result['range_complete'] = not (more or result['pending'] or result['limited'])
     return result
 

@@ -414,6 +414,9 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
         block["text"] += "\n📎 文字起こし " + " · ".join(
             f"{_ocr_label(record)} {len(record['pages'])}ページ {_ocr_analysis_label(record, legacy=legacy_ocr)}" if record["pages"]
             else _ocr_label(record) for record in records)
+        rejected = next((record['rejection'] for record in records if record.get('rejection')), None)
+        if rejected:
+            block['text'] += "\nOCR除外資料の原本: " + rejected['original_project_url']
     return block
 
 
@@ -430,7 +433,7 @@ def attachment_ocr_records(db, mid):
             "WHERE a.message_id=? AND m.body_state IS NOT 'deleted' ORDER BY a.attachment_id", (mid,)):
         doc = attachment_ocr.current(db, row["attachment_id"], project_id=row["project_id"])
         status = (doc if doc else attachment_ocr.view(
-            db, row["attachment_id"], project_id=row["project_id"]))
+            db, row["attachment_id"], project_id=row["project_id"], cfg=cfg))
         if status["state"] in ("unprocessed", "unavailable") and not status.get("artifact_id"):
             continue
         analysis = []
@@ -444,13 +447,14 @@ def attachment_ocr_records(db, mid):
         records.append({"attachment_id": row["attachment_id"], "name": row["name"],
                         "state": status["state"], "artifact_id": status.get("artifact_id"),
                         "text_hash": status.get("text_hash"), "pages": doc["pages"] if doc else [],
-                        'analysis': analysis})
+                        'analysis': analysis, **({'rejection': status} if status['state'] == 'rejected_by_policy' else {})})
     return records
 
 
 def _ocr_label(record):
     labels = {"complete": "完了", "empty": "文字なし", "failed": "失敗",
-              "unsupported": "対象外", "unavailable": "利用不可", "processing": "処理中"}
+              "unsupported": "対象外", "unavailable": "利用不可", "processing": "処理中",
+              "rejected_by_policy": "設定によりOCR対象外・表構造不整合・原本未評価"}
     return labels.get(record["state"], "処理待ち")
 
 
@@ -481,13 +485,16 @@ def original_post_text(db, mid, message):
     for record in records:
         name = inline_text(record["name"] or "添付ファイル", 120)
         sections.append(f"{name} · {_ocr_label(record)} {_ocr_analysis_label(record)}".rstrip())
+        if record.get("rejection"):
+            sections.append("原本の投稿: " + record["rejection"]["original_project_url"])
         for page in record["pages"]:
             sections.extend([f"{page['page']}ページ", page["text"]])
     return "\n".join(sections)
 
 
 def _ocr_generations(db, mids):
-    return {mid: [(r["attachment_id"], r["name"], r["artifact_id"], r["text_hash"], r["state"], r['analysis'])
+    return {mid: [(r["attachment_id"], r["name"], r["artifact_id"], r["text_hash"], r["state"], r['analysis'],
+                  *([r['rejection']] if r.get('rejection') else []))
                   for r in records]
             for mid in mids if (records := attachment_ocr_records(db, mid))}
 

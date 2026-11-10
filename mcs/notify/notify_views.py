@@ -834,6 +834,11 @@ def attachment_report_view(db, project_id, message_ids, *, cursor=None, cfg=None
             'text': where + '\n原文（先頭300字）: ' + quote[:300] + ('…' if len(quote) > 300 else '')})
         if report_refs is not None:
             report_refs.append(ref)
+    for excluded in result.get('excluded_documents', []):
+        view['items'].append({'project_id': project_id, 'text':
+            f"親投稿 #{excluded['parent_message_id']} · 添付 #{excluded['attachment_id']}\n"
+            "表構造を検証できず、設定によりOCR採用対象から除外。原本内容は未評価です。\n"
+            + '原本の投稿: ' + excluded['original_project_url']})
     view['notes'] = ['該当ページの「誤りを報告」から、見落しを含む解析の訂正を依頼できます。原文・元画像は変更しません。']
     if result['limited'] or result['pending']:
         view['notes'].append(f"点検未完了・今回の確認範囲に未解析 {result['pending']}件"
@@ -1415,6 +1420,9 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                           f"未解析 {document_coverage.get('pending', 0)}件"
                           + ("（表示上限あり）" if document_coverage.get("limited") else "")
                           + ("・点検未完了" if not document_coverage.get("complete") else ""))
+    if document_coverage and document_coverage.get("policy_rejected"):
+        status.append(f"設定によるOCR除外 {document_coverage['policy_rejected']}件・原本内容は未評価。"
+                      + "原本の投稿: " + project_url(project_id))
     pump_coverage = view.get("pump_coverage") or {}
     if pump_coverage.get("documents"):
         status.append(f"PCA: {pump_coverage['documents']}資料・記載値は未確認"

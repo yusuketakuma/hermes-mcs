@@ -28,7 +28,7 @@ LOCAL_CALL_S = 300
 _RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
 
 
-def _drain(ledger, cfg, generation, deadline, *, live_config):
+def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_before=None):
     import attachment_inference
 
     result = {'local_done': 0, 'local_deferred': 0}
@@ -75,7 +75,8 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
                     local_blocked |= local['deferred'] > 0
                 else:
                     with writer_lock.capture_writer_refusal() as diagnostic:
-                        raw = attachment_ocr.run_pending(ledger, cfg, limit=1, deadline=deadline - 5)
+                        raw = attachment_ocr.run_pending(ledger, cfg, limit=1, deadline=deadline - 5,
+                            **({"retry_failed_before": retry_failed_before} if retry_failed_before is not None else {}))
                     for key, value in raw.items():
                         if key == 'reason' and value is None and result.get('reason') is not None:
                             continue
@@ -98,8 +99,11 @@ def _drain(ledger, cfg, generation, deadline, *, live_config):
     return result
 
 
-def run(cfg=None):
+def run(cfg=None, *, retry_errors=False):
     """Drain saved OCR and local pages independently under a single bounded job lock."""
+    if type(retry_errors) is not bool:
+        raise ValueError("ocr_retry_errors_invalid")
+    retry_failed_before = time.time() if retry_errors else None
     live_config = cfg is None
     try:
         cfg = load_config() if live_config else cfg
@@ -140,7 +144,8 @@ def run(cfg=None):
             ledger = Ledger(DB)
         finally:
             os.close(fd)
-        result = _drain(ledger, cfg, generation, work_deadline, live_config=live_config)
+        result = _drain(ledger, cfg, generation, work_deadline, live_config=live_config,
+                        **({"retry_failed_before": retry_failed_before} if retry_failed_before is not None else {}))
         if result.get('reason') != 'config_invalid' and (
                 result.get('complete', 0) or result.get('empty', 0) or result['local_done']):
             now = time.monotonic()
@@ -182,9 +187,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", required=True,
                         help="設定で有効にした添付OCRと保存済みページの解析を期限内で進める")
-    parser.parse_args()
+    parser.add_argument("--retry-errors", action="store_true",
+                        help="開始時点より古いOCR失敗を、この実行内で各添付1回だけ待機時間を省いて再処理する")
+    args = parser.parse_args()
     try:
-        result = run(None)
+        result = run(None, retry_errors=True) if args.retry_errors else run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
     if result != {"reason": "busy"} and Path(DATA).is_dir():

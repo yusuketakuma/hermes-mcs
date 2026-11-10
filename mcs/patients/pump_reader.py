@@ -8,6 +8,7 @@ def project(snapshot):
     coverage = {**snapshot['coverage'], 'documents': 0}
     result = {'view': 'pump_timeline', 'project_id': snapshot['project_id'],
               'events': [], 'coverage': coverage}
+    result['excluded_documents'] = snapshot.get('excluded_documents', [])
     for entry in snapshot['documents']:
         if not entry['ready']:
             continue
