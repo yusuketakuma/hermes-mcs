@@ -95,6 +95,11 @@ def test_file_identity_inode_boundaries_and_nested_semantics():
         contract.parse_typed(json.dumps(dict(fx, device='1\n')).encode(), 'FileIdentity')
     parse('1', wrap=True)
     parse('18446744073709551615', wrap=True)
+    # UInt64Decimalを直接definition指定した入口(root)でも同一検査を通る（r17/r19）
+    assert contract.parse_typed(b'"1"', 'UInt64Decimal') == '1'
+    for bad in ('0\n', '1\n', ' 1', '1 ', '1\t', '00', '-1'):
+        with pytest.raises(contract.ContractError):
+            contract.parse_typed(json.dumps(bad).encode(), 'UInt64Decimal')
 
 
 def test_hash_v3_domain_separated():

@@ -99,14 +99,14 @@ def _match_node(d, v):
         return True
     if d is False:
         return False
+    # UInt64Decimalは末尾改行等を含まない厳密な10進数字列のみ受理する
+    # (re.searchの$は末尾LF直前にも一致するため、def実体の同一性でroot/$ref双方を閉じる)。
+    if d is DEFS.get('UInt64Decimal') and (type(v) is not str or re.fullmatch(r'[0-9]+', v) is None):
+        return False
     ref = d.get('$ref')
     if ref is not None:
         name = ref.rsplit('/', 1)[-1]
         _check(name in DEFS)
-        # UInt64Decimalは末尾改行等を含まない厳密な10進数字列のみ受理する
-        # (re.searchの$は末尾LF直前にも一致するため、型契約の共通経路で閉じる)。
-        if name == 'UInt64Decimal' and (type(v) is not str or re.fullmatch(r'[0-9]+', v) is None):
-            return False
         return _match_node(DEFS[name], v)
     for key, want in (('allOf', all), ('anyOf', any)):
         if isinstance(d.get(key), list) and not want(_match_node(x, v) for x in d[key]):
