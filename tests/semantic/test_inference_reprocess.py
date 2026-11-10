@@ -1297,3 +1297,239 @@ def test_old_waiting_classification_is_rechecked_without_reopening_existing_atte
     assert rechecked['seed_cursor'] == old['seed_cursor'] and not rechecked['complete']
     assert dict(_job(store)) == before_job and _job(store, 2) is None
     assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')] == before_outbox
+
+
+def _current_execution():
+    scfg, errors = semantic_policy.runtime_config(_cfg(loop_mode='off'))
+    assert not errors
+    return runtime.execution_generation(scfg)
+
+
+def _stale_contract(store, mid=1, pid=1, **extra):
+    """Turn the auto-seeded job into a pending contract=1 row bound to a
+    foreign execution generation."""
+    row = _job(store, mid, pid)
+    assert row is not None
+    pl = json.loads(row['payload'])
+    pl['execution_contract'] = 1
+    pl['execution_generation'] = 'f' * 64
+    pl.update(extra)
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                         (json.dumps(pl, ensure_ascii=False, sort_keys=True),
+                          row['job_id']))
+    return row['job_id']
+
+
+def _wait_bulk(store):
+    report = {}
+    for _ in range(6):
+        report = _replay(store)
+        if report.get('phase') in ('waiting', 'complete'):
+            break
+    assert report.get('phase') in ('waiting', 'complete')
+    return report
+
+
+def _sched_progress(store):
+    return drain._sched_state(store).get('inference_reprocess')
+
+
+def test_drain_repairs_stale_execution_head_and_reaches_lookahead(store, monkeypatch):
+    from semantic_testkit import _FakeJev
+    for mid in range(1, 13):
+        _save(store, mid)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        pl = runtime.parse_payload(job)
+        if (pl.get('execution_contract') == 1
+                and pl.get('execution_generation')
+                != runtime.execution_generation(scfg)):
+            return 'stale'
+        processed.append(job['job_id'])
+        assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    drain.run_due(store, _cfg(loop_mode='off'), result, time.monotonic() + 300,
+                  jev_client=_FakeJev(), llm_fn=lambda *a, **kw: None,
+                  max_jobs=12)
+    assert len(processed) == 12
+    repaired = json.loads(_job(store, 1)['payload'])
+    assert _job(store, 1)['state'] == 'done'
+    assert repaired['execution_generation'] == _current_execution()
+    assert repaired['execution_contract'] == 1
+
+
+def test_reprocess_job_repairs_once_and_preserves_scope_and_provenance(store):
+    _save(store)
+    _wait_bulk(store)
+    job_id = _stale_contract(store, 1, manual_attempt_limit=3, eligible=True)
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET attempts=3 WHERE job_id=?',
+                         (job_id,))
+    row = store.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?',
+                           (job_id,)).fetchone()
+    before_outbox = [tuple(r) for r in store.db.execute('SELECT * FROM notify_outbox')]
+    before_artifacts = store.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0]
+    cursor_before = _sched_progress(store)
+    report = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'),
+                                              dict(row), deadline=time.monotonic() + 60)
+    assert report['status'] == 'repaired' and report['processed'] == 1
+    after = _job(store, 1)
+    pl = json.loads(after['payload'])
+    assert after['state'] == 'pending' and after['attempts'] == 0
+    assert pl['execution_generation'] == _current_execution()
+    assert pl['execution_contract'] == 1 and pl['reprocess_only'] is True
+    assert pl['targets'] == [1] and pl['source_generation']
+    assert 'manual_attempt_limit' not in pl
+    assert _sched_progress(store) == cursor_before
+    assert [tuple(r) for r in store.db.execute('SELECT * FROM notify_outbox')] == before_outbox
+    assert store.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0] == before_artifacts
+    # A second call sees the new generation: same-ID new-generation is not stale.
+    again = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'),
+                                             dict(after), deadline=time.monotonic() + 60)
+    assert again['status'] == 'not_stale'
+    assert json.loads(_job(store, 1)['payload']) == pl
+
+
+def test_reprocess_job_reply_only_targets_are_not_expanded(store):
+    _save(store, 1)
+    _save(store, 2, parent=1)
+    _wait_bulk(store)
+    row = _job(store, 1)
+    pl = json.loads(row['payload'])
+    pl['targets'] = [2]
+    pl['execution_contract'] = 1
+    pl['execution_generation'] = 'f' * 64
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                         (json.dumps(pl), row['job_id']))
+    report = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'),
+                                              dict(row), deadline=time.monotonic() + 60)
+    assert report['status'] == 'repaired'
+    after = json.loads(_job(store, 1)['payload'])
+    assert after['targets'] == [2]
+
+
+def test_reprocess_job_out_of_scope_permission_and_held(store):
+    import semantic_intake_hold as hold
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    scoped = semantic_reprocess.reprocess_job(
+        store, _cfg(loop_mode='off', project_ids=[2]), row,
+        deadline=time.monotonic() + 60)
+    assert scoped['status'] == 'excluded'
+    store.db.execute('UPDATE patients SET fetch_reason=? WHERE project_id=1',
+                     ('forbidden',))
+    store.db.commit()
+    denied = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row,
+                                              deadline=time.monotonic() + 60)
+    assert denied['status'] == 'excluded'
+    store.db.execute('UPDATE patients SET fetch_reason=NULL WHERE project_id=1')
+    store.db.commit()
+    with store.db:
+        hold.hold_tx(store, 1, 1, [1],
+                     {'source': 'history_import', 'notification_free': True},
+                     source_generation=store._semantic_source_generation(1, 1))
+    held = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row,
+                                            deadline=time.monotonic() + 60)
+    assert held['status'] == 'held'
+    assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64
+
+
+def test_reprocess_job_paused_unverified_and_guards(store, monkeypatch):
+    _save(store)
+    _save(store, 2)
+    _wait_bulk(store)
+    _stale_contract(store, 1, targets=[999])
+    _stale_contract(store, 2)
+    row = dict(_job(store, 1))
+    bad = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row,
+                                           deadline=time.monotonic() + 60)
+    assert bad['status'] == 'unverified'
+    assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64
+    row2 = dict(_job(store, 2))
+    store.artifact_add('semantic_control', 'paused', project_id=1)
+    paused = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row2,
+                                              deadline=time.monotonic() + 60)
+    assert paused['status'] == 'paused'
+    off = semantic_reprocess.reprocess_job(store, _cfg(mode='off'), row2,
+                                           deadline=time.monotonic() + 60)
+    assert off['status'] == 'off'
+    late = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row2,
+                                            deadline=time.monotonic() - 1)
+    assert late['status'] == 'deadline'
+
+
+def test_reprocess_job_source_changed_when_job_mutates_under_fence(store, monkeypatch):
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    row = dict(_job(store, 1))
+    real = semantic_reprocess._reservation_sched
+
+    def tamper(ledger):
+        sched, entries = real(ledger)
+        ledger.db.execute('UPDATE fetch_jobs SET attempts=attempts+1 WHERE job_id=?',
+                          (row['job_id'],))
+        return sched, entries
+
+    monkeypatch.setattr(semantic_reprocess, '_reservation_sched', tamper)
+    report = semantic_reprocess.reprocess_job(store, _cfg(loop_mode='off'), row,
+                                              deadline=time.monotonic() + 60)
+    assert report['status'] == 'source_changed'
+    assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64
+
+
+def test_drain_repairs_at_most_one_root_per_pass(store, monkeypatch):
+    from semantic_testkit import _FakeJev
+    _save(store, 1)
+    _save(store, 2)
+    _wait_bulk(store)
+    _stale_contract(store, 1)
+    _stale_contract(store, 2)
+    processed = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        processed.append(job['job_id'])
+        assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    drain.run_due(store, _cfg(loop_mode='off'), result, time.monotonic() + 300,
+                  jev_client=_FakeJev(), llm_fn=lambda *a, **kw: None, max_jobs=4)
+    gens = {m: json.loads(_job(store, m)['payload'])['execution_generation']
+            for m in (1, 2)}
+    assert sorted(gens.values()).count('f' * 64) == 1
+    assert _current_execution() in gens.values()
+    assert len(processed) == 2
+
+
+def test_drain_holds_unverified_repair_candidate(store, monkeypatch):
+    from semantic_testkit import _FakeJev
+    _save(store)
+    _wait_bulk(store)
+    _stale_contract(store, 1, targets=[999])
+    calls = []
+
+    def fake_process(ledger, scfg, job, *args, **kwargs):
+        calls.append(job['job_id'])
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', fake_process)
+    result = {'errors': []}
+    output = drain.run_due(store, _cfg(loop_mode='off'), result,
+                           time.monotonic() + 300, jev_client=_FakeJev(),
+                           llm_fn=lambda *a, **kw: None, max_jobs=4)
+    assert calls == []
+    assert output.get('payload_hold_count') == 1
+    assert 'semantic: execution_repair_unverified' in result['errors']
+    assert json.loads(_job(store, 1)['payload'])['execution_generation'] == 'f' * 64

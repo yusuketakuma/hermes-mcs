@@ -100,6 +100,46 @@ def _reprocess_proof_time_valid(progress, now):
             and (until is None or type(until) in (int, float) and math.isfinite(until) and now < until < 1e12))
 
 
+def _reprocess_execution_stale(pl, generation):
+    """contract=1 payload bound to a different execution generation."""
+    return (isinstance(pl, dict) and pl.get('execution_contract') == 1
+            and pl.get('execution_generation') != generation)
+
+
+def _reprocess_arrival_event(db, project_id, message_ids, state, pl):
+    """Live arrival provenance to preserve when re-seeding a pending job."""
+    if (state == 'pending' and isinstance(pl, dict) and pl.get('eligible')
+            and not pl.get('notification_free')):
+        return semantic_notice.origin_event_id(db, project_id, message_ids)
+    return None
+
+
+def _reprocess_seed_origin(generation, arrival):
+    return {'source': 'inference_reprocess', 'notification_free': True,
+            'inference_generation': generation, 'arrival_event_id': arrival}
+
+
+def _reprocess_adopt(ledger, project_id, message_ids, generation, arrival,
+                     source_generation):
+    """Single adoption path shared by the bulk pass and one-job repair."""
+    ledger.semantic_seed_tx(project_id, message_ids,
+                            _reprocess_seed_origin(generation, arrival),
+                            _source_generation=source_generation)
+
+
+def _reprocess_adoption_fences(ledger, sched, *, old_progress, epochs,
+                               version, changes):
+    """Writer fence shared by bulk and single-job reprocess adoption."""
+    import semantic_intake_hold
+    return (sched.get('inference_reprocess') == old_progress
+            and all(sched.get(field, 0) == epochs[field]
+                    for field in ('source_epoch', 'analysis_epoch', 'job_state_epoch'))
+            and semantic_intake_hold.hold_epoch(ledger.db) == epochs['intake_hold_epoch']
+            and semantic_intake_hold.unstored_epoch(ledger.db) == epochs['intake_unstored_epoch']
+            and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
+            and ledger.db.total_changes == changes)
+
+
 def _reprocess_bookmark_sealed(ledger, old_progress, epochs, version, changes, cfg, scfg, generation):
     """Recheck a cached observation under the same writer fence without rewriting it."""
     import semantic_intake_hold
@@ -388,28 +428,22 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             if key not in sources:
                 sources[key] = ledger._semantic_source_generation(*key)
             if (not is_current(pl)
-                    or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
+                    or _reprocess_execution_stale(pl, generation)
                     or pl.get('source_generation') != sources[key]
                     or not isinstance(pl.get('targets'), list) or row['message_id'] not in pl['targets']):
-                arrival = (semantic_notice.origin_event_id(ledger.db, row['project_id'], [row['message_id']])
-                           if old is not None and old['state'] == 'pending' and pl.get('eligible')
-                           and not pl.get('notification_free') else None)
+                arrival = _reprocess_arrival_event(
+                    ledger.db, row['project_id'], [row['message_id']],
+                    old['state'] if old is not None else None, pl)
                 replay = (sources[key], arrival)
         planned.append((row, state, replay))
     with _sched_update(ledger) as sched:
-        if (sched.get('inference_reprocess') != old_progress
-                or any(sched.get(field, 0) != epochs[field] for field in fields)
-                or semantic_intake_hold.hold_epoch(ledger.db) != epochs['intake_hold_epoch']
-                or semantic_intake_hold.unstored_epoch(ledger.db) != epochs['intake_unstored_epoch']
-                or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
-                or ledger.db.total_changes != changes):
+        if not _reprocess_adoption_fences(ledger, sched, old_progress=old_progress,
+                                          epochs=epochs, version=version, changes=changes):
             return {'status': 'source_changed', 'complete': False, 'processed': 0}
         for row, state, replay in planned:
             if replay is not None:
-                ledger.semantic_seed_tx(row['project_id'], [row['message_id']],
-                    {'source': 'inference_reprocess', 'notification_free': True,
-                     'inference_generation': generation, 'arrival_event_id': replay[1]},
-                    _source_generation=replay[0])
+                _reprocess_adopt(ledger, row['project_id'], [row['message_id']],
+                                 generation, replay[1], replay[0])
             progress['counts'][state] = progress['counts'].get(state, 0) + 1
             progress['cursor'] = row['message_id']
             if progress['phase'] == 'seed':
@@ -431,6 +465,108 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         progress['remaining_stages'] = ['patient_context', 'rollup', 'karte']
         sched['inference_reprocess'] = progress
     return {'status': progress['phase'], 'processed': len(planned), **progress}
+
+
+def reprocess_job(ledger, cfg, job, *, deadline=None):
+    """Repair one stale-execution job through the shared reprocess contract.
+
+    The drain calls this under the per-job lock before token, model or paid
+    reservations. Only a pending contract=1 job whose stored execution
+    generation is certainly outdated is re-seeded — with exactly its stored
+    targets — through the same fenced adoption as the bulk pass. Every other
+    outcome returns a fixed status; the caller re-reads the fresh row.
+    """
+    if ledger.db.in_transaction:
+        raise ValueError('inference_reprocess_transaction_active')
+    if deadline is not None and time.monotonic() >= deadline:
+        return {'status': 'deadline', 'complete': False}
+    cfg = copy.deepcopy(cfg)
+    scfg, errors = runtime_config(cfg)
+    if errors or scfg['mode'] == 'off':
+        return {'status': 'off', 'complete': False}
+    generation = runtime.execution_generation(scfg)
+    pid, root, job_id = job['project_id'], job['message_id'], job['job_id']
+    row = ledger.db.execute(
+        'SELECT substr(payload,1,?) AS payload,state,attempts FROM fetch_jobs '
+        'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
+        (_REPROCESS_JOB_MAX_BYTES + 1, job_id, JOB_KIND, pid, root)).fetchone()
+    if row is None or row['state'] != 'pending':
+        return {'status': 'not_stale', 'complete': False}
+    pl = semantic_store._reprocess_job_payload(ledger, row, pid, root)
+    if pl is None:
+        return {'status': 'unverified', 'complete': False}
+    if (not is_current(pl) or not _reprocess_execution_stale(pl, generation)
+            or pl.get('execution_generation') is None):
+        return {'status': 'not_stale', 'complete': False}
+    targets = pl.get('targets')
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
+        return {'status': 'unverified', 'complete': False}
+    import semantic_intake_hold
+    from mcs_queries import paused
+    original = _sched_state(ledger)
+    old_progress = original.get('inference_reprocess')
+    epochs = {field: original.get(field, 0)
+              for field in ('source_epoch', 'analysis_epoch', 'job_state_epoch')}
+    try:
+        epochs['intake_hold_epoch'] = semantic_intake_hold.hold_epoch(ledger.db)
+        epochs['intake_unstored_epoch'] = semantic_intake_hold.unstored_epoch(ledger.db)
+    except sqlite3.Error:
+        return {'status': 'intake_hold_unverified', 'complete': False}
+    if any(original.get(field + '_invalid') or type(value) is not int
+           or not 0 <= value < 2**63 for field, value in epochs.items()):
+        return {'status': 'invalid_source_epoch', 'complete': False}
+    version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
+    changes = ledger.db.total_changes
+    source_generation = ledger._semantic_source_generation(pid, root)
+    arrival = _reprocess_arrival_event(ledger.db, pid, targets, row['state'], pl)
+    snapshot = (row['payload'], row['state'], row['attempts'])
+    if deadline is not None and time.monotonic() >= deadline:
+        return {'status': 'deadline', 'complete': False}
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        try:
+            sched, _ = _reservation_sched(ledger)
+        except ValueError:
+            return {'status': 'invalid_source_epoch', 'complete': False}
+        if not _reprocess_adoption_fences(ledger, sched,
+                old_progress=old_progress, epochs=epochs,
+                version=version, changes=changes):
+            return {'status': 'source_changed', 'complete': False, 'processed': 0}
+        current = ledger.db.execute(
+            'SELECT substr(payload,1,?) AS payload,state,attempts FROM fetch_jobs '
+            'WHERE job_id=?', (_REPROCESS_JOB_MAX_BYTES + 1, job_id)).fetchone()
+        if (current is None
+                or (current['payload'], current['state'], current['attempts'])
+                != snapshot):
+            return {'status': 'source_changed', 'complete': False, 'processed': 0}
+        if scfg['project_ids'] is not None and pid not in scfg['project_ids']:
+            return {'status': 'excluded', 'complete': False}
+        patient = ledger.db.execute(
+            'SELECT fetch_reason FROM patients WHERE project_id=?', (pid,)).fetchone()
+        if patient is not None and patient['fetch_reason'] in (
+                'forbidden', 'permission_denied', 'access_revoked'):
+            return {'status': 'excluded', 'complete': False}
+        if paused(ledger.db, pid):
+            return {'status': 'paused', 'complete': False}
+        if (semantic_intake_hold.has_unstored(ledger.db, pid)
+                or semantic_intake_hold.has_held_root(ledger.db, pid, root)):
+            return {'status': 'held', 'complete': False}
+        _reprocess_adopt(ledger, pid, targets, generation, arrival,
+                         source_generation)
+        after = ledger.db.execute(
+            'SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE job_id=?',
+            (_REPROCESS_JOB_MAX_BYTES + 1, job_id)).fetchone()
+        pl_after = (semantic_store._reprocess_job_payload(ledger, after, pid, root)
+                    if after is not None else None)
+        if (after is not None and after['state'] == 'pending'
+                and isinstance(pl_after, dict) and is_current(pl_after)
+                and pl_after.get('execution_contract') == 1
+                and pl_after.get('execution_generation') == generation):
+            return {'status': 'repaired', 'complete': False, 'processed': 1}
+        if semantic_intake_hold.has_held_root(ledger.db, pid, root):
+            return {'status': 'held', 'complete': False}
+        return {'status': 'unverified', 'complete': False}
 
 
 _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
