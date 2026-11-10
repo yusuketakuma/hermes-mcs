@@ -1,0 +1,61 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "Outcome",
+  "data": {
+    "schema_version": "mcs.outcome.v3",
+    "report_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+    "request_nonce": "0bb36bd88ef2f9f8e0e0fd70a66e5631c41b0c5a751a7f7c4d6762732d73f677",
+    "report_sequence": 1,
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+    "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+    "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+    "target": {
+      "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+      "code_seq": 2,
+      "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+      "artifact_size": 4096
+    },
+    "installed": {
+      "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+      "code_seq": 2,
+      "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+      "artifact_size": 4096
+    },
+    "verified_installed": {
+      "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+      "code_seq": 2,
+      "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+      "artifact_size": 4096
+    },
+    "state": "verified",
+    "readiness": "ready",
+    "runtime_generation": 2,
+    "started_at": 1794268800100,
+    "observed_at": 1794268820000,
+    "verified_at": 1794268818000,
+    "local_proof_id": "c1cda263-6282-4b69-a665-12052b97cb37",
+    "error_code": "NONE",
+    "rollout": {
+      "rollout_id": "10000000-0000-4000-8000-000000000001",
+      "assignment_id": "10000000-0000-4000-8000-000000000002",
+      "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "allocation_epoch": 1,
+      "authorization_epoch": 1,
+      "stage": "self",
+      "wave_index": 1
+    }
+  }
+}

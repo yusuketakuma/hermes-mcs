@@ -1,0 +1,145 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "ReleaseAcceptance",
+  "data": {
+    "schema_version": "mcs.release-acceptance.v3",
+    "acceptance_id": "c1514c6c-dad1-46c1-8aa5-57dc1d780ba8",
+    "source": {
+      "repository_id": 123,
+      "repository_owner_id": 456,
+      "tag": "v1.2.3",
+      "tag_oid": "2a1073a6e67f0e5f09a5957c659503c690efe727",
+      "commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "main_snapshot_sha": "0d6e4079e36703ebd37c00722f5891d28b0e2811"
+    },
+    "mode": "full_run",
+    "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "lanes": [
+      {
+        "lane": "lint-test",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "e95b311f7d4f08d62e000242fdb314561eb1bd5d91fc8524421817c8c11aeb81",
+        "evidence_sha256": "447e723af7bd65b09b993caaa1eefc7fbfe8cd90b4fe27a252f553861ad81469",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 100,
+          "artifact_id": 200
+        },
+        "unexecuted_reason": null
+      },
+      {
+        "lane": "hygiene",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "e3d9d3d98b6fbd8b543fdd4afbb390d7ac7fa7b69927305937cbde07ee0210dc",
+        "evidence_sha256": "8af967a9534a65c0c3931de7947e4c64da8c3087a1c8892896a4ec6830722618",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 101,
+          "artifact_id": 201
+        },
+        "unexecuted_reason": null
+      },
+      {
+        "lane": "standalone-sdk",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "75f5c1d63c00d1e10ef61f5c514137ba5245c102b6e85d3f75f8e02e36b35406",
+        "evidence_sha256": "1f93a86c60280b8ff3cb900caecef71bae1e9be176caf3800da06297ba3f8456",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 102,
+          "artifact_id": 202
+        },
+        "unexecuted_reason": null
+      },
+      {
+        "lane": "incident-gates",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "fc1e9a4afea2f0cb72d6df5a2c209b2e7f91ca8b96aaa92634713bffdf54ebdc",
+        "evidence_sha256": "67541f18248735ae136ff079c93b3afb8a96af3f5a062886bb85ca32069b9f4a",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 103,
+          "artifact_id": 203
+        },
+        "unexecuted_reason": null
+      },
+      {
+        "lane": "macos",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "91433ae18845ca572f2dae3a46e89061ae44f076178012a20830b83dd51000a4",
+        "evidence_sha256": "4af4b67134d39ba782808fe32dd7b292f5616253aedb39cfe93f20364a083bef",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 104,
+          "artifact_id": 204
+        },
+        "unexecuted_reason": null
+      },
+      {
+        "lane": "hermes-integration",
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+        "suite_digest": "421fdcff634f637b42eed125a6f66499d8e0d0389c01122ca473bf446e6c32a7",
+        "evidence_sha256": "d20b4a3cfaf5d21294ae79076cfe4aa8db7fcca56a3ccc1229f85435424ca5b5",
+        "measured_result": "success",
+        "coverage": "executed",
+        "reused_from_commit": null,
+        "impact_review_sha256": null,
+        "resolution_evidence_sha256": null,
+        "job_ref": {
+          "workflow_id": 10,
+          "run_id": 20,
+          "run_attempt": 1,
+          "job_id": 105,
+          "artifact_id": 205
+        },
+        "unexecuted_reason": null
+      }
+    ],
+    "release_checks_digest": "961f787b0cd3443fbc7c456886ecd25749c0485c4ae9a02f10599b17dad9f944",
+    "unresolved_product_failures": [],
+    "accepted": true,
+    "accepted_at": 1794268800000,
+    "approved_actor": "synthetic-collector"
+  }
+}

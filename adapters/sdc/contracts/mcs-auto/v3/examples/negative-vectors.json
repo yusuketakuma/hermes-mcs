@@ -1,0 +1,1123 @@
+{
+  "fixture_kind": "synthetic-deliberately-invalid",
+  "vectors": [
+    {
+      "id": "extra_private_field",
+      "definition": "StartRequest",
+      "reject_layer": "structure",
+      "data": {
+        "schema_version": "mcs.start-request.v3",
+        "request_id": "a8cff918-ecc5-4c8f-91e6-c87a5d1a2a05",
+        "request_nonce": "23591da6b5521bbe295f12e5d3c2b234b315939bc1ec02b47a23aa404e88786f",
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+        "local_consent_epoch": 1,
+        "policy_epoch": 1,
+        "rollout_epoch": 1,
+        "publication_id": "3f662004-cb46-46be-8aa8-eae1a6a2328a",
+        "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "compatibility_sha256": "fa528d3adef61d199a8348ffb48ef0143603ea2e0ad007121c39edc6e3aeb567",
+        "preflight": {
+          "schema_version": "mcs.prepared-public.v3",
+          "local_preflight_id": "6f851dc6-6002-4ec0-ae88-0e895c721079",
+          "local_backup_evidence_id": "54d00d86-7758-4ef8-96bc-4685f58e327b",
+          "current_release": {
+            "release_id": "9dc0b5b3802f74b7b2ed3612da1ad734bfefb1db54e5bdad149ebaa1dfc61b77",
+            "code_seq": 1,
+            "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "artifact_sha256": "6783d84adf07619acaff8031668ec8ac96862cbba1493a63af41d38b921225e2",
+            "artifact_size": 4096
+          },
+          "target_release": {
+            "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+            "code_seq": 2,
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+            "artifact_size": 4096
+          },
+          "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+          "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2",
+          "config_contract_sha256": "70441941f9d3ac83b130d994494070a82d46471e09a4dcebae0feea9c5386c91",
+          "data_contract_sha256": "9c2ea3db51c1ba62d6fe9e31d60d8b92065a74d164d99ba238995acb7798f360",
+          "installed_schema": 9,
+          "prepare_nonce": "45666d976bab316d970ec459afd866d9e9a0681ac510f0911f2ac33e9142e51b",
+          "execution_revision": 4,
+          "runtime_generation": 1,
+          "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+          "resources_verified": true,
+          "observed_at": 1794268800000
+        },
+        "preflight_sha256": "6f6ffcd5411d04d9822f07d8371669aa6bb4c99789a19ecff062b44d5a0b4bf8",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "window": {
+          "starts_at": 1794268799000,
+          "ends_at": 1794268860000
+        },
+        "backup_sha256": "715dc8493c36579a5b116995100f635e3572fdf8703e708ef1a08d943b36774e",
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "bool_as_generation",
+      "definition": "PreparedPublic",
+      "reject_layer": "structure",
+      "data": {
+        "schema_version": "mcs.prepared-public.v3",
+        "local_preflight_id": "6f851dc6-6002-4ec0-ae88-0e895c721079",
+        "local_backup_evidence_id": "54d00d86-7758-4ef8-96bc-4685f58e327b",
+        "current_release": {
+          "release_id": "9dc0b5b3802f74b7b2ed3612da1ad734bfefb1db54e5bdad149ebaa1dfc61b77",
+          "code_seq": 1,
+          "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+          "artifact_sha256": "6783d84adf07619acaff8031668ec8ac96862cbba1493a63af41d38b921225e2",
+          "artifact_size": 4096
+        },
+        "target_release": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2",
+        "config_contract_sha256": "70441941f9d3ac83b130d994494070a82d46471e09a4dcebae0feea9c5386c91",
+        "data_contract_sha256": "9c2ea3db51c1ba62d6fe9e31d60d8b92065a74d164d99ba238995acb7798f360",
+        "installed_schema": 9,
+        "prepare_nonce": "45666d976bab316d970ec459afd866d9e9a0681ac510f0911f2ac33e9142e51b",
+        "execution_revision": 4,
+        "runtime_generation": true,
+        "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+        "resources_verified": true,
+        "observed_at": 1794268800000,
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "numeric_nanoseconds",
+      "definition": "FileIdentity",
+      "reject_layer": "structure",
+      "data": {
+        "device": "16777234",
+        "inode": "18446744073709551614",
+        "uid": 501,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 4096,
+        "mtime_ns": 1794268800123456789,
+        "ctime_ns": "1794268800123456789"
+      }
+    },
+    {
+      "id": "overflow_uint64",
+      "definition": "FileIdentity",
+      "reject_layer": "semantic",
+      "data": {
+        "device": "16777234",
+        "inode": "18446744073709551616",
+        "uid": 501,
+        "mode": 33152,
+        "nlink": 1,
+        "size": 4096,
+        "mtime_ns": "1794268800123456789",
+        "ctime_ns": "1794268800123456789"
+      }
+    },
+    {
+      "id": "grant_ttl_31s",
+      "definition": "StartGrant",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.start-grant.v3",
+        "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+        "start_request_id": "a8cff918-ecc5-4c8f-91e6-c87a5d1a2a05",
+        "request_nonce": "23591da6b5521bbe295f12e5d3c2b234b315939bc1ec02b47a23aa404e88786f",
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "target": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+        "local_consent_epoch": 1,
+        "policy_epoch": 1,
+        "rollout_epoch": 1,
+        "publication_id": "3f662004-cb46-46be-8aa8-eae1a6a2328a",
+        "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "compatibility_sha256": "fa528d3adef61d199a8348ffb48ef0143603ea2e0ad007121c39edc6e3aeb567",
+        "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2",
+        "prepare_nonce": "45666d976bab316d970ec459afd866d9e9a0681ac510f0911f2ac33e9142e51b",
+        "execution_revision": 4,
+        "runtime_generation": 1,
+        "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+        "preflight_sha256": "6f6ffcd5411d04d9822f07d8371669aa6bb4c99789a19ecff062b44d5a0b4bf8",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "window": {
+          "starts_at": 1794268799000,
+          "ends_at": 1794268860000
+        },
+        "issued_at": 1794268800000,
+        "not_before": 1794268800000,
+        "expires_at": 1794268831000,
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "grant_negative_window",
+      "definition": "StartGrant",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.start-grant.v3",
+        "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+        "start_request_id": "a8cff918-ecc5-4c8f-91e6-c87a5d1a2a05",
+        "request_nonce": "23591da6b5521bbe295f12e5d3c2b234b315939bc1ec02b47a23aa404e88786f",
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "target": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+        "local_consent_epoch": 1,
+        "policy_epoch": 1,
+        "rollout_epoch": 1,
+        "publication_id": "3f662004-cb46-46be-8aa8-eae1a6a2328a",
+        "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+        "compatibility_sha256": "fa528d3adef61d199a8348ffb48ef0143603ea2e0ad007121c39edc6e3aeb567",
+        "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2",
+        "prepare_nonce": "45666d976bab316d970ec459afd866d9e9a0681ac510f0911f2ac33e9142e51b",
+        "execution_revision": 4,
+        "runtime_generation": 1,
+        "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+        "preflight_sha256": "6f6ffcd5411d04d9822f07d8371669aa6bb4c99789a19ecff062b44d5a0b4bf8",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "window": {
+          "starts_at": 1794268799000,
+          "ends_at": 1794268799000
+        },
+        "issued_at": 1794268800000,
+        "not_before": 1794268800000,
+        "expires_at": 1794268830000,
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "ready_without_proof_time",
+      "definition": "Outcome",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.outcome.v3",
+        "report_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+        "request_nonce": "0bb36bd88ef2f9f8e0e0fd70a66e5631c41b0c5a751a7f7c4d6762732d73f677",
+        "report_sequence": 1,
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "target": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "installed": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "verified_installed": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "state": "verified",
+        "readiness": "ready",
+        "runtime_generation": 2,
+        "started_at": 1794268800100,
+        "observed_at": 1794268820000,
+        "verified_at": null,
+        "local_proof_id": "c1cda263-6282-4b69-a665-12052b97cb37",
+        "error_code": "NONE",
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "verified_wrong_installed",
+      "definition": "Outcome",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.outcome.v3",
+        "report_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+        "request_nonce": "0bb36bd88ef2f9f8e0e0fd70a66e5631c41b0c5a751a7f7c4d6762732d73f677",
+        "report_sequence": 1,
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "target": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "installed": {
+          "release_id": "9dc0b5b3802f74b7b2ed3612da1ad734bfefb1db54e5bdad149ebaa1dfc61b77",
+          "code_seq": 1,
+          "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+          "artifact_sha256": "6783d84adf07619acaff8031668ec8ac96862cbba1493a63af41d38b921225e2",
+          "artifact_size": 4096
+        },
+        "verified_installed": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "state": "verified",
+        "readiness": "ready",
+        "runtime_generation": 2,
+        "started_at": 1794268800100,
+        "observed_at": 1794268820000,
+        "verified_at": 1794268818000,
+        "local_proof_id": "c1cda263-6282-4b69-a665-12052b97cb37",
+        "error_code": "NONE",
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    },
+    {
+      "id": "duplicate_lane",
+      "definition": "ReleaseAcceptance",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.release-acceptance.v3",
+        "acceptance_id": "c1514c6c-dad1-46c1-8aa5-57dc1d780ba8",
+        "source": {
+          "repository_id": 123,
+          "repository_owner_id": 456,
+          "tag": "v1.2.3",
+          "tag_oid": "2a1073a6e67f0e5f09a5957c659503c690efe727",
+          "commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "main_snapshot_sha": "0d6e4079e36703ebd37c00722f5891d28b0e2811"
+        },
+        "mode": "full_run",
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "lanes": [
+          {
+            "lane": "lint-test",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e95b311f7d4f08d62e000242fdb314561eb1bd5d91fc8524421817c8c11aeb81",
+            "evidence_sha256": "447e723af7bd65b09b993caaa1eefc7fbfe8cd90b4fe27a252f553861ad81469",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 100,
+              "artifact_id": 200
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "lint-test",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e3d9d3d98b6fbd8b543fdd4afbb390d7ac7fa7b69927305937cbde07ee0210dc",
+            "evidence_sha256": "8af967a9534a65c0c3931de7947e4c64da8c3087a1c8892896a4ec6830722618",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 101,
+              "artifact_id": 201
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "standalone-sdk",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "75f5c1d63c00d1e10ef61f5c514137ba5245c102b6e85d3f75f8e02e36b35406",
+            "evidence_sha256": "1f93a86c60280b8ff3cb900caecef71bae1e9be176caf3800da06297ba3f8456",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 102,
+              "artifact_id": 202
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "incident-gates",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "fc1e9a4afea2f0cb72d6df5a2c209b2e7f91ca8b96aaa92634713bffdf54ebdc",
+            "evidence_sha256": "67541f18248735ae136ff079c93b3afb8a96af3f5a062886bb85ca32069b9f4a",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 103,
+              "artifact_id": 203
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "macos",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "91433ae18845ca572f2dae3a46e89061ae44f076178012a20830b83dd51000a4",
+            "evidence_sha256": "4af4b67134d39ba782808fe32dd7b292f5616253aedb39cfe93f20364a083bef",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 104,
+              "artifact_id": 204
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hermes-integration",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "421fdcff634f637b42eed125a6f66499d8e0d0389c01122ca473bf446e6c32a7",
+            "evidence_sha256": "d20b4a3cfaf5d21294ae79076cfe4aa8db7fcca56a3ccc1229f85435424ca5b5",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 105,
+              "artifact_id": 205
+            },
+            "unexecuted_reason": null
+          }
+        ],
+        "release_checks_digest": "961f787b0cd3443fbc7c456886ecd25749c0485c4ae9a02f10599b17dad9f944",
+        "unresolved_product_failures": [],
+        "accepted": true,
+        "accepted_at": 1794268800000,
+        "approved_actor": "synthetic-collector"
+      }
+    },
+    {
+      "id": "full_run_wrong_sha",
+      "definition": "ReleaseAcceptance",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.release-acceptance.v3",
+        "acceptance_id": "c1514c6c-dad1-46c1-8aa5-57dc1d780ba8",
+        "source": {
+          "repository_id": 123,
+          "repository_owner_id": 456,
+          "tag": "v1.2.3",
+          "tag_oid": "2a1073a6e67f0e5f09a5957c659503c690efe727",
+          "commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "main_snapshot_sha": "0d6e4079e36703ebd37c00722f5891d28b0e2811"
+        },
+        "mode": "full_run",
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "lanes": [
+          {
+            "lane": "lint-test",
+            "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e95b311f7d4f08d62e000242fdb314561eb1bd5d91fc8524421817c8c11aeb81",
+            "evidence_sha256": "447e723af7bd65b09b993caaa1eefc7fbfe8cd90b4fe27a252f553861ad81469",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 100,
+              "artifact_id": 200
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hygiene",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e3d9d3d98b6fbd8b543fdd4afbb390d7ac7fa7b69927305937cbde07ee0210dc",
+            "evidence_sha256": "8af967a9534a65c0c3931de7947e4c64da8c3087a1c8892896a4ec6830722618",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 101,
+              "artifact_id": 201
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "standalone-sdk",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "75f5c1d63c00d1e10ef61f5c514137ba5245c102b6e85d3f75f8e02e36b35406",
+            "evidence_sha256": "1f93a86c60280b8ff3cb900caecef71bae1e9be176caf3800da06297ba3f8456",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 102,
+              "artifact_id": 202
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "incident-gates",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "fc1e9a4afea2f0cb72d6df5a2c209b2e7f91ca8b96aaa92634713bffdf54ebdc",
+            "evidence_sha256": "67541f18248735ae136ff079c93b3afb8a96af3f5a062886bb85ca32069b9f4a",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 103,
+              "artifact_id": 203
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "macos",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "91433ae18845ca572f2dae3a46e89061ae44f076178012a20830b83dd51000a4",
+            "evidence_sha256": "4af4b67134d39ba782808fe32dd7b292f5616253aedb39cfe93f20364a083bef",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 104,
+              "artifact_id": 204
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hermes-integration",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "421fdcff634f637b42eed125a6f66499d8e0d0389c01122ca473bf446e6c32a7",
+            "evidence_sha256": "d20b4a3cfaf5d21294ae79076cfe4aa8db7fcca56a3ccc1229f85435424ca5b5",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 105,
+              "artifact_id": 205
+            },
+            "unexecuted_reason": null
+          }
+        ],
+        "release_checks_digest": "961f787b0cd3443fbc7c456886ecd25749c0485c4ae9a02f10599b17dad9f944",
+        "unresolved_product_failures": [],
+        "accepted": true,
+        "accepted_at": 1794268800000,
+        "approved_actor": "synthetic-collector"
+      }
+    },
+    {
+      "id": "unresolved_failure",
+      "definition": "ReleaseAcceptance",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.release-acceptance.v3",
+        "acceptance_id": "5823ce42-f83a-4e9c-a677-267a685a2fa2",
+        "source": {
+          "repository_id": 123,
+          "repository_owner_id": 456,
+          "tag": "v1.2.3",
+          "tag_oid": "2a1073a6e67f0e5f09a5957c659503c690efe727",
+          "commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "main_snapshot_sha": "0d6e4079e36703ebd37c00722f5891d28b0e2811"
+        },
+        "mode": "composed",
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "lanes": [
+          {
+            "lane": "lint-test",
+            "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e95b311f7d4f08d62e000242fdb314561eb1bd5d91fc8524421817c8c11aeb81",
+            "evidence_sha256": "447e723af7bd65b09b993caaa1eefc7fbfe8cd90b4fe27a252f553861ad81469",
+            "measured_result": "success",
+            "coverage": "reused",
+            "reused_from_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "impact_review_sha256": "6f61f46c23a66607af759dcd348ac132846385d8f39534e69b6cd934bdabad8b",
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 100,
+              "artifact_id": 200
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hygiene",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e3d9d3d98b6fbd8b543fdd4afbb390d7ac7fa7b69927305937cbde07ee0210dc",
+            "evidence_sha256": "8af967a9534a65c0c3931de7947e4c64da8c3087a1c8892896a4ec6830722618",
+            "measured_result": "failure",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 101,
+              "artifact_id": 201
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "standalone-sdk",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "75f5c1d63c00d1e10ef61f5c514137ba5245c102b6e85d3f75f8e02e36b35406",
+            "evidence_sha256": "1f93a86c60280b8ff3cb900caecef71bae1e9be176caf3800da06297ba3f8456",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 102,
+              "artifact_id": 202
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "incident-gates",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "fc1e9a4afea2f0cb72d6df5a2c209b2e7f91ca8b96aaa92634713bffdf54ebdc",
+            "evidence_sha256": "67541f18248735ae136ff079c93b3afb8a96af3f5a062886bb85ca32069b9f4a",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 103,
+              "artifact_id": 203
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "macos",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "91433ae18845ca572f2dae3a46e89061ae44f076178012a20830b83dd51000a4",
+            "evidence_sha256": "4af4b67134d39ba782808fe32dd7b292f5616253aedb39cfe93f20364a083bef",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 104,
+              "artifact_id": 204
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hermes-integration",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "421fdcff634f637b42eed125a6f66499d8e0d0389c01122ca473bf446e6c32a7",
+            "evidence_sha256": "d20b4a3cfaf5d21294ae79076cfe4aa8db7fcca56a3ccc1229f85435424ca5b5",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 105,
+              "artifact_id": 205
+            },
+            "unexecuted_reason": null
+          }
+        ],
+        "release_checks_digest": "961f787b0cd3443fbc7c456886ecd25749c0485c4ae9a02f10599b17dad9f944",
+        "unresolved_product_failures": [],
+        "accepted": true,
+        "accepted_at": 1794268800000,
+        "approved_actor": "synthetic-reviewed-human"
+      }
+    },
+    {
+      "id": "reused_without_review",
+      "definition": "ReleaseAcceptance",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.release-acceptance.v3",
+        "acceptance_id": "5823ce42-f83a-4e9c-a677-267a685a2fa2",
+        "source": {
+          "repository_id": 123,
+          "repository_owner_id": 456,
+          "tag": "v1.2.3",
+          "tag_oid": "2a1073a6e67f0e5f09a5957c659503c690efe727",
+          "commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "main_snapshot_sha": "0d6e4079e36703ebd37c00722f5891d28b0e2811"
+        },
+        "mode": "composed",
+        "policy_sha256": "823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+        "lanes": [
+          {
+            "lane": "lint-test",
+            "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e95b311f7d4f08d62e000242fdb314561eb1bd5d91fc8524421817c8c11aeb81",
+            "evidence_sha256": "447e723af7bd65b09b993caaa1eefc7fbfe8cd90b4fe27a252f553861ad81469",
+            "measured_result": "success",
+            "coverage": "reused",
+            "reused_from_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 100,
+              "artifact_id": 200
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hygiene",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "e3d9d3d98b6fbd8b543fdd4afbb390d7ac7fa7b69927305937cbde07ee0210dc",
+            "evidence_sha256": "8af967a9534a65c0c3931de7947e4c64da8c3087a1c8892896a4ec6830722618",
+            "measured_result": "failure",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": "4846a7f0774a0b2b5da4b83bc4317c1550e7f51ec6375afc16a686d58a8af97d",
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 101,
+              "artifact_id": 201
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "standalone-sdk",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "75f5c1d63c00d1e10ef61f5c514137ba5245c102b6e85d3f75f8e02e36b35406",
+            "evidence_sha256": "1f93a86c60280b8ff3cb900caecef71bae1e9be176caf3800da06297ba3f8456",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 102,
+              "artifact_id": 202
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "incident-gates",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "fc1e9a4afea2f0cb72d6df5a2c209b2e7f91ca8b96aaa92634713bffdf54ebdc",
+            "evidence_sha256": "67541f18248735ae136ff079c93b3afb8a96af3f5a062886bb85ca32069b9f4a",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 103,
+              "artifact_id": 203
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "macos",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "91433ae18845ca572f2dae3a46e89061ae44f076178012a20830b83dd51000a4",
+            "evidence_sha256": "4af4b67134d39ba782808fe32dd7b292f5616253aedb39cfe93f20364a083bef",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 104,
+              "artifact_id": 204
+            },
+            "unexecuted_reason": null
+          },
+          {
+            "lane": "hermes-integration",
+            "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+            "environment_digest": "b77349bf1fa9b26d45d545d7d64dad96737e9cfbb3cbb5f5d10fb77b0fcc44ad",
+            "suite_digest": "421fdcff634f637b42eed125a6f66499d8e0d0389c01122ca473bf446e6c32a7",
+            "evidence_sha256": "d20b4a3cfaf5d21294ae79076cfe4aa8db7fcca56a3ccc1229f85435424ca5b5",
+            "measured_result": "success",
+            "coverage": "executed",
+            "reused_from_commit": null,
+            "impact_review_sha256": null,
+            "resolution_evidence_sha256": null,
+            "job_ref": {
+              "workflow_id": 10,
+              "run_id": 20,
+              "run_attempt": 1,
+              "job_id": 105,
+              "artifact_id": 205
+            },
+            "unexecuted_reason": null
+          }
+        ],
+        "release_checks_digest": "961f787b0cd3443fbc7c456886ecd25749c0485c4ae9a02f10599b17dad9f944",
+        "unresolved_product_failures": [],
+        "accepted": true,
+        "accepted_at": 1794268800000,
+        "approved_actor": "synthetic-reviewed-human"
+      }
+    },
+    {
+      "id": "candidate_without_selected",
+      "definition": "Offer",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.offer.v3",
+        "request_id": "b1a36d25-d963-4ed2-ac04-939fcb614ccb",
+        "request_nonce": "38af6f54eae67ecbaf93e1605e5285bfc510dc1a833ec297c3392ee820d84360",
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        "rollout_epoch": 1,
+        "status": "candidate",
+        "reason": "ELIGIBLE",
+        "selected": null,
+        "issued_at": 1794268800000,
+        "not_before": 1794268800000,
+        "expires_at": 1794268860000
+      }
+    },
+    {
+      "id": "zero_width_maintenance",
+      "definition": "StandingConsent",
+      "reject_layer": "semantic",
+      "data": {
+        "schema_version": "mcs.standing-consent.v3",
+        "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "profile": {
+          "profile_id": "synthetic-arm64",
+          "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+          "runtime_mode": "standalone",
+          "os": "macos",
+          "cpu": "arm64",
+          "python": [
+            3,
+            14
+          ],
+          "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2"
+        },
+        "allowed_class": "code-only-compatible",
+        "timezone": "Asia/Tokyo",
+        "windows": [
+          {
+            "weekday": 0,
+            "start_minute": 60,
+            "end_minute": 60
+          }
+        ],
+        "max_prepare_seconds": 120,
+        "max_prepare_count_24h": 3,
+        "max_prepare_seconds_24h": 360,
+        "local_consent_epoch": 1,
+        "policy_epoch": 1,
+        "central_policy_id": "8d1c12d9-b9ef-4177-a9d0-4a8207fae549",
+        "central_policy_sha256": "8d1c12d9b9ef2177a9d04a8207fae549c5b0f533e6ef9b42680be165f78765da",
+        "confirmation_receipt_id": "769d7914-c5ba-465b-a801-f865a7f57de5",
+        "confirmed_at": 1794268799000,
+        "expires_at": 1794355200000,
+        "enabled": true,
+        "early_adopter": false,
+        "rollout_policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "id": "schema_future",
+      "definition": "Outcome",
+      "reject_layer": "structure",
+      "data": {
+        "schema_version": "mcs.outcome.v99",
+        "report_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+        "request_nonce": "0bb36bd88ef2f9f8e0e0fd70a66e5631c41b0c5a751a7f7c4d6762732d73f677",
+        "report_sequence": 1,
+        "scope": {
+          "product": "hermes-mcs",
+          "tenant": "synthetic",
+          "installation": "synthetic-mini",
+          "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+          "realm_epoch": "synthetic-realm-1",
+          "environment": "synthetic",
+          "stream_id": "synthetic-stable"
+        },
+        "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+        "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+        "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+        "target": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "installed": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "verified_installed": {
+          "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+          "code_seq": 2,
+          "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+          "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+          "artifact_size": 4096
+        },
+        "state": "verified",
+        "readiness": "ready",
+        "runtime_generation": 2,
+        "started_at": 1794268800100,
+        "observed_at": 1794268820000,
+        "verified_at": 1794268818000,
+        "local_proof_id": "c1cda263-6282-4b69-a665-12052b97cb37",
+        "error_code": "NONE",
+        "rollout": {
+          "rollout_id": "10000000-0000-4000-8000-000000000001",
+          "assignment_id": "10000000-0000-4000-8000-000000000002",
+          "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "allocation_epoch": 1,
+          "authorization_epoch": 1,
+          "stage": "self",
+          "wave_index": 1
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "RolloutPreview",
+  "data": {
+    "schema_version": "mcs.rollout-preview.v3",
+    "request_id": "10000000-0000-4000-8000-000000000013",
+    "request_nonce": "4444444444444444444444444444444444444444444444444444444444444444",
+    "preview_id": "10000000-0000-4000-8000-000000000014",
+    "rollout_id": "10000000-0000-4000-8000-000000000001",
+    "action": "advance",
+    "expected_revision": 2,
+    "health_revision": 300,
+    "authorization_epoch": 1,
+    "current_stage": "pilot",
+    "current_status": "awaiting_approval",
+    "target_stage": "pct10",
+    "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "counters": {
+      "customer_total": 30,
+      "customer_allowed": 1,
+      "device_assigned": 1,
+      "reserved": 0,
+      "granted": 0,
+      "verified": 1,
+      "healthy": 1,
+      "unknown": 0,
+      "deferred_no_grant": 0,
+      "excluded_before_grant": 0
+    },
+    "assignment_ids": [],
+    "evaluation_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "blockers": [],
+    "issued_at": 1794265200000,
+    "expires_at": 1794265500000
+  }
+}

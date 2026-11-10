@@ -1,0 +1,44 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "HealthObservation",
+  "data": {
+    "schema_version": "mcs.health-observation.v3",
+    "report_id": "10000000-0000-4000-8000-000000000011",
+    "request_nonce": "3333333333333333333333333333333333333333333333333333333333333333",
+    "health_sequence": 1,
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "rollout": {
+      "rollout_id": "10000000-0000-4000-8000-000000000001",
+      "assignment_id": "10000000-0000-4000-8000-000000000002",
+      "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "allocation_epoch": 1,
+      "authorization_epoch": 1,
+      "stage": "self",
+      "wave_index": 1
+    },
+    "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+    "grant_id": "3492ad65-d05a-473f-af8c-825521eeb41a",
+    "target": {
+      "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+      "code_seq": 2,
+      "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+      "artifact_size": 4096
+    },
+    "runtime_generation": 2,
+    "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+    "local_runtime_proof_id": "10000000-0000-4000-8000-000000000012",
+    "status": "healthy",
+    "reason_code": "NONE",
+    "observed_at": 1794269120000
+  }
+}

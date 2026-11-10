@@ -1,0 +1,53 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "Compatibility",
+  "data": {
+    "schema_version": "mcs.compatibility.v3",
+    "scope": {
+      "product": "hermes-mcs",
+      "environment": "synthetic",
+      "trust_domain": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "target": {
+      "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+      "code_seq": 2,
+      "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+      "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+      "artifact_size": 4096
+    },
+    "profile": {
+      "profile_id": "synthetic-arm64",
+      "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+      "runtime_mode": "standalone",
+      "os": "macos",
+      "cpu": "arm64",
+      "python": [
+        3,
+        14
+      ],
+      "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2"
+    },
+    "bases": [
+      {
+        "base_release_id": "9dc0b5b3802f74b7b2ed3612da1ad734bfefb1db54e5bdad149ebaa1dfc61b77",
+        "base_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+        "base_schema": 9,
+        "base_profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        "config_contract_sha256": "70441941f9d3ac83b130d994494070a82d46471e09a4dcebae0feea9c5386c91",
+        "data_contract_sha256": "9c2ea3db51c1ba62d6fe9e31d60d8b92065a74d164d99ba238995acb7798f360",
+        "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2"
+      }
+    ],
+    "target_schema": 9,
+    "allowed_class": "code-only-compatible",
+    "config_contract_sha256": "70441941f9d3ac83b130d994494070a82d46471e09a4dcebae0feea9c5386c91",
+    "data_contract_sha256": "9c2ea3db51c1ba62d6fe9e31d60d8b92065a74d164d99ba238995acb7798f360",
+    "classification_evidence_sha256": "9f0c8aa526579f4dbde02f70f4cdf635a22df7d844ce012de5791febea95e732",
+    "db_migration": false,
+    "runtime_change": false,
+    "configuration_change": false,
+    "authorization_expansion": false,
+    "issued_at": 1794268800000
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "HealthAck",
+  "data": {
+    "schema_version": "mcs.health-ack.v3",
+    "request_id": "10000000-0000-4000-8000-000000000011",
+    "request_nonce": "3333333333333333333333333333333333333333333333333333333333333333",
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "report_id": "10000000-0000-4000-8000-000000000011",
+    "observation_sha256": "ce320fb106a302349d009dc98ddd85d9b07449bcae626967e174b6338cf727ca",
+    "received_at": 1794269121000,
+    "issued_at": 1794269121000,
+    "expires_at": 1794269181000
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "StandingConsent",
+  "data": {
+    "schema_version": "mcs.standing-consent.v3",
+    "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "profile": {
+      "profile_id": "synthetic-arm64",
+      "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+      "runtime_mode": "standalone",
+      "os": "macos",
+      "cpu": "arm64",
+      "python": [
+        3,
+        14
+      ],
+      "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2"
+    },
+    "allowed_class": "code-only-compatible",
+    "timezone": "Asia/Tokyo",
+    "windows": [
+      {
+        "weekday": 0,
+        "start_minute": 60,
+        "end_minute": 180
+      }
+    ],
+    "max_prepare_seconds": 120,
+    "max_prepare_count_24h": 3,
+    "max_prepare_seconds_24h": 360,
+    "local_consent_epoch": 1,
+    "policy_epoch": 1,
+    "central_policy_id": "8d1c12d9-b9ef-4177-a9d0-4a8207fae549",
+    "central_policy_sha256": "8d1c12d9b9ef2177a9d04a8207fae549c5b0f533e6ef9b42680be165f78765da",
+    "confirmation_receipt_id": "769d7914-c5ba-465b-a801-f865a7f57de5",
+    "confirmed_at": 1794268799000,
+    "expires_at": 1794355200000,
+    "enabled": true,
+    "early_adopter": false,
+    "rollout_policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}

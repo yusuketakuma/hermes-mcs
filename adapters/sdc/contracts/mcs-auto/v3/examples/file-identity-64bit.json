@@ -1,0 +1,14 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "FileIdentity",
+  "data": {
+    "device": "16777234",
+    "inode": "18446744073709551614",
+    "uid": 501,
+    "mode": 33152,
+    "nlink": 1,
+    "size": 4096,
+    "mtime_ns": "1794268800123456789",
+    "ctime_ns": "1794268800123456789"
+  }
+}

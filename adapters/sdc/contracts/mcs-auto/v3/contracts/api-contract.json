@@ -1,0 +1,307 @@
+{
+  "spec_version": "3.0",
+  "deployed": false,
+  "default_enabled": false,
+  "routes": [
+    {
+      "path": "/v3/mcs/releases/select",
+      "method": "POST",
+      "request_definition": "SelectionRequest",
+      "response_definition": "Offer",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/metadata",
+      "method": "POST",
+      "request_definition": "MetadataRequest",
+      "response_definition": "existing-v1-attestation-or-v3-Compatibility",
+      "auth": "device",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/artifact",
+      "method": "POST",
+      "request_definition": "ReadArtifactRequest",
+      "response_definition": "binary-stream",
+      "auth": "device",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 268435456
+    },
+    {
+      "path": "/v3/mcs/releases/start",
+      "method": "POST",
+      "request_definition": "StartRequest",
+      "response_definition": "StartGrant",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/status",
+      "method": "POST",
+      "request_definition": "StatusRequest",
+      "response_definition": "OperationStatus",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/cancel-prestart",
+      "method": "POST",
+      "request_definition": "PrestartAbort",
+      "response_definition": "OperationStatus",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/result",
+      "method": "POST",
+      "request_definition": "Outcome",
+      "response_definition": "OutcomeAck",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/health",
+      "method": "POST",
+      "request_definition": "HealthObservation",
+      "response_definition": "HealthAck",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/consent-preview",
+      "method": "POST",
+      "request_definition": "ConsentPreviewRequest",
+      "response_definition": "ConsentPreview",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/consent-confirm",
+      "method": "POST",
+      "request_definition": "ConsentConfirmRequest",
+      "response_definition": "ConsentReceipt",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/releases/consent-revoke",
+      "method": "POST",
+      "request_definition": "ConsentRevokeRequest",
+      "response_definition": "ConsentReceipt",
+      "auth": "device",
+      "signed_response": true,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/reserve",
+      "method": "POST",
+      "request_definition": "BuildRequest",
+      "response_definition": "PublicationReservation",
+      "auth": "publisher",
+      "signed_response": false,
+      "max_request_bytes": 131072,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/object-manifests",
+      "method": "POST",
+      "request_definition": "ObjectManifestRequest",
+      "response_definition": "ObjectReceipt",
+      "auth": "publisher",
+      "signed_response": false,
+      "max_request_bytes": 131072,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/objects/verify",
+      "method": "POST",
+      "request_definition": "ObjectVerifyRequest",
+      "response_definition": "ObjectReceipt",
+      "auth": "publisher",
+      "signed_response": false,
+      "max_request_bytes": 131072,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/finalize",
+      "method": "POST",
+      "request_definition": "PublicationFinalizeRequest",
+      "response_definition": "PublishPlan",
+      "auth": "publisher",
+      "signed_response": true,
+      "max_request_bytes": 131072,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/register",
+      "method": "POST",
+      "request_definition": "PublicationRegisterRequest",
+      "response_definition": "PublicationRecord",
+      "auth": "publisher",
+      "signed_response": false,
+      "max_request_bytes": 131072,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/v3/mcs/publications/objects/{sha256}/chunks/{index}",
+      "method": "PUT",
+      "request_definition": "binary-chunk",
+      "response_definition": "ObjectReceipt",
+      "auth": "publisher",
+      "signed_response": false,
+      "max_request_bytes": 16777216,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/create",
+      "method": "POST",
+      "request_definition": "RolloutCreateRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/preview",
+      "method": "POST",
+      "request_definition": "RolloutPreviewRequest",
+      "response_definition": "RolloutPreview",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/read",
+      "method": "POST",
+      "request_definition": "RolloutReadRequest",
+      "response_definition": "RolloutReadResponse",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/activate",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/advance",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/pause",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/resume",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/cancel",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/rollouts/exclude-unstarted",
+      "method": "POST",
+      "request_definition": "RolloutActionRequest",
+      "response_definition": "RolloutAdminReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/policies/preview",
+      "method": "POST",
+      "request_definition": "PolicyPreviewRequest",
+      "response_definition": "PolicyPreview",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/policies/approve",
+      "method": "POST",
+      "request_definition": "PolicyActionRequest",
+      "response_definition": "PolicyReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/policies/revoke",
+      "method": "POST",
+      "request_definition": "PolicyActionRequest",
+      "response_definition": "PolicyReceipt",
+      "auth": "console",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    },
+    {
+      "path": "/admin/v3/mcs/enrollments/propose",
+      "method": "POST",
+      "request_definition": "EnrollmentProposalRequest",
+      "response_definition": "EnrollmentProposalReceipt",
+      "auth": "console-tenant-admin",
+      "signed_response": false,
+      "max_request_bytes": 16384,
+      "max_response_bytes": 16384
+    }
+  ]
+}
