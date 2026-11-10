@@ -1,6 +1,8 @@
 """runtime_entry.acquire のv3判定・Q SH保持・fence読取りを合成control rootで検証する。"""
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -111,6 +113,54 @@ def test_two_shared_entries_coexist(runtime_home):
     finally:
         first.close()
         second.close()
+
+
+@pytest.mark.parametrize('name', ['PYTHONPATH', 'PYTHONHOME'])
+def test_managed_acquire_rejects_shadowing_env(runtime_home, monkeypatch, name):
+    seed_v3(runtime_home)
+    monkeypatch.setenv(name, '/tmp/shadow')
+    with pytest.raises(runtime_entry.RuntimeEntryError, match='UNSAFE_PYTHON_ENV'):
+        runtime_entry.acquire(runtime_home, wait_s=0)
+
+
+def test_managed_acquire_allows_empty_and_missing_env(runtime_home, monkeypatch):
+    seed_v3(runtime_home)
+    monkeypatch.setenv('PYTHONPATH', '')
+    monkeypatch.delenv('PYTHONHOME', raising=False)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    entry.close()
+
+
+def test_ignore_environment_skips_shadowing_check(runtime_home, monkeypatch):
+    """-E/-I makes PYTHON* inert for the interpreter, so the env check is skipped."""
+    seed_v3(runtime_home)
+    monkeypatch.setenv('PYTHONPATH', '/tmp/shadow')
+    monkeypatch.setattr(sys, 'flags', SimpleNamespace(ignore_environment=1))
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    entry.close()
+
+
+def test_legacy_entry_ignores_shadowing_env(runtime_home, monkeypatch):
+    """Unmanaged (pre-v3) devices keep the legacy path regardless of env."""
+    monkeypatch.setenv('PYTHONPATH', '/tmp/shadow')
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert not entry.managed
+    finally:
+        entry.close()
+
+
+def test_adopt_rejects_shadowing_env(runtime_home):
+    seed_v3(runtime_home)
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        fd, env = _dup_env(entry)
+        env['PYTHONPATH'] = '/tmp/shadow'
+        with pytest.raises(runtime_entry.RuntimeEntryError, match='UNSAFE_PYTHON_ENV'):
+            runtime_entry.adopt(runtime_home, env)
+        os.close(fd)
+    finally:
+        entry.close()
 
 
 @pytest.fixture(autouse=True)

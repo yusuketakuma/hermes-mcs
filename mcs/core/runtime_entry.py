@@ -1,6 +1,7 @@
 """v3 runtime-entry bootstrap: hold Q(runtime-entry.lock) SH for the process lifetime."""
 import hashlib
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -38,6 +39,24 @@ def _q_present(store):
         return False
 
 
+_UNSAFE_PYTHON_ENV = ('PYTHONPATH', 'PYTHONHOME')
+
+
+def _check_python_environment(env=None):
+    """Managed entries refuse import-shadowing env vars the interpreter would honor.
+
+    Deployment launchers already unset PYTHONPATH/PYTHONHOME; under -E/-I the
+    interpreter ignores them (sys.flags.ignore_environment) so the check is
+    skipped. Non-empty values only — an empty var cannot shadow imports.
+    """
+    if sys.flags.ignore_environment:
+        return
+    values = os.environ if env is None else env
+    bad = [name for name in _UNSAFE_PYTHON_ENV if values.get(name)]
+    if bad:
+        raise RuntimeEntryError('UNSAFE_PYTHON_ENV:' + ','.join(bad))
+
+
 class RuntimeEntry:
     """Held Q lease plus the verified v3 fence snapshot. close() releases both."""
 
@@ -71,6 +90,12 @@ class RuntimeEntry:
         if self.owner is None:
             return None
         return self.owner.get('runtime_generation')
+
+    @property
+    def pycache_prefix(self):
+        """Interpreter pycache prefix (-X pycache_prefix). M5/M6 launchers bind it
+        to the active generation; recorded here so callers can verify consistency."""
+        return sys.pycache_prefix
 
     @property
     def adopted(self):
@@ -143,6 +168,7 @@ def acquire(runtime_home=None, *, shared=True, wait_s=Q_WAIT_S):
     root = control_root(runtime_home)
     if not root.exists():
         return _hold(_legacy())
+    _check_python_environment()
     from adapters.sdc.storage import Store
     from adapters.sdc import release_auto_state
     try:
@@ -201,6 +227,7 @@ def adopt(runtime_home=None, env=None):
     root = control_root(runtime_home)
     if not root.exists():
         return _hold(_legacy())
+    _check_python_environment(values)
     from adapters.sdc.storage import Store
     from adapters.sdc import release_auto_state
     try:
