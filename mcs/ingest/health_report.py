@@ -75,7 +75,8 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     writer_fields = ("writer_reason", "writer_stage", "writer_job_stage")
     failure_fields = ("failure_reason_counts", "exhausted_failed")
     ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
-    policy_fields = ('policy_binding', 'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
+    policy_fields = ('policy_binding', 'policy_rejected_failed',
+                     'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
@@ -122,13 +123,15 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                 raise ValueError('ocr_status_invalid')
         policy_detail = {key: value[key] for key in policy_fields if key in value}
         if policy_detail:
-            rejected = value.get('policy_rejected_exhausted')
+            rejected = value.get('policy_rejected_failed')
+            rejected_exhausted = value.get('policy_rejected_exhausted')
             unack_rejected = value.get('policy_rejected_unacknowledged')
             if (len(policy_detail) != len(policy_fields) or not ack_detail
                     or value.get('policy_binding') != attachment_ocr.rejection_policy(cfg)
                     or not valid_hash(value.get('policy_binding'))
-                    or type(rejected) is not int or type(unack_rejected) is not int
-                    or not 0 <= unack_rejected <= rejected <= value['exhausted_failed']
+                    or any(type(n) is not int for n in (rejected, rejected_exhausted, unack_rejected))
+                    or not 0 <= unack_rejected <= rejected <= value['pending_failed']
+                    or not 0 <= rejected_exhausted <= min(rejected, value['exhausted_failed'])
                     or rejected > value['failure_reason_counts'].get('output_schema_table_overlap', 0)
                     or unack_rejected > value['unacknowledged_pending_failed']
                     or rejected - unack_rejected > value['acknowledged_exhausted']):
@@ -152,7 +155,7 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     waiting_reasons = (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred")
     active_unacknowledged = value.get('unacknowledged_pending_failed', value.get('pending_failed', 0)) - value.get('policy_rejected_unacknowledged', 0)
     acknowledged_failures = ((value.get('acknowledged_exhausted', 0) > 0
-                              or value.get('policy_rejected_exhausted', 0) > 0)
+                              or value.get('policy_rejected_failed', 0) > 0)
                              and active_unacknowledged == 0
                              and value.get('queue_status') == 'known'
                              and not value.get('failed', 0) and reason in waiting_reasons)

@@ -1,6 +1,7 @@
 """Policy exclusion retains failures, requires acquisition proof, and never fabricates OCR text."""
 import copy
 import json
+import hashlib
 
 import pytest
 
@@ -47,8 +48,9 @@ def observed(case, cfg):
         case.db.rollback()
 
 
-def test_explicit_policy_is_readonly_reversible_and_keeps_original_references(case):
-    bind(case)
+@pytest.mark.parametrize("attempts", [1, 2, 3])
+def test_explicit_policy_is_readonly_reversible_and_keeps_original_references(case, attempts):
+    bind(case, attempts=attempts)
     cfg = configured()
     before, changes = originals(case), case.db.total_changes
     case.db.execute('PRAGMA query_only=ON')
@@ -71,7 +73,7 @@ def test_explicit_policy_is_readonly_reversible_and_keeps_original_references(ca
     assert originals(case) == before and case.db.total_changes == changes
 
 
-@pytest.mark.parametrize('field,value', [('attempts', 2), ('attempts', 4), ('attempts', True),
+@pytest.mark.parametrize('field,value', [('attempts', 0), ('attempts', 4), ('attempts', True),
     ('attempts', 3.0), ('reason', 'timeout'), ('reason', 'engine_load_failed'),
     ('reason', 'synthetic_unknown'), ('state', 'unavailable'), ('input_occurrence', None),
     ('input_occurrence', 'b' * 64)])
@@ -200,3 +202,74 @@ def test_policy_only_gap_does_not_alert_but_other_failures_still_do(case, monkey
     report = health_watch.evaluate(str(case.root), 1001, cfg=cfg)
     assert report['attachment_ocr']['reason'] == 'attachment_ocr_processing_failed'
     assert report['alert'] is True
+
+
+@pytest.mark.parametrize('attempts', [1, 2])
+def test_initial_policy_exclusion_does_not_reclassify_exhaustion_or_grant_ack(case, monkeypatch, attempts):
+    bind(case, attempts=attempts)
+    cfg = configured()
+    monkeypatch.setattr(ocr, 'load_config', lambda: cfg)
+    counts = observed(case, cfg)
+    assert counts['pending_failed'] == counts['policy_rejected_failed'] == 1
+    assert counts['exhausted_failed'] == counts['policy_rejected_exhausted'] == counts['acknowledged_exhausted'] == 0
+    assert counts['policy_rejected_unacknowledged'] == counts['unacknowledged_pending_failed'] == 1
+    case.db.execute('BEGIN')
+    try:
+        with pytest.raises(ValueError, match='ocr_ack_target_invalid'):
+            ack.build_plan(case.db, [case.artifact])
+    finally:
+        case.db.rollback()
+    _status(case.data, **counts)
+    quiet = health_report.attachment_ocr_health(str(case.data), cfg, 1000)
+    assert quiet['reason'] == 'attachment_ocr_policy_excluded' and quiet['alert_required'] is False
+    _status(case.data, failed=1, **counts)
+    assert health_report.attachment_ocr_health(str(case.data), cfg, 1000)['reason'] == 'attachment_ocr_processing_failed'
+
+
+def test_first_proven_failure_is_excluded_and_real_selection_still_retries_to_success(case, monkeypatch):
+    cfg = configured()
+    clock = [10000.0]
+    monkeypatch.setattr(ocr.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(ocr, 'load_config', lambda: cfg)
+    monkeypatch.setattr(ocr, '_settings_current', lambda settings: settings == cfg['attachment_ocr'])
+    monkeypatch.setattr(ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(ocr.os.path, 'isfile', lambda path: True)
+    monkeypatch.setattr(ocr.os, 'access', lambda *args: True)
+    import extract_llm
+    monkeypatch.setattr(extract_llm, '_context_memory_available', lambda: True)
+    blob = b'\x89PNG\r\n\x1a\nfully synthetic image'
+    folder = case.data / 'attachments'
+    folder.mkdir()
+    image = folder / '1'
+    image.write_bytes(blob)
+    image.chmod(0o600)
+    digest = hashlib.sha256(blob).hexdigest()
+    legacy = {**case.doc, 'input_sha256': digest, 'input_bytes': len(blob), 'next_try': 0}
+    with case.db:
+        case.db.execute('UPDATE attachments SET sha256=?,bytes=?,local_path=? WHERE attachment_id=1',
+                        (digest, len(blob), str(image)))
+        case.db.execute('UPDATE artifacts SET content=?,created_at=1 WHERE artifact_id=?',
+                        (json.dumps(legacy), case.artifact))
+    assert ocr.view(case.db, 1, cfg=cfg)['state'] == 'failed'
+    before = originals(case)
+    calls = []
+    def runtime(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError('output_schema_table_overlap')
+        text = '完全合成の回復済み資料。'
+        return [{'page': 1, 'engine': 'yomitoku', 'text': text, 'text_hash': ocr._hash(text)}]
+    monkeypatch.setattr(ocr, '_runtime', runtime)
+    first = ocr.run_pending(case.ledger, cfg, retry_failed_before=clock[0])
+    assert first['failed'] == 1 and len(calls) == 1
+    failed = ocr._latest(case.db, ocr._source(case.db, 1))
+    assert failed['attempts'] == 1 and ocr.view(case.db, 1, cfg=cfg)['state'] == 'rejected_by_policy'
+    assert originals(case)[:-1] == before
+    saved = originals(case)
+    assert ocr.run_pending(case.ledger, cfg)['failed'] == 0 and len(calls) == 1
+    clock[0] = failed['next_try']
+    recovered = ocr.run_pending(case.ledger, cfg)
+    assert recovered['complete'] == 1 and len(calls) == 2
+    assert ocr.current(case.db, 1)['state'] == 'complete'
+    assert ocr.view(case.db, 1, cfg=cfg)['state'] == 'complete'
+    assert originals(case)[:-1] == saved

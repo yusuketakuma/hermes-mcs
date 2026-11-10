@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "証明付きの表構造エラーを初回から除外可能に修正",
+  "summary": "明示的なOCR除外設定で、取得元と親投稿の改訂まで証明できる最新の表構造エラーを、初回の失敗から除外できます。原本未評価と失敗履歴を保持し、除外した失敗数と再試行上限に達した件数を分けます。",
+  "upgrade": "attachment_ocr.reject_uncertain=trueの場合に適用します。既定falseは維持します。旧失敗に証明を後付けせず、初期3回の試行間隔・その後の日次再処理・運用通知の受付条件は変更しません。設定をfalseへ戻すと除外を解除します。",
+  "details": [
+    "現在の取得証明付き最新failed/output_schema_table_overlapで、試行回数が厳密な整数の1〜3の場合だけを対象にする。",
+    "除外ポリシーのbindingをv2へ更新し、古い観測やカーソルを新条件として再利用しない。",
+    "policy_rejected_failedは総除外数、policy_rejected_exhaustedは3回到達の内数として記録する。ACKと除外の二重控除を防ぎ、実行時の新規失敗・未知の理由・部分観測・破損証拠の警報は維持する。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_ocr.py",
+    "mcs/extract/attachment_ocr_ack.py",
+    "mcs/ingest/health_report.py"
+  ]
+}

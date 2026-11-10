@@ -261,7 +261,7 @@ def rejection_policy(cfg):
             or cfg.get("attachment_ocr", {}).get("enabled") is not True
             or cfg["attachment_ocr"].get("reject_uncertain") is not True):
         return None
-    return _hash("ocr-reject-table-overlap/v1/" + RUNTIME_CONTRACT)
+    return _hash("ocr-reject-table-overlap/v2/" + RUNTIME_CONTRACT)
 
 
 def rejected_failure(db, attachment_id, project_id=None, *, cfg=None):
@@ -277,7 +277,7 @@ def rejected_failure(db, attachment_id, project_id=None, *, cfg=None):
         prior = _latest(db, source) if source is not None else None
         if (source is None or source["state"] != "downloaded" or not _matching(prior, source)
                 or prior["state"] != "failed" or prior.get("reason") != "output_schema_table_overlap"
-                or type(prior.get("attempts")) is not int or prior["attempts"] != 3
+                or type(prior.get("attempts")) is not int or not 1 <= prior["attempts"] <= 3
                 or not valid_hash(prior.get("input_occurrence"))
                 or prior["input_occurrence"] != _source_occurrence(db, source)):
             return None
@@ -286,7 +286,7 @@ def rejected_failure(db, attachment_id, project_id=None, *, cfg=None):
         meta = strict_json(row[0]) if row else None
         if not isinstance(meta, dict) or meta.get("input_occurrence") != prior["input_occurrence"]:
             return None
-        proof = attachment_ocr_ack.target(db, prior["artifact_id"])
+        proof = attachment_ocr_ack.failure_target(db, prior["artifact_id"])
         return {"state": "rejected_by_policy", "page_count": 0,
                 "artifact_id": prior["artifact_id"], "attachment_id": attachment_id,
                 "parent_message_id": source["message_id"], "project_id": source["project_id"],
