@@ -43,8 +43,8 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 
 - 業務processはQ SHのみ保持し、G/U/R/C/A/M/Oを同時保持しない（Rはwriter区間のみ、かつQ SHの内側）。
 - updaterのv3採用sequence（spec表）: `G→U→Q(EX)→R→C→A→M→O`。Q EX取得時点で管理下業務processは全退役済みのためR/Cの競合は非協調writerのみ — それをC lockと最終snapshot照合で排除する設計。
-- **追加edge提案**: managed config writerは`Q(SH)→C`の順で取得（C-4のFD借用関係`config_edit.apply→provider_settings.commit_locked(lock_fd=)`は維持、lock取得順のみQの内側へ）。これでtarget順`…Q→R→C→A…`と整合し、逆順edge（C→Q等）は発生しない。
-- **未解決（§8-Q2）**: legacy `config_edit.apply`をv3制御下でQ SH必須化するか、参加しないwriterをsnapshot変化拒否で扱うかの境界確定。
+- **追加edge（確定）**: managed config writerは全て業務入口bootstrapでQ SHをprocess寿命保持するため、config書込みは必ず`Q(SH)内側`で行われ`Q→C`順が自動的に成立する。`config_edit.apply`/`provider_settings.commit_locked(lock_fd=)`のFD借用関係（P0 C-4）は変更しない。updater側は採用sequenceで`…→Q(EX)→R→C→…`の順にCを取得し最終snapshot整合を行う。legacy config writerでQ非参加のものは「参加しないGUI/手動編集」として最終snapshot変化で拒否する（02§4表の規定どおり — 強制防御済みとは呼ばない）。
+- **逆順edge不在の根拠**: Cを取る経路（config_edit/provider_settings）はrelease lockを一切取らず、Q/Cが未存在の現行コードに逆順edgeは存在し得ない。v3追加時に`C→Q`を作らないことが要点 — config writerは必ずQ SH取得後にのみCへ進む。
 
 ## 3. `runtime_entry.py` bootstrap設計
 
@@ -62,7 +62,7 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 ### 3.2 prepared fence / 世代
 
 - OwnerState v3の`active`/StartIntent（`release-start-intent.json`、M2実装済み）と整合しない起動を拒否。単独marker消失を許可とみなさない（v2 spec §2）。
-- `runtime_generation`と起動generationの照合 — bootstrapは「許可generation」のみ通す。具体的なgeneration源（OwnerState or ControlManifest由来）はM4のactivation設計と接続するため、本M3ではfence読取りAPIまでを実装し、値の供給源は未確定事項として明記（§8-Q5）。
+- **許可generationの供給源（確定）**: `OwnerState.runtime_generation`。`finalize_verified`（release_auto_state.py L367）がVERIFIED終端でのみ`outcome.runtime_generation`へ更新する単調fieldであり、「現在認可されたruntime世代」の正本として適格。`active.candidate_generation`は未認可の候補でありbootstrapは許可しない。v3未移行（control root/owner不存在）のdeviceはlegacy modeとしてQを取得せず通常起動 — Qの存在自体がv3適用済みの印。
 
 ### 3.3 入口coverage（P0 inventory A-1/B-7より）
 
@@ -70,12 +70,12 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 |---|---|---|
 | `mcs/ops/mcs_update.py`全subcommand | CLI | SH（業務入口） |
 | `mcs_update.sh` cron | 定期 | SH |
-| `install.sh` | 保守 | 要検討（code適用側=EX相当かSHか — §8-Q4） |
+| `install.sh` | 保守（code適用側） | Q EX — code面を変更する保守操作。別承認の保守作業としてのみ実行（§8決定4） |
 | `mcs_standalone` 独立実行 | 常駐 | SH |
 | `hermes_plugin` gateway | 常駐 | SH — **Hermes起動経路へ契約を適用できないprofileはauto不適格**（02§1.2） |
 | `lineworks_adapter` | 独立CLI/常駐 | SH＋run.lock遵守確認（W06、P0未確認#2） |
 | recovery入口（`org.mcs.recovery`） | 独立slot | Q非保持・code切替時EX（02§1.2「owner/復旧CLIは独立実行枠」） |
-| `mcs_cli` 手動command | CLI | SH（B-6の全commandが対象かは§8-Q4） |
+| `mcs_cli` 手動command | CLI | SH（B-6の全commandが対象 — config書込みもQ SH内側でCへ進む） |
 
 各launcherは`python -I -S`推奨形態で固定bootstrapを読み、Q取得・runtime検証後にsite/flat-import pathを明示設定。`-B`単独・sourceless pyc・shadowing・未許可PYTHONPATHを拒否（AT069）。
 
@@ -86,7 +86,7 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 
 ### 3.5 bypass防止
 
-- `--role=updater`等の外部引数だけでgateを迂回しない（02§1.2）。owner/recovery CLIは**サービス管理が所有する独立実行枠**から起動し、起動側が私有証拠（継承FD集合・親process identity）を検証する。argvのrole申告は資格にしない（§8-Q4で機構確定）。
+- `--role=updater`等の外部引数だけでgateを迂回しない（02§1.2）。owner/recovery CLIは**サービス管理が所有する独立実行枠**から起動し、起動側が私有証拠を検証する。**証拠の正本（確定）**: 親processがservice管理unit（launchd plist/cron wrapper等deployment管理の起動script）であり、かつcontrol root内の私有fileへの**継承FD**を持つこと。argvのrole申告・環境変数の自己申告は資格にしない。FDのdev/ino identityをcontrol root記録と照合する（borrowed FDは別openで取り直さない — 02§4）。具体的な私有file名・記録fieldは実装時に`release_auto_bridge`のControlManifest/OwnerState側へ追加する（§8決定4）。
 
 ## 4. bridge設計（W04）
 
@@ -113,11 +113,11 @@ M4以降（owner orchestration `release_auto_owner.py`、prepare/drain、capabil
 - §11.1のsidecar分類（owner/activation、bootstrap、planning、plan、change、successor、authority、依存receipt、update journal、backup/restore hold）を`MigrationFile.disposition`（preserve/archive_exact/translate_verified/must_be_absent）へ写像。**未列挙recordがあれば自動移行を拒否**。
 - 移行禁止条件（§11.1/AT086）: v1 spent/unknown、pending successor、未解決restore/start intent、applying/stages途中。途中停止のresumeは同一intent/before/afterのみ。
 
-### 4.5 dormant v1機構の扱い（判断案 → §8-Q3）
+### 4.5 dormant v1機構の扱い（確定: v3新規経路）
 
-P0で判明した`_run_native_release`/`_issue_planning_consent`/`_prepare_native_plan`は**全てtest専用dormant**（production caller皆無）。v1 schema owner機構をv3で再利用するか、v3仕様の状態機械（OwnerState v3/StartIntent/SPENT/Outcome）に沿った新規owner orchestration（task map W08=`release_auto_owner.py`、M4+範囲）とするか。
+P0で判明した`_run_native_release`/`_issue_planning_consent`/`_prepare_native_plan`は**全てtest専用dormant**（production caller皆無）。**決定: v3新規経路を採用し、dormant v1関数へproduction配線しない。**
 
-**提案**: v3新規経路を採用。理由: (a) MigrationIntent契約が`source_schema=mcs.release-owner.v1`を「移行元」として扱いv3正本を別に定義、(b) v1関数群はv1 schema・v1 lock順`G→U→R→A→O`前提でv3目標DAG`…Q→R→C→A→M→O`と不整合、(c) dormantコードへのproduction配線は「既存経路の再利用」に見せかけた実質新規配線で検証範囲を曖昧にする。dormant関数はv1回帰試験の対象として残し、削除は別判断。
+根拠: (a) MigrationIntent契約が`source_schema=mcs.release-owner.v1`を「移行元」として扱い、v3正本を別に定義、(b) v1関数群はv1 schema・v1 lock順`G→U→R→A→O`前提でv3目標DAG`G→U→Q→R→C→A→M→O`と不整合（Q/C非対応）、(c) dormantコードへの配線は「既存経路再利用」に見せかけた実質新規配線で検証範囲を曖昧にする。v3 owner orchestrationはtask map W08=`release_auto_owner.py`（M4+範囲）として新規実装する。dormant関数はv1回帰試験の対象として保持し、削除は別判断。
 
 ## 5. lock DAG統合の確定作業
 
@@ -127,9 +127,9 @@ P0で判明した`_run_native_release`/`_issue_planning_consent`/`_prepare_nativ
 | `G(SH)→U→R`（標準update、外側G(SH)含む） | 実測済 | 変更しない。v3適用後もlegacy update経路の回帰対象 |
 | family `state.lock→tick.lock` 系 | 実測済 | 変更しない。Q SHはこれらと独立（別root・別phase） |
 | `Q`新設 | 未実装 | §2の通り実装。DAG位置`U→Q→R` |
-| `C`のDAG位置 | 未確定 | §2.3の`Q→C`参加案。逆順edgeは静的未検出（P0 C-4）だが動的網羅は未完 |
-| `_apply_pipeline` nested再帰DAG | 未精査 | M3で静的追跡（P0未確認#5） |
-| `unlocked_transport`×Q | 未設計 | §2.2で「Q SH保持・R区間解放」と整理。実装時に再検証 |
+| `C`のDAG位置 | 確定（§2.3） | `Q→C` — 全managed writerがQ SH内側でC取得。updater採用sequenceも`…Q(EX)→R→C→A…`順 |
+| `_apply_pipeline` nested再帰DAG | 未精査 | M3実装時に静的追跡（P0未確認#5）— v3経路は新規owner orchestrationで旧pipelineを通らないため影響はlegacy回帰側 |
+| `unlocked_transport`×Q | 確定（§2.2） | Q SHはprocess寿命で保持、R解放区間とも独立。code切替はQ EXが必要なためR解放中processも切替をブロック |
 
 **逆順edge検査（現時点の静的結論）**: Q/Cが未存在のため、現行コードに`…→Q`や`…→C→(G/U/R/A/M/O)`の逆順edgeは存在し得ない。C追加時に`C→Q`を作らないこと（config writerは必ずQ SH取得後にC）が設計上の要点。runtime caller網羅はM3実装時に`git grep`非切詰めで再実施。
 
@@ -157,11 +157,15 @@ P0で判明した`_run_native_release`/`_issue_planning_consent`/`_prepare_nativ
 
 全て一時HOME/DB/Git/署名fixture・偽transport/偽service。実機・実サービス・実鍵不使用。`run_sandbox.py`は別途。
 
-## 8. Codexへの判断依頼事項
+## 8. 設計判断の記録（旧「Codex判断依頼」→ Devin決定、r58単独開発体制）
 
-1. **Q path確定**: `runtime-entry.lock`をcontrol root（G/A/Oと同所）に置く案でよいか。v2 file表の記述と整合するが、data/側を意図していた可能性を排除したい。
-2. **C参加方式**: managed config writerのQ SH参加（`Q→C`）でtarget DAGと整合させる案。legacy `config_edit.apply`へv3制御下のみQ必須化を入れるか、snapshot変化拒否のみにするか。
-3. **dormant v1機構**: §4.5の「v3新規経路・v1 dormantは回帰対象として残す」提案の可否。v1関数の削除/保持も併せて判断願う。
-4. **bypass防止機構**: owner/recovery CLI独立slotの具体的証拠（継承FD・親identity・私有tokenのどれを正本にするか）。install.sh/mcs_cliのQ mode（SH/EX/対象外）確定。
-5. **generation供給源**: bootstrapの「許可generation」をOwnerState v3のどのfieldから読むか（`runtime_generation`? activation証拠?）。M4接続点の確定。
-6. **W06境界**: drain/retire/start観測はM4（prepare/drain）へ完全委譲し、M3は入口Q適用と独立slot起動のみに限定してよいか。
+ユーザー直接指示「devinのみで開発するようにしてください」（Codex r58/r59）により、Codexレビュー待ちを解除。以下6件は既存仕様・コード・承認範囲の証拠に基づきDevinが決定した。新規権限・不可逆な仕様変更を要する項目はない。
+
+| # | 論点 | 決定 | 根拠 |
+|---|---|---|---|
+| 1 | Q path | `runtime-entry.lock`をcontrol root（`~/.mcs-release-control/<sha256>/`、G/A/Oと同所）に新設。NAMES 33→34 | v2 file表（auto-update-v2.md L451）がcontrol root節に明記。2 root構造を増やさない |
+| 2 | C参加方式 | 全managed writerがbootstrapでQ SHをprocess寿命保持→config書込みは必ず`Q→C`順。`config_edit.apply`自体は変更しない。legacy非参加writerはsnapshot変化で拒否 | 02§1.2「全業務入口はbootstrapを通る」+02§4「参加しないGUI/手動編集は最終snapshot変化で拒否」 |
+| 3 | dormant v1機構 | v3新規経路（W08 `release_auto_owner.py`）。dormant v1関数はproduction配線せずv1回帰試験対象として保持 | §4.5の3根拠。MigrationIntentがv1を移行元として扱う契約と整合 |
+| 4 | bypass防止・入口mode | owner/recovery CLIの資格正本=service管理unit親process＋control root私有fileへの継承FD（dev/ino照合）。argv/env自己申告は不認。install.sh=Q EX（code適用側・別承認保守）、mcs_cli=Q SH、bridge=Q EX相当の保守枠 | 02§1.2「独立実行枠」「--role引数で迂回しない」。既存FD継承機構（MCS_RELEASE_CHILD_FDS/lifetime_fds）と同型 |
+| 5 | generation供給源 | `OwnerState.runtime_generation`（`finalize_verified`のみが更新する認可済み世代）。`active.candidate_generation`は未認可で不許可 | release_auto_state.py L367実装済み。VERIFIED終端のみ前進の単調field |
+| 6 | W06境界 | M3は入口Q適用＋独立slot起動枠のみ。drain/retire/start観測はM4（prepare/drain）へ委譲 | 09のM4「prepare/drain…停止予算」と04 W06の機能が対応。M3完了条件は「適格性未確認ならauto不可」でdrain実装を要求しない |
