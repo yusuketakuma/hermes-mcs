@@ -53,6 +53,25 @@ def history(led, monkeypatch, request, tmp_path):
             "INSERT INTO attachments(message_id,file_id,name,local_path,bytes,sha256,state,downloaded_at,created_at) "
             "VALUES(100,'synthetic-third','synthetic-third.pdf','/tmp/fake-third.txt',10,?,'downloaded',?,?)",
             ('ab' * 32, NOW, NOW))
+    # The resolver's retry holds until every unattested collected upload
+    # identity is approved through the real ops.attachment_identity_confirm
+    # chain; each applied receipt re-seals the held update to edit_only reuse.
+    held = _latest_render(led)
+    if held['state'] == 'held':
+        for n, row in enumerate(led.db.execute(
+                "SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+                "AND kind='attachment_part' AND state='held' AND attempt_id IS NULL "
+                "AND error_code='attachment_upload_identity_unverified' ORDER BY idx",
+                (held['delivery_id'],))):
+            plan = notify_recovery.attachment_identity_confirm_plan(
+                led.db, held['delivery_id'], row['part_id'])
+            assert 'error' not in plan, plan
+            confirm = {**plan, 'command_id': _uuid(950 + n), 'actor': 'synthetic-operator',
+                       'human_confirmed': True, 'reason': '合成の添付同一性確認',
+                       'evidence': {'method': 'synthetic_remote_check', 'ref': 'synthetic',
+                                    'worker_stopped': True}}
+            receipt = notify_recovery.apply_attachment_identity_confirm(led, confirm)
+            assert receipt['outcome'] == 'applied', receipt.get('error')
     with led.db:
         queued = _latest_render(led)
         if queued['delivery_id'] != old['delivery_id']:
