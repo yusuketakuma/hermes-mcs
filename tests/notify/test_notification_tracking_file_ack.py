@@ -193,6 +193,44 @@ def test_scope_keys_reject_request_fields():
         assert not notify_scope.scope_keys_allowed(polluted)
 
 
+def test_polluted_scope_cannot_replay_delivered_digest_as_not_sent():
+    """P2 RED: a receipt claiming not_sent whose scope smuggles the original
+    mark_delivered result/remote_id must not reconstruct the stored digest.
+    The pre-fix ordering let scope override `result`, so the same fields hash
+    to the original approval — pin that the new guard rejects up front."""
+    from notify_parts import _part_resolution_request
+    from mcs_util import payload_hash
+    command_id, delivery_id = _uuid(970), _uuid(971)
+    scope = {'transport': 'slack', 'profile': 'P', 'application_id': 'A',
+             'team_id': 'T', 'channel_id': 'C'}
+    fields = {'command_id': command_id, 'actor': 'op', 'reason': 'r',
+              'delivery_id': delivery_id, 'part_id': 'part', 'attempt_id': 'att',
+              'manifest_sha256': 'a' * 64, 'payload_sha256': 'b' * 64,
+              'evidence': {'method': 'm', 'ref': 'r', 'worker_stopped': True}}
+    original = {'version': 1, 'cmd': 'ops.card_part_resolve', 'human_confirmed': True,
+                **scope, **fields, 'expected_state': 'unknown',
+                'result': 'mark_delivered', 'remote_id': 'R1'}
+    assert notify_recovery.validate_card_part_resolve(original) is None
+    saved = {'command_id': command_id, 'payload_hash': payload_hash(original)}
+    receipt = {'kind': 'ops.card_part_resolve', 'outcome': 'applied',
+               'part_state': 'not_sent', 'command_id': command_id,
+               'actor': 'op', 'reason': 'r', 'delivery_id': delivery_id,
+               'part_id': 'part', 'attempt_id': 'att',
+               'manifest_sha256': 'a' * 64, 'payload_sha256': 'b' * 64,
+               'evidence': {'method': 'm', 'ref': 'r', 'worker_stopped': True},
+               'scope': {**scope, 'result': 'mark_delivered', 'remote_id': 'R1'}}
+    row = {'part_attempt': 'att', 'payload_hash': 'a' * 64, 'payload_sha256': 'b' * 64,
+           'delivery_id': delivery_id, 'part_id': 'part', 'remote_id': 'R1',
+           'transport': 'slack', 'profile': 'P', 'application_id': 'A',
+           'team_id': 'T', 'channel_id': 'C'}
+    # Pre-fix ordering put `result` before **scope, so the smuggled fields
+    # rebuild the original approved request byte-for-byte (vulnerability proof).
+    legacy_base = {'version': 1, 'cmd': 'ops.card_part_resolve', 'human_confirmed': True,
+                   'result': 'mark_not_sent', **receipt['scope'], **fields}
+    assert payload_hash({**legacy_base, 'expected_state': 'unknown'}) == saved['payload_hash']
+    assert _part_resolution_request(saved, receipt, row, part_state='not_sent') is None
+
+
 def test_current_or_non_operator_file_failure_never_becomes_history_ack(history):
     with history.db:
         history.db.execute('DELETE FROM command_receipts WHERE command_id=?', (history.resolution['command_id'],))
