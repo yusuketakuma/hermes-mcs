@@ -2,12 +2,15 @@
 import copy
 import hashlib
 import json
+import time
 import pytest
 from types import SimpleNamespace
 
+import cloud_client
 import cloud_inference
 import cloud_policy
 import extract_llm as worker
+import extract_llm_qc
 from extract_testkit import _ledger, _message
 from test_anthropic_runtime import _bound_source, real_record_result, real_usage_reserver, routed as routed
 from test_cloud_repair_final_proof import _repair_run
@@ -226,6 +229,71 @@ def test_late_protected_prior_conflict_survives_recapture_and_refuses_commit(rou
     assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'rejected'
     assert row["_commit_reject_reason"] == "commit_checkpoint"
     assert [tuple(saved) for saved in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+def test_guarded_checkpoint_divergence_refuses_paid_dispatch(routed, monkeypatch, tmp_path):
+    """A guarded persist that observes a diverged checkpoint marks the row
+    _checkpoint_conflict while the protected prior still resolves; the runner's
+    dispatch_current fence then refuses the next paid dispatch as
+    checkpoint_unverified and no new cloud_usage evidence appears."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    filler = "経過は安定しており次回診察で再評価します。"
+    body = ("家族の発熱の既往があります。" + filler * 149
+            + "本人の血圧120/80です。" + "内服と休養を継続してください。" * 30)
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body,
+        expected_sends=4)
+    _, cfg, *_ = routed
+    money = [tuple(saved) for saved in led.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') "
+        "ORDER BY artifact_id")]
+
+    key = next(iter(row["_checkpoint_identity"]))
+    artifact_id = row["_checkpoint_identity"][key][0]
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content='diverged' WHERE artifact_id=?",
+                       (artifact_id,))
+    accepted = worker._persist_chunks(led, row, {key: chunks.get(key)}, context,
+        chunk_size=row["_chunk_size"], splits=row["_splits"], lease=None,
+        guard=row["_checkpoint_guard"])
+    assert accepted is False
+    assert row["_checkpoint_conflict"] is True
+    # The prior still resolves: refusal below comes from the dispatch fence alone.
+    assert extract_llm_qc._protected_prior_current(led.db, row)
+
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
+    assert not errors and selection is not None
+    # Neutralize unrelated admission gates so the dispatch fence is the only
+    # thing that can refuse; owner_alive/deadline/tightened stay real.
+    monkeypatch.setattr(cloud_policy, "setting_block_reason", lambda *_a, **_k: None)
+    monkeypatch.setattr(cloud_policy, "block_reason", lambda *_a, **_k: None)
+    unit = cloud_inference.CloudInferenceUnit(
+        led, cfg, route="reextract", project_id=1, message_id=1, unit_key="1",
+        deadline=time.monotonic() + 600,
+        current=lambda: (extract_llm_qc._prior_matches(led.db, row, row.get("_expected_prior"))
+                         and extract_llm_qc._protected_prior_current(led.db, row)),
+        dispatch=lambda fn, **_kwargs: fn(), owner={"lease": "synthetic-conflict"},
+        selection=selection,
+        dispatch_current=lambda: not row.get("_checkpoint_conflict"))
+    with pytest.raises(cloud_client.CloudNotSent) as refused:
+        unit.guard()
+    assert cloud_client.not_sent_reason(refused.value) == "checkpoint_unverified"
+    assert len(sends) == 4
+    assert [tuple(saved) for saved in led.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') "
+        "ORDER BY artifact_id")] == money
 
 
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):
