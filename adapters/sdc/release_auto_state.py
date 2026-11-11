@@ -418,15 +418,20 @@ def open_intent(store, intent):
     with store.release_owner_lock():
         existing = load_intent(store)
         if existing is not None:
-            # 退役済みintentは直前opのfence。対応terminalがoutcomesへ
-            # 耐久化済みのときだけ次opのfenceとして置き換える。
-            # phase='open'の残存はstart進行中なので拒否、破損はload_intentが拒否。
-            _check(existing['phase'] == 'retired', 'INTENT_EXISTS')
+            # intent残存は直前opのfence。対応terminalがoutcomesへ耐久化済み
+            # のときだけ次opのfenceとして置き換える。terminal未到達のopen残存は
+            # start進行中なので拒否、破損はload_intentが拒否。
+            # open+terminalはfinalize後retire前のcrash残滓(VERIFIED確定済みで
+            # opは終端)なのでretiredと同じく置換を許す。
             owner = load(store)
-            _check(any(o['operation_id'] == existing['operation_id']
-                       and o['attempt_key'] == existing['attempt_key']
-                       and o['state'] in TERMINAL_STATES
-                       for o in owner['outcomes']), 'INTENT_EVIDENCE')
+            evidenced = any(o['operation_id'] == existing['operation_id']
+                            and o['attempt_key'] == existing['attempt_key']
+                            and o['state'] in TERMINAL_STATES
+                            for o in owner['outcomes'])
+            if existing['phase'] == 'retired':
+                _check(evidenced, 'INTENT_EVIDENCE')
+            else:
+                _check(evidenced, 'INTENT_EXISTS')
         store.write(INTENT_NAME, value)
     return value
 

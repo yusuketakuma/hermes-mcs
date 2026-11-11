@@ -127,6 +127,42 @@ def test_consecutive_updates_a_b_c(tmp_path):
             offer_c['selected']['release']['source_commit']
 
 
+def test_retire_intent_crash_does_not_block_next_update(tmp_path,
+                                                        monkeypatch):
+    """finalize_verified後・retire_intent前のcrash: intent='open'残存でも
+    terminal証拠があれば次opが開始できる(連続更新を止めない)。"""
+    with ot.Store(tmp_path / 'private-i4h', create=True) as store:
+        at.seed(store)
+        deps = FaultDeps()
+        real_retire = state.retire_intent
+        crashed = []
+
+        def flaky_retire(*a, **k):
+            if not crashed:
+                crashed.append(1)
+                raise RuntimeError('synthetic crash')
+            return real_retire(*a, **k)
+
+        monkeypatch.setattr(state, 'retire_intent', flaky_retire)
+        # A: VERIFIED確定(finalize)は成功しretire_intentでcrash
+        with pytest.raises(RuntimeError):
+            _drive(store, deps)
+        owner = state.load(store)
+        assert owner['active'] is None
+        assert any(o['state'] == 'VERIFIED' for o in owner['outcomes'])
+        assert state.load_intent(store)['phase'] == 'open'
+        # B: open残存intentをterminal証拠で置き換えて完走する
+        offer_b = _offer_for('B', 3)
+        _use_offer(deps, offer_b)
+        owner_b = _drive(store, deps)
+        assert owner_b['active'] is None
+        assert _verified_target(store) == \
+            offer_b['selected']['release']['release_id']
+        # intentはBのopを指す(Aのopen残存は置き換え済み)
+        assert state.load_intent(store)['operation_id'] == \
+            owner_b['outcomes'][-1]['operation_id']
+
+
 def test_second_update_rejects_stale_offer(tmp_path):
     """A適用後にAより古いcode_seqのofferはstageされない(fail-closed)。"""
     with ot.Store(tmp_path / 'private-i4b', create=True) as store:
