@@ -378,3 +378,53 @@ def test_cmd_consent_confirm_bad_file(control_root, tmp_path, capsys):
     bad = tmp_path / 'bad.json'
     bad.write_text('{"not": "a preview"}')
     assert update_cli.cmd_consent_confirm(_cc_args(str(bad))) == 2
+
+
+def _cp_args(proposal_id='77777777-6666-4555-8444-333333333333', output=None):
+    import argparse
+    return argparse.Namespace(proposal_id=proposal_id,
+                              output=output or '/tmp/preview-out.json')
+
+
+def test_cmd_consent_preview_unavailable_without_state(control_root, capsys):
+    assert not control_root.exists()
+    assert update_cli.cmd_consent_preview(_cp_args()) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out['status'] == 'unavailable'
+
+
+def test_cmd_consent_preview_unavailable_without_wire(control_root, capsys):
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
+    assert update_cli.cmd_consent_preview(_cp_args()) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out['status'] == 'unavailable'
+
+
+def test_cmd_consent_preview_ok(control_root, tmp_path, capsys, monkeypatch):
+    class PreviewWire:
+        def __init__(self):
+            self.sent = []
+
+        def signed_send(self, path, raw):
+            self.sent.append((path, json.loads(raw.decode())))
+            return b'{}'
+
+        def verify(self, path, response):
+            return _preview_payload()
+
+    wire = PreviewWire()
+    monkeypatch.setattr(update_cli, '_v3_consent_wire', lambda: wire)
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
+    out_path = str(tmp_path / 'preview.json')
+    rc = update_cli.cmd_consent_preview(
+        _cp_args(output=out_path))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out['status'] == 'ok'
+    assert out['preview_id'] == '99999999-8888-4777-8666-555555555555'
+    saved = json.loads(Path(out_path).read_text())
+    assert saved['schema_version'] == 'mcs.consent-preview.v3'
+    path, request = wire.sent[0]
+    assert path == '/v3/mcs/releases/consent-preview'
+    assert request['central_proposal_id'] == '77777777-6666-4555-8444-333333333333'

@@ -1,12 +1,16 @@
 {
   "category": "added",
   "title": "v3 standing consentの人間確認付き確定コマンドを追加",
-  "summary": "`mcs update consent-confirm --preview-file <json>` を追加しました。ConsentPreviewの内容(範囲・profile・窓・予算・期限)を表示し、`--confirm-human`と`--reason`が揃った時だけ同意を確定します。確認証拠はpreview内容へ紐付けてローカルに保存され、再試行時も同じ証拠を使います。",
+  "summary": "`mcs update consent-preview --proposal-id <id> --output <file>` でConsentPreviewを取得し、`mcs update consent-confirm --preview-file <file>` で人間確認のうえ同意を確定します。確認証拠はpreview内容へ紐付けてローカルに保存され、再試行時も同じ証拠を使います。",
   "upgrade": "追加操作は不要です。v3自動更新はAUTO_ELIGIBLE=falseのまま無効で、中央wire未配線の間はunavailableを返します。",
   "details": [
     "mcs/ops/release_auto_consent.py: ensure_confirmation_receiptを追加 — preview_sha256をkeyにreceipt_id/confirmed_at/reasonをrelease-consent-confirmation.jsonへ耐久化。同一previewは同一receipt_idを返しCONFIRM_CONFLICTを回避。confirm_standing_policyはwire未設定をCONSENT_WIREで拒否。",
     "mcs/ops/update_cli.py: consent-confirm subcommandを追加 — preview-fileをschema検証してconsent_termsを表示、--confirm-human+--reason必須、wire未配線はunavailable。",
-    "adapters/sdc/storage.py: release-consent-confirmation.jsonをsidecar名・上限64KiBへ登録。"
+    "adapters/sdc/storage.py: release-consent-confirmation.jsonをsidecar名・上限64KiBへ登録。",
+    "mcs/ops/update_cli.py: consent-preview subcommandを追加 — owner stateのscope/profile_sha256と--proposal-idでConsentPreviewRequestを送り、検証済みpreviewを--outputへ保存。"
   ],
-  "refs": ["mcs/ops/update_cli.py", "mcs/ops/release_auto_consent.py"]
+  "refs": [
+    "mcs/ops/update_cli.py",
+    "mcs/ops/release_auto_consent.py"
+  ]
 }

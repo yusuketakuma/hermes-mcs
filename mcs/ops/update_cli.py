@@ -383,6 +383,55 @@ def cmd_consent_confirm(args) -> int:
     return 0
 
 
+def cmd_consent_preview(args) -> int:
+    """v3 ConsentPreviewを中央から取得し--outputへJSON保存する。
+
+    scope/profile_sha256はowner state正本から取り、central_proposal_idは
+    --proposal-idで指定する。wire未配線(本番transport/credential/pinsは
+    W14待ち)ではunavailableを返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    wire = _v3_consent_wire()
+    if wire is None:
+        print(json.dumps({"status": "unavailable",
+                          "reason": "consent wire未配線(W14)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        from adapters.sdc import release_auto_state as auto_state
+        import release_auto_consent as v3_consent
+        with Store(root) as store:
+            owner = auto_state.load(store)
+            preview = v3_consent.request_consent_preview(
+                wire, scope=owner['scope'],
+                profile_sha256=owner['profile']['profile_sha256'],
+                central_proposal_id=args.proposal_id)
+        if not isinstance(preview, dict):
+            raise ValueError
+        raw = json.dumps(preview, ensure_ascii=False,
+                         separators=(',', ':')).encode('utf-8')
+        if len(raw) > 1024 * 1024:
+            raise ValueError
+        with open(args.output, 'wb') as fh:
+            fh.write(raw)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_PREVIEW")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok", "preview_file": args.output,
+                      "preview_id": preview.get("preview_id"),
+                      "expires_at": preview.get("expires_at")},
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_apply(args) -> int:
     return apply(args.tag, args.sha, args.command_id,
                  base_sha=args.base_sha, reinstall=args.reinstall,
@@ -467,6 +516,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
     sub.add_parser("auto-disable", help="v3自動更新の同意を撤回する（local_consent_epochを増分）").set_defaults(
         fn=lambda args: cmd_auto_disable(args))
+    cp_p = sub.add_parser("consent-preview",
+                          help="v3 ConsentPreviewを中央から取得してファイル保存する")
+    cp_p.add_argument("--proposal-id", required=True,
+                      help="中央が発行したconsent proposalのID")
+    cp_p.add_argument("--output", required=True,
+                      help="preview JSONの保存先パス")
+    cp_p.set_defaults(fn=lambda args: cmd_consent_preview(args))
     cc_p = sub.add_parser("consent-confirm",
                           help="v3 standing consentを人間確認のうえ確定する（--preview-file必須）")
     cc_p.add_argument("--preview-file", required=True,
