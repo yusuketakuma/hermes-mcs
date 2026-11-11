@@ -192,8 +192,56 @@ def cmd_check() -> int:
         return apply(picked["tag"], picked["target_sha"],
                      picked["command_id"], picked.get("base_sha"))
     if auto:
+        # v3 owner stateが存在する(または読めない)限りlegacy auto適用を抑止。
+        # 人間承認済みpicked経路は従来どおり(auto無人経路のみが対象)。
+        if _v3_auto_blocked():
+            return 0
         return apply(auto[0], auto[1], None)
     return 0
+
+
+def _v3_state_root():
+    """v3 release stateを持つSDC state_root。未設定ならNone(未移行)。"""
+    root = (mcs_util.load_config().get('sdc') or {}).get('state_root')
+    return root if isinstance(root, str) and root else None
+
+
+def _v3_auto_blocked() -> bool:
+    """v3 owner state存在/読取不能でlegacy auto適用を抑止する(fail-closed)。
+
+    sdc.state_root未設定・state dir未作成=未移行のみFalse。dirがあるのに
+    Storeが開けない・owner stateが読めない場合はTrue — 状態不明で
+    legacy経路を開かない。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        return False
+    try:
+        from adapters.sdc.storage import Store
+        from mcs.ops import release_auto_status as v3_status
+        with Store(root) as store:
+            return v3_status.legacy_auto_blocked(store)
+    except Exception:
+        return True
+
+
+def _v3_status_dto():
+    """cmd_status用のv3 DTO。storeを開けない場合はunreadable固定形。"""
+    base = {'schema_version': 'mcs.release-status-local.v1',
+            'phase': None, 'reason': None, 'verified_release': None,
+            'pending_outbox': None, 'consent': None, 'health': None}
+    root = _v3_state_root()
+    if root is None:
+        return None
+    if not os.path.isdir(root):
+        return {**base, 'state': 'uninitialized'}
+    try:
+        from adapters.sdc.storage import Store
+        from mcs.ops import release_auto_status as v3_status
+        with Store(root) as store:
+            return v3_status.status_dto(store)
+    except Exception:
+        return {**base, 'state': 'unreadable'}
 
 
 def cmd_status() -> int:
@@ -202,9 +250,12 @@ def cmd_status() -> int:
         print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
     cur_tag, cur_sha = _current_version()
-    print(json.dumps({"current_tag": cur_tag, "current_sha": cur_sha,
-                      "state": state}, ensure_ascii=False, indent=2,
-                     default=str))
+    out = {"current_tag": cur_tag, "current_sha": cur_sha,
+           "state": state}
+    v3 = _v3_status_dto()
+    if v3 is not None:
+        out['v3'] = v3
+    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     return 0
 
 
