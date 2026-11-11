@@ -401,3 +401,38 @@ def hash_v3(kind, value):
     except Exception:
         raise ContractError('CONTRACT_INVALID') from None
     return hashlib.sha256((HASH_DOMAIN + kind + '\n' + c).encode('ascii')).hexdigest()
+
+
+_ACCEPTANCE_LANES = ('lint-test', 'hygiene', 'standalone-sdk', 'incident-gates', 'macos', 'hermes-integration')
+
+
+def validate_acceptance(value, *, expected_source, policy):
+    """ReleaseAcceptanceのSEM04–06検査。expected_source/policyへcanonical/hashで束縛する。
+
+    accepted_atの鮮度(ACCEPTANCE_TIME)とrelease_checks_digestの内容照合は受入登録側
+    (中央)の責務で、ここでは署名済み文書の自己整合とlane意味だけを検査する。
+    """
+    _validate('ReleaseAcceptance', value)
+    _validate('SourceRef', expected_source)
+    _validate('RolloutPolicy', policy)
+    _check(_same_json(value['source'], expected_source))
+    _check(value['policy_sha256'] == hash_v3('rollout-policy', policy))
+    lanes = value['lanes']
+    names = [lane['lane'] for lane in lanes]
+    _check(len(names) == len(_ACCEPTANCE_LANES) and set(names) == set(_ACCEPTANCE_LANES))
+    target = value['source']['commit']
+    for lane in lanes:
+        # SEM04: executed/local_equivalentは受入対象commit、reusedは証拠出所commit
+        _check(lane['source_commit'] == (lane['reused_from_commit'] if lane['coverage'] == 'reused' else target))
+        _check(lane['coverage'] != 'executed' or lane['unexecuted_reason'] is None)
+    if value['mode'] == 'full_run':
+        # SEM05: 全lane executed/success・job証拠あり・未実行0
+        _check(all(lane['measured_result'] == 'success' and lane['coverage'] == 'executed'
+                   and lane['job_ref'] is not None for lane in lanes))
+    else:
+        # SEM06: failureは解消証拠、reusedは元SHA+影響レビュー、local_equivalentは実測success
+        _check(all((lane['measured_result'] != 'failure' or lane['resolution_evidence_sha256'] is not None)
+                   and (lane['coverage'] != 'reused'
+                        or (lane['reused_from_commit'] is not None and lane['impact_review_sha256'] is not None))
+                   and (lane['coverage'] != 'local_equivalent' or lane['measured_result'] == 'success')
+                   for lane in lanes))

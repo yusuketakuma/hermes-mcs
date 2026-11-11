@@ -12,11 +12,26 @@ EXAMPLES = Path(__file__).resolve().parents[3] / 'adapters/sdc/contracts/mcs-aut
 FIXTURES = [json.loads(p.read_text()) for p in sorted(EXAMPLES.glob('*.json')) if p.name != 'negative-vectors.json']
 NEGATIVES = json.loads((EXAMPLES / 'negative-vectors.json').read_text())['vectors']
 
-# context照合(SEM02–11,14–17,19–23,27–34)は機能module実装時に個別vectorで固定する。
-# ReleaseAcceptanceの4件はSEM04–06の署名・実測・承認証拠との照合が必要で、publication側で固定する。
+# context照合(SEM02–03,07–11,14–17,19–23,27–34)は機能module実装時に個別vectorで固定する。
+# ReleaseAcceptanceのSEM04–06はvalidate_acceptanceが担うためnegative vectorもここで固定する。
 SEMANTIC_COVERED = {'Offer', 'StartGrant', 'Outcome', 'FileIdentity', 'MaintenanceWindow',
                     'RolloutPolicy', 'StandingConsent', 'ConsentPreview', 'EnrollmentProposalRequest'}
-PENDING = {'duplicate_lane', 'full_run_wrong_sha', 'reused_without_review', 'unresolved_failure'}
+PENDING = set()
+
+
+def _acceptance_policy():
+    return json.loads((EXAMPLES / 'rollout-policy.json').read_text())['data']
+
+
+def _bind_acceptance(data):
+    """fixtureのpolicy_sha256をtest policyへ付け替え、lane semanticsを単独で試験可能にする。"""
+    bound = json.loads(json.dumps(data))
+    bound['policy_sha256'] = contract.hash_v3('rollout-policy', _acceptance_policy())
+    return bound
+
+
+def _acceptance(data):
+    return contract.parse_typed(json.dumps(data).encode(), 'ReleaseAcceptance')
 
 
 @pytest.mark.parametrize('fx', FIXTURES, ids=[f['definition'] for f in FIXTURES])
@@ -31,7 +46,14 @@ def test_positive_fixtures_validate_and_canonical_roundtrip(fx):
 
 def test_negative_vectors_reject_or_stay_pending():
     pending = set()
+    policy = _acceptance_policy()
     for v in NEGATIVES:
+        if v['definition'] == 'ReleaseAcceptance':
+            bound = _bind_acceptance(v['data'])
+            with pytest.raises(contract.ContractError):
+                contract.validate_acceptance(_acceptance(bound),
+                                             expected_source=bound['source'], policy=policy)
+            continue
         covered = v['reject_layer'] == 'structure' or v['definition'] in SEMANTIC_COVERED
         if not covered:
             pending.add(v['id'])
@@ -144,3 +166,58 @@ def test_rollout_policy_semantics_direct_and_nested():
             parse(over)
         with pytest.raises(contract.ContractError):
             parse(over, wrap=True)
+
+
+def test_validate_acceptance_positive_fixtures():
+    """SEM04–06: 公式full/composed例がexpected_source/policy束縛で受理される。"""
+    policy = _acceptance_policy()
+    for name in ('acceptance-full.json', 'acceptance-composed.json'):
+        bound = _bind_acceptance(json.loads((EXAMPLES / name).read_text())['data'])
+        contract.validate_acceptance(_acceptance(bound), expected_source=bound['source'], policy=policy)
+
+
+def test_validate_acceptance_rejects_binding_and_lane_violations():
+    """expected_source/policy不一致とSEM04–06の個別違反を拒否する。"""
+    policy = _acceptance_policy()
+    base = _bind_acceptance(json.loads((EXAMPLES / 'acceptance-composed.json').read_text())['data'])
+    value = _acceptance(base)
+    contract.validate_acceptance(value, expected_source=base['source'], policy=policy)
+
+    # expected_sourceはSourceRef全体のcanonical一致を要求(中央publication.jsと同じ)
+    wrong_source = dict(base['source'], commit='0' * 40)
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(value, expected_source=wrong_source, policy=policy)
+    # policy_sha256はH("rollout-policy", policy)との一致を要求
+    other_policy = dict(policy, policy_revision=policy['policy_revision'] + 1)
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(value, expected_source=base['source'], policy=other_policy)
+
+    def mutated(fn):
+        doc = json.loads(json.dumps(base))
+        fn(doc)
+        return _acceptance(doc)
+
+    # SEM06: local_equivalentは実測successのみ(failureを免除しない)
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(
+            mutated(lambda d: d['lanes'][0].update(coverage='local_equivalent', measured_result='failure',
+                                                    source_commit=d['source']['commit'], reused_from_commit=None,
+                                                    resolution_evidence_sha256='c' * 64)),
+            expected_source=base['source'], policy=policy)
+    # SEM04: executedなのに未実行理由を持つのは矛盾
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(
+            mutated(lambda d: d['lanes'][1].update(unexecuted_reason='runner_down')),
+            expected_source=base['source'], policy=policy)
+    # SEM04: reused laneのsource_commitはreused_from_commitと一致必須
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(
+            mutated(lambda d: d['lanes'][0].update(source_commit=d['source']['commit'])),
+            expected_source=base['source'], policy=policy)
+    # SEM05: full_runでjob_ref欠落・未executedは拒否
+    full = _bind_acceptance(json.loads((EXAMPLES / 'acceptance-full.json').read_text())['data'])
+    with pytest.raises(contract.ContractError):
+        contract.validate_acceptance(
+            _acceptance(dict(full, lanes=[dict(lane, job_ref=None) if i == 0 else lane
+                              for i, lane in enumerate(full['lanes'])])),
+            expected_source=full['source'], policy=policy)
