@@ -27,6 +27,7 @@ PROFILE = _example('standing-consent.json')['profile']
 CONSENT_EX = _example('standing-consent.json')
 CURRENT = _example('prepared-public.json')['current_release']
 
+RECEIPT_ID = 'a1b2c3d4-5678-4abc-8def-0123456789ab'
 NOW_MS = int(datetime(2026, 11, 9, 2, 0,
                       tzinfo=ZoneInfo('Asia/Tokyo')).timestamp() * 1000)
 
@@ -166,7 +167,8 @@ def test_confirm_standing_policy_saves_consent(store):
 
     wire = EchoWire()
     consent = consent_mod.confirm_standing_policy(
-        store, wire, preview=preview, clock=Clock())
+        store, wire, preview=preview, clock=Clock(),
+        confirmation_receipt_id=RECEIPT_ID)
     owner = state.load(store)
     assert owner['consent'] == consent
     assert consent['schema_version'] == 'mcs.standing-consent.v3'
@@ -178,6 +180,7 @@ def test_confirm_standing_policy_saves_consent(store):
     assert consent['central_policy_sha256'] == preview['central_policy_sha256']
     assert consent['expires_at'] == preview['consent_expires_at']
     assert consent['enabled'] is True
+    assert consent['confirmation_receipt_id'] == RECEIPT_ID
     path, request = wire.sent[0]
     assert path == '/v3/mcs/releases/consent-confirm'
     assert request['preview_id'] == preview['preview_id']
@@ -191,7 +194,8 @@ def test_confirm_rejects_expired_preview(store):
     wire = FakeWire()
     with pytest.raises(consent_mod.ConsentError):
         consent_mod.confirm_standing_policy(
-            store, wire, preview=preview, clock=Clock())
+            store, wire, preview=preview, clock=Clock(),
+            confirmation_receipt_id=RECEIPT_ID)
     assert state.load(store)['consent'] is None
     assert wire.sent == []
 
@@ -208,7 +212,8 @@ def test_confirm_rejects_revoked_receipt(store):
 
     with pytest.raises(consent_mod.ConsentError):
         consent_mod.confirm_standing_policy(
-            store, RevokeWire(), preview=preview, clock=Clock())
+            store, RevokeWire(), preview=preview, clock=Clock(),
+            confirmation_receipt_id=RECEIPT_ID)
     assert state.load(store)['consent'] is None
 
 
@@ -224,7 +229,8 @@ def test_confirm_rejects_receipt_hash_mismatch(store):
 
     with pytest.raises(consent_mod.ConsentError):
         consent_mod.confirm_standing_policy(
-            store, BadWire(), preview=preview, clock=Clock())
+            store, BadWire(), preview=preview, clock=Clock(),
+            confirmation_receipt_id=RECEIPT_ID)
     assert state.load(store)['consent'] is None
 
 

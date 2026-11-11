@@ -74,14 +74,15 @@ def request_consent_preview(wire, *, scope, profile_sha256, central_proposal_id)
     return _send(wire, CONSENT_PREVIEW_PATH, request, 'ConsentPreviewRequest')
 
 
-def _consent_from_preview(preview):
+def _consent_from_preview(preview, confirmation_receipt_id):
     """検証済みConsentPreviewからStandingConsentを構成する。
 
     policy/window/profile/epoch/早期採用者/両policy hashはpreviewと完全一致
-    (SEM10・中央CONSENT_MISMATCHと同じ規則)。consent_idと
-    confirmation_receipt_idはpreview_idから決定論的に導出し、retryで同一
-    consent bytesを再構成する。expires_atはproposal承認の
-    consent_expires_atをそのまま上限として使う。
+    (SEM10・中央CONSENT_MISMATCHと同じ規則)。confirmation_receipt_idは
+    実機人確認の私有証拠へ対応するIDを呼出側が渡す(spec 03:
+    confirmation receiptは実機人確認の私有証拠と対応)。consent_idは
+    preview_idから決定論的に導出しretryで同一consent bytesを再構成する。
+    expires_atはproposal承認のconsent_expires_atをそのまま上限として使う。
     """
     preview_id = preview.get('preview_id')
     _require(isinstance(preview_id, str), 'CONSENT_PREVIEW')
@@ -100,7 +101,7 @@ def _consent_from_preview(preview):
         'policy_epoch': preview['policy_epoch'],
         'central_policy_id': preview['central_policy_id'],
         'central_policy_sha256': preview['central_policy_sha256'],
-        'confirmation_receipt_id': _det_uuid('consent-confirmation|' + preview_id),
+        'confirmation_receipt_id': confirmation_receipt_id,
         'confirmed_at': preview['issued_at'],
         'expires_at': preview['consent_expires_at'],
         'enabled': True,
@@ -112,13 +113,16 @@ def _consent_from_preview(preview):
         max_bytes=contract.AUTO_INPUT_BYTES)
 
 
-def confirm_standing_policy(store, wire, *, preview, clock):
+def confirm_standing_policy(store, wire, *, preview, clock,
+                            confirmation_receipt_id):
     """previewからStandingConsentを構成し中央confirm→owner stateへ保存する。
 
     previewはrequest_consent_preview等でwire.verify済みのpayloadを渡す。
-    期限切れpreview・receipt非active・wire失敗は全てConsentErrorで止め、
-    owner stateは変更しない(confirm応答を確認してからだけ保存する)。
-    戻り値は保存したStandingConsent dict。
+    confirmation_receipt_idは実機人確認の私有証拠へ対応するUUIDv4を呼出側
+    (人間向けconfirm CLI)が渡す — retryでは同一IDを再利用しないとconsent
+    bytesが変わりCONFIRM_CONFLICTになる。期限切れpreview・receipt非active・
+    wire失敗は全てConsentErrorで止め、owner stateは変更しない(confirm応答を
+    確認してからだけ保存する)。戻り値は保存したStandingConsent dict。
     """
     _require(isinstance(preview, dict), 'CONSENT_PREVIEW')
     preview = contract.parse_typed(
@@ -128,7 +132,7 @@ def confirm_standing_policy(store, wire, *, preview, clock):
     _require(type(now_ms) is int, 'CONSENT_CLOCK')
     _require(type(preview.get('expires_at')) is int
              and preview['expires_at'] > now_ms, 'CONSENT_PREVIEW_EXPIRED')
-    consent = _consent_from_preview(preview)
+    consent = _consent_from_preview(preview, confirmation_receipt_id)
     _require(type(consent['expires_at']) is int
              and consent['expires_at'] > now_ms, 'CONSENT_EXPIRED')
     preview_sha256 = contract.hash_v3('consent-preview', preview)
