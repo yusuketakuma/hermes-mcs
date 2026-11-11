@@ -148,10 +148,21 @@ def check_acceptance(request_path, acceptance_path, rollout_policy_path,
 
 # --- package ---------------------------------------------------------------
 
+def _request_source(request):
+    """flat local形式とcontract BuildRequest(source.*)を正規化する。"""
+    source = request.get('source')
+    if isinstance(source, dict):
+        return (source.get('commit'), source.get('tag'),
+                source.get('main_snapshot_sha'))
+    return (request.get('commit'), request.get('tag'),
+            request.get('main_snapshot_sha'))
+
+
 def package(request_path, assets_dir, output):
     """固定asset集合をローカルで計測しasset-list.jsonを出力。外部変更なし。"""
     request = _load(request_path)
-    _require(COMMIT_RE.fullmatch(str(request.get('commit', ''))),
+    commit, tag, _snapshot = _request_source(request)
+    _require(COMMIT_RE.fullmatch(str(commit or '')),
              'REQUEST_INVALID')
     entries = []
     for name in sorted(os.listdir(assets_dir)):
@@ -164,7 +175,7 @@ def package(request_path, assets_dir, output):
     asset_set_sha = hashlib.sha256(
         json.dumps(entries, sort_keys=True).encode()).hexdigest()
     result = {'schema_version': 'mcs.release-asset-list.local.v1',
-              'commit': request['commit'], 'tag': request.get('tag'),
+              'commit': commit, 'tag': tag,
               'assets': entries, 'asset_set_sha256': asset_set_sha}
     _dump(output, result)
     return result
@@ -212,8 +223,7 @@ def create_bundle(request_path, repo, output_dir, output):
     build/install/importは行わない(git plumbingのみ)。
     """
     request = _load(request_path)
-    commit = request.get('commit')
-    tag = request.get('tag')
+    commit, tag, main_snapshot = _request_source(request)
     _require(isinstance(commit, str) and COMMIT_RE.fullmatch(commit),
              'REQUEST_INVALID')
     _require(isinstance(tag, str) and TAG_RE.fullmatch(tag), 'TAG_INVALID')
@@ -224,8 +234,7 @@ def create_bundle(request_path, repo, output_dir, output):
                         commit).get('stdout', '0').strip() or '0')
     _require(expected > 0, 'COMMIT_INVALID')
     # spec §4手順7: 読取り時main SHAに対しtargetが祖先であることを隔離検証。
-    # main_snapshot_shaはinspect-event必須項目。object不在・非祖先はfail-closed。
-    main_snapshot = request.get('main_snapshot_sha')
+    # main_snapshot_shaはidentify必須項目。object不在・非祖先はfail-closed。
     _require(isinstance(main_snapshot, str)
              and COMMIT_RE.fullmatch(main_snapshot),
              'MAIN_SNAPSHOT_INVALID')
