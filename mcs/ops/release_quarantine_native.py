@@ -5,7 +5,7 @@ advance_runtimeが必要とする観測面のうち、process実体に触れる�
 このmodule単体ではtickを完走しない。
 
 birth_witnessは子側quarantine_bootstrap.default_birthと同一計算
-(sysctl kern.proc.pid.<pid>出力のsha256)を使い、親子で値が一致する。
+(/bin/ps lstart出力とpidのsha256)を使い、親子で値が一致する。
 """
 import hashlib
 import os
