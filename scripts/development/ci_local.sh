@@ -19,10 +19,10 @@
 #   MCS_CI_PYTHON             Python of ci.yml python-version with the ci.yml pytest
 #   MCS_CI_STANDALONE_PYTHON  same, plus deployment/requirements-standalone.txt
 #   MCS_CI_HERMES_AGENT       hermes-agent checkout at the ci.yml ref, with .venv
-# Exit: 0 only when all six jobs pass on a clean clone; 1 otherwise; 2 usage.
+# Exit: 0 only when all seven jobs pass on a clean clone; 1 otherwise; 2 usage.
 set -u
 
-JOBS="lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
+JOBS="publication-request lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -179,6 +179,14 @@ prereq_hermes_integration() {
 }
 
 # --- job bodies: ci.yml run lines, verbatim except where noted ---
+prereq_publication_request() { command -v python3 >/dev/null 2>&1 || { reason="python3 が未導入"; return 1; }; }
+job_publication_request() {
+    # ci.ymlではtag push時のみ動くhint生成。localでは合成envで同じscriptを実行する。
+    REPOSITORY_ID=1 REF_NAME=v0.0.0-local \
+    SHA=0000000000000000000000000000000000000000 \
+    HEAD_COMMIT_ID='' RUN_ID=1 RUN_ATTEMPT=1 \
+        python3 scripts/development/publication_request.py
+}
 job_lint_test() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
