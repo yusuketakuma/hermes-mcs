@@ -1,0 +1,19 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストで選択したOCR原本ページを親チャット抽出と独立に利用可能化",
+  "summary": "添付OCRの個別ページを患者コンテキストの素材として選択できるようにし、親チャットメッセージの抽出が未完了でも、準備済みのOCRページだけを範囲指定で作成・表示できるようにします。親側の削除・権限取消・取込保留・期限切れは引き続きページを拒否します。",
+  "upgrade": "追加設定は不要です。attachment_ocr が有効な環境でのみ挙動が変わり、無効な環境では従来どおりOCRページは素材に含まれません。",
+  "details": [
+    "選択可否の判定で、OCRページは親メッセージの抽出完了ではなくページ自身の臨床抽出の準備状態で判定します。親メッセージの存在・削除・権限・取込保留・期限は _ocr_parent_ready で別途確認します。",
+    "スコープ付き readiness では、OCRページをチャット保留判定の対象メッセージから除外し、選択されたOCRページの親だけを親ゲートで再検証します。未選択の添付が未完でも、選択済みチャット素材の公開を妨げません。",
+    "全体の完了判定・添付カバレッジ・依存完全性・クラウド抽出準備・期限の各条件は変更していません。範囲指定の成功は患者全体の完了を意味しません。",
+    "実際のローカルOCR経路から範囲指定公開・コンテキスト表示まで、親チャット抽出が未完のまま進むことを確認する統合テストを追加しました。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "tests/patients/test_ocr_context_sources.py",
+    "tests/patients/test_ocr_local_context_pipeline.py",
+    "tests/patients/test_context_growth_adversarial.py",
+    "tests/patients/test_patient_context_refresh.py"
+  ]
+}

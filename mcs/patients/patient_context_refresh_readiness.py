@@ -798,7 +798,23 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
         **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
 
 
+def _ocr_parent_ready(db, row, *, deadline):
+    """Parent gates that still apply to a selected OCR original: the parent
+    message must exist, stay permitted and undeleted, and carry no intake
+    hold. The parent's own chat extraction state never gates the page; its
+    clinical extraction readiness is judged by the source itself."""
+    import semantic_intake_hold
+    if (row is None or row['body_state'] == 'deleted'
+            or row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked')
+            or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline):
+        return False
+    root = row['parent_id'] or row['message_id']
+    return not (semantic_intake_hold.has_held_root(db, row['project_id'], root)
+                or semantic_intake_hold.has_unstored_root(db, row['project_id'], root))
+
+
 def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
+    import attachment_ocr
     import extract_llm
     import semantic_policy
     from mcs_queries import attachment_ocr_coverage, paused
@@ -813,7 +829,8 @@ def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
         'JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?', (pid,))}
     pending = {row[0] for row in db.execute(f'SELECT m.message_id FROM messages m WHERE m.project_id=? '
         f'AND (({extract_llm.pending_pred(db, include_thin=False)}) OR EXISTS ({extract_llm._hold_sql()}))', (pid,))}
-    checked, keys = {}, []
+    ocr_invalid = attachment_ocr.config_error(cfg)
+    checked, ocr_parents, keys = {}, {}, []
     for source in snapshot['sources']:
         patient_context_refresh_sources._scan_check(db)
         key = context_plan.source_key(source)
@@ -821,16 +838,23 @@ def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
             continue
         mid = source.get('parent_message_id') or source.get('message_id')
         if mid:
-            if mid not in checked:
-                attachments = attachment_ocr_coverage(db, pid, cfg, mid=mid)
-                checked[mid] = (mid in rows and mid not in pending
-                    and attachments['mode'] != 'invalid'
-                    and _message_ready(ledger, rows[mid], cfg, policy, deadline=deadline,
-                                       attachment_mode=attachments['mode'], material=True)
-                    and (policy['mode'] == 'off' or policy['extract_qc'] != 'annotate'
-                         or _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=mid)))
-            if not checked[mid]:
-                continue
+            if source.get('source') == 'attachment_ocr':
+                if mid not in ocr_parents:
+                    ocr_parents[mid] = (not ocr_invalid
+                        and _ocr_parent_ready(db, rows.get(mid), deadline=deadline))
+                if not ocr_parents[mid]:
+                    continue
+            else:
+                if mid not in checked:
+                    attachments = attachment_ocr_coverage(db, pid, cfg, mid=mid)
+                    checked[mid] = (mid in rows and mid not in pending
+                        and attachments['mode'] != 'invalid'
+                        and _message_ready(ledger, rows[mid], cfg, policy, deadline=deadline,
+                                           attachment_mode=attachments['mode'], material=True)
+                        and (policy['mode'] == 'off' or policy['extract_qc'] != 'annotate'
+                             or _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=mid)))
+                if not checked[mid]:
+                    continue
         if patient_context_refresh_state._sources_intact([source]):
             keys.append(key)
     return tuple(keys)
@@ -857,8 +881,11 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                       and coverage.get("repairable", 0) > 0
                       and set(coverage.get("reasons", {})).issubset({"retained_karte_requires_audit", "retained_attachment_requires_audit"}))
         material = source_keys is not None
+        # OCR pages are judged by their own clinical extraction readiness;
+        # their parent chat's pending/material state must not gate them.
         mids = sorted({source.get('parent_message_id') or source['message_id'] for source in snapshot['sources']
-                       if source.get('parent_message_id') or source.get('message_id')})
+                       if source.get('source') != 'attachment_ocr'
+                       and (source.get('parent_message_id') or source.get('message_id'))})
         if (errors or patient_context_refresh_state._out_of_scope(snapshot) or paused(db, pid)
                 or source_keys is None and not snapshot["acquisition"]["complete"]
                 or source_keys is not None and len(snapshot['sources']) != len(source_keys)
@@ -885,6 +912,17 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                                   attachment_mode=snapshot['attachment_coverage']['mode'],
                                   material=material):
                 return False
+        if material:
+            ocr_mids = sorted({source.get('parent_message_id') for source in snapshot['sources']
+                               if source.get('source') == 'attachment_ocr' and source.get('parent_message_id')})
+            if ocr_mids:
+                parents = {row['message_id']: row for row in db.execute(
+                    "SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
+                    "JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=? "
+                    "AND m.message_id IN (SELECT value FROM json_each(?))",
+                    (pid, json.dumps(ocr_mids)))}
+                if any(not _ocr_parent_ready(db, parents.get(mid), deadline=deadline) for mid in ocr_mids):
+                    return False
         if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline,
                     **({'message_ids': mids} if source_keys is not None else {}),

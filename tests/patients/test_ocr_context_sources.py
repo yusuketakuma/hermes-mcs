@@ -114,6 +114,38 @@ def test_image_only_post_readiness_releases_after_ocr_inference(source_store, mo
     assert refresh._inference_ready(led, 1, OCR_CFG, deadline=time.monotonic() + 600)
 
 
+def test_ready_ocr_page_progresses_while_parent_chat_pending(source_store):
+    import time
+    import patient_context_refresh_readiness as readiness
+    import patient_context_refresh_sources as sources
+    led, key, result = source_store
+    result['ready'] = True
+    deadline = time.monotonic() + 600
+    snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+    # The parent chat has no extraction artifact and stays pending; the ready
+    # page is eligible on its own clinical extraction instead.
+    assert readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline) == (key,)
+    assert readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
+
+
+def test_ocr_page_scope_still_rejects_unready_page_and_deleted_parent(source_store):
+    import time
+    import patient_context_refresh_readiness as readiness
+    import patient_context_refresh_sources as sources
+    led, key, result = source_store
+    deadline = time.monotonic() + 600
+    result['ready'] = False
+    snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+    assert key not in readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline)
+    assert not readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
+    result['ready'] = True
+    led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=10")
+    led.db.commit()
+    snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+    assert key not in readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline)
+    assert not readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
+
+
 def test_verified_empty_page_needs_no_clinical_inference(source_store, monkeypatch):
     import json
     import attachment_ocr

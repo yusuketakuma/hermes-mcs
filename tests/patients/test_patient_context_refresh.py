@@ -89,8 +89,8 @@ def _raw_proof(led, pid, mid, *, cloud=False):
                 for i in range(len(chunks))}}}
     if cloud:
         meta.update(contract)
-    led.artifact_add('extract_llm', json.dumps({'summary': '合成の経過報告'}),
-                     project_id=pid, message_id=mid, model=model, meta=meta)
+    return led.artifact_add('extract_llm', json.dumps({'summary': '合成の経過報告'}),
+                            project_id=pid, message_id=mid, model=model, meta=meta)
 
 
 def _semantic_proof(led, pid, mid, cfg=CFG, *, observation_quote=None):

@@ -18,6 +18,7 @@ import pytest
 import extract_llm
 import extract_llm_runner
 import inference_dependency_loss as dependency_loss
+import mcs_queries
 import mcs_requests
 import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness
@@ -25,10 +26,9 @@ import patient_context_refresh_sources
 import patient_context_refresh_state
 import patient_context_plan as context_plan
 from adapters.common import envelopes
-from extract_testkit import _hash, _message
-from inference_version import CURRENT_VERSION, VERSION_KEY
+from extract_testkit import _message
 from test_inference_v1_context import _clinical_source, _delete_supported_stop
-from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
+from test_patient_context_refresh import CFG, _raw_proof, _semantic_proof, document, runtime as runtime, seed, step
 
 
 def _scoped_snapshot(led, pid, keys, cfg=CFG):
@@ -161,10 +161,17 @@ def test_pending_ocr_on_another_source_cannot_block_or_leak(runtime):
     assert _keys(scoped) == [1]
     assert scoped["attachment_coverage"]["complete"]
     assert _scoped_ready(led, 1, [1], clock, cfg=cfg)
-    blocked = _scoped_snapshot(led, 1, [2], cfg)
-    assert not blocked["attachment_coverage"]["complete"]
-    assert not _scoped_ready(led, 1, [2], clock, cfg=cfg)
-    assert _keys(blocked) == [2]           # OCR未完の添付は source として現れない
+    pending_attachment = _scoped_snapshot(led, 1, [2], cfg)
+    assert not pending_attachment["attachment_coverage"]["complete"]
+    # r134/r140: the pending attachment is unselected work — it neither blocks
+    # the analyzed chat material nor leaks its (nonexistent) OCR source in.
+    assert _keys(pending_attachment) == [2]  # OCR未完の添付は source として現れない
+    assert _scoped_ready(led, 1, [2], clock, cfg=cfg)
+    selected = led.db.execute(
+        f"SELECT {mcs_queries.qc_source_id('m', version=extract_llm.EXTRACT_VERSION)} AS artifact_id "
+        "FROM messages m WHERE m.message_id=2").fetchone()
+    assert selected['artifact_id'] is not None
+    assert mcs_queries.selected_artifact_proof_valid(led.db, selected['artifact_id'], material=True)
     assert not _full_ready(led, 1, clock, cfg=cfg)
 
 
@@ -303,12 +310,10 @@ def test_human_feedback_drops_the_source_until_a_new_bound_proof(runtime, monkey
     path's newly bound artifact lets it rejoin. The report note is never
     transcribed into the source material or the re-extract input."""
     led, clock, _ = runtime
-    body = '服薬管理: 家族が薬を保管しています。咳あり。'
-    seed(led, mid=1, pid=1, body=body)
-    aid = led.artifact_add('extract_llm', json.dumps({'summary': '咳あり'}),
-                           project_id=1, message_id=1,
-                           meta={VERSION_KEY: CURRENT_VERSION, 'hash': _hash(led),
-                                 'extract_version': extract_llm.EXTRACT_VERSION})
+    body = '生活環境: 合成の記録を保管しています。'
+    seed(led, mid=1, pid=1, body=body, proof=False)
+    aid = _raw_proof(led, 1, 1)
+    _semantic_proof(led, 1, 1)
     assert _scoped_ready(led, 1, [1], clock)
     req = envelopes.extract_feedback(
         'synthetic-operator', {'project_id': 1, 'extract_ref': {
@@ -319,8 +324,14 @@ def test_human_feedback_drops_the_source_until_a_new_bound_proof(runtime, monkey
     assert 1 not in patient_context_refresh_readiness._eligible_source_keys(
         led, 1, CFG, snapshot, deadline=clock.mono + 60)
     calls = []
-    monkeypatch.setattr(extract_llm, 'llm_extract', lambda text, **kw:
-                        calls.append(text) or {'summary': '服薬管理の報告'})
+
+    def _reextract(text, **kw):
+        calls.append(text)
+        kw["meta_out"].update(completeness_chunks=1, completeness={"0": {
+            "state": "hint_gaps_resolved", "remaining_hint_candidates": 0}})
+        return {'summary': '合成の経過報告'}
+
+    monkeypatch.setattr(extract_llm, 'llm_extract', _reextract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
     assert extract_llm.run_pending(led, limit=5, budget_s=30)['done'] == 1
     assert calls == [body]                          # the note never becomes model input

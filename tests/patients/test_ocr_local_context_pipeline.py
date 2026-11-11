@@ -1,5 +1,6 @@
 """Real local OCR production feeds the context-only cloud consumer without rerouting."""
 import json
+import time
 
 import pytest
 
@@ -13,9 +14,10 @@ import extract_llm_provider
 import local_llm
 import mcs_queries
 import patient_context_refresh_readiness as readiness
+import patient_context_refresh_state as state
 from anthropic_context_testkit import cloud, runtime
 from test_context_cloud_update_identity import finish, real_cloud, receipts
-from test_patient_context_refresh import _raw_proof, _semantic_proof, step
+from test_patient_context_refresh import CFG as BASE_CFG, _raw_proof, _semantic_proof, seed, step
 
 __all__ = ['cloud', 'runtime', 'real_cloud']
 
@@ -109,3 +111,60 @@ def test_actual_local_ocr_result_becomes_full_context_input_without_individual_c
     assert receipts(ledger) == saved and len(posts) == count and len(local_calls) == local_count
     if pending_journal:
         assert journal.read_text() == 'synthetic unreplayable journal'
+
+
+def test_ready_ocr_page_publishes_scoped_context_while_parent_chat_pending(
+        runtime, monkeypatch):
+    """A ready OCR original publishes its own scoped context while the parent
+    chat extraction is still pending — the page is an independent original,
+    never gated by the chat message's extraction state."""
+    ledger, clock, _ = runtime
+    cfg = {**BASE_CFG, 'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
+    monkeypatch.setattr(attachment_inference, 'load_config', lambda: cfg)
+    seed(ledger, body='本人は合成の自宅で生活しています。', proof=False)
+    key = _retain_ocr(ledger)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
+                             "AND message_id=1").fetchone()[0] == 0
+
+    def admitted(_owner, text, **kwargs):
+        assert not ledger.db.in_transaction
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and ('reports' in payload or 'source' in payload):
+            if 'reports' in payload:
+                answer = {'fact_ids': [r['id'] for r in payload['reports'][:12]]}
+            else:
+                body = payload['source']
+                answer = {'patient_context': [{'category': 'living', 'text': body,
+                    'evidence': body, 'subject': 'unspecified', 'details': []}]}
+        else:
+            answer = {'symptoms': [], 'summary': LOCAL_SUMMARY}
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(answer)}
+
+    monkeypatch.setattr(local_llm, 'admitted_probe_format', lambda *a, **k: 'plain')
+    monkeypatch.setattr(local_llm, 'admitted_chat', admitted)
+    result = attachment_inference.run_pending(ledger, cfg, stage='local',
+                                              deadline=time.monotonic() + 300)
+    assert result['done'] == 1 and result['deferred'] == 0, result
+    local = attachment_extraction.current(ledger.db, 1, key, cfg=cfg)
+    assert local and local['ready'] and local['require_cloud'] is False
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
+                             "AND message_id=1").fetchone()[0] == 0
+
+    view = None
+    for _ in range(30):
+        result = step(runtime, cfg=cfg)
+        view = readiness.context_view_input(ledger.db, 1, cfg=cfg)
+        if view is not None or result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    assert view is not None, 'ready OCR scope never published while parent chat pending'
+    assert view['facts'] and view['coverage']['partial'] is True
+    assert view['coverage']['unreflected'] == 1
+    assert readiness.inference_coverage(ledger.db, 1, cfg)['complete'] is False
+    _, meta = state._latest(ledger.db, state.KIND, 1)
+    assert meta['source_scope'] == [key]
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
+                             "AND message_id=1").fetchone()[0] == 0
