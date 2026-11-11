@@ -178,3 +178,54 @@ def test_consumed_grant_cannot_be_replayed(tmp_path):
             owner_mod.consume_start(store, deps, grant)
         # 状態はSTARTEDのまま(二重effectなし)
         assert state.load(store)['active']['phase'] == 'STARTED'
+
+
+# --- consume_start耐久化点のcrash注入 ----------------------------------------
+
+def test_crash_after_open_intent_holds_fail_closed(tmp_path, monkeypatch):
+    """intent書込み後・START_INTENT前のcrash: open intentが残り再送は拒否。"""
+    with ot.Store(tmp_path / 'private-i4e', create=True) as store:
+        at.seed(store)
+        deps = rt_test.RuntimeDeps()
+        ot._prepared_owner(store, deps)
+        grant = owner_mod.request_start(store, deps)
+
+        def boom(*a, **k):
+            raise RuntimeError('synthetic crash')
+
+        monkeypatch.setattr(owner_mod, '_mutate', boom)
+        with pytest.raises(RuntimeError):
+            owner_mod.consume_start(store, deps, grant)
+        monkeypatch.undo()
+        # intent='open'・active=PREPAREDが残り、推測進行せずholdする
+        assert state.load_intent(store)['phase'] == 'open'
+        assert state.load(store)['active']['phase'] == 'PREPARED'
+        info = owner_mod.resume(store, deps)
+        assert info['action'] == 'await_grant'
+        with pytest.raises(state.OwnerStateError, match='INTENT_EXISTS'):
+            owner_mod.consume_start(store, deps, grant)
+        assert state.load(store)['active']['phase'] == 'PREPARED'
+
+
+def test_crash_after_start_intent_observes_without_advancing(
+        tmp_path, monkeypatch):
+    """START_INTENT永続化後・SPENT前のcrash: observe_onlyで保持・再consume拒否。"""
+    with ot.Store(tmp_path / 'private-i4f', create=True) as store:
+        at.seed(store)
+        deps = rt_test.RuntimeDeps()
+        ot._prepared_owner(store, deps)
+        grant = owner_mod.request_start(store, deps)
+
+        def boom(*a, **k):
+            raise RuntimeError('synthetic crash')
+
+        monkeypatch.setattr(state, 'record_spent', boom)
+        with pytest.raises(RuntimeError):
+            owner_mod.consume_start(store, deps, grant)
+        monkeypatch.undo()
+        assert state.load(store)['active']['phase'] == 'START_INTENT'
+        info = owner_mod.resume(store, deps)
+        assert info['action'] == 'observe_only'
+        # phaseがPREPAREDでないためconsume再送は拒否(二重start防止)
+        with pytest.raises(owner_mod.OwnerError):
+            owner_mod.consume_start(store, deps, grant)
