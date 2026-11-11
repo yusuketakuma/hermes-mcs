@@ -218,3 +218,24 @@ def test_dispatch_tag_from_acceptance(env, monkeypatch, tmp_path):
     req, _ = _resolve(env, monkeypatch, _lightweight_routes())
     assert req['source']['tag'] == 'v1.2.3'
     assert req['upstream_run_id'] is None
+
+
+def test_expect_ids_match_and_mismatch(env, monkeypatch):
+    """手動入力のrequest_id/acceptance_id照合 — 一致は通り相違は拒否。"""
+    req, _ = _resolve(env, monkeypatch, _lightweight_routes())
+    acc_id = json.loads(Path(env['acc']).read_text())['acceptance_id']
+    calls = []
+    monkeypatch.setattr(api, '_github_call',
+                        _fake_github(calls, _lightweight_routes()))
+    ok = br.resolve(env['event'], env['policy'], env['acc'], env['out'],
+                    gh_token='tok', expect_request_id=req['request_id'],
+                    expect_acceptance_id=acc_id)
+    assert ok['request_id'] == req['request_id']
+    with pytest.raises(SystemExit, match='EXPECT_REQUEST_ID_MISMATCH'):
+        br.resolve(env['event'], env['policy'], env['acc'], env['out'],
+                   gh_token='tok', expect_request_id='0' * 64)
+    with pytest.raises(SystemExit, match='EXPECT_ACCEPTANCE_ID_MISMATCH'):
+        br.resolve(env['event'], env['policy'], env['acc'], env['out'],
+                   gh_token='tok',
+                   expect_acceptance_id='123e4567-e89b-42d3-a456-'
+                                        '426614174000')

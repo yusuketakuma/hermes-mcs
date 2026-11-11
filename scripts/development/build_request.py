@@ -118,18 +118,22 @@ def _main_snapshot(repo, token, *, opener=None):
 
 
 def resolve(event_path, policy_path, acceptance_path, output,
-            *, gh_token=None, opener=None, hint_path=None):
+            *, gh_token=None, opener=None, hint_path=None,
+            expect_request_id=None, expect_acceptance_id=None):
     """PUB10本体。event/policy/acceptanceはfile、github_readはtoken経由。"""
     event = json.loads(Path(event_path).read_text())
     policy = json.loads(Path(policy_path).read_text())
     acceptance = json.loads(Path(acceptance_path).read_text())
     return _resolve_docs(event, policy, acceptance, output,
                          gh_token=gh_token, opener=opener,
-                         hint_path=hint_path)
+                         hint_path=hint_path,
+                         expect_request_id=expect_request_id,
+                         expect_acceptance_id=expect_acceptance_id)
 
 
 def _resolve_docs(event, policy, acceptance, output,
-                  *, gh_token=None, opener=None, hint_path=None):
+                  *, gh_token=None, opener=None, hint_path=None,
+                  expect_request_id=None, expect_acceptance_id=None):
     gh_token = gh_token or os.environ.get('GITHUB_TOKEN') \
         or os.environ.get('GH_TOKEN')
     if not gh_token:
@@ -203,6 +207,10 @@ def _resolve_docs(event, policy, acceptance, output,
     except Exception:
         _fail('ACCEPTANCE_INVALID')
     acceptance_id = acceptance.get('acceptance_id')
+    # 手動dispatch入力のacceptance_idは解決した文書と一致必須。
+    if expect_acceptance_id \
+            and acceptance_id != expect_acceptance_id:
+        _fail('EXPECT_ACCEPTANCE_ID_MISMATCH')
     acceptance_sha = _contract.hash_v3('release-acceptance', acceptance)
     # request_id: request本体からの決定的導出(同一入力→同一idで冪等)
     request = {'schema_version': 'mcs.build-request.v3',
@@ -225,6 +233,10 @@ def _resolve_docs(event, policy, acceptance, output,
     request['request_id'] = _contract.hash_v3(
         'build-request', {k: v for k, v in request.items()
                           if k not in ('request_id', 'created_at')})
+    # 手動dispatch入力のrequest_idは決定的導出値と一致必須 —
+    # admin登録値と再計算値の相違はfail-closedで検出する。
+    if expect_request_id and request['request_id'] != expect_request_id:
+        _fail('EXPECT_REQUEST_ID_MISMATCH')
     try:
         _contract.parse_document(
             json.dumps(request, ensure_ascii=False).encode(),
@@ -267,21 +279,27 @@ def main(argv=None):
                         help='eventを環境変数から構成する')
     parser.add_argument('--hint',
                         help='publication-request artifact JSON(未信頼)')
+    parser.add_argument('--expect-request-id', default='',
+                        help='手動dispatch入力request_id(空=照合しない)')
+    parser.add_argument('--expect-acceptance-id', default='',
+                        help='手動dispatch入力acceptance_id(空=照合しない)')
     parser.add_argument('--policy', required=True)
     parser.add_argument('--acceptance', required=True)
     parser.add_argument('--output', required=True)
     args = parser.parse_args(argv)
     if args.from_env == (args.event is not None):
         _fail('EVENT_SOURCE_AMBIGUOUS')
+    expects = {'expect_request_id': args.expect_request_id or None,
+               'expect_acceptance_id': args.expect_acceptance_id or None}
     if args.from_env:
         event = _event_from_env()
         policy = json.loads(Path(args.policy).read_text())
         acceptance = json.loads(Path(args.acceptance).read_text())
         _resolve_docs(event, policy, acceptance, args.output,
-                      hint_path=args.hint)
+                      hint_path=args.hint, **expects)
     else:
         resolve(args.event, args.policy, args.acceptance, args.output,
-                hint_path=args.hint)
+                hint_path=args.hint, **expects)
     return 0
 
 

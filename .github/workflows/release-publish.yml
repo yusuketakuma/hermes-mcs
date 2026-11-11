@@ -84,6 +84,8 @@ jobs:
           UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           PUBLISHER_SOURCE_COMMIT: ${{ github.sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          ACCEPTANCE_ID: ${{ inputs.acceptance_id }}
         run: |
           set -euo pipefail
           # hintは未信頼 — build_request.pyがrun APIで再照合する。
@@ -96,6 +98,8 @@ jobs:
           fi
           # shellcheck disable=SC2086
           python3 scripts/development/build_request.py --from-env $HINT_ARG \
+            --expect-request-id "${REQUEST_ID:-}" \
+            --expect-acceptance-id "${ACCEPTANCE_ID:-}" \
             --policy deployment/release-publisher/policy.json \
             --acceptance acceptance/acceptance.json \
             --output build-request.json
