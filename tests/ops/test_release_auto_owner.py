@@ -692,6 +692,30 @@ def test_consume_rejects_grant_for_other_operation(store):
         owner_mod.consume_start(store, deps, grant)
 
 
+def test_request_start_rejects_outside_window(store):
+    seed(store)
+    deps = FakeDeps()
+    _prepared_owner(store, deps)
+    deps.now_s = lambda: NOW_S + 7200  # 04:00 JST — window(60-180分)の外
+    with pytest.raises(owner_mod.OwnerError) as e:
+        owner_mod.request_start(store, deps)
+    assert e.value.code == 'OUTSIDE_WINDOW'
+
+
+def test_consume_rechecks_window_at_fresh_time(store):
+    seed(store)
+    deps = FakeDeps()
+    _prepared_owner(store, deps)
+    grant = owner_mod.request_start(store, deps)
+    # lock前のrequest再構築では窓内、lock内の新時刻再確認で窓外(時計進行を模倣)
+    ticks = iter([NOW_S, NOW_S + 7200])
+    deps.now_s = lambda: next(ticks, NOW_S + 7200)
+    with pytest.raises(owner_mod.OwnerError) as e:
+        owner_mod.consume_start(store, deps, grant)
+    assert e.value.code == 'OUTSIDE_WINDOW'
+    assert state.load(store)['active']['phase'] == 'PREPARED'
+
+
 # --- resume / tick -----------------------------------------------------------
 
 def test_resume_prepared_expired_defers(store):

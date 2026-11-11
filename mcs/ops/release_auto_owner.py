@@ -654,6 +654,8 @@ def _start_request(store, deps):
     consent = owner['consent']
     if not _consent_live(consent, deps.now_ms()):
         raise OwnerError('CONSENT_REQUIRED')
+    if not _in_window(consent, deps.now_s()):
+        raise OwnerError('OUTSIDE_WINDOW')
     meta = _release_meta(deps, active, owner)
     request_id, request_nonce = _request_ids(
         'start', active['operation_id'], active['attempt_key'])
@@ -761,6 +763,9 @@ def consume_start(store, deps, grant):
             raise OwnerError('STALE_EXECUTION')
         if not _consent_live(owner['consent'], deps.now_ms()):
             raise OwnerError('CONSENT_REQUIRED')
+        # DEV31-4: grant期限・保守窓を重い検査後の新しい時刻で再確認する。
+        if not _in_window(owner['consent'], deps.now_s()):
+            raise OwnerError('OUTSIDE_WINDOW')
         if deps.local_revoke() or deps.holds():
             raise OwnerError('HOLD_PRESENT')
         _check_grant(grant, request, owner, active, public, deps)
