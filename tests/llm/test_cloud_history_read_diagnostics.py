@@ -53,8 +53,10 @@ def _assert_refusal(provider, phase, prompt):
         "budget_exceeded", "cloud_unit_unresolved", False, 0)
     assert cloud_client.not_sent_reason(error) == "cloud_unit_unresolved"
     assert error.__cause__ is None and error.__suppress_context__
-    assert provider.possibly_sent is (phase == "request_send_block_reason")
-    assert provider.unresolved is (phase == "request_send_block_reason")
+    # An unreadable history — in either phase — cannot prove no prior paid
+    # send, so the unit stays possibly-sent/unresolved for both.
+    assert provider.possibly_sent is True
+    assert provider.unresolved is True
     assert not provider.completed_reservations and not provider.discarded
     assert provider.final_disposition is None
 

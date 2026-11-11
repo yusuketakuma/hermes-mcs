@@ -315,8 +315,13 @@ class CloudInferenceUnit:
                         input_binding=self._input_binding(),
                         request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
                         owner=self.owner, scope=self.scope)
+                except cloud_client.CloudNotSent:
+                    raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
                     _history_read_error("recover_response", error)
+                    # An unreadable recovery history cannot prove no prior
+                    # paid send: hold the unit like a blocked send check.
+                    self.possibly_sent = True
                     raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
             saved = self.dispatch(recover, result=True)
             if saved is not None:
