@@ -199,7 +199,7 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
 
 def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
                 prior_content=None, answer_hook=None, extract_extra=None, body=None,
-                expected_sends=2):
+                expected_sends=2, truncated=None):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops."""
     led, cfg, _, _, _ = routed
@@ -259,11 +259,17 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
                 answer["vitals"] = dict(repair_vitals)
             if answer_hook is not None:
                 answer = answer_hook(request, answer)
+            usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                     "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
+            if truncated is not None and truncated(request):
+                return 200, {}, json.dumps({"status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "model": self.model, "service_tier": "default",
+                    "output": [{"type": "reasoning"}], "usage": usage}).encode()
             return 200, {}, json.dumps({"status": "completed", "model": self.model, "service_tier": "default",
                 "output": [{"type": "message", "role": "assistant", "content": [
                     {"type": "output_text", "text": json.dumps(answer, ensure_ascii=False)}]}],
-                "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
-                          "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
+                "usage": usage}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
     deadline = time.monotonic() + 600
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, message_id=1,
@@ -279,10 +285,17 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
             value.quality_started_id = identity[0] if identity is not None else None
         return accepted
 
+    def on_split(key, size):
+        row["_splits"][key] = int(size)
+        return worker._persist_chunks(led, row, {key: {}}, context,
+            chunk_size=row["_chunk_size"], splits=row["_splits"], split_size=size,
+            lease=lease, guard=row["_checkpoint_guard"])
+
     with legacy_cloud_routes():
         result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
             posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-            quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
+            quality_qc_src=source_id, on_chunk=checkpoint, on_split=on_split,
+            chunk_size=row["_chunk_size"], provider=provider,
             medication_hints=worker._frame_medications(row), **extra)
     assert isinstance(result, dict) and len(sends) == expected_sends
     row["_provider_evidence"] = meta.pop("_provider_evidence")

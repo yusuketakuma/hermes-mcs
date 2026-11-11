@@ -2,12 +2,16 @@
 import copy
 import hashlib
 import json
+import time
 import pytest
 from types import SimpleNamespace
 
+import cloud_client
 import cloud_inference
 import cloud_policy
 import extract_llm as worker
+import extract_llm_progress
+import extract_llm_qc
 from extract_testkit import _ledger, _message
 from test_anthropic_runtime import _bound_source, real_record_result, real_usage_reserver, routed as routed
 from test_cloud_repair_final_proof import _repair_run
@@ -83,6 +87,114 @@ def test_protected_loss_repair_mints_v2_proof_and_replays(routed, monkeypatch, t
         meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
         expected_prior=prior) == 'written'
     assert len(sends) == 2
+
+
+def test_protected_prior_length_split_repair_mints_v2_and_replays(routed, monkeypatch, tmp_path):
+    """A paid length-truncated repair under a protected prior splits the leaf,
+    keeps the v2 proof binding on the split plan, and the committed result
+    replays through progress without another paid call."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    filler = "経過は安定しており次回診察で再評価します。"
+    body = ("家族の発熱の既往があります。" + filler * 149
+            + "本人の血圧120/80です。" + "内服と休養を継続してください。" * 30)
+    truncated_once = []
+
+    def truncated(request):
+        if request["reasoning"]["effort"] == "high" and not truncated_once:
+            truncated_once.append(request)
+            return True
+        return False
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body,
+        expected_sends=10, truncated=truncated)
+    assert truncated_once, "the targeted high repair was never length-truncated"
+    _, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    repairs = [item.repair_proof for item in saved.values()
+               if getattr(item, "repair_proof", None)]
+    assert any(proof["version"] == 2 for proof in repairs)
+    results = [json.loads(item["meta"]) for item in
+               led.artifacts("cloud_usage_result", project_id=1, message_id=1)]
+    assert any(item.get("answer_finish_reason_v1") == "length" for item in results)
+    # The saved-leaf check above can be satisfied by a split child; pin the v2
+    # proof on the split parent record itself and bind its response to the
+    # length receipt before commit cleanup removes the current checkpoint rows.
+    parents = [item for item in led.artifacts("extract_llm_chunk", project_id=1, message_id=1)
+               if "split_size" in json.loads(item["meta"] or "{}")]
+    assert parents, "expected a persisted split parent checkpoint row"
+    parent_repair = json.loads(parents[0]["content"]).get("__quality_repair_v1")
+    assert isinstance(parent_repair, dict) and parent_repair.get("version") == 2
+    assert parent_repair.get("protected_prior_ref") == row["_protected_prior_ref"]
+    parent_receipt = cloud_policy.reservation_evidence(
+        led.db, parent_repair["response"]["reservation_artifact_id"])
+    assert parent_receipt["result"]["answer_finish_reason_v1"] == "length"
+    assert parent_receipt["result"]["answer_text_sha256_v1"] == hashlib.sha256(
+        parent_repair["response"]["answer_text"].encode()).hexdigest()
+    sends_before = len(sends)
+    assert worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior) == 'written'
+    message = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    # attention alone cannot distinguish a verified proof from a rejected one;
+    # pin that the progress read's inline-proof verification returned True.
+    original_verify = extract_llm_progress._verify_inline_extract_proof
+    verify_calls = []
+
+    def spy(db, r, context, document, proof):
+        outcome = original_verify(db, r, context, document, proof)
+        verify_calls.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(extract_llm_progress, "_verify_inline_extract_proof", spy)
+    assert worker.progress_for_message(led.db, message, model=result["_model"])["state"] == "attention"
+    assert verify_calls and all(verify_calls)
+    assert len(sends) == sends_before
+
+
+def test_v2_repair_leaf_resumes_from_checkpoint_without_redispatch(routed, monkeypatch, tmp_path):
+    """A paid v2 repair leaf persisted by one pass is adopted by a later engine
+    pass through chunks_in: the consumer replay already validated the proof at
+    load time, and the resumed run dispatches no new paid call for that piece."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    body = "本人に発熱と咳があります。家族の発熱の既往があります。本人の血圧120/80です。"
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body)
+    assert len(sends) == 2
+    splits, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    assert saved and any(getattr(item, "repair_proof", None) is not None
+                         and item.repair_proof["version"] == 2 for item in saved.values())
+    sends_before = len(sends)
+    monkeypatch.setattr(worker.local_llm, "chat",
+                        lambda *args, **kwargs: pytest.fail("resumed pass dispatched a call"))
+    resumed_meta = {}
+    resumed = worker.llm_extract(body, context=context, hints=worker._rule_hints(row),
+        deadline=time.monotonic() + 60, chunks_in=saved, chunks_out={},
+        posted_at=row["posted_at"], chunk_size=row["_chunk_size"], splits_in=splits,
+        medication_hints=worker._frame_medications(row),
+        protected_prior=json.loads(row["_protected_prior"]["content"]),
+        protected_prior_ref=row.get("_protected_prior_ref"), meta_out=resumed_meta)
+    assert isinstance(resumed, dict)
+    assert resumed_meta.get("checkpoint_reuses", 0) >= 1
+    assert len(sends) == sends_before
 
 
 def _protected_v1_repair_run(routed, monkeypatch, tmp_path):
@@ -226,6 +338,71 @@ def test_late_protected_prior_conflict_survives_recapture_and_refuses_commit(rou
     assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'rejected'
     assert row["_commit_reject_reason"] == "commit_checkpoint"
     assert [tuple(saved) for saved in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+def test_guarded_checkpoint_divergence_refuses_paid_dispatch(routed, monkeypatch, tmp_path):
+    """A guarded persist that observes a diverged checkpoint marks the row
+    _checkpoint_conflict while the protected prior still resolves; the runner's
+    dispatch_current fence then refuses the next paid dispatch as
+    checkpoint_unverified and no new cloud_usage evidence appears."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    filler = "経過は安定しており次回診察で再評価します。"
+    body = ("家族の発熱の既往があります。" + filler * 149
+            + "本人の血圧120/80です。" + "内服と休養を継続してください。" * 30)
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body,
+        expected_sends=4)
+    _, cfg, *_ = routed
+    money = [tuple(saved) for saved in led.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') "
+        "ORDER BY artifact_id")]
+
+    key = next(iter(row["_checkpoint_identity"]))
+    artifact_id = row["_checkpoint_identity"][key][0]
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content='diverged' WHERE artifact_id=?",
+                       (artifact_id,))
+    accepted = worker._persist_chunks(led, row, {key: chunks.get(key)}, context,
+        chunk_size=row["_chunk_size"], splits=row["_splits"], lease=None,
+        guard=row["_checkpoint_guard"])
+    assert accepted is False
+    assert row["_checkpoint_conflict"] is True
+    # The prior still resolves: refusal below comes from the dispatch fence alone.
+    assert extract_llm_qc._protected_prior_current(led.db, row)
+
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
+    assert not errors and selection is not None
+    # Neutralize unrelated admission gates so the dispatch fence is the only
+    # thing that can refuse; owner_alive/deadline/tightened stay real.
+    monkeypatch.setattr(cloud_policy, "setting_block_reason", lambda *_a, **_k: None)
+    monkeypatch.setattr(cloud_policy, "block_reason", lambda *_a, **_k: None)
+    unit = cloud_inference.CloudInferenceUnit(
+        led, cfg, route="reextract", project_id=1, message_id=1, unit_key="1",
+        deadline=time.monotonic() + 600,
+        current=lambda: (extract_llm_qc._prior_matches(led.db, row, row.get("_expected_prior"))
+                         and extract_llm_qc._protected_prior_current(led.db, row)),
+        dispatch=lambda fn, **_kwargs: fn(), owner={"lease": "synthetic-conflict"},
+        selection=selection,
+        dispatch_current=lambda: not row.get("_checkpoint_conflict"))
+    with pytest.raises(cloud_client.CloudNotSent) as refused:
+        unit.guard()
+    assert cloud_client.not_sent_reason(refused.value) == "checkpoint_unverified"
+    assert len(sends) == 4
+    assert [tuple(saved) for saved in led.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') "
+        "ORDER BY artifact_id")] == money
 
 
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):

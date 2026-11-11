@@ -624,3 +624,155 @@ def test_repair_length_attempt_is_counted_before_local_split(monkeypatch):
     meta = {}
     assert extract_llm.llm_extract(body, meta_out=meta) is not None
     assert meta["repairs"] == 1 and meta["length_stops"] == 1
+
+
+def test_protected_prior_repair_commits_and_replays_without_reselect(db, monkeypatch):
+    """The real runner re-extracts a pending protected prior: the first answer
+    drops the stored protected assertion, the bounded repair restores it, the
+    atomic commit replaces the prior and consumes the checkpoints, and progress
+    reads the finished state without another selection or backend call."""
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    db.save_messages([_message(body=body)])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    prior_content = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+        "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    prior = db.artifact_add("extract_llm", json.dumps(prior_content, ensure_ascii=False),
+        project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+              "source_binding": dependency_loss.source_binding(db.db, 1, 1),
+              "extract_version": extract_llm.EXTRACT_VERSION - 1})
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+        "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    calls = []
+
+    def reply(piece):
+        calls.append(piece)
+        answer = first if len(calls) == 1 else repaired
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(answer, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    result = extract_llm.run_pending(db, limit=1, budget_s=200)
+    assert result["done"] == 1 and result["failed"] == 0
+    assert len(calls) == 2 and all(piece == body for piece in calls)
+    final = db.db.execute("SELECT content,meta,model FROM artifacts WHERE kind='extract_llm'").fetchone()
+    assert json.loads(final["content"])["symptoms"][0]["status"] == "ongoing"
+    assert db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (prior,)).fetchone() is None
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk' "
+                         "AND message_id=1").fetchone()[0] == 0
+    framed = _framed_source(db, db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    assert extract_llm.progress_for_message(db.db, framed, model=final["model"])["state"] == "complete"
+    assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
+    assert len(calls) == 2
+
+
+@pytest.mark.xfail(strict=True, reason="prior basis mismatch re-bases paid pending evidence "
+                                        "(task83 r50 defect; fix pending product IF)")
+def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db, monkeypatch):
+    """A pending first candidate persisted while protected prior A was current
+    carries meta.protected_prior_ref=A. When a newer valid prior B supersedes A,
+    re-prepare must not silently re-base the paid A-era evidence onto B: the
+    stored candidate is re-evaluated against B's wider protected set, so without
+    a basis check the runner dispatches a repair whose paid basis changed.
+    Expected safe outcome: evidence preserved, no new paid call, fixed defer."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "母は頭痛があります。記録確認をお願いします。")
+    db.save_messages([_message(body=body)])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+
+    def seed_prior(symptoms):
+        return db.artifact_add("extract_llm", json.dumps({"symptoms": symptoms}, ensure_ascii=False),
+            project_id=1, message_id=1,
+            meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+                  "source_binding": dependency_loss.source_binding(db.db, 1, 1),
+                  "extract_version": extract_llm.EXTRACT_VERSION - 1})
+
+    family_cough = {"text": "咳", "subject": "family", "negated": False,
+                    "status": "ongoing", "evidence": "父は昨日、咳がありました。"}
+    family_headache = {"text": "頭痛", "subject": "family", "negated": False,
+                       "status": "ongoing", "evidence": "母は頭痛があります"}
+    seed_prior([dict(family_cough)])
+
+    first = {"symptoms": [dict(family_cough)], "requests": []}
+    calls, clock = [], [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def reply(piece):
+        calls.append(piece)
+        clock[0] += 20
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(first, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
+    assert first_run["done"] == 0 and first_run["deferred"] == 1
+    assert len(calls) == 1
+    chunks = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                           "AND message_id=1").fetchall()
+    assert chunks
+    refs = {json.dumps(json.loads(meta[0]).get("protected_prior_ref"), sort_keys=True)
+            for meta in chunks}
+    assert len(refs) == 1 and "null" not in refs
+
+    seed_prior([dict(family_cough), dict(family_headache)])
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    assert len(calls) == 1, "paid repair dispatched under a different protected prior"
+    assert second_run["done"] == 0
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk' "
+                         "AND message_id=1").fetchone()[0] == len(chunks)
+
+
+def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, monkeypatch):
+    """Control for the pending case: a started (dispatch-unknown) checkpoint
+    minted under prior A keeps its state when prior B supersedes A — the engine
+    records dispatch_unknown, never re-asks the paid repair, and commits the
+    leaf as attention without a new backend call."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "母は頭痛があります。記録確認をお願いします。")
+    db.save_messages([_message(body=body)])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+
+    def seed_prior(symptoms):
+        return db.artifact_add("extract_llm", json.dumps({"symptoms": symptoms}, ensure_ascii=False),
+            project_id=1, message_id=1,
+            meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+                  "source_binding": dependency_loss.source_binding(db.db, 1, 1),
+                  "extract_version": extract_llm.EXTRACT_VERSION - 1})
+
+    family_cough = {"text": "咳", "subject": "family", "negated": False,
+                    "status": "ongoing", "evidence": "父は昨日、咳がありました。"}
+    family_headache = {"text": "頭痛", "subject": "family", "negated": False,
+                       "status": "ongoing", "evidence": "母は頭痛があります"}
+    seed_prior([dict(family_cough)])
+
+    first = {"symptoms": [dict(family_cough)], "requests": []}
+    calls, clock = [], [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def reply(piece):
+        calls.append(piece)
+        clock[0] += 20
+        if len(calls) == 2:
+            raise KeyboardInterrupt("synthetic interruption after repair dispatch")
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(first, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
+    assert first_run["deferred"] == 1 and len(calls) == 1
+    with pytest.raises(KeyboardInterrupt):
+        extract_llm.run_pending(db, limit=1, budget_s=300)
+    assert len(calls) == 2
+    started = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                            "AND message_id=1").fetchall()
+    states = [(json.loads(meta[0]).get("chunk"), json.loads(meta[0]).get("quality_status"))
+              for meta in started]
+    assert started and any(status == "started" for _key, status in states), states
+
+    seed_prior([dict(family_cough), dict(family_headache)])
+    third_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    assert len(calls) == 2, "started checkpoint was re-dispatched under a new prior"
+    remaining = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                              "AND message_id=1").fetchall()
+    assert not remaining, f"started checkpoint not consumed: {third_run} {states}"
