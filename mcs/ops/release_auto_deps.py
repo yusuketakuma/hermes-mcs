@@ -15,9 +15,10 @@ canonical path解決(全てmcs_util/runtime_entry/service_contract正本):
 - repository  = mcs_util.REPO(MCS_UPDATE_REPO優先の既存解決)
 - agents_dir/uid = service_management.default_paths
 
-service drain既定labelはservice_contract正本から導出:
-hermes=RESIDENT_LABELS+設定時LINEWORKS_LABEL、standalone/空は
-未対応面としてfail-closed stub(standalone supervisor drainは別binding)。
+service drain既定labelはservice_contract正本の
+diagnosed_agent_labelsから導出(hermes=watcher+resident+設定時
+SDC/LINE WORKS)。standaloneは子process退役証明が別途必要なため
+fail-closed stub(standalone supervisor drainは別binding)。
 """
 import functools
 import hashlib
@@ -81,16 +82,19 @@ def _service_drain_unavailable():
 
 
 def _default_drain_labels(cfg):
-    """service_contract正本からdrain対象labelを導出。None=未対応。"""
+    """drain対象labelをservice_contract正本から導出。None=未対応。
+
+    hermesはdiagnosed_agent_labels(=desired+LINE WORKS)をそのまま使う —
+    watcher(local.mcs-cmd/mcs-int)はingest intake、residentは抽出、
+    SDC/LINE WORKSは設定時のみ含まれる正本inventory。standaloneは
+    supervisor配下の子processをlaunchd bootoutだけでは退役証明できない
+    (restart reservation protocol未統合)ためfail-closed stubを返す。
+    """
     import mcs_runtime
     import service_contract
     if mcs_runtime.standalone(cfg):
         return None
-    labels = list(service_contract.RESIDENT_LABELS)
-    ntf = cfg.get('notify')
-    if isinstance(ntf, dict) and ntf.get('interactive') == 'lineworks':
-        labels.append(service_contract.LINEWORKS_LABEL)
-    return labels
+    return service_contract.diagnosed_agent_labels(cfg)
 
 
 def _file_witness(path, logical_id):

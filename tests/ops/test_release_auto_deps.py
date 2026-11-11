@@ -145,8 +145,11 @@ def test_default_drain_labels_hermes_and_lineworks(env):
                 'notify': {'interactive': 'lineworks'}})
     labels = deps_mod._default_drain_labels(
         {'runtime_mode': 'hermes', 'notify': {'interactive': 'lineworks'}})
-    assert 'ai.mcs.extract-drainer' in labels
-    assert 'ai.mcs.lineworks' in labels
+    # diagnosed_agent_labels正本: watcher(cmd/int/health)+resident3+
+    # LINE WORKS。SDCはsdc.enabled未設定のため含まれない
+    for expected in ('local.mcs-cmd', 'local.mcs-int', 'local.mcs-health',
+                     'ai.mcs.extract-drainer', 'ai.mcs.lineworks'):
+        assert expected in labels
     st = deps_mod._default_drain_labels({'runtime_mode': 'standalone'})
     assert st is None
 
