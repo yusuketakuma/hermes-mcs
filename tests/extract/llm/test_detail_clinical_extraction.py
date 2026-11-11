@@ -1009,6 +1009,36 @@ def test_terminal_repair_marker_failure_refuses_job(db):
     assert row["_resume_refused"] is True
 
 
+def test_terminal_repair_marker_outer_seal_failure_refuses_job(db):
+    """A terminal record carrying an explicit repair marker whose outer seal
+    condition fails before matches is computed (provider_leaf absent) is
+    still bound evidence: the shared refusal fires outside the seal AND so
+    the leaf is never adopted as an ordinary cached terminal."""
+    body = "合成の本文です。" * 12
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    value = extract_llm._EvidenceLeaf({"summary": "合成の部分結果"},
+                                    extract_llm._provider_evidence(["local"], True))
+    assert extract_llm._persist_chunks(db, row, {0: value})
+    raw = db.db.execute("SELECT artifact_id, meta, content FROM artifacts "
+                        "WHERE kind='extract_llm_chunk'").fetchone()
+    meta = json.loads(raw["meta"])
+    meta["quality_pass"] = extract_quality._QUALITY_CHECKPOINT
+    meta["quality_status"] = "hint_gaps_resolved"
+    meta.pop("provider_leaf", None)
+    content = json.loads(raw["content"])
+    content["__quality_repair_v1"] = {"bogus": 1}
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=?, content=? WHERE artifact_id=?",
+                      (json.dumps(meta, ensure_ascii=False),
+                       json.dumps(content, ensure_ascii=False), raw["artifact_id"]))
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert splits == {}
+    assert saved == {0: {"_resume_refused": "quality_checkpoint_unverified",
+                        "_quality_status": "pending"}}
+    assert row["_resume_refused"] is True
+
+
 def test_unreachable_pending_child_does_not_hold_job(db):
     """A pending record whose key cannot resolve under the current selected
     layout (shadowed by a terminal root) is unreachable evidence: it stays

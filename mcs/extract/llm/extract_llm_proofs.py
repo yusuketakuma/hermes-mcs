@@ -568,10 +568,6 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                 if matches and repair is not None:
                     matches = _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, content,
                                                   records=proof_lookup)
-                if repair is not None and not matches:
-                    if proof_rows is None:
-                        _refuse_live_checkpoint(r, saved, key, meta, bound=True)
-                    continue
                 if matches:
                     validated = _EvidenceLeaf(validated, evidence)
                     validated.repair_proof = repair
@@ -590,6 +586,13 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                         validated.quality_origin_id = origin_ref if validated.quality_origin is not None else None
                         if meta.get("quality_status") == "started" and prior_kind in ("raw", "cached"):
                             validated.quality_prior_kind = prior_kind
+            # An explicit repair marker is bound evidence even when the outer
+            # seal condition failed before matches could be computed: refuse
+            # live resume and never adopt the leaf as an ordinary terminal.
+            if repair is not None and not matches:
+                if proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta, bound=True)
+                continue
             # A known uncertainty may be counted again during validation. Keep
             # it only when the complete source-bound provider seal and payload
             # (including retained losses) reproduce exactly. New content loss,
