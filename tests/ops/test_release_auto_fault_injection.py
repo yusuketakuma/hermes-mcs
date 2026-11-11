@@ -229,3 +229,33 @@ def test_crash_after_start_intent_observes_without_advancing(
         # phaseがPREPAREDでないためconsume再送は拒否(二重start防止)
         with pytest.raises(owner_mod.OwnerError):
             owner_mod.consume_start(store, deps, grant)
+
+
+def test_crash_after_spent_keeps_grant_burned(tmp_path, monkeypatch):
+    """SPENT永続化後・STARTED前のcrash: spent記録が残りgrantは消費済み扱い。"""
+    with ot.Store(tmp_path / 'private-i4g', create=True) as store:
+        at.seed(store)
+        deps = rt_test.RuntimeDeps()
+        ot._prepared_owner(store, deps)
+        grant = owner_mod.request_start(store, deps)
+        real_mutate = owner_mod._mutate
+        calls = []
+
+        def flaky(store_, fn):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError('synthetic crash')
+            return real_mutate(store_, fn)
+
+        monkeypatch.setattr(owner_mod, '_mutate', flaky)
+        with pytest.raises(RuntimeError):
+            owner_mod.consume_start(store, deps, grant)
+        monkeypatch.undo()
+        owner = state.load(store)
+        assert owner['active']['phase'] == 'START_INTENT'
+        # SPENTは耐久化済み: grant_idがspentへ記録され二重消費を防ぐ
+        assert [s['grant_id'] for s in owner['spent']] == [grant['grant_id']]
+        info = owner_mod.resume(store, deps)
+        assert info['action'] == 'observe_only'
+        with pytest.raises(owner_mod.OwnerError):
+            owner_mod.consume_start(store, deps, grant)
