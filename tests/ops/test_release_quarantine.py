@@ -264,6 +264,32 @@ def test_heartbeat_observations_scoped_to_receipt(deps):
         {'activation_receipt_id': None}) == []
 
 
+def test_heartbeats_tail_read_beyond_max(deps):
+    """追記fileがMAX超過しても末尾の直近beatを失わない。
+
+    長期ACTIVATING停滞でheartbeat fileが上限を超えると、従来は読取り全体が
+    []になりHEARTBEAT_INSUFFICIENTで永久wedgeした。末尾MAX bytesから
+    部分行を捨てて読むため直近2beat(間隔>=5s)を回復できる。
+    """
+    _plant(deps, 'svc-a')
+    _plant(deps, 'svc-b')
+    hb = deps._heartbeat_path(RECEIPT, 'svc-a')
+    # MAX_WITNESS_BYTES超のfileを作り、末尾2beatを新しい時刻にする
+    line = (json.dumps({'heartbeat_at': 100}) + '\n').encode()
+    with open(hb, 'wb') as f:
+        f.write(line * (rq.MAX_WITNESS_BYTES // len(line) + 2))
+        f.write(json.dumps({'heartbeat_at': 9000}).encode() + b'\n')
+        f.write(json.dumps({'heartbeat_at': 14000}).encode() + b'\n')
+    assert os.path.getsize(hb) > rq.MAX_WITNESS_BYTES
+    obs = deps.heartbeat_observations(_active())
+    times = sorted(o['heartbeat_at'] for o in obs
+                   if o['service_id'] == 'svc-a')
+    assert times[-2:] == [9000, 14000]
+    # svc-bは小file — tail seekでも全beatが読める
+    assert sorted(o['heartbeat_at'] for o in obs
+                  if o['service_id'] == 'svc-b') == [1500, 1900]
+
+
 def test_measure_source_manifest_equals_tree(deps):
     assert deps.measure_source_manifest() == deps.loaded_source_expect(None)
     assert deps.measure_source_manifest() == rq.measure_tree(deps.generation_root)

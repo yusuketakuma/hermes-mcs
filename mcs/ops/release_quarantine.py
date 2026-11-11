@@ -196,11 +196,19 @@ class QuarantineDeps:
         path = self._heartbeat_path(receipt_id, service_id)
         try:
             with open(path, 'rb') as f:
+                # fileは追記のみで上限を超え得る — 全体を読まず末尾MAX bytesを
+                # 読み、_heartbeat_okが必要とする直近beatを失わない
+                # (長期ACTIVATING停滞でfile超過→観測0件の永久wedgeを防ぐ)。
+                f.seek(0, os.SEEK_END)
+                end = f.tell()
+                start = max(0, end - MAX_WITNESS_BYTES)
+                f.seek(start)
                 raw = f.read(MAX_WITNESS_BYTES + 1)
         except OSError:
             return []
-        if len(raw) > MAX_WITNESS_BYTES:
-            return []
+        if start > 0:
+            nl = raw.find(b'\n')
+            raw = raw[nl + 1:] if nl >= 0 else b''
         times = []
         for line in raw.splitlines():
             try:
