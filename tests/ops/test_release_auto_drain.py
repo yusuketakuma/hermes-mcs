@@ -1,11 +1,16 @@
 """v3 launchd drain実装: inventory/stop/probe/RetiredProcess写像の検証。"""
+import os
 import sys
+import tempfile
 import types
+from pathlib import Path
 
 import pytest
 
 from release_auto_drain import (LaunchdDrain, ServiceError, birth_witness,
-                                native_launchd_drain, process_instance_id)
+                                native_intake_stop, native_launchd_drain,
+                                native_restart_same_version,
+                                process_instance_id)
 
 LABELS = ['ai.mcs.extract-drainer', 'ai.mcs.extract-drainer-2']
 
@@ -188,9 +193,10 @@ def test_birth_witness_deterministic():
 
 
 class _R:
-    def __init__(self, rc, out=''):
+    def __init__(self, rc, out='', err=''):
         self.returncode = rc
         self.stdout = out
+        self.stderr = err
 
 
 def _fake_diag(started_at):
@@ -281,3 +287,77 @@ def test_native_stray_pids():
         ['l1'], uid=501, runtime_generation=1, boot_id='a' * 64,
         run=broken)
     assert drain3._stray_pids() is None  # 照合不能
+
+
+# --- native_intake_stop / native_restart_same_version ---------------------
+
+
+def test_native_intake_stop_writes_marker():
+    from update_lifecycle_context import MARKER_PATH
+    os.makedirs(os.path.dirname(MARKER_PATH), exist_ok=True)
+    stop = native_intake_stop()
+    try:
+        stop()
+        assert os.path.exists(MARKER_PATH)
+    finally:
+        if os.path.exists(MARKER_PATH):
+            os.unlink(MARKER_PATH)
+
+
+def test_native_restart_bootstraps_stopped_and_removes_marker():
+    from update_lifecycle_context import MARKER_PATH, _write_marker
+    os.makedirs(os.path.dirname(MARKER_PATH), exist_ok=True)
+    drain, state = make_drain()
+    running(state, LABELS[0], 101, 1000.5)
+    services = drain.services()
+    drain.stopper(services[0])
+    agents = Path(tempfile.mkdtemp())
+    (agents / (LABELS[0] + '.plist')).write_text('plist')
+    bootstrapped = []
+
+    def run(argv):
+        if 'bootstrap' in argv:
+            bootstrapped.append(argv)
+            return _R(0)
+        return _R(0)  # print → loaded
+
+    _write_marker()
+    try:
+        restart = native_restart_same_version(
+            drain, agents_dir=str(agents), run=run)
+        restart()
+        assert bootstrapped and 'bootstrap' in bootstrapped[0]
+        assert 'gui/' in bootstrapped[0][2]
+        assert not os.path.exists(MARKER_PATH)
+        # 冪等: loaded扱いなら再bootstrapしない
+        state['pids'][LABELS[0]] = 777
+        state['absent'].discard(LABELS[0])
+        n = len(bootstrapped)
+        restart()
+        assert len(bootstrapped) == n
+    finally:
+        if os.path.exists(MARKER_PATH):
+            os.unlink(MARKER_PATH)
+
+
+def test_native_restart_fail_closed():
+    drain, state = make_drain()
+    running(state, LABELS[0], 101, 1000.5)
+    services = drain.services()
+    drain.stopper(services[0])
+    agents = Path(tempfile.mkdtemp())
+    # plist欠落 → 拒否
+    restart = native_restart_same_version(
+        drain, agents_dir=str(agents), run=lambda argv: _R(0))
+    with pytest.raises(ServiceError):
+        restart()
+    # bootstrap失敗 → 拒否
+    (agents / (LABELS[0] + '.plist')).write_text('plist')
+
+    def bad_run(argv):
+        return _R(1, 'boom')
+
+    restart2 = native_restart_same_version(
+        drain, agents_dir=str(agents), run=bad_run)
+    with pytest.raises(ServiceError):
+        restart2()

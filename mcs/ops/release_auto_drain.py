@@ -138,6 +138,10 @@ class LaunchdDrain:
         except Exception:
             return None
 
+    def stopped_labels(self):
+        """request_stopが実際にbootoutしたlabel(sorted)。"""
+        return sorted(self._captured)
+
     # --- PrivateWitness.retired_processes provider ---------------------
 
     def retired_processes(self, evidence):
@@ -253,3 +257,66 @@ def native_launchd_drain(labels, *, uid, runtime_generation, boot_id,
         bootout=bootout, process_started_at=process_started_at,
         stray_drainer_pids=stray_drainer_pids,
         runtime_generation=runtime_generation, boot_id=boot_id)
+
+
+def native_intake_stop():
+    """ServiceDrain.stop_new_intakeへ渡す実intake停止を返す。
+
+    既存update marker(update_lifecycle_context._write_marker)を書き、
+    cron catchup等のhelperが新規処理を始めないようにする。resident
+    drainer自体はrequest_stop側の責務。marker書込み失敗は例外のまま
+    ServiceDrainがINTAKE_STOPへ写す。
+    """
+    def stop():
+        from update_lifecycle_context import _write_marker
+        _write_marker()
+    return stop
+
+
+def native_restart_same_version(drain, *, agents_dir, run=None):
+    """ServiceDrain.restart_same_versionへ渡す実restarterを返す。
+
+    LaunchdDrainがbootoutしたlabelだけを同一plistでbootstrapする
+    (prepareはcode/configに触れないため同一版の再起動)。既にloadedな
+    labelは触らない=冪等。最後にintake markerを除去して受付を再開する
+    (marker除去はupdate_lifecycle_context._remove_markerが正本、
+    関数内importで重い依存を遅延)。plist欠落・bootstrap失敗・marker
+    除去失敗は全てServiceErrorでfail-closed。
+    """
+    if not isinstance(drain, LaunchdDrain):
+        raise ServiceError('SERVICE_RESTART')
+    if not isinstance(agents_dir, str) or not agents_dir:
+        raise ServiceError('SERVICE_RESTART')
+
+    def _run(argv):
+        if run is not None:
+            return run(argv)
+        import lifecycle_io
+        return lifecycle_io.run_bounded(argv, timeout=_LAUNCHCTL_TIMEOUT_S)
+
+    def restart():
+        from service_management import launchd_bootstrap
+        for label in drain.stopped_labels():
+            plist = os.path.join(agents_dir, label + '.plist')
+            if not os.path.isfile(plist):
+                raise ServiceError('SERVICE_RESTART')
+            # absent(rc=113)のlabelだけbootstrap — loadedは既に稼働中
+            try:
+                absent = drain._agent_absent(label)
+            except Exception as e:
+                raise ServiceError('SERVICE_RESTART') from e
+            if absent is not True:
+                continue
+            if launchd_bootstrap(label, plist, _run) is not None:
+                raise ServiceError('SERVICE_RESTART')
+        try:
+            from update_lifecycle_context import MARKER_PATH, _remove_marker
+            _remove_marker()
+            if os.path.lexists(MARKER_PATH):
+                raise ServiceError('SERVICE_RESTART')
+        except ServiceError:
+            raise
+        except Exception as e:
+            raise ServiceError('SERVICE_RESTART') from e
+
+    return restart
