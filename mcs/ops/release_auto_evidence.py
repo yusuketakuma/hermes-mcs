@@ -112,6 +112,24 @@ def store_evidence(runtime_home, raw):
                 _check(written > 0, 'EVIDENCE_WRITE')
                 view = view[written:]
             os.fsync(fd)
+        except BaseException:
+            # O_EXCLで自分が作ったfileだけがここに来る — 途中書込みの
+            # 残骸を残すと同bytesの再storeが永久にEVIDENCE_TAMPERで
+            # wedgeするため、dir entryがまだ自分のinodeを指す時だけ除去する。
+            try:
+                mine = os.fstat(fd)
+                try:
+                    current = os.stat(key, dir_fd=fd_dir,
+                                      follow_symlinks=False)
+                except OSError:
+                    current = None
+                if (current is not None
+                        and (current.st_dev, current.st_ino)
+                        == (mine.st_dev, mine.st_ino)):
+                    os.unlink(key, dir_fd=fd_dir)
+            except OSError:
+                pass
+            raise
         finally:
             os.close(fd)
         os.fsync(fd_dir)

@@ -108,3 +108,25 @@ def test_evidence_dir_wrong_mode_rejected(runtime_home):
     with pytest.raises(ev.EvidenceError) as error:
         ev.load_evidence(runtime_home, 'a' * 64)
     assert error.value.code == 'EVIDENCE_DIR_HOLD'
+
+
+def test_store_write_failure_removes_partial(runtime_home, monkeypatch):
+    """書込み途中失敗の残骸を除去し、同bytesの再storeを可能にする。"""
+    raw = b'evidence-that-fails-once'
+    key = hashlib.sha256(raw).hexdigest()
+    real_write = os.write
+    state = {'failed': False}
+
+    def flaky_write(fd, data):
+        if not state['failed']:
+            state['failed'] = True
+            raise OSError('synthetic write failure')
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, 'write', flaky_write)
+    with pytest.raises(OSError):
+        ev.store_evidence(runtime_home, raw)
+    assert not (_evidence_dir(runtime_home) / key).exists()
+    monkeypatch.setattr(os, 'write', real_write)
+    assert ev.store_evidence(runtime_home, raw) == key
+    assert ev.load_evidence(runtime_home, key) == raw
