@@ -135,6 +135,43 @@ def test_protected_prior_length_split_repair_mints_v2_and_replays(routed, monkey
     assert len(sends) == sends_before
 
 
+def test_v2_repair_leaf_resumes_from_checkpoint_without_redispatch(routed, monkeypatch, tmp_path):
+    """A paid v2 repair leaf persisted by one pass is adopted by a later engine
+    pass through chunks_in: the consumer replay already validated the proof at
+    load time, and the resumed run dispatches no new paid call for that piece."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    body = "本人に発熱と咳があります。家族の発熱の既往があります。本人の血圧120/80です。"
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body)
+    assert len(sends) == 2
+    splits, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    assert saved and any(getattr(item, "repair_proof", None) is not None
+                         and item.repair_proof["version"] == 2 for item in saved.values())
+    sends_before = len(sends)
+    monkeypatch.setattr(worker.local_llm, "chat",
+                        lambda *args, **kwargs: pytest.fail("resumed pass dispatched a call"))
+    resumed_meta = {}
+    resumed = worker.llm_extract(body, context=context, hints=worker._rule_hints(row),
+        deadline=time.monotonic() + 60, chunks_in=saved, chunks_out={},
+        posted_at=row["posted_at"], chunk_size=row["_chunk_size"], splits_in=splits,
+        medication_hints=worker._frame_medications(row),
+        protected_prior=json.loads(row["_protected_prior"]["content"]),
+        protected_prior_ref=row.get("_protected_prior_ref"), meta_out=resumed_meta)
+    assert isinstance(resumed, dict)
+    assert resumed_meta.get("checkpoint_reuses", 0) >= 1
+    assert len(sends) == sends_before
+
+
 def _protected_v1_repair_run(routed, monkeypatch, tmp_path):
     """Run a protected-prior repair that yields an inline v1 proof and locate the
     v1 repair's started artifact."""
