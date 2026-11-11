@@ -11,6 +11,7 @@ witnessのbinding一致＋proc_info(pid)の生死/birth独立照合＋loaded sou
 import hashlib
 import json
 import os
+import stat
 
 from release_auto_owner import OwnerError
 
@@ -45,14 +46,25 @@ def _sha256_file(path):
 
 
 def measure_tree(root):
-    """source treeのmanifest digest: sorted(relpath, file sha256)のcanonical hash。"""
+    """source treeのmanifest digest: sorted(relpath, file sha256)のcanonical hash。
+
+    os.walkはsymlinked dirを潜らず、file側はopen()がlink先を辿るため、
+    そのままではsymlinkがdigestの盲点になる(検証済みgenerationには
+    symlinkは存在しない)。symlinked dir・非regular fileは明示拒否し、
+    link先の事後改変でdigestが変わらないTOCTOUを塞ぐ。
+    """
     entries = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
+        for d in dirnames:
+            if os.path.islink(os.path.join(dirpath, d)):
+                raise OwnerError('SOURCE_UNOBSERVED')
         for name in sorted(filenames):
             if name.endswith(('.pyc', '.pyo')):
                 continue
             full = os.path.join(dirpath, name)
+            if not stat.S_ISREG(os.lstat(full).st_mode):
+                raise OwnerError('SOURCE_UNOBSERVED')
             rel = os.path.relpath(full, root)
             entries.append([rel, _sha256_file(full)])
     canonical = json.dumps(entries, separators=(',', ':')).encode()

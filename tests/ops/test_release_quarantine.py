@@ -116,6 +116,21 @@ def test_measure_tree_deterministic_and_ignores_pyc(tmp_path):
     assert rq.measure_tree(str(root)) != h1
 
 
+def test_measure_tree_rejects_symlinks(tmp_path):
+    """symlinked dir/fileはdigest盲点 — open()がlink先を辿りos.walkが
+    dirを潜らないため、明示拒否しないとlink先の事後改変を検出できない。"""
+    root = tmp_path / 't'
+    (root / 'pkg').mkdir(parents=True)
+    (root / 'pkg' / 'a.py').write_text('a')
+    os.symlink('/tmp', str(root / 'linked'))
+    with pytest.raises(OwnerError, match='SOURCE_UNOBSERVED'):
+        rq.measure_tree(str(root))
+    os.unlink(root / 'linked')
+    os.symlink('/etc/hosts', str(root / 'evil.py'))
+    with pytest.raises(OwnerError, match='SOURCE_UNOBSERVED'):
+        rq.measure_tree(str(root))
+
+
 # --- services / fence ---------------------------------------------------------
 
 def test_service_desires_reads_manifest(deps):
