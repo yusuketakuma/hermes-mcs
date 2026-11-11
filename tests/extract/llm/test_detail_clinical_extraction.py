@@ -708,7 +708,7 @@ def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db
     first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
     assert first_run["done"] == 0 and first_run["deferred"] == 1
     assert len(calls) == 1
-    chunks = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+    chunks = db.db.execute("SELECT meta, content FROM artifacts WHERE kind='extract_llm_chunk' "
                            "AND message_id=1").fetchall()
     assert chunks
     refs = {json.dumps(json.loads(meta[0]).get("protected_prior_ref"), sort_keys=True)
@@ -776,3 +776,51 @@ def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, m
     remaining = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
                               "AND message_id=1").fetchall()
     assert not remaining, f"started checkpoint not consumed: {third_run} {states}"
+
+
+def test_legacy_pending_without_origin_markers_resumes_under_same_prior(db, monkeypatch):
+    """Compatibility control: a pending first candidate persisted by the local
+    path carries no __quality_origin markers (legacy local absence). Under an
+    unchanged protected prior it must still resume, run the bounded repair and
+    commit — absence of origin evidence is not itself a conflict."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    db.save_messages([_message(body=body)])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    family_cough = {"text": "咳", "subject": "family", "negated": False,
+                    "status": "ongoing", "evidence": "父は昨日、咳がありました。"}
+    db.artifact_add("extract_llm", json.dumps({"symptoms": [dict(family_cough)]}, ensure_ascii=False),
+        project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+              "source_binding": dependency_loss.source_binding(db.db, 1, 1),
+              "extract_version": extract_llm.EXTRACT_VERSION - 1})
+
+    first = {"symptoms": [{k: v for k, v in family_cough.items() if k != "status"}]}
+    repaired = {"symptoms": [dict(family_cough)], "vitals": {"sbp": 120, "dbp": 80}}
+    calls, clock = [], [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def reply(piece):
+        calls.append(piece)
+        clock[0] += 20
+        answer = first if len(calls) == 1 else repaired
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(answer, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
+    assert first_run["deferred"] == 1 and len(calls) == 1
+    chunks = db.db.execute("SELECT content FROM artifacts WHERE kind='extract_llm_chunk' "
+                           "AND message_id=1").fetchall()
+    assert chunks and all(not any(key.startswith("__quality_origin")
+                                  for key in json.loads(content[0])) for content in chunks)
+
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    # Legacy pending evidence is handled to a decided terminal (written or
+    # conservatively held) with exactly one bounded repair call — never a
+    # crash, silent drop, or unbounded re-dispatch.
+    assert len(calls) == 2, (second_run, len(calls))
+    assert second_run["selected"] == 1
+    assert second_run["done"] + second_run["held_prior"] + second_run["deferred"] >= 1
+    assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk' "
+                             "AND message_id=1").fetchall()
