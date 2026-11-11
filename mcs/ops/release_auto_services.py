@@ -35,7 +35,9 @@ class ServiceError(RuntimeError):
 
 
 def _validate_services(services):
-    if (not isinstance(services, (list, tuple)) or not services
+    # 空listは有効 — 実行中の管理processが0件なら退役は空証明で完結する
+    # (witnessのretired_processesもminItems=0を許容)。None/非list/重複idは拒否。
+    if (not isinstance(services, (list, tuple))
             or any(not isinstance(s, dict) or type(s.get('id')) is not str
                    or not s['id'] for s in services)):
         raise ServiceError('SERVICE_INVENTORY')

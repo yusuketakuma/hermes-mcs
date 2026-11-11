@@ -115,10 +115,11 @@ class PrivateWitness:
             if (not isinstance(w, dict)
                     or not isinstance(w.get('logical_id'), str)
                     or not w['logical_id']
-                    or not isinstance(w.get('identity'), dict)
                     or not isinstance(w.get('sha256'), str)
                     or len(w['sha256']) != 64):
                 raise WitnessError('WITNESS_FILES')
+            # providerはos.stat_resultまたはFileIdentity形dictを返せる
+            w['identity'] = _stat_fields(w.get('identity'))
 
         src = self._call('source_facts')
         if not isinstance(src, dict):

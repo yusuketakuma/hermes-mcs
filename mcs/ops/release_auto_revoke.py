@@ -17,13 +17,26 @@ class LocalRevoke:
     """owner state consent記録から撤回を判定するdeps実装。"""
 
     def __init__(self, store):
-        """store: auto_state.loadが読めるStore互換(read/root_fingerprint)。
-        lock区間内外どちらからも呼ばれるため、factoryは専用の読取Storeを渡す。"""
+        """store: auto_state.loadが読めるStore互換(read/root_fingerprint)、
+        または呼出毎に新しいStoreを返すcallable(factoryは専用の読取Storeを
+        都度開閉するためこちらを使う)。lock区間内外どちらからも呼ばれる。"""
         self._store = store
+
+    def _owner(self):
+        if callable(self._store):
+            s = self._store()
+            try:
+                return auto_state.load(s)
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        return auto_state.load(self._store)
 
     def __call__(self):
         try:
-            owner = auto_state.load(self._store)
+            owner = self._owner()
         except Exception:
             return True
         consent = owner.get('consent') if isinstance(owner, dict) else None
