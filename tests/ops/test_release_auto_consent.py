@@ -308,3 +308,43 @@ def test_disable_auto_wire_failure_keeps_local_revoked(store):
     owner = state.load(store)
     assert owner['consent']['enabled'] is False
     assert owner['consent']['local_consent_epoch'] == consent['local_consent_epoch'] + 1
+
+
+def test_ensure_confirmation_receipt_persists_and_reuses(store):
+    preview = _preview()
+    first = consent_mod.ensure_confirmation_receipt(store, preview, NOW_MS,
+                                                    reason='確認した')
+    again = consent_mod.ensure_confirmation_receipt(store, preview, NOW_MS + 1)
+    assert first == again
+    evidence = store.read(consent_mod.CONFIRMATION_NAME)
+    assert evidence['schema_version'] == 'mcs.consent-confirmation-local.v1'
+    entry = next(iter(evidence['entries'].values()))
+    assert entry['receipt_id'] == first
+    assert entry['confirmed_at'] == NOW_MS
+    assert entry['reason'] == '確認した'
+    assert entry['preview_id'] == preview['preview_id']
+
+
+def test_ensure_confirmation_receipt_distinct_previews(store):
+    a = consent_mod.ensure_confirmation_receipt(store, _preview(), NOW_MS)
+    b = consent_mod.ensure_confirmation_receipt(
+        store, _preview(preview_id='88888888-7777-4666-8555-444444444444'),
+        NOW_MS)
+    assert a != b
+    assert len(store.read(consent_mod.CONFIRMATION_NAME)['entries']) == 2
+
+
+def test_ensure_confirmation_receipt_rejects_corrupt(store):
+    store.write(consent_mod.CONFIRMATION_NAME,
+                {'schema_version': 'wrong', 'entries': {}})
+    with pytest.raises(consent_mod.ConsentError):
+        consent_mod.ensure_confirmation_receipt(store, _preview(), NOW_MS)
+
+
+def test_confirm_requires_wire(store):
+    seed(store)
+    with pytest.raises(consent_mod.ConsentError):
+        consent_mod.confirm_standing_policy(
+            store, None, preview=_preview(), clock=Clock(),
+            confirmation_receipt_id=RECEIPT_ID)
+    assert state.load(store)['consent'] is None

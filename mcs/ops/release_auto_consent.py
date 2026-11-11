@@ -18,6 +18,7 @@ request_id/request_nonce/各種IDは論理内容から決定論的に導出し�
 confirmation_receipt_idが私有証拠へ束縛する。
 """
 import json
+import uuid
 
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as auto_state
@@ -29,6 +30,13 @@ PREVIEW_REQUEST = 'mcs.consent-preview-request.v3'
 CONFIRM_REQUEST = 'mcs.consent-confirm-request.v3'
 REVOKE_REQUEST = 'mcs.consent-revoke-request.v3'
 STANDING_CONSENT = 'mcs.standing-consent.v3'
+
+# 人確認の私有証拠(spec 03 SEM10: confirmation receiptは実機人確認の私有証拠と
+# 対応)。preview bytesごとにreceipt_idを耐久化し、retryで同一consent bytesを
+# 再構成する。owner state正本ではなく独立sidecar — consent schemaの項目ではない。
+CONFIRMATION_NAME = 'release-consent-confirmation.json'
+_CONFIRMATION_SCHEMA = 'mcs.consent-confirmation-local.v1'
+_CONFIRMATION_MAX = 16
 
 
 class ConsentError(RuntimeError):
@@ -54,6 +62,63 @@ def _active_receipt(receipt):
     _require(isinstance(receipt, dict), 'CONSENT_RECEIPT')
     _require(receipt.get('status') == 'active', 'CONSENT_NOT_ACTIVE')
     return receipt
+
+
+def _confirmation_load(store):
+    raw = store.read(CONFIRMATION_NAME)
+    if raw is None:
+        return {'schema_version': _CONFIRMATION_SCHEMA, 'entries': {}}
+    entries = raw.get('entries') if isinstance(raw, dict) else None
+    if (not isinstance(raw, dict)
+            or raw.get('schema_version') != _CONFIRMATION_SCHEMA
+            or not isinstance(entries, dict)):
+        raise ConsentError('CONSENT_EVIDENCE')
+    for key, entry in entries.items():
+        if (not isinstance(key, str) or len(key) != 64
+                or not isinstance(entry, dict)
+                or not isinstance(entry.get('receipt_id'), str)
+                or type(entry.get('confirmed_at')) is not int
+                or ('reason' in entry and not isinstance(entry['reason'], str))):
+            raise ConsentError('CONSENT_EVIDENCE')
+    return raw
+
+
+def ensure_confirmation_receipt(store, preview, now_ms, *, reason=None):
+    """preview bytesへ束縛した人確認receipt_idを私有証拠へ耐久化して返す。
+
+    previewは呼出側でwire.verify済みのpayload。schema検証後、
+    preview_sha256をkeyにentriesへ{receipt_id, confirmed_at, preview_id,
+    reason?}を記録する。同一previewの再呼出しは最初のreceipt_idを返す — これにより
+    confirm retryでconsent bytesが一致しCONFIRM_CONFLICTを避けられる。
+    entriesはconfirmed_at昇順で_CONFIRMATION_MAX件まで保持する
+    (preview TTL<=5分のため古い証拠の実害はない)。
+    """
+    _require(isinstance(preview, dict), 'CONSENT_PREVIEW')
+    preview = contract.parse_typed(
+        contract.canonical_typed(preview, 'ConsentPreview'), 'ConsentPreview',
+        max_bytes=contract.AUTO_INPUT_BYTES)
+    _require(type(now_ms) is int and now_ms > 0, 'CONSENT_CLOCK')
+    preview_sha256 = contract.hash_v3('consent-preview', preview)
+    with store.release_owner_lock():
+        state = _confirmation_load(store)
+        entries = state['entries']
+        existing = entries.get(preview_sha256)
+        if isinstance(existing, dict):
+            return existing['receipt_id']
+        receipt_id = str(uuid.uuid4())
+        entry = {'receipt_id': receipt_id, 'confirmed_at': now_ms,
+                 'preview_id': preview.get('preview_id')}
+        if isinstance(reason, str):
+            entry['reason'] = reason
+        entries[preview_sha256] = entry
+        if len(entries) > _CONFIRMATION_MAX:
+            for key, _ in sorted(
+                    entries.items(),
+                    key=lambda kv: kv[1]['confirmed_at']
+            )[:len(entries) - _CONFIRMATION_MAX]:
+                del entries[key]
+        store.write(CONFIRMATION_NAME, state)
+        return receipt_id
 
 
 def request_consent_preview(wire, *, scope, profile_sha256, central_proposal_id):
@@ -124,6 +189,7 @@ def confirm_standing_policy(store, wire, *, preview, clock,
     wire失敗は全てConsentErrorで止め、owner stateは変更しない(confirm応答を
     確認してからだけ保存する)。戻り値は保存したStandingConsent dict。
     """
+    _require(wire is not None, 'CONSENT_WIRE')
     _require(isinstance(preview, dict), 'CONSENT_PREVIEW')
     preview = contract.parse_typed(
         contract.canonical_typed(preview, 'ConsentPreview'), 'ConsentPreview',

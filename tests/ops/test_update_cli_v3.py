@@ -6,6 +6,7 @@ v3正本はcontrol_root(runtime_home)配下 — sdc.state_rootではない(spec 
 """
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -228,3 +229,152 @@ def test_status_consent_revoked(control_root):
 
 def test_status_consent_none(control_root):
     assert _status_with_consent(control_root, None) is None
+
+
+EXAMPLES = (Path(__file__).resolve().parents[2]
+            / 'adapters/sdc/contracts/mcs-auto/v3/examples')
+
+
+def _example(name):
+    return json.loads((EXAMPLES / name).read_text())['data']
+
+
+def _preview_payload():
+    """実clockに対して有効なConsentPreview payloadをexample値で組み立てる。"""
+    scope = _example('offer.json')['scope']
+    profile = _example('standing-consent.json')['profile']
+    consent_ex = _example('standing-consent.json')
+    now = int(time.time() * 1000)
+    return {
+        'schema_version': 'mcs.consent-preview.v3',
+        'request_id': '11111111-2222-4333-8444-555555555555',
+        'request_nonce': 'a' * 64,
+        'preview_id': '99999999-8888-4777-8666-555555555555',
+        'central_proposal_id': '77777777-6666-4555-8444-333333333333',
+        'scope': scope, 'profile': profile,
+        'central_policy_id': consent_ex['central_policy_id'],
+        'central_policy_sha256': consent_ex['central_policy_sha256'],
+        'policy_epoch': 1, 'local_consent_epoch': 1,
+        'timezone': 'Asia/Tokyo',
+        'windows': [{'weekday': 0, 'start_minute': 60, 'end_minute': 180}],
+        'max_prepare_seconds': 120, 'max_prepare_attempts_24h': 3,
+        'max_prepare_seconds_24h': 360, 'early_adopter': False,
+        'allowed_class': 'code-only-compatible',
+        'consent_expires_at': now + 30 * 86_400_000,
+        'issued_at': now - 60_000, 'expires_at': now + 240_000,
+        'rollout_policy_sha256': consent_ex['rollout_policy_sha256'],
+    }
+
+
+def _preview_file(tmp_path):
+    path = tmp_path / 'preview.json'
+    path.write_text(json.dumps(_preview_payload()))
+    return str(path)
+
+
+def _cc_args(preview_file, **over):
+    import argparse
+    base = {'preview_file': preview_file, 'confirm_human': False,
+            'reason': None}
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def test_cmd_consent_confirm_shows_terms_without_flag(control_root, tmp_path, capsys):
+    control_root.mkdir()
+    preview_file = _preview_file(tmp_path)
+    rc = update_cli.cmd_consent_confirm(
+        _cc_args(preview_file))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out['status'] == 'confirmation_required'
+    terms = out['consent_terms']
+    assert terms['preview_id'] == '99999999-8888-4777-8666-555555555555'
+    assert terms['windows'] == [{'weekday': 0, 'start_minute': 60,
+                                 'end_minute': 180}]
+    assert terms['max_prepare_attempts_24h'] == 3
+
+
+def test_cmd_consent_confirm_requires_reason(control_root, tmp_path, capsys):
+    control_root.mkdir()
+    preview_file = _preview_file(tmp_path)
+    rc = update_cli.cmd_consent_confirm(
+        _cc_args(preview_file, confirm_human=True))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out['status'] == 'confirmation_required'
+
+
+def test_cmd_consent_confirm_unavailable_without_wire(control_root, tmp_path, capsys):
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
+    preview_file = _preview_file(tmp_path)
+    rc = update_cli.cmd_consent_confirm(
+        _cc_args(preview_file, confirm_human=True, reason='内容を確認した'))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1 and out['status'] == 'unavailable'
+    assert 'consent_terms' in out
+
+
+def test_cmd_consent_confirm_ok_and_evidence_idempotent(
+        control_root, tmp_path, capsys, monkeypatch):
+    from adapters.sdc import release_auto_contract as contract
+    import release_auto_consent as v3_consent
+
+    class EchoWire:
+        def __init__(self):
+            self.sent = []
+
+        def signed_send(self, path, raw):
+            self.sent.append((path, json.loads(raw.decode())))
+            return b'{}'
+
+        def verify(self, path, response):
+            request = self.sent[-1][1]
+            consent = request['consent']
+            return {
+                'schema_version': 'mcs.consent-receipt.v3',
+                'request_id': request['request_id'],
+                'request_nonce': request['request_nonce'],
+                'scope': consent['scope'],
+                'consent_id': consent['consent_id'],
+                'consent_sha256': contract.hash_v3('standing-consent', consent),
+                'local_consent_epoch': consent['local_consent_epoch'],
+                'policy_epoch': consent['policy_epoch'],
+                'status': 'active',
+                'accepted_at': int(time.time() * 1000),
+                'issued_at': int(time.time() * 1000),
+                'expires_at': int(time.time() * 1000) + 300_000,
+            }
+
+    wire = EchoWire()
+    monkeypatch.setattr(update_cli, '_v3_consent_wire', lambda: wire)
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
+    preview_file = _preview_file(tmp_path)
+    rc = update_cli.cmd_consent_confirm(
+        _cc_args(preview_file, confirm_human=True, reason='内容を確認した'))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out['status'] == 'ok'
+    receipt_id = out['confirmation_receipt_id']
+    assert receipt_id
+    with Store(control_root) as store:
+        owner = state.load(store)
+        assert owner['consent']['confirmation_receipt_id'] == receipt_id
+        evidence = store.read(v3_consent.CONFIRMATION_NAME)
+    entry = next(iter(evidence['entries'].values()))
+    assert entry['receipt_id'] == receipt_id
+    assert entry['reason'] == '内容を確認した'
+    # 同一previewの再実行は同一receipt_id(証拠再利用) — consent bytes一致
+    rc = update_cli.cmd_consent_confirm(
+        _cc_args(preview_file, confirm_human=True, reason='再確認'))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out['status'] == 'ok'
+    assert out['confirmation_receipt_id'] == receipt_id
+
+
+def test_cmd_consent_confirm_bad_file(control_root, tmp_path, capsys):
+    control_root.mkdir()
+    missing = str(tmp_path / 'none.json')
+    assert update_cli.cmd_consent_confirm(_cc_args(missing)) == 2
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{"not": "a preview"}')
+    assert update_cli.cmd_consent_confirm(_cc_args(str(bad))) == 2

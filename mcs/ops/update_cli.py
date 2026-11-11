@@ -289,6 +289,100 @@ def cmd_auto_disable(_args) -> int:
     return 0
 
 
+def _v3_consent_wire():
+    """v3 consent経路のwire。transport/credential/pinsの本番配線はW14待ち。"""
+    return None
+
+
+_CONSENT_TERM_KEYS = ('scope', 'profile', 'allowed_class', 'timezone', 'windows',
+                      'max_prepare_seconds', 'max_prepare_attempts_24h',
+                      'max_prepare_seconds_24h', 'early_adopter',
+                      'local_consent_epoch', 'policy_epoch',
+                      'central_policy_id', 'central_policy_sha256',
+                      'consent_expires_at', 'expires_at',
+                      'rollout_policy_sha256')
+
+
+class _WallClock:
+    def wall_ms(self):
+        return int(time.time() * 1000)
+
+
+def cmd_consent_confirm(args) -> int:
+    """v3 standing consentの人間確認付き確定(spec 03 SEM10)。
+
+    --preview-fileのConsentPreview payloadをschema検証してconsent_termsを
+    表示する。--confirm-humanと--reasonが揃った時だけ、preview bytesへ束縛した
+    私有証拠receiptを発行してconfirm_standing_policyへ渡す。wire未配線
+    (本番transport/credential/pinsはW14待ち)ではunavailableを返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        if not os.path.isfile(args.preview_file):
+            raise ValueError
+        with open(args.preview_file, 'rb') as fh:
+            raw = fh.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError
+        preview = json.loads(raw.decode('utf-8'))
+    except Exception:
+        print(json.dumps({"status": "error", "code": "CONSENT_PREVIEW_FILE"},
+                         ensure_ascii=False))
+        return 2
+    try:
+        from adapters.sdc import release_auto_contract as contract
+        import release_auto_consent as v3_consent
+        preview = contract.parse_typed(
+            contract.canonical_typed(preview, 'ConsentPreview'),
+            'ConsentPreview', max_bytes=contract.AUTO_INPUT_BYTES)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_PREVIEW")},
+                         ensure_ascii=False))
+        return 2
+    terms = {k: preview[k] for k in _CONSENT_TERM_KEYS if k in preview}
+    terms['preview_id'] = preview.get('preview_id')
+    terms['central_proposal_id'] = preview.get('central_proposal_id')
+    if args.confirm_human is not True \
+            or not mcs_util.valid_text(args.reason, 2000):
+        print(json.dumps({"status": "confirmation_required",
+                          "consent_terms": terms,
+                          "hint": "--confirm-human と --reason を付けて再実行"},
+                         ensure_ascii=False))
+        return 0
+    wire = _v3_consent_wire()
+    if wire is None:
+        print(json.dumps({"status": "unavailable",
+                          "reason": "consent wire未配線(W14)",
+                          "consent_terms": terms}, ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        clock = _WallClock()
+        with Store(root) as store:
+            receipt_id = v3_consent.ensure_confirmation_receipt(
+                store, preview, clock.wall_ms(), reason=args.reason)
+            consent = v3_consent.confirm_standing_policy(
+                store, wire, preview=preview, clock=clock,
+                confirmation_receipt_id=receipt_id)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_CONFIRM")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok",
+                      "consent_id": consent.get("consent_id"),
+                      "expires_at": consent.get("expires_at"),
+                      "confirmation_receipt_id": receipt_id},
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_apply(args) -> int:
     return apply(args.tag, args.sha, args.command_id,
                  base_sha=args.base_sha, reinstall=args.reinstall,
@@ -373,6 +467,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
     sub.add_parser("auto-disable", help="v3自動更新の同意を撤回する（local_consent_epochを増分）").set_defaults(
         fn=lambda args: cmd_auto_disable(args))
+    cc_p = sub.add_parser("consent-confirm",
+                          help="v3 standing consentを人間確認のうえ確定する（--preview-file必須）")
+    cc_p.add_argument("--preview-file", required=True,
+                      help="request_consent_previewで取得したConsentPreviewのJSONファイル")
+    cc_p.add_argument("--confirm-human", action="store_true",
+                      help="consent_termsを確認し同意したことを明示する")
+    cc_p.add_argument("--reason", help="人間確認の理由（監査用・必須）")
+    cc_p.set_defaults(fn=lambda args: cmd_consent_confirm(args))
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted(_resume_provider_migration=True))
