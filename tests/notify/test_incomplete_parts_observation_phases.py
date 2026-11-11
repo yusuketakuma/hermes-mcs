@@ -175,17 +175,40 @@ class _Profiler:
         profiler = self
 
         def timed(*args, **kwargs):
+            profiler.calls[key] = profiler.calls.get(key, 0) + 1
             previous = profiler.phase
             profiler.phase = key
             started = time.perf_counter()
             try:
                 result = original(*args, **kwargs)
-                return iter(list(result)) if materialize else result
             finally:
                 profiler.elapsed[key] = (profiler.elapsed.get(key, 0.0)
                                          + time.perf_counter() - started)
-                profiler.calls[key] = profiler.calls.get(key, 0) + 1
-                profiler.phase = previous
+            profiler.phase = previous
+            if not materialize or not hasattr(result, "__next__"):
+                return result
+            # Generator results keep streaming order: each next() is timed
+            # under this phase and consumer work between yields stays in the
+            # outer phase — never materialize the whole stream up front.
+            iterator = iter(result)
+
+            def measured():
+                try:
+                    while True:
+                        profiler.phase = key
+                        item_started = time.perf_counter()
+                        try:
+                            item = next(iterator)
+                        except StopIteration:
+                            return
+                        finally:
+                            profiler.elapsed[key] = (profiler.elapsed.get(key, 0.0)
+                                                     + time.perf_counter() - item_started)
+                            profiler.phase = previous
+                        yield item
+                finally:
+                    profiler.phase = previous
+            return measured()
         return timed
 
     def count_only(self, module, name):
@@ -204,29 +227,35 @@ class _Profiler:
 
 
 def _observe(db, monkeypatch, *, seconds=health_report.NOTIFICATION_OBSERVATION_S):
-    """Install phase wrappers and run the production bounded read once."""
+    """Install phase wrappers and run the production bounded read once.
+
+    Patches are scoped to this call via ``monkeypatch.context()`` so autouse
+    fixture patches stay untouched and each observe wraps the originals —
+    never a broad ``monkeypatch.undo()``.
+    """
     profiler = _Profiler(db)
-    monkeypatch.setattr(notify_tracking_ack, "receipt_targets",
-                        profiler.wrap(notify_tracking_ack, "receipt_targets",
-                                      "receipt_targets"))
-    monkeypatch.setattr(notify_scope, "_incomplete_part_rows",
-                        profiler.wrap(notify_scope, "_incomplete_part_rows",
-                                      "part_rows", materialize=True))
-    monkeypatch.setattr(notify_tracking_ack, "acknowledged",
-                        profiler.wrap(notify_tracking_ack, "acknowledged",
-                                      "acknowledged"))
-    monkeypatch.setattr(notify_tracking_ack, "target",
-                        profiler.count_only(notify_tracking_ack, "target"))
     observation = {}
-    started = time.perf_counter()
-    try:
-        report = health_report.bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, NOW, SLACK),
-            seconds=seconds, observation=observation)
-        outcome = "complete"
-    except Exception as exc:
-        report, outcome = None, f"{type(exc).__name__}: {exc}"
-    total = time.perf_counter() - started
+    with monkeypatch.context() as scoped:
+        scoped.setattr(notify_tracking_ack, "receipt_targets",
+                       profiler.wrap(notify_tracking_ack, "receipt_targets",
+                                     "receipt_targets"))
+        scoped.setattr(notify_scope, "_incomplete_part_rows",
+                       profiler.wrap(notify_scope, "_incomplete_part_rows",
+                                     "part_rows", materialize=True))
+        scoped.setattr(notify_tracking_ack, "acknowledged",
+                       profiler.wrap(notify_tracking_ack, "acknowledged",
+                                     "acknowledged"))
+        scoped.setattr(notify_tracking_ack, "target",
+                       profiler.count_only(notify_tracking_ack, "target"))
+        started = time.perf_counter()
+        try:
+            report = health_report.bounded_health_read(
+                db, lambda _check: notify_scope.incomplete_parts_health(db, NOW, SLACK),
+                seconds=seconds, observation=observation)
+            outcome = "complete"
+        except Exception as exc:
+            report, outcome = None, f"{type(exc).__name__}: {exc}"
+        total = time.perf_counter() - started
     return report, outcome, total, profiler.snapshot(), observation
 
 
@@ -236,7 +265,28 @@ def _dump(name, payload):
         path = Path(out)
         path.mkdir(parents=True, exist_ok=True)
         (path / name).write_text(json.dumps(payload, indent=2, sort_keys=True))
-    print(f"OBSERVE {name}: " + json.dumps(payload, sort_keys=True)[:2000])
+    print(f"OBSERVE {name}: " + json.dumps(payload, sort_keys=True))
+
+
+class _FakeClock:
+    """Deterministic monotonic source for ``health_report``'s bounded read.
+
+    Only ``health_report.time`` is swapped, so the budget clock is fully
+    controlled while every other module keeps the real clock. ``time.time``
+    and friends delegate to the real module.
+    """
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 def test_receipt_sweep_scales_the_indexing_phase(tmp_path, monkeypatch):
@@ -291,7 +341,6 @@ def test_ack_hit_reproof_scales_per_target(tmp_path, monkeypatch):
 
         db.execute("DELETE FROM command_receipts")
         db.commit()
-        monkeypatch.undo()
         report_wo, outcome_wo, total_wo, snap_wo, obs_wo = _observe(db, monkeypatch)
         assert outcome_wo == "complete"
         assert snap_wo["calls"].get("acknowledged") == 1000
@@ -315,9 +364,11 @@ def test_ack_hit_reproof_scales_per_target(tmp_path, monkeypatch):
         ledger.close()
 
 
-def test_combined_sweep_reproduces_the_production_shape(tmp_path, monkeypatch):
-    """4096 applied receipts plus 1000 live ack hits — the production shape
-    that reported observation_limit — measured through the real 2s budget."""
+def test_combined_sweep_synthetic_stress_shape(tmp_path, monkeypatch):
+    """A synthetic stress shape — 4096 filler receipts plus 1000 live ack
+    hits — sized to exceed the observation budget. It is not a measured
+    production shape; the bounded pass records what the real 2s window does
+    with it."""
     ledger = _ledger(tmp_path)
     db = ledger.db
     try:
@@ -335,7 +386,6 @@ def test_combined_sweep_reproduces_the_production_shape(tmp_path, monkeypatch):
         assert snap_full["calls"].get("target") == 1000
         assert report_full["acknowledged_unresolved_total"] == 1000
         assert report_full["total"] == 1064
-        monkeypatch.undo()
 
         report, outcome, total, snap, observation = _observe(db, monkeypatch)
         index = notify_tracking_ack.receipt_targets(db)
@@ -374,8 +424,7 @@ def test_receipt_table_sweep_scales_the_sql_kind_filter(tmp_path, monkeypatch):
             assert outcome_full == "complete"
             index = notify_tracking_ack.receipt_targets(db)
             assert len(index) == 512
-            monkeypatch.undo()
-
+    
             report, outcome, total, snap, observation = _observe(db, monkeypatch)
             results.append({"other_receipts": others, "tracking_receipts": 512,
                             "parts": _PART_COUNT,
@@ -415,8 +464,7 @@ def test_part_count_sweep_scales_the_row_scan(tmp_path, monkeypatch):
             assert snap_full["calls"].get("acknowledged") == count
             assert snap_full["calls"].get("target", 0) == 0
             assert report_full["total"] == count and report_full["cards"] == renders
-            monkeypatch.undo()
-
+    
             report, outcome, total, snap, observation = _observe(db, monkeypatch)
             results.append({"parts": count, "renders": renders, "receipts": 512,
                             "unbounded": {"total_elapsed_s": round(total_full, 6),
@@ -435,19 +483,24 @@ def test_part_count_sweep_scales_the_row_scan(tmp_path, monkeypatch):
                               "per_render": 20, "runs": results})
 
 
-def test_python_only_overrun_is_invisible_until_the_final_check(db):
+def test_python_only_overrun_is_invisible_until_the_final_check(db, monkeypatch):
     """A read spending its budget in non-SQL Python cannot be interrupted by
-    the progress handler; the shared deadline only stops it after return."""
+    the progress handler; the shared deadline only stops it after return.
+    A fake health_report clock makes the overrun deterministic — no wall
+    clock assertions."""
+    clock = _FakeClock()
+    monkeypatch.setattr(health_report, "time", clock)
     observation = {}
-    started = time.perf_counter()
+
+    def read(_check):
+        clock.advance(1.0)
+        return {}
+
     with pytest.raises(RuntimeError, match="observation_limit"):
-        health_report.bounded_health_read(
-            db, lambda _check: time.sleep(0.3) or {},
-            seconds=0.05, observation=observation)
-    elapsed = time.perf_counter() - started
+        health_report.bounded_health_read(db, read, seconds=0.05,
+                                          observation=observation)
     assert observation["stop"] == "time_limit"
-    assert observation["elapsed_s"] >= 0.29
-    assert elapsed >= 0.29
+    assert observation["elapsed_s"] == pytest.approx(1.0)
 
 
 def test_depleted_entry_budget_starts_no_read(db):
@@ -466,24 +519,34 @@ def test_depleted_entry_budget_starts_no_read(db):
     assert observation["stop"] == "budget_exhausted"
 
 
-def test_production_wrapper_reports_honest_unknown_on_overrun(tmp_path):
+def test_production_wrapper_reports_honest_unknown_on_overrun(tmp_path, monkeypatch):
     """health_report.incomplete_parts_health keeps total=None and an honest
-    observation_limit reason when the bounded read stops — never zeroed."""
+    observation_limit reason when the bounded read stops — never zeroed.
+    The overrun is driven by a fake health_report clock advanced inside a
+    wrapped phase, so the bound fires deterministically on any machine."""
     ledger = _ledger(tmp_path)
     db = ledger.db
     try:
-        _insert_receipts(db, _filler_receipts(4096))
+        _plain_incomplete(db, _PART_COUNT)
         db.commit()
-        started = time.perf_counter()
+        clock = _FakeClock()
+        monkeypatch.setattr(health_report, "time", clock)
+        original = notify_tracking_ack.receipt_targets
+
+        def slow_receipt_targets(*args, **kwargs):
+            clock.advance(10.0)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(notify_tracking_ack, "receipt_targets",
+                            slow_receipt_targets)
         report = health_report.incomplete_parts_health(db, NOW, SLACK, seconds=0.05)
-        elapsed = time.perf_counter() - started
         assert report["status"] == "unknown"
         assert report["reason"] == "observation_limit"
         assert report["total"] is None and report["cards"] is None
         assert report["by_state"] == dict.fromkeys(
             ("pending", "unknown", "not_sent", "held"))
         _dump("honest_unknown.json", {
-            "receipts": 4096, "seconds": 0.05,
-            "elapsed_s": round(elapsed, 6), "report": report})
+            "parts": _PART_COUNT, "seconds": 0.05, "clock_advance_s": 10.0,
+            "report": report})
     finally:
         ledger.close()
