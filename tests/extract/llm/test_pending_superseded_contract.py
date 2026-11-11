@@ -1,12 +1,16 @@
 """Chunk records written under a retired contract generation classify as
 superseded — never resumed, never silently unverifiable (fully synthetic)."""
+import hashlib
 import json
 from unittest.mock import patch
 
 import pytest
 
 import anthropic_client
+import cloud_client
+import cloud_inference
 import cloud_policy
+from clinical_chunking import plan_chunks
 import extract_llm as worker
 import extract_llm_context
 import extract_llm_engine
@@ -23,8 +27,14 @@ __all__ = ['routed']
 ATTEMPT = {'qc_src': None, 'thin_src': None, 'human_src': None, 'auto_retry': 0}
 
 
-def _frozen(ledger):
+def _frozen(ledger, body=None):
     old(ledger)
+    if body is not None:
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        with ledger.db:
+            ledger.db.execute(
+                "UPDATE messages SET body_text=?, content_hash=? WHERE message_id=1",
+                (body, digest))
     row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
     row.update(_source_binding=source_binding(ledger.db, 1, 1),
                _target=('', 'synthetic-model'), _cloud_mode='off')
@@ -180,7 +190,20 @@ def test_prepare_migrates_fully_retired_pending_set(routed):
     assert jobs2[0][0]["_frame"]["artifact_id"] == r["_frame"]["artifact_id"]
 
 
-def _real_reserve(ledger, cfg, monkeypatch):
+def test_multi_piece_superseded_body_stays_held(routed):
+    """The migrated contract covers a single-leaf request: a body that
+    plan_chunks splits keeps the superseded hold before any frame work."""
+    ledger, cfg, *_ = routed
+    body = "\n".join(f"合成の経過記録{i:03d}。症状は安定している。" for i in range(400))
+    assert len(plan_chunks(body, worker._CHUNK_SIZE)) > 1
+    row, frame = _frozen(ledger, body=body)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    jobs, _skipped, blocked, reasons = _prepare(ledger, _pending_rows(ledger))
+    assert jobs == [] and blocked == 1
+    assert reasons == {'prepare_context_load_superseded': 1}
+
+
+def _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の予約確認。"):
     _use_real_cloud_accounting(monkeypatch)
     cfg["cloud_llm"]["provider"] = "anthropic"
     selection, errors = cloud_policy.resolve_profile(
@@ -193,21 +216,103 @@ def _real_reserve(ledger, cfg, monkeypatch):
     # reservation seed runs under the reopened route, like legacy_cloud_routes.
     with patch.object(cloud_policy, "send_route", lambda route: True):
         return reserve(anthropic_client.AnthropicClient("synthetic-unused").body(
-            "完全合成の予約確認。", 256, None), 30)
+            prompt, 256, None), 30)
 
 
-def test_owned_paid_history_keeps_the_cohort_held(routed, monkeypatch):
-    """A bound reservation is paid work: the guard fails closed, no local job."""
+def _guard(ledger, cfg, prompt):
+    return cloud_inference.guard_reextract_local(
+        ledger, cfg, prompt, project_id=1, message_id=1, unit_key="1",
+        owner={}, input_binding=None)
+
+
+def test_guard_admits_a_different_fingerprint_and_holds_same_or_absent(
+        routed, monkeypatch):
+    """The financial guard compares logical fingerprints, not ownership:
+    a different valid fp passes while same/absent fp always holds."""
     ledger, cfg, *_ = routed
     row, frame = _frozen(ledger)
     _persist(ledger, row, frame, _old_context(row, frame))
-    _real_reserve(ledger, cfg, monkeypatch)
-    assert cloud_policy.unbound_unit_history(
-        ledger, route="reextract", project_id=1,
-        message_id=1, unit_key="1") is False
-    jobs, _skipped, blocked, reasons = _prepare(ledger, _pending_rows(ledger))
-    assert jobs == [] and blocked == 1
-    assert reasons == {'prepare_context_load_superseded': 1}
+    _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の旧要求。")
+    _guard(ledger, cfg, "完全合成の別の現在要求。")          # different fp: pass
+    _guard(ledger, cfg, "完全合体の旧要求。")                # near-miss still differs: pass
+    with pytest.raises(cloud_client.CloudError):
+        _guard(ledger, cfg, "完全合成の旧要求。")            # same fp: hold
+    # an absent fingerprint can never prove a different request
+    with ledger.db:
+        ledger.db.execute(
+            "UPDATE artifacts SET meta=json_remove(meta,'$.logical_request_fp') "
+            "WHERE kind='cloud_usage_reserve'")
+    with pytest.raises(cloud_client.CloudError):
+        _guard(ledger, cfg, "完全合成の別の現在要求。")
+    # a corrupt receipt can never prove a different request either
+    with ledger.db:
+        ledger.db.execute(
+            "UPDATE artifacts SET meta='not-json' WHERE kind='cloud_usage_reserve'")
+    with pytest.raises((cloud_client.CloudError, ValueError)):
+        _guard(ledger, cfg, "完全合成の別の現在要求。")
+
+
+def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch):
+    """Positive: an owned different-fp reservation stays untouched while the
+    migrated row completes a current local final through the real guard."""
+    ledger, cfg, calls, reserved, results = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の旧cloud要求。")
+    before = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context",
+                                     "cloud_usage_reserve", "cloud_usage_result"))
+    assert cloud_policy.owns_request(ledger.db, route="reextract",
+                                     project_id=1, message_id=1)
+    prompts = []
+
+    def fake_call(prompt, **_kw):
+        prompts.append(prompt)
+        return {"symptoms": [], "summary": "合成の要約"}
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report["done"] == 1 and prompts
+    assert calls == [] and reserved == [] and results == []
+    # the old paid unit is preserved exactly: ownership, reservation rows,
+    # and every pre-existing checkpoint/frame row are byte-for-byte unchanged
+    assert cloud_policy.owns_request(ledger.db, route="reextract",
+                                     project_id=1, message_id=1)
+    after = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context",
+                                    "cloud_usage_reserve", "cloud_usage_result"))
+    for artifact_id, snapshot in before.items():
+        assert after[artifact_id] == snapshot
+    current = ledger.db.execute(
+        "SELECT a.* FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=?",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+    assert len(current) == 1
+    assert json.loads(current[0]["content"])["summary"] == "合成の要約"
+
+
+def test_same_fingerprint_history_holds_the_migration(routed, monkeypatch):
+    """A reservation bound to the exact current prompt is the same request:
+    the guard holds and no local dispatch or artifact happens."""
+    ledger, cfg, _calls, _reserved, _results = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    prompts = []
+
+    def capture(prompt, **_kw):
+        prompts.append(prompt)
+        return extract_llm_engine._DEFERRED
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", capture)
+    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert first["done"] == 0 and len(prompts) == 1
+    _real_reserve(ledger, cfg, monkeypatch, prompt=prompts[0])
+    second = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert second["done"] == 0 and len(prompts) == 1   # guard fired before dispatch
+    assert not ledger.db.execute(
+        "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=?",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
 
 
 def _artifact_rows(ledger, kinds):

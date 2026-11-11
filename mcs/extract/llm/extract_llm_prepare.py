@@ -239,17 +239,18 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r['_source_binding'] = binding
         r["_target"] = target
         # Read-only recognition before any owned/provider state is restored:
-        # pending work that is entirely retired-generation migrates to one
-        # fresh current-contract local unit, but only when the unit's whole
-        # paid history proves no cloud work is owned or unverifiable.
+        # pending work that is entirely retired-generation becomes an
+        # independent current-contract local attempt. Its financial guard
+        # runs at dispatch against the exact prompt; paid ownership rows
+        # stay untouched and never route this attempt back to cloud.
         superseded = _pending_superseded_scan(ledger.db, r)
-        if superseded and not cloud_policy.unbound_unit_history(
-                ledger, route="reextract", project_id=r["project_id"],
-                message_id=r["message_id"], unit_key=str(r["message_id"])):
-            block("prepare_context_load_superseded")
-            continue
         if superseded:
             r["_superseded_local"] = True
+            if len(plan_chunks(r["body_text"], _CHUNK_SIZE)) > 1:
+                # The migrated contract covers a single-leaf current
+                # request; multi-piece bodies keep the superseded hold.
+                block("prepare_context_load_superseded")
+                continue
         mode = "off" if superseded else (
             _cloud_mode(ledger, cfg, "reextract", r["project_id"])
             if allow_cloud and _cloud_reextract(ledger, r, background=background) else "off")
@@ -257,7 +258,9 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         # stays held unless the config itself declares the retirement —
         # explicit off/dry_run or a verifiable route/project exclusion.
         # A computed 'off' (mode omitted, key unreadable) proves nothing.
-        owned = mode == "off" and allow_cloud \
+        # A superseded row already committed to its local attempt: the old
+        # unit's ownership is preserved in place, never restored here.
+        owned = mode == "off" and allow_cloud and not superseded \
             and cloud_policy.owns_request(ledger.db, route="reextract",
                                           project_id=r["project_id"], message_id=r["message_id"]) \
             and not cloud_policy.scope_revoked(cfg, "reextract", r["project_id"])

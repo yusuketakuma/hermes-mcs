@@ -579,6 +579,26 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _infer(r, ctx, saved, hints, qc, index, meta, chunks_out, provider=None):
         r["_proof_vital_policy"] = copy.deepcopy(vital_policy)
+        request_guard = None
+        if r.get("_superseded_local"):
+            # The migrated row's financial guard binds to each exact prompt
+            # this local execution sends; any hold verdict defers the row.
+            binding = {"value": None}
+            def request_guard(prompt, kind="first"):
+                if kind != "first":
+                    return "cloud_unit_unresolved"
+                try:
+                    if binding["value"] is None:
+                        binding["value"] = _chunk_context(r, ctx, checkpoint=True)
+                    cloud_inference.guard_reextract_local(
+                        ledger, load_config(), prompt,
+                        project_id=r["project_id"], message_id=r["message_id"],
+                        unit_key=str(r["message_id"]), owner={},
+                        input_binding=binding["value"])
+                except (cloud_client.CloudError, ValueError, TypeError,
+                        KeyError, sqlite3.Error, OSError, RuntimeError):
+                    return "cloud_unit_unresolved"
+                return None
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
@@ -586,6 +606,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            medication_hints=_frame_medications(r),
                            medication_guard=lambda: _owner_call(lambda: _extraction_dispatch_current(
                                ledger, r, leases[index], deadline)),
+                           request_guard=request_guard,
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
                            **({"provider": provider} if provider is not None else {}),

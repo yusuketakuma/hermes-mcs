@@ -410,7 +410,6 @@ def _pending_superseded_scan(db, r):
     models = [row[0] for row in db.execute(
         "SELECT DISTINCT model FROM artifacts WHERE kind='extract_llm_chunk' "
         "AND project_id=? AND message_id=?", (r["project_id"], r["message_id"]))]
-    old = _known_old_contracts()
     saw_record = False
     for model in models:
         variant = {key: value for key, value in r.items()
@@ -424,6 +423,7 @@ def _pending_superseded_scan(db, r):
             if not records:
                 continue
             frames = _pending_frames(db, variant, model)
+            unmatched = []
             for record, witness, content_hash, plain_plan in records:
                 saw_record = True
                 current = _match_pending_record(
@@ -431,18 +431,9 @@ def _pending_superseded_scan(db, r):
                     lambda target, text: _chunk_context(target, text, checkpoint=True))
                 if len(current) != 0:
                     return False
-                total = 0
-                for _gen_id, prompt_head, schema in old:
-                    matched = _match_pending_record(
-                        db, variant, record, witness, content_hash, plain_plan, frames,
-                        lambda target, text, h=prompt_head, s=schema:
-                            _chunk_context(target, text, checkpoint=True,
-                                           prompt_head=h, schema=s))
-                    total += len(matched)
-                    if total > 1:
-                        return False
-                if total != 1:
-                    return False
+                unmatched.append((record, witness, content_hash, plain_plan))
+            if not _pending_records_known_old(db, variant, unmatched, frames):
+                return False
         except ValueError:
             return False
     return saw_record

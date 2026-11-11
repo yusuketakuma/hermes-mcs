@@ -62,7 +62,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None, quality_qc_src=None,
-                medication_hints=None, medication_guard=None
+                medication_hints=None, medication_guard=None, request_guard=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -116,6 +116,14 @@ def llm_extract(body: str, *, context: str | None = None,
                 and (medication_guard is None or not medication_guard())):
             _CALL_NOTES.defer_reason = "currentness_unverified"
             return _DEFERRED, None
+        if request_guard is not None:
+            # The migration entry binds its financial guard to this exact
+            # prompt: a hold verdict defers before any local dispatch, and a
+            # non-first kind (repair) is outside the migrated contract.
+            held = request_guard(args[0], kind=kwargs.get("kind", "first"))
+            if held is not None:
+                _CALL_NOTES.defer_reason = held
+                return _DEFERRED, None
         active_call = call if provider_override is None else functools.partial(_llm_call, provider=provider_override)
         previous = getattr(_CALL_NOTES, "medication_guard", None)
         previous_changed = getattr(_CALL_NOTES, "medication_source_changed", False)

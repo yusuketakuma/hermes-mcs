@@ -399,6 +399,51 @@ def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key
     cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=project_id,
         message_id=message_id, unit_key=unit_key, request_factory=request)
 
+
+def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_key,
+                          owner, input_binding):
+    """guard_local_fallback for the superseded local migration (reextract).
+
+    The common path keeps its accounting snapshot, verified history, tally
+    and repeated-request checks; this entry's stricter rule lives in the
+    request factory: every retained request must carry a valid
+    logical_request_fp that differs from this request's. A same, absent or
+    malformed fingerprint always holds, even where the generic guard would
+    allow a confirmed rejection. Empty verified history never builds a
+    candidate, matching guard_local_fallback."""
+    def request():
+        rows = cloud_policy._verified_request_history(
+            ledger, route='reextract', project_id=project_id,
+            message_id=message_id, unit_key=unit_key)
+        settings = resolve_cloud_settings(cfg)
+        selection, errors = cloud_policy.resolve_profile(
+            cfg, route='reextract', purpose='backlog', root=HOME)
+        if errors or selection is None:
+            raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
+        tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
+        if selection['provider'] == 'openai':
+            from types import SimpleNamespace
+            body = openai_client.OpenAIClient.body(
+                SimpleNamespace(model=selection['model'], effort=selection['effort']),
+                prompt, tokens, None)
+        else:
+            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        candidate = cloud_policy._request_identity(
+            settings, body, route='reextract', project_id=project_id,
+            message_id=message_id, unit_key=unit_key, owner=owner,
+            selection=selection, input_binding=input_binding)
+        new_fp = candidate.get('logical_request_fp')
+        for row in rows:
+            meta = cloud_policy._receipt_meta(row['meta'])
+            fp = meta.get('logical_request_fp') if isinstance(meta, dict) else None
+            if (not isinstance(fp, str) or re.fullmatch(r'[0-9a-f]{64}', fp) is None
+                    or fp == new_fp):
+                raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
+        return candidate, body
+    cloud_policy.guard_local_fallback(ledger, route='reextract', project_id=project_id,
+        message_id=message_id, unit_key=unit_key, request_factory=request)
+
+
 def resolve_cloud_settings(cfg):
     if not cfg:
         # an unreadable config (load_config's {}) never auto-enables the paid

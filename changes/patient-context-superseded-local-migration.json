@@ -1,12 +1,13 @@
 {
   "category": "changed",
   "title": "旧契約世代の停滞抽出を現行契約のローカル処理へ移行",
-  "summary": "旧い契約世代で中断した抽出のうち、有料クラウド履歴が一切無いと証明できるものは、現行契約のローカル処理としてやり直されます。クラウドの予約・送信・結果記録は作られず、旧いcheckpoint行は変更されません。有料履歴が不明・未解決・所有済みの場合は従来どおり保留されます。",
+  "summary": "旧い契約世代で中断した抽出は、現行契約のローカル処理としてやり直されます。実行直前に既存の金融ガードが実際に送るプロンプトへ適用され、過去のクラウド要求が全て別の有効な要求指紋を持つ場合だけ進みます。同一・欠落・不正な指紋や未解決の会計履歴では従来どおり保留され、旧い予約・所有・checkpoint行は一切変更されません。",
   "upgrade": "追加操作は不要です。ローカルLLMが利用できる環境でのみ移行が進み、クラウド課金は発生しません。",
   "details": [
-    "mcs/llm/cloud_policy.py: unbound_unit_history を追加。会計スナップショット内で月次集計の健全性・単位の予約/結果履歴の検証・当該メッセージへの予約非所有を確認し、有料作業が残る単位をローカルへ解放しない。",
-    "mcs/extract/llm/extract_llm_context.py: _pending_superseded_scan が全モデル範囲のpending recordを走査し、全てが退役世代へ一意に束縛され現行契約に一致しない場合のみ superseded と判定する読み取り専用の認識段階。",
-    "mcs/extract/llm/extract_llm_prepare.py: superseded 判定かつ金融ガード通過の行はクラウドモード・プロファイル解決を経ずにローカル強制とし、現行契約のframeを一度だけ構築して既存のclaim/CAS/採用経路で実行する。"
+    "mcs/extract/llm/extract_llm_context.py: _pending_superseded_scan が全モデル範囲のpending recordを走査し、現行契約に一致せず全てが退役世代へ一意に束縛される場合のみ superseded と判定する読み取り専用の認識段階。",
+    "mcs/extract/llm/extract_llm_prepare.py: superseded 行はクラウドモード・所有プロファイル復元を経ずローカルへ固定し、退役frameを再開せず現行契約のframeを一度だけ構築する。複数pieceの本文は移行対象外として保留する。",
+    "mcs/llm/cloud_inference.py: guard_reextract_local が既存の guard_local_fallback 経路（会計スナップショット・検証済み履歴・集計健全性・重複要求ガード）をそのまま使い、さらに全履歴の論理要求指紋が有効かつ新規要求と相違することを要求する。",
+    "mcs/extract/llm/extract_llm_engine.py / extract_llm_runner.py: ローカル実行の各プロンプト送信直前に金融ガードを適用し、保留判定は送信前に延期へ変換する。修復・分割など移行契約外の呼出しは保留される。"
   ],
-  "refs": ["mcs/extract/llm/extract_llm_prepare.py", "mcs/extract/llm/extract_llm_context.py", "mcs/llm/cloud_policy.py"]
+  "refs": ["mcs/extract/llm/extract_llm_prepare.py", "mcs/extract/llm/extract_llm_context.py", "mcs/llm/cloud_inference.py", "mcs/extract/llm/extract_llm_engine.py", "mcs/extract/llm/extract_llm_runner.py"]
 }
