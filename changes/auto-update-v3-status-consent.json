@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "v3状態表示の同意欄が常に空だった問題を修正",
+  "summary": "`mcs update status` のv3欄で同意状態が常に空でした。StandingConsentに存在しない'state'項目を読んでいたためで、現在は active/expired/revoked/unknown を正しく表示します。",
+  "upgrade": "追加操作は不要です。v3自動更新はAUTO_ELIGIBLE=falseのまま無効です。",
+  "details": [
+    "mcs/ops/release_auto_status.py: consent表示を_enabled/expires_atから導出する_consents_stateへ修正。enabled!=trueはrevoked(auto-disable済み)、expires_at超過はexpired、判定不能はunknownで正常扱いしない。"
+  ],
+  "refs": ["mcs/ops/release_auto_status.py"]
+}

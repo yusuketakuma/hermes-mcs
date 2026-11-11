@@ -5,6 +5,7 @@ runtime_entry.control_rootをtmp_path配下へ差し替え、Storeはその配�
 v3正本はcontrol_root(runtime_home)配下 — sdc.state_rootではない(spec 02/03)。
 """
 import json
+import time
 
 import pytest
 
@@ -195,3 +196,35 @@ def test_cmd_auto_disable_unavailable_without_state(control_root, capsys):
     assert update_cli.cmd_auto_disable(None) == 1
     out = json.loads(capsys.readouterr().out)
     assert out['status'] == 'unavailable'
+
+
+def _status_with_consent(control_root, consent):
+    import release_auto_status as v3_status
+    with Store(control_root, create=True) as store:
+        value = _owner_value(store)
+        value['consent'] = consent
+        store.write(state.OWNER_NAME, value)
+    with Store(control_root) as store:
+        return v3_status.status_dto(store)['consent']
+
+
+def test_status_consent_active(control_root):
+    consent = _consent_value()
+    consent['expires_at'] = int(time.time() * 1000) + 86_400_000
+    assert _status_with_consent(control_root, consent) == 'active'
+
+
+def test_status_consent_expired(control_root):
+    consent = _consent_value()
+    consent['expires_at'] = int(time.time() * 1000) - 1000
+    assert _status_with_consent(control_root, consent) == 'expired'
+
+
+def test_status_consent_revoked(control_root):
+    consent = _consent_value()
+    consent['enabled'] = False
+    assert _status_with_consent(control_root, consent) == 'revoked'
+
+
+def test_status_consent_none(control_root):
+    assert _status_with_consent(control_root, None) is None

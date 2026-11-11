@@ -9,6 +9,7 @@ legacy_auto_blocked: v3 owner stateが存在する(または読めない)限り
 legacy auto更新経路を抑止する。file不在=未移行でのみFalse。
 """
 import os
+import time
 
 from adapters.sdc import release_auto_state as auto_state
 
@@ -16,6 +17,21 @@ OWNER_NAME = 'release-owner.json'
 
 # UNKNOWN phaseは正常系の語へ写像しない — 表示stateを'unknown'へ固定する。
 _UNKNOWN_PHASES = frozenset({'UNKNOWN'})
+
+
+def _consent_state(consent, now_ms):
+    """StandingConsentの表示state。enabled!=trueは撤回(auto-disable)済み、
+    expires_at超過は期限切れ。判定不能は'unknown'で正常扱いしない。"""
+    if consent is None:
+        return None
+    if not isinstance(consent, dict):
+        return 'unknown'
+    if consent.get('enabled') is not True:
+        return 'revoked'
+    expires = consent.get('expires_at')
+    if type(expires) is not int:
+        return 'unknown'
+    return 'active' if expires > now_ms else 'expired'
 
 
 def status_dto(store):
@@ -45,7 +61,8 @@ def status_dto(store):
            'phase': None, 'reason': None,
            'verified_release': (verified or {}).get('release_id'),
            'pending_outbox': outbox_pending,
-           'consent': (owner.get('consent') or {}).get('state'),
+           'consent': _consent_state(owner.get('consent'),
+                                     int(time.time() * 1000)),
            'health': None}
     if active is not None:
         phase = active.get('phase')
