@@ -9,11 +9,11 @@
 
 | file | 内容 |
 |---|---|
-| `p0a-callers.txt` | P0-a指定入口（`apply` wrapper/`_apply_pipeline`/`cmd_check`/`--post-merge`/`rollback`/`recover`/`_run_native_release`/`install.sh`/`mcs_upgrade`/`reinstall_done`/`settings_migration_receipt`）の全caller grep結果（tests/integration/changes/docs除外、非切詰め。`apply`はwrapper呼出3箇所＋facade re-export callerを収録） |
-| `p0b-callers.txt` | writer_lock全API（`acquire_run_lock`/`unlocked_transport`/`wait_run_lock`/`writer_blocked`/`updater_state`/`RunLockLost`）+ `sqlite3.connect` + store read/write呼出しの全caller grep結果 |
-| `p0c-lock-callers.txt` | Store lock/method caller（`release_*_lock`/`store.lock()`/`guard_credential`/`diagnostic_state_lock`等）+ `control.read/write`呼出し + `release_state._read/_write` caller |
-| `p0d-store-access.txt` | `store.read('…')`/`store.write('…')`リテラル引数呼出し + `_file_lock('…')` + `Store(`生成箇所 |
-| `p0d-datafiles.txt` | notify spool file名・recovery `.prev`・data/配下file名のgrep結果 |
+| `p0a-callers.md` | P0-a指定入口（`apply` wrapper/`_apply_pipeline`/`cmd_check`/`--post-merge`/`rollback`/`recover`/`_run_native_release`/`install.sh`/`mcs_upgrade`/`reinstall_done`/`settings_migration_receipt`）の全caller grep結果（tests/integration/changes/docs除外、非切詰め。`apply`はwrapper呼出3箇所＋facade re-export callerを収録） |
+| `p0b-callers.md` | writer_lock全API（`acquire_run_lock`/`unlocked_transport`/`wait_run_lock`/`writer_blocked`/`updater_state`/`RunLockLost`）+ `sqlite3.connect` + store read/write呼出しの全caller grep結果 |
+| `p0c-lock-callers.md` | Store lock/method caller（`release_*_lock`/`store.lock()`/`guard_credential`/`diagnostic_state_lock`等）+ `control.read/write`呼出し + `release_state._read/_write` caller |
+| `p0d-store-access.md` | `store.read('…')`/`store.write('…')`リテラル引数呼出し + `_file_lock('…')` + `Store(`生成箇所 |
+| `p0d-datafiles.md` | notify spool file名・recovery `.prev`・data/配下file名のgrep結果 |
 
 ---
 
@@ -25,7 +25,7 @@
 
 ### A-1. 入口別caller対応表
 
-| 入口（仕様指定） | 実装本体 | caller（grep全件、`p0a-callers.txt`参照） | profile | 親process | 入口時点の保持lock | 入口内の取得 | 解放 | FD継承/借用 | 外部callback/待機 |
+| 入口（仕様指定） | 実装本体 | caller（grep全件、`p0a-callers.md`参照） | profile | 親process | 入口時点の保持lock | 入口内の取得 | 解放 | FD継承/借用 | 外部callback/待機 |
 |---|---|---|---|---|---|---|---|---|---|
 | `check`（既定） | `update_cli.cmd_check` L89（**`@_legacy_entry` L88で全工程を`_call_legacy` wrap**）→ auto/picked判定 → **`update_apply.apply`直呼出** L192（picked）/ L195（auto）→ `apply` L116 → `_call_legacy`（nested G再取得）→ `_apply_pipeline` L129 | `deployment/scripts/mcs_update.sh`（exec `mcs_update.py check`）、`update_cli`既定（L269）/`check` sub（L291）。**同名別関数注意**: `mcs_setup.py cmd_check`（setup診断 L836、`cmd_check(args)`）と`notify_cmds._human_cmd_check`は別物。picked.rollback時はL190で`rollback()`へ分岐、`held`時は`recover_interrupted()`へ分岐 | hermes cron | cron/launchd | **入口時点でG(SH)取得済み**（`@_legacy_entry`→`_call_legacy`→`_release_legacy_scope(HOME)`→`_open_release_gate` `LOCK_SH\|LOCK_NB`＋owner file存在で`release_entry_hold`拒否）。Git fetch・通知待機もG保持下 | state判断用にU取得（L117 `acquire_update_lock`）→apply呼出前に`os.close(upd_fd)`で解放 → apply内でnested G(SH)+U→R | U(L117)はapply前解放、pipeline内U→Rはpipeline終了時 | post-merge子へlifetime_fds全体（G含む）+extra(R,U)をdup継承 | Git fetch・通知・pre-check待機（全てG(SH)保持下） |
 | `apply` | `update_cli.cmd_apply` L211 → `apply()` L212 → `apply` L116 → `_call_legacy` → `_apply_pipeline` | `apply` subcommand dispatch L271/284（`mcs_update.py apply` — 手動実行 + `scripts/mcs_upgrade.py` subprocess）。**`cmd_check`は`cmd_apply`を経由せず`apply()`を直呼出**（L192/L195 — check行参照）。facade `mcs_update.apply`（L309 re-export）のcallerはtest専用: `test_mcs_update_restore.py` L681/778、`test_mcs_update_apply.py` L323、`test_mcs_update.py` L745（`update_cli.apply`をmonkeypatch）。`release_apply_owner._run_native_release` L1047は`apply()`を通らず`mcs_update._apply_pipeline`を`_release_cap`付きで直呼出 | manual/hermes | ユーザー端末 or cron | **apply()が`_call_legacy`でG(SH)を必ず取得**（引数検証後L125、lifetime_fdsへ登録・`_RELEASE_GATE_FD`設定）。mcs_upgrade経由時は更に外側で`_release_scope`のG(SH)を保持（二重SHは両立） | U→R（`_apply_pipeline`内、G(SH)は外側で保持済み） | pipeline終了時にU/R解放、`_call_legacy` ExitStack終了でG(SH)解放 | post-merge子へlifetime_fds全体（G含む）+extra(R,U)をdup継承 | `--confirm-human`/`--reason`は未公開候補のみ |
@@ -58,7 +58,7 @@
 
 - **`_call_legacy(function,...)`**（`update_lifecycle_context.py` L250–268）: `settings_migration_receipt.pending(DATA)`を先に検査（pending時はprint+return 2）→ ExitStackで`_release_legacy_scope(HOME)`をenter（= `release_apply_owner._legacy_scope` → `release_apply_checks._legacy_scope` L497 → `_open_release_gate` L457の`LOCK_SH|LOCK_NB`＋owner file存在拒否）→ 得たfdを`owned_process.lifetime_fds((fd,))`へ登録 → `_RELEASE_GATE_FD` ContextVar設定 → `function(*args,**kwargs)`実行 → ExitStack終了でG(SH)解放。**呼出全体がG(SH)保持下で動く**
 - **`_release_legacy_scope`** は `update_lifecycle_context.py` L44で`release_apply_owner._legacy_scope`をimport（L46でimport失敗時None→L257で`release gate unavailable`→return 2のfail-closed）。`release_apply_owner.py` L33は`release_apply_checks`からのre-export
-- **`@_legacy_entry` decorator**（同L305–309）: `guarded(*a,**kw) → _call_legacy(function,...)`。付与箇所（`p0c-lock-callers.txt`証拠）: `update_cli.cmd_check` L88、`update_recovery.reinstall_done` L94、`update_recovery.recover_interrupted` L232、`update_apply.rollback` L615
+- **`@_legacy_entry` decorator**（同L305–309）: `guarded(*a,**kw) → _call_legacy(function,...)`。付与箇所（`p0c-lock-callers.md`証拠）: `update_cli.cmd_check` L88、`update_recovery.reinstall_done` L94、`update_recovery.recover_interrupted` L232、`update_apply.rollback` L615
 - **`_call_legacy`直接呼出**（decorator非経由）: `update_apply.apply` L125（引数検証後にpipelineへ）、`update_cli.cmd_post_merge` L259（`_legacy_post_merge` — post-merge子のlegacy分岐）
 - **nested G(SH)は両立**: `cmd_check`が`@_legacy_entry`でG保持中に`apply()`→`_call_legacy`が別fdで再取得しても`LOCK_SH`同士は競合しない（`_open_release_gate`は毎回新規open→flock SH|NB）
 - **`_lifetime_fds`伝播**: `owned_process.lifetime_fds`が登録したfdは`_inherited_fds`（owned_process.py L35–50）経由で全`pass_fds`付きsubprocessへdup継承。`_run_with_lifetime`（update_lifecycle_context L293–）も`kwargs['pass_fds']`へlifetime_fdsをmerge — **G(SH)はgit fetch等の全子processへ伝播する**
@@ -98,7 +98,7 @@
 | `unlocked_transport(db, lock_fd, wait_s, deadline)` | L152 | transport中のみ`LOCK_UN`→DB作業前にbounded再取得（既定150s、deadline上限）。`db.in_transaction`中はRuntimeError。marker出現or stamp変化で`RunLockLost(held=True)`、期限切れで`RunLockLost(held=False, updated=…)` |
 | `wait_run_lock(path, wait_s, expected_code_stamp, marker_path)` | L190 | poll取得+世代fence: 取得直後にmarker有or stamp不一致ならfd返却しNone（旧code混在防止） |
 
-### B-2. writer_lock caller分類（`p0b-callers.txt`全件、file単位集約）
+### B-2. writer_lock caller分類（`p0b-callers.md`全件、file単位集約）
 
 | 分類 | file |
 |---|---|
@@ -115,7 +115,7 @@
 ### B-3. SQLite境界
 
 - 正本DB: `mcs/core/ledger.py` — `sqlite3.connect(path, timeout=30)` L113、URI接続 L1214,1235。`PRAGMA foreign_keys=ON`/`busy_timeout=30000`。`with self.db` transaction（L17 docstring）
-- `sqlite3.connect` callerは`p0b-callers.txt`に全件保存（30+ file: extract/llm store系・adapters/common・recovery DB tool等）
+- `sqlite3.connect` callerは`p0b-callers.md`に全件保存（30+ file: extract/llm store系・adapters/common・recovery DB tool等）
 - **境界規則**: run.lock保持下での書込み、または`unlocked_transport`で通信中のみ解放→再取得後に書込み。v3は「管理対象起動・新規admission・既存結果確定」の3境界へ接続。全SQL改修は対象外
 - recovery系: `deployment/recovery/mcs_recovery_database.py`が独立にDBを扱う（updater lockとは別系統）
 
@@ -211,7 +211,7 @@
 
 注意（r50指摘1）: 上表のG(SH)は`_call_legacy`/`_legacy_entry`が取得する**外側gate**で、`_apply_pipeline`/`rollback`/`recover_interrupted`の関数本体内部が取るのはU→Rのみ。`_apply_pipeline`を`apply()`経由せず直接呼ぶcaller（`release_apply_owner`の`_release_cap`経路・test）はこの外側G(SH)を持たない — 代わりにrelease経路はG(EX)を自前取得済み。
 
-**SDC store内family lock（monitor root内、`p0c-lock-callers.txt`全件）:**
+**SDC store内family lock（monitor root内、`p0c-lock-callers.md`全件）:**
 
 | 順序 | caller例 |
 |---|---|
@@ -276,7 +276,7 @@ G共有gate（upgrade/settings reconcile + _call_legacy/_legacy_entry経由の�
 
 ### D-1. `adapters/sdc/storage.py` `NAMES`/`LIMITS`（L20–38、実測全33 name — L20 frozenset 21 + L35追加12）
 
-| filename | LIMIT | 分類 | 主なaccessor（`p0d-store-access.txt`/`p0c-lock-callers.txt`） |
+| filename | LIMIT | 分類 | 主なaccessor（`p0d-store-access.md`/`p0c-lock-callers.md`） |
 |---|---|---|---|
 | `endpoint.json` | 4096 | SDC endpoint設定 | `store.read` 12箇所（connector/transport/provision等） |
 | `credential` | 4096 | 旧credential実体 | `store.read` 19箇所・`store.write` 3箇所 |
@@ -320,7 +320,7 @@ G共有gate（upgrade/settings reconcile + _call_legacy/_legacy_entry経由の�
 - **control root（`~/.mcs-release-control/<sha256(runtime_home)>`）**: `release-owner.json`/`release-owner.lock`/`release-owner-activation.json`/`release-entry.lock`/`release-bootstrap.json`/`release-authority.lock`/`release-planning.json`/`release-plan.json`/`release-change.json`/`release-successor.json`/`release-start-intent.json`/`release-migration-v3.json` — `Store` class共用だが**実fileはcontrol root配下**（`_control_store` L447–455が`Store(root.parent, create=True)`→`Store(root, create=True)`をyield）
 - **data/ root（`~/.mcs/data`）**: `update.lock`(U)・`run.lock`(R)・`update_state.json`・`update_in_progress.marker`・`ledger.db`・`mcs.log`・notify spool dirs・`restore_report.json`・`recovery_report.json`・`restore_pending.json`・`.mcs-release-dependencies.json`（`release_dependency_lock.py`）・backup snapshot dir・recovery `.prev`（`prepare_recovery.py` L151 `os.replace(tmp, target+".prev")` — 旧version退避generation file）
 
-### D-3. notify spool / recovery .prev の具体file（`p0d-datafiles.txt`）
+### D-3. notify spool / recovery .prev の具体file（`p0d-datafiles.md`）
 
 - notify spool: `notify_dirs(root)`の9 dir（`discord_render`/`discord_state`/`slack_render`/`slack_state`/`lineworks_render`/`lineworks_state`/`flags`/`cmd_int`/`cmd_results`）。file: `flags/notify.json`、`notify_gc_cursor.json`、`<delivery_id>.json`、`*.json.claimed`、`restore_pending.json`/`restore_reconcile.json`/`restore.json`/`backup_restore_approval.json`/`backup_restore_resume.json`/`backup_restore_blocked.json`
 - recovery `.prev`: `prepare_recovery.py` L151が`os.replace(str(previous_tmp), str(target) + ".prev")` — 対象script/fileの`.prev` suffix退避。`mcs_recover.py`/`update_recovery.py`/`update_restore.py`が`prev_sha`（git sha）と`.prev`（file世代）を区別して使用

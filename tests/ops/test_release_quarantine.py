@@ -8,8 +8,8 @@ import uuid
 
 import pytest
 
-from mcs.ops import release_quarantine as rq
-from mcs.ops.release_auto_owner import OwnerError
+import release_quarantine as rq
+from release_auto_owner import OwnerError
 
 BOOT = 'b' * 64
 RECEIPT = '11111111-2222-3333-4444-555555555555'
@@ -313,7 +313,7 @@ class IntegratedDeps:
         self.runtime_advance = self._advance
 
     def _advance(self, store):
-        from mcs.ops import release_runtime_proof as rt
+        import release_runtime_proof as rt
         return rt.advance_runtime(store, self)
 
     def __getattr__(self, name):
@@ -330,8 +330,8 @@ def test_end_to_end_applied_to_verified_with_real_deps(tmp_path):
     import test_release_auto_apply as at
     import test_release_auto_owner as ot
     from adapters.sdc import release_auto_state as state
-    from mcs.ops import release_auto_apply as apply_mod
-    from mcs.ops import release_runtime_proof as rt
+    import release_auto_apply as apply_mod
+    import release_runtime_proof as rt
 
     store_dir = tmp_path / 'owner'
     with ot.Store(store_dir, create=True) as store:

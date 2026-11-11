@@ -16,7 +16,7 @@ import pytest
 
 from adapters.sdc import release_auto_state as state
 from adapters.sdc.storage import Store
-from mcs.ops import release_auto_owner as owner_mod
+import release_auto_owner as owner_mod
 
 EXAMPLES = Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/mcs-auto/v3/examples'
 

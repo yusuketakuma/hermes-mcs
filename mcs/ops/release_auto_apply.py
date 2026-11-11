@@ -11,7 +11,7 @@ post-merge失敗でreset/clean/DB restoreは行わない(v1 bailとは別policy)
 import hashlib
 import json
 
-from mcs.ops.release_auto_owner import OwnerError, _det_uuid, _mutate
+from release_auto_owner import OwnerError, _det_uuid, _mutate
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as auto_state
 

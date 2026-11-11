@@ -14,8 +14,8 @@ import test_release_auto_owner as ot
 import test_release_runtime_proof as rt_t
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as state
-from mcs.ops import release_auto_recovery as rec
-from mcs.ops import release_runtime_proof as rt_mod
+import release_auto_recovery as rec
+import release_runtime_proof as rt_mod
 
 H = 'a' * 64
 
@@ -183,7 +183,7 @@ def _store_with_phase(tmp_path, phase):
         if phase == 'APPLIED':
             at.seed(store)
             op_id, deps = at.started(store, deps)
-            from mcs.ops import release_auto_apply as apply_mod
+            import release_auto_apply as apply_mod
             apply_mod.apply_code_only_v3(store, at._capability(store), deps)
         elif phase == 'PREPARED':
             ot._prepared_owner(store, deps)

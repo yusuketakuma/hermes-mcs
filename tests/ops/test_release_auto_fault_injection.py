@@ -14,9 +14,9 @@ import test_release_auto_apply as at
 import test_release_auto_owner as ot
 import test_release_runtime_proof as rt_test
 from adapters.sdc import release_auto_state as state
-from mcs.ops import release_auto_apply as apply_mod
-from mcs.ops import release_auto_owner as owner_mod
-from mcs.ops import release_runtime_proof as rt
+import release_auto_apply as apply_mod
+import release_auto_owner as owner_mod
+import release_runtime_proof as rt
 
 
 class FaultDeps(rt_test.RuntimeDeps):

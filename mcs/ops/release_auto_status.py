@@ -56,7 +56,7 @@ def status_dto(store):
                                   and error.replace('_', '').isalnum()
                                   and error.isupper()) else None
     try:
-        from mcs.ops import release_auto_health as health
+        import release_auto_health as health
         dto['health'] = health.health_status(store)
     except Exception:
         dto['health'] = {'state': 'unreadable'}

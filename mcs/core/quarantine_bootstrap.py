@@ -203,7 +203,7 @@ def run(env=None, *, acquire=None, birth_fn=None, main=None,
         birth = birth_fn(pid)
         if not isinstance(birth, str) or _SHA256.fullmatch(birth) is None:
             raise BootstrapError('BIRTH_INVALID')
-        from mcs.ops.release_quarantine import measure_tree
+        from release_quarantine import measure_tree
         loaded = measure_tree(b['SOURCE_ROOT'])
         state_name = {'resident': 'running', 'timer': 'armed',
                       'disabled': 'stopped'}[b['SERVICE_KIND']]

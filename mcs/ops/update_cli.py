@@ -218,7 +218,7 @@ def _v3_auto_blocked() -> bool:
         return False
     try:
         from adapters.sdc.storage import Store
-        from mcs.ops import release_auto_status as v3_status
+        import release_auto_status as v3_status
         with Store(root) as store:
             return v3_status.legacy_auto_blocked(store)
     except Exception:
@@ -237,7 +237,7 @@ def _v3_status_dto():
         return {**base, 'state': 'uninitialized'}
     try:
         from adapters.sdc.storage import Store
-        from mcs.ops import release_auto_status as v3_status
+        import release_auto_status as v3_status
         with Store(root) as store:
             return v3_status.status_dto(store)
     except Exception:

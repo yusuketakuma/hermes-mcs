@@ -164,7 +164,7 @@ def test_run_writes_witness_and_calls_main(tmp_path, monkeypatch):
     monkeypatch.setattr(qb, 'default_birth', lambda pid: BIRTH)
     # measure_treeはstub moduleをimportできないためrun経路ではimport失敗する。
     # → measure_treeをモンキーパッチして親子整合を保つ
-    import mcs.ops.release_quarantine as rq
+    import release_quarantine as rq
     monkeypatch.setattr(rq, 'measure_tree', lambda root: 'd' * 64)
     # run内のfrom importは既にpatch済みmoduleを使う
     result = qb.run(env, acquire=lambda home: entry,
@@ -215,7 +215,7 @@ def test_run_timer_and_disabled_states(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'pycache_prefix', '/tmp/pc')
     monkeypatch.setattr(qb, 'enter_source_path', lambda root: None)
     monkeypatch.setattr(qb, 'default_birth', lambda pid: BIRTH)
-    import mcs.ops.release_quarantine as rq
+    import release_quarantine as rq
     monkeypatch.setattr(rq, 'measure_tree', lambda root: 'd' * 64)
     for kind, want in (('timer', 'armed'), ('disabled', 'stopped')):
         env = _env(MCS_Q_STATE_DIR=str(state), MCS_Q_SOURCE_ROOT=str(src),

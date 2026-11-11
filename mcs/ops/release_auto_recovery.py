@@ -15,7 +15,7 @@ import os
 import stat
 import sys
 
-from mcs.ops import release_auto_bridge as bridge
+import release_auto_bridge as bridge
 from adapters.sdc import release_auto_state as auto_state
 
 # closure内でrecoveryが必要とする最小file集合(descriptorを除く)。

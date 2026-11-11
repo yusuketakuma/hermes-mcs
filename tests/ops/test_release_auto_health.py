@@ -11,9 +11,9 @@ import test_release_auto_apply as at
 import test_release_auto_owner as ot
 import test_release_runtime_proof as rt_t
 from adapters.sdc import release_auto_state as state
-from mcs.ops import release_auto_health as health
-from mcs.ops import release_auto_status as status_mod
-from mcs.ops import release_runtime_proof as rt
+import release_auto_health as health
+import release_auto_status as status_mod
+import release_runtime_proof as rt
 
 
 class HealthDeps(rt_t.RuntimeDeps):
@@ -56,7 +56,7 @@ def _verified(store, deps=None):
     at.seed(store)
     deps = deps or HealthDeps()
     op_id, deps = at.started(store, deps)
-    from mcs.ops import release_auto_apply as apply_mod
+    import release_auto_apply as apply_mod
     apply_mod.apply_code_only_v3(store, at._capability(store), deps)
     for _ in range(10):
         if state.load(store)['active'] is None:

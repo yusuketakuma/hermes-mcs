@@ -9,8 +9,8 @@ import pytest
 
 import test_release_auto_owner as ot
 from adapters.sdc import release_auto_state as state
-from mcs.ops import release_auto_apply as apply_mod
-from mcs.ops import release_auto_owner as owner_mod
+import release_auto_apply as apply_mod
+import release_auto_owner as owner_mod
 
 TARGET = ot.TARGET
 COMMIT = TARGET['source_commit']

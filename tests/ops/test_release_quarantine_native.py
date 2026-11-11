@@ -6,8 +6,8 @@ import os
 import subprocess
 import sys
 
-from mcs.core import quarantine_bootstrap
-from mcs.ops import release_quarantine_native as native
+import quarantine_bootstrap
+import release_quarantine_native as native
 
 
 def test_native_spawner_and_proc_info_roundtrip():

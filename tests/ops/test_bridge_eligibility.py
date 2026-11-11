@@ -1,7 +1,7 @@
 """§6適格性評価: AUTO_ELIGIBLEの唯一の導出点 evaluate_eligibility。"""
 import pytest
 
-from mcs.ops import release_auto_bridge
+import release_auto_bridge
 
 ALL = {name: True for name in release_auto_bridge._ELIGIBILITY_PREREQUISITES}
 

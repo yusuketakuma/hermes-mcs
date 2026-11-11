@@ -10,9 +10,9 @@ import pytest
 import test_release_auto_apply as at
 import test_release_auto_owner as ot
 from adapters.sdc import release_auto_state as state
-from mcs.ops import release_auto_apply as apply_mod
-from mcs.ops import release_auto_owner as owner_mod
-from mcs.ops import release_runtime_proof as rt
+import release_auto_apply as apply_mod
+import release_auto_owner as owner_mod
+import release_runtime_proof as rt
 
 NOW_MS = ot.NOW_MS
 BOOT = 'b' * 64

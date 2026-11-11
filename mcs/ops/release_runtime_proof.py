@@ -17,8 +17,8 @@ deps契約(全て冪等必須・副作用はlock外):
 import hashlib
 import json
 
-from mcs.ops import release_auto_health as health
-from mcs.ops.release_auto_owner import OwnerError, _det_uuid, _nonce, _mutate
+import release_auto_health as health
+from release_auto_owner import OwnerError, _det_uuid, _nonce, _mutate
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as auto_state
 

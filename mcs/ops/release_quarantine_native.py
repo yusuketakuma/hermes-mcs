@@ -13,8 +13,8 @@ import subprocess
 import sys
 import time
 
-from mcs.core import quarantine_bootstrap
-from mcs.ops import release_quarantine as rq
+import quarantine_bootstrap
+import release_quarantine as rq
 
 _SYSCTL_CANDIDATES = ('/usr/sbin/sysctl', '/sbin/sysctl', 'sysctl')
 

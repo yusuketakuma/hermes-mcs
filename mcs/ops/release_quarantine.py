@@ -12,7 +12,7 @@ import hashlib
 import json
 import os
 
-from mcs.ops.release_auto_owner import OwnerError
+from release_auto_owner import OwnerError
 
 WITNESS_SCHEMA = 'mcs.quarantine-witness.v3'
 HEARTBEAT_SCHEMA = 'mcs.quarantine-heartbeat.v3'
