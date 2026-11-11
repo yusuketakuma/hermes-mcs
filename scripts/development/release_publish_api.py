@@ -36,7 +36,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _opener():
-    return urllib.request.build_opener(_NoRedirect)
+    # 環境proxy経由でBearer/OIDC tokenが流出しないようProxyHandlerを
+    # 明示的に空で無効化する(build_opener既定はenv proxyを拾う)。
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                       _NoRedirect)
 
 
 def _read_bounded(response, limit=MAX_RESPONSE_BYTES):
@@ -48,10 +51,24 @@ def _read_bounded(response, limit=MAX_RESPONSE_BYTES):
 
 def api_request(method, url, *, token, body=None, raw=None, headers=None,
                 timeout_s=30, opener=None):
-    """JSON/binary 1回のHTTP呼出。redirect不追従・bounded read・Bearer付与。"""
+    """JSON/binary 1回のHTTP呼出。redirect不追従・bounded read・Bearer付与。
+
+    tokenはstrまたは0引数callable(provider)。callableはこのrequest送信の
+    直前に評価する — OIDC JWTはrequest毎にfresh取得が必要で、同一JWTの
+    複数request流用は中央recordJtiが409 OIDC_REPLAYで拒否する。
+    provider失敗時はRequest構築前に拒否し、秘密値は返り値/logへ出さない。
+    """
     if not isinstance(url, str) or not url.startswith('https://'):
         raise PublishApiError('URL_INVALID')
-    hdrs = {'authorization': 'Bearer ' + token,
+    try:
+        bearer = token() if callable(token) else token
+    except PublishApiError:
+        raise
+    except Exception as error:
+        raise PublishApiError('OIDC_UNAVAILABLE') from error
+    if not isinstance(bearer, str) or not bearer:
+        raise PublishApiError('OIDC_INVALID')
+    hdrs = {'authorization': 'Bearer ' + bearer,
             'accept': 'application/json',
             'cache-control': 'no-store'}
     data = None
@@ -94,7 +111,8 @@ def api_request(method, url, *, token, body=None, raw=None, headers=None,
 
 
 def oidc_token(env=None, *, opener=None):
-    """GitHub Actions OIDC JWTを取得する。値は返さずheader用tokenとしてのみ使う。"""
+    """GitHub Actions OIDC JWTを取得して返す。request毎に呼び、
+    返り値はAuthorization header用途のみ — log/標準出力/例外messageへ出さない。"""
     env = os.environ if env is None else env
     url = env.get('ACTIONS_ID_TOKEN_REQUEST_URL')
     req_token = env.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN')

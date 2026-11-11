@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "release公開ワークフローが中央APIでOIDC_REPLAYにより失敗する問題を修正",
+  "summary": "release-publishワークフローのauthorize工程は、予約・manifest・chunk・verify・finalizeの複数リクエストを中央CSDCへ送ります。従来はOIDCトークンを1回だけ取得して全リクエストで使い回していたため、中央側のjti再利用検査により2件目以降が409 OIDC_REPLAYで拒否され、公開工程が完了しませんでした。リクエストごとにOIDCトークンを新規取得するよう修正しました。あわせて、環境変数で設定されたHTTPプロキシ経由に認証トークンが流れないよう、共通HTTPクライアントでプロキシを明示的に無効化しました。",
+  "upgrade": "追加操作は不要です。GitHub Actionsの id-token: write 権限と ACTIONS_ID_TOKEN_REQUEST_* 環境変数が従来どおり必要です。ローカル検証用の MCS_PUBLISH_OIDC_TOKEN はverify-registerの単発リクエストでのみ使われ、authorizeの複数リクエスト経路では参照されなくなりました。",
+  "details": [
+    "scripts/development/release_publish_api.py: api_requestのtoken引数がstrに加えて0引数callable(provider)を受け付け、送信直前に毎回評価するよう変更。provider失敗時はRequest構築前にOIDC_UNAVAILABLEで拒否。_opener()へProxyHandler({})を明示し環境proxyを無効化。oidc_token()のdocstringを実際の戻り値に合わせて修正。",
+    "scripts/development/release_publish.py: _publisher_token()を_publisher_token_provider(fresh_only)へ変更。authorizeはfresh_only=Trueで常にOIDCエンドポイントから毎回取得し、MCS_PUBLISH_OIDC_TOKENの静的値を複数リクエストへ流用しない。verify-registerのregisterは単発リクエストのため静的overrideを従来どおり許容。",
+    "tests/meta/test_release_publish.py: request毎のfresh token取得・全phaseでのtoken一意性・provider失敗時の送信前拒否・静的overrideの単発/複数request使い分け・環境proxy無効化とno-redirectの回帰を追加。"
+  ],
+  "refs": ["scripts/development/release_publish.py", "scripts/development/release_publish_api.py", "tests/meta/test_release_publish.py"]
+}
