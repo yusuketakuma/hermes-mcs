@@ -120,8 +120,15 @@ def recover_tick(store, deps):
     depsはrelease_runtime_proof.advance_runtimeと同じ注入面
     (runtime_advance hookを持つowner deps、またはadvance_runtimeを
     直接呼べるcallableをdeps.runtime_advanceへ束ねたもの)。
+    owner stateが読めない・存在しない場合はstatus_onlyを返し前進させない
+    (spec 04 §4.1「不存在・未適格ならstatusのみ」)。
     """
-    owner = auto_state.load(store)
+    try:
+        owner = auto_state.load(store)
+    except auto_state.OwnerStateError as e:
+        return {'action': 'status_only', 'code': e.code}
+    except OSError:
+        return {'action': 'status_only', 'code': 'STORE_UNREADABLE'}
     active = owner['active']
     if active is None:
         return {'action': 'idle'}

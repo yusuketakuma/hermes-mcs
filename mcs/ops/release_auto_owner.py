@@ -928,9 +928,14 @@ def resume(store, deps):
     PREPARING中断は期限内ならprepare再開、期限切れはDEFERRED+同版再起動。
     PREPAREDはabort証拠があればcancel_prestart経路で同bytes再送、期限切れも
     同経路で中央状態(not_found/cancelled_prestart)確認まで終端しない。
-    STAGED以降の推測進行は行わない。
+    STAGED以降の推測進行は行わない。owner stateが読めない場合はstatus_only。
     """
-    owner = auto_state.load(store)
+    try:
+        owner = auto_state.load(store)
+    except auto_state.OwnerStateError as e:
+        return {'action': 'status_only', 'code': e.code}
+    except OSError:
+        return {'action': 'status_only', 'code': 'STORE_UNREADABLE'}
     active = owner['active']
     if active is None:
         return {'action': 'idle'}
@@ -1012,13 +1017,21 @@ def tick(store, deps):
 
     各段階は独立に再開可能。OwnerErrorはholdとして記録し例外を外へ流さない
     (失敗しても安全側: DEFERRED済み・pending outbox・active保持のいずれか)。
+    owner stateが読めない・存在しない場合はstatus_onlyを返しeffectを出さない
+    (spec 04 §4.1「不存在・未適格ならstatusのみ」)。
     effectはdeps.apply_effect設定時のみ同一tick内で実行する。
     """
     try:
         deliver_outbox(store, deps)
     except Exception:
         pass
-    owner = auto_state.load(store)
+    try:
+        owner = auto_state.load(store)
+    except auto_state.OwnerStateError as e:
+        # spec 04 §4.1: owner不存在・未適格はstatusのみ — effectを出さない。
+        return {'action': 'status_only', 'code': e.code}
+    except OSError:
+        return {'action': 'status_only', 'code': 'STORE_UNREADABLE'}
     active = owner['active']
     if active is not None:
         info = resume(store, deps)

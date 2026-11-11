@@ -213,6 +213,14 @@ def test_recover_tick_idle_without_active(tmp_path):
         assert rec.recover_tick(store, object())['action'] == 'idle'
 
 
+def test_recover_tick_without_owner_is_status_only(tmp_path):
+    # spec 04 §4.1: owner不存在はstatusのみ — 前進もhold誤認もしない。
+    with ot.Store(tmp_path / 's', create=True) as store:
+        info = rec.recover_tick(store, object())
+        assert info == {'action': 'status_only',
+                        'code': 'UNKNOWN_BASELINE'}
+
+
 def test_recover_tick_holds_before_runtime_phases(tmp_path):
     with _store_with_phase(tmp_path, 'PREPARED') as (store, deps):
         spy = _AdvanceSpy()

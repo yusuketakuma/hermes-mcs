@@ -809,6 +809,30 @@ def test_tick_second_run_observe_only(store):
     assert [p for p, _ in deps.sent].count(owner_mod.START_PATH) == 1
 
 
+def test_tick_without_owner_is_status_only(store):
+    # spec 04 §4.1: owner不存在はstatusのみ — 送信もeffectも起こさない。
+    deps = FakeDeps()
+    result = owner_mod.tick(store, deps)
+    assert result == {'action': 'status_only', 'code': 'UNKNOWN_BASELINE'}
+    assert deps.sent == []
+
+
+def test_tick_unreadable_owner_is_status_only(store):
+    store.write(state.OWNER_NAME, {'bogus': True})
+    deps = FakeDeps()
+    result = owner_mod.tick(store, deps)
+    assert result['action'] == 'status_only'
+    assert result['code'] in ('INVALID', 'SCHEMA_MISMATCH')
+    assert deps.sent == []
+
+
+def test_resume_without_owner_is_status_only(store):
+    deps = FakeDeps()
+    result = owner_mod.resume(store, deps)
+    assert result == {'action': 'status_only', 'code': 'UNKNOWN_BASELINE'}
+    assert deps.sent == []
+
+
 # --- prestart cancel (SEM21 / TX-ABORT) --------------------------------------
 
 def test_cancel_staged_defers_without_central(store):

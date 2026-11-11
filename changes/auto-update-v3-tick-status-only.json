@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "v3更新tickがowner状態なしで異常終了しないよう修正",
+  "summary": "v3自動更新の内部tick処理が、owner状態ファイル未作成・読取不能の環境で例外を送出していました。仕様の「不存在・未適格ならstatusのみ」に合わせ、status_onlyを返して外部送信・effectを一切行わないよう修正しました。現時点でtickの呼出元は未接続のため利用者への影響はありません。",
+  "upgrade": "追加操作は不要です。v3自動更新はAUTO_ELIGIBLE=falseのまま無効です。",
+  "details": [
+    "mcs/ops/release_auto_owner.py: tick冒頭のowner state読込みでOwnerStateError/OSErrorを捕捉し、{'action':'status_only','code':...}を返す。UNKNOWN_BASELINE(未移行)・INVALID/SCHEMA_MISMATCH/ROOT_MISMATCH(破損・別系統)・STORE_UNREADABLEを区別して記録する。"
+  ],
+  "refs": ["mcs/ops/release_auto_owner.py"]
+}
