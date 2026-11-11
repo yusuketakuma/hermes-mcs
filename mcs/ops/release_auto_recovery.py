@@ -14,9 +14,17 @@ import json
 import os
 import stat
 import sys
+from pathlib import Path
 
-import release_auto_bridge as bridge
-from adapters.sdc import release_auto_state as auto_state
+# -m/scriptどちらの起動でもflat import rootを登録する(sdc_keychainと同型)。
+REPO = Path(__file__).resolve().parents[2]
+for _path in (str(REPO), str(REPO / 'mcs')):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+import _mcs_path  # noqa: E402,F401
+
+import release_auto_bridge as bridge  # noqa: E402
+from adapters.sdc import release_auto_state as auto_state  # noqa: E402
 
 # closure内でrecoveryが必要とする最小file集合(descriptorを除く)。
 # manifest自体はfilesに含めない(04 §4.3)。定義はbridge側の単一正本。

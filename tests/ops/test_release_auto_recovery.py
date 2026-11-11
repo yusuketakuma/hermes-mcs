@@ -83,6 +83,23 @@ def test_cli_verify_rejects_missing_descriptor(tmp_path, capsys):
     assert out['code'] == 'GENERATION_DESCRIPTOR'
 
 
+def test_cli_module_and_script_invocation(tmp_path):
+    """python -m/script両経路でverify CLIが完走する(entrypoint契約)。"""
+    import subprocess
+    import sys
+    from pathlib import Path
+    gen, _, _ = _deploy(tmp_path, _full_files())
+    repo = Path(__file__).resolve().parents[2]
+    for argv in ([sys.executable, '-m', 'mcs.ops.release_auto_recovery',
+                  'verify', '--generation-dir', gen],
+                 [sys.executable, 'mcs/ops/release_auto_recovery.py',
+                  'verify', '--generation-dir', gen]):
+        proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True,
+                              timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout)['ok'] is True
+
+
 # --- verify_generation ---------------------------------------------------------
 
 def test_verify_generation_happy(tmp_path):
