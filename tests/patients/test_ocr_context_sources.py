@@ -146,6 +146,60 @@ def test_ocr_page_scope_still_rejects_unready_page_and_deleted_parent(source_sto
     assert not readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
 
 
+@pytest.mark.parametrize('block', ['permission', 'held', 'unstored'])
+def test_ocr_page_scope_rejects_blocked_parent(source_store, block):
+    """A ready page stays ineligible while its parent chat is permission-held,
+    intake-held or carries unstored intake: the parent's own extraction state
+    never gates the page, but its availability gates still apply."""
+    import time
+    import patient_context_refresh_readiness as readiness
+    import patient_context_refresh_sources as sources
+    import semantic_intake_hold
+    led, key, result = source_store
+    result['ready'] = True
+    deadline = time.monotonic() + 600
+    snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+    assert readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline) == (key,)
+    assert readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
+    if block == 'permission':
+        led.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
+    elif block == 'held':
+        led.artifact_add('semantic_intake_hold_v1', '{}', project_id=1, model='10')
+    else:
+        semantic_intake_hold.record_unstored(led, 1, roots=[10])
+    led.db.commit()
+    snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+    assert key not in readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline)
+    assert not readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key])
+
+
+def test_ocr_page_scope_rejects_missing_or_swapped_original(source_store):
+    """The selected page must resolve to its retained original: a swapped
+    attachment original or a removed OCR artifact drops the source entirely,
+    so scoped readiness fails closed instead of adopting stale material."""
+    import time
+    import original_source_keys
+    import patient_context_refresh_readiness as readiness
+    import patient_context_refresh_sources as sources
+    led, key, result = source_store
+    result['ready'] = True
+    deadline = time.monotonic() + 600
+
+    def scoped():
+        snapshot = sources._snapshot(led.db, 1, OCR_CFG, hydrate=False)
+        return (key in readiness._eligible_source_keys(led, 1, OCR_CFG, snapshot, deadline=deadline),
+                readiness._inference_ready(led, 1, OCR_CFG, deadline=deadline, source_keys=[key]))
+
+    assert scoped() == (True, True)
+    led.db.execute("UPDATE attachments SET sha256=? WHERE attachment_id=1", ('b' * 64,))
+    led.db.commit()
+    assert scoped() == (False, False)
+    led.db.execute("UPDATE attachments SET sha256=? WHERE attachment_id=1", ('a' * 64,))
+    led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (original_source_keys.parse(key)[1],))
+    led.db.commit()
+    assert scoped() == (False, False)
+
+
 def test_verified_empty_page_needs_no_clinical_inference(source_store, monkeypatch):
     import json
     import attachment_ocr

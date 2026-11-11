@@ -125,9 +125,21 @@ def test_ready_ocr_page_publishes_scoped_context_while_parent_chat_pending(
     key = _retain_ocr(ledger)
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
                              "AND message_id=1").fetchone()[0] == 0
+    parent_before = tuple(ledger.db.execute(
+        'SELECT body_text,content_hash FROM messages WHERE message_id=1').fetchone())
+    ocr_artifact = int(key.split(':')[1])
+    ocr_before = ledger.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                                   (ocr_artifact,)).fetchone()[0]
+    attachment_before = tuple(ledger.db.execute(
+        'SELECT * FROM attachments WHERE attachment_id=1').fetchone())
+    reserves_before = ledger.db.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0]
+
+    calls = []
 
     def admitted(_owner, text, **kwargs):
         assert not ledger.db.in_transaction
+        calls.append(text)
         try:
             payload = json.loads(text)
         except ValueError:
@@ -166,5 +178,29 @@ def test_ready_ocr_page_publishes_scoped_context_while_parent_chat_pending(
     assert readiness.inference_coverage(ledger.db, 1, cfg)['complete'] is False
     _, meta = state._latest(ledger.db, state.KIND, 1)
     assert meta['source_scope'] == [key]
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
+                             "AND message_id=1").fetchone()[0] == 0
+    # The parent chat's own extraction stays genuinely pending — pinned on the
+    # raw scheduler predicate, not inferred from the missing artifact row.
+    pending = extract_llm.pending_pred(ledger.db)
+    assert ledger.db.execute(
+        'SELECT 1 FROM messages m WHERE m.project_id=1 AND m.message_id=1 '
+        f'AND ({pending}) LIMIT 1').fetchone()
+    # Repeating the same scope must not grow material inference calls, paid
+    # reservations, or mutate the parent message or the retained original.
+    published_calls = len(calls)
+    reserves_after = ledger.db.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0]
+    assert reserves_after == reserves_before == 0
+    result = step(runtime, cfg=cfg)
+    assert result['status'] in ('progressed', 'deferred', 'complete'), result
+    assert len(calls) == published_calls
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is not None
+    assert tuple(ledger.db.execute(
+        'SELECT body_text,content_hash FROM messages WHERE message_id=1').fetchone()) == parent_before
+    assert ledger.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                             (ocr_artifact,)).fetchone()[0] == ocr_before
+    assert tuple(ledger.db.execute(
+        'SELECT * FROM attachments WHERE attachment_id=1').fetchone()) == attachment_before
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm' "
                              "AND message_id=1").fetchone()[0] == 0
