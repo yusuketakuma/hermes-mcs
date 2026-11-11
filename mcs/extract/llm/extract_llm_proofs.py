@@ -131,6 +131,78 @@ def _chunk_span(body, chunk_size, key, splits, *, root_plan=None):
     return piece, start
 
 
+def _resume_basis_reason(db, r, recorded, stored, prepared):
+    """Live-resume basis verdict for one recorded protected-prior reference.
+
+    ``recorded`` distinguishes an absent meta key from an explicit value;
+    ``prepared`` is this run's _protected_prior_ref. An explicit record that
+    differs from — or survives while — the prepared basis refuses; an
+    unrecorded legacy basis only refuses when this run would claim a
+    protected basis it cannot prove. An explicit value must resolve through
+    the same reference contract as admission — explicit null, wrong types
+    and unresolvable references are invalid records, not missing legacy."""
+    if not recorded:
+        return "protected_basis_unrecorded" if prepared is not None else None
+    if _resolve_protected_prior_reference(db, r, stored) is None:
+        return "protected_basis_invalid"
+    # Canonical bytes keep JSON type distinctions dict equality collapses
+    # (true vs 1, 1.0 vs 1) so only the exact recorded basis is admitted.
+    return None if mcs_util.canonical(stored) == mcs_util.canonical(prepared) \
+        else "protected_basis_conflict"
+
+
+def _refuse_live_checkpoint(r, saved, key, meta):
+    """A selected pending/started record that fails admission keeps its
+    evidence and refuses the whole job — never a fresh paid slot. The
+    sentinel stays pending-shaped so progress readers report the chunk as
+    unfinished rather than completed."""
+    if meta.get("quality_status") not in ("pending", "started"):
+        return
+    r["_resume_refused"] = True
+    saved[key] = {"_resume_refused": "quality_checkpoint_unverified",
+                  "_quality_status": "pending"}
+
+
+def _mark_live_resume(db, r, meta, leaf, *, has_inline_origin, has_origin_ref,
+                      origin, origin_ref, origin_basis):
+    """Flag live resume targets whose recorded basis/origin cannot be admitted.
+
+    Live admission only: proof_rows replay never reaches this marker. Pending
+    and started rows refuse outright; plain saved leaves only carry the
+    would-conflict verdict so the engine can refuse if hint coverage would
+    promote them into a protected repair."""
+    if not isinstance(leaf, dict) or "_quality_result" in leaf:
+        return
+    status = leaf.get("_quality_status")
+    active = status in ("pending", "started")
+    if not active and status is not None:
+        return
+    reasons = []
+    reason = _resume_basis_reason(db, r, "protected_prior_ref" in meta,
+                                  meta.get("protected_prior_ref"),
+                                  r.get("_protected_prior_ref"))
+    if reason is not None:
+        reasons.append(reason)
+    if has_inline_origin and has_origin_ref:
+        reasons.append("origin_binding_conflict")
+    elif has_inline_origin and (origin is None or getattr(leaf, "quality_origin", None) is None):
+        reasons.append("origin_unverified")
+    elif has_origin_ref:
+        if origin_ref is None or getattr(leaf, "quality_origin", None) is None:
+            reasons.append("origin_unverified")
+        else:
+            reason = _resume_basis_reason(db, r, origin_basis[0], origin_basis[1],
+                                          r.get("_protected_prior_ref"))
+            if reason is not None:
+                reasons.append(reason)
+    if reasons:
+        if active:
+            leaf["_resume_refused"] = reasons[0]
+            r["_resume_refused"] = True
+        else:
+            leaf["_resume_promote_conflict"] = reasons[0]
+
+
 def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, candidate):
     """Rebuild a pending leaf's first request and validate its retained answer."""
     try:
@@ -181,7 +253,8 @@ def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, 
         return None
 
 
-def _checkpoint_origin_ref(db, r, context, key, chunk_size, splits, artifact_id, current_id, candidate, *, records=None):
+def _checkpoint_origin_ref(db, r, context, key, chunk_size, splits, artifact_id, current_id, candidate, *, records=None,
+                           basis_out=None):
     try:
         if type(artifact_id) is not int or not 0 < artifact_id < current_id:
             return None
@@ -207,7 +280,10 @@ def _checkpoint_origin_ref(db, r, context, key, chunk_size, splits, artifact_id,
         expected = _leaf_record(meta, r, evidence, row["content"]) if evidence is not None else None
         if expected is None or mcs_util.canonical(proof) != mcs_util.canonical(expected):
             return None
-        return _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, content)
+        origin = _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, content)
+        if origin is not None and basis_out is not None:
+            basis_out.append(("protected_prior_ref" in meta, meta.get("protected_prior_ref")))
+        return origin
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
         return None
 
@@ -401,10 +477,14 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         meta, content, artifact_project, artifact_model, raw_meta, artifact_id = records[key]
         piece = _chunk_piece(r["body_text"], chunk_size, key, splits, root_plan=(roots, starts))
         if piece is None:
+            if proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta)
             continue
         sha = hashlib.sha256(piece.encode()).hexdigest()
         legacy_complete = type(key) is int and "split_size" not in meta
         if meta.get("piece_sha256", sha if legacy_complete else None) != sha:
+            if proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta)
             continue
         if "split_size" in meta:
             size = meta["split_size"]
@@ -417,18 +497,29 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                             or size != max(1, len(piece) // 2)
                             or not _replay_repair_leaf(db, r, context, key, chunk_size, splits, split_repair,
                                                        None, records=proof_lookup, finish_reason="length")):
+                        if proof_rows is None:
+                            _refuse_live_checkpoint(r, saved, key, meta)
                         continue
                     splits[key] = size
+                elif proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta)
+            elif proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta)
             continue
         raw_content = content
         try:
             content = json.loads(raw_content)
         except (ValueError, TypeError, RecursionError):
+            if proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta)
             continue
+        has_inline_origin = isinstance(content, dict) and "__quality_origin_v1" in content
+        has_origin_ref = isinstance(content, dict) and "__quality_origin_ref_v1" in content
         origin = content.pop("__quality_origin_v1", None) if isinstance(content, dict) else None
         origin_ref = content.pop("__quality_origin_ref_v1", None) if isinstance(content, dict) else None
         prior_kind = content.pop("__quality_prior_kind_v1", None) if isinstance(content, dict) else None
         repair = content.pop("__quality_repair_v1", None) if isinstance(content, dict) else None
+        origin_ref_basis = (False, None)
         validated = extract_validation.validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
         if validated is not None:
             repeated_loss = bool(validated.get("_items_dropped") or validated.get("_evidence_dropped"))
@@ -457,6 +548,8 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     matches = _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, content,
                                                   records=proof_lookup)
                 if repair is not None and not matches:
+                    if proof_rows is None:
+                        _refuse_live_checkpoint(r, saved, key, meta)
                     continue
                 if matches:
                     validated = _EvidenceLeaf(validated, evidence)
@@ -468,9 +561,11 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                             db, r, context, key, chunk_size, splits, origin, content)
                         validated.quality_origin_id = artifact_id if validated.quality_origin is not None else None
                     elif origin_ref is not None and meta.get("quality_status") in ("pending", "started"):
+                        origin_basis = []
                         validated.quality_origin = _checkpoint_origin_ref(
                             db, r, context, key, chunk_size, splits, origin_ref, artifact_id, content,
-                            records=proof_lookup)
+                            records=proof_lookup, basis_out=origin_basis)
+                        origin_ref_basis = origin_basis[0] if origin_basis else (False, None)
                         validated.quality_origin_id = origin_ref if validated.quality_origin is not None else None
                         if meta.get("quality_status") == "started" and prior_kind in ("raw", "cached"):
                             validated.quality_prior_kind = prior_kind
@@ -479,6 +574,8 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             # (including retained losses) reproduce exactly. New content loss,
             # increased losses and unproven legacy payloads remain unreadable.
             if repeated_loss and not matches:
+                if proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta)
                 continue
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
@@ -486,7 +583,13 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     _QUALITY_TERMINAL):
                 validated["_quality_result"] = {"state": meta["quality_status"],
                                                 "remaining_hint_candidates": meta.get("quality_remaining")}
+            if proof_rows is None:
+                _mark_live_resume(db, r, meta, validated,
+                                  has_inline_origin=has_inline_origin, has_origin_ref=has_origin_ref,
+                                  origin=origin, origin_ref=origin_ref, origin_basis=origin_ref_basis)
             saved[key] = validated
+        elif proof_rows is None:
+            _refuse_live_checkpoint(r, saved, key, meta)
     return splits, saved
 
 
@@ -545,9 +648,11 @@ def _capture_checkpoint_state(db, r, context):
         "context": _chunk_context(r, context, checkpoint=True), "refs": copy.deepcopy(_frame_refs(r)),
     }
     r["_checkpoint_guard"] = object()
-    # A protected-prior or earlier checkpoint conflict must survive a late
-    # recapture: refuse admission instead of silently re-arming the slot.
+    # A protected-prior, resume-admission or earlier checkpoint conflict must
+    # survive a late recapture: refuse admission instead of silently re-arming
+    # the slot.
     r["_checkpoint_conflict"] = (r.get("_checkpoint_conflict") is True
+                                 or r.get("_resume_refused") is True
                                  or not _protected_prior_current(db, r))
     return saved
 
