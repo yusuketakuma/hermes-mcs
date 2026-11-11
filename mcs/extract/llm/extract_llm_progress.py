@@ -1,6 +1,7 @@
 """Read verified extraction completion and bounded per-message progress."""
 import json
 import sqlite3
+import cloud_inference
 import inference_version as inference
 import extract_validation
 import extract_quality
@@ -103,6 +104,13 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
     final_meta = (loads_dict(final["meta"]) or {}) if final else {}
     if "internal_proof_version" in final_meta or "internal_proof_hash" in final_meta:
         r["_provider_contract"] = {key: final_meta.get(key) for key in ("backend", "model", "prompt")}
+    else:
+        # An unmarked final keeps the provider contract its writer bound into
+        # context_binding; restore it only from the explicitly stored,
+        # currently supported triple — never guessed from the model column.
+        provider_contract = {key: final_meta.get(key) for key in ("backend", "model", "prompt")}
+        if cloud_inference.is_supported_cloud_contract(provider_contract):
+            r["_provider_contract"] = provider_contract
     settled = (final is not None and not final_meta.get("error")
                and final_meta.get("invalidated") in (None, False, 0)
                and final_meta.get("hash") == r["content_hash"]

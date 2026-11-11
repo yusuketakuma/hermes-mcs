@@ -5,7 +5,7 @@ import json
 import patient_context_refresh_readiness as readiness
 from extract_testkit import _message
 from mcs_queries import EXTRACT_FEEDBACK_KIND, selected_artifact_proof_valid
-from test_patient_context_refresh import CFG, _raw_proof, runtime, step, stamp
+from test_patient_context_refresh import CFG, _raw_proof, runtime, seed, step, stamp
 from test_patient_context_partial import publish
 
 __all__ = ['runtime']
@@ -187,3 +187,21 @@ def test_framed_material_survives_unrelated_later_reply(runtime):
     led.save_messages([_message(3, '生活環境: 合成の新着返信。', 'full', project_id=1,
                                 posted_at='2026-10-04T10:00:00+09:00')])
     assert selected_artifact_proof_valid(led.db, artifact_id, material=True)
+
+
+def test_unmarked_cloud_final_material_proof_restores_saved_contract(runtime):
+    """An unmarked cloud final binds its provider contract into
+    context_binding at write time; the material reader restores the stored
+    supported triple rather than recomputing a contract-free binding, and a
+    tampered or unsupported stored contract still fails closed."""
+    led, _, _ = runtime
+    seed(led, proof=False)
+    artifact_id = _raw_proof(led, 1, 1, cloud=True)
+    assert selected_artifact_proof_valid(led.db, artifact_id, material=True)
+    meta = json.loads(led.db.execute(
+        'SELECT meta FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()[0])
+    meta['prompt'] = 'deadbeefdeadbeef'
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                   (json.dumps(meta), artifact_id))
+    led.db.commit()
+    assert not selected_artifact_proof_valid(led.db, artifact_id, material=True)

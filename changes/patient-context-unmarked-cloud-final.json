@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "未マークのクラウド抽出finalを素材証明で正しく読取",
+  "summary": "internal proofマーカーを持たないクラウド抽出final（旧契約世代の保存済み成果物）が、保存時にcontext_bindingへ束縛されたプロバイダ契約を読取側で再現できず、素材証明が常に失敗していました。読取側は保存された backend/model/prompt の三つ組が現在サポート対象の契約として検証できる場合のみ復元し、model列だけから契約を推測することはありません。改ざん・非対応契約は従来どおりfail-closedで拒否されます。",
+  "upgrade": "追加操作は不要です。既存の保存済み抽出finalが患者コンテキストの素材として正しく評価されるようになります。",
+  "details": [
+    "extract_llm._progress_steps で、unmarked finalのmetaに保存された backend/model/prompt が cloud_inference.is_supported_cloud_contract を通る場合のみ _provider_contract を復元します。",
+    "marked finalの経路は不変です。契約が保存されていない・非対応・改ざん済みの場合は契約なしで再計算され、context_binding不一致により拒否されます。",
+    "素材証明の他の条件（source occurrence・frame参照・QC/人否認・completeness）は従来どおりです。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_progress.py", "tests/patients/test_patient_context_material.py", "tests/patients/test_context_growth_adversarial.py"]
+}

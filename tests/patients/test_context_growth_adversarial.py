@@ -314,6 +314,7 @@ def test_human_feedback_drops_the_source_until_a_new_bound_proof(runtime, monkey
     seed(led, mid=1, pid=1, body=body, proof=False)
     aid = _raw_proof(led, 1, 1)
     _semantic_proof(led, 1, 1)
+    assert mcs_queries.selected_artifact_proof_valid(led.db, aid, material=True)
     assert _scoped_ready(led, 1, [1], clock)
     req = envelopes.extract_feedback(
         'synthetic-operator', {'project_id': 1, 'extract_ref': {
@@ -337,6 +338,11 @@ def test_human_feedback_drops_the_source_until_a_new_bound_proof(runtime, monkey
     assert calls == [body]                          # the note never becomes model input
     assert led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == body
     assert _scoped_ready(led, 1, [1], clock)        # new bound artifact readmits the source
+    new_aid = led.db.execute(
+        "SELECT artifact_id FROM artifacts WHERE kind='extract_llm' AND message_id=1 "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]
+    assert new_aid != aid
+    assert mcs_queries.selected_artifact_proof_valid(led.db, new_aid, material=True)
     assert extract_llm.run_pending(led, limit=5, budget_s=30)['selected'] == 0
     stale = {**req, 'command_id': str(uuid.uuid4())}
     assert mcs_requests.apply_command(led, stale)['error'] == 'extraction_changed'
