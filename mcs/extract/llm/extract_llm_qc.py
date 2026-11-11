@@ -119,6 +119,12 @@ def _resolve_protected_prior_reference(db, r, reference):
     return row
 
 
+def _protected_prior_current(db, r):
+    """The pinned protected prior still resolves under the live source."""
+    ref = r.get("_protected_prior_ref")
+    return ref is None or _resolve_protected_prior_reference(db, r, ref) is not None
+
+
 def _hold_sql(*, human=False, released=False):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
     ``released`` matches the same receipt minted under an older code contract."""
