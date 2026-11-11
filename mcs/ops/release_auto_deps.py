@@ -432,6 +432,14 @@ def build_deps(*, store, cfg=None, runtime_home=None, paths=None,
         import release_runtime_proof
         deps.runtime_advance = lambda s: \
             release_runtime_proof.advance_runtime(s, deps)
+    else:
+        # quarantine未注入でもattr欠落のAttributeErrorでなくcoded holdへ。
+        stub = _Unavailable(OwnerError, 'QUARANTINE_UNAVAILABLE')
+        for name in ('service_desires', 'release_update_fence',
+                     'quarantine_launch', 'probe_runtime',
+                     'heartbeat_observations', 'loaded_source_expect',
+                     'measure_source_manifest', 'runtime_advance'):
+            setattr(deps, name, stub)
     return deps
 
 

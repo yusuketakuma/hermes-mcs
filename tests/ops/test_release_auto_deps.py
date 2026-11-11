@@ -192,8 +192,12 @@ def test_journal_apply_wiring(env, tmp_path):
 def test_apply_effect_and_runtime_advance_hooks(env):
     deps = _build(env)
     assert callable(deps.apply_effect)
-    # quarantine未注入 → runtime_advanceは未設定(observe_only経路)
-    assert getattr(deps, 'runtime_advance', None) is None
+    # quarantine未注入 → runtime_advance等はcoded stub(QUARANTINE_UNAVAILABLE)。
+    # attr欠落のAttributeErrorではなくOwnerErrorでfail-closedする。
+    for name in ('service_desires', 'quarantine_launch', 'probe_runtime',
+                 'runtime_advance'):
+        with pytest.raises(OwnerError, match='QUARANTINE_UNAVAILABLE'):
+            getattr(deps, name)()
 
 
 def test_runtime_advance_with_quarantine(env):
