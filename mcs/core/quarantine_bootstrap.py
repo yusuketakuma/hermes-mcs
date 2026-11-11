@@ -99,20 +99,22 @@ def verify_entry(entry, b):
 
 
 def default_birth(pid):
-    """native birth witness: sysctl kern.proc.pid.<pid>の開始時刻をsha256化。
+    """native birth witness: ps lstart(開始時刻)をpidと共にsha256化。
 
-    実機ではp_starttimeを使う。ここでは失敗を隠さずBootstrapErrorにする。
+    sysctl kern.proc.pidは現行macOSに存在しないためpsを使う。
+    quarantine envはPATHを持たないので/bin/ps絶対パス。親側proc_infoも
+    同じ計算を使うため値は一致する。失敗は隠さずBootstrapErrorにする。
     """
     import subprocess
     try:
-        out = subprocess.run(
-            ['sysctl', '-n', f'kern.proc.pid.{pid}'],
-            capture_output=True, text=True, timeout=5)
+        out = subprocess.run(['/bin/ps', '-o', 'lstart=', '-p', str(pid)],
+                             capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         raise BootstrapError('BIRTH_UNAVAILABLE') from None
-    if out.returncode != 0 or not out.stdout.strip():
+    value = out.stdout.strip()
+    if out.returncode != 0 or not value:
         raise BootstrapError('BIRTH_UNAVAILABLE')
-    return hashlib.sha256(out.stdout.strip().encode()).hexdigest()
+    return hashlib.sha256(f'{pid}|{value}'.encode()).hexdigest()
 
 
 def _atomic_write(path, raw: bytes):
