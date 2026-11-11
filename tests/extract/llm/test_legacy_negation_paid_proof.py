@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import pytest
 from types import SimpleNamespace
 
 import cloud_inference
@@ -108,8 +109,10 @@ def _protected_v1_repair_run(routed, monkeypatch, tmp_path):
     _, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
     repairs = [item.repair_proof for item in saved.values() if getattr(item, "repair_proof", None)]
     v1 = [proof for proof in repairs if proof["version"] == 1]
-    assert v1, f"expected a v1 repair, got {[p.get('version') for p in repairs]}"
-    return led, row, context, result, meta, qc_id, prior, chunks, v1[0]["started_artifact_id"]
+    v2 = [proof for proof in repairs if proof["version"] == 2]
+    assert v1 and v2, f"expected v1+v2 repairs, got {[p.get('version') for p in repairs]}"
+    return (led, row, context, result, meta, qc_id, prior, chunks,
+            v1[0]["started_artifact_id"], v2[0]["started_artifact_id"])
 
 
 def _downgrade_started_row(led, started_id):
@@ -162,24 +165,47 @@ def test_retained_v1_repair_without_prior_ref_replays_under_protected_prior(rout
     """A retained inline v1 repair whose started row predates protected_prior_ref
     embedding must still replay when the record carries a pinned prior: v1 proofs
     never bound the reference, so an absent meta ref is not a mismatch."""
-    led, row, context, result, meta, qc_id, prior, chunks, started_id = _protected_v1_repair_run(
+    led, row, context, result, meta, qc_id, prior, chunks, started_id, _v2_id = _protected_v1_repair_run(
         routed, monkeypatch, tmp_path)
     _downgrade_started_row(led, started_id)
     assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'written'
 
 
-def test_kept_prior_retention_reverifies_downgraded_v1_repair(routed, monkeypatch, tmp_path):
-    """Keeping the committed result (_kept_prior) re-verifies the stored inline
-    proof, which replays the downgraded v1 repair leaf through the same path."""
-    led, row, context, result, meta, qc_id, prior, chunks, started_id = _protected_v1_repair_run(
+@pytest.mark.parametrize("trigger", ["kept_prior", "qc_failed", "human_failed"])
+def test_kept_prior_retention_reverifies_downgraded_v1_repair(routed, monkeypatch, tmp_path, trigger):
+    """Keeping the committed result re-verifies the stored inline proof through
+    the retaining_prior branch (kept_prior / qc_failed / human_failed), which
+    replays the downgraded v1 repair leaf through the same path."""
+    led, row, context, result, meta, qc_id, prior, chunks, started_id, _v2_id = _protected_v1_repair_run(
         routed, monkeypatch, tmp_path)
     assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'written'
     stored = _downgrade_committed_proof_row(led, row, started_id)
     committed = worker._prior_extract(led.db, row)
     assert committed is not None
     assert json.loads(committed["meta"]).get("internal_proof_version") == 1
-    row["_kept_prior"] = True
-    assert worker._replace_current(led, row, stored) is True
+    if trigger == "kept_prior":
+        row["_kept_prior"] = True
+        assert worker._replace_current(led, row, stored) is True
+    elif trigger == "qc_failed":
+        assert worker._replace_current(led, row, stored, qc_fix={"applied": False}) is True
+    else:
+        assert worker._replace_current(led, row, stored,
+                                       extra_meta={"human_fix": {"applied": False}}) is True
+
+
+def test_v2_repair_with_tampered_prior_ref_is_rejected(routed, monkeypatch, tmp_path):
+    """A v2 repair whose started row carries a protected_prior_ref that no longer
+    matches the current pinned prior must fail closed at commit."""
+    led, row, context, result, meta, qc_id, prior, chunks, _v1_id, v2_id = _protected_v1_repair_run(
+        routed, monkeypatch, tmp_path)
+    saved_row = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (v2_id,)).fetchone()
+    tampered = json.loads(saved_row[0])
+    tampered["protected_prior_ref"] = {"version": 1, "artifact_id": 0,
+                                     "identity_sha256": "0" * 64, "source_binding": "tampered"}
+    with led.db:
+        led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                       (json.dumps(tampered, ensure_ascii=False), v2_id))
+    assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'rejected'
 
 
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):
