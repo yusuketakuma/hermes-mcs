@@ -123,7 +123,7 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
             return out
         r["_frame"] = frame
         context = frame["text"]
-        if required_contract is not None and (
+        if (required_contract is not None or material) and (
                 not _frame_references_current(db, r, frame) or not _medication_reference_current(db, r)):
             return out
     else:

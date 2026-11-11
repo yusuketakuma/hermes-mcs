@@ -5,7 +5,7 @@
   "upgrade": "追加操作は不要です。部分公開は既存の検証済み範囲に限られ、全体が未完の間は 100% と表示しません。",
   "details": [
     "material=True のときだけ共通の厳密証明経路を使い、既定の呼出しは従来どおり。",
-    "無関係な後着返信だけでは既存 member の素材証明は無効にならず、抽出時に依存した参照の編集や版の往復では拒否する。",
+    "無関係な後着返信だけでは既存 member の素材証明は無効にならず、抽出時に依存した参照の編集や版の往復（ABA）では拒否する。凍結された参照元と医薬品参照の現在性も採用時に再確認する。",
     "QC・人による否認・権限剥奪・出典編集は引き続き採用を止める。"
   ],
   "refs": ["mcs/core/mcs_queries.py", "mcs/extract/llm/extract_llm_progress.py", "mcs/patients/patient_context_refresh_readiness.py"]
