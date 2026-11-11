@@ -924,6 +924,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r, ctx, saved, hints, qc = candidate
             if circuit_s and r.get("_cloud_mode") != "on":
                 continue
+            if r.get("_resume_refused"):
+                # Prepare already proved this job's saved resume evidence
+                # cannot be admitted; defer before any claim or side effect.
+                deferred += 1
+                _defer_note("quality_checkpoint_unverified")
+                continue
             lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
                                           deadline - time.monotonic() + TIMEOUT + 30))
             if lease is not None:
@@ -935,6 +941,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 saved = _capture_checkpoint_state(ledger.db, r, ctx)
                 jobs[index] = (r, ctx, saved, hints, qc)
                 claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
+                if r.get("_resume_refused"):
+                    # First detected after the claim: stop before _ensure_v1,
+                    # provider construction or any checkpoint write. The claim
+                    # itself may already have written, so this is not a
+                    # zero-write guarantee — only a pre-side-effect stop.
+                    claimed.pop()
+                    _release(ledger, r, lease)
+                    deferred += 1
+                    _defer_note("quality_checkpoint_unverified")
+                    continue
                 # the v3 pass performs the v1/v2 (rule) work simultaneously —
                 # claimed rows mint/refresh their extract_v1 artifact here so
                 # speed-lane readers never wait on the LLM queue
