@@ -233,13 +233,9 @@ def _v3_status_dto():
     root = _v3_state_root()
     if root is None:
         return None
-    if not os.path.isdir(root):
-        return {**base, 'state': 'uninitialized'}
     try:
-        from adapters.sdc.storage import Store
         import release_auto_status as v3_status
-        with Store(root) as store:
-            return v3_status.status_dto(store)
+        return v3_status.status_dto_at(root)
     except Exception:
         return {**base, 'state': 'unreadable'}
 

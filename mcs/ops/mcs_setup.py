@@ -882,6 +882,18 @@ def _doctor_check(errors: list[str], warnings: list[str]) -> DoctorCheck:
             "errors": len(errors), "warnings": len(warnings)}
 
 
+def _doctor_v3_status(cfg: dict):
+    """v3 release owner状態のread-only DTO。sdc.state_root未設定はNone。"""
+    try:
+        import release_auto_status as v3_status
+        return v3_status.status_dto_at((cfg.get('sdc') or {}).get('state_root'))
+    except Exception:
+        return {'schema_version': 'mcs.release-status-local.v1',
+                'state': 'unreadable', 'phase': None, 'reason': None,
+                'verified_release': None, 'pending_outbox': None,
+                'consent': None, 'health': None}
+
+
 _CONTEXT_REFRESH_COUNTS = ("initial_pending", "delta_pending", "history_pending",
                    "audit_pending", "failed", "complete")
 _CONTEXT_REFRESH_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
@@ -1151,7 +1163,8 @@ def cmd_doctor(args) -> int:
     report = {"optional_features": _doctor_optional_features(cfg), "mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
-              "operations": operations, "card_worker": worker,
+              "operations": operations, "v3": _doctor_v3_status(cfg),
+              "card_worker": worker,
               "patient_context_nightly": context_refresh_result, "collection": collection, "providers": providers,
               "source": environment_diagnostics.source_status(cfg, probe="services" in probes and not config_errors, paths=_service_paths()),
               "recovery_selection": {"explicit": "recovery_python" in cfg,

@@ -8,6 +8,8 @@ HELD/unresolvedは正常表示へ変換しない。
 legacy_auto_blocked: v3 owner stateが存在する(または読めない)限り
 legacy auto更新経路を抑止する。file不在=未移行でのみFalse。
 """
+import os
+
 from adapters.sdc import release_auto_state as auto_state
 
 OWNER_NAME = 'release-owner.json'
@@ -61,6 +63,29 @@ def status_dto(store):
     except Exception:
         dto['health'] = {'state': 'unreadable'}
     return dto
+
+
+def status_dto_at(state_root):
+    """state_root dirから固定DTOを組み立てる。root未設定/非strはNone。
+
+    dir未作成=uninitialized、Storeを開けない・stateが読めない=unreadable
+    固定形。update_cli/doctor等の呼出側がroot解決と失敗写像を重複しない
+    ための入口。
+    """
+    base = {'schema_version': 'mcs.release-status-local.v1',
+            'state': 'unreadable', 'phase': None, 'reason': None,
+            'verified_release': None, 'pending_outbox': None,
+            'consent': None, 'health': None}
+    if not isinstance(state_root, str) or not state_root:
+        return None
+    if not os.path.isdir(state_root):
+        return {**base, 'state': 'uninitialized'}
+    try:
+        from adapters.sdc.storage import Store
+        with Store(state_root) as store:
+            return status_dto(store)
+    except Exception:
+        return base
 
 
 def legacy_auto_blocked(store):

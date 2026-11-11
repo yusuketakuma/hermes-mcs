@@ -185,3 +185,27 @@ def test_legacy_auto_blocked(store):
     # 破損 → True(fail-closed)
     store.write('release-owner.json', {'schema_version': 'bogus'})
     assert status_mod.legacy_auto_blocked(store) is True
+
+
+def test_status_dto_at_root_resolution(tmp_path):
+    # root未設定/非str → None(呼出側でキー省略)
+    assert status_mod.status_dto_at(None) is None
+    assert status_mod.status_dto_at('') is None
+    assert status_mod.status_dto_at(123) is None
+    # dir未作成 → uninitialized
+    dto = status_mod.status_dto_at(str(tmp_path / 'missing'))
+    assert dto['state'] == 'uninitialized'
+    # 0700 dir・owner file無し → Storeが開き uninitialized
+    empty = tmp_path / 'empty-root'
+    empty.mkdir(mode=0o700)
+    assert status_mod.status_dto_at(str(empty))['state'] == 'uninitialized'
+    # 権限不正 → Store拒否 → unreadable(fail-closed、正常扱いしない)
+    bad = tmp_path / 'bad-root'
+    bad.mkdir(mode=0o755)
+    assert status_mod.status_dto_at(str(bad))['state'] == 'unreadable'
+    # seeded store → idle DTO
+    root = tmp_path / 'seeded-root'
+    with ot.Store(root, create=True) as seeded:
+        ot.seed(seeded)
+    dto = status_mod.status_dto_at(str(root))
+    assert dto['state'] == 'idle' and dto['schema_version'] == 'mcs.release-status-local.v1'
