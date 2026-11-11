@@ -18,10 +18,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'mcs'))
 import _mcs_path  # noqa: E402,F401 — shared flat module roots
+from adapters.sdc import release_auto_contract as _contract  # noqa: E402
 
 TAG_RE = re.compile(r'^v\d+\.\d+\.\d+$')
 COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
-SHA_RE = re.compile(r'^[0-9a-f]{64}$')
 
 
 def _load(path):
@@ -55,14 +55,19 @@ def _require(ok, code):
 
 # --- inspect-event ---------------------------------------------------------
 
-def inspect_event(event_path, policy_path, output):
+def inspect_event(event_path, policy_path, main_snapshot_sha, output):
     """GitHub event+固定policyを照合し、build対象のsource identityを出力。
 
     fork拒否: repository.id/owner.idがpolicyの固定値と一致しない限り拒否。
     tagはvX.Y.Zのみ。GETのみ・外部変更なし。
+    main_snapshot_shaはspec §4手順7の読取り時main SHA。実workflowはAPIで
+    取得して本CLIへ明示入力する(event payloadには含まれない)。
     """
     event = _load(event_path)
     policy = _load(policy_path)
+    _require(isinstance(main_snapshot_sha, str)
+             and COMMIT_RE.fullmatch(main_snapshot_sha),
+             'MAIN_SNAPSHOT_INVALID')
     repo = event.get('repository') or {}
     owner = repo.get('owner') or {}
     _require(repo.get('id') == policy.get('repository_id'),
@@ -86,6 +91,7 @@ def inspect_event(event_path, policy_path, output):
     request = {'schema_version': 'mcs.release-build-request.local.v1',
                'repository_id': repo['id'], 'owner_id': owner['id'],
                'tag': tag, 'tag_oid': tag_oid, 'commit': commit,
+               'main_snapshot_sha': main_snapshot_sha,
                'publisher_policy_sha256': _sha256_file(policy_path),
                'event': 'push' if event.get('ref') else 'release'}
     _dump(output, request)
@@ -94,23 +100,44 @@ def inspect_event(event_path, policy_path, output):
 
 # --- check-acceptance ------------------------------------------------------
 
-def check_acceptance(request_path, acceptance_path, output):
-    """同一SHAの正式受入票を検証する。受入票はrequest.commitへ束縛必須。"""
+def check_acceptance(request_path, acceptance_path, rollout_policy_path,
+                     output):
+    """v3 ReleaseAcceptanceをSEM04–06で検査し、requestのsource identityと
+    rollout policyへ束縛する。release-acceptance.json assetはschemaの
+    ReleaseAcceptance文書でなければならない(旧flat形式は拒否)。"""
     request = _load(request_path)
     ticket = _load(acceptance_path)
+    policy = _load(rollout_policy_path)
+    expected_source = {
+        'repository_id': request.get('repository_id'),
+        'repository_owner_id': request.get('owner_id'),
+        'tag': request.get('tag'),
+        'tag_oid': request.get('tag_oid'),
+        'commit': request.get('commit'),
+        'main_snapshot_sha': request.get('main_snapshot_sha'),
+    }
     reasons = []
-    if ticket.get('source_commit') != request.get('commit'):
-        reasons.append('SOURCE_COMMIT_MISMATCH')
-    if not SHA_RE.fullmatch(str(ticket.get('acceptance_sha256', ''))):
-        reasons.append('ACCEPTANCE_SHA_INVALID')
-    if not re.fullmatch(r'[0-9a-f-]{36}', str(ticket.get('acceptance_id', ''))):
-        reasons.append('ACCEPTANCE_ID_INVALID')
+    if any(value is None for value in expected_source.values()):
+        reasons.append('REQUEST_SOURCE_INCOMPLETE')
+    else:
+        try:
+            _contract.validate_acceptance(
+                ticket, expected_source=expected_source, policy=policy)
+        except _contract.ContractError as error:
+            reasons.append(error.code)
+        except Exception:
+            reasons.append('ACCEPTANCE_UNREADABLE')
     result = {'schema_version': 'mcs.release-acceptance-check.local.v1',
               'ok': not reasons, 'reasons': reasons,
               'commit': request.get('commit'), 'tag': request.get('tag'),
-              'acceptance_id': ticket.get('acceptance_id'),
-              'acceptance_sha256': ticket.get('acceptance_sha256')}
+              'acceptance_id': (ticket.get('acceptance_id')
+                                if isinstance(ticket, dict) else None),
+              'mode': (ticket.get('mode')
+                       if isinstance(ticket, dict) else None)}
     _dump(output, result)
+    if reasons:
+        raise SystemExit('release_publish: ACCEPTANCE_REJECTED:'
+                         + ','.join(reasons))
     return result
 
 
@@ -289,10 +316,12 @@ def main(argv=None):
     p = sub.add_parser('inspect-event')
     p.add_argument('--event', required=True)
     p.add_argument('--policy', required=True)
+    p.add_argument('--main-snapshot-sha', required=True)
     p.add_argument('--output', required=True)
     p = sub.add_parser('check-acceptance')
     p.add_argument('--request', required=True)
     p.add_argument('--acceptance', required=True)
+    p.add_argument('--rollout-policy', required=True)
     p.add_argument('--output', required=True)
     p = sub.add_parser('package')
     p.add_argument('--request', required=True)
@@ -316,9 +345,10 @@ def main(argv=None):
     p.add_argument('--output', required=True)
     args = parser.parse_args(argv)
     handlers = {
-        'inspect-event': lambda a: inspect_event(a.event, a.policy, a.output),
+        'inspect-event': lambda a: inspect_event(
+            a.event, a.policy, a.main_snapshot_sha, a.output),
         'check-acceptance': lambda a: check_acceptance(
-            a.request, a.acceptance, a.output),
+            a.request, a.acceptance, a.rollout_policy, a.output),
         'package': lambda a: package(a.request, a.assets, a.output),
         'create-bundle': lambda a: create_bundle(
             a.request, a.repo, a.output_dir, a.output),

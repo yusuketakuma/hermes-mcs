@@ -5,9 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from adapters.sdc import release_auto_contract as contract
+
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ROOT / "scripts" / "development" / "release_publish.py"
+EXAMPLES = ROOT / "adapters" / "sdc" / "contracts" / "mcs-auto" / "v3" / "examples"
 COMMIT = "a" * 40
+MAIN_SNAPSHOT = "e" * 40
 
 
 def _run(*args, env=None):
@@ -42,11 +46,13 @@ def test_inspect_event_happy(tmp_path):
     out = tmp_path / 'build-request.json'
     result = _run('inspect-event', '--event', str(_event(tmp_path)),
                   '--policy', str(_policy(tmp_path)),
+                  '--main-snapshot-sha', MAIN_SNAPSHOT,
                   '--output', str(out))
     assert result.returncode == 0, result.stderr
     doc = json.loads(out.read_text())
     assert doc['tag'] == 'v1.2.3' and doc['commit'] == COMMIT
     assert doc['repository_id'] == 12345 and doc['owner_id'] == 777
+    assert doc['main_snapshot_sha'] == MAIN_SNAPSHOT
     assert len(doc['publisher_policy_sha256']) == 64
 
 
@@ -55,6 +61,7 @@ def test_inspect_event_rejects_fork_repo(tmp_path):
     out = tmp_path / 'out.json'
     result = _run('inspect-event', '--event', str(_event(tmp_path)),
                   '--policy', str(_policy(tmp_path, repository_id=999)),
+                  '--main-snapshot-sha', MAIN_SNAPSHOT,
                   '--output', str(out))
     assert result.returncode != 0
     assert 'REPOSITORY_MISMATCH' in result.stderr
@@ -65,6 +72,7 @@ def test_inspect_event_rejects_non_tag_ref(tmp_path):
     event = _event(tmp_path, ref='refs/heads/main')
     result = _run('inspect-event', '--event', str(event),
                   '--policy', str(_policy(tmp_path)),
+                  '--main-snapshot-sha', MAIN_SNAPSHOT,
                   '--output', str(tmp_path / 'o.json'))
     assert result.returncode != 0
 
@@ -73,40 +81,121 @@ def test_inspect_event_rejects_bad_tag(tmp_path):
     event = _event(tmp_path, ref='refs/tags/nightly')
     result = _run('inspect-event', '--event', str(event),
                   '--policy', str(_policy(tmp_path)),
+                  '--main-snapshot-sha', MAIN_SNAPSHOT,
                   '--output', str(tmp_path / 'o.json'))
     assert result.returncode != 0
     assert 'TAG_INVALID' in result.stderr
 
 
-def test_check_acceptance_binds_same_commit(tmp_path):
-    req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': COMMIT, 'tag': 'v1.2.3'}))
-    acc = tmp_path / 'acc.json'
-    acc.write_text(json.dumps({
-        'acceptance_id': '12345678-1234-4234-8234-123456789abc',
-        'source_commit': COMMIT,
-        'acceptance_sha256': 'b' * 64}))
+def test_inspect_event_rejects_bad_main_snapshot(tmp_path):
+    result = _run('inspect-event', '--event', str(_event(tmp_path)),
+                  '--policy', str(_policy(tmp_path)),
+                  '--main-snapshot-sha', 'not-a-sha',
+                  '--output', str(tmp_path / 'o.json'))
+    assert result.returncode != 0
+    assert 'MAIN_SNAPSHOT_INVALID' in result.stderr
+
+
+def _v3_fixtures(tmp_path, **source_over):
+    """contract exampleのReleaseAcceptance/RolloutPolicyをpolicyへ再束縛する。"""
+    policy = json.loads(
+        (EXAMPLES / 'rollout-policy.json').read_text())['data']
+    acceptance = json.loads(
+        (EXAMPLES / 'acceptance-full.json').read_text())['data']
+    acceptance['policy_sha256'] = contract.hash_v3('rollout-policy', policy)
+    source = dict(acceptance['source'])
+    source.update(source_over)
+    acceptance['source'] = source
+    policy_path = tmp_path / 'rollout-policy.json'
+    policy_path.write_text(json.dumps(policy))
+    acceptance_path = tmp_path / 'release-acceptance.json'
+    acceptance_path.write_text(json.dumps(acceptance))
+    return policy_path, acceptance_path
+
+
+def _v3_request(tmp_path, **over):
+    """acceptance-full.jsonのsourceへ一致するbuild requestを作る。"""
+    request = {'schema_version': 'mcs.release-build-request.local.v1',
+               'repository_id': 123, 'owner_id': 456, 'tag': 'v1.2.3',
+               'tag_oid': '2a1073a6e67f0e5f09a5957c659503c690efe727',
+               'commit': 'b9469a95e64ad83017429739bd95b527100cdfec',
+               'main_snapshot_sha': '0d6e4079e36703ebd37c00722f5891d28b0e2811'}
+    request.update(over)
+    path = tmp_path / 'req.json'
+    path.write_text(json.dumps(request))
+    return path
+
+
+def test_check_acceptance_binds_v3_source_and_policy(tmp_path):
+    policy_path, acc = _v3_fixtures(tmp_path)
+    req = _v3_request(tmp_path)
     out = tmp_path / 'check.json'
     result = _run('check-acceptance', '--request', str(req),
-                  '--acceptance', str(acc), '--output', str(out))
-    assert result.returncode == 0
-    assert json.loads(out.read_text())['ok'] is True
+                  '--acceptance', str(acc),
+                  '--rollout-policy', str(policy_path),
+                  '--output', str(out))
+    assert result.returncode == 0, result.stderr
+    doc = json.loads(out.read_text())
+    assert doc['ok'] is True and doc['mode'] == 'full_run'
 
 
-def test_check_acceptance_rejects_other_sha(tmp_path):
-    req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': COMMIT, 'tag': 'v1.2.3'}))
-    acc = tmp_path / 'acc.json'
+def test_check_acceptance_rejects_other_commit(tmp_path):
+    policy_path, acc = _v3_fixtures(tmp_path)
+    req = _v3_request(tmp_path, commit='c' * 40)
+    out = tmp_path / 'check.json'
+    result = _run('check-acceptance', '--request', str(req),
+                  '--acceptance', str(acc),
+                  '--rollout-policy', str(policy_path),
+                  '--output', str(out))
+    assert result.returncode != 0
+    assert 'ACCEPTANCE_REJECTED' in result.stderr
+    assert json.loads(out.read_text())['ok'] is False
+
+
+def test_check_acceptance_rejects_other_policy(tmp_path):
+    policy_path, acc = _v3_fixtures(tmp_path)
+    other = json.loads(policy_path.read_text())
+    other['policy_revision'] += 1
+    other_path = tmp_path / 'other-policy.json'
+    other_path.write_text(json.dumps(other))
+    req = _v3_request(tmp_path)
+    result = _run('check-acceptance', '--request', str(req),
+                  '--acceptance', str(acc),
+                  '--rollout-policy', str(other_path),
+                  '--output', str(tmp_path / 'o.json'))
+    assert result.returncode != 0
+    assert 'ACCEPTANCE_REJECTED' in result.stderr
+
+
+def test_check_acceptance_rejects_incomplete_request(tmp_path):
+    """main_snapshot_shaを欠く旧requestはsource identity不完全で拒否。"""
+    policy_path, acc = _v3_fixtures(tmp_path)
+    req = _v3_request(tmp_path)
+    doc = json.loads(req.read_text())
+    del doc['main_snapshot_sha']
+    req.write_text(json.dumps(doc))
+    result = _run('check-acceptance', '--request', str(req),
+                  '--acceptance', str(acc),
+                  '--rollout-policy', str(policy_path),
+                  '--output', str(tmp_path / 'o.json'))
+    assert result.returncode != 0
+    assert 'REQUEST_SOURCE_INCOMPLETE' in result.stderr
+
+
+def test_check_acceptance_rejects_legacy_flat_ticket(tmp_path):
+    """旧flat形式の受入票はv3 ReleaseAcceptanceでないため拒否。"""
+    policy_path, _acc = _v3_fixtures(tmp_path)
+    acc = tmp_path / 'legacy.json'
     acc.write_text(json.dumps({
         'acceptance_id': '12345678-1234-4234-8234-123456789abc',
-        'source_commit': 'c' * 40,
-        'acceptance_sha256': 'b' * 64}))
-    out = tmp_path / 'check.json'
-    _run('check-acceptance', '--request', str(req),
-         '--acceptance', str(acc), '--output', str(out))
-    doc = json.loads(out.read_text())
-    assert doc['ok'] is False
-    assert 'SOURCE_COMMIT_MISMATCH' in doc['reasons']
+        'source_commit': 'b' * 40, 'acceptance_sha256': 'b' * 64}))
+    req = _v3_request(tmp_path)
+    result = _run('check-acceptance', '--request', str(req),
+                  '--acceptance', str(acc),
+                  '--rollout-policy', str(policy_path),
+                  '--output', str(tmp_path / 'o.json'))
+    assert result.returncode != 0
+    assert 'ACCEPTANCE_REJECTED' in result.stderr
 
 
 def test_package_emits_fixed_asset_list(tmp_path):
