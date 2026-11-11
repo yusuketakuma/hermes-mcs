@@ -473,3 +473,14 @@ def _github_call(method, url, token, *, body=None, raw=None, headers=None,
     if expect is not None and status not in expect:
         raise PublishApiError('GITHUB_STATUS_%d' % status, status)
     return status, doc
+
+
+def register_request(*, publication_id, expected_revision, fencing_token,
+                     verification):
+    """PublicationRegisterRequest(contract)を組み立て検査する。"""
+    doc = {'schema_version': 'mcs.publication-register-request.v3',
+           'publication_id': publication_id,
+           'expected_revision': expected_revision,
+           'fencing_token': fencing_token,
+           'verification': verification}
+    return _parse('PublicationRegisterRequest', doc)

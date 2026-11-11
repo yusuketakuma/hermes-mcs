@@ -608,13 +608,19 @@ def _authorize_result(tmp_path):
     assets = []
     assets_dir = tmp_path / 'pub-assets'
     assets_dir.mkdir(exist_ok=True)
-    for name, blob in (('hermes-mcs.bundle', b'bundle-bytes'),
-                       ('notes.png', b'png-bytes')):
+    blobs = [('hermes-mcs.bundle', b'bundle-bytes',
+              'application/octet-stream'),
+             ('notes.png', b'png-bytes', 'image/png'),
+             ('release-core.json', b'{"core":1}', 'application/json'),
+             ('release-attestation.initial.json', b'{"att":1}',
+              'application/json'),
+             ('compatibility.json', b'{"compat":1}', 'application/json'),
+             ('release-acceptance.json', b'{"acc":1}', 'application/json')]
+    for name, blob, media in blobs:
         (assets_dir / name).write_bytes(blob)
         assets.append({'name': name, 'sha256': __import__('hashlib')
                        .sha256(blob).hexdigest(), 'size': len(blob),
-                       'media_type': 'application/octet-stream'
-                       if name.endswith('.bundle') else 'image/png'})
+                       'media_type': media})
     plan = {'schema_version': 'mcs.publish-plan.v3',
             'publication_id': '12345678-1234-4234-8234-123456789abc',
             'request': request,
@@ -653,7 +659,7 @@ def test_publish_dry_run_default(tmp_path):
         capture_output=True, text=True, timeout=30, env=env)
     assert result.returncode == 0, result.stderr
     doc = json.loads(out.read_text())
-    assert doc['dry_run'] is True and doc['asset_count'] == 2
+    assert doc['dry_run'] is True and doc['asset_count'] == 6
 
 
 def test_publish_rejects_asset_mismatch(tmp_path):
@@ -730,7 +736,114 @@ def test_publish_execute_happy_path(tmp_path, monkeypatch):
     assert obs['dry_run'] is False
     assert obs['github_release_id'] == 42
     assert obs['release_verified'] is True and obs['immutable'] is True
-    assert [a['name'] for a in obs['assets']] == [
-        'hermes-mcs.bundle', 'notes.png']
+    assert len(obs['assets']) == 6
     assert 'create' in calls and 'publish' in calls
     assert ('upload', 'hermes-mcs.bundle') in calls
+
+
+def _observation(tmp_path, auth_path):
+    """verify-register試験用のpublish observationを組み立てる。"""
+    result = json.loads(Path(auth_path).read_text())
+    plan = result['publish_plan']
+    obs_assets = [{'asset_id': 100 + i, 'name': a['name'],
+                   'size': a['size'], 'sha256': a['sha256']}
+                  for i, a in enumerate(plan['assets'])]
+    obs = {'schema_version': 'mcs.release-publish-observation.local.v1',
+           'dry_run': False, 'github_release_id': 42,
+           'tag': 'v1.2.3', 'commit': COMMIT,
+           'assets': obs_assets, 'release_verified': True,
+           'immutable': True, 'observed_at': 1700000000000}
+    path = tmp_path / 'obs.json'
+    path.write_text(json.dumps(obs))
+    return path
+
+
+def test_verify_register_dry_run_default(tmp_path):
+    auth, _ = _authorize_result(tmp_path)
+    obs = _observation(tmp_path, auth)
+    out = tmp_path / 'rec.json'
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('MCS_PUBLISH_')
+           and k not in ('GITHUB_TOKEN', 'GH_TOKEN',
+                         'ACTIONS_ID_TOKEN_REQUEST_TOKEN')}
+    result = subprocess.run(
+        [sys.executable, str(CLI), 'verify-register',
+         '--authorize', str(auth), '--observation', str(obs),
+         '--output', str(out)],
+        capture_output=True, text=True, timeout=30, env=env)
+    assert result.returncode == 0, result.stderr
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is True
+    assert doc['github_release_id'] == 42
+
+
+def test_verify_register_execute_builds_verification(tmp_path, monkeypatch):
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('GITHUB_RUN_ID', '123')
+    monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
+    monkeypatch.setenv('MCS_VERIFIER_CLOSURE_SHA256', 'a' * 64)
+    monkeypatch.setenv('MCS_PUBLISH_TOOLCHAIN_SHA256', 'b' * 64)
+    auth, _ = _authorize_result(tmp_path)
+    obs = _observation(tmp_path, auth)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    captured = {}
+
+    def fake_register(base, token, body, **kw):
+        captured['body'] = body
+        return {'schema_version': 'mcs.publication-record.v3',
+                'publication_id': body['publication_id'],
+                'immutable': True}
+
+    monkeypatch.setattr(module._api, 'register', fake_register)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {})
+    out = tmp_path / 'rec.json'
+    module.main(['verify-register', '--authorize', str(auth),
+                 '--observation', str(obs), '--pins', str(pins),
+                 '--output', str(out)])
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is False
+    body = captured['body']
+    v = body['verification']
+    assert v['schema_version'] == 'mcs.github-verification.v3'
+    assert v['github_release_id'] == 42
+    assert v['publisher_run_id'] == 123
+    assert v['publisher_run_attempt'] == 1
+    assert v['release_verified'] is True and v['immutable'] is True
+    assert v['verifier_closure_sha256'] == 'a' * 64
+    assert v['toolchain_sha256'] == 'b' * 64
+    names = [a['name'] for a in v['assets']]
+    assert names == sorted(names) and len(names) == 5
+    assert all(a['verified'] is True for a in v['assets'])
+    assert body['expected_revision'] == 2
+    assert body['fencing_token'] == 7
+    assert len(v['release_attestation_evidence_sha256']) == 64
+
+
+def test_verify_register_rejects_tampered_observation(tmp_path, monkeypatch):
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    auth, _ = _authorize_result(tmp_path)
+    obs = _observation(tmp_path, auth)
+    doc = json.loads(obs.read_text())
+    doc['assets'][0]['sha256'] = '0' * 64
+    obs.write_text(json.dumps(doc))
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {})
+    out = tmp_path / 'rec.json'
+    try:
+        module.main(['verify-register', '--authorize', str(auth),
+                     '--observation', str(obs), '--pins', str(pins),
+                     '--output', str(out)])
+    except SystemExit as error:
+        assert 'ASSET_MISMATCH' in str(error)
+    else:
+        raise AssertionError('expected failure')

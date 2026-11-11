@@ -425,16 +425,119 @@ def _asset_digest(asset):
     return None
 
 
-def verify_register(plan_path, observation_path, output):
-    plan = _load(plan_path)
+_REGISTER_ASSET_NAMES = frozenset({
+    'release-core.json', 'release-attestation.initial.json',
+    'compatibility.json', 'release-acceptance.json',
+    'hermes-mcs.bundle'})
+_SHA_RE = re.compile(r'^[0-9a-f]{64}$')
+
+
+def _env_sha256(name):
+    value = os.environ.get(name)
+    _require(isinstance(value, str) and _SHA_RE.fullmatch(value),
+             'ENV_INVALID:' + name)
+    return value
+
+
+def _env_positive(name):
+    value = os.environ.get(name)
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        _require(False, 'ENV_INVALID:' + name)
+    _require(number >= 1, 'ENV_INVALID:' + name)
+    return number
+
+
+def verify_register(authorize_path, observation_path, pins_path, output):
+    """verify-register job: GitHub観測をGithubVerificationへ束縛し中央登録。
+
+    中央はcallerのbooleanを信用せずGitHub APIからRelease/asset/tagを
+    独立再照合する。verification.sourceはacceptance.sourceとcanonical
+    一致が必要なためplan.request.sourceをそのまま使う。
+    """
+    result = _load(authorize_path)
+    plan = result.get('publish_plan')
+    envelope = result.get('envelope')
+    _require(type(plan) is dict and type(envelope) is dict,
+             'AUTHORIZE_RESULT_INVALID')
+    request = plan.get('request')
+    _require(type(request) is dict, 'PLAN_INVALID')
+    pub_id = plan.get('publication_id')
     obs = _load(observation_path)
-    record = {'schema_version': 'mcs.release-publication-record.local.v1',
-              'dry_run': True, 'commit': plan.get('commit'),
-              'tag': plan.get('tag'),
-              'observation_commit': obs.get('commit'),
-              'note': 'central registration requires publisher OIDC route'}
-    _dump(output, record)
-    return record
+    _require(type(obs) is dict, 'OBSERVATION_INVALID')
+    if not _external_guard():
+        record = {'schema_version':
+                  'mcs.release-publication-record.local.v1',
+                  'dry_run': True, 'publication_id': pub_id,
+                  'github_release_id': obs.get('github_release_id'),
+                  'note': 'central register requires MCS_PUBLISH_EXECUTE=1'
+                          ' + OIDC'}
+        _dump(output, record)
+        return record
+    _require(pins_path, 'PINS_REQUIRED')
+    _verify_plan_envelope(envelope, pins_path, pub_id, request)
+    _require(obs.get('dry_run') is False
+             and obs.get('release_verified') is True
+             and obs.get('immutable') is True
+             and type(obs.get('github_release_id')) is int
+             and obs['github_release_id'] >= 1,
+             'OBSERVATION_INVALID')
+    plan_assets = {a.get('name'): a for a in plan.get('assets') or []
+                   if type(a) is dict}
+    obs_assets = {a.get('name'): a for a in obs.get('assets') or []
+                  if type(a) is dict}
+    vassets = []
+    for name in sorted(_REGISTER_ASSET_NAMES):
+        pa = plan_assets.get(name)
+        oa = obs_assets.get(name)
+        _require(pa is not None and oa is not None,
+                 'ASSET_MISSING:' + name)
+        _require(oa.get('sha256') == pa.get('sha256')
+                 and oa.get('size') == pa.get('size'),
+                 'ASSET_MISMATCH:' + name)
+        _require(type(oa.get('asset_id')) is int
+                 and oa['asset_id'] >= 1, 'ASSET_ID_INVALID')
+        vassets.append({'asset_id': oa['asset_id'], 'name': name,
+                        'sha256': pa['sha256'], 'size': pa['size'],
+                        'verified': True})
+    evidence = {'github_release_id': obs['github_release_id'],
+                'tag': obs.get('tag'), 'commit': obs.get('commit'),
+                'assets': obs.get('assets'),
+                'observed_at': obs.get('observed_at')}
+    evidence_sha = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, sort_keys=True,
+                   separators=(',', ':')).encode()).hexdigest()
+    verification = {'schema_version': 'mcs.github-verification.v3',
+                    'publication_id': pub_id,
+                    'github_release_id': obs['github_release_id'],
+                    'source': request['source'],
+                    'publisher_run_id': _env_positive('GITHUB_RUN_ID'),
+                    'publisher_run_attempt':
+                        _env_positive('GITHUB_RUN_ATTEMPT'),
+                    'verifier_closure_sha256':
+                        _env_sha256('MCS_VERIFIER_CLOSURE_SHA256'),
+                    'toolchain_sha256':
+                        _env_sha256('MCS_PUBLISH_TOOLCHAIN_SHA256'),
+                    'release_attestation_evidence_sha256': evidence_sha,
+                    'release_verified': True, 'immutable': True,
+                    'assets': vassets,
+                    'observed_at': obs.get('observed_at')
+                    if type(obs.get('observed_at')) is int
+                    else int(time.time() * 1000)}
+    reg_req = _api.register_request(
+        publication_id=pub_id,
+        expected_revision=plan.get('revision'),
+        fencing_token=plan.get('fencing_token'),
+        verification=verification)
+    token = _publisher_token()
+    base = _api.api_base()
+    record = _api.register(base, token, reg_req)
+    result_doc = {'schema_version': 'mcs.release-publication-record.local.v1',
+                  'dry_run': False, 'record': record,
+                  'verification': verification}
+    _dump(output, result_doc)
+    return result_doc
 
 
 # --- authorize (spec §3.2 authorize-publish job): reserve→upload→finalize ---
@@ -601,8 +704,9 @@ def main(argv=None):
     p.add_argument('--pins')
     p.add_argument('--output', required=True)
     p = sub.add_parser('verify-register')
-    p.add_argument('--plan', required=True)
+    p.add_argument('--authorize', required=True)
     p.add_argument('--observation', required=True)
+    p.add_argument('--pins')
     p.add_argument('--output', required=True)
     p = sub.add_parser('authorize')
     p.add_argument('--build-request', required=True)
@@ -624,7 +728,7 @@ def main(argv=None):
         'publish': lambda a: publish(
             a.authorize, a.assets_dir, a.pins, a.output),
         'verify-register': lambda a: verify_register(
-            a.plan, a.observation, a.output),
+            a.authorize, a.observation, a.pins, a.output),
         'authorize': lambda a: authorize(
             a.build_request, a.assets_dir, a.release_core,
             a.compatibility, a.pins, a.output),
