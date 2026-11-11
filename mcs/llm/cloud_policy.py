@@ -682,6 +682,24 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
         return False
 
 
+def unbound_unit_history(ledger, *, route, project_id, message_id, unit_key):
+    """Prove the message's unit on `route` holds no paid cloud work: inside
+    one accounting snapshot the fiscal tally is valid, the unit's whole
+    reservation/result history verifies, and no reservation binds the
+    message. A tainted or ambiguous history proves nothing — it never
+    releases the unit to a local path."""
+    try:
+        with _accounting_snapshot(ledger.db):
+            if _tally(ledger).invalid:
+                return False
+            _verified_request_history(ledger, route=route, project_id=project_id,
+                                      message_id=message_id, unit_key=unit_key)
+            return not owns_request(ledger.db, route=route,
+                                    project_id=project_id, message_id=message_id)
+    except (AnthropicError, sqlite3.Error):
+        return False
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],

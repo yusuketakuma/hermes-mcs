@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "旧契約世代の停滞抽出を現行契約のローカル処理へ移行",
+  "summary": "旧い契約世代で中断した抽出のうち、有料クラウド履歴が一切無いと証明できるものは、現行契約のローカル処理としてやり直されます。クラウドの予約・送信・結果記録は作られず、旧いcheckpoint行は変更されません。有料履歴が不明・未解決・所有済みの場合は従来どおり保留されます。",
+  "upgrade": "追加操作は不要です。ローカルLLMが利用できる環境でのみ移行が進み、クラウド課金は発生しません。",
+  "details": [
+    "mcs/llm/cloud_policy.py: unbound_unit_history を追加。会計スナップショット内で月次集計の健全性・単位の予約/結果履歴の検証・当該メッセージへの予約非所有を確認し、有料作業が残る単位をローカルへ解放しない。",
+    "mcs/extract/llm/extract_llm_context.py: _pending_superseded_scan が全モデル範囲のpending recordを走査し、全てが退役世代へ一意に束縛され現行契約に一致しない場合のみ superseded と判定する読み取り専用の認識段階。",
+    "mcs/extract/llm/extract_llm_prepare.py: superseded 判定かつ金融ガード通過の行はクラウドモード・プロファイル解決を経ずにローカル強制とし、現行契約のframeを一度だけ構築して既存のclaim/CAS/採用経路で実行する。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_prepare.py", "mcs/extract/llm/extract_llm_context.py", "mcs/llm/cloud_policy.py"]
+}

@@ -265,12 +265,16 @@ def _match_pending_record(db, r, record, witness, content_hash, plain_plan, fram
     return matched
 
 
+def _known_old_contracts():
+    try:
+        return extract_llm_historical.known_old_contracts()
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return ()
+
+
 def _pending_records_known_old(db, r, unmatched, frames):
     """Every unmatched record must bind exactly one retired-generation frame."""
-    try:
-        old = extract_llm_historical.known_old_contracts()
-    except (OSError, ValueError, TypeError, KeyError, RecursionError):
-        return False
+    old = _known_old_contracts()
     for record, witness, content_hash, plain_plan in unmatched:
         total = 0
         for _gen_id, prompt_head, schema in old:
@@ -286,14 +290,14 @@ def _pending_records_known_old(db, r, unmatched, frames):
     return True
 
 
-def _pending_context_frame(db, r, *, attempt, enabled):
-    """Resume the exact frozen attempt before creating any new medication reference inputs."""
+def _pending_records(db, r, model):
+    """Collectible pending chunk records for one model scope."""
     records = []
     legacy_binding = None
     for row in db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,content "
                           "FROM artifacts WHERE kind='extract_llm_chunk' "
                           "AND project_id=? AND message_id=? AND model=?",
-                          (r["project_id"], r["message_id"], r["_target"][1])):
+                          (r["project_id"], r["message_id"], model)):
         meta = loads_dict(row[5])
         if (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
                 and meta.get("ver") == EXTRACT_VERSION
@@ -302,7 +306,7 @@ def _pending_context_frame(db, r, *, attempt, enabled):
             # Only a proven old local envelope may discard an unusable value;
             # unknown provider/repair records retain their hold and receipts.
             if (not r.get("_provider_contract") and r.get("_cloud_mode") in (None, "off")
-                    and meta.get("actual_model") == r["_target"][1]
+                    and meta.get("actual_model") == model
                     and not any(key in meta for key in ("provider_leaf", "backend", "prompt", "config_generation",
                         "quality_status", "quality_pass", "quality_lease", "split_size", "context_snapshot"))):
                 try:
@@ -323,13 +327,15 @@ def _pending_context_frame(db, r, *, attempt, enabled):
                           and _provider_strict_dict(row[6]) == {})
             content_hash = hashlib.sha256(row[6].encode()).hexdigest() if isinstance(row[6], str) else None
             records.append((meta, tuple(row[:6]), content_hash, plain_plan))
-    if not records:
-        return None
-    contracts = _context_contracts()
+    return records
+
+
+def _pending_frames(db, r, model):
+    """Validated frozen frames for one model scope."""
     frames = []
     for row in db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
                           "AND message_id=? AND model=? ORDER BY artifact_id DESC",
-                          (extraction_context.KIND, r["project_id"], r["message_id"], r["_target"][1])):
+                          (extraction_context.KIND, r["project_id"], r["message_id"], model)):
         doc, meta = loads_dict(row[1]), loads_dict(row[2])
         if (not isinstance(doc, dict) or not isinstance(meta, dict)
                 or not isinstance(doc.get("source"), dict)
@@ -349,6 +355,16 @@ def _pending_context_frame(db, r, *, attempt, enabled):
         frame = {**doc, "artifact_id": row[0]}
         old_target = {**r, **doc["source"], "_source_binding": meta["source_binding"]}
         frames.append((frame, old_target))
+    return frames
+
+
+def _pending_context_frame(db, r, *, attempt, enabled):
+    """Resume the exact frozen attempt before creating any new medication reference inputs."""
+    records = _pending_records(db, r, r["_target"][1])
+    if not records:
+        return None
+    contracts = _context_contracts()
+    frames = _pending_frames(db, r, r["_target"][1])
     candidates = {}
     unmatched = []
     for record, witness, content_hash, plain_plan in records:
@@ -384,3 +400,49 @@ def _pending_context_frame(db, r, *, attempt, enabled):
     if len(candidates) > 1:
         raise ValueError("pending_context_unverifiable")
     return next(iter(candidates.values())) if candidates else None
+
+
+def _pending_superseded_scan(db, r):
+    """Read-only: True only when every collectible pending record, across every
+    model scope, binds exactly one retired-generation frame and none binds the
+    current contract. Recognition for the current-local transition; it never
+    resumes, adopts, or mutates old rows."""
+    models = [row[0] for row in db.execute(
+        "SELECT DISTINCT model FROM artifacts WHERE kind='extract_llm_chunk' "
+        "AND project_id=? AND message_id=?", (r["project_id"], r["message_id"]))]
+    old = _known_old_contracts()
+    saw_record = False
+    for model in models:
+        variant = {key: value for key, value in r.items()
+                   if key not in ("_provider_contract", "_frame", "_cloud_config",
+                                  "_cloud_settings", "_cloud_selection", "_cloud_owned",
+                                  "_cloud_background", "_cloud_history_snapshot",
+                                  "_required_cloud_contract")}
+        variant.update(_target=("", model), _cloud_mode="off")
+        try:
+            records = _pending_records(db, variant, model)
+            if not records:
+                continue
+            frames = _pending_frames(db, variant, model)
+            for record, witness, content_hash, plain_plan in records:
+                saw_record = True
+                current = _match_pending_record(
+                    db, variant, record, witness, content_hash, plain_plan, frames,
+                    lambda target, text: _chunk_context(target, text, checkpoint=True))
+                if len(current) != 0:
+                    return False
+                total = 0
+                for _gen_id, prompt_head, schema in old:
+                    matched = _match_pending_record(
+                        db, variant, record, witness, content_hash, plain_plan, frames,
+                        lambda target, text, h=prompt_head, s=schema:
+                            _chunk_context(target, text, checkpoint=True,
+                                           prompt_head=h, schema=s))
+                    total += len(matched)
+                    if total > 1:
+                        return False
+                if total != 1:
+                    return False
+        except ValueError:
+            return False
+    return saw_record

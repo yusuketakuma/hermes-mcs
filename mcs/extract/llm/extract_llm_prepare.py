@@ -21,6 +21,7 @@ from extract_llm_context import (
     _context_contracts,
     _medication_reference_current,
     _pending_context_frame,
+    _pending_superseded_scan,
     _thread_context,
 )
 from extract_llm_prompts import (
@@ -237,8 +238,21 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             continue
         r['_source_binding'] = binding
         r["_target"] = target
-        mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
-            ledger, r, background=background) else "off"
+        # Read-only recognition before any owned/provider state is restored:
+        # pending work that is entirely retired-generation migrates to one
+        # fresh current-contract local unit, but only when the unit's whole
+        # paid history proves no cloud work is owned or unverifiable.
+        superseded = _pending_superseded_scan(ledger.db, r)
+        if superseded and not cloud_policy.unbound_unit_history(
+                ledger, route="reextract", project_id=r["project_id"],
+                message_id=r["message_id"], unit_key=str(r["message_id"])):
+            block("prepare_context_load_superseded")
+            continue
+        if superseded:
+            r["_superseded_local"] = True
+        mode = "off" if superseded else (
+            _cloud_mode(ledger, cfg, "reextract", r["project_id"])
+            if allow_cloud and _cloud_reextract(ledger, r, background=background) else "off")
         # Ownership is durable and decided before settings: an owned unit
         # stays held unless the config itself declares the retirement —
         # explicit off/dry_run or a verifiable route/project exclusion.
@@ -308,7 +322,10 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
         stage = "load"
         try:
-            frame = _pending_context_frame(ledger.db, r, attempt=attempt, enabled=enabled)
+            # A superseded cohort never resumes its retired frames: the
+            # current-contract frame is prepared fresh below, exactly once.
+            frame = None if r.get("_superseded_local") else _pending_context_frame(
+                ledger.db, r, attempt=attempt, enabled=enabled)
             if frame is None:
                 hint_deadline = time.monotonic() + 1.0
                 if deadline is not None:
