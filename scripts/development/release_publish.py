@@ -297,36 +297,13 @@ def create_bundle(request_path, repo, output_dir, output):
     return result
 
 
-# --- reserve / publish / verify-register (dry-run既定) ----------------------
+# --- publish / verify-register (dry-run既定) ---------------------------------
 
 def _external_guard():
     """外部変更commandの実実行条件。満たさなければdry-run計画のみ出力。"""
     return (os.environ.get('MCS_PUBLISH_EXECUTE') == '1'
             and bool(os.environ.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN')
                      or os.environ.get('MCS_PUBLISH_OIDC_TOKEN')))
-
-
-def _plan_common(request_path, extra=None):
-    request = _load(request_path)
-    _require(COMMIT_RE.fullmatch(str(request.get('commit', ''))),
-             'REQUEST_INVALID')
-    plan = {'schema_version': 'mcs.release-publish-plan.local.v1',
-            'dry_run': not _external_guard(),
-            'commit': request['commit'], 'tag': request.get('tag'),
-            'repository_id': request.get('repository_id'),
-            'publisher_policy_sha256': request.get('publisher_policy_sha256')}
-    if extra:
-        plan.update(extra)
-    return plan
-
-
-def reserve(request_path, assets_path, output):
-    assets = _load(assets_path)
-    plan = _plan_common(request_path, {'assets': assets.get('assets'),
-                                       'asset_set_sha256':
-                                       assets.get('asset_set_sha256')})
-    _dump(output, plan)
-    return plan
 
 
 def publish(authorize_path, assets_dir, pins_path, output):
@@ -717,10 +694,6 @@ def main(argv=None):
     p.add_argument('--repo', required=True)
     p.add_argument('--output-dir', required=True)
     p.add_argument('--output', required=True)
-    p = sub.add_parser('reserve')
-    p.add_argument('--request', required=True)
-    p.add_argument('--assets', required=True)
-    p.add_argument('--output', required=True)
     p = sub.add_parser('publish')
     p.add_argument('--authorize', required=True)
     p.add_argument('--assets-dir', required=True)
@@ -747,7 +720,6 @@ def main(argv=None):
         'package': lambda a: package(a.request, a.assets, a.output),
         'create-bundle': lambda a: create_bundle(
             a.request, a.repo, a.output_dir, a.output),
-        'reserve': lambda a: reserve(a.request, a.assets, a.output),
         'publish': lambda a: publish(
             a.authorize, a.assets_dir, a.pins, a.output),
         'verify-register': lambda a: verify_register(

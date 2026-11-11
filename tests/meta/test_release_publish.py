@@ -341,27 +341,6 @@ def test_create_bundle_rejects_missing_main_snapshot(tmp_path):
     assert 'MAIN_SNAPSHOT_INVALID' in result.stderr
 
 
-def test_external_commands_are_dry_run_by_default(tmp_path):
-    """reserve/publish/verify-registerは既定で外部を変更しない。"""
-    req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': COMMIT, 'tag': 'v1.2.3',
-                               'repository_id': 1}))
-    assets = tmp_path / 'assets.json'
-    assets.write_text(json.dumps({'assets': [{'name': 'a'}],
-                                  'asset_set_sha256': 'd' * 64}))
-    plan = tmp_path / 'plan.json'
-    env = {k: v for k, v in os.environ.items()
-           if k not in ('MCS_PUBLISH_EXECUTE', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
-                        'MCS_PUBLISH_OIDC_TOKEN')}
-    result = subprocess.run(
-        [sys.executable, str(CLI), 'reserve', '--request', str(req),
-         '--assets', str(assets), '--output', str(plan)],
-        capture_output=True, text=True, timeout=30, env=env)
-    assert result.returncode == 0
-    doc = json.loads(plan.read_text())
-    assert doc['dry_run'] is True
-
-
 # --- authorize (v3中央API client) -----------------------------------------
 
 def _build_request(tmp_path, **over):
