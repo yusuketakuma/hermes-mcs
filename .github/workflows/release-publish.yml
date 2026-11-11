@@ -169,10 +169,12 @@ jobs:
           # candidate assetはbundle+画像のみ。4metadata
           # (release-core/attestation.initial/compatibility/acceptance)は
           # 中央finalizeが生成するためここでは作らない。
-          # 画像はnotesが参照する許可済み説明図 — 配備側が
-          # release-materials/images/へ配置した場合のみ同梱する。
-          if [ -d release-materials/images ]; then
-            cp release-materials/images/* assets/ 2>/dev/null || true
+          # 画像はnotesが参照する許可済み説明図 — 慣例の
+          # docs/releases/<tag>/ 配下のpng/svgを同梱する。
+          TAG=$(python3 -c "import json;print(json.load(open('work/build-request.json'))['source']['tag'])")
+          if [ -d "docs/releases/$TAG" ]; then
+            find "docs/releases/$TAG" -maxdepth 1 -type f \
+              \( -name '*.png' -o -name '*.svg' \) -exec cp {} assets/ \;
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
