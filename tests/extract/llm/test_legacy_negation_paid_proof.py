@@ -88,6 +88,53 @@ def test_protected_loss_repair_mints_v2_proof_and_replays(routed, monkeypatch, t
     assert len(sends) == 2
 
 
+def test_protected_prior_length_split_repair_mints_v2_and_replays(routed, monkeypatch, tmp_path):
+    """A paid length-truncated repair under a protected prior splits the leaf,
+    keeps the v2 proof binding on the split plan, and the committed result
+    replays through progress without another paid call."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    filler = "経過は安定しており次回診察で再評価します。"
+    body = ("家族の発熱の既往があります。" + filler * 149
+            + "本人の血圧120/80です。" + "内服と休養を継続してください。" * 30)
+    truncated_once = []
+
+    def truncated(request):
+        if request["reasoning"]["effort"] == "high" and not truncated_once:
+            truncated_once.append(request)
+            return True
+        return False
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body,
+        expected_sends=10, truncated=truncated)
+    assert truncated_once, "the targeted high repair was never length-truncated"
+    _, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    repairs = [item.repair_proof for item in saved.values()
+               if getattr(item, "repair_proof", None)]
+    assert any(proof["version"] == 2 for proof in repairs)
+    results = [json.loads(item["meta"]) for item in
+               led.artifacts("cloud_usage_result", project_id=1, message_id=1)]
+    assert any(item.get("answer_finish_reason_v1") == "length" for item in results)
+    sends_before = len(sends)
+    assert worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior) == 'written'
+    message = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    # Unresolved hint gaps keep the honest terminal state; the progress read
+    # itself replays the committed inline proof without another paid call.
+    assert worker.progress_for_message(led.db, message, model=result["_model"])["state"] == "attention"
+    assert len(sends) == sends_before
+
+
 def _protected_v1_repair_run(routed, monkeypatch, tmp_path):
     """Run a protected-prior repair that yields an inline v1 proof and locate the
     v1 repair's started artifact."""
