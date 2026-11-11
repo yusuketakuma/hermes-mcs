@@ -186,15 +186,7 @@ def _mark_live_resume(db, r, meta, leaf, *, has_inline_origin, has_origin_ref,
     and started rows refuse outright; plain saved leaves only carry the
     would-conflict verdict so the engine can refuse if hint coverage would
     promote them into a protected repair."""
-    if not isinstance(leaf, dict):
-        return
-    if "_quality_result" in leaf:
-        if provider_seal_unverified:
-            # A terminal record whose recorded provider seal cannot be
-            # reproduced is corrupt explicit evidence: refuse the whole job
-            # rather than silently reusing it as a cached result.
-            leaf["_resume_refused"] = "provider_seal_unverified"
-            r["_resume_refused"] = True
+    if not isinstance(leaf, dict) or "_quality_result" in leaf:
         return
     status = leaf.get("_quality_status")
     active = status in ("pending", "started")
@@ -513,8 +505,7 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         legacy_complete = type(key) is int and "split_size" not in meta
         if meta.get("piece_sha256", sha if legacy_complete else None) != sha:
             if proof_rows is None:
-                _refuse_live_checkpoint(r, saved, key, meta,
-                                        bound="provider_leaf" in meta, content=content)
+                _refuse_live_checkpoint(r, saved, key, meta, content=content)
             continue
         if "split_size" in meta:
             size = meta["split_size"]
@@ -541,8 +532,7 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             content = json.loads(raw_content)
         except (ValueError, TypeError, RecursionError):
             if proof_rows is None:
-                _refuse_live_checkpoint(r, saved, key, meta,
-                                        bound="provider_leaf" in meta, content=content)
+                _refuse_live_checkpoint(r, saved, key, meta, content=content)
             continue
         has_inline_origin = isinstance(content, dict) and "__quality_origin_v1" in content
         has_origin_ref = isinstance(content, dict) and "__quality_origin_ref_v1" in content
@@ -625,7 +615,7 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         elif proof_rows is None:
             _refuse_live_checkpoint(r, saved, key, meta,
                                     bound=repair is not None or has_inline_origin
-                                    or has_origin_ref or "provider_leaf" in meta)
+                                    or has_origin_ref)
     return splits, saved
 
 

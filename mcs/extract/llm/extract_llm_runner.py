@@ -41,7 +41,6 @@ from extract_llm_context import (
 )
 from extract_llm_engine import (
     _resume_promotion_refusal,
-    _resume_terminal_refusal,
     llm_extract,
 )
 from extract_llm_errors import (
@@ -193,12 +192,6 @@ def _resume_admission_refused(r, saved, hints):
     if not saved:
         return False
     if _resume_promotion_refusal(
-            saved, body=r["body_text"], chunk_size=r["_chunk_size"],
-            splits=r["_splits"], hints=hints,
-            posted_at=r["posted_at"]) is not None:
-        r["_resume_refused"] = True
-        return True
-    if _resume_terminal_refusal(
             saved, body=r["body_text"], chunk_size=r["_chunk_size"],
             splits=r["_splits"], hints=hints,
             posted_at=r["posted_at"]) is not None:

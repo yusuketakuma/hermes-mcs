@@ -77,36 +77,6 @@ def _resume_promotion_refusal(saved, *, body, chunk_size, splits, hints,
     return None
 
 
-def _resume_terminal_refusal(saved, *, body, chunk_size, splits, hints,
-                             posted_at):
-    """First terminal leaf whose recorded quality result no longer matches a
-    fresh hint-coverage computation; None when every terminal leaf is
-    consistent. Mirrors the per-chunk check inside infer_piece so an
-    inconsistent terminal refuses the whole job before the first dispatch
-    instead of only after earlier chunks already ran."""
-    for key, leaf in saved.items():
-        if not isinstance(leaf, dict) or leaf.get("_quality_status") is not None:
-            continue
-        record = leaf.get("_quality_result")
-        if not isinstance(record, dict):
-            continue
-        found = _chunk_span(body, chunk_size, key, splits)
-        if found is None:
-            continue
-        piece, _start = found
-        piece_hints = hints if piece == body and isinstance(hints, dict) else _rule_hints(
-            {"body_text": piece, "posted_at": posted_at})
-        result = {k: value for k, value in leaf.items()
-                  if k not in ("_quality_result", "_provider_leaf",
-                               "_resume_refused", "_resume_promote_conflict")}
-        if record.get("state") == "hint_gaps_resolved" and any(
-                result.get(field) for field in ("_items_dropped", "_evidence_dropped")):
-            record = {**record, "state": "unresolved"}
-        if not _quality_record_consistent(record, _hint_coverage(result, piece_hints, piece)):
-            return "quality_checkpoint_unverified"
-    return None
-
-
 def llm_extract(body: str, *, context: str | None = None,
                 hints: dict | None = None,
                 deadline: float | None = None,
@@ -560,11 +530,6 @@ def llm_extract(body: str, *, context: str | None = None,
         for leaf in saved.values():
             if isinstance(leaf, dict) and leaf.get("_resume_refused"):
                 return leaf["_resume_refused"]
-        terminal = _resume_terminal_refusal(
-            saved, body=body, chunk_size=chunk_size, splits=splits,
-            hints=hints, posted_at=posted_at)
-        if terminal is not None:
-            return terminal
         return _resume_promotion_refusal(
             saved, body=body, chunk_size=chunk_size, splits=splits,
             hints=hints, posted_at=posted_at)
