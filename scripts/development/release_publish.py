@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""v3 publisher内部CLI (M9/W11): identify/package/authorize/publish/verify-register。
+
+全commandはpath引数のみを取り、任意URL・秘密値をstdoutへ出さない。
+外部変更を伴うcommand(reserve/publish/verify-register)は既定でdry-run —
+検証済みrequestを出力するだけで中央/GitHubを変更しない。実実行は
+MCS_PUBLISH_EXECUTE=1 と OIDC workflow環境が揃った固定CIからのみ。
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+
+TAG_RE = re.compile(r'^v\d+\.\d+\.\d+$')
+COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
+SHA_RE = re.compile(r'^[0-9a-f]{64}$')
+
+
+def _load(path):
+    with open(path, 'rb') as f:
+        return json.loads(f.read())
+
+
+def _dump(path, value):
+    raw = json.dumps(value, ensure_ascii=False, indent=2,
+                     sort_keys=True).encode() + b'\n'
+    tmp = path + '.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(raw)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _require(ok, code):
+    if not ok:
+        raise SystemExit('release_publish: ' + code)
+
+
+# --- inspect-event ---------------------------------------------------------
+
+def inspect_event(event_path, policy_path, output):
+    """GitHub event+固定policyを照合し、build対象のsource identityを出力。
+
+    fork拒否: repository.id/owner.idがpolicyの固定値と一致しない限り拒否。
+    tagはvX.Y.Zのみ。GETのみ・外部変更なし。
+    """
+    event = _load(event_path)
+    policy = _load(policy_path)
+    repo = event.get('repository') or {}
+    owner = repo.get('owner') or {}
+    _require(repo.get('id') == policy.get('repository_id'),
+             'REPOSITORY_MISMATCH')
+    _require(owner.get('id') == policy.get('owner_id'),
+             'OWNER_MISMATCH')
+    tag = commit = tag_oid = None
+    if event.get('ref', '').startswith('refs/tags/'):
+        tag = event['ref'][len('refs/tags/'):]
+        tag_oid = event.get('after') or event.get('head_commit', {}).get('id')
+        commit = tag_oid
+    elif event.get('release', {}).get('tag_name'):
+        rel = event['release']
+        tag = rel['tag_name']
+        commit = rel.get('target_commitish')
+    _require(tag and TAG_RE.fullmatch(tag), 'TAG_INVALID')
+    _require(isinstance(commit, str) and COMMIT_RE.fullmatch(commit),
+             'COMMIT_INVALID')
+    _require(isinstance(tag_oid, str) and COMMIT_RE.fullmatch(tag_oid or ''),
+             'TAG_OID_INVALID')
+    request = {'schema_version': 'mcs.release-build-request.local.v1',
+               'repository_id': repo['id'], 'owner_id': owner['id'],
+               'tag': tag, 'tag_oid': tag_oid, 'commit': commit,
+               'publisher_policy_sha256': _sha256_file(policy_path),
+               'event': 'push' if event.get('ref') else 'release'}
+    _dump(output, request)
+    return request
+
+
+# --- check-acceptance ------------------------------------------------------
+
+def check_acceptance(request_path, acceptance_path, output):
+    """同一SHAの正式受入票を検証する。受入票はrequest.commitへ束縛必須。"""
+    request = _load(request_path)
+    ticket = _load(acceptance_path)
+    reasons = []
+    if ticket.get('source_commit') != request.get('commit'):
+        reasons.append('SOURCE_COMMIT_MISMATCH')
+    if not SHA_RE.fullmatch(str(ticket.get('acceptance_sha256', ''))):
+        reasons.append('ACCEPTANCE_SHA_INVALID')
+    if not re.fullmatch(r'[0-9a-f-]{36}', str(ticket.get('acceptance_id', ''))):
+        reasons.append('ACCEPTANCE_ID_INVALID')
+    result = {'schema_version': 'mcs.release-acceptance-check.local.v1',
+              'ok': not reasons, 'reasons': reasons,
+              'commit': request.get('commit'), 'tag': request.get('tag'),
+              'acceptance_id': ticket.get('acceptance_id'),
+              'acceptance_sha256': ticket.get('acceptance_sha256')}
+    _dump(output, result)
+    return result
+
+
+# --- package ---------------------------------------------------------------
+
+def package(request_path, assets_dir, output):
+    """固定asset集合をローカルで計測しasset-list.jsonを出力。外部変更なし。"""
+    request = _load(request_path)
+    _require(COMMIT_RE.fullmatch(str(request.get('commit', ''))),
+             'REQUEST_INVALID')
+    entries = []
+    for name in sorted(os.listdir(assets_dir)):
+        path = os.path.join(assets_dir, name)
+        if not os.path.isfile(path) or name.startswith('.'):
+            continue
+        entries.append({'name': name, 'size': os.path.getsize(path),
+                        'sha256': _sha256_file(path)})
+    _require(entries, 'ASSET_SET_EMPTY')
+    asset_set_sha = hashlib.sha256(
+        json.dumps(entries, sort_keys=True).encode()).hexdigest()
+    result = {'schema_version': 'mcs.release-asset-list.local.v1',
+              'commit': request['commit'], 'tag': request.get('tag'),
+              'assets': entries, 'asset_set_sha256': asset_set_sha}
+    _dump(output, result)
+    return result
+
+
+# --- reserve / publish / verify-register (dry-run既定) ----------------------
+
+def _external_guard():
+    """外部変更commandの実実行条件。満たさなければdry-run計画のみ出力。"""
+    return (os.environ.get('MCS_PUBLISH_EXECUTE') == '1'
+            and bool(os.environ.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN')
+                     or os.environ.get('MCS_PUBLISH_OIDC_TOKEN')))
+
+
+def _plan_common(request_path, extra=None):
+    request = _load(request_path)
+    _require(COMMIT_RE.fullmatch(str(request.get('commit', ''))),
+             'REQUEST_INVALID')
+    plan = {'schema_version': 'mcs.release-publish-plan.local.v1',
+            'dry_run': not _external_guard(),
+            'commit': request['commit'], 'tag': request.get('tag'),
+            'repository_id': request.get('repository_id'),
+            'publisher_policy_sha256': request.get('publisher_policy_sha256')}
+    if extra:
+        plan.update(extra)
+    return plan
+
+
+def reserve(request_path, assets_path, output):
+    assets = _load(assets_path)
+    plan = _plan_common(request_path, {'assets': assets.get('assets'),
+                                       'asset_set_sha256':
+                                       assets.get('asset_set_sha256')})
+    _dump(output, plan)
+    return plan
+
+
+def publish(plan_path, output):
+    plan = _load(plan_path)
+    _require(plan.get('dry_run') is not False or not _external_guard(),
+             'EXECUTE_NOT_PERMITTED')
+    obs = {'schema_version': 'mcs.release-publish-observation.local.v1',
+           'dry_run': plan.get('dry_run', True),
+           'commit': plan.get('commit'), 'tag': plan.get('tag'),
+           'note': 'external publish requires fixed CI workflow + OIDC'}
+    _dump(output, obs)
+    return obs
+
+
+def verify_register(plan_path, observation_path, output):
+    plan = _load(plan_path)
+    obs = _load(observation_path)
+    record = {'schema_version': 'mcs.release-publication-record.local.v1',
+              'dry_run': True, 'commit': plan.get('commit'),
+              'tag': plan.get('tag'),
+              'observation_commit': obs.get('commit'),
+              'note': 'central registration requires publisher OIDC route'}
+    _dump(output, record)
+    return record
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='release_publish')
+    sub = parser.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('inspect-event')
+    p.add_argument('--event', required=True)
+    p.add_argument('--policy', required=True)
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('check-acceptance')
+    p.add_argument('--request', required=True)
+    p.add_argument('--acceptance', required=True)
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('package')
+    p.add_argument('--request', required=True)
+    p.add_argument('--assets', required=True)
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('reserve')
+    p.add_argument('--request', required=True)
+    p.add_argument('--assets', required=True)
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('publish')
+    p.add_argument('--plan', required=True)
+    p.add_argument('--output', required=True)
+    p = sub.add_parser('verify-register')
+    p.add_argument('--plan', required=True)
+    p.add_argument('--observation', required=True)
+    p.add_argument('--output', required=True)
+    args = parser.parse_args(argv)
+    handlers = {
+        'inspect-event': lambda a: inspect_event(a.event, a.policy, a.output),
+        'check-acceptance': lambda a: check_acceptance(
+            a.request, a.acceptance, a.output),
+        'package': lambda a: package(a.request, a.assets, a.output),
+        'reserve': lambda a: reserve(a.request, a.assets, a.output),
+        'publish': lambda a: publish(a.plan, a.output),
+        'verify-register': lambda a: verify_register(
+            a.plan, a.observation, a.output),
+    }
+    handlers[args.command](args)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
