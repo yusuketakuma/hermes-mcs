@@ -64,9 +64,16 @@ class _FakeLocal:
 @pytest.fixture
 def env(tmp_path):
     runtime_home = str(tmp_path / 'runtime-home')
-    control = str(control_root(runtime_home))
-    os.makedirs(control, mode=0o700, exist_ok=True)
-    store = Store(control, create=True)
+    control = control_root(runtime_home)
+    # os.makedirsのmodeは末端のみ効く — .mcs-release-control等の中間も0700必須
+    # (release_auto_evidence._control_dirのprivate連鎖検査と同じ条件)
+    for directory in (control.parent, control):
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            pass
+        os.chmod(directory, 0o700)
+    store = Store(str(control), create=True)
     yield {'store': store, 'control': control,
            'runtime_home': runtime_home,
            'data_dir': str(tmp_path / 'data'),
