@@ -3,6 +3,7 @@
 実process/network/本体importは使わない。closure世代はtmpdirへ人工的に構築。
 """
 import hashlib
+import json
 import os
 from contextlib import contextmanager
 
@@ -50,6 +51,36 @@ def _deploy(tmp_path, files_spec):
 
 def _full_files():
     return {p: b'x' for p in rec._REQUIRED_CLOSURE}
+
+
+# --- CLI verify ---------------------------------------------------------------
+
+def test_cli_verify_accepts_intact_generation(tmp_path, capsys):
+    gen, _, _ = _deploy(tmp_path, _full_files())
+    assert rec.main(['verify', '--generation-dir', gen]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['ok'] is True
+    assert out['generation'] == os.path.basename(gen)
+
+
+def test_cli_verify_rejects_tampered_generation(tmp_path, capsys):
+    gen, _, _ = _deploy(tmp_path, _full_files())
+    target = os.path.join(gen, 'mcs/ops/release_auto_recovery.py')
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, 'wb') as f:
+        f.write(b'tampered')
+    assert rec.main(['verify', '--generation-dir', gen]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out['ok'] is False
+    assert out['code'] == 'GENERATION_TAMPER'
+
+
+def test_cli_verify_rejects_missing_descriptor(tmp_path, capsys):
+    assert rec.main(['verify', '--generation-dir',
+                     str(tmp_path / 'nonexistent')]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out['ok'] is False
+    assert out['code'] == 'GENERATION_DESCRIPTOR'
 
 
 # --- verify_generation ---------------------------------------------------------

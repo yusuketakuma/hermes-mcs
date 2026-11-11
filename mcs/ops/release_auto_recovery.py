@@ -10,8 +10,10 @@ advance_runtime経由で前進させ、STAGED以前・UNKNOWN・v1 pendingは一
 (新規grant/effect/コード変更/DB復元は別承認保守の領域)。
 """
 import hashlib
+import json
 import os
 import stat
+import sys
 
 from mcs.ops import release_auto_bridge as bridge
 from adapters.sdc import release_auto_state as auto_state
@@ -133,3 +135,55 @@ def recover_tick(store, deps):
                                                          'advanced'),
                 'phase': phase}
     return {'action': 'advanced', 'phase': phase}
+
+
+# --- CLI -----------------------------------------------------------------
+
+def _cli_verify(generation_dir):
+    """配備済みclosure世代をdescriptor自己導出で一式照合する。
+
+    descriptor(sdc-update-control.json)のcanonical bytesからmanifestを
+    復元しverify_generationへ渡す。store/deps不要のread-only検査で、
+    本体checkoutをimportしないclosure単体で実行できる。
+    """
+    descriptor = os.path.join(generation_dir, bridge._CLOSURE_DESCRIPTOR)
+    try:
+        with open(descriptor, 'rb') as f:
+            canonical = f.read(8 * 1024 * 1024 + 1)
+        if len(canonical) > 8 * 1024 * 1024:
+            raise RecoveryError('GENERATION_DESCRIPTOR')
+        manifest_value = json.loads(canonical)
+    except (OSError, ValueError):
+        raise RecoveryError('GENERATION_DESCRIPTOR') from None
+    if not (isinstance(manifest_value, dict)
+            and isinstance(manifest_value.get('files'), list)):
+        raise RecoveryError('GENERATION_DESCRIPTOR')
+    verify_generation(generation_dir, manifest_value, canonical)
+    return {'ok': True,
+            'generation': os.path.basename(os.path.normpath(generation_dir))}
+
+
+def main(argv=None):
+    """recovery closureの最小CLI。verifyは世代一式照合のみ(状態変更なし)。
+
+    status/tickはstore+deps注入が必要でclosure単体では提供しない —
+    trusted driver側の責務として残す。
+    """
+    import argparse
+    parser = argparse.ArgumentParser(prog='mcs-release-recovery')
+    sub = parser.add_subparsers(dest='command', required=True)
+    verify = sub.add_parser('verify', help='closure世代を一式照合する')
+    verify.add_argument('--generation-dir', required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == 'verify':
+            out = _cli_verify(args.generation_dir)
+    except RecoveryError as e:
+        print(json.dumps({'ok': False, 'code': e.code}))
+        return 2
+    print(json.dumps(out, sort_keys=True))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
