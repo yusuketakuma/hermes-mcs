@@ -261,6 +261,38 @@ def test_retire_intent_requires_durable_terminal_evidence(store):
                             terminal_record=terminal_record(U, H, state_name='DEFERRED'))
 
 
+def test_open_intent_replaces_only_retired_with_terminal_evidence(store):
+    """退役済みintentは対応terminalがoutcomesへある場合のみ次opのfenceへ置き換わる。"""
+    seed(store)
+    V = '92345678-1234-4234-8234-123456789abc'
+
+    def intent_for(op, attempt):
+        return {'schema_version': 'mcs.start-intent.v3', 'operation_id': op,
+                'grant_id': '42345678-1234-4234-8234-123456789abc',
+                'grant_sha256': H, 'attempt_key': attempt,
+                'prepare_nonce': '6' * 64, 'root_fingerprint': store.root_fingerprint(),
+                'source_before': COMMIT, 'source_target': '7' * 40, 'created_at': 1000,
+                'phase': 'open', 'terminal_outcome_sha256': None}
+
+    state.open_intent(store, intent_for(U, H))
+    # openのままでは別opのfenceを拒否(進行中startの保護)
+    with pytest.raises(state.OwnerStateError, match='INTENT_EXISTS'):
+        state.open_intent(store, intent_for(V, '9' * 64))
+    # terminalを耐久化して退役させると次opが開始できる(連続更新の前提)
+    term = terminal_record(U, H, state_name='DEFERRED')
+    state.record_terminal(store, term)
+    state.retire_intent(store, operation_id=U, terminal_record=term)
+    state.open_intent(store, intent_for(V, '9' * 64))
+    assert state.load_intent(store)['operation_id'] == V
+    # 退役を装うが対応terminalの無いintentは証拠不一致で拒否
+    forged = intent_for('72345678-1234-4234-8234-123456789abc', '8' * 64)
+    forged['phase'] = 'retired'
+    forged['terminal_outcome_sha256'] = '5' * 64
+    store.write(state.INTENT_NAME, forged)
+    with pytest.raises(state.OwnerStateError, match='INTENT_EVIDENCE'):
+        state.open_intent(store, intent_for(U, H))
+
+
 def test_verified_terminal_requires_finalize_path(store):
     """R22: VERIFIEDはfinalize_verifiedのatomic確定経路のみ。record_terminal/save()での
     単独追記は原子的確定を伴わないため拒否する。"""

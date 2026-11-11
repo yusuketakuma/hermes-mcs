@@ -416,7 +416,17 @@ def open_intent(store, intent):
         raise OwnerStateError('INVALID') from None
     _check(value['phase'] == 'open', 'INTENT_PHASE')
     with store.release_owner_lock():
-        _check(store.read(INTENT_NAME) is None, 'INTENT_EXISTS')
+        existing = load_intent(store)
+        if existing is not None:
+            # 退役済みintentは直前opのfence。対応terminalがoutcomesへ
+            # 耐久化済みのときだけ次opのfenceとして置き換える。
+            # phase='open'の残存はstart進行中なので拒否、破損はload_intentが拒否。
+            _check(existing['phase'] == 'retired', 'INTENT_EXISTS')
+            owner = load(store)
+            _check(any(o['operation_id'] == existing['operation_id']
+                       and o['attempt_key'] == existing['attempt_key']
+                       and o['state'] in TERMINAL_STATES
+                       for o in owner['outcomes']), 'INTENT_EVIDENCE')
         store.write(INTENT_NAME, value)
     return value
 
