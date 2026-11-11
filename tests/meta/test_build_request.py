@@ -23,6 +23,7 @@ OWNER_ID = 678
 
 def _policy():
     return {'repository_id': REPO_ID, 'repository_owner_id': OWNER_ID,
+            'ci_workflow_id': 42,
             'publisher_workflow': '.github/workflows/ci.yml'}
 
 
@@ -40,6 +41,7 @@ def _acceptance(tag='v1.2.3', tag_oid=COMMIT, commit=COMMIT,
 def _run_doc(**over):
     doc = {'event': 'push', 'head_sha': COMMIT, 'conclusion': 'success',
            'status': 'completed', 'path': '.github/workflows/ci.yml',
+           'workflow_id': 42,
            'head_repository': {'id': REPO_ID}}
     doc.update(over)
     return doc
@@ -136,6 +138,7 @@ def test_automatic_path_verifies_run(env, monkeypatch):
     ({'head_sha': 'e' * 40}, 'UPSTREAM_RUN_MISMATCH'),
     ({'path': '.github/workflows/other.yml'},
      'UPSTREAM_WORKFLOW_MISMATCH'),
+    ({'workflow_id': 99}, 'UPSTREAM_WORKFLOW_MISMATCH'),
 ])
 def test_upstream_run_rejections(env, monkeypatch, patch, code):
     routes = _lightweight_routes() + [

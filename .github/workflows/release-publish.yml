@@ -50,6 +50,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
       - name: fetch upstream hint and acceptance artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -136,6 +141,15 @@ jobs:
           # candidate tagのhelperを実行しない。
           ref: ${{ github.sha }}
           path: publisher-src
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          # lock・policy等のdeployment資料はpublisher source側にある。
+          python3 publisher-src/scripts/development/publisher_toolchain.py check \
+            --lock publisher-src/deployment/release-publisher/publisher-toolchain.lock
       - name: create complete git bundle (PUB20)
         run: |
           set -euo pipefail
@@ -177,6 +191,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
       - name: fetch artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -226,6 +245,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
       - name: fetch authorize result
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -268,6 +292,11 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
       - name: fetch artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

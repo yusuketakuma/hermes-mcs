@@ -83,8 +83,8 @@ def _peel_tag(repo, tag, token, *, opener=None):
 
 def _verify_upstream_run(repo, run_id, run_attempt, token, *,
                          expected_event, expected_sha, expected_repo_id,
-                         opener=None):
-    """upstream ci runをID+attemptで取得しevent/head_sha/pathを照合。"""
+                         expected_workflow_id, opener=None):
+    """upstream ci runをID+attemptで取得しevent/head_sha/path/IDを照合。"""
     run = _get('/actions/runs/%d/attempts/%d' % (run_id, run_attempt),
                token, repo, opener=opener)
     if not isinstance(run, dict):
@@ -96,6 +96,8 @@ def _verify_upstream_run(repo, run_id, run_attempt, token, *,
         _fail('UPSTREAM_RUN_MISMATCH')
     path = (run.get('path') or '')
     if path != '.github/workflows/ci.yml':
+        _fail('UPSTREAM_WORKFLOW_MISMATCH')
+    if run.get('workflow_id') != expected_workflow_id:
         _fail('UPSTREAM_WORKFLOW_MISMATCH')
     head_repo = run.get('head_repository')
     if not isinstance(head_repo, dict) \
@@ -168,10 +170,15 @@ def _resolve_docs(event, policy, acceptance, output,
     else:
         _require_int(run_id, 'RUN_ID_INVALID')
         _require_int(run_attempt, 'RUN_ATTEMPT_INVALID')
+        # spec §4手順3: workflow IDをpolicy allowlist値と照合する。
+        # policyがci_workflow_idを持たない場合は照合不能=fail-closed。
+        workflow_id = policy.get('ci_workflow_id')
+        _require_int(workflow_id, 'POLICY_WORKFLOW_ID_INVALID')
         _verify_upstream_run(repo_env, run_id, run_attempt, gh_token,
                              expected_event='push',
                              expected_sha=source_sha,
                              expected_repo_id=repository_id,
+                             expected_workflow_id=workflow_id,
                              opener=opener)
     # 5. tag peel — 読取りを2回行い同一結果を要求する(PUB10再読照合)
     tag_oid, commit = _peel_tag(repo_env, tag, gh_token, opener=opener)
