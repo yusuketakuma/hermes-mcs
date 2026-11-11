@@ -56,6 +56,34 @@ def test_retained_paid_origin_with_legacy_default_false_remains_exact(tmp_path, 
         ledger.close()
 
 
+def test_protected_loss_repair_mints_v2_proof_and_replays(routed, monkeypatch, tmp_path):
+    """A paid repair that restores a lost protected assertion binds the strict
+    prior reference as proof v2; the final inline proof replays it after the
+    original checkpoint rows are cleaned up."""
+    body = "本人に発熱と咳があります。家族の発熱の既往があります。本人の血圧120/80です。"
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body)
+    assert len(sends) == 2
+    _, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    assert saved and saved[0].repair_proof is not None
+    proof = saved[0].repair_proof
+    assert proof["version"] == 2
+    assert proof["protected_prior_ref"] == row["_protected_prior_ref"]
+    assert worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior) == 'written'
+    assert len(sends) == 2
+
+
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):
     symptoms = worker.extract_validation.Validator.symptoms
     def legacy_symptoms(self, document, out):

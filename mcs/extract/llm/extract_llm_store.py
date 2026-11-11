@@ -565,9 +565,13 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     with _checkpoint_write(ledger.db, replay=replay):
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
+        protected_current = _protected_prior_current(ledger.db, r)
         if (not _source_writable(ledger.db, r)
                 or not _prior_matches(ledger.db, r, r.get("_expected_prior"))
-                or not _protected_prior_current(ledger.db, r)):
+                or not protected_current):
+            if (guard is not None and guard is r.get("_checkpoint_guard")
+                    and not protected_current):
+                r["_checkpoint_conflict"] = True
             return False
         if (replay and lease is None) or (lease is not None and not _owns_current_source(ledger, r, lease)):
             return False

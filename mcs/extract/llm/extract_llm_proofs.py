@@ -48,7 +48,9 @@ from extract_llm_provider import (
 )
 from extract_llm_qc import (
     _PROTECTED_PRIOR_FIELDS,
+    _protected_prior_current,
     _protected_prior_reference,
+    _resolve_protected_prior_reference,
     _qc_feedback,
     _repair_qc_snapshot_feedback,
     _snapshot_repair_qc,
@@ -214,8 +216,19 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                         finish_reason="stop"):
     """Reconstruct one accepted completeness repair from protected evidence."""
     try:
-        if (not isinstance(repair, dict) or set(repair) != {"version", "started_artifact_id", "response"}
-                or repair["version"] != 1 or type(repair["started_artifact_id"]) is not int):
+        if not isinstance(repair, dict) or type(repair.get("started_artifact_id")) is not int:
+            return False
+        version = repair.get("version")
+        if version == 1:
+            if set(repair) != {"version", "started_artifact_id", "response"}:
+                return False
+            protected_ref = None
+        elif version == 2:
+            if (set(repair) != {"version", "started_artifact_id", "response", "protected_prior_ref"}
+                    or not isinstance(repair["protected_prior_ref"], dict)):
+                return False
+            protected_ref = repair["protected_prior_ref"]
+        else:
             return False
         started_id = repair["started_artifact_id"]
         row = (records.get(started_id) if records is not None else db.execute(
@@ -238,7 +251,8 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                 or type(meta.get("quality_lease")) not in (int, float)
                 or not math.isfinite(meta["quality_lease"]) or meta["quality_lease"] <= 0):
             return False
-        if meta.get("protected_prior_ref") != r.get("_protected_prior_ref"):
+        if (meta.get("protected_prior_ref") != r.get("_protected_prior_ref")
+                or (version == 2 and protected_ref != r.get("_protected_prior_ref"))):
             return False
         old_proof = meta.get("provider_leaf")
         old_evidence = _leaf_evidence(_EvidenceLeaf({}, old_proof))
@@ -272,17 +286,41 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
             before.pop("reply", None)
         if mcs_util.canonical(before) != mcs_util.canonical(prior):
             return False
+        piece_prior = {}
+        if version == 2:
+            record = r.get("_protected_prior")
+            if isinstance(record, dict):
+                if _protected_prior_reference(record, r.get("_source_binding")) != protected_ref:
+                    return False
+            else:
+                resolved = _resolve_protected_prior_reference(db, r, protected_ref)
+                if resolved is None:
+                    return False
+                record = {name: resolved[name] for name in _PROTECTED_PRIOR_FIELDS}
+            prior_doc = mcs_util.loads_dict(record.get("content"))
+            whole = extract_quality.protected_assertions(prior_doc, r["body_text"])
+            piece_prior = extract_quality.protected_assertions(whole, piece)
+            if not piece_prior:
+                return False
+        protected_loss = (extract_quality.protected_lost(piece_prior, before, r["body_text"])
+                          if piece_prior else {})
         completeness = extract_quality.completeness_issues(before, hints, piece)
-        if not completeness:
+        if version == 1:
+            if not completeness:
+                return False
+        elif not (completeness or protected_loss):
             return False
         issues = extract_quality.repair_issues(drops, before) + completeness
+        if protected_loss:
+            issues.append("保存済みの保護対象にある主体・否定・状態が欠落しています。対象本文の根拠を再確認してください")
         if piece == r["body_text"] and extract_quality.is_thin(before, r["body_text"]):
             issues.append("本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
                           "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を全て抽出してください")
         medication_reference = extraction_medications.block(
             _frame_medications(r), r["body_text"], start, piece, private=False)
         prompt = _repair_prompt(r["posted_at"], issues, original, hints, reference,
-                               medication_reference) + piece + _PROMPT_TAIL
+                               medication_reference,
+                               **({"protected_prior": piece_prior} if piece_prior else {})) + piece + _PROMPT_TAIL
         response = repair["response"]
         if (not isinstance(response, dict) or set(response) != {"version", "answer_text", "reservation_artifact_id",
                 "reservation_id", "contract", "owner", "unit_key", "witness"} or response["version"] != 1
@@ -308,6 +346,8 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
             after.pop("reply", None)
         return (extract_quality.quality_improves(after, before, r["body_text"],
                     hints if piece == r["body_text"] else None)
+                and (not piece_prior
+                     or not extract_quality.protected_lost(piece_prior, after, r["body_text"]))
                 and mcs_util.canonical(after) == mcs_util.canonical(candidate))
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
         return False
@@ -498,7 +538,10 @@ def _capture_checkpoint_state(db, r, context):
         "context": _chunk_context(r, context, checkpoint=True), "refs": copy.deepcopy(_frame_refs(r)),
     }
     r["_checkpoint_guard"] = object()
-    r["_checkpoint_conflict"] = False
+    # A protected-prior or earlier checkpoint conflict must survive a late
+    # recapture: refuse admission instead of silently re-arming the slot.
+    r["_checkpoint_conflict"] = (r.get("_checkpoint_conflict") is True
+                                 or not _protected_prior_current(db, r))
     return saved
 
 
@@ -764,6 +807,7 @@ def _verify_inline_extract_proof(db, r, context, document, proof):
             record = proof["protected_prior"]
             if not _proof_prior_record_valid(record, r):
                 return False
+            r["_protected_prior"] = record
             binding = r.get("_source_binding")
             if mcs_util.valid_hash(binding):
                 r["_protected_prior_ref"] = {

@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "保護属性の修復proofをversion 2へ拡張し、参照紐付けと競合保全を追加",
+  "summary": "保護属性（家族・他者主体や否定）を持つ旧抽出が失われた場合の単回修復で、修復応答が保護prior参照へ正確に紐付くことを証明するrepair proof version 2を導入しました。修復の採用には品質改善に加えて保護属性の完全な保持を要求し、参照を欠く保護修復はディスパッチしません。チャンク状態の再取得時に保護prior競合や既存のcheckpoint競合を消去しないようにし、永続化側でも保護prior不整合を競合として記録します。",
+  "upgrade": "追加操作は不要です。保護prior参照を持つ修復はversion 2 proofを発行し、version 1の既存proof・再課金なし再生の動作は変わりません。保護priorが解決できない状態では修復が採用されず、従来どおり未解決として保持されます。",
+  "details": [
+    "mcs/extract/llm/extract_llm_engine.py: llm_extractへprotected_prior/protected_prior_refを追加。piece毎にprotected_assertionsで保護集合を切り出し、protected_lostで欠落を検出して修復要否へ合成。採用時は品質改善かつ保護保持を要求し、distinct-profile修復ではversion 2 proof（protected_prior_ref入り）を通常・長さ打ち切り両経路で発行。参照欠落時は保護修復をディスパッチしない。",
+    "mcs/extract/llm/extract_llm_proofs.py: _replay_repair_leafをversion 1/2の厳密key集合で検証。version 2は開始行の参照一致・原記録の解決・piece単位の保護再構成を行い、保護欠落が残る修復を拒否。inline proof検証は埋込み保護priorレコードを局所rowへ複写して参照を再構成。_capture_checkpoint_stateは_checkpoint_conflictを保全し、保護prior非現在を競合として記録。",
+    "mcs/extract/llm/extract_llm_runner.py: ローカル・クラウド両経路で_protected_prior内容と_protected_prior_refをengineへ受渡し。",
+    "mcs/extract/llm/extract_llm_store.py: _persist_chunksの早期returnで保護prior非現在をguarded競合として記録。",
+    "tests/extract/llm/test_cloud_repair_final_proof.py: _repair_runへprior_content/answer_hook/extract_extra/bodyの追加引数を導入（既存呼出しは無変更）。保護prior自動供給を本番runnerと同じ形で再現。",
+    "tests/extract/llm/test_legacy_negation_paid_proof.py: 保護属性欠落→修復でversion 2 proof発行・原子コミット・inline proof再生（再課金なし）を検証する回帰を追加。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_engine.py",
+    "mcs/extract/llm/extract_llm_proofs.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "tests/extract/llm/test_cloud_repair_final_proof.py",
+    "tests/extract/llm/test_legacy_negation_paid_proof.py"
+  ]
+}

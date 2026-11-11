@@ -62,7 +62,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None, quality_qc_src=None,
-                medication_hints=None, medication_guard=None, protected_prior=None
+                medication_hints=None, medication_guard=None, protected_prior=None,
+                protected_prior_ref=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -285,6 +286,15 @@ def llm_extract(body: str, *, context: str | None = None,
         protected_loss = extract_quality.protected_lost(piece_prior, v, body) if piece_prior else {}
         quality_repair_needed = bool(completeness or protected_loss)
 
+        def _repair_proof(started_id, response):
+            if not piece_prior:
+                return {"version": 1, "started_artifact_id": started_id,
+                        "response": response}
+            if protected_prior_ref is None:
+                return None
+            return {"version": 2, "started_artifact_id": started_id,
+                    "response": response, "protected_prior_ref": protected_prior_ref}
+
         if not quality_status and any(
                 note.get('finish_reason') == 'stop' and note.get('reused_response') is not True
                 for note in notes[call_start:]):
@@ -358,7 +368,8 @@ def llm_extract(body: str, *, context: str | None = None,
             if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
                 repair_client = None
                 distinct_profile = False
-                if quality_repair_needed and v is not None and on_chunk is not None:
+                if (quality_repair_needed and v is not None and on_chunk is not None
+                        and (not piece_prior or protected_prior_ref is not None)):
                     base_selection = getattr(provider, "selection", None)
                     profile_cfg = getattr(provider, "_profile_cfg", None)
                     if base_selection is not None and profile_cfg is not None:
@@ -415,9 +426,11 @@ def llm_extract(body: str, *, context: str | None = None,
                         try:
                             active, request, answer, finish = repair_response
                             response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
-                            proof = {"version": 1, "started_artifact_id": started.quality_started_id,
-                                     "response": response}
+                            proof = _repair_proof(started.quality_started_id, response)
                         except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
+                            _CALL_NOTES.defer_reason = "repair_unavailable"
+                            return _DEFERRED
+                        if proof is None:
                             _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
                         return split_piece(key, piece, start, remaining, repair=proof)
@@ -437,9 +450,11 @@ def llm_extract(body: str, *, context: str | None = None,
                             try:
                                 active, request, answer, finish = repair_response
                                 response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
-                                repair_proof = {"version": 1, "started_artifact_id": started.quality_started_id,
-                                                "response": response}
+                                repair_proof = _repair_proof(started.quality_started_id, response)
                             except (ValueError, TypeError, KeyError, cloud_inference.CloudFallback, sqlite3.Error):
+                                _CALL_NOTES.defer_reason = "repair_unavailable"
+                                return _DEFERRED
+                            if repair_proof is None:
                                 _CALL_NOTES.defer_reason = "repair_unavailable"
                                 return _DEFERRED
                         v = rv

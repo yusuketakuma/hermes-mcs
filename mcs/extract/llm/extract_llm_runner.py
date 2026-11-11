@@ -21,7 +21,7 @@ from extraction_provenance import (
     EvidenceLeaf as _EvidenceLeaf,
     leaf_evidence as _leaf_evidence,
 )
-from mcs_util import load_config
+from mcs_util import load_config, loads_dict
 from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb
 
 from extract_llm_admission import (
@@ -596,6 +596,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            chunks_in=saved,
                            chunks_out=chunks_out,
                            vital_policy=vital_policy,
+                           protected_prior=(loads_dict(r["_protected_prior"]["content"])
+                               if isinstance(r.get("_protected_prior"), dict) else None),
+                           protected_prior_ref=r.get("_protected_prior_ref"),
                            chunk_size=r["_chunk_size"],
                            splits_in=r["_splits"],
                            on_split=(lambda key, size: _queue_checkpoint(index, key, size, True))
@@ -1179,6 +1182,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
+                protected_prior=(loads_dict(r["_protected_prior"]["content"])
+                    if isinstance(r.get("_protected_prior"), dict) else None),
+                protected_prior_ref=r.get("_protected_prior_ref"),
                 medication_hints=_frame_medications(r),
                 **({"references": _frame_refs(r)} if _frame_refs(r) else {}))
             provider.commit_guard()
