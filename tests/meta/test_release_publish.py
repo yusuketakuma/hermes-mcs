@@ -360,3 +360,242 @@ def test_external_commands_are_dry_run_by_default(tmp_path):
     assert result.returncode == 0
     doc = json.loads(plan.read_text())
     assert doc['dry_run'] is True
+
+
+# --- authorize (v3中央API client) -----------------------------------------
+
+def _build_request(tmp_path, **over):
+    doc = {'schema_version': 'mcs.build-request.v3',
+           'request_id': 'b' * 64,
+           'source': {'repository_id': 12345,
+                      'repository_owner_id': 777,
+                      'tag': 'v1.2.3',
+                      'tag_oid': COMMIT,
+                      'commit': COMMIT,
+                      'main_snapshot_sha': MAIN_SNAPSHOT},
+           'acceptance_id': '12345678-1234-4234-8234-123456789abc',
+           'acceptance_sha256': 'c' * 64,
+           'upstream_run_id': None,
+           'upstream_run_attempt': None,
+           'publisher_source_commit': COMMIT,
+           'publisher_policy_sha256': 'd' * 64,
+           'created_at': 1700000000}
+    doc.update(over)
+    path = tmp_path / 'build-request.json'
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def _authorize_args(tmp_path, request=None):
+    assets = tmp_path / 'assets'
+    assets.mkdir(exist_ok=True)
+    (assets / 'hermes-mcs.bundle').write_bytes(b'bundle-bytes')
+    (assets / 'notes.png').write_bytes(b'png-bytes')
+    core = tmp_path / 'core.json'
+    core.write_text(json.dumps({'schema': 'x'}))
+    compat_example = json.loads(
+        (EXAMPLES / 'compatibility.json').read_text())['data']
+    compat = tmp_path / 'compat.json'
+    compat.write_text(json.dumps([compat_example]))
+    return ['authorize',
+            '--build-request', str(request or _build_request(tmp_path)),
+            '--assets-dir', str(assets),
+            '--release-core', str(core),
+            '--compatibility', str(compat),
+            '--output', str(tmp_path / 'out.json')]
+
+
+def test_authorize_dry_run_default(tmp_path):
+    out = tmp_path / 'out.json'
+    args = _authorize_args(tmp_path)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('MCS_PUBLISH_')
+           and k != 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'}
+    result = subprocess.run([sys.executable, str(CLI), *args],
+                            capture_output=True, text=True, timeout=30,
+                            env=env)
+    assert result.returncode == 0, result.stderr
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is True
+    names = [a['name'] for a in doc['candidate_assets']]
+    assert names == ['hermes-mcs.bundle', 'notes.png']
+    assert doc['candidate_assets'][0]['media_type'] == 'application/octet-stream'
+    assert doc['candidate_assets'][1]['media_type'] == 'image/png'
+
+
+def test_authorize_rejects_invalid_build_request(tmp_path):
+    bad = tmp_path / 'bad.json'
+    bad.write_text(json.dumps({'schema_version': 'mcs.build-request.v3'}))
+    result = _run(*_authorize_args(tmp_path, request=bad))
+    assert result.returncode != 0
+    assert 'BUILD_REQUEST_INVALID' in result.stderr
+
+
+def test_authorize_rejects_unknown_asset(tmp_path):
+    assets = tmp_path / 'assets2'
+    assets.mkdir()
+    (assets / 'hermes-mcs.bundle').write_bytes(b'x')
+    (assets / 'evil.txt').write_bytes(b'x')
+    args = ['authorize', '--build-request',
+            str(_build_request(tmp_path)), '--assets-dir', str(assets),
+            '--release-core', str(tmp_path / 'core.json'),
+            '--compatibility', str(tmp_path / 'compat.json'),
+            '--output', str(tmp_path / 'o.json')]
+    (tmp_path / 'core.json').write_text('{}')
+    (tmp_path / 'compat.json').write_text('[]')
+    result = _run(*args)
+    assert result.returncode != 0
+    assert 'ASSET_INVALID' in result.stderr
+
+
+def test_authorize_rejects_reserved_asset_name(tmp_path):
+    assets = tmp_path / 'assets3'
+    assets.mkdir()
+    (assets / 'hermes-mcs.bundle').write_bytes(b'x')
+    (assets / 'release-core.json').write_bytes(b'{}')
+    args = ['authorize', '--build-request',
+            str(_build_request(tmp_path)), '--assets-dir', str(assets),
+            '--release-core', str(tmp_path / 'core.json'),
+            '--compatibility', str(tmp_path / 'compat.json'),
+            '--output', str(tmp_path / 'o.json')]
+    (tmp_path / 'core.json').write_text('{}')
+    (tmp_path / 'compat.json').write_text('[]')
+    result = _run(*args)
+    assert result.returncode != 0
+    assert 'ASSET_INVALID' in result.stderr
+
+
+def test_authorize_requires_bundle(tmp_path):
+    assets = tmp_path / 'assets4'
+    assets.mkdir()
+    (assets / 'notes.png').write_bytes(b'x')
+    args = ['authorize', '--build-request',
+            str(_build_request(tmp_path)), '--assets-dir', str(assets),
+            '--release-core', str(tmp_path / 'core.json'),
+            '--compatibility', str(tmp_path / 'compat.json'),
+            '--output', str(tmp_path / 'o.json')]
+    (tmp_path / 'core.json').write_text('{}')
+    (tmp_path / 'compat.json').write_text('[]')
+    result = _run(*args)
+    assert result.returncode != 0
+    assert 'ASSET_MISSING' in result.stderr
+
+
+def _load_cli():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'release_publish_cli', CLI)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _publish_plan(publication_id, request):
+    import base64
+    plan = {'schema_version': 'mcs.publish-plan.v3',
+            'publication_id': publication_id,
+            'request': request,
+            'release': {'release_id': 'f' * 64, 'code_seq': 1,
+                        'source_commit': COMMIT,
+                        'artifact_sha256': '0' * 64,
+                        'artifact_size': 10},
+            'profile_sha256s': [], 'assets': [],
+            'asset_set_sha256': '1' * 64,
+            'github_release_id': None, 'revision': 2,
+            'fencing_token': 7, 'phase': 'packaged',
+            'issued_at': 1700000000, 'expires_at': 1700086400}
+    payload = base64.urlsafe_b64encode(
+        json.dumps(plan, sort_keys=True, separators=(',', ':')
+                   ).encode()).rstrip(b'=').decode()
+    return {'alg': 'PS256', 'kid': 'k' * 64,
+            'purpose': 'mcs-publication-plan-v3',
+            'payload': payload, 'signature': 's' * 512}, plan
+
+
+def test_authorize_execute_calls_central_phases(tmp_path, monkeypatch):
+    """execute経路: reserve→manifest/chunk/verify→finalize→署名検証→plan。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    calls = []
+    pub_id = '12345678-1234-4234-8234-123456789abc'
+    reservation = {'schema_version': 'mcs.publication-reservation.v3',
+                   'publication_id': pub_id,
+                   'request_id': 'r' * 64, 'code_seq': 1,
+                   'revision': 1, 'fencing_token': 7,
+                   'issued_at': 1700000000, 'expires_at': 1700086400}
+    request_doc = json.loads(_build_request(tmp_path).read_text())
+    envelope, plan_doc = _publish_plan(pub_id, request_doc)
+
+    def fake_reserve(base, token, body, **kw):
+        calls.append(('reserve', base, token))
+        return reservation
+
+    def fake_manifest(base, token, body, **kw):
+        calls.append(('manifest', body['sha256'][:8]))
+        return {'state': 'manifest_fixed'}
+
+    def fake_put(base, token, **kw):
+        calls.append(('put', kw['object_sha256'][:8], kw['index']))
+        return {'state': 'chunks_incomplete'}
+
+    def fake_verify(base, token, **kw):
+        calls.append(('verify', kw['manifest_sha256'][:8]))
+        return {'state': 'ready'}
+
+    def fake_finalize(base, token, body, **kw):
+        calls.append(('finalize', body['publication_id']))
+        return envelope
+
+    verified = {}
+
+    def fake_verify_env(raw, **kw):
+        verified.update(kw)
+        return {'ok': True}
+
+    monkeypatch.setattr(module._api, 'reserve', fake_reserve)
+    monkeypatch.setattr(module._api, 'register_manifest', fake_manifest)
+    monkeypatch.setattr(module._api, 'put_chunk', fake_put)
+    monkeypatch.setattr(module._api, 'verify_object', fake_verify)
+    monkeypatch.setattr(module._api, 'finalize', fake_finalize)
+    monkeypatch.setattr(module._api, 'decode_plan',
+                        lambda env: plan_doc)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope', fake_verify_env)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    out = tmp_path / 'result.json'
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(out)
+    args += ['--pins', str(pins)]
+    module.main(args)
+    result = json.loads(out.read_text())
+    assert result['dry_run'] is False
+    kinds = [c[0] for c in calls]
+    assert kinds[0] == 'reserve' and kinds[-1] == 'finalize'
+    assert kinds.count('manifest') == 2
+    assert kinds.count('put') == 2
+    assert kinds.count('verify') == 2
+    assert verified['purpose'] == 'mcs-publication-plan-v3'
+    assert verified['expected']['publication_id'] == pub_id
+    assert result['publish_plan']['publication_id'] == pub_id
+    assert len(result['object_receipts']) == 2
+
+
+def test_authorize_execute_requires_pins(tmp_path, monkeypatch):
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setattr(module._api, 'reserve',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError('must not call')))
+    out = tmp_path / 'r.json'
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(out)
+    try:
+        module.main(args)
+    except SystemExit as error:
+        assert 'PINS_REQUIRED' in str(error)
+    else:
+        raise AssertionError('expected failure')

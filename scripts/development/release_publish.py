@@ -13,11 +13,16 @@ import os
 import re
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'mcs'))
 import _mcs_path  # noqa: E402,F401 — shared flat module roots
+import release_publish_api as _api  # noqa: E402
+import sdc_support_signatures as _sig  # noqa: E402
 from adapters.sdc import release_auto_contract as _contract  # noqa: E402
 
 TAG_RE = re.compile(r'^v\d+\.\d+\.\d+$')
@@ -325,6 +330,132 @@ def verify_register(plan_path, observation_path, output):
     return record
 
 
+# --- authorize (spec §3.2 authorize-publish job): reserve→upload→finalize ---
+
+BUNDLE_ASSET = 'hermes-mcs.bundle'
+_CANDIDATE_MEDIA = {'.png': 'image/png', '.svg': 'image/svg+xml'}
+_RESERVED_ASSET_NAMES = frozenset({
+    'release-core.json', 'release-attestation.initial.json',
+    'compatibility.json', 'release-acceptance.json'})
+
+
+def _candidate_assets(assets_dir):
+    """candidate asset(bundle+説明画像)を名前順で読み、media typeを検査する。"""
+    root = Path(assets_dir)
+    _require(root.is_dir(), 'ASSETS_DIR_INVALID')
+    out = []
+    for path in sorted(root.iterdir()):
+        if not path.is_file():
+            continue
+        name = path.name
+        _require(name not in _RESERVED_ASSET_NAMES, 'ASSET_INVALID:' + name)
+        if name == BUNDLE_ASSET:
+            media = 'application/octet-stream'
+        else:
+            media = _CANDIDATE_MEDIA.get(path.suffix.lower())
+            _require(media is not None, 'ASSET_INVALID:' + name)
+        data = path.read_bytes()
+        out.append({'name': name, 'media_type': media,
+                    'sha256': hashlib.sha256(data).hexdigest(),
+                    'size': len(data), 'data': data})
+    _require(any(a['name'] == BUNDLE_ASSET for a in out), 'ASSET_MISSING')
+    return out
+
+
+def _publisher_token():
+    token = os.environ.get('MCS_PUBLISH_OIDC_TOKEN')
+    if token:
+        return token
+    return _api.oidc_token()
+
+
+def authorize(build_request_path, assets_dir, release_core_path,
+              compatibility_path, pins_path, output):
+    """authorize-publish: 中央reserve→object固定→finalize→署名PublishPlan検証。
+
+    全phaseは中央側で冪等(request hash/fencing)なため、失敗時は同じ引数で
+    再実行すればよい。dry-run既定ではnetworkへ出ない。
+    """
+    request = _load(build_request_path)
+    try:
+        _contract.parse_document(
+            json.dumps(request, ensure_ascii=False).encode(),
+            'BuildRequest', max_bytes=1048576)
+    except Exception:
+        _require(False, 'BUILD_REQUEST_INVALID')
+    assets = _candidate_assets(assets_dir)
+    core_text = Path(release_core_path).read_text(encoding='utf-8')
+    try:
+        json.loads(core_text)
+    except Exception:
+        _require(False, 'RELEASE_CORE_INVALID')
+    compat = _load(compatibility_path)
+    _require(type(compat) is list and all(type(x) is dict for x in compat),
+             'COMPATIBILITY_INVALID')
+    candidates = [{k: a[k] for k in ('name', 'media_type', 'sha256', 'size')}
+                  for a in assets]
+    if not _external_guard():
+        plan = {'schema_version': 'mcs.release-authorize-plan.local.v1',
+                'dry_run': True, 'build_request': request,
+                'candidate_assets': candidates,
+                'note': 'central authorize requires MCS_PUBLISH_EXECUTE=1 + OIDC'}
+        _dump(output, plan)
+        return plan
+    _require(pins_path, 'PINS_REQUIRED')
+    token = _publisher_token()
+    base = _api.api_base()
+    reservation = _api.reserve(base, token, request)
+    pub_id = reservation['publication_id']
+    revision = reservation['revision']
+    fencing = reservation['fencing_token']
+    receipts = []
+    for asset in assets:
+        manifest_req, chunks = _api.object_manifest_request(
+            request_id=str(uuid.uuid4()), publication_id=pub_id,
+            expected_revision=revision, fencing_token=fencing,
+            data=asset['data'], content_type=asset['media_type'])
+        _api.register_manifest(base, token, manifest_req)
+        msha = _api.object_manifest_sha256(manifest_req)
+        for chunk in chunks:
+            _api.put_chunk(base, token, publication_id=pub_id,
+                           object_sha256=asset['sha256'],
+                           index=chunk['index'], manifest_sha256=msha,
+                           fencing_token=fencing,
+                           request_id=str(uuid.uuid4()),
+                           data=chunk['data'])
+        receipt = _api.verify_object(
+            base, token, request_id=str(uuid.uuid4()),
+            publication_id=pub_id, expected_revision=revision,
+            fencing_token=fencing, manifest_sha256=msha)
+        _require(receipt.get('state') == 'ready', 'OBJECT_NOT_READY')
+        receipts.append({'name': asset['name'], 'sha256': asset['sha256'],
+                         'size': asset['size'], 'state': receipt['state']})
+    fin_req = _api.finalize_request(
+        publication_id=pub_id, expected_revision=revision,
+        fencing_token=fencing, release_core_json=core_text,
+        compatibility_payloads=compat, candidate_assets=candidates)
+    envelope = _api.finalize(base, token, fin_req)
+    envelope_raw = json.dumps(envelope, ensure_ascii=False,
+                              sort_keys=True,
+                              separators=(',', ':')).encode()
+    try:
+        _sig.verify_v3_envelope(
+            envelope_raw, purpose='mcs-publication-plan-v3',
+            pins=_load(pins_path),
+            expected={'publication_id': pub_id, 'request': request},
+            now_ms=int(time.time() * 1000))
+    except Exception:
+        _require(False, 'PLAN_SIGNATURE_INVALID')
+    plan = _api.decode_plan(envelope)
+    _require(plan.get('publication_id') == pub_id, 'PLAN_MISMATCH')
+    result = {'schema_version': 'mcs.release-authorize-result.local.v1',
+              'dry_run': False, 'reservation': reservation,
+              'object_receipts': receipts, 'publish_plan': plan,
+              'envelope': envelope}
+    _dump(output, result)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='release_publish')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -358,6 +489,13 @@ def main(argv=None):
     p.add_argument('--plan', required=True)
     p.add_argument('--observation', required=True)
     p.add_argument('--output', required=True)
+    p = sub.add_parser('authorize')
+    p.add_argument('--build-request', required=True)
+    p.add_argument('--assets-dir', required=True)
+    p.add_argument('--release-core', required=True)
+    p.add_argument('--compatibility', required=True)
+    p.add_argument('--pins')
+    p.add_argument('--output', required=True)
     args = parser.parse_args(argv)
     handlers = {
         'inspect-event': lambda a: inspect_event(
@@ -371,6 +509,9 @@ def main(argv=None):
         'publish': lambda a: publish(a.plan, a.output),
         'verify-register': lambda a: verify_register(
             a.plan, a.observation, a.output),
+        'authorize': lambda a: authorize(
+            a.build_request, a.assets_dir, a.release_core,
+            a.compatibility, a.pins, a.output),
     }
     handlers[args.command](args)
     return 0
