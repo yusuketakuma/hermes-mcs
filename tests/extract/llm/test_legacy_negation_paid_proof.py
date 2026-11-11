@@ -433,22 +433,27 @@ def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(r
 
 
 def _resume_under_new_prior(routed, monkeypatch, led, body, source_id, prior_a_ref,
-                            prior_b_content, sends):
-    """Add a newer valid prior B on the same source, re-prepare, and run one
-    engine pass over the persisted checkpoint state."""
+                            prior_b_content, sends, *, add_prior=True):
+    """Optionally add a newer valid prior B on the same source, re-prepare, and
+    run one engine pass over the persisted checkpoint state. With
+    ``add_prior=False`` the same prior stays current — the positive control
+    proving this fixture can still dispatch a repair when the basis is
+    unchanged, so a refusal under B is attributable to the basis swap alone."""
     _, cfg, *_ = routed
-    # A newer extract artifact on an older public inference version is not a
-    # current extraction, so the QC-flagged pending route and frame stay
-    # bound to prior A — but _prior_extract still resolves it as the newest
-    # source-bound extract, making it the protected prior B.
-    prior_b_id = _extract_artifact(led, 1, prior_b_content, _hash(led))
+    if add_prior:
+        # A newer extract artifact on an older public inference version is not a
+        # current extraction, so the QC-flagged pending route and frame stay
+        # bound to prior A — but _prior_extract still resolves it as the newest
+        # source-bound extract, making it the protected prior B.
+        prior_b_id = _extract_artifact(led, 1, prior_b_content, _hash(led))
+        with led.db:
+            saved_meta = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                        (prior_b_id,)).fetchone()
+            meta_b = json.loads(saved_meta[0])
+            meta_b["inference_engine_version"] = "0.1"
+            led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                           (json.dumps(meta_b, ensure_ascii=False), prior_b_id))
     with led.db:
-        saved_meta = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
-                                    (prior_b_id,)).fetchone()
-        meta_b = json.loads(saved_meta[0])
-        meta_b["inference_engine_version"] = "0.1"
-        led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
-                       (json.dumps(meta_b, ensure_ascii=False), prior_b_id))
         # The previous pass's claim lease is still live; expire it the way a
         # later run_pending pass would see it after the lease runs out.
         led.db.execute("UPDATE fetch_jobs SET next_try=0 "
@@ -459,7 +464,10 @@ def _resume_under_new_prior(routed, monkeypatch, led, body, source_id, prior_a_r
     row, context, _, hints, qc = jobs[0]
     context = _use_legacy_frame(led, row)
     assert row.get("_protected_prior_ref") is not None
-    assert row["_protected_prior_ref"] != prior_a_ref
+    if add_prior:
+        assert row["_protected_prior_ref"] != prior_a_ref
+    else:
+        assert row["_protected_prior_ref"] == prior_a_ref
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
     assert not errors and selection is not None
     row["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
@@ -496,9 +504,13 @@ def _resume_under_new_prior(routed, monkeypatch, led, body, source_id, prior_a_r
     chunks, meta = {}, {}
 
     def checkpoint(key, value):
-        return worker._persist_chunks(led, row, {key: value}, context,
+        accepted = worker._persist_chunks(led, row, {key: value}, context,
             chunk_size=row["_chunk_size"], splits=row["_splits"],
             lease=lease, guard=row["_checkpoint_guard"])
+        if accepted and isinstance(value, worker._EvidenceLeaf):
+            identity = row["_checkpoint_identity"].get(key)
+            value.quality_started_id = identity[0] if identity is not None else None
+        return accepted
 
     with legacy_cloud_routes():
         result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline,
@@ -523,39 +535,101 @@ _PROTECTED_ITEM = {"text": "家族の発熱", "status": "past", "subject": "fami
                    "negated": False, "evidence": "家族の発熱の既往があります"}
 
 
-@pytest.mark.xfail(strict=True,
-    reason="pending checkpoint minted under prior A is adopted for paid repair "
-           "under superseded prior B; product IF pending Oracle mcs-frozen-checkpoint-basis")
+def _evidence_dir():
+    import os
+    from pathlib import Path
+    out = os.environ.get("MCS_TASK83_EVIDENCE_DIR")
+    return Path(out) if out else None
+
+
+def _dump_evidence(name, payload):
+    """Persist RED/GREEN evidence (sends, reserve/result rows, asserts) for
+    review — never just the xfail marker."""
+    out = _evidence_dir()
+    if out is None:
+        return
+    out.mkdir(parents=True, exist_ok=True)
+    (out / name).write_text(json.dumps(payload, indent=2, sort_keys=True,
+                                     default=str))
+
+
+def _money_rows(led):
+    return [list(row) for row in led.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') "
+        "ORDER BY artifact_id")]
+
+
 def test_pending_checkpoint_under_superseded_prior_must_defer(routed, monkeypatch, tmp_path):
     """A real pending checkpoint plus its paid first-response origin saved under
     prior A must not dispatch a repair once a newer valid prior B is current:
-    desired behavior keeps the old evidence, adds no repair send or started
-    row, and defers fixed. Currently the A-bound pending leaf loads without a
-    prior-ref check and the repair dispatches under B (RED)."""
+    the live-resume admission refuses the job-wide resume, keeps the old
+    evidence, adds no repair send or started row, and defers fixed."""
+    min_repair_s = extract_llm_engine._MIN_REPAIR_S
     led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
         routed, monkeypatch, tmp_path, {"sbp": 120},
         prior_content={"symptoms": [dict(_PROTECTED_ITEM)]},
         body=_PROTECTED_B_BODY, expected_sends=1, pending_only=True)
+    # pending_only parked _MIN_REPAIR_S at 10**9 for the first pass only —
+    # restore it so the second pass's budget is real and only the prior swap
+    # can deny the repair.
+    monkeypatch.setattr(extract_llm_engine, "_MIN_REPAIR_S", min_repair_s)
     prior_a_ref = row["_protected_prior_ref"]
     source_id = row["_protected_prior"]["artifact_id"]
     assert prior_a_ref is not None
     pending_before = _quality_rows(led, "pending")
     assert pending_before and not _quality_rows(led, "started")
+    money_before = _money_rows(led)
     prior_b = {"symptoms": [dict(_PROTECTED_ITEM)], "summary": "合成の要約B"}
     result2, _row2 = _resume_under_new_prior(
         routed, monkeypatch, led, _PROTECTED_B_BODY, source_id, prior_a_ref,
         prior_b, sends)
+    evidence = {
+        "sends": list(sends), "money_before": money_before,
+        "money_after": _money_rows(led),
+        "pending_before": pending_before,
+        "pending_after": _quality_rows(led, "pending"),
+        "started_after": _quality_rows(led, "started"),
+        "result2": "deferred" if result2 is extract_llm_engine._DEFERRED
+                   else type(result2).__name__,
+    }
+    _dump_evidence("pending-prior-basis.json", evidence)
     # Old evidence must be preserved either way (new rows may be appended).
     assert set(pending_before) <= set(_quality_rows(led, "pending"))
-    # Desired fail-closed outcome (currently RED):
+    assert not _quality_rows(led, "started")
+    assert len(sends) == 1, f"repair dispatched under prior B: {evidence}"
+    assert result2 is extract_llm_engine._DEFERRED, evidence
+
+
+def test_pending_checkpoint_under_same_prior_still_dispatches(routed, monkeypatch, tmp_path):
+    """Positive control for the prior-basis RED: with the prior unchanged the
+    same persisted pending checkpoint still earns its single repair dispatch —
+    proving the fixture can send and that only the A→B swap denies it."""
+    min_repair_s = extract_llm_engine._MIN_REPAIR_S
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(_PROTECTED_ITEM)]},
+        body=_PROTECTED_B_BODY, expected_sends=1, pending_only=True)
+    monkeypatch.setattr(extract_llm_engine, "_MIN_REPAIR_S", min_repair_s)
+    prior_a_ref = row["_protected_prior_ref"]
+    source_id = row["_protected_prior"]["artifact_id"]
     assert len(sends) == 1
-    assert result2 is extract_llm_engine._DEFERRED
+    result2, _row2 = _resume_under_new_prior(
+        routed, monkeypatch, led, _PROTECTED_B_BODY, source_id, prior_a_ref,
+        None, sends, add_prior=False)
+    _dump_evidence("pending-same-prior-control.json", {
+        "sends": list(sends),
+        "result2": "deferred" if result2 is extract_llm_engine._DEFERRED
+                   else type(result2).__name__})
+    assert len(sends) == 2, "same-prior pending repair did not dispatch"
+    assert result2 is not extract_llm_engine._DEFERRED
 
 
 def test_started_checkpoint_under_superseded_prior_holds_without_redispatch(routed, monkeypatch, tmp_path):
     """Control: a started checkpoint at rest under prior A keeps its state and
-    is not re-dispatched when prior B becomes current — the engine resolves it
-    as dispatch_unknown and finishes honestly without a new paid call."""
+    is not re-dispatched when prior B becomes current. Its recorded basis no
+    longer matches the prepared basis, so live admission refuses before any
+    rewrite — the row stays started, no new paid call, fixed defer."""
     original_prompt = extract_llm_engine._repair_prompt
     led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
         routed, monkeypatch, tmp_path, {"sbp": 120},
@@ -572,5 +646,6 @@ def test_started_checkpoint_under_superseded_prior_holds_without_redispatch(rout
         routed, monkeypatch, led, _PROTECTED_B_BODY, source_id, prior_a_ref,
         prior_b, sends)
     assert len(sends) == 1
-    assert isinstance(result2, dict)
+    assert result2 is extract_llm_engine._DEFERRED
     assert set(started_before) <= set(_quality_rows(led, "started"))
+    assert _quality_rows(led, "started") == started_before

@@ -667,19 +667,14 @@ def test_protected_prior_repair_commits_and_replays_without_reselect(db, monkeyp
     assert len(calls) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="prior basis mismatch re-bases pending evidence on the "
-                                        "shared dispatch path (task83 r50 defect; local-path RED, "
-                                        "not a paid-billing proof; fix pending product IF)")
 def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db, monkeypatch):
     """A pending first candidate persisted while protected prior A was current
     carries meta.protected_prior_ref=A. When a newer valid prior B supersedes A,
-    re-prepare must not silently re-base the A-era evidence onto B: the stored
-    candidate is re-evaluated against B's wider protected set, so without a
-    basis check the runner dispatches another send on the shared dispatch path.
+    live-resume admission (Oracle mcs-frozen-checkpoint-basis, option A) refuses
+    the job-wide resume: all checkpoint rows stay byte-identical, zero new
+    started rows, zero new sends, fixed defer.
     _fake_backend is the local chat path, so this pins local send counts and
-    shared-path behaviour — it is not a paid reservation/re-billing proof.
-    Expected safe outcome (final pin, pending Oracle IF): all checkpoint rows
-    byte-identical, zero new started rows, zero new sends, fixed defer."""
+    shared-path behaviour — it is not a paid reservation/re-billing proof."""
     body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
             "母は頭痛があります。記録確認をお願いします。")
     db.save_messages([_message(body=body)])
@@ -734,9 +729,10 @@ def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db
 
 def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, monkeypatch):
     """Control for the pending case: a started (dispatch-unknown) checkpoint
-    minted under prior A keeps its state when prior B supersedes A — the engine
-    records dispatch_unknown, never re-asks the paid repair, and commits the
-    leaf as attention without a new backend call."""
+    minted under prior A keeps its state when prior B supersedes A. Its
+    recorded basis no longer matches the prepared basis, so live admission
+    refuses before any rewrite — the original rows stay byte-identical, the
+    job defers fixed, and no new backend call is made."""
     body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
             "母は頭痛があります。記録確認をお願いします。")
     db.save_messages([_message(body=body)])
@@ -779,25 +775,31 @@ def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, m
               for meta in started]
     assert started and any(status == "started" for _key, status in states), states
 
+    rows_before = [(meta, content) for meta, content in db.db.execute(
+        "SELECT meta, content FROM artifacts WHERE kind='extract_llm_chunk' "
+        "AND message_id=1 ORDER BY artifact_id").fetchall()]
     seed_prior([dict(family_cough), dict(family_headache)])
     third_run = extract_llm.run_pending(db, limit=1, budget_s=300)
     assert len(calls) == 2, "started checkpoint was re-dispatched under a new prior"
-    remaining = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
-                              "AND message_id=1").fetchall()
-    # Current-spec observation only: today's engine consumes the started
-    # checkpoint as attention. Under the pending Oracle IF for basis mismatch
-    # (pre-dispatch defer + evidence preservation) the final requirement is
-    # expected to be the remaining original rows unchanged — do not read this
-    # assert as that acceptance. The normal-basis started terminal-cleanup
-    # control is covered separately in the checkpoint tests.
-    assert not remaining, f"started checkpoint not consumed: {third_run} {states}"
+    rows_after = [(meta, content) for meta, content in db.db.execute(
+        "SELECT meta, content FROM artifacts WHERE kind='extract_llm_chunk' "
+        "AND message_id=1 ORDER BY artifact_id").fetchall()]
+    # Oracle IF (adopted): basis mismatch refuses a live started resume before
+    # any rewrite — original evidence stays byte-identical and the job defers.
+    assert rows_after == rows_before, f"started evidence was rewritten: {third_run} {states}"
+    assert third_run["done"] == 0 and third_run["deferred"] == 1, third_run
 
 
 def test_legacy_pending_without_origin_markers_resumes_under_same_prior(db, monkeypatch):
     """Compatibility control: a pending first candidate persisted by the local
     path carries no __quality_origin markers (legacy local absence). Under an
-    unchanged protected prior it must still resume, run the bounded repair and
-    commit — absence of origin evidence is not itself a conflict."""
+    unchanged protected prior it must resume and run exactly one bounded
+    repair. The observed terminal is a regular ``held_prior`` retention hold
+    (``protected_loss``) — the merged result could not prove it retains every
+    protected assertion, so the commit is conservatively held for review
+    rather than written. That is a decided, evidence-preserving outcome: the
+    pending evidence is consumed, the seeded prior artifact is untouched, and
+    a further run dispatches nothing."""
     body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
             "本人の血圧120/80です。")
     db.save_messages([_message(body=body)])
@@ -831,11 +833,19 @@ def test_legacy_pending_without_origin_markers_resumes_under_same_prior(db, monk
                                   for key in json.loads(content[0])) for content in chunks)
 
     second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
-    # Legacy pending evidence is handled to a decided terminal (written or
-    # conservatively held) with exactly one bounded repair call — never a
-    # crash, silent drop, or unbounded re-dispatch.
     assert len(calls) == 2, (second_run, len(calls))
     assert second_run["selected"] == 1
-    assert second_run["done"] + second_run["held_prior"] + second_run["deferred"] >= 1
+    # Pinned terminal: one bounded repair ran and the commit was held as a
+    # regular protected_loss retention hold — not a silent success.
+    assert second_run["held_prior"] == 1 and second_run["done"] == 0
+    assert second_run["deferred"] == 0
+    holds = db.db.execute("SELECT content FROM artifacts WHERE kind='extract_upgrade_v1'").fetchall()
+    assert [json.loads(h[0]).get("reason") for h in holds] == ["protected_loss"]
+    # Cleanup consistency: checkpoint rows consumed, seeded prior artifact is
+    # still the only extract_llm row (the held result was never committed).
     assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk' "
                              "AND message_id=1").fetchall()
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm'").fetchone()[0] == 1
+    # A further pass must not re-dispatch or rewrite the held evidence.
+    third_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    assert len(calls) == 2 and third_run["held_prior"] == 0
