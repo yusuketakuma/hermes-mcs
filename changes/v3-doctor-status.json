@@ -1,11 +1,11 @@
 {
   "category": "added",
   "title": "doctor診断出力へのv3自動更新状態の追加",
-  "summary": "mcs doctor --json の出力に v3 キーを追加し、v3リリースownerの状態（idle/active/unknown/uninitialized/unreadable と phase・未配送outbox数・検証済みリリース）を確認できるようにします。sdc.state_root が未設定の環境では v3 は null で、既存の診断項目に変更はありません。update status と同じ固定DTOを使い、生の例外・パス・hostnameは含めません。",
-  "upgrade": "追加操作は不要です。sdc.state_root が設定済みの環境でのみ v3 キーに値が入ります。",
+  "summary": "mcs doctor --json の出力に v3 キーを追加し、v3リリースownerの状態（idle/active/unknown/uninitialized/unreadable と phase・未配送outbox数・検証済みリリース）を確認できるようにします。状態の正本はv3 control root（release-owner.jsonを持つ私有dir）で、update status と同じ固定DTOを使い、生の例外・パス・hostnameは含めません。",
+  "upgrade": "追加操作は不要です。v3移行が済んでいない環境では v3.state は uninitialized になります。",
   "details": [
     "report.v3 は mcs.release-status-local.v1 schema の固定DTOです。state=unknown の場合も正常系へは写像しません。",
-    "state_root 未設定は null、dir未作成は uninitialized、Storeを開けない・stateが読めない場合は unreadable です。",
+    "control root dir未作成は uninitialized、Storeを開けない・stateが読めない場合は unreadable です。",
     "--share の共有レポートには v3 は含まれません（共有用allowlistの対象外）。"
   ],
   "refs": ["mcs/ops/mcs_setup.py", "mcs/ops/release_auto_status.py", "mcs/ops/update_cli.py", "tests/ops/test_mcs_setup_doctor.py", "tests/ops/test_release_auto_health.py"]

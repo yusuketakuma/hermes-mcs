@@ -883,10 +883,11 @@ def _doctor_check(errors: list[str], warnings: list[str]) -> DoctorCheck:
 
 
 def _doctor_v3_status(cfg: dict):
-    """v3 release owner状態のread-only DTO。sdc.state_root未設定はNone。"""
+    """v3 release owner状態のread-only DTO。正本はcontrol_root配下。"""
     try:
         import release_auto_status as v3_status
-        return v3_status.status_dto_at((cfg.get('sdc') or {}).get('state_root'))
+        from runtime_entry import control_root
+        return v3_status.status_dto_at(str(control_root()))
     except Exception:
         return {'schema_version': 'mcs.release-status-local.v1',
                 'state': 'unreadable', 'phase': None, 'reason': None,

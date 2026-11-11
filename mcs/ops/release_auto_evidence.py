@@ -11,7 +11,8 @@ import stat
 
 from safe_io import create_exclusive
 
-MAX_EVIDENCE_BYTES = 256 * 1024
+# spec 03: StoredEvidence objectは最大8MiB/file。
+MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
 _KEY_HEX = 64
 
 

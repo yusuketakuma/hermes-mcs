@@ -201,17 +201,24 @@ def cmd_check() -> int:
 
 
 def _v3_state_root():
-    """v3 release stateを持つSDC state_root。未設定ならNone(未移行)。"""
-    root = (mcs_util.load_config().get('sdc') or {}).get('state_root')
-    return root if isinstance(root, str) and root else None
+    """v3 release stateのcontrol root。v3正本はcontrol_root(runtime_home)配下。
+
+    sdc.state_rootはSDC端末stateでありrelease owner正本ではない —
+    spec 02/03・runtime_entry・run_migration・_open_release_gateが全て
+    control rootを指す。dir未作成=未移行の判定は呼出側が行う。
+    """
+    try:
+        from runtime_entry import control_root
+        return str(control_root(HOME))
+    except Exception:
+        return None
 
 
 def _v3_auto_blocked() -> bool:
     """v3 owner state存在/読取不能でlegacy auto適用を抑止する(fail-closed)。
 
-    sdc.state_root未設定・state dir未作成=未移行のみFalse。dirがあるのに
-    Storeが開けない・owner stateが読めない場合はTrue — 状態不明で
-    legacy経路を開かない。
+    control root未作成=未移行のみFalse。dirがあるのにStoreが開けない・
+    owner stateが読めない場合はTrue — 状態不明でlegacy経路を開かない。
     """
     root = _v3_state_root()
     if root is None or not os.path.isdir(root):

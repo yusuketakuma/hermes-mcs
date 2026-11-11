@@ -1,10 +1,14 @@
 """update_cliのv3 status DTO表示とlegacy auto抑止配線を合成Storeで検証する。
 
-実config・実SDC state・実更新経路には触れない。mcs_util.load_configと
-journal_store/_current_versionだけをstubし、Storeはtmp_path配下の合成root。
+実config・実SDC state・実control root・実更新経路には触れない。
+runtime_entry.control_rootをtmp_path配下へ差し替え、Storeはその配下の合成root。
+v3正本はcontrol_root(runtime_home)配下 — sdc.state_rootではない(spec 02/03)。
 """
 import json
 
+import pytest
+
+import runtime_entry
 import update_cli
 from adapters.sdc.storage import Store
 from adapters.sdc import release_auto_state as state
@@ -14,9 +18,13 @@ U = '12345678-1234-4234-8234-123456789abc'
 COMMIT = 'b' * 40
 
 
-def _config(monkeypatch, root):
-    cfg = {} if root is None else {'sdc': {'state_root': str(root)}}
-    monkeypatch.setattr(update_cli.mcs_util, 'load_config', lambda: cfg)
+@pytest.fixture
+def control_root(tmp_path, monkeypatch):
+    """runtime_entry.control_rootをtmp_path/'ctl'へ固定する。"""
+    root = tmp_path / 'ctl'
+    monkeypatch.setattr(runtime_entry, 'control_root',
+                        lambda *a, **k: root)
+    return root
 
 
 def _owner_value(store):
@@ -49,67 +57,67 @@ def _owner_value(store):
         'prepare_budget': []}
 
 
-def test_v3_unconfigured_means_unmigrated(tmp_path, monkeypatch):
-    _config(monkeypatch, None)
-    assert update_cli._v3_state_root() is None
-    assert update_cli._v3_auto_blocked() is False
-    assert update_cli._v3_status_dto() is None
+def test_v3_control_root_resolution(control_root):
+    # control_root()の解決結果をそのまま返す — dir存在判定は呼出側。
+    assert update_cli._v3_state_root() == str(control_root)
 
 
-def test_v3_missing_dir_is_unmigrated_not_blocked(tmp_path, monkeypatch):
-    root = tmp_path / 'sdc-never-created'
-    _config(monkeypatch, root)
+def test_v3_missing_dir_is_unmigrated_not_blocked(control_root):
+    assert not control_root.exists()
     assert update_cli._v3_auto_blocked() is False
     dto = update_cli._v3_status_dto()
     assert dto['state'] == 'uninitialized'
 
 
-def test_v3_empty_store_does_not_block_legacy_auto(tmp_path, monkeypatch):
-    with Store(tmp_path / 'sdc', create=True):
+def test_v3_empty_store_does_not_block_legacy_auto(control_root):
+    with Store(control_root, create=True):
         pass
-    _config(monkeypatch, tmp_path / 'sdc')
     # release-owner.json不在=未移行 → legacy autoは従来どおり
     assert update_cli._v3_auto_blocked() is False
     assert update_cli._v3_status_dto()['state'] == 'uninitialized'
 
 
-def test_v3_owner_state_blocks_legacy_auto(tmp_path, monkeypatch):
-    root = tmp_path / 'sdc'
-    with Store(root, create=True) as store:
+def test_v3_owner_state_blocks_legacy_auto(control_root):
+    with Store(control_root, create=True) as store:
         store.write(state.OWNER_NAME, _owner_value(store))
-    _config(monkeypatch, root)
     assert update_cli._v3_auto_blocked() is True
     dto = update_cli._v3_status_dto()
     assert dto['state'] == 'idle'
     assert dto['phase'] is None
 
 
-def test_v3_unreadable_owner_blocks_legacy_auto(tmp_path, monkeypatch):
-    root = tmp_path / 'sdc'
-    with Store(root, create=True) as store:
+def test_v3_unreadable_owner_blocks_legacy_auto(control_root):
+    with Store(control_root, create=True) as store:
         store.write(state.OWNER_NAME, {'bogus': True})
-    _config(monkeypatch, root)
     # parse不能=読取不能 → fail-closedで抑止、DTOはunreadable
     assert update_cli._v3_auto_blocked() is True
     assert update_cli._v3_status_dto()['state'] == 'unreadable'
 
 
-def test_v3_store_open_failure_blocks_legacy_auto(tmp_path, monkeypatch):
-    root = tmp_path / 'sdc'
-    root.mkdir(mode=0o700)
-    _config(monkeypatch, root)
+def test_v3_store_open_failure_blocks_legacy_auto(control_root):
+    control_root.mkdir(mode=0o700)
     # dirはあるがStoreのprivate-root検査(0700以外等)で開けない → 抑止
     import os
-    os.chmod(root, 0o755)
+    os.chmod(control_root, 0o755)
     assert update_cli._v3_auto_blocked() is True
     assert update_cli._v3_status_dto()['state'] == 'unreadable'
 
 
-def test_cmd_status_includes_v3_dto(tmp_path, monkeypatch, capsys):
-    root = tmp_path / 'sdc'
-    with Store(root, create=True) as store:
+def test_v3_ignores_sdc_state_root(control_root, tmp_path, monkeypatch):
+    """sdc.state_rootにowner stateがあってもv3正本ではない — control rootのみ見る。"""
+    decoy = tmp_path / 'sdc-state'
+    with Store(decoy, create=True) as store:
         store.write(state.OWNER_NAME, _owner_value(store))
-    _config(monkeypatch, root)
+    monkeypatch.setattr(update_cli.mcs_util, 'load_config',
+                        lambda: {'sdc': {'state_root': str(decoy)}})
+    # control root未作成 → decoyがあっても未移行扱い(fail-closed方向でない)
+    assert update_cli._v3_auto_blocked() is False
+    assert update_cli._v3_status_dto()['state'] == 'uninitialized'
+
+
+def test_cmd_status_includes_v3_dto(control_root, monkeypatch, capsys):
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
     monkeypatch.setattr(update_cli.journal_store, 'load_state',
                         lambda path: {})
     monkeypatch.setattr(update_cli, '_current_version',
@@ -120,12 +128,12 @@ def test_cmd_status_includes_v3_dto(tmp_path, monkeypatch, capsys):
     assert out['v3']['schema_version'] == 'mcs.release-status-local.v1'
 
 
-def test_cmd_status_omits_v3_when_unconfigured(tmp_path, monkeypatch, capsys):
-    _config(monkeypatch, None)
+def test_cmd_status_shows_uninitialized_before_migration(control_root,
+                                                        monkeypatch, capsys):
     monkeypatch.setattr(update_cli.journal_store, 'load_state',
                         lambda path: {})
     monkeypatch.setattr(update_cli, '_current_version',
                         lambda: ('v9.9.9', 'd' * 40))
     assert update_cli.cmd_status() == 0
     out = json.loads(capsys.readouterr().out)
-    assert 'v3' not in out
+    assert out['v3']['state'] == 'uninitialized'

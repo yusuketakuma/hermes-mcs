@@ -1,12 +1,12 @@
 {
   "category": "added",
   "title": "v3自動更新状態のstatus表示とlegacy自動更新の抑止",
-  "summary": "SDC連携が有効でv3リリースowner状態が存在する環境では、update statusコマンドの出力にv3状態（idle/active/unknownとphase・未配送outbox数・検証済みリリース）を含めます。また、v3状態が存在するか読めない場合は、承認を待たずに新版を自動適用するlegacy auto経路を抑止し、更新の所有権をv3プロトコルへ一本化します。v3未移行（状態ファイルなし）の環境では従来どおりです。",
-  "upgrade": "追加操作は不要です。sdc.state_rootが設定済みでv3移行が済んだ環境のみ挙動が変わります。人間が承認した個別のupdate_applyは従来どおり実行できます。",
+  "summary": "v3リリースowner状態が存在する環境では、update statusコマンドの出力にv3状態（idle/active/unknownとphase・未配送outbox数・検証済みリリース）を含めます。また、v3状態が存在するか読めない場合は、承認を待たずに新版を自動適用するlegacy auto経路を抑止し、更新の所有権をv3プロトコルへ一本化します。v3未移行（control root未作成）の環境では従来どおりです。",
+  "upgrade": "追加操作は不要です。v3移行が済んだ環境のみ挙動が変わります。人間が承認した個別のupdate_applyは従来どおり実行できます。",
   "details": [
     "cmd_statusのJSON出力にv3キーを追加。stateはidle/active/unknown/uninitialized/unreadableの固定値のみで、生の例外・パス・hostnameは含めません。",
-    "legacy auto（mode=autoの無人適用）は、release-owner.jsonが存在するか読取不能な場合に適用を見送ります。file不在=未移行のみ従来どおり適用されます。",
-    "state_root未設定またはstate dir未作成は未移行として扱い、legacy autoを抑止しません。dirがあるのにStoreを開けない場合はfail-closedで抑止します。"
+    "legacy auto（mode=autoの無人適用）は、release-owner.jsonがcontrol rootに存在するか読取不能な場合に適用を見送ります。control root未作成=未移行のみ従来どおり適用されます。",
+    "v3正本はsdc.state_rootではなくv3 control root（runtime_entry.control_root）です。dirがあるのにStoreを開けない場合はfail-closedで抑止します。"
   ],
   "refs": ["mcs/ops/update_cli.py", "mcs/ops/release_auto_status.py", "tests/ops/test_update_cli_v3.py"]
 }
