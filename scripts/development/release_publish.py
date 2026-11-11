@@ -158,9 +158,22 @@ def _request_source(request):
             request.get('main_snapshot_sha'))
 
 
+def _check_request_schema(request):
+    """v3 BuildRequestはschema検査する。flat local形式は対象外。"""
+    if request.get('schema_version') != 'mcs.build-request.v3':
+        return
+    try:
+        _contract.parse_document(
+            json.dumps(request, ensure_ascii=False).encode(),
+            'BuildRequest', max_bytes=65536)
+    except Exception:
+        raise SystemExit('release_publish: REQUEST_INVALID') from None
+
+
 def package(request_path, assets_dir, output):
     """固定asset集合をローカルで計測しasset-list.jsonを出力。外部変更なし。"""
     request = _load(request_path)
+    _check_request_schema(request)
     commit, tag, _snapshot = _request_source(request)
     _require(COMMIT_RE.fullmatch(str(commit or '')),
              'REQUEST_INVALID')
@@ -223,6 +236,7 @@ def create_bundle(request_path, repo, output_dir, output):
     build/install/importは行わない(git plumbingのみ)。
     """
     request = _load(request_path)
+    _check_request_schema(request)
     commit, tag, main_snapshot = _request_source(request)
     _require(isinstance(commit, str) and COMMIT_RE.fullmatch(commit),
              'REQUEST_INVALID')
