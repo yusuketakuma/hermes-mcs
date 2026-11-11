@@ -26,6 +26,20 @@ _SIDECAR_DISPOSITION = {
 }
 _KNOWN_FILES = frozenset(_SIDECAR_DISPOSITION) | {'release-start-intent.json', 'release-migration-v3.json'}
 
+# control closure内でrecoveryが必要とする最小file集合(descriptorを除く)。
+# manifest自体はfilesに含めない(04 §4.3)。run_migrationはこの部分集合を
+# 必須として拒否する — 配備後にrecoveryが動けないclosureを作らない。
+RECOVERY_REQUIRED_CLOSURE = frozenset({
+    'mcs/ops/release_auto_state.py',
+    'mcs/ops/release_auto_owner.py',
+    'mcs/ops/release_auto_apply.py',
+    'mcs/ops/release_runtime_proof.py',
+    'mcs/ops/release_auto_recovery.py',
+    'adapters/sdc/release_auto_contract.py',
+    'adapters/sdc/release_auto_state.py',
+    'mcs/core/runtime_entry.py',
+})
+
 
 class BridgeError(RuntimeError):
     """Bridge refusal; the code selects the safe hold."""
@@ -458,6 +472,9 @@ def run_migration(spec):
         check_v1_blockers(store)
         files = classify_sidecars(store)
         manifest = build_control_manifest(**spec['manifest'])
+        covered = {e['path'] for e in manifest['manifest']['files']}
+        missing = sorted(RECOVERY_REQUIRED_CLOSURE - covered)
+        _check(not missing, 'CLOSURE_INCOMPLETE:' + ','.join(missing))
         owner = initial_owner_value(
             scope=spec['scope'], root_fingerprint=store.root_fingerprint(),
             repository_fingerprint=spec['repository_fingerprint'],

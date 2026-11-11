@@ -17,17 +17,8 @@ from mcs.ops import release_auto_bridge as bridge
 from adapters.sdc import release_auto_state as auto_state
 
 # closure内でrecoveryが必要とする最小file集合(descriptorを除く)。
-# manifest自体はfilesに含めない(04 §4.3)。
-_REQUIRED_CLOSURE = frozenset({
-    'mcs/ops/release_auto_state.py',
-    'mcs/ops/release_auto_owner.py',
-    'mcs/ops/release_auto_apply.py',
-    'mcs/ops/release_runtime_proof.py',
-    'mcs/ops/release_auto_recovery.py',
-    'adapters/sdc/release_auto_contract.py',
-    'adapters/sdc/release_auto_state.py',
-    'mcs/core/runtime_entry.py',
-})
+# manifest自体はfilesに含めない(04 §4.3)。定義はbridge側の単一正本。
+_REQUIRED_CLOSURE = bridge.RECOVERY_REQUIRED_CLOSURE
 
 
 class RecoveryError(RuntimeError):

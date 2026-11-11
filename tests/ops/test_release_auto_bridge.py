@@ -336,7 +336,9 @@ def _cli_spec(store, tmp_path):
     """run_migration CLI用のspec JSONを構築して書き出す。v1 ownerを配置済みにする。"""
     put(store, 'release-owner.json', {'schema_version': 'mcs.release-owner.v1',
                                     'spent': [], 'outbox': []})
-    manifest, source_root = _manifest_for(tmp_path, {'mcs/core/runtime_entry.py': b'print(1)\n'})
+    closure_files = {rel: f'# {rel}\n'.encode()
+                     for rel in sorted(bridge.RECOVERY_REQUIRED_CLOSURE)}
+    manifest, source_root = _manifest_for(tmp_path, closure_files)
     kwargs = owner_kwargs(store)
     spec = {
         'control_root': str(store.root), 'source_root': str(source_root),
@@ -409,3 +411,17 @@ def test_run_migration_holds_q_ex_during_drive(store, tmp_path, monkeypatch, cap
 def test_run_migration_cli_spec_unreadable(store, tmp_path, capsys):
     assert bridge.main(['migrate', '--spec', str(tmp_path / 'missing.json')]) == 2
     assert json.loads(capsys.readouterr().out)['code'] == 'SPEC_UNREADABLE'
+
+
+def test_run_migration_rejects_closure_missing_recovery_files(store, tmp_path, capsys):
+    """recovery必須fileを欠くmanifestは配備前に拒否される。"""
+    _, spec_path = _cli_spec(store, tmp_path)
+    spec = json.loads(spec_path.read_text())
+    spec['manifest']['files'] = [
+        e for e in spec['manifest']['files']
+        if e['path'] != 'mcs/ops/release_auto_recovery.py']
+    spec_path.write_text(json.dumps(spec))
+    assert bridge.main(['migrate', '--spec', str(spec_path)]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out['code'].startswith('CLOSURE_INCOMPLETE:')
+    assert 'release_auto_recovery.py' in out['code']
