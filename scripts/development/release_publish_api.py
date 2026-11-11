@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -268,3 +269,207 @@ def decode_plan(envelope):
 def register(base, token, register_request, *, opener=None):
     return _post(base, '/v3/mcs/publications/register', token,
                  register_request, 'PublicationRecord', opener=opener)
+
+
+# --- GitHub Releases API (spec 01 §6) ---------------------------------------
+
+GITHUB_API = 'https://api.github.com'
+GITHUB_UPLOAD = 'https://uploads.github.com'
+_GITHUB_HOSTS = frozenset({'api.github.com', 'uploads.github.com'})
+MAX_GITHUB_PAGES = 20
+
+
+def _github_url_ok(url):
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    return (p.scheme == 'https' and p.hostname in _GITHUB_HOSTS
+            and not p.username and not p.password and not p.fragment)
+
+
+def github_request(method, url, *, token, body=None, raw=None,
+                   headers=None, opener=None):
+    """api.github.com/uploads.github.com 限定のGitHub API呼出。"""
+    if not _github_url_ok(url):
+        raise PublishApiError('GITHUB_URL_INVALID')
+    hdrs = {'authorization': 'Bearer ' + token,
+            'accept': 'application/vnd.github+json',
+            'x-github-api-version': '2022-11-28',
+            'cache-control': 'no-store',
+            'user-agent': 'mcs-release-publish'}
+    data = None
+    if raw is not None:
+        data = raw
+    elif body is not None:
+        data = json.dumps(body, ensure_ascii=False, sort_keys=True,
+                          separators=(',', ':')).encode()
+        hdrs['content-type'] = 'application/json'
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, data=data, headers=hdrs,
+                                 method=method)
+    open_fn = opener or _opener().open
+    try:
+        with open_fn(req, timeout=30) as response:
+            status = getattr(response, 'status', 200)
+            payload = _read_bounded(response)
+    except urllib.error.HTTPError as error:
+        try:
+            detail = _read_bounded(error, 65536)
+        except Exception:
+            detail = b''
+        code = 'HTTP_%d' % error.code
+        try:
+            doc = json.loads(detail)
+            if isinstance(doc, dict) and isinstance(doc.get('message'), str):
+                code = doc['message'][:80]
+        except Exception:
+            pass
+        raise PublishApiError(code, error.code) from None
+    except PublishApiError:
+        raise
+    except Exception as error:
+        raise PublishApiError('TRANSPORT_ERROR') from error
+    try:
+        doc = json.loads(payload) if payload else None
+    except Exception:
+        doc = None
+    return status, doc
+
+
+def github_repo_slug(env=None):
+    env = os.environ if env is None else env
+    repo = env.get('MCS_PUBLISH_GITHUB_REPO')
+    if not isinstance(repo, str) or re.fullmatch(
+            r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo) is None:
+        raise PublishApiError('GITHUB_REPO_UNCONFIGURED')
+    return repo
+
+
+def github_get_tag_ref(repo, tag, token, *, opener=None):
+    """GET /git/ref/tags/{tag} → object{sha,type}。404はNone。"""
+    status, doc = _github_call(
+        'GET', GITHUB_API + '/repos/' + repo + '/git/ref/tags/' + tag,
+        token, opener=opener, not_found_none=True)
+    if doc is None:
+        return None
+    obj = doc.get('object') if isinstance(doc, dict) else None
+    if not isinstance(obj, dict) or not isinstance(obj.get('sha'), str):
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    return {'sha': obj['sha'], 'type': obj.get('type')}
+
+
+def github_get_tag(repo, sha, token, *, opener=None):
+    """annotated tag objectのpeeled commitを返す。"""
+    status, doc = _github_call(
+        'GET', GITHUB_API + '/repos/' + repo + '/git/tags/' + sha,
+        token, opener=opener)
+    obj = doc.get('object') if isinstance(doc, dict) else None
+    if not isinstance(obj, dict) or obj.get('type') != 'commit' \
+            or not isinstance(obj.get('sha'), str):
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    return obj['sha']
+
+
+def github_find_release_by_tag(repo, tag, token, *, opener=None):
+    """GET /releases/tags/{tag}。404はNone、draftも返す。"""
+    status, doc = _github_call(
+        'GET', GITHUB_API + '/repos/' + repo + '/releases/tags/' + tag,
+        token, opener=opener, not_found_none=True)
+    return doc if isinstance(doc, dict) else None
+
+
+def github_create_draft(repo, *, tag_name, target_commitish, token,
+                        opener=None):
+    """POST /releases draft=true固定。返り値はrelease dict。"""
+    status, doc = _github_call(
+        'POST', GITHUB_API + '/repos/' + repo + '/releases', token,
+        body={'tag_name': tag_name, 'target_commitish': target_commitish,
+              'draft': True, 'prerelease': False, 'make_latest': False},
+        opener=opener)
+    if not isinstance(doc, dict) or not isinstance(doc.get('id'), int):
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    return doc
+
+
+def github_list_assets(repo, release_id, token, *, opener=None):
+    """GET /releases/{id}/assets 全page(最大20page・100/page)。"""
+    out = []
+    for page in range(1, MAX_GITHUB_PAGES + 1):
+        status, doc = _github_call(
+            'GET', GITHUB_API + '/repos/' + repo + '/releases/'
+            + str(release_id) + '/assets?per_page=100&page=' + str(page),
+            token, opener=opener)
+        if not isinstance(doc, list):
+            raise PublishApiError('GITHUB_RESPONSE_INVALID')
+        out.extend(doc)
+        if len(doc) < 100:
+            return out
+    raise PublishApiError('GITHUB_PAGINATION_LIMIT')
+
+
+def github_upload_asset(release, name, data, token, *, opener=None):
+    """draft releaseのupload_urlへassetをPUT相当POSTでuploadする。
+
+    upload_url templateは `.../releases/{id}/assets{?name,label}`。
+    hostはuploads.github.com固定・release id一致を検証してから使う。
+    """
+    template = release.get('upload_url') if isinstance(release, dict) else None
+    if not isinstance(template, str):
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+    parsed = urlparse(template)
+    if parsed.scheme != 'https' or parsed.hostname != 'uploads.github.com' \
+            or parsed.username or parsed.password or parsed.fragment:
+        raise PublishApiError('GITHUB_UPLOAD_URL_INVALID')
+    if ('/releases/' + str(release.get('id')) + '/assets') not in parsed.path:
+        raise PublishApiError('GITHUB_UPLOAD_URL_INVALID')
+    query = dict(parse_qsl(parsed.query))
+    url = urlunparse(parsed._replace(
+        query=urlencode({'name': name, **({'label': query['label']}
+                                          if 'label' in query else {})})))
+    status, doc = _github_call(
+        'POST', url, token, raw=data,
+        headers={'content-type': 'application/octet-stream',
+                 'content-length': str(len(data))},
+        opener=opener, expect=(201,))
+    if not isinstance(doc, dict) or doc.get('state') != 'uploaded' \
+            or doc.get('name') != name:
+        raise PublishApiError('GITHUB_UPLOAD_INVALID')
+    return doc
+
+
+def github_publish_release(repo, release_id, token, *, opener=None):
+    """PATCH draft=false, prerelease=false, make_latest=falseで公開。"""
+    status, doc = _github_call(
+        'PATCH', GITHUB_API + '/repos/' + repo + '/releases/'
+        + str(release_id), token,
+        body={'draft': False, 'prerelease': False, 'make_latest': False},
+        opener=opener)
+    if not isinstance(doc, dict) or doc.get('id') != release_id:
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    return doc
+
+
+def github_get_release(repo, release_id, token, *, opener=None):
+    status, doc = _github_call(
+        'GET', GITHUB_API + '/repos/' + repo + '/releases/' + str(release_id),
+        token, opener=opener)
+    if not isinstance(doc, dict):
+        raise PublishApiError('GITHUB_RESPONSE_INVALID')
+    return doc
+
+
+def _github_call(method, url, token, *, body=None, raw=None, headers=None,
+                 opener=None, not_found_none=False, expect=None):
+    """github_requestのstatus判定wrapper。404→None, expect集合外→error。"""
+    try:
+        status, doc = github_request(
+            method, url, token=token, body=body, raw=raw, headers=headers,
+            opener=opener)
+    except PublishApiError as error:
+        if not_found_none and error.status == 404:
+            return 404, None
+        raise
+    if expect is not None and status not in expect:
+        raise PublishApiError('GITHUB_STATUS_%d' % status, status)
+    return status, doc

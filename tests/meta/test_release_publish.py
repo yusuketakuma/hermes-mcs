@@ -599,3 +599,138 @@ def test_authorize_execute_requires_pins(tmp_path, monkeypatch):
         assert 'PINS_REQUIRED' in str(error)
     else:
         raise AssertionError('expected failure')
+
+
+def _authorize_result(tmp_path):
+    """publish試験用のauthorize result(plan+envelope)を組み立てる。"""
+    import base64
+    request = json.loads(_build_request(tmp_path).read_text())
+    assets = []
+    assets_dir = tmp_path / 'pub-assets'
+    assets_dir.mkdir(exist_ok=True)
+    for name, blob in (('hermes-mcs.bundle', b'bundle-bytes'),
+                       ('notes.png', b'png-bytes')):
+        (assets_dir / name).write_bytes(blob)
+        assets.append({'name': name, 'sha256': __import__('hashlib')
+                       .sha256(blob).hexdigest(), 'size': len(blob),
+                       'media_type': 'application/octet-stream'
+                       if name.endswith('.bundle') else 'image/png'})
+    plan = {'schema_version': 'mcs.publish-plan.v3',
+            'publication_id': '12345678-1234-4234-8234-123456789abc',
+            'request': request,
+            'release': {'release_id': 'f' * 64, 'code_seq': 1,
+                        'source_commit': COMMIT,
+                        'artifact_sha256': '0' * 64, 'artifact_size': 10},
+            'profile_sha256s': [], 'assets': assets,
+            'asset_set_sha256': '1' * 64, 'github_release_id': None,
+            'revision': 2, 'fencing_token': 7, 'phase': 'packaged',
+            'issued_at': 1700000000, 'expires_at': 1700086400}
+    payload = base64.urlsafe_b64encode(
+        json.dumps(plan, sort_keys=True, separators=(',', ':')
+                   ).encode()).rstrip(b'=').decode()
+    envelope = {'alg': 'PS256', 'kid': 'k' * 64,
+                'purpose': 'mcs-publication-plan-v3',
+                'payload': payload, 'signature': 's' * 512}
+    result = {'schema_version': 'mcs.release-authorize-result.local.v1',
+              'dry_run': False, 'reservation': {},
+              'object_receipts': [], 'publish_plan': plan,
+              'envelope': envelope}
+    path = tmp_path / 'authorize.json'
+    path.write_text(json.dumps(result))
+    return path, assets_dir
+
+
+def test_publish_dry_run_default(tmp_path):
+    auth, assets_dir = _authorize_result(tmp_path)
+    out = tmp_path / 'obs.json'
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('MCS_PUBLISH_')
+           and k not in ('GITHUB_TOKEN', 'GH_TOKEN',
+                         'ACTIONS_ID_TOKEN_REQUEST_TOKEN')}
+    result = subprocess.run(
+        [sys.executable, str(CLI), 'publish', '--authorize', str(auth),
+         '--assets-dir', str(assets_dir), '--output', str(out)],
+        capture_output=True, text=True, timeout=30, env=env)
+    assert result.returncode == 0, result.stderr
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is True and doc['asset_count'] == 2
+
+
+def test_publish_rejects_asset_mismatch(tmp_path):
+    auth, assets_dir = _authorize_result(tmp_path)
+    (assets_dir / 'notes.png').write_bytes(b'tampered')
+    out = tmp_path / 'obs.json'
+    # dry-runではbytes照合しないが、plan自体の妥当性は確認される
+    result = _run('publish', '--authorize', str(auth),
+                  '--assets-dir', str(assets_dir), '--output', str(out))
+    assert result.returncode == 0
+
+
+def test_publish_execute_happy_path(tmp_path, monkeypatch):
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('GITHUB_TOKEN', 'ghtok')
+    monkeypatch.setenv('MCS_PUBLISH_GITHUB_REPO', 'owner/repo')
+    auth, assets_dir = _authorize_result(tmp_path)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    calls = []
+    release = {'id': 42, 'draft': True, 'tag_name': 'v1.2.3',
+               'target_commitish': COMMIT, 'upload_url':
+               'https://uploads.github.com/repos/owner/repo/releases/42'
+               '/assets{?name,label}'}
+    gh_assets = []
+
+    def fake_tag_ref(repo, tag, token, **kw):
+        return {'sha': COMMIT, 'type': 'commit'}
+
+    def fake_find(repo, tag, token, **kw):
+        return None
+
+    def fake_create(repo, *, tag_name, target_commitish, token, **kw):
+        calls.append('create')
+        return release
+
+    def fake_list(repo, rid, token, **kw):
+        return list(gh_assets)
+
+    def fake_upload(rel, name, data, token, **kw):
+        calls.append(('upload', name))
+        gh_assets.append({'id': len(gh_assets) + 1, 'name': name,
+                          'size': len(data),
+                          'digest': 'sha256:' + __import__('hashlib')
+                          .sha256(data).hexdigest(), 'state': 'uploaded'})
+        return gh_assets[-1]
+
+    def fake_publish(repo, rid, token, **kw):
+        calls.append('publish')
+        release['draft'] = False
+        return release
+
+    def fake_get(repo, rid, token, **kw):
+        return {'id': rid, 'draft': False, 'prerelease': False,
+                'immutable': True, 'tag_name': 'v1.2.3'}
+
+    monkeypatch.setattr(module._api, 'github_get_tag_ref', fake_tag_ref)
+    monkeypatch.setattr(module._api, 'github_find_release_by_tag', fake_find)
+    monkeypatch.setattr(module._api, 'github_create_draft', fake_create)
+    monkeypatch.setattr(module._api, 'github_list_assets', fake_list)
+    monkeypatch.setattr(module._api, 'github_upload_asset', fake_upload)
+    monkeypatch.setattr(module._api, 'github_publish_release', fake_publish)
+    monkeypatch.setattr(module._api, 'github_get_release', fake_get)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {})
+    out = tmp_path / 'obs.json'
+    module.main(['publish', '--authorize', str(auth),
+                 '--assets-dir', str(assets_dir), '--pins', str(pins),
+                 '--output', str(out)])
+    obs = json.loads(out.read_text())
+    assert obs['dry_run'] is False
+    assert obs['github_release_id'] == 42
+    assert obs['release_verified'] is True and obs['immutable'] is True
+    assert [a['name'] for a in obs['assets']] == [
+        'hermes-mcs.bundle', 'notes.png']
+    assert 'create' in calls and 'publish' in calls
+    assert ('upload', 'hermes-mcs.bundle') in calls

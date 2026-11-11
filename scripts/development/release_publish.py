@@ -306,16 +306,123 @@ def reserve(request_path, assets_path, output):
     return plan
 
 
-def publish(plan_path, output):
-    plan = _load(plan_path)
-    _require(plan.get('dry_run') is not False or not _external_guard(),
-             'EXECUTE_NOT_PERMITTED')
+def publish(authorize_path, assets_dir, pins_path, output):
+    """publish job: 固定PublishPlanのassetをGitHub draft→upload→publish。
+
+    asset bytesはpackage成果物(中央保存bytesと同一hashで照合)を使う。
+    tag/ref/release/asset集合は全て読取り照合し、曖昧・不一致はHOLD。
+    """
+    result = _load(authorize_path)
+    plan = result.get('publish_plan')
+    envelope = result.get('envelope')
+    _require(type(plan) is dict and type(envelope) is dict,
+             'AUTHORIZE_RESULT_INVALID')
+    request = plan.get('request')
+    _require(type(request) is dict, 'PLAN_INVALID')
+    source = request.get('source')
+    _require(type(source) is dict, 'PLAN_INVALID')
+    tag = source.get('tag')
+    commit = source.get('commit')
+    tag_oid = source.get('tag_oid')
+    plan_assets = plan.get('assets')
+    _require(type(plan_assets) is list and plan_assets, 'PLAN_INVALID')
+    if not _external_guard():
+        obs = {'schema_version': 'mcs.release-publish-observation.local.v1',
+               'dry_run': True, 'tag': tag, 'commit': commit,
+               'asset_count': len(plan_assets),
+               'note': 'github publish requires MCS_PUBLISH_EXECUTE=1'
+                       ' + GITHUB_TOKEN'}
+        _dump(output, obs)
+        return obs
+    _require(pins_path, 'PINS_REQUIRED')
+    _verify_plan_envelope(envelope, pins_path, plan.get('publication_id'),
+                          request)
+    gh_token = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
+    _require(gh_token, 'GITHUB_TOKEN_MISSING')
+    repo = _api.github_repo_slug()
+    root = Path(assets_dir)
+    _require(root.is_dir(), 'ASSETS_DIR_INVALID')
+    local = {}
+    for spec in plan_assets:
+        name = spec.get('name')
+        _require(type(name) is str and name, 'PLAN_INVALID')
+        path = root / name
+        _require(path.is_file() and not path.is_symlink(),
+                 'ASSET_MISSING:' + name)
+        data = path.read_bytes()
+        _require(hashlib.sha256(data).hexdigest() == spec.get('sha256')
+                 and len(data) == spec.get('size'),
+                 'ASSET_MISMATCH:' + name)
+        local[name] = data
+    ref = _api.github_get_tag_ref(repo, tag, gh_token)
+    _require(ref is not None, 'TAG_MISSING')
+    if ref['type'] == 'tag':
+        _require(ref['sha'] == tag_oid, 'TAG_OID_MISMATCH')
+        peeled = _api.github_get_tag(repo, ref['sha'], gh_token)
+    else:
+        peeled = ref['sha']
+    _require(peeled == commit, 'TAG_COMMIT_MISMATCH')
+    existing = _api.github_find_release_by_tag(repo, tag, gh_token)
+    if existing is not None and existing.get('draft') is False:
+        _require(False, 'RELEASE_ALREADY_PUBLISHED')
+    if existing is not None:
+        _require(existing.get('tag_name') == tag
+                 and existing.get('target_commitish') in (None, commit),
+                 'RELEASE_CONFLICT')
+        release = existing
+    else:
+        release = _api.github_create_draft(
+            repo, tag_name=tag, target_commitish=commit, token=gh_token)
+    present = {_asset_name(a): a
+               for a in _api.github_list_assets(repo, release['id'],
+                                                gh_token)}
+    for spec in sorted(plan_assets, key=lambda a: a['name']):
+        name = spec['name']
+        data = local[name]
+        prior = present.get(name)
+        if prior is not None:
+            _require(prior.get('size') == spec['size']
+                     and _asset_digest(prior) == spec['sha256'],
+                     'ASSET_MISMATCH:' + name)
+            continue
+        _api.github_upload_asset(release, name, data, gh_token)
+    after = _api.github_list_assets(repo, release['id'], gh_token)
+    _require(len(after) == len(plan_assets), 'ASSET_SET_MISMATCH')
+    observed = []
+    for spec in sorted(plan_assets, key=lambda a: a['name']):
+        match = [a for a in after if a.get('name') == spec['name']]
+        _require(len(match) == 1, 'ASSET_SET_MISMATCH')
+        asset = match[0]
+        _require(asset.get('size') == spec['size']
+                 and _asset_digest(asset) == spec['sha256'],
+                 'ASSET_MISMATCH:' + spec['name'])
+        observed.append({'asset_id': asset.get('id'), 'name': spec['name'],
+                         'size': spec['size'], 'sha256': spec['sha256']})
+    _api.github_publish_release(repo, release['id'], gh_token)
+    final = _api.github_get_release(repo, release['id'], gh_token)
+    _require(final.get('draft') is False
+             and final.get('prerelease') is False, 'PUBLISH_INCOMPLETE')
+    immutable = final.get('immutable')
+    _require(immutable is not False, 'RELEASE_NOT_IMMUTABLE')
     obs = {'schema_version': 'mcs.release-publish-observation.local.v1',
-           'dry_run': plan.get('dry_run', True),
-           'commit': plan.get('commit'), 'tag': plan.get('tag'),
-           'note': 'external publish requires fixed CI workflow + OIDC'}
+           'dry_run': False, 'github_release_id': release['id'],
+           'tag': tag, 'commit': commit,
+           'assets': observed, 'release_verified': True,
+           'immutable': immutable,
+           'observed_at': int(time.time() * 1000)}
     _dump(output, obs)
     return obs
+
+
+def _asset_name(asset):
+    return asset.get('name') if isinstance(asset, dict) else None
+
+
+def _asset_digest(asset):
+    digest = asset.get('digest') if isinstance(asset, dict) else None
+    if isinstance(digest, str) and digest.startswith('sha256:'):
+        return digest[len('sha256:'):]
+    return None
 
 
 def verify_register(plan_path, observation_path, output):
@@ -367,6 +474,22 @@ def _publisher_token():
     if token:
         return token
     return _api.oidc_token()
+
+
+def _verify_plan_envelope(envelope, pins_path, publication_id, request):
+    """finalize応答envelopeを署名・payload・expected束縛で検証する。"""
+    _require(type(envelope) is dict, 'PLAN_SIGNATURE_INVALID')
+    envelope_raw = json.dumps(envelope, ensure_ascii=False, sort_keys=True,
+                              separators=(',', ':')).encode()
+    try:
+        _sig.verify_v3_envelope(
+            envelope_raw, purpose='mcs-publication-plan-v3',
+            pins=_load(pins_path),
+            expected={'publication_id': publication_id,
+                      'request': request},
+            now_ms=int(time.time() * 1000))
+    except Exception:
+        _require(False, 'PLAN_SIGNATURE_INVALID')
 
 
 def authorize(build_request_path, assets_dir, release_core_path,
@@ -435,17 +558,7 @@ def authorize(build_request_path, assets_dir, release_core_path,
         fencing_token=fencing, release_core_json=core_text,
         compatibility_payloads=compat, candidate_assets=candidates)
     envelope = _api.finalize(base, token, fin_req)
-    envelope_raw = json.dumps(envelope, ensure_ascii=False,
-                              sort_keys=True,
-                              separators=(',', ':')).encode()
-    try:
-        _sig.verify_v3_envelope(
-            envelope_raw, purpose='mcs-publication-plan-v3',
-            pins=_load(pins_path),
-            expected={'publication_id': pub_id, 'request': request},
-            now_ms=int(time.time() * 1000))
-    except Exception:
-        _require(False, 'PLAN_SIGNATURE_INVALID')
+    _verify_plan_envelope(envelope, pins_path, pub_id, request)
     plan = _api.decode_plan(envelope)
     _require(plan.get('publication_id') == pub_id, 'PLAN_MISMATCH')
     result = {'schema_version': 'mcs.release-authorize-result.local.v1',
@@ -483,7 +596,9 @@ def main(argv=None):
     p.add_argument('--assets', required=True)
     p.add_argument('--output', required=True)
     p = sub.add_parser('publish')
-    p.add_argument('--plan', required=True)
+    p.add_argument('--authorize', required=True)
+    p.add_argument('--assets-dir', required=True)
+    p.add_argument('--pins')
     p.add_argument('--output', required=True)
     p = sub.add_parser('verify-register')
     p.add_argument('--plan', required=True)
@@ -506,7 +621,8 @@ def main(argv=None):
         'create-bundle': lambda a: create_bundle(
             a.request, a.repo, a.output_dir, a.output),
         'reserve': lambda a: reserve(a.request, a.assets, a.output),
-        'publish': lambda a: publish(a.plan, a.output),
+        'publish': lambda a: publish(
+            a.authorize, a.assets_dir, a.pins, a.output),
         'verify-register': lambda a: verify_register(
             a.plan, a.observation, a.output),
         'authorize': lambda a: authorize(
