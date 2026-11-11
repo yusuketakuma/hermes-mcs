@@ -197,7 +197,9 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     assert len(sends) == 2
 
 
-def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False):  # noqa: F811
+def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
+                prior_content=None, answer_hook=None, extract_extra=None, body=None,
+                expected_sends=2):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops."""
     led, cfg, _, _, _ = routed
@@ -215,9 +217,9 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
 
-    body = "本人に発熱と咳があります。本人の血圧120/80です。"
+    body = body or "本人に発熱と咳があります。本人の血圧120/80です。"
     led.save_messages([_message(1, body, project_id=1)])
-    source_id = _extract_artifact(led, 1, {"symptoms": [{"text": "頭痛", "status": "ongoing",
+    source_id = _extract_artifact(led, 1, prior_content or {"symptoms": [{"text": "頭痛", "status": "ongoing",
         "subject": "patient", "evidence": "頭痛"}]}, _hash(led))
     qc_id = _qc_artifact(led, 1, source_id, _hash(led), {"qc": "done", "items": [
         {"section": "symptoms", "verdict": "NO_MATCH", "item": {"text": "頭痛"}}]})
@@ -241,6 +243,10 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     row["_proof_vital_policy"] = None
     lease = worker._claim(led, row)
     saved = worker._capture_checkpoint_state(led.db, row, context)
+    extra = dict(extract_extra or {})
+    if row.get("_protected_prior") is not None and "protected_prior" not in extra:
+        extra["protected_prior"] = mcs_util.loads_dict(row["_protected_prior"]["content"])
+        extra["protected_prior_ref"] = row.get("_protected_prior_ref")
 
     sends = []
     real_client = worker.openai_client.OpenAIClient
@@ -251,6 +257,8 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
                                    for text in ("発熱", "咳")]}
             if request["reasoning"]["effort"] == "high":
                 answer["vitals"] = dict(repair_vitals)
+            if answer_hook is not None:
+                answer = answer_hook(request, answer)
             return 200, {}, json.dumps({"status": "completed", "model": self.model, "service_tier": "default",
                 "output": [{"type": "message", "role": "assistant", "content": [
                     {"type": "output_text", "text": json.dumps(answer, ensure_ascii=False)}]}],
@@ -275,8 +283,8 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
         result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
             posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
             quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
-            medication_hints=worker._frame_medications(row))
-    assert isinstance(result, dict) and len(sends) == 2
+            medication_hints=worker._frame_medications(row), **extra)
+    assert isinstance(result, dict) and len(sends) == expected_sends
     row["_provider_evidence"] = meta.pop("_provider_evidence")
     result["_model"] = selection["model"]
     return led, row, context, result, meta, qc_id, prior, chunks, sends
