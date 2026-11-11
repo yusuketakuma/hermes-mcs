@@ -187,6 +187,60 @@ def test_service_set_drift_rejected_at_activation(store):
 
 # --- ACTIVATING → VERIFIED ---------------------------------------------------
 
+def test_fence_release_crash_retried_by_complete_verified(store):
+    """ACTIVATING永続化後・fence解放のcrash: _complete_verifiedが冪等に再試行。"""
+    _, deps = _applied(store)
+    rt.advance_runtime(store, deps)  # → CANDIDATE_READY
+    real = deps.release_update_fence
+    calls = []
+
+    def flaky(generation):
+        calls.append(generation)
+        if len(calls) == 1:
+            raise RuntimeError('synthetic fence crash')
+        return real(generation)
+
+    deps.release_update_fence = flaky
+    with pytest.raises(RuntimeError):
+        rt.advance_runtime(store, deps)  # ACTIVATING永続化後にcrash
+    # phaseはACTIVATINGで保持(未検証を成功化しない)
+    assert state.load(store)['active']['phase'] == 'ACTIVATING'
+    # 次tick: _complete_verified冒頭でfenceを冪等再試行→VERIFIEDへ進む
+    rt.advance_runtime(store, deps)
+    owner = state.load(store)
+    assert owner['active'] is None
+    assert owner['outcomes'][-1]['state'] == 'VERIFIED'
+    # fenceは同generationで2回呼ばれた(失敗1回+冪等再試行1回)
+    candidate = calls[0]
+    assert calls == [candidate, candidate]
+
+
+def test_quarantine_launch_crash_retries_with_same_receipt(store):
+    """launch成功後・receipt永続化前のcrash: 同一receipt_idで冪等再試行。"""
+    _, deps = _applied(store)
+    real = deps.quarantine_launch
+    calls = []
+
+    def flaky(active, receipt_id):
+        calls.append(receipt_id)
+        real(active, receipt_id)
+        if len(calls) == 1:
+            raise RuntimeError('post-launch crash')
+
+    deps.quarantine_launch = flaky
+    with pytest.raises(RuntimeError):
+        rt.advance_runtime(store, deps)
+    # receipt未永続化・APPLIED保持(起動証拠を推測で作らない)
+    active = state.load(store)['active']
+    assert active['phase'] == 'APPLIED'
+    assert active.get('activation_receipt_id') is None
+    # 再試行はoperation決定論的な同一receipt_idでlaunchする
+    owner = rt.advance_runtime(store, deps)
+    assert owner['phase'] == 'CANDIDATE_READY'
+    assert calls[0] == calls[1]
+    assert deps.launches[0] == deps.launches[1]
+
+
 def test_activating_verifies_atomically(store):
     op_id, deps = _applied(store)
     owner = _advance_to(store, deps, 'ACTIVATING')
