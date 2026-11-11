@@ -208,6 +208,25 @@ def test_v2_repair_with_tampered_prior_ref_is_rejected(routed, monkeypatch, tmp_
     assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'rejected'
 
 
+def test_late_protected_prior_conflict_survives_recapture_and_refuses_commit(routed, monkeypatch, tmp_path):
+    """A pinned protected prior that stops resolving after dispatch must surface
+    as a durable checkpoint conflict on the next capture: the commit is refused
+    and the started/paid evidence rows are left untouched for a later safe path."""
+    led, row, context, result, meta, qc_id, prior, chunks, _v1_id, _v2_id = _protected_v1_repair_run(
+        routed, monkeypatch, tmp_path)
+    prior_id = row["_protected_prior"]["artifact_id"]
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (prior_id,))
+    before = [tuple(saved) for saved in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    worker._capture_checkpoint_state(led.db, row, context)
+    assert row.get("_checkpoint_conflict") is True
+    worker._capture_checkpoint_state(led.db, row, context)
+    assert row.get("_checkpoint_conflict") is True
+    assert _commit_run(led, row, context, result, meta, qc_id, prior, chunks) == 'rejected'
+    assert row["_commit_reject_reason"] == "commit_checkpoint"
+    assert [tuple(saved) for saved in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):
     symptoms = worker.extract_validation.Validator.symptoms
     def legacy_symptoms(self, document, out):
