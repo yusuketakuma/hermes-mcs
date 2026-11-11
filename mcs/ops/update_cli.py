@@ -262,6 +262,33 @@ def cmd_status() -> int:
     return 0
 
 
+def cmd_auto_disable(_args) -> int:
+    """v3 auto-updateのlocal撤回(spec 02 §revocationのauto-disable)。
+
+    consentをenabled=false・local_consent_epoch増分でowner stateへ先に
+    耐久保存する。中央consent-revokeは本番wire配線後のtrusted経路が担う
+    ため、ここではlocal撤回のみを行い結果をJSONで返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        import release_auto_consent as v3_consent
+        with Store(root) as store:
+            result = v3_consent.disable_auto(store)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "AUTO_DISABLE_FAILED")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok", **result}, ensure_ascii=False))
+    return 0
+
+
 def cmd_apply(args) -> int:
     return apply(args.tag, args.sha, args.command_id,
                  base_sha=args.base_sha, reinstall=args.reinstall,
@@ -344,6 +371,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pl_p.set_defaults(fn=lambda args: cmd_plan(args))
     sub.add_parser("check", help="新しい版を確認し、設定・承認に従って更新する（省略時の動作）").set_defaults(fn=lambda args: cmd_check())
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
+    sub.add_parser("auto-disable", help="v3自動更新の同意を撤回する（local_consent_epochを増分）").set_defaults(
+        fn=lambda args: cmd_auto_disable(args))
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted(_resume_provider_migration=True))

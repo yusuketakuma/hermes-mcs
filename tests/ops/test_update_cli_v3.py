@@ -137,3 +137,61 @@ def test_cmd_status_shows_uninitialized_before_migration(control_root,
     assert update_cli.cmd_status() == 0
     out = json.loads(capsys.readouterr().out)
     assert out['v3']['state'] == 'uninitialized'
+
+
+def _consent_value():
+    """_owner_value互換の最小StandingConsent(enabled=true, epoch=1)。"""
+    return {
+        'schema_version': 'mcs.standing-consent.v3',
+        'consent_id': '9e8d7c6b-1234-4abc-8def-0123456789ab',
+        'scope': {'product': 'hermes-mcs', 'tenant': 'tenant-a',
+                  'installation': 'inst-a', 'device_id': U,
+                  'realm_epoch': 'realm-1', 'environment': 'synthetic',
+                  'stream_id': 'st'},
+        'profile': {'profile_id': 'auto-mini', 'profile_sha256': '3' * 64,
+                    'runtime_mode': 'standalone', 'os': 'macos',
+                    'cpu': 'arm64', 'python': [3, 14],
+                    'control_closure_sha256': '4' * 64},
+        'allowed_class': 'code-only-compatible',
+        'timezone': 'Asia/Tokyo',
+        'windows': [{'weekday': 0, 'start_minute': 60, 'end_minute': 180}],
+        'max_prepare_seconds': 120, 'max_prepare_count_24h': 3,
+        'max_prepare_seconds_24h': 360,
+        'local_consent_epoch': 1, 'policy_epoch': 1,
+        'central_policy_id': '11111111-2222-4333-8444-555555555555',
+        'central_policy_sha256': '5' * 64,
+        'confirmation_receipt_id': '66666666-7777-4888-8999-000000000000',
+        'confirmed_at': 1794268799000, 'expires_at': 1794355200000,
+        'enabled': True, 'early_adopter': False,
+        'rollout_policy_sha256': '6' * 64}
+
+
+def test_cmd_auto_disable_revokes_consent(control_root, capsys):
+    with Store(control_root, create=True) as store:
+        value = _owner_value(store)
+        value['consent'] = _consent_value()
+        store.write(state.OWNER_NAME, value)
+    assert update_cli.cmd_auto_disable(None) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['status'] == 'ok' and out['action'] == 'disabled'
+    assert out['local_consent_epoch'] == 2
+    assert out['central_notified'] is False
+    with Store(control_root) as store:
+        owner = state.load(store)
+    assert owner['consent']['enabled'] is False
+    assert owner['consent']['local_consent_epoch'] == 2
+
+
+def test_cmd_auto_disable_noop_without_consent(control_root, capsys):
+    with Store(control_root, create=True) as store:
+        store.write(state.OWNER_NAME, _owner_value(store))
+    assert update_cli.cmd_auto_disable(None) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out['action'] == 'noop'
+
+
+def test_cmd_auto_disable_unavailable_without_state(control_root, capsys):
+    assert not control_root.exists()
+    assert update_cli.cmd_auto_disable(None) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out['status'] == 'unavailable'
