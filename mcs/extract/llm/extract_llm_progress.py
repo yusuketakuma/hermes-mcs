@@ -108,9 +108,14 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
         # An unmarked final keeps the provider contract its writer bound into
         # context_binding; restore it only from the explicitly stored,
         # currently supported triple — never guessed from the model column.
+        # backend/prompt are cloud-contract markers a legitimate writer stores
+        # only inside that triple, so markers without a supported triple are
+        # corrupt and fail closed; a lone model stays a valid legacy field.
         provider_contract = {key: final_meta.get(key) for key in ("backend", "model", "prompt")}
         if cloud_inference.is_supported_cloud_contract(provider_contract):
             r["_provider_contract"] = provider_contract
+        elif "backend" in final_meta or "prompt" in final_meta:
+            return out
     settled = (final is not None and not final_meta.get("error")
                and final_meta.get("invalidated") in (None, False, 0)
                and final_meta.get("hash") == r["content_hash"]

@@ -205,3 +205,27 @@ def test_unmarked_cloud_final_material_proof_restores_saved_contract(runtime):
                    (json.dumps(meta), artifact_id))
     led.db.commit()
     assert not selected_artifact_proof_valid(led.db, artifact_id, material=True)
+
+
+def test_unmarked_local_final_rejects_explicit_invalid_contract(runtime):
+    """A legitimate local final stores no provider contract: explicit
+    cloud-contract markers (backend/prompt) outside a supported triple are
+    corrupt and fail closed, while a lone legacy model field is tolerated."""
+    led, _, _ = runtime
+    seed(led, proof=False)
+    artifact_id = _raw_proof(led, 1, 1)
+    original = json.loads(led.db.execute(
+        'SELECT meta FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()[0])
+    assert selected_artifact_proof_valid(led.db, artifact_id, material=True)
+
+    def write_meta(meta):
+        led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                       (json.dumps(meta), artifact_id))
+        led.db.commit()
+
+    write_meta({**original, 'backend': 'anthropic', 'prompt': 'not-a-contract'})
+    assert not selected_artifact_proof_valid(led.db, artifact_id, material=True)
+    write_meta({**original, 'backend': 'anthropic'})
+    assert not selected_artifact_proof_valid(led.db, artifact_id, material=True)
+    write_meta({**original, 'model': 'synthetic-legacy-model'})
+    assert selected_artifact_proof_valid(led.db, artifact_id, material=True)
