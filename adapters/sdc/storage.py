@@ -32,13 +32,14 @@ LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
-NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json', 'runtime-entry.lock'}
+NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json', 'runtime-entry.lock'}
 _RELEASE_SIDECAR_NAMES = frozenset({'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json',
                                     'release-planning.json', 'release-plan.json', 'release-change.json',
-                                    'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json'})
+                                    'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json',
+                                    'release-health.json'})
 LIMITS.update({'release-successor.json': 2 * 1024 * 1024 + 65536, 'release-change.json': 131072, 'release-plan.json': 65536, 'release-planning.json': 16384, 'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
                'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0,
-               'release-start-intent.json': 32 * 1024, 'release-migration-v3.json': 65536, 'runtime-entry.lock': 0})
+               'release-start-intent.json': 32 * 1024, 'release-migration-v3.json': 65536, 'release-health.json': 65536, 'runtime-entry.lock': 0})
 _IDS = ('claim_id', 'device_id', 'key_id', 'rotation_id')
 _STOP = ('state', 'enabled', 'disconnected', 'central_suspended', 'enrollment_hold')
 _OPERATIONS = {'connect': {'initial-key', 'claim-key-id', 'reenroll-key'},
@@ -304,7 +305,7 @@ class Store:
             from .provision import support_bootstrap
             value = self._managed_or_legacy(name, support_bootstrap(self))
             return default if value is None else value
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json'):
             # Local consent/disable has its own root binding and needs no monitor endpoint.
             return self._read_file(name, default)
         marker = self._marker()
@@ -572,7 +573,7 @@ class Store:
             return
         if name in ('endpoint.json', 'support-bootstrap.json') and self._read_file('provision-state.json', _MISSING) is not _MISSING:
             raise ValueError('SDC_PROVISION_MANAGED_ROOT')
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json'):
             self._write_file(name, value)
             return
         if name == 'credential-store.json':

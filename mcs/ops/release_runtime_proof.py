@@ -17,6 +17,7 @@ deps契約(全て冪等必須・副作用はlock外):
 import hashlib
 import json
 
+from mcs.ops import release_auto_health as health
 from mcs.ops.release_auto_owner import OwnerError, _det_uuid, _nonce, _mutate
 from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as auto_state
@@ -270,6 +271,13 @@ def _complete_verified(store, deps, owner, active):
     manifest_sha = deps.measure_source_manifest()
     if not (isinstance(manifest_sha, str) and len(manifest_sha) == 64):
         raise OwnerError('MANIFEST_UNVERIFIED')
+    # health bindingはfinalize前に耐久化する(proofはfinalizeで消えるため)。
+    # health側の失敗でVERIFIED確定を阻害しない — 観測系はfail-openせず
+    # binding無し=報告なしの保守側へ倒す。
+    try:
+        health.record_verified_binding(store, active, spent, owner['scope'])
+    except Exception:
+        pass
     owner = auto_state.load(store)
     auto_state.finalize_verified(
         store, terminal, outcome_raw=raw.decode('utf-8'),
