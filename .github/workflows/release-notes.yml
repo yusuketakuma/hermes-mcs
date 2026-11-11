@@ -81,12 +81,27 @@ jobs:
       - name: Preview canonical title and body updates
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/development/sync_release_notes.py
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # release eventはそのtagだけを対象にする(spec W11)。
+          # 手動sync_existing(tag無し)は従来どおり全release対象。
+          TAG_ARG=""
+          if [ "${{ github.event_name }}" = "release" ] && [ -n "$EVENT_TAG" ]; then
+            TAG_ARG="--tag $EVENT_TAG"
+          fi
+          # shellcheck disable=SC2086
+          python3 scripts/development/sync_release_notes.py $TAG_ARG
       - name: Synchronize existing release notes only
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
         run: |
-          python3 scripts/development/sync_release_notes.py --apply > release-sync-result.json
+          TAG_ARG=""
+          if [ "${{ github.event_name }}" = "release" ] && [ -n "$EVENT_TAG" ]; then
+            TAG_ARG="--tag $EVENT_TAG"
+          fi
+          # shellcheck disable=SC2086
+          python3 scripts/development/sync_release_notes.py --apply $TAG_ARG > release-sync-result.json
           cat release-sync-result.json
       - name: Record execution result
         run: |
