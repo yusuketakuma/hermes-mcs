@@ -207,7 +207,7 @@ def _enrollment_admitted(root):
 
 def _enrollment_config_admits(cfg, root):
     settings = cfg.get('sdc', {})
-    return isinstance(settings, dict) and settings.get('enabled') is True and isinstance(settings.get('state_root'), str) and Path(settings['state_root']).absolute() == root
+    return isinstance(settings, dict) and settings.get('enabled', True) is True and isinstance(settings.get('state_root'), str) and Path(settings['state_root']).absolute() == root
 
 
 def tick(root=None):

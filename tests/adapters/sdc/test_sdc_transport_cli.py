@@ -83,12 +83,15 @@ def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python(tmp_p
     for mode in ('standalone', 'hermes'):
         cfg = {'runtime_mode': mode}
         original = service_contract.desired_agent_labels(cfg)
-        assert service_contract.SDC_LABEL not in original
-        for settings in ({}, {'enabled': False}):
+        # sdc.enabled defaults to on: only an explicit false removes the dedicated job.
+        assert service_contract.SDC_LABEL in original
+        for settings in ({'enabled': False},):
             cfg['sdc'] = settings
             assert service_contract.SDC_LABEL not in service_contract.desired_agent_labels(cfg)
+        for settings in ({}, {'enabled': True}):
+            cfg['sdc'] = settings
+            assert service_contract.SDC_LABEL in service_contract.desired_agent_labels(cfg)
         cfg['sdc'] = {'enabled': True, 'state_root': '/synthetic/private'}
-        assert service_contract.desired_agent_labels(cfg) == original + [service_contract.SDC_LABEL]
         values = service_contract.service_substitutions(cfg, root=str(base / 'root'), checkout=str(checkout), standalone_runtime_home='/synthetic/runtime', hermes_runtime_home='/synthetic/hermes', hermes_python='/synthetic/pinned/python', recovery_dir=str(base / 'recovery'))
         assert values['SDC_ROOT'] == '/synthetic/private'
         assert values['PYTHON'] == ('/synthetic/runtime/venv/bin/python3' if mode == 'standalone' else '/synthetic/pinned/python')
