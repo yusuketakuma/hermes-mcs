@@ -64,6 +64,12 @@ class ServiceDrain:
         self._mono = mono
         self._sleep = sleep
         self._poll = poll_interval_s
+        self._last_evidence = None
+
+    @property
+    def last_evidence(self):
+        """直近のawait_retirement戻り値(witness provider結線用)。"""
+        return self._last_evidence
 
     # --- deps契約 ------------------------------------------------------
 
@@ -121,9 +127,10 @@ class ServiceDrain:
             if not pending or self._mono() >= deadline_mono:
                 break
             self._sleep(self._poll)
-        return {'observed_at_ms': self._now_ms(),
-                'deadline_epoch_ms': deadline_epoch_ms,
-                'services': results}
+        self._last_evidence = {'observed_at_ms': self._now_ms(),
+                               'deadline_epoch_ms': deadline_epoch_ms,
+                               'services': results}
+        return self._last_evidence
 
     def retirement_complete(self, evidence, services):
         """evidenceが要求service全idの退役証拠を持つか検査する。"""
