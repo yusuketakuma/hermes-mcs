@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "自動更新の通信失敗で中央の拒否理由と再試行待ち時間が失われる問題を修正",
+  "summary": "v3自動更新のwire層は、中央CSDCからの拒否応答（署名不正・状態不一致・再試行指定付きエラー等）を一律の汎用エラーへ丸めていました。そのため呼出側が「一時的な拒否で待てばよい」のか「恒久的な拒否で中止すべき」かを区別できず、再試行の分類に必要な情報が失われていました。通信層の拒否詳細（HTTP status・中央のエラーコード・retry_after_ms）をエラーオブジェクトへ保持するよう修正しました。既存の呼出側の動作（例外として失敗扱い・再試行）は変わりません。",
+  "upgrade": "追加操作は不要です。v3自動更新は引き続き無効のままで、本修正は有効化前の内部配線の修正です。",
+  "details": [
+    "mcs/ops/release_auto_wire.py: WireErrorへstatus/remote_code/retry_after_msの任意フィールドを追加し、signed_send/fetch_artifactがReleaseAutoErrorを受けた際に構造化して再raiseするよう変更。codeは従来どおり固定token(WIRE_SEND/WIRE_FETCH)で、__cause__に元例外を保持。ReleaseAutoError以外の失敗は従来どおり詳細なしで丸める。",
+    "tests/ops/test_release_auto_wire.py: transport拒否のstatus/code/retry_after_ms退避・非transport失敗の詳細なし・__cause__連鎖の回帰を追加。"
+  ],
+  "refs": ["mcs/ops/release_auto_wire.py", "tests/ops/test_release_auto_wire.py"]
+}
