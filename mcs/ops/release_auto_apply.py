@@ -142,7 +142,8 @@ def _git_effect(deps, owner, active):
     findings = deps.git_inspect(repo)
     if not isinstance(findings, dict):
         raise _ApplyMismatch('GIT_ENV_UNSAFE')
-    if any(findings.get(k) for k in _UNSAFE_GIT_FINDINGS):
+    # 監査項目の欠落・非False値は全てunsafe扱い(fail-closed)。
+    if any(findings.get(k) is not False for k in _UNSAFE_GIT_FINDINGS):
         raise _ApplyMismatch('GIT_ENV_UNSAFE')
     commit = target['source_commit']
     _require_git(_git(deps, repo, 'bundle', 'verify', bundle), 'BUNDLE_INVALID')

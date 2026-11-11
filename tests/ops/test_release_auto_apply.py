@@ -26,7 +26,11 @@ class ApplyDeps(ot.FakeDeps):
         self.git_fail_at = None      # argv部分文字列 → rc=1を返す段階
         self.head = ot.CURRENT['source_commit']
         self.ancestor_rc = 0
-        self.findings = {}
+        # 実Git.git_inspectと同じ全監査keyを返す — applyは欠落keyを
+        # unsafe扱いするため、safe既定は明示的なFalseで構成する。
+        self.findings = {k: False for k in
+                         ('alternates', 'replace_refs', 'includes',
+                          'hooks_path', 'fsmonitor', 'external_filter')}
         self.digest_override = None
         self.measure_override = None
         self.journal = []
@@ -257,6 +261,17 @@ def test_apply_unsafe_git_env_marks_unknown(store):
     seed(store)
     _, deps = started(store)
     deps.findings = {'alternates': True}
+    with pytest.raises(owner_mod.OwnerError) as e:
+        apply_mod.apply_code_only_v3(store, _capability(store), deps)
+    assert e.value.code == 'GIT_ENV_UNSAFE'
+    _assert_unknown(store, deps, 'GIT_ENV_UNSAFE')
+
+
+def test_apply_partial_git_findings_marks_unknown(store):
+    """監査key欠落のfindingsはunsafe扱い — 部分dictをsafeと誤認しない。"""
+    seed(store)
+    _, deps = started(store)
+    deps.findings = {'alternates': False}  # 残key欠落
     with pytest.raises(owner_mod.OwnerError) as e:
         apply_mod.apply_code_only_v3(store, _capability(store), deps)
     assert e.value.code == 'GIT_ENV_UNSAFE'
