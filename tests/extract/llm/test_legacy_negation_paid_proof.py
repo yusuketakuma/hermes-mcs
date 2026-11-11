@@ -10,6 +10,7 @@ import cloud_client
 import cloud_inference
 import cloud_policy
 import extract_llm as worker
+import extract_llm_progress
 import extract_llm_qc
 from extract_testkit import _ledger, _message
 from test_anthropic_runtime import _bound_source, real_record_result, real_usage_reserver, routed as routed
@@ -124,14 +125,38 @@ def test_protected_prior_length_split_repair_mints_v2_and_replays(routed, monkey
     results = [json.loads(item["meta"]) for item in
                led.artifacts("cloud_usage_result", project_id=1, message_id=1)]
     assert any(item.get("answer_finish_reason_v1") == "length" for item in results)
+    # The saved-leaf check above can be satisfied by a split child; pin the v2
+    # proof on the split parent record itself and bind its response to the
+    # length receipt before commit cleanup removes the current checkpoint rows.
+    parents = [item for item in led.artifacts("extract_llm_chunk", project_id=1, message_id=1)
+               if "split_size" in json.loads(item["meta"] or "{}")]
+    assert parents, "expected a persisted split parent checkpoint row"
+    parent_repair = json.loads(parents[0]["content"]).get("__quality_repair_v1")
+    assert isinstance(parent_repair, dict) and parent_repair.get("version") == 2
+    assert parent_repair.get("protected_prior_ref") == row["_protected_prior_ref"]
+    parent_receipt = cloud_policy.reservation_evidence(
+        led.db, parent_repair["response"]["reservation_artifact_id"])
+    assert parent_receipt["result"]["answer_finish_reason_v1"] == "length"
+    assert parent_receipt["result"]["answer_text_sha256_v1"] == hashlib.sha256(
+        parent_repair["response"]["answer_text"].encode()).hexdigest()
     sends_before = len(sends)
     assert worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
         meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
         expected_prior=prior) == 'written'
     message = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-    # Unresolved hint gaps keep the honest terminal state; the progress read
-    # itself replays the committed inline proof without another paid call.
+    # attention alone cannot distinguish a verified proof from a rejected one;
+    # pin that the progress read's inline-proof verification returned True.
+    original_verify = extract_llm_progress._verify_inline_extract_proof
+    verify_calls = []
+
+    def spy(db, r, context, document, proof):
+        outcome = original_verify(db, r, context, document, proof)
+        verify_calls.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(extract_llm_progress, "_verify_inline_extract_proof", spy)
     assert worker.progress_for_message(led.db, message, model=result["_model"])["state"] == "attention"
+    assert verify_calls and all(verify_calls)
     assert len(sends) == sends_before
 
 
