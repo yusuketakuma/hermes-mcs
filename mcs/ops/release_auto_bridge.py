@@ -413,9 +413,15 @@ def deploy_closure(manifest_value, canonical, source_root, recovery_root):
 def verify_closure(manifest_value, canonical, source_root, recovery_root):
     """drive()のverify hook実体: 配備を冪等に整えてからclosureを再検証する。"""
     generation = deploy_closure(manifest_value, canonical, source_root, recovery_root)
+    _check(not os.path.islink(generation), 'VERIFY_FAILED')
     expected = {_safe_relpath(e['path']): e for e in manifest_value['files']}
     seen = set()
     for dirpath, dirnames, filenames in os.walk(generation):
+        # os.walk(followlinks=False既定)はsymlinked dirをdirnamesへ列挙するが
+        # 潜らない — dot-dirの走査除外より先にlstatでsymlink自体を拒否する。
+        for d in dirnames:
+            _check(not os.path.islink(os.path.join(dirpath, d)),
+                   'VERIFY_FAILED')
         dirnames[:] = [d for d in dirnames if not d.startswith('.')]
         for filename in filenames:
             full = os.path.join(dirpath, filename)

@@ -291,6 +291,28 @@ def test_deploy_and_verify_closure(store, tmp_path):
     assert open(target, 'rb').read() == b'print(1)\n'
 
 
+def test_verify_closure_rejects_symlinked_dir(store, tmp_path):
+    """os.walkはsymlinked dirを潜らない — dirnames側のsymlinkも拒否する。"""
+    source_root = tmp_path / 'source'
+    rel = 'mcs/core/runtime_entry.py'
+    path = source_root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'print(1)\n')
+    manifest = bridge.build_control_manifest(
+        entrypoints=['mcs_update.py'],
+        files=[{'path': rel, 'mode': '100644',
+                'sha256': hashlib.sha256(b'print(1)\n').hexdigest()}],
+        dependency_policy_sha256='b' * 64, recovery_generation_sha256='c' * 64)
+    canonical = manifest['canonical']
+    recovery = tmp_path / 'recovery'
+    generation = bridge.deploy_closure(manifest['manifest'], canonical,
+                                       str(source_root), str(recovery))
+    os.symlink('/tmp', os.path.join(generation, 'mcs', 'linked'))
+    with pytest.raises(bridge.BridgeError, match='VERIFY_FAILED'):
+        bridge.verify_closure(manifest['manifest'], canonical,
+                              str(source_root), str(recovery))
+
+
 def test_deploy_closure_rejects_unsafe_path(store, tmp_path):
     bad = bridge.build_control_manifest(
         entrypoints=['x'],
