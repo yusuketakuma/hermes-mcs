@@ -13,7 +13,7 @@ import hashlib
 import json
 import secrets
 
-from adapters.sdc import protocol, release_contract
+from adapters.sdc import protocol, release_auto_contract as contract, release_contract
 from adapters.sdc.support_contract import canonical
 from sdc_support_signatures import verify_release_attestation, verify_v3_envelope
 
@@ -135,7 +135,7 @@ def _expected(path, purpose, request):
         for key in ('local_consent_epoch', 'policy_epoch'):
             if key in consent:
                 expected[key] = consent[key]
-        expected['consent_sha256'] = _sha256_canonical(consent)
+        expected['consent_sha256'] = contract.hash_v3('standing-consent', consent)
         return expected
     raise WireError('WIRE_PURPOSE')
 

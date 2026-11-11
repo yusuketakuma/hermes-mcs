@@ -11,7 +11,8 @@ ownerが`witness_private(active)`へ要求するのはschema_version/publicを�
   Q EX保持中のfresh stat+内容hashが契約(spec 03: lock_fingerprints再照合)。
 - source_facts(): {'source_tree_sha256','runtime_fingerprint'}
 - ledger_stat(): ledger DBのstat(dictまたはos.stat_result)
-- stage_stat(): {'path','identity'} — staged artifactのFileIdentity+path
+- stage_stat(active): {'path','identity'} — staged artifactの
+  FileIdentity+path(active['target']から導出)
 - backup_detail(): {'path','sha256'} — backup_evidenceが発行した私有記録の
   実path/hash(wireへは出さない。uuidはpublic側の責務)
 - retired_processes(): RetiredProcess[] — await_retirement証拠または
@@ -86,9 +87,9 @@ class PrivateWitness:
             'required_free_bytes': required_free_bytes,
             'reserved_owner_bytes': reserved_owner_bytes}
 
-    def _call(self, name):
+    def _call(self, name, *args):
         try:
-            return self._providers[name]()
+            return self._providers[name](*args)
         except WitnessError:
             raise
         except Exception as e:
@@ -129,7 +130,8 @@ class PrivateWitness:
                 raise WitnessError('WITNESS_SOURCE')
 
         led = _stat_fields(self._call('ledger_stat'))
-        stg = self._call('stage_stat')
+        # stage_statのみactiveを受け取る — stage artifactはtarget依存のため
+        stg = self._call('stage_stat', active)
         if not isinstance(stg, dict):
             raise WitnessError('WITNESS_STAGE')
         stage_path = _need(stg.get('path'))

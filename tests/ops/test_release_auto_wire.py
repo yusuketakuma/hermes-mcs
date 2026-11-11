@@ -185,7 +185,8 @@ def test_verify_consent_confirm_binds_inner_consent(monkeypatch):
     assert expected['scope'] == SCOPE and expected['consent_id'] == 'cid'
     assert expected['local_consent_epoch'] == 4
     assert expected['consent_sha256'] == hashlib.sha256(
-        canonical(consent).encode('ascii')).hexdigest()
+        b'MCS-AUTO-v3\nstanding-consent\n' + canonical(consent).encode('ascii')
+    ).hexdigest()
     assert 'scope' not in body  # request直下にscopeが無いことを確認済み
 
 

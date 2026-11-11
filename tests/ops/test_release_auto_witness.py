@@ -53,7 +53,7 @@ def make_witness(store, ledger_file=None, **over):
         'source_facts': lambda: {'source_tree_sha256': _sha('tree'),
                                  'runtime_fingerprint': _sha('rt')},
         'ledger_stat': lambda: os.stat(ledger_file),
-        'stage_stat': lambda: {'path': '/synthetic/stage',
+        'stage_stat': lambda _active: {'path': '/synthetic/stage',
                                'identity': _ident(size=4096)},
         'backup_detail': lambda: {'path': '/synthetic/backup.tar',
                                   'sha256': _sha('backup')},
@@ -184,11 +184,11 @@ def test_witness_rejects_bad_stage(tmp_path):
         # nlink!=1 はspec FileIdentity const違反として事前拒否
         w = make_witness(
             store,
-            stage_stat=lambda: {'path': '/s',
+            stage_stat=lambda _active: {'path': '/s',
                                 'identity': _ident(nlink=2)})
         with pytest.raises(WitnessError):
             w.witness_private(ACTIVE)
-        w2 = make_witness(store, stage_stat=lambda: {'identity': {}})
+        w2 = make_witness(store, stage_stat=lambda _active: {'identity': {}})
         with pytest.raises(WitnessError):
             w2.witness_private(ACTIVE)
 
