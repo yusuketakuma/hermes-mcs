@@ -121,6 +121,41 @@ def test_v3_owner_schema_without_q_holds(runtime_home):
         runtime_entry.acquire(runtime_home, wait_s=0)
 
 
+def test_real_legacy_gate_root_is_unmanaged(runtime_home):
+    """P0再現: v1機構の実経路 release_apply_checks._open_release_gate が
+    作るcontrol root(release-entry.lockのみ)はv3未移行としてunmanaged。"""
+    import release_apply_checks
+    fd = release_apply_checks._open_release_gate(str(runtime_home))
+    try:
+        # ゲート生存中(LOCK_SH保持)でもlegacy rootはunmanaged
+        entry = runtime_entry.acquire(runtime_home, wait_s=0)
+        try:
+            assert not entry.managed and entry.fd is None
+        finally:
+            entry.close()
+    finally:
+        os.close(fd)
+    # ゲート終了後もlock fileは残存し同じ判定になる
+    assert (runtime_entry.control_root(runtime_home)
+            / 'release-entry.lock').exists()
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert not entry.managed and entry.fd is None
+    finally:
+        entry.close()
+
+
+def test_real_legacy_gate_root_with_v3_marker_holds(runtime_home):
+    """実legacy rootへv3 markerが混在すれば従来どおりfail-closedでhold。"""
+    import release_apply_checks
+    fd = release_apply_checks._open_release_gate(str(runtime_home))
+    os.close(fd)
+    _touch(runtime_entry.control_root(runtime_home),
+           'release-migration-v3.json', b'{}')
+    with pytest.raises(runtime_entry.RuntimeEntryError, match='RUNTIME_HOLD'):
+        runtime_entry.acquire(runtime_home, wait_s=0)
+
+
 def test_missing_owner_holds(runtime_home):
     seed_v3(runtime_home, owner=False)
     with pytest.raises(runtime_entry.RuntimeEntryError, match='UNKNOWN_BASELINE'):
