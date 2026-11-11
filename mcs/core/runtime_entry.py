@@ -14,6 +14,15 @@ Q_POLL_S = 0.2
 CHILD_FDS_ENV = 'MCS_RUNTIME_ENTRY_FDS'
 _CURRENT = None
 
+# The control root predates v3: v1 release locks (release-entry.lock etc.)
+# live in the same per-home namespace, so root existence alone must not
+# select the managed path. Only v3 protocol artifacts do.
+_V3_STATE_NAMES = ('release-start-intent.json', 'release-migration-v3.json',
+                   'release-health.json', 'release-consent-confirmation.json')
+_V3_OWNER_SCHEMA = 'mcs.release-owner.v3'
+_LEGACY_LOCK_NAMES = ('release-entry.lock', 'release-owner.lock',
+                      'release-authority.lock')
+
 
 class RuntimeEntryError(RuntimeError):
     """v3 bootstrap refusal; the code selects the safe hold."""
@@ -175,6 +184,44 @@ def _fence_consistent(store, owner, intent):
             and active.get('prepare_nonce') == intent.get('prepare_nonce'))
 
 
+def _entry_state(fd, name):
+    """True/False on definitive stat; None when the entry cannot be observed."""
+    try:
+        os.stat(name, dir_fd=fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
+def _v3_state_present(store):
+    """v3 protocol artifact in the control root (the Q lock itself is checked
+    separately by the caller). release-owner.json is shared with v1, so only
+    the v3 schema counts; an unreadable owner cannot prove legacy."""
+    for name in _V3_STATE_NAMES:
+        if _entry_state(store.fd, name) is not False:
+            return True
+    try:
+        owner = store.read('release-owner.json')
+    except Exception:
+        return True
+    return (isinstance(owner, dict)
+            and owner.get('schema_version') == _V3_OWNER_SCHEMA)
+
+
+def _legacy_root(store):
+    """Only v1 release locks present — proof no v3 migration ever ran here.
+    An empty or partially unobservable root cannot prove legacy."""
+    seen = False
+    for name in _LEGACY_LOCK_NAMES:
+        state = _entry_state(store.fd, name)
+        if state is None:
+            return False
+        seen = seen or state
+    return seen
+
+
 def _hold(entry):
     global _CURRENT
     _CURRENT = entry
@@ -189,13 +236,13 @@ def current():
 def acquire(runtime_home=None, *, shared=True, wait_s=Q_WAIT_S):
     """Business-process bootstrap. Returns a held RuntimeEntry for the process lifetime.
 
-    Legacy devices (no v3 control root) get managed=False and no locks. A control root
-    without runtime-entry.lock, an unreadable owner, or a vanished Q inode all hold.
+    Legacy devices (no v3 control root, or a root holding only v1 release
+    locks) get managed=False and no locks. A control root with v3 markers but
+    no runtime-entry.lock, an unreadable owner, or a vanished Q inode all hold.
     """
     root = control_root(runtime_home)
     if not root.exists():
         return _hold(_legacy())
-    _check_python_environment()
     from adapters.sdc.storage import Store
     from adapters.sdc import release_auto_state
     try:
@@ -203,8 +250,16 @@ def acquire(runtime_home=None, *, shared=True, wait_s=Q_WAIT_S):
     except (OSError, ValueError) as error:
         raise RuntimeEntryError('RUNTIME_HOLD') from error
     try:
-        if not _q_present(store):
-            raise RuntimeEntryError('RUNTIME_HOLD')
+        q_present = _q_present(store)
+        if not q_present:
+            # Legacy devices keep only v1 release locks in this root — no v3
+            # migration ever ran, so business entries stay unmanaged. Any v3
+            # marker, or a root that cannot prove legacy, remains a hold.
+            if _v3_state_present(store) or not _legacy_root(store):
+                raise RuntimeEntryError('RUNTIME_HOLD')
+            store.close()
+            return _hold(_legacy())
+        _check_python_environment()
         deadline = time.monotonic() + wait_s
         while True:
             try:

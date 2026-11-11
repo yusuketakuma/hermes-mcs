@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "v3未移行環境でHermesプラグイン等の起動が止まる問題を修正",
+  "summary": "v3制御ディレクトリ（~/.mcs-release-control/<home識別子>）はv1更新機構のロック用に既存環境にも存在します。従来はこのdirの存在だけでv3管理対象と判定し、runtime-entry.lockが無いと起動を拒否していたため、v3未移行の環境ではHermesプラグイン・LINE WORKSアダプター・独立実行hostが起動時に失敗する状態でした。v1ロックのみが存在するrootは未管理（legacy）として扱うよう修正し、v3の痕跡（migration記録・start intent・health・consent証拠・v3 schemaのowner state）がある場合は従来どおりfail-closedで停止します。",
+  "upgrade": "追加操作は不要です。次回の通常更新で新しいコードが反映され、Hermes gatewayの再起動後にプラグインが正常に登録されます。v3移行済み環境の動作（Q lock保持・fence検査）は変わりません。",
+  "details": [
+    "mcs/core/runtime_entry.py: acquire()がcontrol root内のv3専用sidecar（release-start-intent.json・release-migration-v3.json・release-health.json・release-consent-confirmation.json）とrelease-owner.jsonのv3 schemaを検査し、v3痕跡が無くv1ロック（release-entry.lock/release-owner.lock/release-authority.lock）のみ存在するrootを未管理として返すよう変更。空・未知ファイルのみのrootは従来どおりRUNTIME_HOLD。PYTHONPATH/PYTHONHOME検査はv3管理経路でのみ実施。",
+    "tests/core/test_runtime_entry.py: v1ロックのみのrootで未管理になること、shadowing envを無視すること、v3 markerやv3 schema ownerがあればQ無しでもholdになることの回帰を追加。"
+  ],
+  "refs": ["mcs/core/runtime_entry.py", "hermes_plugin/__init__.py", "adapters/lineworks/__main__.py", "lineworks_adapter/__main__.py", "mcs_standalone/__main__.py"]
+}

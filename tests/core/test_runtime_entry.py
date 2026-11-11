@@ -72,6 +72,55 @@ def test_control_root_without_q_holds(runtime_home):
         runtime_entry.acquire(runtime_home, wait_s=0)
 
 
+def _touch(root, name, raw=b''):
+    fd = os.open(root / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, raw)
+    finally:
+        os.close(fd)
+
+
+def test_legacy_root_with_v1_locks_is_unmanaged(runtime_home):
+    """v1 release locks alone prove no v3 migration ran — legacy no-op."""
+    root = managed_root(runtime_home)
+    _touch(root, 'release-entry.lock')
+    _touch(root, 'release-owner.lock')
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert not entry.managed and entry.fd is None
+    finally:
+        entry.close()
+
+
+def test_legacy_root_ignores_shadowing_env(runtime_home, monkeypatch):
+    root = managed_root(runtime_home)
+    _touch(root, 'release-entry.lock')
+    monkeypatch.setenv('PYTHONPATH', '/tmp/shadow')
+    entry = runtime_entry.acquire(runtime_home, wait_s=0)
+    try:
+        assert not entry.managed
+    finally:
+        entry.close()
+
+
+def test_v3_marker_without_q_holds(runtime_home):
+    """v3 sidecar beside v1 locks is still a hold — markers beat legacy proof."""
+    root = managed_root(runtime_home)
+    _touch(root, 'release-entry.lock')
+    _touch(root, 'release-migration-v3.json', b'{}')
+    with pytest.raises(runtime_entry.RuntimeEntryError, match='RUNTIME_HOLD'):
+        runtime_entry.acquire(runtime_home, wait_s=0)
+
+
+def test_v3_owner_schema_without_q_holds(runtime_home):
+    root = managed_root(runtime_home)
+    _touch(root, 'release-entry.lock')
+    _touch(root, 'release-owner.json',
+           b'{"schema_version":"mcs.release-owner.v3"}')
+    with pytest.raises(runtime_entry.RuntimeEntryError, match='RUNTIME_HOLD'):
+        runtime_entry.acquire(runtime_home, wait_s=0)
+
+
 def test_missing_owner_holds(runtime_home):
     seed_v3(runtime_home, owner=False)
     with pytest.raises(runtime_entry.RuntimeEntryError, match='UNKNOWN_BASELINE'):
