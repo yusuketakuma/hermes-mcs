@@ -218,6 +218,20 @@ def create_bundle(request_path, repo, output_dir, output):
     expected = int(_git('-C', repo, 'rev-list', '--count',
                         commit).get('stdout', '0').strip() or '0')
     _require(expected > 0, 'COMMIT_INVALID')
+    # spec §4手順7: 読取り時main SHAに対しtargetが祖先であることを隔離検証。
+    # main_snapshot_shaはinspect-event必須項目。object不在・非祖先はfail-closed。
+    main_snapshot = request.get('main_snapshot_sha')
+    _require(isinstance(main_snapshot, str)
+             and COMMIT_RE.fullmatch(main_snapshot),
+             'MAIN_SNAPSHOT_INVALID')
+    _git('-C', repo, 'rev-parse', '--verify', '--quiet',
+         main_snapshot + '^{commit}')
+    from release_auto_git import Git
+    probe = Git().run(['-C', repo, 'merge-base', '--is-ancestor',
+                       commit, main_snapshot], timeout_s=30)
+    if probe.get('rc') == 1:
+        raise SystemExit('release_publish: SOURCE_NOT_ON_MAIN')
+    _require(probe.get('rc') == 0, 'GIT_FAILED:merge-base')
     os.makedirs(output_dir, exist_ok=True)
     bundle_path = os.path.join(output_dir, _BUNDLE_NAME)
     try:
@@ -249,6 +263,7 @@ def create_bundle(request_path, repo, output_dir, output):
                         'size': os.path.getsize(bundle_path),
                         'sha256': _sha256_file(bundle_path)},
               'commit': commit, 'tag': tag, 'ref': ref,
+              'main_snapshot_sha': main_snapshot,
               'reachable_commits': expected}
     _dump(output, result)
     return result

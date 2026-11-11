@@ -250,7 +250,8 @@ def test_create_bundle_happy(tmp_path):
     repo, git = _git_repo(tmp_path)
     commit = git('rev-parse', 'HEAD').stdout.strip()
     req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': commit, 'tag': 'v1.2.3'}))
+    req.write_text(json.dumps({'commit': commit, 'tag': 'v1.2.3',
+                               'main_snapshot_sha': commit}))
     out_dir = tmp_path / 'out'
     proof = tmp_path / 'proof.json'
     result = _run('create-bundle', '--request', str(req),
@@ -265,6 +266,7 @@ def test_create_bundle_happy(tmp_path):
     assert len(doc['asset']['sha256']) == 64
     assert doc['reachable_commits'] == 3
     assert doc['commit'] == commit
+    assert doc['main_snapshot_sha'] == commit
     # 一時refは除去済み — repoにmcs-publish refが残らない
     refs = git('for-each-ref', 'refs/mcs-publish').stdout.strip()
     assert refs == ''
@@ -273,7 +275,8 @@ def test_create_bundle_happy(tmp_path):
 def test_create_bundle_rejects_missing_commit(tmp_path):
     repo, _git = _git_repo(tmp_path)
     req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': 'd' * 40, 'tag': 'v1.2.3'}))
+    req.write_text(json.dumps({'commit': 'd' * 40, 'tag': 'v1.2.3',
+                               'main_snapshot_sha': 'e' * 40}))
     result = _run('create-bundle', '--request', str(req),
                   '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
                   '--output', str(tmp_path / 'p.json'))
@@ -285,7 +288,8 @@ def test_create_bundle_rejects_bad_tag(tmp_path):
     repo, git = _git_repo(tmp_path)
     commit = git('rev-parse', 'HEAD').stdout.strip()
     req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': commit, 'tag': 'nightly'}))
+    req.write_text(json.dumps({'commit': commit, 'tag': 'nightly',
+                               'main_snapshot_sha': commit}))
     result = _run('create-bundle', '--request', str(req),
                   '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
                   '--output', str(tmp_path / 'p.json'))
@@ -297,14 +301,44 @@ def test_create_bundle_partial_history(tmp_path):
     """root commitを対象にするとその到達履歴のみ — reachable数で検証。"""
     repo, git = _git_repo(tmp_path)
     first = git('rev-list', '--max-parents=0', 'HEAD').stdout.strip()
+    head = git('rev-parse', 'HEAD').stdout.strip()
     req = tmp_path / 'req.json'
-    req.write_text(json.dumps({'commit': first, 'tag': 'v1.0.0'}))
+    req.write_text(json.dumps({'commit': first, 'tag': 'v1.0.0',
+                               'main_snapshot_sha': head}))
     proof = tmp_path / 'proof.json'
     result = _run('create-bundle', '--request', str(req),
                   '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
                   '--output', str(proof))
     assert result.returncode == 0, result.stderr
     assert json.loads(proof.read_text())['reachable_commits'] == 1
+
+
+def test_create_bundle_rejects_source_not_on_main(tmp_path):
+    """spec §4手順7: targetがmain snapshotの祖先でない場合は拒否。"""
+    repo, git = _git_repo(tmp_path)
+    head = git('rev-parse', 'HEAD').stdout.strip()
+    first = git('rev-list', '--max-parents=0', 'HEAD').stdout.strip()
+    req = tmp_path / 'req.json'
+    # HEADをtag対象、root commitをmain snapshot扱い → HEADはrootの子孫で非祖先
+    req.write_text(json.dumps({'commit': head, 'tag': 'v1.2.3',
+                               'main_snapshot_sha': first}))
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
+                  '--output', str(tmp_path / 'p.json'))
+    assert result.returncode != 0
+    assert 'SOURCE_NOT_ON_MAIN' in result.stderr
+
+
+def test_create_bundle_rejects_missing_main_snapshot(tmp_path):
+    repo, git = _git_repo(tmp_path)
+    commit = git('rev-parse', 'HEAD').stdout.strip()
+    req = tmp_path / 'req.json'
+    req.write_text(json.dumps({'commit': commit, 'tag': 'v1.2.3'}))
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
+                  '--output', str(tmp_path / 'p.json'))
+    assert result.returncode != 0
+    assert 'MAIN_SNAPSHOT_INVALID' in result.stderr
 
 
 def test_external_commands_are_dry_run_by_default(tmp_path):
