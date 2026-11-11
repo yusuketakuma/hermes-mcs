@@ -199,7 +199,8 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
 
 def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
                 prior_content=None, answer_hook=None, extract_extra=None, body=None,
-                expected_sends=2, truncated=None):
+                expected_sends=2, truncated=None, pending_only=False,
+                crash_after_started=False):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops."""
     led, cfg, _, _, _ = routed
@@ -271,6 +272,16 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
                     {"type": "output_text", "text": json.dumps(answer, ensure_ascii=False)}]}],
                 "usage": usage}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
+    if pending_only:
+        # Exhaust the repair reserve after the pending checkpoint persists:
+        # the run defers with a real paid first response and no started row.
+        monkeypatch.setattr(extract_llm_engine, "_MIN_REPAIR_S", 10**9)
+    if crash_after_started:
+        # Stop between the started checkpoint persist and the repair dispatch:
+        # the started row stays at rest with its paid first-response origin.
+        def _crash(*_args, **_kwargs):
+            raise RuntimeError("synthetic_repair_prompt_crash")
+        monkeypatch.setattr(extract_llm_engine, "_repair_prompt", _crash)
     deadline = time.monotonic() + 600
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, message_id=1,
         unit_key="1", deadline=deadline, current=lambda: worker._owns_current_source(led, row, lease),
@@ -291,15 +302,26 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
             chunk_size=row["_chunk_size"], splits=row["_splits"], split_size=size,
             lease=lease, guard=row["_checkpoint_guard"])
 
-    with legacy_cloud_routes():
-        result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
-            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
-            quality_qc_src=source_id, on_chunk=checkpoint, on_split=on_split,
-            chunk_size=row["_chunk_size"], provider=provider,
-            medication_hints=worker._frame_medications(row), **extra)
-    assert isinstance(result, dict) and len(sends) == expected_sends
-    row["_provider_evidence"] = meta.pop("_provider_evidence")
-    result["_model"] = selection["model"]
+    try:
+        with legacy_cloud_routes():
+            result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
+                posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
+                quality_qc_src=source_id, on_chunk=checkpoint, on_split=on_split,
+                chunk_size=row["_chunk_size"], provider=provider,
+                medication_hints=worker._frame_medications(row), **extra)
+    except RuntimeError as error:
+        if not crash_after_started or str(error) != "synthetic_repair_prompt_crash":
+            raise
+        result = None
+    if crash_after_started:
+        assert result is None and len(sends) == expected_sends
+    elif pending_only:
+        assert result is extract_llm_engine._DEFERRED and len(sends) == expected_sends
+    else:
+        assert isinstance(result, dict) and len(sends) == expected_sends
+    row["_provider_evidence"] = meta.pop("_provider_evidence", None)
+    if result is not None and not pending_only:
+        result["_model"] = selection["model"]
     return led, row, context, result, meta, qc_id, prior, chunks, sends
 
 
