@@ -218,7 +218,8 @@ def test_late_protected_prior_conflict_survives_recapture_and_refuses_commit(rou
     with led.db:
         led.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (prior_id,))
     before = [tuple(saved) for saved in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
-    worker._capture_checkpoint_state(led.db, row, context)
+    saved = worker._capture_checkpoint_state(led.db, row, context)
+    assert saved, "prior conflict must not silently drop checkpoint records"
     assert row.get("_checkpoint_conflict") is True
     worker._capture_checkpoint_state(led.db, row, context)
     assert row.get("_checkpoint_conflict") is True
