@@ -12,7 +12,8 @@ from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
 from notify_render import SECTION_RULE, card_body_text, own_post, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
-                          scope_fields, scope_matches, stored_scope,
+                          scope_fields, scope_keys_allowed, scope_matches,
+                          stored_scope,
                           _body_witness_proofs, _attachment_identity_witness_proofs)
 
 THREAD_PART_LIMIT = 1900
@@ -562,10 +563,11 @@ def _part_resolution_request(saved, receipt, row, *, part_state):
                 or receipt['manifest_sha256'] != row['payload_hash']
                 or receipt['payload_sha256'] != row['payload_sha256']
                 or receipt['delivery_id'] != row['delivery_id'] or receipt['part_id'] != row['part_id']
+                or not scope_keys_allowed(receipt['scope'])
                 or not scope_matches(row, receipt['scope'])):
             return None
         base = {'version': 1, 'cmd': 'ops.card_part_resolve', 'human_confirmed': True,
-                'result': 'mark_' + part_state, **receipt['scope'], **{k: receipt[k] for k in (
+                **receipt['scope'], **{k: receipt[k] for k in (
                     'command_id', 'actor', 'reason', 'delivery_id', 'part_id', 'attempt_id',
                     'manifest_sha256', 'payload_sha256', 'evidence')}}
         # The original receipt omits expected_state. Its digest proves which
@@ -574,7 +576,8 @@ def _part_resolution_request(saved, receipt, row, *, part_state):
         for expected in states:
             remotes = ({'remote_id': row['remote_id']},) if part_state == 'delivered' else ({}, {'remote_id': None})
             for remote in remotes:
-                req = {**base, 'expected_state': expected, **remote}
+                req = {**base, 'expected_state': expected, **remote,
+                       'result': 'mark_' + part_state}
                 if validate_card_part_resolve(req) is None and payload_hash(req) == saved['payload_hash']:
                     return req
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -642,8 +645,7 @@ def _confirmed_upload_identities(db, card):
                 or not isinstance(receipt.get("remote_id"), str) or not receipt["remote_id"]):
             continue
         scope = receipt.get("scope")
-        if (not isinstance(scope, dict)
-                or scope.keys() - {"transport", *scope_fields("slack")}
+        if (not scope_keys_allowed(scope)
                 or not scope_matches(card, scope)):
             continue
         req = {"version": 1, "cmd": "ops.attachment_identity_confirm",

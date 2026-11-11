@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "通知scopeの未知key混入を拒否しresolve要求復元のresult固定を強化",
+  "summary": "カード部品解決・添付同一性確認のreceipt照合で、保存されたscopeに要求項目（result・remote_id等）が混入していてもscope照合が未知keyを無視するため、復元した要求へ値が流れ込み得る隙間を塞ぎました。scopeが保持できるkeyを保存形式の契約（transport別のscope項目＋slack/lineworksのtransport）に限定し、復元要求のresultは展開後に固定値で最後に設定します。",
+  "upgrade": "追加操作は不要です。scopeに要求項目を含む改竄・破損receiptは、今回の変更で復元段階でも拒否されるようになりました。正常なreceiptの動作は変わりません。",
+  "details": [
+    "mcs/notify/notify_scope.py: scope_keys_allowedを追加。scope dictがstored_scopeの出力契約（transport別scope_fields＋slack/lineworksのみtransport）に一致するkeyだけを持つか検査。",
+    "mcs/notify/notify_parts.py: _part_resolution_requestのguardへscope_keys_allowedを追加し、復元要求のresultをscope/remote展開の後に固定値で最後に設定。_confirmed_upload_identitiesのinline key制限を共有helperへ置換。",
+    "tests/notify/test_notification_tracking_file_ack.py: scopeへresult/remote_idを混入したreceipt・part_state不一致のnegativeを追加し、helperの受理/拒否を直接検証。"
+  ],
+  "refs": [
+    "mcs/notify/notify_scope.py",
+    "mcs/notify/notify_parts.py",
+    "tests/notify/test_notification_tracking_file_ack.py"
+  ]
+}
