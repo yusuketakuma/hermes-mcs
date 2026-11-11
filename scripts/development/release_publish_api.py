@@ -64,8 +64,8 @@ def api_request(method, url, *, token, body=None, raw=None, headers=None,
         bearer = token() if callable(token) else token
     except PublishApiError:
         raise
-    except Exception as error:
-        raise PublishApiError('OIDC_UNAVAILABLE') from error
+    except Exception:
+        raise PublishApiError('OIDC_UNAVAILABLE') from None
     if not isinstance(bearer, str) or not bearer:
         raise PublishApiError('OIDC_INVALID')
     hdrs = {'authorization': 'Bearer ' + bearer,
@@ -103,8 +103,8 @@ def api_request(method, url, *, token, body=None, raw=None, headers=None,
         raise PublishApiError(code, error.code) from None
     except PublishApiError:
         raise
-    except Exception as error:
-        raise PublishApiError('TRANSPORT_ERROR') from error
+    except Exception:
+        raise PublishApiError('TRANSPORT_ERROR') from None
     if not 200 <= status < 300:
         raise PublishApiError('HTTP_%d' % status, status)
     return payload
@@ -128,8 +128,8 @@ def oidc_token(env=None, *, opener=None):
             doc = json.loads(_read_bounded(response, 65536))
     except PublishApiError:
         raise
-    except Exception as error:
-        raise PublishApiError('OIDC_UNAVAILABLE') from error
+    except Exception:
+        raise PublishApiError('OIDC_UNAVAILABLE') from None
     value = doc.get('value') if isinstance(doc, dict) else None
     if not isinstance(value, str) or not value or len(value) > 8192:
         raise PublishApiError('OIDC_INVALID')
@@ -345,8 +345,8 @@ def github_request(method, url, *, token, body=None, raw=None,
         raise PublishApiError(code, error.code) from None
     except PublishApiError:
         raise
-    except Exception as error:
-        raise PublishApiError('TRANSPORT_ERROR') from error
+    except Exception:
+        raise PublishApiError('TRANSPORT_ERROR') from None
     try:
         doc = json.loads(payload) if payload else None
     except Exception:
