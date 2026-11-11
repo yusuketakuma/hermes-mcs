@@ -449,7 +449,8 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
 
 
 def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
-                              used_keys, *, check_current, mark_context=None, expected_prior=None):
+                              used_keys, *, check_current, mark_context=None, expected_prior=None,
+                              adoption_guard=None):
     if isinstance(r, dict):
         r.pop("_commit_reject_reason", None)
         r.pop("_completeness_reject_reason", None)
@@ -464,6 +465,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
             if (not _source_writable(ledger.db, r)
                     or not _owns_current_source(ledger, r, r.get("_current_lease"))):
                 return _commit_rejected(r, "source_or_owner")
+            if adoption_guard is not None and not adoption_guard():
+                # The migrated row's financial boundary re-verification ran
+                # inside this write transaction: a hold rejects the adoption
+                # and the row stays pending for the next guarded attempt.
+                return _commit_rejected(r, "superseded_guard")
             expected = r.get("_checkpoint_identity")
             if expected is None:
                 return _commit_rejected(r, "checkpoint")

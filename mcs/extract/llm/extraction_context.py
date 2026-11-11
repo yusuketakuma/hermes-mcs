@@ -324,8 +324,13 @@ def _prior_source_attempt(doc, meta, target, *, model, contract, attempt, compat
 
 
 def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None,
-            compatible_contracts=()):
-    """Persist the full attempt frame before inference; retries reuse it byte for byte."""
+            compatible_contracts=(), guard=None):
+    """Persist the full attempt frame before inference; retries reuse it byte for byte.
+
+    ``guard`` optionally receives the built (or reused) frame document after
+    candidate construction and before it is persisted or returned — the
+    superseded migration uses it to clear the financial guard on the exact
+    request this frame will serve, so a held candidate never becomes durable."""
     if ledger.db.in_transaction:
         raise ValueError("context_transaction_owned")
     target = dict(target)
@@ -377,6 +382,8 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
                         raise ValueError('context_snapshot_invalid')
                     references.append(reference)
                 if all(reference_current(ledger.db, target, reference, version=version) for reference in references):
+                    if guard is not None:
+                        guard(old)
                     return old
                 # The old attempt frame remains immutable history. Only its
                 # now-invalid antecedents justify reading a fresh bounded set.
@@ -402,6 +409,8 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
         if medication_hints is not None:
             payload["medication_hints"] = medication_hints
         doc = {**payload, "digest": _digest(payload)}
+        if guard is not None:
+            guard(doc)
         aid = ledger.artifact_add_tx(KIND, json.dumps(doc, ensure_ascii=False),
                                     project_id=target["project_id"], message_id=target["message_id"],
                                     model=model, meta={"hash": target["content_hash"],

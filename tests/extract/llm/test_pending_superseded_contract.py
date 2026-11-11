@@ -27,16 +27,17 @@ __all__ = ['routed']
 ATTEMPT = {'qc_src': None, 'thin_src': None, 'human_src': None, 'auto_retry': 0}
 
 
-def _frozen(ledger, body=None):
-    old(ledger)
+def _frozen(ledger, body=None, mid=1):
+    old(ledger, mid=mid)
     if body is not None:
         digest = hashlib.sha256(body.encode()).hexdigest()
         with ledger.db:
             ledger.db.execute(
-                "UPDATE messages SET body_text=?, content_hash=? WHERE message_id=1",
-                (body, digest))
-    row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
-    row.update(_source_binding=source_binding(ledger.db, 1, 1),
+                "UPDATE messages SET body_text=?, content_hash=? WHERE message_id=?",
+                (body, digest, mid))
+    row = dict(ledger.db.execute(
+        'SELECT * FROM messages WHERE message_id=?', (mid,)).fetchone())
+    row.update(_source_binding=source_binding(ledger.db, row['project_id'], mid),
                _target=('', 'synthetic-model'), _cloud_mode='off')
     frame = frames.prepare(ledger, row, model='synthetic-model',
         contract=worker._context_contract(), attempt=ATTEMPT, enabled=False,
@@ -46,7 +47,7 @@ def _frozen(ledger, body=None):
 
 def _persist(ledger, row, frame, context, model='synthetic-model'):
     return ledger.artifact_add('extract_llm_chunk', '{}',
-        project_id=1, message_id=1, model=model,
+        project_id=row['project_id'], message_id=row['message_id'], model=model,
         meta={VERSION_KEY: CURRENT_VERSION, 'hash': row['content_hash'],
               'ver': worker.EXTRACT_VERSION, 'chunk': 0, 'context': context,
               'chunk_size': worker._CHUNK_SIZE, 'split_size': worker._CHUNK_SIZE // 3,
@@ -355,3 +356,129 @@ def test_retired_cohort_runs_local_and_is_adopted(routed, monkeypatch):
     after = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context"))
     for artifact_id, snapshot in before.items():
         assert after[artifact_id] == snapshot
+
+
+def test_adoption_boundary_reverifies_and_rejects_a_late_hold(
+        routed, monkeypatch):
+    """A same-fingerprint reservation appearing after dispatch must stop the
+    adoption inside the commit transaction — not just the next prepare."""
+    ledger, _cfg, calls, reserved, results = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    before = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context"))
+    real_guard = cloud_inference.guard_reextract_local
+    guard_calls = []
+
+    def late_hold(ledger_, cfg_, prompt, **kw):
+        guard_calls.append(prompt)
+        if len(guard_calls) >= 3:   # prepare ok, dispatch ok, adoption holds
+            raise cloud_client.CloudError("budget_exceeded", "cloud_unit_unresolved")
+        return real_guard(ledger_, cfg_, prompt, **kw)
+
+    monkeypatch.setattr(cloud_inference, "guard_reextract_local", late_hold)
+    prompts = []
+
+    def fake_call(prompt, **_kw):
+        prompts.append(prompt)
+        return {"symptoms": [], "summary": "合成の要約"}
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report["done"] == 0 and len(prompts) == 1 and len(guard_calls) == 3
+    assert not ledger.db.execute(
+        "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=?",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+    after = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context"))
+    for artifact_id, snapshot in before.items():
+        assert after[artifact_id] == snapshot
+    # the held row stays pending: the next prepare's guard holds it again
+    second = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert second["done"] == 0 and len(prompts) == 1
+
+
+def test_guarded_prompt_is_the_dispatched_prompt(routed, monkeypatch):
+    """The prompt the financial guard clears at prepare and re-verifies at
+    adoption is byte-identical to the prompt the local call actually sends."""
+    ledger, _cfg, _calls, _reserved, _results = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    seen = []
+    real_frp = extract_llm_engine.first_request_prompt
+
+    def spy(*args, **kwargs):
+        prompt = real_frp(*args, **kwargs)
+        seen.append(prompt)
+        return prompt
+
+    monkeypatch.setattr(extract_llm_engine, "first_request_prompt", spy)
+    import extract_llm_runner
+    monkeypatch.setattr(extract_llm_runner, "first_request_prompt", spy)
+    prompts = []
+
+    def fake_call(prompt, **_kw):
+        prompts.append(prompt)
+        return {"symptoms": [], "summary": "合成の要約"}
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report["done"] == 1 and len(prompts) == 1
+    # prepare + adoption both composed the guarded candidate; it is the
+    # exact string the engine dispatched
+    assert len(seen) >= 2 and all(p == prompts[0] for p in seen)
+
+
+def test_failed_local_attempt_preserves_every_old_row(routed, monkeypatch):
+    """A failed migrated attempt deletes nothing: old checkpoints, frames,
+    reservations and ownership stay byte-for-byte identical."""
+    ledger, _cfg, _calls, _reserved, _results = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    before = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context",
+                                     "cloud_usage_reserve", "cloud_usage_result"))
+
+    def fake_call(prompt, **_kw):
+        return None
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
+    import extract_llm_runner
+    monkeypatch.setattr(extract_llm_runner, "_llm_up", lambda deadline=None: True)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report["done"] == 0
+    after = _artifact_rows(ledger, ("extract_llm_chunk", "extraction_context",
+                                    "cloud_usage_reserve", "cloud_usage_result"))
+    for artifact_id, snapshot in before.items():
+        assert after[artifact_id] == snapshot
+    assert not ledger.db.execute(
+        "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=?",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+
+
+def test_parallel_superseded_jobs_complete_through_owner_guard(
+        routed, monkeypatch):
+    """Two migrated rows run concurrently: the financial guard's ledger
+    reads marshal to the owner thread — no ProgrammingError masquerading
+    as a permanent cloud_unit_unresolved."""
+    ledger, _cfg, calls, reserved, results = routed
+    prompts = []
+    for mid, body in ((1, None), (2, "別の完全合成の記録。")):
+        row, frame = _frozen(ledger, body=body, mid=mid)
+        _persist(ledger, row, frame, _old_context(row, frame))
+
+    def fake_call(prompt, **_kw):
+        prompts.append(prompt)
+        return {"symptoms": [], "summary": "合成の要約"}
+
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
+    report = worker.run_pending(ledger, limit=2, budget_s=180, workers=2)
+    assert report["done"] == 2 and len(prompts) == 2
+    assert calls == [] and reserved == [] and results == []
+    current = ledger.db.execute(
+        "SELECT a.* FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=?",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+    assert len(current) == 2

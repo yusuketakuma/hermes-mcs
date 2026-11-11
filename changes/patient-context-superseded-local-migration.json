@@ -7,7 +7,8 @@
     "mcs/extract/llm/extract_llm_context.py: _pending_superseded_scan が全モデル範囲のpending recordを走査し、現行契約に一致せず全てが退役世代へ一意に束縛される場合のみ superseded と判定する読み取り専用の認識段階。",
     "mcs/extract/llm/extract_llm_prepare.py: superseded 行はクラウドモード・所有プロファイル復元を経ずローカルへ固定し、退役frameを再開せず現行契約のframeを一度だけ構築する。複数pieceの本文は移行対象外として保留する。",
     "mcs/llm/cloud_inference.py: guard_reextract_local が既存の guard_local_fallback 経路（会計スナップショット・検証済み履歴・集計健全性・重複要求ガード）をそのまま使い、さらに全履歴の論理要求指紋が有効かつ新規要求と相違することを要求する。",
-    "mcs/extract/llm/extract_llm_engine.py / extract_llm_runner.py: ローカル実行の各プロンプト送信直前に金融ガードを適用し、保留判定は送信前に延期へ変換する。修復・分割など移行契約外の呼出しは保留される。"
+    "mcs/extract/llm/extraction_context.py: prepare が構築または再利用するframe候補を永続化・返却の前にガードへ渡し、保留された候補はdurableにならない。",
+    "mcs/extract/llm/extract_llm_engine.py / extract_llm_runner.py: ローカル実行の各プロンプト送信直前に金融ガードを適用し、保留判定は送信前に延期へ変換する。並列workerからの台帳参照はowner threadへ集約する。採用時にはコミットトランザクション内で同一要求を再検証し、送信後に現れた同一指紋の予約・結果・修復要求があれば採用を拒否して行をpendingのまま残す。修復・分割など移行契約外の呼出しは保留される。"
   ],
-  "refs": ["mcs/extract/llm/extract_llm_prepare.py", "mcs/extract/llm/extract_llm_context.py", "mcs/llm/cloud_inference.py", "mcs/extract/llm/extract_llm_engine.py", "mcs/extract/llm/extract_llm_runner.py"]
+  "refs": ["mcs/extract/llm/extract_llm_prepare.py", "mcs/extract/llm/extract_llm_context.py", "mcs/extract/llm/extraction_context.py", "mcs/llm/cloud_inference.py", "mcs/extract/llm/extract_llm_engine.py", "mcs/extract/llm/extract_llm_runner.py", "mcs/extract/llm/extract_llm_store.py"]
 }

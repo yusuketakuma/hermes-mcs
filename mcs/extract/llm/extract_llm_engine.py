@@ -50,6 +50,33 @@ from extract_llm_source_contract import (
     _rule_hints,
 )
 
+def _call_prompt(prompt, thead, piece, start, body, piece_hints,
+                 medication_hints, *, private):
+    """Compose one piece's dispatch prompt — the single source both the
+    engine call and the migration's financial guard must share."""
+    hint = _hint_block(piece_hints) if piece_hints else ""
+    reference = _piece_reference(body, start, len(piece))
+    scoped = prompt + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
+    scoped += extraction_medications.block(
+        medication_hints, body, start, piece, private=private)
+    return scoped + thead + piece + _PROMPT_TAIL
+
+
+def first_request_prompt(body, *, context, hints, medication_hints, references,
+                         feedback, posted_at):
+    """The exact first-call prompt of a single-piece local request.
+
+    llm_extract resolves piece hints per piece; for the one-piece case the
+    migration guards this is `hints` verbatim (or the rule fallback when
+    absent), composed through the same _call_prompt the dispatch uses, so
+    the guarded request and the sent request cannot diverge."""
+    prompt, _ = _extract_prompt_context(context, references, feedback)
+    piece_hints = hints if isinstance(hints, dict) else _rule_hints(
+        {"body_text": body, "posted_at": posted_at})
+    return _call_prompt(prompt, _target_head(posted_at), body, 0, body,
+                        piece_hints, medication_hints, private=True)
+
+
 def llm_extract(body: str, *, context: str | None = None,
                 hints: dict | None = None,
                 deadline: float | None = None,
@@ -240,11 +267,7 @@ def llm_extract(body: str, *, context: str | None = None,
         if key in splits:
             return children(key, piece, start, remaining)
         sizes.append(len(piece))
-        hint = _hint_block(piece_hints) if piece_hints else ""
         reference = _piece_reference(body, start, len(piece))
-        scoped_prompt = prompt + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
-        scoped_prompt += extraction_medications.block(
-            medication_hints, body, start, piece, private=provider is None)
         piece_context = has_ctx or bool(reference)
         call_start = len(notes)
         if quality_status:
@@ -252,8 +275,10 @@ def llm_extract(body: str, *, context: str | None = None,
                  if k not in ("_quality_status", "_provider_leaf")}
             first_provider = leaf_parts(cached) or [None]
         else:
-            d, first_provider = evidenced_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
-                                               deadline=deadline, need_s=_MIN_CALL_S)
+            d, first_provider = evidenced_call(
+                _call_prompt(prompt, thead, piece, start, body, piece_hints,
+                             medication_hints, private=provider is None),
+                deadline=deadline, need_s=_MIN_CALL_S)
             first_provider = [first_provider]
         first_response = getattr(_CALL_NOTES, "cloud_response", None) if not quality_status else None
         piece_providers = first_provider if isinstance(d, dict) else []

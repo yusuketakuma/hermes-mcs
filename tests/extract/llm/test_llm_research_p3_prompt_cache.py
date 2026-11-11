@@ -81,7 +81,7 @@ def test_repair_prompt_without_reference_is_byte_stable():
 def test_context_refresh_prompts_lead_with_the_fixed_instruction(monkeypatch):
     payloads = []
 
-    def ask(cfg, payload, deadline, admit):
+    def ask(cfg, payload, deadline, admit, **_kw):
         payloads.append(payload)
         raise patient_context_refresh_state.Deferred("captured")
     monkeypatch.setattr(patient_context_quality_controller, "_ask", ask)

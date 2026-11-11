@@ -340,7 +340,7 @@ _DEFER_REASONS.update(_PREPARE_CONTEXT_REJECTION_CODES)
 _COMMIT_REJECTION_REASONS = frozenset({
     "transaction", "source_or_owner", "checkpoint", "prior_changed", "quality_proof",
     "completeness", "context", "reference", "medication", "retained_proof", "result_seal",
-    "insert_fence", "cloud_guard",
+    "insert_fence", "cloud_guard", "superseded_guard",
 })
 _COMPLETENESS_REJECTION_REASONS = frozenset("completeness_" + reason for reason in (
     "shape", "layout", "pending", "adopted", "terminal", "coverage", "validation"))

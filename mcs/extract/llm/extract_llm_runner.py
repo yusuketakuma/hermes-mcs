@@ -40,6 +40,7 @@ from extract_llm_context import (
     _frame_refs,
 )
 from extract_llm_engine import (
+    first_request_prompt,
     llm_extract,
 )
 from extract_llm_errors import (
@@ -583,11 +584,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if r.get("_superseded_local"):
             # The migrated row's financial guard binds to each exact prompt
             # this local execution sends; any hold verdict defers the row.
+            # All ledger reads marshal to the owner thread: pool workers
+            # share one sqlite connection and would raise ProgrammingError.
             binding = {"value": None}
             def request_guard(prompt, kind="first"):
                 if kind != "first":
                     return "cloud_unit_unresolved"
-                try:
+                def check():
                     if binding["value"] is None:
                         binding["value"] = _chunk_context(r, ctx, checkpoint=True)
                     cloud_inference.guard_reextract_local(
@@ -595,10 +598,35 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         project_id=r["project_id"], message_id=r["message_id"],
                         unit_key=str(r["message_id"]), owner={},
                         input_binding=binding["value"])
-                except (cloud_client.CloudError, ValueError, TypeError,
-                        KeyError, sqlite3.Error, OSError, RuntimeError):
+                try:
+                    _owner_call(check)
+                except (cloud_client.CloudError, cloud_inference.CloudFallback,
+                        ValueError, TypeError, KeyError, sqlite3.Error,
+                        OSError, RuntimeError):
                     return "cloud_unit_unresolved"
                 return None
+            # The adoption boundary re-verifies the same request inside the
+            # commit transaction: any reservation/result/disposition that
+            # appeared after dispatch must still satisfy the strict
+            # all-valid/different-fingerprint rule or the write is rejected.
+            def adoption_guard():
+                try:
+                    cloud_inference.guard_reextract_local(
+                        ledger, load_config(),
+                        first_request_prompt(
+                            r["body_text"], context=ctx, hints=hints,
+                            medication_hints=_frame_medications(r),
+                            references=_frame_refs(r), feedback=None,
+                            posted_at=r["posted_at"]),
+                        project_id=r["project_id"], message_id=r["message_id"],
+                        unit_key=str(r["message_id"]), owner={},
+                        input_binding=_chunk_context(r, ctx, checkpoint=True))
+                except (cloud_client.CloudError, cloud_inference.CloudFallback,
+                        ValueError, TypeError, KeyError, sqlite3.Error,
+                        OSError, RuntimeError):
+                    return False
+                return True
+            r["_superseded_guard"] = adoption_guard
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
@@ -664,7 +692,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             {"qc": qc["qc"], "applied": True} if qc else None,
             extra or None, used_keys,
             check_current=qc is None and not r["thin_src"] and not r["human_src"],
-            expected_prior=r.get("_expected_prior"))
+            expected_prior=r.get("_expected_prior"),
+            adoption_guard=r.get("_superseded_guard"))
         if outcome != "written":
             if outcome == "rejected":
                 r["_commit_hold"] = True

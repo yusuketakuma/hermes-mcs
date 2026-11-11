@@ -6,8 +6,10 @@ import os
 import sqlite3
 import time
 import inference_version as inference
+import cloud_client
 import cloud_policy
 import cloud_inference
+import extract_llm_engine
 from clinical_chunking import plan_chunks
 import inference_dependency_loss
 import extraction_context
@@ -17,6 +19,7 @@ from mcs_queries import (current_extract_pred,
 from mcs_util import HOME, load_config, loads_dict
 
 from extract_llm_context import (
+    _chunk_context,
     _context_contract,
     _context_contracts,
     _medication_reference_current,
@@ -337,16 +340,43 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                 medication_hints = extraction_medications.build(ledger.db, cfg, r["body_text"],
                     private=mode != "on", deadline=hint_deadline)
                 stage = "prepare"
+                frame_guard = None
+                if superseded:
+                    # Candidate build -> financial guard -> persist the same
+                    # candidate: the guard sees the exact prompt this frame
+                    # will serve, composed by the engine's own builder.
+                    def frame_guard(frame_doc):
+                        bound = {**r, "_frame": frame_doc}
+                        cloud_inference.guard_reextract_local(
+                            ledger, cfg,
+                            extract_llm_engine.first_request_prompt(
+                                r["body_text"], context=frame_doc["text"],
+                                hints=hints,
+                                medication_hints=frame_doc.get("medication_hints"),
+                                references=frame_doc.get("refs"), feedback=None,
+                                posted_at=r["posted_at"]),
+                            project_id=r["project_id"], message_id=r["message_id"],
+                            unit_key=str(r["message_id"]), owner={},
+                            input_binding=_chunk_context(
+                                bound, frame_doc["text"], checkpoint=True))
                 frame = extraction_context.prepare(ledger, r, model=r["_target"][1],
                     contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
                     version=EXTRACT_VERSION, medication_hints=medication_hints,
-                    compatible_contracts=tuple(_context_contracts() - {_context_contract()}))
+                    compatible_contracts=(() if superseded else
+                                          tuple(_context_contracts() - {_context_contract()})),
+                    guard=frame_guard)
             r["_frame"] = frame
             if not _medication_reference_current(ledger.db, r, cfg=cfg, deadline=deadline):
                 block("prepare_medication_changed")
                 continue
         except sqlite3.Error:
             block("prepare_database_unavailable")
+            continue
+        except cloud_client.CloudError:
+            # Only the superseded frame guard raises here; a held financial
+            # candidate keeps the row pending under the same reason.
+            block("prepare_context_load_superseded" if superseded
+                  else "prepare_database_unavailable")
             continue
         except ValueError as error:
             block(_prepare_context_rejection(stage, error))
