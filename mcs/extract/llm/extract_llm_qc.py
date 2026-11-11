@@ -213,7 +213,7 @@ def _has_kind(kind: str, alias: str, project: bool = False) -> str:
             f" AND {alias}.message_id=m.message_id{scope})")
 
 
-def pending_pred(db) -> str:
+def pending_pred(db, *, include_thin: bool = True) -> str:
     """Shared body-current extraction and quality-retry eligibility.
 
     Evaluated per stored message, so the JSON-heavy subqueries sit behind
@@ -222,7 +222,15 @@ def pending_pred(db) -> str:
     same body-length bound), so a missing guard row already decides it.
     The qc_fix test runs after the settle test, which is false for most
     of a mature corpus. Boolean results are identical to the unguarded
-    composition (tests/extract/llm/test_stab_pending_pred.py)."""
+    composition (tests/extract/llm/test_stab_pending_pred.py).
+
+    ``include_thin=False`` is the patient-context material variant: a
+    scheduled thin-quality retry does not invalidate the current
+    artifact, so it must not read as pending material. Every other
+    clause — missing current extraction, actionable QC flag, human
+    report, held upgrade — is unchanged."""
+    thin = (f"(length(m.body_text) >= {extract_quality._THIN_BODY_MIN}\n"
+            f"                 AND EXISTS ({_thin_pending_sql(db)}))") if include_thin else "0"
     return f"""{ELIGIBLE_MESSAGE}
         AND (NOT {_has_kind(V4_PROJECTION_KIND, 'v0', project=True)}
              OR {current_v4_id()} IS NULL)
@@ -232,8 +240,7 @@ def pending_pred(db) -> str:
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
              OR ({_has_kind('extract_qc', 'q0')}
                  AND EXISTS ({_qc_flagged_sql(val="1")}))
-             OR (length(m.body_text) >= {extract_quality._THIN_BODY_MIN}
-                 AND EXISTS ({_thin_pending_sql(db)})))
+             OR {thin})
         AND NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}

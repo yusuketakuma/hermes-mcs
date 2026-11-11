@@ -108,11 +108,44 @@ def _read(db, pid, cfg):
                 or progress.get('quality_state') == 'held'))
     def result(percent, stage):
         return observation(percent, stage, held=held, source_sig=signature)
+    _, meta = state._latest(db, state.KIND, pid)
+    partial_scope = None
+    partial_checked = False
+
+    def usable_partial():
+        # A verified scoped publication stays displayable while the rest of
+        # the patient is still acquiring; whole-patient completion is never
+        # claimed for it.
+        nonlocal partial_scope, partial_checked
+        if not partial_checked:
+            partial_checked = True
+            keys = meta.get('source_scope') if meta.get('published') else None
+            if keys:
+                try:
+                    scoped = sources._snapshot(db, pid, cfg, hydrate=False,
+                                               contract=snapshot['contract'], source_keys=keys)
+                    with sources._scan_read_owner(db, pid) as proof_for:
+                        coverage = readiness._inference_coverage(
+                            db, pid, cfg, scoped,
+                            read_proof=proof_for(scoped, cfg), proof_for=proof_for)
+                        view = readiness._context_view_input(db, pid, cfg=cfg, proof_for=proof_for)
+                    if coverage['publication_eligible'] and coverage['summary']['current'] and view is not None:
+                        partial_scope = keys
+                except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+                    partial_scope = None
+        return partial_scope
     if not snapshot['acquisition']['complete'] or not snapshot['attachment_coverage']['complete']:
-        return result(0, 'inputs')
+        if usable_partial() is None:
+            return result(0, 'inputs')
     # Missing unit evidence leaves the stage boundary unchanged.
-    if not readiness._inference_ready(SimpleNamespace(db=db), pid, cfg,
-            deadline=db.scan_until + state.COMMIT_MARGIN):
+    ready = readiness._inference_ready(SimpleNamespace(db=db), pid, cfg,
+            deadline=db.scan_until + state.COMMIT_MARGIN)
+    if not ready:
+        scope = usable_partial()
+        ready = scope is not None and readiness._inference_ready(
+            SimpleNamespace(db=db), pid, cfg,
+            deadline=db.scan_until + state.COMMIT_MARGIN, source_keys=scope)
+    if not ready:
         sources._scan_check(db)
         if (not control_held or not snapshot['dependencies']['complete']
                 or not state._sources_intact(observed) or not _local_sources_ready(db, pid, cfg)):

@@ -207,6 +207,17 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
     fetch_allowed = snapshot["acquisition"]["complete"]
     eligible = bool(complete and patient_context_refresh_state.options(cfg)["publication"] and not scope.get("is_archived")
                     and (source_keys is not None or fetch_allowed))
+    if source_keys is not None:
+        # Scoped publication proves the selected cohort only: whole-patient
+        # cloud/acquisition/attachment completion stays reported by `complete`
+        # and `status`, never by this eligibility.
+        eligible = bool(current and patient_context_refresh_state.options(cfg)["publication"]
+                        and not scope.get("is_archived")
+                        and not patient_context_refresh_state._out_of_scope(snapshot)
+                        and snapshot["dependencies"]["complete"]
+                        and snapshot["attachment_coverage"]["mode"] != "invalid"
+                        and counts["eligible"] == counts["audited"] + counts["skipped"]
+                        and not counts["incomplete"])
     if publication is not None:
         eligible = publication['publication_eligible']
         complete = complete and publication['complete']
@@ -711,7 +722,7 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, mes
     return True
 
 
-def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode):
+def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, material=False):
     import semantic_intake_hold
     import semantic_policy
     import semantic_store
@@ -739,6 +750,24 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode):
         return True
     if policy['mode'] == 'off':
         return _raw_extraction_current(db, row, cfg)[0]
+    if material:
+        # Material adoption keeps adverse semantic evidence closed
+        # (held/failed/repair_required/permission/scope) while a merely
+        # scheduled reprocessing does not invalidate the selected artifact.
+        # 'pending' is adoptable only before the semantic pipeline engages
+        # the member at all: an existing audit row — even a PENDING one —
+        # is incomplete evaluation evidence, not absence of evidence.
+        if row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked'):
+            return False
+        state = semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
+            **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {}))
+        if state in ('current', 'current_skipped'):
+            return True
+        if state != 'pending':
+            return False
+        return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND message_id=? "
+                          "AND (project_id=? OR project_id IS NULL) LIMIT 1",
+                          (semantic_policy.KIND_AUDIT, mid, pid)).fetchone() is None
     return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
         **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
 
@@ -757,7 +786,7 @@ def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
         'SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m '
         'JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?', (pid,))}
     pending = {row[0] for row in db.execute(f'SELECT m.message_id FROM messages m WHERE m.project_id=? '
-        f'AND (({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()}))', (pid,))}
+        f'AND (({extract_llm.pending_pred(db, include_thin=False)}) OR EXISTS ({extract_llm._hold_sql()}))', (pid,))}
     checked, keys = {}, []
     for source in snapshot['sources']:
         patient_context_refresh_sources._scan_check(db)
@@ -768,8 +797,10 @@ def _eligible_source_keys(ledger, pid, cfg, snapshot, *, deadline):
         if mid:
             if mid not in checked:
                 attachments = attachment_ocr_coverage(db, pid, cfg, mid=mid)
-                checked[mid] = (mid in rows and mid not in pending and attachments['complete']
-                    and _message_ready(ledger, rows[mid], cfg, policy, deadline=deadline, attachment_mode=attachments['mode'])
+                checked[mid] = (mid in rows and mid not in pending
+                    and attachments['mode'] != 'invalid'
+                    and _message_ready(ledger, rows[mid], cfg, policy, deadline=deadline,
+                                       attachment_mode=attachments['mode'], material=True)
                     and (policy['mode'] == 'off' or policy['extract_qc'] != 'annotate'
                          or _extraction_qc_ready(db, pid, policy, deadline=deadline, message_id=mid)))
             if not checked[mid]:
@@ -799,21 +830,24 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
         repairable = (allow_dependency_repair and coverage.get("terminal") == 0
                       and coverage.get("repairable", 0) > 0
                       and set(coverage.get("reasons", {})).issubset({"retained_karte_requires_audit", "retained_attachment_requires_audit"}))
+        material = source_keys is not None
+        mids = sorted({source.get('parent_message_id') or source['message_id'] for source in snapshot['sources']
+                       if source.get('parent_message_id') or source.get('message_id')})
         if (errors or patient_context_refresh_state._out_of_scope(snapshot) or paused(db, pid)
                 or source_keys is None and not snapshot["acquisition"]["complete"]
                 or source_keys is not None and len(snapshot['sources']) != len(source_keys)
-                or not patient_context_refresh_state._sources_intact(snapshot["sources"]) or not snapshot["attachment_coverage"]["complete"]
+                or not patient_context_refresh_state._sources_intact(snapshot["sources"])
+                or (material and snapshot["attachment_coverage"]["mode"] == "invalid"
+                    or not material and not snapshot["attachment_coverage"]["complete"])
                 or not (snapshot["dependencies"]["complete"] or repairable)
                 or source_keys is None and semantic_intake_hold.has_unstored(db, pid)
                 or source_keys is None and complete is not None and not complete(pid)
-                or not _cloud_extraction_ready(db, pid, cfg, deadline=deadline)):
+                or not material and not _cloud_extraction_ready(db, pid, cfg, deadline=deadline)):
             return False
-        mids = sorted({source.get('parent_message_id') or source['message_id'] for source in snapshot['sources']
-                       if source.get('parent_message_id') or source.get('message_id')})
         selected_sql = ' AND m.message_id IN (SELECT value FROM json_each(?))' if source_keys is not None else ''
         params = (pid, json.dumps(mids)) if source_keys is not None else (pid,)
         if db.execute(f"SELECT 1 FROM messages m WHERE m.project_id=?{selected_sql} AND "
-                      f"(({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()})) LIMIT 1",
+                      f"(({extract_llm.pending_pred(db, include_thin=not material)}) OR EXISTS ({extract_llm._hold_sql()})) LIMIT 1",
                       params).fetchone():
             return False
         rows = db.execute(
@@ -822,7 +856,8 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             params).fetchall()
         for row in rows:
             if not _message_ready(ledger, row, cfg, policy, deadline=deadline,
-                                  attachment_mode=snapshot['attachment_coverage']['mode']):
+                                  attachment_mode=snapshot['attachment_coverage']['mode'],
+                                  material=material):
                 return False
         if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline,
