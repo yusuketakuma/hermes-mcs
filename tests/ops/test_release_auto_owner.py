@@ -132,6 +132,11 @@ class FakeDeps:
         self.offer_override = None
         self.abort_fail = False
         self.abort_status_override = None
+        self.status_fail = False
+        # START_PATH到達で中央がoperationを作成した記録。値は中央phase
+        # (OP_STATE写像: signing_reserved/grant_issued→pending/granted、
+        # cancelled/released_prestart→cancelled_prestart)。
+        self.central_ops = {}
         self.evidence = {}
         self.meta = {'publication_id': OFFER['selected']['publication_id'],
                      'manifest_digest': OFFER['selected']['manifest_digest'],
@@ -161,8 +166,34 @@ class FakeDeps:
             return json.dumps(offer).encode()
         if path == owner_mod.START_PATH:
             request = json.loads(raw)
+            self.central_ops[request['operation_id']] = 'grant_issued'
             grant = self._grant_for(request)
             return json.dumps(grant).encode()
+        if path == owner_mod.STATUS_PATH:
+            if self.status_fail:
+                raise OSError('synthetic status failure')
+            request = json.loads(raw)
+            op_state = {'signing_reserved': 'pending',
+                        'grant_issued': 'granted',
+                        'started': 'pending',
+                        'reported': 'received',
+                        'verified': 'received',
+                        'unknown': 'pending',
+                        'cancelled': 'cancelled_prestart',
+                        'released_prestart': 'cancelled_prestart'}
+            phase = self.central_ops.get(request['operation_id'])
+            status = {'schema_version': 'mcs.operation-status.v3',
+                      'request_id': request['request_id'],
+                      'request_nonce': request['request_nonce'],
+                      'scope': request['scope'],
+                      'operation_id': request['operation_id'],
+                      'kind': request['kind'],
+                      'object_id': request['object_id'],
+                      'object_sha256': None,
+                      'state': op_state.get(phase, 'not_found'),
+                      'issued_at': self.now_ms_value,
+                      'expires_at': self.now_ms_value + 30000}
+            return json.dumps(status).encode()
         if path == owner_mod.RESULT_PATH:
             outcome = json.loads(raw)
             ack = _example('outcome-ack.json')
@@ -175,13 +206,17 @@ class FakeDeps:
             if self.abort_fail:
                 raise OSError('synthetic network failure')
             abort = json.loads(raw)
+            # 中央はstart request未到達のoperationを持たず404を返す
+            if abort['operation_id'] not in self.central_ops:
+                raise OSError('operation not found')
+            self.central_ops[abort['operation_id']] = 'cancelled'
             status = {'schema_version': 'mcs.operation-status.v3',
                       'request_id': abort['request_id'],
                       'request_nonce': abort['request_nonce'],
                       'scope': abort['scope'],
                       'operation_id': abort['operation_id'],
                       'kind': 'prestart_abort',
-                      'object_id': abort['start_request_id'],
+                      'object_id': abort['local_abort_receipt_id'],
                       'object_sha256': None,
                       'state': 'cancelled_prestart',
                       'issued_at': self.now_ms_value,
@@ -793,6 +828,8 @@ def test_cancel_prepared_sends_abort_and_cancels(store):
     seed(store)
     deps = FakeDeps()
     op_id = _prepared_owner(store, deps)
+    attempt_key = state.load(store)['active']['attempt_key']
+    owner_mod.request_start(store, deps)  # 中央にoperation(grant)を作成
     active = state.load(store)['active']
     public = active['private_witness']['public']
     result = owner_mod.cancel_prestart(store, deps, op_id,
@@ -813,7 +850,9 @@ def test_cancel_prepared_sends_abort_and_cancels(store):
     assert abort['prepare_nonce'] == active['prepare_nonce']
     assert abort['execution_revision'] == public['execution_revision']
     assert abort['reason'] == 'REVOKED_BEFORE_START'
-    assert abort['grant_id'] is None
+    # grant_idは中央採番値(derivedUuid)を再現 — 未消費でもbinding可能
+    assert abort['grant_id'] == owner_mod._expected_grant_id(
+        op_id, attempt_key)
     assert [p for p, _ in deps.sent][-1] == owner_mod.ABORT_PATH
     assert deps.restarts == 1
     assert deps.lock_calls[-1] == ('G', 'U', 'Q', 'R', 'C', 'A', 'M')
@@ -838,6 +877,7 @@ def test_cancel_pending_resumes_with_identical_bytes(store):
     seed(store)
     deps = FakeDeps()
     op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)  # 中央にoperationを作成
     deps.abort_fail = True
     with pytest.raises(owner_mod.OwnerError) as e:
         owner_mod.cancel_prestart(store, deps, op_id)
@@ -845,12 +885,14 @@ def test_cancel_pending_resumes_with_identical_bytes(store):
     owner = state.load(store)
     assert owner['active']['phase'] == 'PREPARED'  # 終端していない
     assert owner['operation_evidence']  # abort証拠は耐久済み
-    first_raw = deps.sent[-1][1]
+    # 失敗後にstatus観測(not_foundでない)を挟むため、abort bytesはpathで特定する
+    first_raw = next(raw for p, raw in deps.sent
+                     if p == owner_mod.ABORT_PATH)
     # abort証拠記録でexec_revが進み、prepared grant束縛は既に無効
     deps.abort_fail = False
     info = owner_mod.resume(store, deps)
     assert info['action'] == 'cancelled'
-    assert deps.sent[-1][1] == first_raw  # 同bytes冪等再送
+    assert deps.sent[-1] == (owner_mod.ABORT_PATH, first_raw)  # 同bytes冪等再送
     owner = state.load(store)
     assert owner['active'] is None
     assert owner['outcomes'][-1]['state'] == 'CANCELLED_NO_EFFECT'
@@ -861,6 +903,7 @@ def test_cancel_rejected_keeps_prepared_and_evidence(store):
     seed(store)
     deps = FakeDeps()
     op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)  # 中央にoperationを作成
     deps.abort_status_override = lambda status, abort: dict(
         status, state='granted')
     with pytest.raises(owner_mod.OwnerError) as e:
@@ -875,6 +918,7 @@ def test_abort_evidence_blocks_late_consume(store):
     seed(store)
     deps = FakeDeps()
     op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)  # 中央にoperationを作成
     deps.abort_fail = True
     with pytest.raises(owner_mod.OwnerError):
         owner_mod.cancel_prestart(store, deps, op_id)
@@ -891,6 +935,7 @@ def test_abort_evidence_tamper_fails_closed(store):
     seed(store)
     deps = FakeDeps()
     op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)  # 中央にoperationを作成
     deps.abort_fail = True
     with pytest.raises(owner_mod.OwnerError):
         owner_mod.cancel_prestart(store, deps, op_id)
@@ -901,3 +946,82 @@ def test_abort_evidence_tamper_fails_closed(store):
     assert info['action'] == 'abort_pending'
     assert info['code'] in ('EVIDENCE_MISMATCH', 'EVIDENCE_UNAVAILABLE')
     assert state.load(store)['active']['phase'] == 'PREPARED'  # 終端しない
+
+
+def test_central_uuid_matches_central_derived_uuid():
+    # CSDC consent.js derivedUuid('start-grant-id', {...}) の実測値との一致。
+    # node実機で算出した値をpinする(JS/Python canonical parityの回帰防止)。
+    got = owner_mod._central_uuid('start-grant-id', {
+        'request_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'operation_id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'})
+    assert got == '08328f6d-a809-4f6a-9ec3-2996e804b36d'
+
+
+def test_resume_prepared_expired_aborts_when_start_sent(store):
+    """start request送信済みのPREPARED期限切れ: abortでcancelled_prestart確認まで終端。"""
+    seed(store)
+    deps = FakeDeps()
+    _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)  # grant発行・未consume
+    deps.now_ms_value += 121000  # prepare_deadline超過
+    info = owner_mod.resume(store, deps)
+    assert info['action'] == 'cancelled' and info['notified'] is True
+    owner = state.load(store)
+    assert owner['active'] is None
+    assert owner['outcomes'][-1]['state'] == 'CANCELLED_NO_EFFECT'
+    assert owner_mod.ABORT_PATH in [p for p, _ in deps.sent]
+    assert deps.restarts == 1
+
+
+def test_cancel_prepared_without_start_defers(store):
+    """start request未到達のPREPARED取消: 中央not_found確認でlocal DEFERRED終端。"""
+    seed(store)
+    deps = FakeDeps()
+    op_id = _prepared_owner(store, deps)  # request_start未呼出
+    result = owner_mod.cancel_prestart(store, deps, op_id)
+    assert result == {'action': 'deferred', 'notified': False}
+    owner = state.load(store)
+    assert owner['active'] is None
+    assert owner['outcomes'][-1]['state'] == 'DEFERRED'
+    # abort送信試行→404相当→status not_found確認の順で観測した
+    paths = [p for p, _ in deps.sent]
+    assert paths[-2:] == [owner_mod.ABORT_PATH, owner_mod.STATUS_PATH]
+
+
+def test_cancel_prepared_released_prestart_converges(store):
+    """abort未達でも中央が予約解放済み(cancelled/released_prestart)なら
+    status観測でCANCELLED_NO_EFFECTへ収束する — reconciler解放で
+    abort receipt無しの経路でも同bytes再送がALREADY_STARTEDで詰まらない。"""
+    seed(store)
+    deps = FakeDeps()
+    op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)
+    deps.central_ops[op_id] = 'released_prestart'  # reconciler解放を再現
+    deps.abort_fail = True
+    result = owner_mod.cancel_prestart(store, deps, op_id)
+    assert result == {'action': 'cancelled', 'notified': True}
+    owner = state.load(store)
+    assert owner['active'] is None
+    assert owner['outcomes'][-1]['state'] == 'CANCELLED_NO_EFFECT'
+    assert deps.restarts == 1
+
+
+def test_cancel_prepared_status_failure_stays_pending(store):
+    """abort失敗+status観測も失敗: STATUS_PENDINGでPREPAREDを保持し再送可能。"""
+    seed(store)
+    deps = FakeDeps()
+    op_id = _prepared_owner(store, deps)
+    owner_mod.request_start(store, deps)
+    deps.abort_fail = True
+    deps.status_fail = True
+    with pytest.raises(owner_mod.OwnerError) as e:
+        owner_mod.cancel_prestart(store, deps, op_id)
+    assert e.value.code == 'STATUS_PENDING'
+    owner = state.load(store)
+    assert owner['active']['phase'] == 'PREPARED'  # 終端しない
+    assert owner['operation_evidence']  # abort証拠は残り再送可能
+    # status復旧後のresumeで同bytes再送→cancelled_prestart確認→終端
+    deps.abort_fail = False
+    deps.status_fail = False
+    info = owner_mod.resume(store, deps)
+    assert info['action'] == 'cancelled'

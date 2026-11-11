@@ -89,6 +89,32 @@ def _det_uuid(seed):
     return f'{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}'
 
 
+def _central_uuid(kind, value):
+    """中央derivedUuid相当: hash_v3(kind,value)先頭32hexをUUIDv4形へ整形する。
+
+    CSDC fleet/releases/auto/consent.js の derivedUuid と同一手順
+    ("MCS-AUTO-v3\n"+kind+"\n"+canonicalのsha256先頭32文字、version/variant固定)。
+    """
+    h = list(contract.hash_v3(kind, value)[:32])
+    h[12] = '4'
+    h[16] = '89ab'[int(h[16], 16) & 3]
+    s = ''.join(h)
+    return f'{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}'
+
+
+def _expected_grant_id(operation_id, attempt_key):
+    """中央がstart request受理時にoperationへ採番するgrant_idを再現する。
+
+    releases.js: derivedUuid('start-grant-id',{request_id,operation_id})。
+    request_idは_start_requestと同じ決定論的導出のため、grant未受領でも
+    abort/statusのbindingに使える(署名grantのgrant_idと一致する)。
+    """
+    request_id, _ = _request_ids('start', operation_id, attempt_key)
+    return _central_uuid('start-grant-id',
+                         {'request_id': request_id,
+                          'operation_id': operation_id})
+
+
 def _request_ids(kind, *parts):
     """(request_id, request_nonce)を論理request内容から決定論的に導出する。"""
     seed = hashlib.sha256(
@@ -523,7 +549,12 @@ def _build_abort(store, deps, owner, active, operation_id, reason, grant_id):
     abort = {'schema_version': 'mcs.prestart-abort.v3',
              'request_id': abort_request_id, 'request_nonce': abort_nonce,
              'scope': owner['scope'], 'operation_id': operation_id,
-             'start_request_id': start_request_id, 'grant_id': grant_id,
+             'start_request_id': start_request_id,
+             # grant_idは中央がoperation作成時に決定論的採番する値。
+             # grant未受領でもrequest_id/operation_idから再現できる。
+             'grant_id': (grant_id if grant_id is not None
+                          else _expected_grant_id(operation_id,
+                                                  active['attempt_key'])),
              'prepare_nonce': active['prepare_nonce'],
              'execution_revision': public['execution_revision'],
              'local_abort_receipt_id': _det_uuid(
@@ -548,9 +579,8 @@ def _send_abort(store, deps, owner, operation_id, abort_raw):
     except Exception as e:
         raise OwnerError('ABORT_PENDING') from e
     abort = json.loads(abort_raw)
-    known_objects = {abort['start_request_id'], abort['request_id']}
-    if abort.get('grant_id'):
-        known_objects.add(abort['grant_id'])
+    # 中央のOperationStatus.object_idはprestart_abort kindでは
+    # request.local_abort_receipt_idをechoする(固定値・一意照合)。
     if not (status['schema_version'] == 'mcs.operation-status.v3'
             and status['request_id'] == abort['request_id']
             and status['request_nonce'] == abort['request_nonce']
@@ -558,8 +588,43 @@ def _send_abort(store, deps, owner, operation_id, abort_raw):
             and status['operation_id'] == operation_id
             and status['scope'] == owner['scope']
             and status['state'] == 'cancelled_prestart'
-            and status['object_id'] in known_objects):
+            and status['object_id'] == abort['local_abort_receipt_id']):
         raise OwnerError('ABORT_REJECTED')
+
+
+def _query_start_status(store, deps, owner, active):
+    """kind=start/object_id=採番grant_idで中央のoperation状態を観測する。
+
+    戻り値はOperationStatus.state('not_found'含む)。start requestが
+    中央へ未到達なら'not_found'、到達済みならpending/granted等を返す。
+    送信/検証失敗・応答不整合はOwnerErrorでfail-closed(不明をnot_foundと
+    みなさない)。
+    """
+    operation_id = active['operation_id']
+    grant_id = _expected_grant_id(operation_id, active['attempt_key'])
+    request_id, request_nonce = _request_ids(
+        'status', operation_id, active['attempt_key'], 'start', grant_id)
+    request = {'schema_version': 'mcs.status-request.v3',
+               'request_id': request_id, 'request_nonce': request_nonce,
+               'scope': owner['scope'], 'operation_id': operation_id,
+               'kind': 'start', 'object_id': grant_id}
+    request = contract.parse_typed(json.dumps(request).encode(), 'StatusRequest')
+    raw = json.dumps(request, ensure_ascii=True,
+                     separators=(',', ':')).encode()
+    try:
+        response = deps.signed_send(STATUS_PATH, raw)
+        payload = deps.verify(STATUS_PATH, response)
+        status = contract.parse_typed(json.dumps(payload).encode(),
+                                      'OperationStatus')
+    except OwnerError:
+        raise
+    except Exception as e:
+        raise OwnerError('STATUS_PENDING') from e
+    if not (status['operation_id'] == operation_id
+            and status['kind'] == 'start'
+            and status['object_id'] == grant_id):
+        raise OwnerError('STATUS_MISMATCH')
+    return status['state']
 
 
 def cancel_prestart(store, deps, operation_id, reason='PREPARE_DEFERRED',
@@ -569,8 +634,11 @@ def cancel_prestart(store, deps, operation_id, reason='PREPARE_DEFERRED',
     - STAGED/PREPARING: 中央へstart要求未到達なのでlocal DEFERRED終端のみ。
     - PREPARED: abort証拠をevidence/へ耐久保存→operation_evidenceへ記録
       (exec_rev前進でprepared grant束縛も無効化)→中央cancel-prestartで
-      cancelled_prestartを確認→CANCELLED_NO_EFFECT終端。送信失敗時は証拠が
-      残りresumeが同bytesを冪等再送して終端する。証拠既存時は保存bytesを使う。
+      cancelled_prestartを確認→CANCELLED_NO_EFFECT終端。送信が不明な場合は
+      kind=start/object_id=採番grant_idのstatus観測で中央状態を確定する:
+      not_found→DEFERRED終端、cancelled_prestart→CANCELLED_NO_EFFECT終端、
+      op残存/観測不能→ABORT_PENDINGで保持し同bytesを再送する。証拠既存時は
+      保存bytesを使う。
     - START_INTENT以降・intent/SPENT有りは拒否(観測的復旧の領域)。
     検査〜終端はconsume_startと同じlock集合で直列化する(CAS)。
     """
@@ -624,7 +692,36 @@ def cancel_prestart(store, deps, operation_id, reason='PREPARE_DEFERRED',
             owner = auto_state.load(store)
 
     # lock解放後に中央へ通知(networkはlock外)。同bytesの再送は中央で冪等。
-    _send_abort(store, deps, owner, operation_id, abort_raw)
+    try:
+        _send_abort(store, deps, owner, operation_id, abort_raw)
+    except OwnerError as e:
+        if e.code != 'ABORT_PENDING':
+            raise
+        # abort送信が不明なまま残る場合、中央のoperation状態をstatus観測で
+        # 確定する。start request未到達(not_found)なら取消対象が存在しない
+        # ためlocal DEFERREDで終端。cancelled/released_prestart(予約解放済み)
+        # ならCANCELLED_NO_EFFECTで終端 — reconciler解放などabort receipt無しの
+        # 経路でも同bytes再送がALREADY_STARTEDで詰まるのを防ぐ。観測不能・
+        # op残存(pending/granted等)はABORT_PENDINGのまま保持して再送する。
+        # STATUS_*のOwnerErrorは証拠不整合の信号なのでそのまま伝播する。
+        try:
+            central_state = _query_start_status(store, deps, owner, active)
+        except OwnerError:
+            raise
+        except Exception as exc:
+            raise OwnerError('ABORT_PENDING') from exc
+        if central_state == 'not_found':
+            with deps.acquire_locks(('G', 'U', 'Q', 'R', 'C', 'A', 'M')):
+                _defer_active(store, deps, operation_id, 'DEFERRED')
+            deps.restart_same_version()
+            return {'action': 'deferred', 'notified': False}
+        if central_state == 'cancelled_prestart':
+            with deps.acquire_locks(('G', 'U', 'Q', 'R', 'C', 'A', 'M')):
+                _defer_active(store, deps, operation_id,
+                              'CANCELLED_NO_EFFECT')
+            deps.restart_same_version()
+            return {'action': 'cancelled', 'notified': True}
+        raise OwnerError('ABORT_PENDING')
 
     with deps.acquire_locks(('G', 'U', 'Q', 'R', 'C', 'A', 'M')):
         _defer_active(store, deps, operation_id, 'CANCELLED_NO_EFFECT')
@@ -829,7 +926,9 @@ def resume(store, deps):
     """active操作の観測的継続/復旧。START後は証拠収集のみで状態を進めない。
 
     PREPARING中断は期限内ならprepare再開、期限切れはDEFERRED+同版再起動。
-    PREPARED期限切れも同様。STAGED以降の推測進行は行わない。
+    PREPAREDはabort証拠があればcancel_prestart経路で同bytes再送、期限切れも
+    同経路で中央状態(not_found/cancelled_prestart)確認まで終端しない。
+    STAGED以降の推測進行は行わない。
     """
     owner = auto_state.load(store)
     active = owner['active']
@@ -843,24 +942,26 @@ def resume(store, deps):
             return {'phase': phase, 'action': 'deferred'}
         return {'phase': phase, 'action': 'resume_prepare'}
     if phase == 'PREPARED':
-        # abort証拠があればcancel-prestartが途中で止まった状態。
-        # 保存bytesを冪等再送し、確認できたらCANCELLED_NO_EFFECTで終端する。
+        # abort証拠があればcancel-prestartが途中で止まった状態。証拠bytesは
+        # cancel_prestart内で再利用され同bytes冪等再送→status観測で終端する
+        # (cancelled_prestart/not_found確認まで終端しない)。
         if _has_abort_evidence(owner, active['operation_id']):
             try:
-                abort_raw = _load_abort_raw(store, deps, owner,
-                                            active['operation_id'])
-                _send_abort(store, deps, owner, active['operation_id'], abort_raw)
+                result = cancel_prestart(store, deps, active['operation_id'],
+                                        reason='PREPARE_DEFERRED')
             except (OwnerError, auto_state.OwnerStateError) as e:
-                return {'phase': phase, 'action': 'abort_pending', 'code': e.code}
-            with deps.acquire_locks(('G', 'U', 'Q', 'R', 'C', 'A', 'M')):
-                _defer_active(store, deps, active['operation_id'],
-                              'CANCELLED_NO_EFFECT')
-            deps.restart_same_version()
-            return {'phase': phase, 'action': 'cancelled'}
+                return {'phase': phase, 'action': 'abort_pending',
+                        'code': e.code}
+            return {'phase': phase, 'action': result['action'],
+                    'notified': result.get('notified')}
         if deps.now_ms() > active['prepare_deadline']:
-            _defer_active(store, deps, active['operation_id'], 'DEFERRED')
-            deps.restart_same_version()
-            return {'phase': phase, 'action': 'deferred'}
+            # PREPAREDはstart request送信済みの可能性がある。中央slotは
+            # TTLでは解放されないため、abort経路(cancel_prestart)で
+            # cancelled_prestart確認かnot_found確認まで終端しない。
+            result = cancel_prestart(store, deps, active['operation_id'],
+                                    reason='EXPIRED_BEFORE_START')
+            return {'phase': phase, 'action': result['action'],
+                    'notified': result.get('notified')}
         return {'phase': phase, 'action': 'await_grant'}
     if phase == 'STAGED':
         return {'phase': phase, 'action': 'await_window'}
