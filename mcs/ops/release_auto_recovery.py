@@ -54,6 +54,9 @@ def verify_generation(generation_dir, manifest_value, canonical):
     expected_sha = hashlib.sha256(canonical).hexdigest()
     _check(os.path.basename(os.path.normpath(generation_dir))
            == 'runtime-' + expected_sha, 'GENERATION_NAME')
+    # generation dir自体がsymlinkなら配下file照合はtarget側を読むだけで
+    # 配置の同一性を証明しない — specのsymlink拒否をrootにも適用する。
+    _check(not os.path.islink(generation_dir), 'GENERATION_TAMPER')
     descriptor = os.path.join(generation_dir, bridge._CLOSURE_DESCRIPTOR)
     _check(os.path.isfile(descriptor) and not os.path.islink(descriptor),
            'GENERATION_DESCRIPTOR')
@@ -66,6 +69,11 @@ def verify_generation(generation_dir, manifest_value, canonical):
                 for e in manifest_value['files']}
     seen = set()
     for dirpath, dirnames, filenames in os.walk(generation_dir):
+        # os.walk(followlinks=False既定)はsymlinked dirをdirnamesへ列挙するが
+        # 潜らない — dot-dirの走査除外より先にlstatでsymlink自体を拒否する。
+        for d in dirnames:
+            _check(not os.path.islink(os.path.join(dirpath, d)),
+                   'GENERATION_TAMPER')
         dirnames[:] = [d for d in dirnames if not d.startswith('.')]
         for filename in filenames:
             full = os.path.join(dirpath, filename)

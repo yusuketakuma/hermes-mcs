@@ -161,6 +161,28 @@ def test_verify_generation_rejects_symlink(tmp_path):
         rec.verify_generation(gen, manifest, canonical)
 
 
+def test_verify_generation_rejects_symlinked_dir(tmp_path):
+    """os.walkはsymlinked dirを潜らない — dirnames側のsymlinkも拒否する。"""
+    gen, manifest, canonical = _deploy(tmp_path, _full_files())
+    link = os.path.join(gen, 'mcs', 'ops', 'linked')
+    os.symlink('/tmp', link)
+    with pytest.raises(rec.RecoveryError) as e:
+        rec.verify_generation(gen, manifest, canonical)
+    assert e.value.code == 'GENERATION_TAMPER'
+
+
+def test_verify_generation_rejects_symlinked_root(tmp_path):
+    """generation dir自体がsymlinkでもfile照合は通ってしまう — rootも拒否。"""
+    gen, manifest, canonical = _deploy(tmp_path, _full_files())
+    real = os.path.join(str(tmp_path), 'real-target')
+    os.rename(gen, real)
+    link = os.path.join(str(tmp_path), os.path.basename(gen))
+    os.symlink(real, link)
+    with pytest.raises(rec.RecoveryError) as e:
+        rec.verify_generation(link, manifest, canonical)
+    assert e.value.code == 'GENERATION_TAMPER'
+
+
 def test_generation_for_locates_only_matching(tmp_path):
     gen, manifest, canonical = _deploy(tmp_path, _full_files())
     assert rec.generation_for(canonical, str(tmp_path)) == gen
