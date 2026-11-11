@@ -197,9 +197,16 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     assert len(sends) == 2
 
 
-def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False):  # noqa: F811
+def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
+                thin=False, plain=False):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
-    repair improves it and returns with evidence, then stops."""
+    repair improves it and returns with evidence, then stops. ``thin`` pads a
+    cue-free >=300-char body around a single-vital cue and keeps the fact
+    lists empty, so the marked final stays under the two-fact thin bound and
+    is a scheduled thin retry rather than a completed clinical result.
+    ``plain`` drops the prior extract and QC audit so the same producer
+    commits a first extraction with qc_fix=None — a thin result there stays
+    genuinely re-pending instead of qc-settled."""
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     cfg["cloud_llm"]["provider"] = "openai"
@@ -215,12 +222,15 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
 
-    body = "本人に発熱と咳があります。本人の血圧120/80です。"
+    body = ("合成の経過記録です。" * 35 + "本人の体温は36.5度です。" if thin
+            else "本人に発熱と咳があります。本人の血圧120/80です。")
     led.save_messages([_message(1, body, project_id=1)])
-    source_id = _extract_artifact(led, 1, {"symptoms": [{"text": "頭痛", "status": "ongoing",
-        "subject": "patient", "evidence": "頭痛"}]}, _hash(led))
-    qc_id = _qc_artifact(led, 1, source_id, _hash(led), {"qc": "done", "items": [
-        {"section": "symptoms", "verdict": "NO_MATCH", "item": {"text": "頭痛"}}]})
+    source_id = qc_id = None
+    if not plain:
+        source_id = _extract_artifact(led, 1, {"symptoms": [{"text": "頭痛", "status": "ongoing",
+            "subject": "patient", "evidence": "頭痛"}]}, _hash(led))
+        qc_id = _qc_artifact(led, 1, source_id, _hash(led), {"qc": "done", "items": [
+            {"section": "symptoms", "verdict": "NO_MATCH", "item": {"text": "頭痛"}}]})
     with led.db:
         led.db.execute("BEGIN IMMEDIATE")
         cloud_policy.capture_history_tx(led.db, "synthetic-qc-replay", time.time())
@@ -233,7 +243,8 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
         context = _use_legacy_frame(led, row)
     else:
         assert worker._frame_medications(row) is not None
-    prior = worker._prior_identity(worker._prior_extract(led.db, row))
+    prior_row = worker._prior_extract(led.db, row)
+    prior = worker._prior_identity(prior_row) if prior_row is not None else None
     selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
     assert not errors and selection is not None
     row["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
@@ -247,8 +258,9 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     class Client(real_client):
         def request(self, method, request, timeout, **_kwargs):
             sends.append(request["model"])
-            answer = {"symptoms": [{"text": text, "status": "ongoing", "subject": "patient", "evidence": text}
-                                   for text in ("発熱", "咳")]}
+            answer = ({"symptoms": []} if thin else
+                      {"symptoms": [{"text": text, "status": "ongoing", "subject": "patient", "evidence": text}
+                                    for text in ("発熱", "咳")]})
             if request["reasoning"]["effort"] == "high":
                 answer["vitals"] = dict(repair_vitals)
             return 200, {}, json.dumps({"status": "completed", "model": self.model, "service_tier": "default",
@@ -273,7 +285,8 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
 
     with legacy_cloud_routes():
         result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
-            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
+            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks,
+            feedback=qc["notes"] if qc else None,
             quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
             medication_hints=worker._frame_medications(row))
     assert isinstance(result, dict) and len(sends) == 2
@@ -297,6 +310,57 @@ def test_partial_repair_still_commits_as_terminal_unresolved(routed, monkeypatch
     assert worker.progress_for_message(led.db, message, model=result["_model"])["state"] == "attention"
     rows, _ = worker._select_pending(led, 1, None, None, False)
     assert not rows and len(sends) == 2
+
+
+def test_marked_thin_final_material_proof_ignores_scheduled_retry(routed, monkeypatch, tmp_path):  # noqa: F811
+    """A marked thin final from a plain first extraction keeps its scheduled
+    thin retry: ordinary progress reports attention on the same artifact the
+    material witness accepts. No qc_fix is stored, so pending_pred itself
+    stays true — the retry is genuinely re-pending, not merely displayed."""
+    import mcs_queries
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"bt": 36.5}, thin=True, plain=True)
+    assert qc_id is None and prior is None
+    outcome = worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, None, None, tuple(chunks), check_current=False, expected_prior=None)
+    assert outcome == "written"
+    assert not led.artifacts("extract_llm_chunk", message_id=1)
+    [final] = _current_artifacts(led)
+    final_meta = json.loads(final["meta"])
+    assert final_meta["internal_proof_version"] == 1
+    assert "__mcs_internal_proof_v1" in json.loads(final["content"])
+    message = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+
+    # The thin retry is genuinely scheduled on this exact final: the thin
+    # probe fires and the ordinary pending predicate includes it, while the
+    # material variant (thin scheduling excluded) reports nothing pending.
+    assert led.db.execute(
+        "SELECT 1 FROM messages m WHERE m.message_id=1 AND EXISTS ("
+        + worker._thin_pending_sql(led.db) + ")").fetchone() is not None
+    assert led.db.execute(
+        "SELECT 1 FROM messages m WHERE m.message_id=1 AND ("
+        + worker.pending_pred(led.db) + ")").fetchone() is not None
+    assert led.db.execute(
+        "SELECT 1 FROM messages m WHERE m.message_id=1 AND ("
+        + worker.pending_pred(led.db, include_thin=False) + ")").fetchone() is None
+
+    # Ordinary progress keeps attention; the material witness accepts.
+    assert worker.progress_for_message(led.db, message, model=result["_model"],
+        expected_artifact_id=final["artifact_id"])["state"] == "attention"
+    assert worker.material_proof_for_message(led.db, message, model=result["_model"],
+        expected_artifact_id=final["artifact_id"])["state"] == "complete"
+    assert mcs_queries.selected_artifact_proof_valid(led.db, final["artifact_id"], material=True)
+
+    # Repeated witness reads are pure: sends and stored artifacts unchanged.
+    artifact_count = led.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
+    for _ in range(2):
+        assert worker.progress_for_message(led.db, message, model=result["_model"],
+            expected_artifact_id=final["artifact_id"])["state"] == "attention"
+        assert worker.material_proof_for_message(led.db, message, model=result["_model"],
+            expected_artifact_id=final["artifact_id"])["state"] == "complete"
+        assert mcs_queries.selected_artifact_proof_valid(led.db, final["artifact_id"], material=True)
+    assert len(sends) == 2
+    assert led.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == artifact_count
 
 
 @pytest.mark.parametrize("damage", ["state_resolved", "remaining_wrong", "extra_key",
