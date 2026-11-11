@@ -99,7 +99,9 @@ def _build_observation(state, now_ms):
            'status': 'healthy', 'reason_code': 'NONE',
            'observed_at': now_ms}
     obs = contract.parse_typed(json.dumps(obs).encode(), 'HealthObservation')
-    raw = json.dumps(obs, ensure_ascii=True, separators=(',', ':')).encode()
+    # HealthAckのobservation_sha256は中央がcanonicalAuto hashで返す — 送信bytesを
+    # canonical形に揃え、pending sha256と中央hashを一致させる。
+    raw = contract.canonical_typed(obs, 'HealthObservation')
     return obs, raw, sequence
 
 

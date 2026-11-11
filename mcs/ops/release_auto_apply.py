@@ -215,7 +215,9 @@ def _unknown_outcome(store, deps, owner, active, spent):
                    f'local-proof-absent|{operation_id}|{seq}'),
                'error_code': 'RESULT_UNKNOWN', 'rollout': active['rollout']}
     outcome = contract.parse_typed(json.dumps(outcome).encode(), 'Outcome')
-    raw = json.dumps(outcome, ensure_ascii=True, separators=(',', ':')).encode()
+    # ACKのoutcome_sha256は中央がcanonicalAuto hashで返す(SEM27) — 送信bytesを
+    # canonical形に揃え、保存sha256と中央hashを一致させる。
+    raw = contract.canonical_typed(outcome, 'Outcome')
     entry = {'report_id': report_id, 'operation_id': operation_id,
              'raw': raw.decode('utf-8'),
              'sha256': hashlib.sha256(raw).hexdigest(), 'acknowledged': False}

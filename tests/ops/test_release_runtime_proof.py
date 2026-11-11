@@ -9,6 +9,7 @@ import pytest
 
 import test_release_auto_apply as at
 import test_release_auto_owner as ot
+from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as state
 import release_auto_apply as apply_mod
 import release_auto_owner as owner_mod
@@ -261,8 +262,14 @@ def test_activating_verifies_atomically(store):
     intent = state.load_intent(store)
     assert intent is not None and intent['phase'] == 'retired'
     # VERIFIED outbox entryがある
-    assert any(e['operation_id'] == op_id and e['acknowledged'] is False
-               for e in owner['outbox'])
+    entry = next((e for e in owner['outbox']
+                  if e['operation_id'] == op_id), None)
+    assert entry is not None and entry['acknowledged'] is False
+    # SEM27: OutcomeAckのoutcome_sha256は中央canonicalAuto hash — 送信rawは
+    # canonical形(再canonicalizeで不変)でなければACK照合が一致しない。
+    assert entry['raw'] == contract.canonical_typed(
+        contract.parse_typed(entry['raw'], 'Outcome'),
+        'Outcome').decode('utf-8')
 
 
 def test_heartbeat_insufficient_keeps_activating(store):

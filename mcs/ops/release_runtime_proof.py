@@ -226,7 +226,9 @@ def _verified_outcome(store, deps, owner, active, spent):
                'local_proof_id': active['runtime_proof']['proof_id'],
                'error_code': 'NONE', 'rollout': active['rollout']}
     outcome = contract.parse_typed(json.dumps(outcome).encode(), 'Outcome')
-    raw = json.dumps(outcome, ensure_ascii=True, separators=(',', ':')).encode()
+    # ACKのoutcome_sha256は中央がcanonicalAuto hashで返す(SEM27) — 送信bytesを
+    # canonical形に揃え、保存sha256と中央hashを一致させる。
+    raw = contract.canonical_typed(outcome, 'Outcome')
     return outcome, raw
 
 

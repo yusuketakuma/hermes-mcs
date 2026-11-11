@@ -8,6 +8,7 @@ import json
 import pytest
 
 import test_release_auto_owner as ot
+from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as state
 import release_auto_apply as apply_mod
 import release_auto_owner as owner_mod
@@ -186,8 +187,14 @@ def _assert_unknown(store, deps, code):
     active = owner['active']
     assert active['phase'] == 'UNKNOWN' and active['error_code'] == code
     # Outcome unknownがoutboxへ固定済み
-    outcome = next((json.loads(e['raw']) for e in owner['outbox']), None)
-    assert outcome is not None
+    entry = next((e for e in owner['outbox']), None)
+    assert entry is not None
+    # SEM27: OutcomeAckのoutcome_sha256は中央canonicalAuto hash — 送信rawは
+    # canonical形(再canonicalizeで不変)でなければACK照合が一致しない。
+    assert entry['raw'] == contract.canonical_typed(
+        contract.parse_typed(entry['raw'], 'Outcome'),
+        'Outcome').decode('utf-8')
+    outcome = json.loads(entry['raw'])
     assert outcome['state'] == 'unknown' and outcome['readiness'] == 'unknown'
     assert outcome['error_code'] == 'RESULT_UNKNOWN' and outcome['verified_at'] is None
     # rollback系gitは呼ばれない

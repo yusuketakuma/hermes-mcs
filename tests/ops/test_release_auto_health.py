@@ -10,6 +10,7 @@ import pytest
 import test_release_auto_apply as at
 import test_release_auto_owner as ot
 import test_release_runtime_proof as rt_t
+from adapters.sdc import release_auto_contract as contract
 from adapters.sdc import release_auto_state as state
 import release_auto_health as health
 import release_auto_status as status_mod
@@ -110,6 +111,11 @@ def test_report_health_sends_observation_and_acks(store):
     assert obs['schema_version'] == 'mcs.health-observation.v3'
     assert obs['status'] == 'healthy' and obs['reason_code'] == 'NONE'
     assert obs['health_sequence'] == 1
+    # SEM32: HealthAckのobservation_sha256は中央canonicalAuto hash — 送信bytesは
+    # canonical形(再canonicalizeで不変)でなければACK照合が一致しない。
+    assert sent[0] == contract.canonical_typed(
+        contract.parse_typed(sent[0], 'HealthObservation'),
+        'HealthObservation')
     info = health.health_status(store)
     assert info['state'] == 'bound'
     assert info['health_sequence'] == 1
