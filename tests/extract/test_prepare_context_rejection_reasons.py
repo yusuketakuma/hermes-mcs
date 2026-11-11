@@ -12,6 +12,7 @@ from test_anthropic_runtime import old, routed as routed
 
 CASES = [
     ('load', 'pending_context_unverifiable', 'prepare_context_load_unverifiable'),
+    ('load', 'pending_context_superseded', 'prepare_context_load_superseded'),
     ('load', 'pending_context_reference_changed', 'prepare_context_load_reference_changed'),
     ('medication', 'medication_reference_input_invalid', 'prepare_context_medication_input_invalid'),
     ('medication', 'medication_reference_snapshot_invalid', 'prepare_context_medication_snapshot_invalid'),

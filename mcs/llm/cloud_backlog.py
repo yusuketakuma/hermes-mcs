@@ -329,7 +329,8 @@ _SEMANTIC_STOP_REASONS = frozenset({
 _DEFER_REASONS.update(_SEMANTIC_STOP_REASONS)
 _PREPARE_CONTEXT_REJECTION_CODES = frozenset({
     "prepare_context_invalid", "prepare_context_other", "prepare_context_load_unverifiable",
-    "prepare_context_load_reference_changed", "prepare_context_medication_input_invalid",
+    "prepare_context_load_superseded", "prepare_context_load_reference_changed",
+    "prepare_context_medication_input_invalid",
     "prepare_context_medication_snapshot_invalid", "prepare_context_prepare_transaction_owned",
     "prepare_context_prepare_options_invalid", "prepare_context_prepare_budget_exceeded",
     "prepare_context_prepare_medication_invalid", "prepare_context_prepare_source_changed",

@@ -18,6 +18,7 @@ import mcs_queries
 import mcs_util
 import extraction_context
 import extraction_medications
+import extract_llm_historical
 from mcs_util import load_config, loads_dict, strict_json
 
 from extract_llm_prompts import (
@@ -132,11 +133,14 @@ def _thread_context(db, r, *, budget=_CTX_TOTAL_MAX) -> str | None:
     return (karte + thread) or None
 
 
-def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
+def _chunk_context(r, context: str | None, *, checkpoint: bool = False,
+                   prompt_head=None, schema=None) -> str:
     """Bind completed results to their source and checkpoints to the local-hint contract."""
     binding = [_INFERENCE_VERSION, _LOADED_SOURCE_DIGESTS["inference_version"], r["posted_at"], context,
          _actual_model(r),
-         _PROMPT_HEAD, extract_schema.SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
+         _PROMPT_HEAD if prompt_head is None else prompt_head,
+         extract_schema.SCHEMA if schema is None else schema,
+         "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
     if "_source_binding" in r.keys():
         binding.append(r["_source_binding"])
     if isinstance(r, dict) and r.get("_provider_contract"):
@@ -205,6 +209,83 @@ def _context_contracts():
             (_PRIOR_CONTEXT_SOURCE, _PREPARE_CONTEXT_SOURCE))}
 
 
+def _match_pending_record(db, r, record, witness, content_hash, plain_plan, frames, context_hash):
+    """Bind one pending chunk record to the frames its stored context hash proves."""
+    matched = []
+    leaf = record.get("provider_leaf")
+    evidence = None
+    if "provider_leaf" in record:
+        evidence = _leaf_evidence(_EvidenceLeaf({}, leaf))
+        if evidence is None:
+            raise ValueError("pending_context_unverifiable")
+        choices = (leaf.get("provider_contract"),)
+    elif "checkpoint_provider_contract" in record:
+        choices = (record["checkpoint_provider_contract"],)
+    else:
+        choices = (r.get("_provider_contract"),)
+        size, split, key = (record.get("chunk_size"), record.get("split_size"), record.get("chunk"))
+        # Old plain length plans carry no provider proof. Recognize only
+        # exact historical context hashes from the existing finite contracts.
+        layout = type(key) is int and key == -1 and "split_size" not in record
+        split_plan = (type(split) is int and type(size) is int and 0 < split < size
+                      and (type(key) is int and key >= 0 or isinstance(key, str)
+                           and re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key)))
+        if (type(size) is int and 1 <= size <= _CHUNK_SIZE and (layout or split_plan)
+                and record.get("actual_model") == r["_target"][1]
+                and plain_plan):
+            choices = cloud_inference.supported_cloud_contracts(r["_target"][1])
+            if r.get("_provider_contract") is None:
+                choices = (None, *choices)
+    for contract in choices:
+        if (contract is not None and (not cloud_inference.is_supported_cloud_contract(contract)
+                or contract.get("model") != r["_target"][1])):
+            raise ValueError("pending_context_unverifiable")
+        if ("provider_leaf" in record and "checkpoint_provider_contract" in record
+                and record["checkpoint_provider_contract"] != contract):
+            raise ValueError("pending_context_unverifiable")
+        for frame, target in frames:
+            target = {**target, "_provider_contract": contract, "_frame": frame}
+            if any(name in record and record[name] != value for name, value in _frame_meta(target).items()):
+                continue
+            if context_hash(target, frame["text"]) == record["context"]:
+                saved = db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,content "
+                                   "FROM artifacts WHERE artifact_id=?", (witness[0],)).fetchone()
+                if (saved is None or tuple(saved[:6]) != witness or not isinstance(saved[6], str)
+                        or hashlib.sha256(saved[6].encode()).hexdigest() != content_hash):
+                    raise ValueError("pending_context_unverifiable")
+                if evidence is not None:
+                    try:
+                        expected = _leaf_record(record, target, evidence, saved[6])
+                        valid = expected is not None and mcs_util.canonical(leaf) == mcs_util.canonical(expected)
+                    except (ValueError, TypeError, KeyError, RecursionError):
+                        valid = False
+                    if not valid:
+                        raise ValueError("pending_context_unverifiable")
+                matched.append((frame, target))
+    return matched
+
+
+def _pending_records_known_old(db, r, unmatched, frames):
+    """Every unmatched record must bind exactly one retired-generation frame."""
+    try:
+        old = extract_llm_historical.known_old_contracts()
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return False
+    for record, witness, content_hash, plain_plan in unmatched:
+        total = 0
+        for _gen_id, prompt_head, schema in old:
+            matched = _match_pending_record(
+                db, r, record, witness, content_hash, plain_plan, frames,
+                lambda target, text, h=prompt_head, s=schema:
+                    _chunk_context(target, text, checkpoint=True, prompt_head=h, schema=s))
+            total += len(matched)
+            if total > 1:
+                return False
+        if total != 1:
+            return False
+    return True
+
+
 def _pending_context_frame(db, r, *, attempt, enabled):
     """Resume the exact frozen attempt before creating any new medication reference inputs."""
     records = []
@@ -269,60 +350,13 @@ def _pending_context_frame(db, r, *, attempt, enabled):
         old_target = {**r, **doc["source"], "_source_binding": meta["source_binding"]}
         frames.append((frame, old_target))
     candidates = {}
+    unmatched = []
     for record, witness, content_hash, plain_plan in records:
-        matched = []
-        leaf = record.get("provider_leaf")
-        evidence = None
-        if "provider_leaf" in record:
-            evidence = _leaf_evidence(_EvidenceLeaf({}, leaf))
-            if evidence is None:
-                raise ValueError("pending_context_unverifiable")
-            choices = (leaf.get("provider_contract"),)
-        elif "checkpoint_provider_contract" in record:
-            choices = (record["checkpoint_provider_contract"],)
-        else:
-            choices = (r.get("_provider_contract"),)
-            size, split, key = (record.get("chunk_size"), record.get("split_size"), record.get("chunk"))
-            # Old plain length plans carry no provider proof. Recognize only
-            # exact historical context hashes from the existing finite contracts.
-            layout = type(key) is int and key == -1 and "split_size" not in record
-            split_plan = (type(split) is int and type(size) is int and 0 < split < size
-                          and (type(key) is int and key >= 0 or isinstance(key, str)
-                               and re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key)))
-            if (type(size) is int and 1 <= size <= _CHUNK_SIZE and (layout or split_plan)
-                    and record.get("actual_model") == r["_target"][1]
-                    and plain_plan):
-                choices = cloud_inference.supported_cloud_contracts(r["_target"][1])
-                if r.get("_provider_contract") is None:
-                    choices = (None, *choices)
-        for contract in choices:
-            if (contract is not None and (not cloud_inference.is_supported_cloud_contract(contract)
-                    or contract.get("model") != r["_target"][1])):
-                raise ValueError("pending_context_unverifiable")
-            if ("provider_leaf" in record and "checkpoint_provider_contract" in record
-                    and record["checkpoint_provider_contract"] != contract):
-                raise ValueError("pending_context_unverifiable")
-            for frame, target in frames:
-                target = {**target, "_provider_contract": contract, "_frame": frame}
-                if any(name in record and record[name] != value for name, value in _frame_meta(target).items()):
-                    continue
-                if _chunk_context(target, frame["text"], checkpoint=True) == record["context"]:
-                    saved = db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,content "
-                                       "FROM artifacts WHERE artifact_id=?", (witness[0],)).fetchone()
-                    if (saved is None or tuple(saved[:6]) != witness or not isinstance(saved[6], str)
-                            or hashlib.sha256(saved[6].encode()).hexdigest() != content_hash):
-                        raise ValueError("pending_context_unverifiable")
-                    if evidence is not None:
-                        try:
-                            expected = _leaf_record(record, target, evidence, saved[6])
-                            valid = expected is not None and mcs_util.canonical(leaf) == mcs_util.canonical(expected)
-                        except (ValueError, TypeError, KeyError, RecursionError):
-                            valid = False
-                        if not valid:
-                            raise ValueError("pending_context_unverifiable")
-                    matched.append((frame, target))
+        matched = _match_pending_record(db, r, record, witness, content_hash, plain_plan, frames,
+            lambda target, text: _chunk_context(target, text, checkpoint=True))
         if len(matched) != 1:
-            raise ValueError("pending_context_unverifiable")
+            unmatched.append((record, witness, content_hash, plain_plan))
+            continue
         frame, target = matched[0]
         # A verified older source or a different retry keeps its own history.
         if (target["_source_binding"] != r["_source_binding"]
@@ -337,6 +371,14 @@ def _pending_context_frame(db, r, *, attempt, enabled):
         if not _frame_references_current(db, r, current):
             raise ValueError("pending_context_reference_changed")
         candidates[current["artifact_id"]] = current
+    if unmatched:
+        # A record no current contract can bind may still be a verified
+        # artifact of a retired generation. Only when every pending record
+        # proves exactly one old binding and none resumed does the caller
+        # see the distinct superseded signal; anything else stays held.
+        if candidates or not _pending_records_known_old(db, r, unmatched, frames):
+            raise ValueError("pending_context_unverifiable")
+        raise ValueError("pending_context_superseded")
     if len(candidates) > 1:
         raise ValueError("pending_context_unverifiable")
     return next(iter(candidates.values())) if candidates else None

@@ -1,0 +1,11 @@
+{
+  "category": "added",
+  "title": "旧契約世代の抽出checkpointをsupersededとして識別",
+  "summary": "過去の契約世代で書かれた抽出checkpointが現在の契約と一致しない場合、未知の破損と区別して prepare_context_load_superseded として分類します。現時点では引き続き保留され、旧行は変更されません。",
+  "upgrade": "追加操作は不要です。分類が変わるだけで抽出の再開条件は変わりません。",
+  "details": [
+    "mcs/extract/llm/extract_llm_historical.py: 退役した chunk-context 定数集合(旧PROMPT_HEAD/SCHEMA)を有限集合として保持し、停滞recordが既知の旧世代に一意に束縛されるかを検証する。",
+    "mcs/extract/llm/extract_llm_context.py: 全pending recordが現行契約に一致せず、かつ全てが旧世代へ一意に束縛される場合のみ pending_context_superseded を返す。混在・未知・複数一致は従来どおり unverifiable で保留。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_context.py", "mcs/extract/llm/extract_llm_historical.py"]
+}
