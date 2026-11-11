@@ -602,6 +602,7 @@ def _settle_initial_history(ledger, job, payload, cohort):
         if ready:
             db.execute("UPDATE patients SET history_floor=-1,coverage_ts=MAX(COALESCE(coverage_ts,0),?) WHERE project_id=?",
                        (ledger.high_watermark(pid),pid))
+            ledger.patient_fetch_completed(pid)
         initial_import_state.refresh_capture_tx(ledger, pid, time.time())
     return ready
 
@@ -860,6 +861,9 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
     since cutoff — the only path where an edit/deletion/tombstone on an
     old post is observed (F04). Re-saving lets the upsert detect the
     changed content_hash and retire derived artifacts as usual."""
+    import initial_import_state
+    with ledger.db:
+        initial_import_state.reconcile_completed_fetches_tx(ledger.db)
     done_n = 0
     jobs = ledger.db.execute(
         "SELECT * FROM fetch_jobs WHERE kind='reconcile' "

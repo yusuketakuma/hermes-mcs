@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "履歴walkで取得完了した患者のfetch_stateがpendingのまま残る問題を修正",
+  "summary": "履歴walkが末尾（history_floor=-1）まで完了しても、未読一覧に一度も現れなかった患者はfetch_stateが'pending'のまま残り、取得完了（acquisition.complete）と判定されず患者コンテキスト等の下流処理が進みませんでした。walk完了時とreconcile時に、取得証拠（floor=-1・fetch job決着・理由なし・capture証明）が揃った患者のfetch_stateを'complete'へ確定するよう修正しました。'incomplete'・'failed'・'forbidden'・理由付きの行は従来どおり明示的な回復経路を維持します。",
+  "upgrade": "追加操作は不要です。次回のreconcileステージ実行時に、取得証拠が揃った既存患者へ自動でfetch_state='complete'が打刻されます。人間の承認や手動のDB変更は不要です。",
+  "details": [
+    "Ledger.set_history_floor が floor=-1（walk末尾到達）へ遷移した際、fetch_state='pending'かつfetch_reasonなしの行を'complete'へ更新します。_settle_initial_history（cohort経路）でも同様に確定します。",
+    "initial_import_state.reconcile_completed_fetches_tx を追加し、run_reconcile_jobs の先頭で毎サイクル実行します。walk完了がこの修正より前だった既存患者を、acquisition_statusと同じ証拠（floor=-1・history/thread/reply job決着・理由なし・capture complete+proofまたは無し）で検証して打刻します。",
+    "fetch_state='incomplete'・'failed'・'forbidden'・fetch_reasonあり・未完了jobあり・capture未証明の患者は対象外のままです。acquisition_statusの契約（'pending'は未完了扱い）は変更していません。"
+  ],
+  "refs": ["mcs/core/ledger.py", "mcs/core/initial_import_state.py", "mcs/ingest/job_ops.py", "tests/core/test_initial_import_state.py"]
+}

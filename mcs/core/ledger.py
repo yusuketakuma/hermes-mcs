@@ -456,6 +456,8 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             "(history_floor IS NULL OR history_floor=0 "
             "OR ? < history_floor)",
             (new, project_id, new))
+        if new == -1:
+            self.patient_fetch_completed(project_id)
         self.db.commit()
 
     def history_cursor(self, project_id: int) -> int:
@@ -498,6 +500,20 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
               WHERE project_id=?
             """, (target, project_id))
 
+
+    def patient_fetch_completed(self, project_id: int):
+        """Stamp a fully walked history as a completed fetch.
+
+        The unread path is the only other place that sets fetch_state='complete',
+        so a patient acquired entirely by the history walk would stay 'pending'
+        forever. Only a clean 'pending' row is upgraded: 'incomplete'/'failed'/
+        'forbidden' keep their explicit reason and recovery path. Caller owns
+        the transaction.
+        """
+        self.db.execute(
+            "UPDATE patients SET fetch_state='complete' WHERE project_id=? "
+            "AND fetch_state='pending' AND fetch_reason IS NULL",
+            (project_id,))
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:

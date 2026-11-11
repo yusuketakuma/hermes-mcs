@@ -391,3 +391,79 @@ def test_legacy_without_initial_import_requires_full_fetch_floor_and_jobs(store)
         assert not state.acquisition_status(store.db, 2)['complete']
     finally:
         store.db.rollback()
+
+
+def test_completed_walk_stamps_fetch_state_for_pending_patient(store):
+    """A patient acquired entirely by the history walk must still reach
+    fetch_state='complete' — the unread path alone never stamps it."""
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state='pending',fetch_reason=NULL "
+                         "WHERE project_id=1")
+    store.set_history_floor(1, 0)
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=1").fetchone()[0] == 'complete'
+
+
+@pytest.mark.parametrize('value', ['incomplete', 'failed', 'forbidden'])
+def test_completed_walk_preserves_unresolved_fetch_state(store, value):
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state=?,fetch_reason='synthetic' "
+                         "WHERE project_id=1", (value,))
+    store.set_history_floor(1, 0)
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=1").fetchone()[0] == value
+
+
+def test_completed_walk_preserves_pending_with_reason(store):
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state='pending',fetch_reason='synthetic' "
+                         "WHERE project_id=1")
+    store.set_history_floor(1, 0)
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=1").fetchone()[0] == 'pending'
+
+
+def _legacy_walked(store, pid=2):
+    """A non-cohort patient whose history walk already reached the end."""
+    store.upsert_patient_info(_unread_patient(pid))
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET state='done' "
+                         "WHERE project_id=? AND kind IN ('history','thread','reply')", (pid,))
+        store.db.execute("UPDATE patients SET fetch_state='pending',fetch_reason=NULL,"
+                         "history_floor=-1 WHERE project_id=?", (pid,))
+
+
+def test_reconcile_stamps_legacy_walked_patient_once(store):
+    _legacy_walked(store)
+    with store.db:
+        assert state.reconcile_completed_fetches_tx(store.db) == 1
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=2").fetchone()[0] == 'complete'
+    store.db.execute('BEGIN')
+    try:
+        assert state.acquisition_status(store.db, 2)['complete'] is True
+    finally:
+        store.db.rollback()
+    with store.db:
+        assert state.reconcile_completed_fetches_tx(store.db) == 0
+
+
+def test_reconcile_skips_unfinished_fetch_job(store):
+    _legacy_walked(store)
+    store.job_add_tx('history', 2)
+    with store.db:
+        assert state.reconcile_completed_fetches_tx(store.db) == 0
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=2").fetchone()[0] == 'pending'
+
+
+def test_reconcile_ignores_non_pending_and_unfloored(store):
+    _legacy_walked(store)
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state='incomplete',fetch_reason='x' "
+                         "WHERE project_id=2")
+        store.db.execute("INSERT INTO patients(project_id,fetch_state,"
+                         "fetch_reason,history_floor) VALUES(3,'pending',NULL,NULL)")
+        assert state.reconcile_completed_fetches_tx(store.db) == 0
+    assert store.db.execute(
+        "SELECT fetch_state FROM patients WHERE project_id=2").fetchone()[0] == 'incomplete'

@@ -264,6 +264,43 @@ def acquisition_status(db, project_id):
                                        [list(row) for row in jobs]])}
 
 
+def reconcile_completed_fetches_tx(db):
+    """Stamp fetch_state='complete' for patients whose walk finished before
+    the completion stamp existed. Caller provides the transaction.
+
+    Applies the same evidence acquisition_status checks, minus fetch_state:
+    a clean 'pending' row with floor=-1, settled history/thread/reply jobs,
+    no reason, and a proven or absent capture cohort is a finished fetch.
+    'incomplete'/'failed'/'forbidden' and malformed capture are left for
+    their explicit recovery path. Returns the number of rows stamped.
+    """
+    stamped = 0
+    for row in db.execute(
+            "SELECT project_id FROM patients WHERE fetch_state='pending' "
+            "AND fetch_reason IS NULL AND history_floor=-1").fetchall():
+        pid = row[0]
+        if db.execute(
+                "SELECT 1 FROM fetch_jobs WHERE project_id=? "
+                "AND kind IN ('history','thread','reply') AND state IS NOT 'done' "
+                "LIMIT 1", (pid,)).fetchone():
+            continue
+        try:
+            capture = load(db, pid)
+        except (ValueError, TypeError, KeyError):
+            continue
+        capture_ok = capture is None or (
+            capture.get("capture_phase") == "complete"
+            and history_walk.capture_proof(capture.get("capture_proof"), pid,
+                                           capture["cohort_id"]))
+        if not capture_ok:
+            continue
+        stamped += db.execute(
+            "UPDATE patients SET fetch_state='complete' WHERE project_id=? "
+            "AND fetch_state='pending' AND fetch_reason IS NULL",
+            (pid,)).rowcount
+    return stamped
+
+
 def refresh_capture_tx(ledger, project_id, now):
     """Publish capture completion only after verified history and all fetch work settle."""
     state = load(ledger.db, project_id)
