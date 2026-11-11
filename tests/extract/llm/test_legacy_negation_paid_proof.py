@@ -10,11 +10,13 @@ import cloud_client
 import cloud_inference
 import cloud_policy
 import extract_llm as worker
+import extract_llm_engine
 import extract_llm_progress
 import extract_llm_qc
-from extract_testkit import _ledger, _message
+import mcs_util
+from extract_testkit import _extract_artifact, _hash, _ledger, _message
 from test_anthropic_runtime import _bound_source, real_record_result, real_usage_reserver, routed as routed
-from test_cloud_repair_final_proof import _repair_run
+from test_cloud_repair_final_proof import _repair_run, _use_legacy_frame
 from test_cloud_response_recovery import legacy_cloud_routes
 
 
@@ -428,3 +430,147 @@ def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(r
     assert len(sends) == 2
     assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts WHERE kind IN "
         "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') ORDER BY artifact_id")] == money
+
+
+def _resume_under_new_prior(routed, monkeypatch, led, body, source_id, prior_a_ref,
+                            prior_b_content, sends):
+    """Add a newer valid prior B on the same source, re-prepare, and run one
+    engine pass over the persisted checkpoint state."""
+    _, cfg, *_ = routed
+    # A newer extract artifact on an older public inference version is not a
+    # current extraction, so the QC-flagged pending route and frame stay
+    # bound to prior A — but _prior_extract still resolves it as the newest
+    # source-bound extract, making it the protected prior B.
+    prior_b_id = _extract_artifact(led, 1, prior_b_content, _hash(led))
+    with led.db:
+        saved_meta = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?",
+                                    (prior_b_id,)).fetchone()
+        meta_b = json.loads(saved_meta[0])
+        meta_b["inference_engine_version"] = "0.1"
+        led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                       (json.dumps(meta_b, ensure_ascii=False), prior_b_id))
+        # The previous pass's claim lease is still live; expire it the way a
+        # later run_pending pass would see it after the lease runs out.
+        led.db.execute("UPDATE fetch_jobs SET next_try=0 "
+                       "WHERE kind='extract_claim' AND message_id=1")
+    rows, _ = worker._select_pending(led, 1, None, None, False)
+    jobs, _, blocked = worker._prepare_jobs(led, rows, ("", "gpt-6-luna"), False, allow_cloud=False)
+    assert not blocked and len(jobs) == 1
+    row, context, _, hints, qc = jobs[0]
+    context = _use_legacy_frame(led, row)
+    assert row.get("_protected_prior_ref") is not None
+    assert row["_protected_prior_ref"] != prior_a_ref
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
+    assert not errors and selection is not None
+    row["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
+    row["_target"] = ("", selection["model"])
+    row["_proof_vital_policy"] = None
+    lease = worker._claim(led, row)
+    saved = worker._capture_checkpoint_state(led.db, row, context)
+    real_client = worker.openai_client.OpenAIClient
+
+    class Client(real_client):
+        def request(self, method, request, timeout, **_kwargs):
+            sends.append(request["model"])
+            answer = {"symptoms": [{"text": text, "status": "ongoing", "subject": "patient",
+                                    "evidence": text} for text in ("発熱", "咳")]}
+            if request["reasoning"]["effort"] == "high":
+                answer["vitals"] = {"sbp": 120}
+                answer["symptoms"].append({"text": "家族の発熱", "status": "past",
+                    "subject": "family", "negated": False,
+                    "evidence": "家族の発熱の既往があります"})
+            usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
+            return 200, {}, json.dumps({"status": "completed", "model": self.model,
+                "service_tier": "default",
+                "output": [{"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": json.dumps(answer, ensure_ascii=False)}]}],
+                "usage": usage}).encode()
+
+    monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
+    deadline = time.monotonic() + 600
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+        message_id=1, unit_key="1", deadline=deadline,
+        current=lambda: worker._owns_current_source(led, row, lease),
+        dispatch=lambda fn, **_kwargs: fn(), owner={"lease": lease}, selection=selection)
+    chunks, meta = {}, {}
+
+    def checkpoint(key, value):
+        return worker._persist_chunks(led, row, {key: value}, context,
+            chunk_size=row["_chunk_size"], splits=row["_splits"],
+            lease=lease, guard=row["_checkpoint_guard"])
+
+    with legacy_cloud_routes():
+        result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline,
+            meta_out=meta, posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks,
+            feedback=qc["notes"], quality_qc_src=source_id, on_chunk=checkpoint,
+            chunk_size=row["_chunk_size"], provider=provider,
+            medication_hints=worker._frame_medications(row),
+            protected_prior=mcs_util.loads_dict(row["_protected_prior"]["content"]),
+            protected_prior_ref=row.get("_protected_prior_ref"))
+    return result, row
+
+
+def _quality_rows(led, status):
+    return [item["artifact_id"] for item in
+            led.artifacts("extract_llm_chunk", project_id=1, message_id=1)
+            if json.loads(item["meta"]).get("quality_status") == status]
+
+
+_PROTECTED_B_BODY = ("本人に発熱と咳があります。家族の発熱の既往があります。"
+                     "本人の血圧120/80です。")
+_PROTECTED_ITEM = {"text": "家族の発熱", "status": "past", "subject": "family",
+                   "negated": False, "evidence": "家族の発熱の既往があります"}
+
+
+@pytest.mark.xfail(strict=True,
+    reason="pending checkpoint minted under prior A is adopted for paid repair "
+           "under superseded prior B; product IF pending Oracle mcs-frozen-checkpoint-basis")
+def test_pending_checkpoint_under_superseded_prior_must_defer(routed, monkeypatch, tmp_path):
+    """A real pending checkpoint plus its paid first-response origin saved under
+    prior A must not dispatch a repair once a newer valid prior B is current:
+    desired behavior keeps the old evidence, adds no repair send or started
+    row, and defers fixed. Currently the A-bound pending leaf loads without a
+    prior-ref check and the repair dispatches under B (RED)."""
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(_PROTECTED_ITEM)]},
+        body=_PROTECTED_B_BODY, expected_sends=1, pending_only=True)
+    prior_a_ref = row["_protected_prior_ref"]
+    source_id = row["_protected_prior"]["artifact_id"]
+    assert prior_a_ref is not None
+    pending_before = _quality_rows(led, "pending")
+    assert pending_before and not _quality_rows(led, "started")
+    prior_b = {"symptoms": [dict(_PROTECTED_ITEM)], "summary": "合成の要約B"}
+    result2, _row2 = _resume_under_new_prior(
+        routed, monkeypatch, led, _PROTECTED_B_BODY, source_id, prior_a_ref,
+        prior_b, sends)
+    # Old evidence must be preserved either way (new rows may be appended).
+    assert set(pending_before) <= set(_quality_rows(led, "pending"))
+    # Desired fail-closed outcome (currently RED):
+    assert len(sends) == 1
+    assert result2 is extract_llm_engine._DEFERRED
+
+
+def test_started_checkpoint_under_superseded_prior_holds_without_redispatch(routed, monkeypatch, tmp_path):
+    """Control: a started checkpoint at rest under prior A keeps its state and
+    is not re-dispatched when prior B becomes current — the engine resolves it
+    as dispatch_unknown and finishes honestly without a new paid call."""
+    original_prompt = extract_llm_engine._repair_prompt
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(_PROTECTED_ITEM)]},
+        body=_PROTECTED_B_BODY, expected_sends=1, crash_after_started=True)
+    monkeypatch.setattr(extract_llm_engine, "_repair_prompt", original_prompt)
+    assert result is None and len(sends) == 1
+    prior_a_ref = row["_protected_prior_ref"]
+    source_id = row["_protected_prior"]["artifact_id"]
+    started_before = _quality_rows(led, "started")
+    assert started_before and _quality_rows(led, "pending")
+    prior_b = {"symptoms": [dict(_PROTECTED_ITEM)], "summary": "合成の要約B"}
+    result2, _row2 = _resume_under_new_prior(
+        routed, monkeypatch, led, _PROTECTED_B_BODY, source_id, prior_a_ref,
+        prior_b, sends)
+    assert len(sends) == 1
+    assert isinstance(result2, dict)
+    assert set(started_before) <= set(_quality_rows(led, "started"))
