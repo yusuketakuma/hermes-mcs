@@ -198,7 +198,8 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
 
 
 def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
-                prior_content=None, answer_hook=None, extract_extra=None, body=None):
+                prior_content=None, answer_hook=None, extract_extra=None, body=None,
+                expected_sends=2):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops."""
     led, cfg, _, _, _ = routed
@@ -283,7 +284,7 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
             posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks, feedback=qc["notes"],
             quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
             medication_hints=worker._frame_medications(row), **extra)
-    assert isinstance(result, dict) and len(sends) == 2
+    assert isinstance(result, dict) and len(sends) == expected_sends
     row["_provider_evidence"] = meta.pop("_provider_evidence")
     result["_model"] = selection["model"]
     return led, row, context, result, meta, qc_id, prior, chunks, sends

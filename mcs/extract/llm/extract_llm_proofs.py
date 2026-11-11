@@ -251,9 +251,16 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                 or type(meta.get("quality_lease")) not in (int, float)
                 or not math.isfinite(meta["quality_lease"]) or meta["quality_lease"] <= 0):
             return False
-        if (meta.get("protected_prior_ref") != r.get("_protected_prior_ref")
-                or (version == 2 and protected_ref != r.get("_protected_prior_ref"))):
-            return False
+        meta_ref = meta.get("protected_prior_ref")
+        prior_ref = r.get("_protected_prior_ref")
+        if version == 2:
+            if meta_ref != prior_ref or protected_ref != prior_ref:
+                return False
+        # v1 proofs predate protected references and carry no basis to fence:
+        # the started row's recorded ref names the prior at repair time, while
+        # r's ref names the current prior — legitimately different once the
+        # repaired artifact itself is retained. The current prior adoption
+        # fence stays at commit (_protected_prior_current/_prior_matches).
         old_proof = meta.get("provider_leaf")
         old_evidence = _leaf_evidence(_EvidenceLeaf({}, old_proof))
         expected = _leaf_record(meta, r, old_evidence, row["content"]) if old_evidence is not None else None

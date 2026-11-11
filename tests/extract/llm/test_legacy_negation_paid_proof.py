@@ -84,6 +84,47 @@ def test_protected_loss_repair_mints_v2_proof_and_replays(routed, monkeypatch, t
     assert len(sends) == 2
 
 
+def test_retained_v1_repair_without_prior_ref_replays_under_protected_prior(routed, monkeypatch, tmp_path):
+    """A retained inline v1 repair whose started row predates protected_prior_ref
+    embedding must still replay when the record carries a pinned prior: v1 proofs
+    never bound the reference, so an absent meta ref is not a mismatch."""
+    protected = {"text": "家族の発熱", "status": "past", "subject": "family",
+                 "negated": False, "evidence": "家族の発熱の既往があります"}
+    filler = "経過は安定しており次回診察で再評価します。"
+    body = ("家族の発熱の既往があります。" + filler * 149
+            + "本人の血圧120/80です。" + "内服と休養を継続してください。" * 30)
+
+    def hook(request, answer):
+        if request["reasoning"]["effort"] == "high":
+            answer["vitals"] = {"sbp": 120}
+            if "家族の発熱の既往" in str(request):
+                answer["symptoms"].append(dict(protected))
+        return answer
+
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120},
+        prior_content={"symptoms": [dict(protected)]}, answer_hook=hook, body=body,
+        expected_sends=4)
+    assert row.get("_protected_prior_ref") is not None
+    _, saved = worker._saved_chunk_state(led.db, row, context, chunk_size=row["_chunk_size"])
+    repairs = [item.repair_proof for item in saved.values() if getattr(item, "repair_proof", None)]
+    v1 = [proof for proof in repairs if proof["version"] == 1]
+    assert v1, f"expected a v1 repair, got {[p.get('version') for p in repairs]}"
+    started_id = v1[0]["started_artifact_id"]
+    saved_row = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (started_id,)).fetchone()
+    old_meta = json.loads(saved_row[0])
+    assert "protected_prior_ref" in old_meta
+    old_meta.pop("protected_prior_ref")
+    if isinstance(old_meta.get("provider_leaf"), dict):
+        old_meta["provider_leaf"].pop("protected_prior_ref", None)
+    with led.db:
+        led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                       (json.dumps(old_meta, ensure_ascii=False), started_id))
+    assert worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {'qc': qc_id, 'applied': True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior) == 'written'
+
+
 def test_retained_repaired_leaf_replays_legacy_default_false_without_rebilling(routed, monkeypatch, tmp_path):
     symptoms = worker.extract_validation.Validator.symptoms
     def legacy_symptoms(self, document, out):
