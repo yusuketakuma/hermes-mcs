@@ -25,6 +25,9 @@ if __package__ in (None, ""):
     __package__ = "mcs_standalone"
 
 import mcs_standalone  # noqa: E402,F401  (path bootstrap)
+if __name__ == "__main__":
+    import runtime_entry as _runtime_entry  # noqa: E402
+    _RUNTIME_ENTRY = _runtime_entry.acquire()  # noqa: E402  (Q SH; process lifetime via runtime_entry.current())
 from adapters.common.paths import read_verified_attachment  # noqa: E402
 from mcs_util import HOME  # noqa: E402
 from safe_io import fdopen_owned  # noqa: E402

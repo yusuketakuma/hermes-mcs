@@ -1,0 +1,82 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "StartRequest",
+  "data": {
+    "schema_version": "mcs.start-request.v3",
+    "request_id": "a8cff918-ecc5-4c8f-91e6-c87a5d1a2a05",
+    "request_nonce": "23591da6b5521bbe295f12e5d3c2b234b315939bc1ec02b47a23aa404e88786f",
+    "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "consent_id": "12423e04-82f3-481c-b1d2-3230664e95bb",
+    "local_consent_epoch": 1,
+    "policy_epoch": 1,
+    "rollout_epoch": 1,
+    "publication_id": "3f662004-cb46-46be-8aa8-eae1a6a2328a",
+    "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+    "compatibility_sha256": "fa528d3adef61d199a8348ffb48ef0143603ea2e0ad007121c39edc6e3aeb567",
+    "preflight": {
+      "schema_version": "mcs.prepared-public.v3",
+      "local_preflight_id": "6f851dc6-6002-4ec0-ae88-0e895c721079",
+      "local_backup_evidence_id": "54d00d86-7758-4ef8-96bc-4685f58e327b",
+      "current_release": {
+        "release_id": "9dc0b5b3802f74b7b2ed3612da1ad734bfefb1db54e5bdad149ebaa1dfc61b77",
+        "code_seq": 1,
+        "source_commit": "4ba10998a6ebceb06ecf1a94bb2970c91ff19a67",
+        "artifact_sha256": "6783d84adf07619acaff8031668ec8ac96862cbba1493a63af41d38b921225e2",
+        "artifact_size": 4096
+      },
+      "target_release": {
+        "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+        "code_seq": 2,
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+        "artifact_size": 4096
+      },
+      "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+      "control_closure_sha256": "0fcd568a5cb9bdb4677b69354b11ee415af8f784519cff3da49a26f84eaee7f2",
+      "config_contract_sha256": "70441941f9d3ac83b130d994494070a82d46471e09a4dcebae0feea9c5386c91",
+      "data_contract_sha256": "9c2ea3db51c1ba62d6fe9e31d60d8b92065a74d164d99ba238995acb7798f360",
+      "installed_schema": 9,
+      "prepare_nonce": "45666d976bab316d970ec459afd866d9e9a0681ac510f0911f2ac33e9142e51b",
+      "execution_revision": 4,
+      "runtime_generation": 1,
+      "boot_id": "6a9c95c8edc85c5edbc3d2998357955257efaf8c038d2b4fba564b788f977109",
+      "resources_verified": true,
+      "observed_at": 1794268800000,
+      "rollout": {
+        "rollout_id": "10000000-0000-4000-8000-000000000001",
+        "assignment_id": "10000000-0000-4000-8000-000000000002",
+        "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "allocation_epoch": 1,
+        "authorization_epoch": 1,
+        "stage": "self",
+        "wave_index": 1
+      }
+    },
+    "preflight_sha256": "d318f165fa2a50f35584aa48286696953b52a1dd968ae10aa90a7e666b71419f",
+    "attempt_key": "4289490b29be9bf633617cde65a5b7e0a4562115d58fb0126dae838de0dc5660",
+    "window": {
+      "starts_at": 1794268799000,
+      "ends_at": 1794268860000
+    },
+    "rollout": {
+      "rollout_id": "10000000-0000-4000-8000-000000000001",
+      "assignment_id": "10000000-0000-4000-8000-000000000002",
+      "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "allocation_epoch": 1,
+      "authorization_epoch": 1,
+      "stage": "self",
+      "wave_index": 1
+    }
+  }
+}

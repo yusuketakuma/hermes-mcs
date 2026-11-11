@@ -1,0 +1,828 @@
+=== apply (update_apply.apply wrapper) callers ===
+--- module importers ---
+tests/core/test_supported_schema_upgrade.py:9:import update_apply
+tests/meta/test_mcs_recover_restore.py:2:import update_apply
+tests/ops/test_installed_standalone_update.py:15:import update_apply
+tests/ops/test_git_timeout_cleanup.py:4:import update_apply
+tests/ops/test_runtime_compatibility.py:3:import update_apply
+tests/ops/test_update_recovery_classification.py:2:import update_apply
+tests/ops/test_mcs_update_restore.py:2:import update_apply
+tests/ops/test_update_child_reaping.py:2:import update_apply
+tests/ops/test_update_environment_agents_dir.py:4:import update_apply
+tests/ops/test_lifecycle_standalone.py:3:import update_apply
+tests/ops/test_release_apply_owner_planning.py:2:import update_apply
+tests/ops/test_update_candidate.py:2:import update_apply
+tests/ops/test_release_apply_owner_native_apply.py:2:import update_apply
+tests/ops/test_update_backup_capacity.py:2:import update_apply
+tests/ops/test_update_failure_cleanup.py:2:import update_apply
+tests/ops/test_restart_runtime_boundary.py:3:import update_apply
+tests/ops/test_update_error_output.py:2:import update_apply
+tests/ops/test_update_log_migration.py:2:import update_apply
+tests/ops/test_restore_evidence.py:2:import update_apply
+tests/ops/test_mcs_update_recovery.py:2:import update_apply
+tests/ops/ops_testkit.py:7:import update_apply
+tests/ops/test_update_rollback_guards.py:3:import update_apply
+tests/ops/mcs_update_testkit.py:2:import update_apply
+tests/ops/test_mcs_update_services.py:2:import update_apply
+tests/ops/test_ops_owned_fd_closeout.py:2:import update_apply
+tests/ops/test_backup_restore_consent.py:2:import update_apply
+tests/ops/test_yomitoku_install.py:2:import update_apply
+tests/ops/test_update_failure_diagnostics.py:3:import update_apply
+tests/ops/test_audit_ops_notify.py:3:import update_apply
+tests/ops/test_mcs_update_apply.py:2:import update_apply
+tests/ops/test_update_lock_wait.py:2:import update_apply
+tests/ops/test_update_recovery_stability.py:3:import update_apply
+tests/ops/test_mcs_update_release_boundary.py:3:import update_apply
+tests/ops/test_mcs_update_rollback_floor.py:3:import update_apply
+tests/ops/test_update_service_stop_verification.py:2:import update_apply
+tests/ops/test_environment_diagnostics_boundary.py:2:import update_apply
+tests/ops/test_provider_rollback_source_witness.py:2:import update_apply
+tests/ops/test_python314_runtime_migration.py:2:import update_apply
+tests/ops/test_update_receipt_boundary.py:2:import update_apply
+tests/ops/test_supported_update_paths.py:2:import update_apply
+tests/ops/test_mcs_upgrade.py:4:import update_apply
+tests/ops/test_restore_control_boundaries.py:2:import update_apply
+tests/ops/test_drug_info.py:2:import update_apply
+tests/ops/test_update_loaded_rollback_closure.py:2:import update_apply
+tests/ops/test_run_log_failure_diagnostics.py:2:import update_apply
+tests/ops/test_mcs_update.py:2:import update_apply
+mcs/ops/update_cli.py:28:from update_apply import (
+mcs/ops/mcs_update.py:308:from update_apply import (
+--- apply( call sites in importers ---
+192:        return apply(picked["tag"], picked["target_sha"],
+195:        return apply(auto[0], auto[1], None)
+212:    return apply(args.tag, args.sha, args.command_id,
+309:    apply as apply,
+329:    cmd_apply as cmd_apply,
+--- facade re-export callers (mcs_update.apply / _apply_pipeline / rollback) ---
+mcs/ops/release_apply_owner.py:1047:                result = mcs_update._apply_pipeline(None, core['commit'], None,
+tests/ops/test_mcs_update_restore.py:681:    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == expected
+tests/ops/test_mcs_update_restore.py:778:    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
+tests/ops/test_mcs_update_restore.py:806:    assert mcs_update.rollback() == 0
+tests/ops/test_release_apply_owner_native_apply.py:648:    assert mcs_update._apply_pipeline(*arguments[:6], candidate_sha=arguments[6],
+tests/ops/test_mcs_update_apply.py:323:    assert mcs_update.apply("v1.1.0", sha, "cid") == 1
+tests/ops/test_mcs_update.py:947:    assert mcs_update.rollback(command_id="synthetic-empty-rollback") == 0
+integration/test_mcs_recovery_narrative.py:852:        rc = mcs_update.rollback("cid-rb")
+integration/test_mcs_recovery_narrative.py:1087:    assert mcs_update.rollback("cid-rb") == 2
+--- update_cli.apply name patching / direct refs ---
+tests/ops/test_mcs_update_apply.py:168:    monkeypatch.setattr(update_cli, 'apply', updater.apply)
+tests/ops/test_mcs_update.py:745:    monkeypatch.setattr(update_cli, 'apply', mcs_update.apply)
+--- apply subcommand dispatch ---
+211:def cmd_apply(args) -> int:
+271:    ap_p = sub.add_parser("apply", help="指定した版へ更新する")
+284:    ap_p.set_defaults(fn=lambda args: cmd_apply(args))
+
+=== _apply_pipeline callers ===
+mcs/ops/mcs_update.py:310:    _apply_pipeline as _apply_pipeline,
+mcs/ops/release_apply_owner.py:1047:                result = mcs_update._apply_pipeline(None, core['commit'], None,
+mcs/ops/update_apply.py:125:    return _call_legacy(_apply_pipeline, tag, sha, command_id, base_sha, reinstall, install_args,
+mcs/ops/update_apply.py:129:def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
+=== cmd_check callers ===
+mcs/notify/notify_cmds.py:387:        error = _human_cmd_check(req)
+mcs/notify/notify_cmds.py:415:def _human_cmd_check(req) -> str | None:
+mcs/ops/commands/mcs_operations.py:661:        # same opt-in as cmd_check's detection: only a notified
+mcs/ops/mcs_setup.py:381:    check_result = cmd_check(args)
+mcs/ops/mcs_setup.py:836:def cmd_check(args) -> int:
+mcs/ops/mcs_setup.py:1407:    p.set_defaults(fn=cmd_check, yes=True)
+mcs/ops/mcs_update.py:327:    cmd_check as cmd_check,
+mcs/ops/setup/setup_integration.py:480:    # key (dotted paths nest); the trailing cmd_check validates them.
+mcs/ops/update_cli.py:89:def cmd_check() -> int:
+mcs/ops/update_cli.py:269:    ap.set_defaults(fn=lambda args: cmd_check())
+mcs/ops/update_cli.py:291:    sub.add_parser("check", help="新しい版を確認し、設定・承認に従って更新する（省略時の動作）").set_defaults(fn=lambda args: cmd_check())
+mcs/ops/update_execution.py:289:    # carry it, and cmd_check's auto path never passes it
+=== --post-merge / post_merge entry ===
+mcs/extract/llm/extract_validation.py:51:    applied post-merge/post-validate so single, chunked and batch
+mcs/notify/notify_flush.py:349:                '[MCS] 更新の中断を検出し、post-merge を完了しました'):
+mcs/ops/mcs_update.py:203:    _post_merge as _post_merge,
+mcs/ops/mcs_update.py:283:    _run_post_merge as _run_post_merge,
+mcs/ops/mcs_update.py:331:    _legacy_post_merge as _legacy_post_merge,
+mcs/ops/mcs_update.py:332:    cmd_post_merge as cmd_post_merge,
+mcs/ops/release_apply_checks.py:378:def _adopt_post_merge(runtime_home, repository, *, ticket_fd, locks, deadline):
+mcs/ops/release_apply_owner.py:29:    _adopt_post_merge as _adopt_post_merge,
+mcs/ops/release_apply_owner.py:1333:def _run_effect_post_merge(entry, *, environment, timeout):
+mcs/ops/release_apply_owner.py:1396:            child = subprocess.Popen([sys.executable, str(Path(entry.repository) / 'mcs/ops/mcs_update.py'), '--post-merge'],
+mcs/ops/update_apply.py:1:"""Apply approved source changes with journals and guarded post-merge effects."""
+mcs/ops/update_apply.py:39:    _run_post_merge,
+mcs/ops/update_apply.py:231:            merged = "merge" in stages or "post_merge" in stages
+mcs/ops/update_apply.py:567:            # post-merge under NEW code; parent keeps both locks held.
+mcs/ops/update_apply.py:572:            journal(state, "post_merge")
+mcs/ops/update_apply.py:576:                    _run_post_merge(sha, run_lock_fd=run_fd)
+mcs/ops/update_apply.py:581:                _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
+mcs/ops/update_cli.py:68:    _post_merge,
+mcs/ops/update_cli.py:233:def _legacy_post_merge(state):
+mcs/ops/update_cli.py:234:    return _post_merge(state, legacy_provider_migration=True)
+mcs/ops/update_cli.py:237:def cmd_post_merge() -> int:
+mcs/ops/update_cli.py:240:    # the post-merge stage is only reachable from the parent apply
+mcs/ops/update_cli.py:248:            from release_apply_owner import CHILD_FDS_ENV, _adopt_post_merge
+mcs/ops/update_cli.py:253:            state = _adopt_post_merge(HOME, REPO, ticket_fd=pipe_fd,
+mcs/ops/update_cli.py:258:            return _post_merge(state, native_provider_migration=True)
+mcs/ops/update_cli.py:259:    return _call_legacy(_legacy_post_merge, state)
+mcs/ops/update_cli.py:266:    ap.add_argument("--post-merge", action="store_true",
+mcs/ops/update_cli.py:307:    if args.post_merge:
+mcs/ops/update_cli.py:308:        return cmd_post_merge()
+mcs/ops/update_execution.py:199:def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -> None:
+mcs/ops/update_execution.py:212:        return release_apply_owner._run_effect_post_merge(_release_entry, environment=env, timeout=T_POST_MERGE)
+mcs/ops/update_execution.py:227:             "--post-merge"],
+mcs/ops/update_execution.py:256:                "post_merge_failed: "
+mcs/ops/update_execution.py:300:    # the old interpreter is allowed here: post-merge migrates it (1.0.18)
+mcs/ops/update_lifecycle_context.py:164:_POST_MERGE_UPDATE_FD = ContextVar('mcs_post_merge_update_fd', default=None)
+mcs/ops/update_preflight.py:121:    # the post-merge `services`; anything else still blocks before merge
+mcs/ops/update_recovery.py:201:        "[MCS] 更新の中断を検出し、post-merge を完了しました", notice_code="recovery_completed")
+mcs/ops/update_runtime_migration.py:171:    parent decides (so its post-merge timeout includes T_INSTALL); the
+mcs/ops/update_runtime_migration.py:323:            phases = ("post_merge", "runtime_migration", "reinstall")
+mcs/ops/update_runtime_migration.py:327:                           for name in ("post_merge", "services", "restart", "postcheck", "done")))):
+mcs/ops/update_runtime_migration.py:335:            elif "post_merge" in names:
+mcs/ops/update_runtime_migration.py:336:                tail = names[names.index("post_merge"):]
+mcs/ops/update_runtime_migration.py:339:                        or entry and not recovering and tail != ["post_merge"]):
+mcs/ops/update_runtime_migration.py:386:def _post_merge(state: dict, *, native_provider_migration: bool = False,
+=== rollback callers ===
+integration/test_mcs_recovery_narrative.py:852:        rc = mcs_update.rollback("cid-rb")
+integration/test_mcs_recovery_narrative.py:1087:    assert mcs_update.rollback("cid-rb") == 2
+mcs/core/ledger.py:633:            self.db.rollback()
+mcs/core/ledger.py:811:            self.db.rollback()
+mcs/core/ledger_schema.py:283:            db.rollback()
+mcs/core/ledger_schema.py:472:        db.rollback()
+mcs/core/ledger_schema.py:693:        db.rollback()
+mcs/extract/attachment_ocr.py:689:            ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:176:                ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:194:                ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:372:            ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:405:            ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:418:            ledger.db.rollback()
+mcs/extract/llm/extract_llm_errors.py:450:            ledger.db.rollback()
+mcs/extract/llm/extract_llm_selection.py:293:            db.rollback()
+mcs/extract/llm/extract_llm_store.py:675:                ledger.db.rollback()
+mcs/extract/llm/extract_llm_store.py:699:                        ledger.db.rollback()
+mcs/ingest/job_ops.py:229:                    getattr(ledger, "db", ledger).rollback()
+mcs/llm/admission/llm_admission.py:353:            self.db.rollback()
+mcs/notify/notify_actions.py:77:        reader.rollback()
+mcs/notify/notify_cmds.py:484:                        notify_cards.connection(ledger).rollback()
+mcs/ops/ocr_failure_ack.py:107:                    db.rollback()
+mcs/ops/ocr_failure_ack.py:148:                    db.rollback()
+mcs/ops/update_apply.py:274:                    # rollback(): a failed/interrupted DB restore must
+mcs/ops/update_apply.py:302:                    # rollback(): writers stopped, marker kept until consent
+mcs/ops/update_apply.py:393:                    # propagate (as in rollback()), never reach bail() below,
+mcs/ops/update_apply.py:616:def rollback(command_id: str | None = None) -> int:
+mcs/ops/update_cli.py:190:        return rollback(command_id=picked.get("command_id"))
+mcs/ops/update_cli.py:293:    sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
+mcs/ops/update_recovery.py:640:    Same order as rollback(): journal a rollback-shaped record, quiesce,
+mcs/ops/update_restore.py:136:    copy must still block rollback. rollback() checks it before journaling or resetting:
+mcs/ops/update_restore.py:215:    """Restore tracked files to prev_sha — shared by rollback() and the
+mcs/patients/patient_context_quality_controller.py:71:        ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:125:            ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:210:        ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:229:                ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:234:                ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:257:            ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:297:        ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:487:            ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:530:            ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:617:        ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:683:                ledger.db.rollback()
+mcs/patients/patient_context_quality_controller.py:699:                ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:86:            ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:143:            ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:240:        ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:272:            ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:366:            ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:442:        ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:486:            ledger.db.rollback()
+mcs/patients/patient_context_quality_receipts.py:557:            ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:250:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:257:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:262:            ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:520:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:532:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:549:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:555:        ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:558:        ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:695:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:714:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:723:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:726:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1121:            ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1136:            ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1218:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1224:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1228:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1247:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1261:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1268:                        ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1276:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1279:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1285:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1298:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1317:                ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1328:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1426:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1448:                    ledger.db.rollback()
+mcs/patients/patient_context_refresh.py:1453:            ledger.db.rollback()
+mcs/patients/patient_context_refresh_readiness.py:135:                db.rollback()
+mcs/patients/patient_context_refresh_readiness.py:821:            db.rollback()
+mcs/patients/patient_context_refresh_sources.py:81:            db.rollback()
+mcs/semantic/semantic_reprocess.py:642:                ledger.db.rollback()
+mcs/semantic/semantic_reprocess.py:666:        ledger.db.rollback()
+=== recover callers ===
+conftest.py:11:`test_mcs_recovery_narrative.py`) run without the hermes checkout.
+deployment/install/runtime.sh:713:    RECOVERY_SRC="$REPO/deployment/recovery/mcs_recover.py"
+deployment/install/runtime.sh:714:    RECOVERY_DST="$RECOVERY_DIR/mcs_recover.py"
+deployment/launchagents/org.mcs.recovery.plist:17:    <string>__RECOVERY__/mcs_recover.py</string>
+deployment/recovery/mcs_recover.py:4:導入先は ~/.mcs-recovery/mcs_recover.py です。MCS 本体のプログラムが
+deployment/recovery/mcs_recover.py:8:  python3 mcs_recover.py --help      この説明を表示（変更しません）
+deployment/recovery/mcs_recover.py:9:  python3 mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
+deployment/recovery/mcs_recover.py:10:  python3 mcs_recover.py --interactive  日本語の案内で状態確認と復旧を進める
+deployment/recovery/mcs_recover.py:11:  python3 mcs_recover.py             中断を確認し、必要な復旧を実行
+deployment/recovery/mcs_recover.py:12:  python3 mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
+deployment/recovery/mcs_recover.py:48:SUPPORT_FILES = {'mcs_recovery_gateway.py': '4b896f55269b9197f6d91b0dbbffea36682ac56438483482fe624725a3263fc0', 'mcs_recovery_core.py': '3bc35ad1e7b051bbfaaef52c46814856105919a36570090347327bd636b3408e', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '728a8fef544b9dddbbb2a92bf54e4d67eeb8abf439d2a8d1e616e292c1ea5f4a'}
+deployment/recovery/mcs_recover.py:73:    order = ("mcs_recovery_gateway.py", "mcs_recovery_core.py",
+deployment/recovery/mcs_recover.py:74:             "mcs_recovery_services.py", "mcs_recovery_database.py")
+deployment/recovery/mcs_recover.py:96:    namespace = "_mcs_recovery_" + uuid.uuid4().hex
+deployment/recovery/mcs_recover.py:98:        namespace = "_mcs_recovery_" + uuid.uuid4().hex
+deployment/recovery/mcs_recover.py:119:            if symbol == "mcs_recovery_core":
+deployment/recovery/mcs_recover.py:132:mcs_recovery_gateway = _support["mcs_recovery_gateway"]
+deployment/recovery/mcs_recover.py:133:_GATEWAY_RESTART_PROGRAM = mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
+deployment/recovery/mcs_recover.py:134:_atomic_json = mcs_recovery_gateway._atomic_json
+deployment/recovery/mcs_recover.py:135:_fdopen_owned = mcs_recovery_gateway._fdopen_owned
+deployment/recovery/mcs_recover.py:136:_gateway_restart_report = mcs_recovery_gateway._gateway_restart_report
+deployment/recovery/mcs_recover.py:137:_gateway_restart_run = mcs_recovery_gateway._gateway_restart_run
+deployment/recovery/mcs_recover.py:138:_read_local_json = mcs_recovery_gateway._read_local_json
+deployment/recovery/mcs_recover.py:139:_read_regular_bytes = mcs_recovery_gateway._read_regular_bytes
+deployment/recovery/mcs_recover.py:140:request_gateway_restart = mcs_recovery_gateway.request_gateway_restart
+deployment/recovery/mcs_recover.py:141:mcs_recovery_core = _support["mcs_recovery_core"]
+deployment/recovery/mcs_recover.py:142:AGENTS_DIR = mcs_recovery_core.AGENTS_DIR
+deployment/recovery/mcs_recover.py:143:CRON_LABEL_PREFIX = mcs_recovery_core.CRON_LABEL_PREFIX
+deployment/recovery/mcs_recover.py:144:DATA = mcs_recovery_core.DATA
+deployment/recovery/mcs_recover.py:145:ESCALATE_REALERT_S = mcs_recovery_core.ESCALATE_REALERT_S
+deployment/recovery/mcs_recover.py:146:EXCLUDED_LABELS = mcs_recovery_core.EXCLUDED_LABELS
+deployment/recovery/mcs_recover.py:147:GIT_LOCK_MIN_AGE_S = mcs_recovery_core.GIT_LOCK_MIN_AGE_S
+deployment/recovery/mcs_recover.py:148:GIT_TERM_GRACE_S = mcs_recovery_core.GIT_TERM_GRACE_S
+deployment/recovery/mcs_recover.py:149:HERMES_PY = mcs_recovery_core.HERMES_PY
+deployment/recovery/mcs_recover.py:150:HOME = mcs_recovery_core.HOME
+deployment/recovery/mcs_recover.py:151:KNOWN_AGENT_LABELS = mcs_recovery_core.KNOWN_AGENT_LABELS
+deployment/recovery/mcs_recover.py:152:KNOWN_CRON_SCRIPTS = mcs_recovery_core.KNOWN_CRON_SCRIPTS
+deployment/recovery/mcs_recover.py:153:LEDGER = mcs_recovery_core.LEDGER
+deployment/recovery/mcs_recover.py:154:MANIFEST_PATH = mcs_recovery_core.MANIFEST_PATH
+deployment/recovery/mcs_recover.py:155:MARKER_PATH = mcs_recovery_core.MARKER_PATH
+deployment/recovery/mcs_recover.py:156:RECOVERY_DIR = mcs_recovery_core.RECOVERY_DIR
+deployment/recovery/mcs_recover.py:157:REPO = mcs_recovery_core.REPO
+deployment/recovery/mcs_recover.py:158:REPORT_PATH = mcs_recovery_core.REPORT_PATH
+deployment/recovery/mcs_recover.py:159:RESIDENT_LABELS = mcs_recovery_core.RESIDENT_LABELS
+deployment/recovery/mcs_recover.py:160:RUN_LOCK = mcs_recovery_core.RUN_LOCK
+deployment/recovery/mcs_recover.py:161:SCRIPTS_DIR = mcs_recovery_core.SCRIPTS_DIR
+deployment/recovery/mcs_recover.py:162:STALE_S = mcs_recovery_core.STALE_S
+deployment/recovery/mcs_recover.py:163:STANDALONE_LABEL = mcs_recovery_core.STANDALONE_LABEL
+deployment/recovery/mcs_recover.py:164:STATE_PATH = mcs_recovery_core.STATE_PATH
+deployment/recovery/mcs_recover.py:165:T_GIT = mcs_recovery_core.T_GIT
+deployment/recovery/mcs_recover.py:166:UPDATE_LOCK = mcs_recovery_core.UPDATE_LOCK
+deployment/recovery/mcs_recover.py:167:WATCHER_LABELS = mcs_recovery_core.WATCHER_LABELS
+deployment/recovery/mcs_recover.py:168:_RECOVERY_ROOT = mcs_recovery_core._RECOVERY_ROOT
+deployment/recovery/mcs_recover.py:169:_RELEASE_GATE_FD = mcs_recovery_core._RELEASE_GATE_FD
+deployment/recovery/mcs_recover.py:170:_RecoveryRoot = mcs_recovery_core._RecoveryRoot
+deployment/recovery/mcs_recover.py:171:_RecoveryRootChanged = mcs_recovery_core._RecoveryRootChanged
+deployment/recovery/mcs_recover.py:172:_alert_due = mcs_recovery_core._alert_due
+deployment/recovery/mcs_recover.py:173:_alert_key = mcs_recovery_core._alert_key
+deployment/recovery/mcs_recover.py:174:_awaiting_consent = mcs_recovery_core._awaiting_consent
+deployment/recovery/mcs_recover.py:175:_check_recovery_root = mcs_recovery_core._check_recovery_root
+deployment/recovery/mcs_recover.py:176:_clean = mcs_recovery_core._clean
+deployment/recovery/mcs_recover.py:177:_clean_stale_git_locks = mcs_recovery_core._clean_stale_git_locks
+deployment/recovery/mcs_recover.py:178:_drainers_key = mcs_recovery_core._drainers_key
+deployment/recovery/mcs_recover.py:179:_ensure_recovery_marker = mcs_recovery_core._ensure_recovery_marker
+deployment/recovery/mcs_recover.py:180:_git = mcs_recovery_core._git
+deployment/recovery/mcs_recover.py:181:_git_out = mcs_recovery_core._git_out
+deployment/recovery/mcs_recover.py:182:_head = mcs_recovery_core._head
+deployment/recovery/mcs_recover.py:183:_installed_repo = mcs_recovery_core._installed_repo
+deployment/recovery/mcs_recover.py:184:_last_report = mcs_recovery_core._last_report
+deployment/recovery/mcs_recover.py:185:_lifetime_fds = mcs_recovery_core._lifetime_fds
+deployment/recovery/mcs_recover.py:186:_link_identity = mcs_recovery_core._link_identity
+deployment/recovery/mcs_recover.py:187:_load_state = mcs_recovery_core._load_state
+deployment/recovery/mcs_recover.py:188:_local_changes_outside = mcs_recovery_core._local_changes_outside
+deployment/recovery/mcs_recover.py:189:_open_release_gate = mcs_recovery_core._open_release_gate
+deployment/recovery/mcs_recover.py:190:_release_control_root = mcs_recovery_core._release_control_root
+deployment/recovery/mcs_recover.py:191:_release_scope = mcs_recovery_core._release_scope
+deployment/recovery/mcs_recover.py:192:_remove_marker = mcs_recovery_core._remove_marker
+deployment/recovery/mcs_recover.py:193:_report = mcs_recovery_core._report
+deployment/recovery/mcs_recover.py:194:_root_identity = mcs_recovery_core._root_identity
+deployment/recovery/mcs_recover.py:195:_run_owned = mcs_recovery_core._run_owned
+deployment/recovery/mcs_recover.py:196:_runtime_config = mcs_recovery_core._runtime_config
+deployment/recovery/mcs_recover.py:197:_runtime_mode = mcs_recovery_core._runtime_mode
+deployment/recovery/mcs_recover.py:198:_save_state = mcs_recovery_core._save_state
+deployment/recovery/mcs_recover.py:199:_stop_owned = mcs_recovery_core._stop_owned
+deployment/recovery/mcs_recover.py:200:_try_lock = mcs_recovery_core._try_lock
+deployment/recovery/mcs_recover.py:201:_unreconciled_restore = mcs_recovery_core._unreconciled_restore
+deployment/recovery/mcs_recover.py:202:_valid_state = mcs_recovery_core._valid_state
+deployment/recovery/mcs_recover.py:203:mcs_recovery_services = _support["mcs_recovery_services"]
+deployment/recovery/mcs_recover.py:204:_agent_pid = mcs_recovery_services._agent_pid
+deployment/recovery/mcs_recover.py:205:_bootstrap_agent = mcs_recovery_services._bootstrap_agent
+deployment/recovery/mcs_recover.py:206:_launchctl = mcs_recovery_services._launchctl
+deployment/recovery/mcs_recover.py:207:_notify = mcs_recovery_services._notify
+deployment/recovery/mcs_recover.py:208:_owned_cron = mcs_recovery_services._owned_cron
+deployment/recovery/mcs_recover.py:209:_reconcile_membership = mcs_recovery_services._reconcile_membership
+deployment/recovery/mcs_recover.py:210:_restart_drainers = mcs_recovery_services._restart_drainers
+deployment/recovery/mcs_recover.py:211:_restart_gateway = mcs_recovery_services._restart_gateway
+deployment/recovery/mcs_recover.py:212:_restart_lineworks = mcs_recovery_services._restart_lineworks
+deployment/recovery/mcs_recover.py:213:_restart_services = mcs_recovery_services._restart_services
+deployment/recovery/mcs_recover.py:214:_setup_python = mcs_recovery_services._setup_python
+deployment/recovery/mcs_recover.py:215:_standalone_drainer_problems = mcs_recovery_services._standalone_drainer_problems
+deployment/recovery/mcs_recover.py:216:_standalone_status = mcs_recovery_services._standalone_status
+deployment/recovery/mcs_recover.py:217:_standalone_target_supported = mcs_recovery_services._standalone_target_supported
+deployment/recovery/mcs_recover.py:218:mcs_recovery_database = _support["mcs_recovery_database"]
+deployment/recovery/mcs_recover.py:219:RESTORE_LOSS_NOTICE = mcs_recovery_database.RESTORE_LOSS_NOTICE
+deployment/recovery/mcs_recover.py:220:_EFFECT_TABLES = mcs_recovery_database._EFFECT_TABLES
+deployment/recovery/mcs_recover.py:221:_INTAKE_EVIDENCE_ROWS = mcs_recovery_database._INTAKE_EVIDENCE_ROWS
+deployment/recovery/mcs_recover.py:222:_INTAKE_EVIDENCE_ROW_BYTES = mcs_recovery_database._INTAKE_EVIDENCE_ROW_BYTES
+deployment/recovery/mcs_recover.py:223:_INTAKE_EVIDENCE_SECONDS = mcs_recovery_database._INTAKE_EVIDENCE_SECONDS
+deployment/recovery/mcs_recover.py:224:_MAX_RECEIPT_BYTES = mcs_recovery_database._MAX_RECEIPT_BYTES
+deployment/recovery/mcs_recover.py:225:_STAGING_KEYS = mcs_recovery_database._STAGING_KEYS
+deployment/recovery/mcs_recover.py:226:_STAGING_NAME = mcs_recovery_database._STAGING_NAME
+deployment/recovery/mcs_recover.py:227:_STORED_TABLES = mcs_recovery_database._STORED_TABLES
+deployment/recovery/mcs_recover.py:228:_approval_receipt = mcs_recovery_database._approval_receipt
+deployment/recovery/mcs_recover.py:229:_bound_consent = mcs_recovery_database._bound_consent
+deployment/recovery/mcs_recover.py:230:_consent_for = mcs_recovery_database._consent_for
+deployment/recovery/mcs_recover.py:231:_db_version = mcs_recovery_database._db_version
+deployment/recovery/mcs_recover.py:232:_file_sha256 = mcs_recovery_database._file_sha256
+deployment/recovery/mcs_recover.py:233:_intake_comparison = mcs_recovery_database._intake_comparison
+deployment/recovery/mcs_recover.py:234:_intake_evidence = mcs_recovery_database._intake_evidence
+deployment/recovery/mcs_recover.py:235:_loss_report = mcs_recovery_database._loss_report
+deployment/recovery/mcs_recover.py:236:_mark_restored = mcs_recovery_database._mark_restored
+deployment/recovery/mcs_recover.py:237:_record_hold = mcs_recovery_database._record_hold
+deployment/recovery/mcs_recover.py:238:_release_staging = mcs_recovery_database._release_staging
+deployment/recovery/mcs_recover.py:239:_replace_database = mcs_recovery_database._replace_database
+deployment/recovery/mcs_recover.py:240:_restore_content_digest = mcs_recovery_database._restore_content_digest
+deployment/recovery/mcs_recover.py:241:_restore_db = mcs_recovery_database._restore_db
+deployment/recovery/mcs_recover.py:242:_restore_reconcile_pending = mcs_recovery_database._restore_reconcile_pending
+deployment/recovery/mcs_recover.py:243:_restored_writer_compatible = mcs_recovery_database._restored_writer_compatible
+deployment/recovery/mcs_recover.py:244:_settle_staging = mcs_recovery_database._settle_staging
+deployment/recovery/mcs_recover.py:245:_staging_matches = mcs_recovery_database._staging_matches
+deployment/recovery/mcs_recover.py:246:_staging_record = mcs_recovery_database._staging_record
+deployment/recovery/mcs_recover.py:247:_table_count = mcs_recovery_database._table_count
+deployment/recovery/mcs_recover.py:248:_watermark = mcs_recovery_database._watermark
+deployment/recovery/mcs_recover.py:257:    key = mcs_recovery_core._alert_key(state, detail)
+deployment/recovery/mcs_recover.py:258:    notify, notified_at = mcs_recovery_core._alert_due(result, key, time.time())
+deployment/recovery/mcs_recover.py:259:    mcs_recovery_core._report(result, detail, alert_key=key, notified_at=notified_at,
+deployment/recovery/mcs_recover.py:262:        mcs_recovery_services._notify(text)
+deployment/recovery/mcs_recover.py:288:        "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + mcs_recovery_database.RESTORE_LOSS_NOTICE,
+deployment/recovery/mcs_recover.py:300:def recover(if_stale=False):
+deployment/recovery/mcs_recover.py:302:    previous = mcs_recovery_core._RECOVERY_ROOT
+deployment/recovery/mcs_recover.py:305:            root = mcs_recovery_core._RecoveryRoot(os.path.dirname(mcs_recovery_core.DATA))
+deployment/recovery/mcs_recover.py:307:            if os.path.lexists(os.path.dirname(mcs_recovery_core.DATA)):
+deployment/recovery/mcs_recover.py:309:        mcs_recovery_core._RECOVERY_ROOT = root
+deployment/recovery/mcs_recover.py:313:                scope.enter_context(mcs_recovery_core._release_scope(os.path.dirname(mcs_recovery_core.DATA)))
+deployment/recovery/mcs_recover.py:316:            mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:318:    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged):
+deployment/recovery/mcs_recover.py:321:        mcs_recovery_core._RECOVERY_ROOT = previous
+deployment/recovery/mcs_recover.py:328:    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
+deployment/recovery/mcs_recover.py:350:            data_fd = os.open(mcs_recovery_core.DATA, os.O_RDONLY | os.O_DIRECTORY)
+deployment/recovery/mcs_recover.py:352:            return os.path.lexists(mcs_recovery_core.DATA)
+deployment/recovery/mcs_recover.py:354:            held, current = os.fstat(data_fd), os.stat(mcs_recovery_core.DATA)
+deployment/recovery/mcs_recover.py:370:    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
+deployment/recovery/mcs_recover.py:373:        mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:374:        root_fd = os.dup(mcs_recovery_core._RECOVERY_ROOT.fd) if mcs_recovery_core._RECOVERY_ROOT is not None else os.open(root, flags)
+deployment/recovery/mcs_recover.py:381:        root_path = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
+deployment/recovery/mcs_recover.py:386:            data_fd = os.open(os.path.basename(mcs_recovery_core.DATA), flags, dir_fd=root_fd)
+deployment/recovery/mcs_recover.py:388:            return os.path.lexists(mcs_recovery_core.DATA)
+deployment/recovery/mcs_recover.py:391:            current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
+deployment/recovery/mcs_recover.py:407:            current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
+deployment/recovery/mcs_recover.py:412:            mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:413:            root_current = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
+deployment/recovery/mcs_recover.py:429:    root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
+deployment/recovery/mcs_recover.py:430:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:431:    root_fd = (os.dup(mcs_recovery_core._RECOVERY_ROOT.fd) if mcs_recovery_core._RECOVERY_ROOT is not None else
+deployment/recovery/mcs_recover.py:435:        current = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
+deployment/recovery/mcs_recover.py:453:            mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:454:            root_after = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
+deployment/recovery/mcs_recover.py:471:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:478:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recover.py:480:        mcs_recovery_core._report("corrupt_state",
+deployment/recovery/mcs_recover.py:483:    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+deployment/recovery/mcs_recover.py:484:        mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+deployment/recovery/mcs_recover.py:489:            and not os.path.exists(mcs_recovery_core.MARKER_PATH):
+deployment/recovery/mcs_recover.py:491:    upd_fd = mcs_recovery_core._try_lock(mcs_recovery_core.UPDATE_LOCK)
+deployment/recovery/mcs_recover.py:495:        run_fd = mcs_recovery_core._try_lock(mcs_recovery_core.RUN_LOCK)
+deployment/recovery/mcs_recover.py:510:        mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:511:        state = mcs_recovery_core._load_state()               # fresh view under the locks
+deployment/recovery/mcs_recover.py:515:            mcs_recovery_core._report("corrupt_state", "update_state.json unreadable under lock")
+deployment/recovery/mcs_recover.py:517:        if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+deployment/recovery/mcs_recover.py:518:            mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+deployment/recovery/mcs_recover.py:525:                mcs_recovery_core._ensure_recovery_marker()
+deployment/recovery/mcs_recover.py:527:                mcs_recovery_core._report("provider_migration_hold_unverified",
+deployment/recovery/mcs_recover.py:531:            mcs_recovery_core._report("provider_migration_pending",
+deployment/recovery/mcs_recover.py:544:                head = mcs_recovery_core._head()
+deployment/recovery/mcs_recover.py:553:            if last and time.time() - last < mcs_recovery_core.STALE_S:
+deployment/recovery/mcs_recover.py:569:                mcs_recovery_core._ensure_recovery_marker()
+deployment/recovery/mcs_recover.py:572:                    mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:573:                    if mcs_recovery_core._load_state() != state:
+deployment/recovery/mcs_recover.py:576:                mcs_recovery_core._report("restore_hold_unverified", "rollback hold could not be saved or verified")
+deployment/recovery/mcs_recover.py:580:                mcs_recovery_core._report("restore_backup_unverified", "schema rollback backup path is missing or invalid")
+deployment/recovery/mcs_recover.py:583:            mcs_recovery_core._remove_marker()                # orphan — writer is dead
+deployment/recovery/mcs_recover.py:585:        removed = mcs_recovery_core._clean_stale_git_locks()
+deployment/recovery/mcs_recover.py:591:            marker = mcs_recovery_core._awaiting_consent()
+deployment/recovery/mcs_recover.py:601:                mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:602:        prior_drainers = mcs_recovery_core._last_report().get("drainers_key")
+deployment/recovery/mcs_recover.py:609:                or mcs_recovery_core._awaiting_consent() is not None
+deployment/recovery/mcs_recover.py:612:            # = mcs_update.recover_interrupted.drainers: bounce once per
+deployment/recovery/mcs_recover.py:619:            return mcs_recovery_services._restart_drainers() if bounce \
+deployment/recovery/mcs_recover.py:620:                else mcs_recovery_services._restart_drainers(bounce=False)
+deployment/recovery/mcs_recover.py:623:            # Canonical policy: mcs_update.recover_interrupted's
+deployment/recovery/mcs_recover.py:633:                mcs_recovery_core._report("restore_consent_blocked",
+deployment/recovery/mcs_recover.py:639:                mcs_recovery_core._report("escalate", detail, alert_key=mcs_recovery_core._alert_key(state, detail))
+deployment/recovery/mcs_recover.py:646:                mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:647:            dkey = mcs_recovery_core._drainers_key(state, head)
+deployment/recovery/mcs_recover.py:653:            mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recover.py:669:        if os.path.exists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD")):
+deployment/recovery/mcs_recover.py:680:            if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(prev):
+deployment/recovery/mcs_recover.py:682:            r = mcs_recovery_core._git(["merge", "--abort"])
+deployment/recovery/mcs_recover.py:683:            if (not r or r.returncode != 0) or mcs_recovery_core._head() != prev:
+deployment/recovery/mcs_recover.py:685:                                f"{mcs_recovery_core._head()[:12]} != prev {str(prev)[:12]}")
+deployment/recovery/mcs_recover.py:695:            mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:696:            mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recover.py:697:            mcs_recovery_core._report("resumed_done", "completed bookkeeping after crash")
+deployment/recovery/mcs_recover.py:698:            mcs_recovery_services._notify("[MCS] 中断された更新の後処理を完了しました")
+deployment/recovery/mcs_recover.py:699:            return mcs_recovery_services._restart_services("resumed_done", mcs_recovery_core._runtime_mode() == "standalone" or bool(
+deployment/recovery/mcs_recover.py:705:        head = mcs_recovery_core._head()
+deployment/recovery/mcs_recover.py:717:        clean = mcs_recovery_core._clean()
+deployment/recovery/mcs_recover.py:722:                foreign = mcs_recovery_core._local_changes_outside(prev, target)
+deployment/recovery/mcs_recover.py:728:                if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(target):
+deployment/recovery/mcs_recover.py:733:                r = mcs_recovery_core._git(["reset", "--hard", target])
+deployment/recovery/mcs_recover.py:736:                clean = mcs_recovery_core._clean()
+deployment/recovery/mcs_recover.py:748:                        mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:749:                        if mcs_recovery_core._load_state() != state:
+deployment/recovery/mcs_recover.py:752:                        mcs_recovery_core._report("restore_hold_unverified",
+deployment/recovery/mcs_recover.py:767:                    mcs_recovery_core._report("restore_journal_unverified", "rollback identity is unverified")
+deployment/recovery/mcs_recover.py:771:                    current = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recover.py:782:                    mcs_recovery_database._record_hold(state, report, applying["backup_path"])
+deployment/recovery/mcs_recover.py:785:                    err = mcs_recovery_database._restore_db(applying["backup_path"],
+deployment/recovery/mcs_recover.py:788:                    mcs_recovery_core._report("restore_incomplete",
+deployment/recovery/mcs_recover.py:796:                    mcs_recovery_core._report("restore_journal_unverified", "rollback journal changed during restore")
+deployment/recovery/mcs_recover.py:799:                    mcs_recovery_core._report("restore_journal_unverified", "rollback restore staging remains unverified")
+deployment/recovery/mcs_recover.py:802:                    mcs_recovery_core._report("restore_incomplete", "rollback database restore result unverified")
+deployment/recovery/mcs_recover.py:809:                    mcs_recovery_core._report("restore_consent_pending", err + " — " + mcs_recovery_database.RESTORE_LOSS_NOTICE)
+deployment/recovery/mcs_recover.py:812:                    mcs_recovery_core._report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
+deployment/recovery/mcs_recover.py:820:                    mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:822:                    and not applying.get("reinstall_done"):
+deployment/recovery/mcs_recover.py:826:            problems = mcs_recovery_services._reconcile_membership(
+deployment/recovery/mcs_recover.py:829:            problems += drainers(mcs_recovery_core._drainers_key(state, head))
+deployment/recovery/mcs_recover.py:851:            mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:852:            mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recover.py:853:            mcs_recovery_core._report("resumed", "post-merge converged after crash")
+deployment/recovery/mcs_recover.py:854:            mcs_recovery_services._notify("[MCS] 中断された更新の、プログラム切り替え後の処理を完了しました")
+deployment/recovery/mcs_recover.py:855:            return mcs_recovery_services._restart_services("resumed", mcs_recovery_core._runtime_mode() == "standalone"
+deployment/recovery/mcs_recover.py:867:                foreign = mcs_recovery_core._local_changes_outside(target, prev)
+deployment/recovery/mcs_recover.py:873:                if mcs_recovery_core._runtime_mode() == "standalone" and not mcs_recovery_services._standalone_target_supported(prev):
+deployment/recovery/mcs_recover.py:875:                mcs_recovery_core._git_out(["reset", "--hard", prev])
+deployment/recovery/mcs_recover.py:876:                if mcs_recovery_core._head() != prev or mcs_recovery_core._clean() is not True:
+deployment/recovery/mcs_recover.py:890:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recover.py:892:    mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recover.py:893:    dkey = mcs_recovery_core._drainers_key(state, mcs_recovery_core._head())
+deployment/recovery/mcs_recover.py:894:    if mcs_recovery_core._last_report().get("drainers_key") == dkey:
+deployment/recovery/mcs_recover.py:895:        problems = mcs_recovery_services._restart_drainers(bounce=False)
+deployment/recovery/mcs_recover.py:897:        problems = mcs_recovery_services._restart_drainers()
+deployment/recovery/mcs_recover.py:899:        mcs_recovery_core._report("recovery_incomplete", "restart:" + ",".join(problems),
+deployment/recovery/mcs_recover.py:915:    mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recover.py:916:    mcs_recovery_core._report(result, "removed locks: " + ",".join(removed))
+deployment/recovery/mcs_recover.py:922:    mcs_recovery_services._notify("[MCS] " + explanation)
+deployment/recovery/mcs_recover.py:925:    return mcs_recovery_services._restart_services(result, mcs_recovery_core._runtime_mode() == "standalone", lineworks=False)
+deployment/recovery/mcs_recover.py:938:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recover.py:942:    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+deployment/recovery/mcs_recover.py:945:    held = bool(state.get("restore_consent") or mcs_recovery_core._awaiting_consent())
+deployment/recovery/mcs_recover.py:949:    pending = held or state.get("applying") or state.get("stages") or os.path.exists(mcs_recovery_core.MARKER_PATH)
+deployment/recovery/mcs_recover.py:977:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recover.py:978:    if mcs_recovery_core._unreconciled_restore() is not None and not mcs_recovery_database._restored_writer_compatible():
+deployment/recovery/mcs_recover.py:981:    if state.get("restore_consent") or mcs_recovery_core._awaiting_consent():
+deployment/recovery/mcs_recover.py:987:    if state.get("applying") or state.get("stages") or os.path.exists(mcs_recovery_core.MARKER_PATH):
+deployment/recovery/mcs_recover.py:1009:        state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recover.py:1010:        print(json.dumps({"state": state, "head": mcs_recovery_core._head(),
+deployment/recovery/mcs_recover.py:1011:                          "clean": mcs_recovery_core._clean(), "settings_migration_pending": _settings_migration_pending()},
+deployment/recovery/mcs_recovery_core.py:15:from . import mcs_recovery_gateway
+deployment/recovery/mcs_recovery_core.py:23:        path = mcs_recovery_gateway._read_regular_bytes(os.path.join(RECOVERY_DIR, "repo_path"), 65536).decode("utf-8").strip()
+deployment/recovery/mcs_recovery_core.py:365:            with mcs_recovery_gateway._fdopen_owned(fd, "rb") as stream:
+deployment/recovery/mcs_recovery_core.py:418:        s = mcs_recovery_gateway._read_local_json(STATE_PATH)
+deployment/recovery/mcs_recovery_core.py:432:    mcs_recovery_gateway._atomic_json(STATE_PATH, state, ".ustate.", ensure_ascii=False, sort_keys=True)
+deployment/recovery/mcs_recovery_core.py:455:        with mcs_recovery_gateway._fdopen_owned(fd, "w") as stream:
+deployment/recovery/mcs_recovery_core.py:468:        mcs_recovery_gateway._atomic_json(REPORT_PATH, dict({"result": result, "detail": detail,
+deployment/recovery/mcs_recovery_core.py:495:        last = mcs_recovery_gateway._read_local_json(REPORT_PATH)
+deployment/recovery/mcs_recovery_core.py:516:        data = mcs_recovery_gateway._read_local_json(path)
+deployment/recovery/mcs_recovery_core.py:534:        marker = mcs_recovery_gateway._read_local_json(os.path.join(DATA, "restore_pending.json"))
+deployment/recovery/mcs_recovery_core.py:537:    if isinstance(marker, dict) and marker.get("by") in ("mcs_update", "mcs_recover") \
+deployment/recovery/mcs_recovery_core.py:584:        cfg = mcs_recovery_gateway._read_local_json(path, 262144)
+deployment/recovery/mcs_recovery_database.py:14:from . import mcs_recovery_core
+deployment/recovery/mcs_recovery_database.py:15:from . import mcs_recovery_gateway
+deployment/recovery/mcs_recovery_database.py:24:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recovery_database.py:26:    marker = mcs_recovery_core._unreconciled_restore()
+deployment/recovery/mcs_recovery_database.py:32:    path = os.path.join(mcs_recovery_core.REPO, "mcs", "core", "ledger.py")
+deployment/recovery/mcs_recovery_database.py:35:        with mcs_recovery_gateway._fdopen_owned(fd, "rb") as stream:
+deployment/recovery/mcs_recovery_database.py:51:        head = mcs_recovery_core._head()
+deployment/recovery/mcs_recovery_database.py:52:        if not head or head != applying["sha"] or mcs_recovery_core._clean() is not True:
+deployment/recovery/mcs_recovery_database.py:54:        committed = mcs_recovery_core._git(["show", head + ":mcs/core/ledger.py"])
+deployment/recovery/mcs_recovery_database.py:58:        return (mcs_recovery_core._head() == head and mcs_recovery_core._clean() is True
+deployment/recovery/mcs_recovery_database.py:59:                and _db_version(mcs_recovery_core.LEDGER) == values[0].value)
+deployment/recovery/mcs_recovery_database.py:66:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recovery_database.py:71:            mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recovery_database.py:98:    marker = os.path.join(mcs_recovery_core.DATA, "restore_pending.json")
+deployment/recovery/mcs_recovery_database.py:100:               "by": "mcs_recover", "at": time.time()}
+deployment/recovery/mcs_recovery_database.py:105:    mcs_recovery_gateway._atomic_json(marker, payload, ".restore.", sort_keys=True)
+deployment/recovery/mcs_recovery_database.py:259:            Path(mcs_recovery_core.LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
+deployment/recovery/mcs_recovery_database.py:302:        mcs_recovery_gateway._atomic_json(os.path.join(mcs_recovery_core.DATA, "restore_report.json"), report,
+deployment/recovery/mcs_recovery_database.py:346:            Path(mcs_recovery_core.LEDGER).resolve().as_uri() + "?mode=ro", uri=True)
+deployment/recovery/mcs_recovery_database.py:413:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recovery_database.py:428:    mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recovery_database.py:446:    state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recovery_database.py:450:        mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recovery_database.py:457:    directory = os.path.dirname(mcs_recovery_core.LEDGER)
+deployment/recovery/mcs_recovery_database.py:469:        with mcs_recovery_gateway._fdopen_owned(fd, "wb") as dst:
+deployment/recovery/mcs_recovery_database.py:470:            state = mcs_recovery_core._load_state()
+deployment/recovery/mcs_recovery_database.py:473:            mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recovery_database.py:490:        live = sqlite3.connect(Path(mcs_recovery_core.LEDGER).resolve().as_uri() + "?mode=rw",
+deployment/recovery/mcs_recovery_database.py:501:        if any(os.path.lexists(mcs_recovery_core.LEDGER + suffix)
+deployment/recovery/mcs_recovery_database.py:505:        os.replace(temporary, mcs_recovery_core.LEDGER)
+deployment/recovery/mcs_recovery_database.py:529:    mcs_recovery_core._save_state(state)
+deployment/recovery/mcs_recovery_database.py:541:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_database.py:542:    marker = os.path.join(mcs_recovery_core.DATA, "restore_pending.json")
+deployment/recovery/mcs_recovery_database.py:544:        current = mcs_recovery_gateway._read_local_json(marker)
+deployment/recovery/mcs_recovery_database.py:556:    live = _db_version(mcs_recovery_core.LEDGER)
+deployment/recovery/mcs_recovery_database.py:575:        if mcs_recovery_core._unreconciled_restore() is not None and not _restored_writer_compatible():
+deployment/recovery/mcs_recovery_database.py:613:    if _db_version(mcs_recovery_core.LEDGER) != back:
+deployment/recovery/mcs_recovery_services.py:14:from . import mcs_recovery_core
+deployment/recovery/mcs_recovery_services.py:15:from . import mcs_recovery_gateway
+deployment/recovery/mcs_recovery_services.py:20:    mode = mcs_recovery_core._runtime_mode()
+deployment/recovery/mcs_recovery_services.py:22:        exe = str(Path(mcs_recovery_core.DATA).parent / "venv/bin/python3")
+deployment/recovery/mcs_recovery_services.py:26:    if os.access(mcs_recovery_core.HERMES_PY, os.X_OK):
+deployment/recovery/mcs_recovery_services.py:27:        return mcs_recovery_core.HERMES_PY
+deployment/recovery/mcs_recovery_services.py:35:        result = mcs_recovery_core._git(["cat-file", "-e", f"{ref}:{name}"])
+deployment/recovery/mcs_recovery_services.py:42:    path = Path(mcs_recovery_core.DATA, "standalone-status.json")
+deployment/recovery/mcs_recovery_services.py:44:        status = mcs_recovery_gateway._read_local_json(path, 65536, private=True)
+deployment/recovery/mcs_recovery_services.py:82:                              timeout=mcs_recovery_core.T_GIT, **kw)
+deployment/recovery/mcs_recovery_services.py:117:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:118:    mode = mcs_recovery_core._runtime_mode()
+deployment/recovery/mcs_recovery_services.py:122:        mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recovery_services.py:123:        if os.path.lexists(mcs_recovery_core.MARKER_PATH):
+deployment/recovery/mcs_recovery_services.py:128:                _launchctl(["bootstrap", f"gui/{os.getuid()}", os.path.join(mcs_recovery_core.AGENTS_DIR, "ai.mcs.standalone.plist")])
+deployment/recovery/mcs_recovery_services.py:142:    bounce = bounce or os.path.lexists(mcs_recovery_core.MARKER_PATH)
+deployment/recovery/mcs_recovery_services.py:144:        for label in mcs_recovery_core.RESIDENT_LABELS:
+deployment/recovery/mcs_recovery_services.py:155:    mcs_recovery_core._remove_marker()
+deployment/recovery/mcs_recovery_services.py:156:    if os.path.lexists(mcs_recovery_core.MARKER_PATH):
+deployment/recovery/mcs_recovery_services.py:158:    for label in mcs_recovery_core.RESIDENT_LABELS:
+deployment/recovery/mcs_recovery_services.py:159:        plist = os.path.join(mcs_recovery_core.AGENTS_DIR, label + ".plist")
+deployment/recovery/mcs_recovery_services.py:187:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:188:    mode = mcs_recovery_core._runtime_mode()
+deployment/recovery/mcs_recovery_services.py:192:            path = Path(mcs_recovery_core.DATA, "standalone-restart.request")
+deployment/recovery/mcs_recovery_services.py:196:                mcs_recovery_gateway._atomic_json(str(path), value, ".restart.", suffix="")
+deployment/recovery/mcs_recovery_services.py:202:    return mcs_recovery_gateway.request_gateway_restart(mcs_recovery_core.DATA, mcs_recovery_core.AGENTS_DIR, os.getuid())
+deployment/recovery/mcs_recovery_services.py:212:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:213:    cfg = mcs_recovery_core._runtime_config()
+deployment/recovery/mcs_recovery_services.py:232:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:238:    mcs_recovery_core._report("restart_request_failed", "restart request not saved or started",
+deployment/recovery/mcs_recovery_services.py:247:    actual = os.path.normpath(os.path.join(mcs_recovery_core.SCRIPTS_DIR, script_path))
+deployment/recovery/mcs_recovery_services.py:253:                os.path.join(mcs_recovery_core.SCRIPTS_DIR, script)):
+deployment/recovery/mcs_recovery_services.py:257:            and os.path.basename(script_path) in mcs_recovery_core.KNOWN_CRON_SCRIPTS
+deployment/recovery/mcs_recovery_services.py:258:            and actual == os.path.join(mcs_recovery_core.SCRIPTS_DIR, os.path.basename(script_path)))
+deployment/recovery/mcs_recovery_services.py:266:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:277:    mode = mcs_recovery_core._runtime_mode()
+deployment/recovery/mcs_recovery_services.py:282:        manifest = mcs_recovery_gateway._read_local_json(mcs_recovery_core.MANIFEST_PATH, 262144)
+deployment/recovery/mcs_recovery_services.py:290:    current_cron = mcs_recovery_core.KNOWN_CRON_SCRIPTS - {"mcs_offsite.sh"}
+deployment/recovery/mcs_recovery_services.py:291:    backup = mcs_recovery_core._runtime_config().get("backup", {"enabled": False})
+deployment/recovery/mcs_recovery_services.py:297:            os.path.join(mcs_recovery_core.REPO, "deployment", "scripts", "mcs_offsite.sh")):
+deployment/recovery/mcs_recovery_services.py:305:    for path in glob.glob(os.path.join(mcs_recovery_core.AGENTS_DIR, "*.plist")):
+deployment/recovery/mcs_recovery_services.py:308:                                   mcs_recovery_core.CRON_LABEL_PREFIX))
+deployment/recovery/mcs_recovery_services.py:309:                 or label == mcs_recovery_core.STANDALONE_LABEL) \
+deployment/recovery/mcs_recovery_services.py:310:            and label not in mcs_recovery_core.EXCLUDED_LABELS
+deployment/recovery/mcs_recovery_services.py:312:                and label not in mcs_recovery_core.KNOWN_AGENT_LABELS:
+deployment/recovery/mcs_recovery_services.py:333:                               timeout=mcs_recovery_core.T_GIT)
+deployment/recovery/mcs_recovery_services.py:350:                                             capture_output=True, timeout=mcs_recovery_core.T_GIT)
+deployment/recovery/mcs_recovery_services.py:358:    setup_py = os.path.join(mcs_recovery_core.REPO, "mcs", "ops", "mcs_setup.py")
+deployment/recovery/mcs_recovery_services.py:362:            result = mcs_recovery_core._run_owned([setup_python, setup_py, "services"],
+deployment/recovery/mcs_recovery_services.py:426:    mcs_recovery_core._check_recovery_root()
+deployment/recovery/mcs_recovery_services.py:428:    cfg = mcs_recovery_core._runtime_config()
+deployment/recovery/mcs_recovery_services.py:452:            python = os.path.join(mcs_recovery_core.HOME, "venv", "bin", "python3")
+deployment/recovery/mcs_recovery_services.py:453:            entry = os.path.join(mcs_recovery_core.REPO, "mcs_standalone", "__main__.py")
+deployment/recovery/prepare_recovery.py:44:            "mcs_recovery_gateway.py", "mcs_recovery_core.py",
+deployment/recovery/prepare_recovery.py:45:            "mcs_recovery_services.py", "mcs_recovery_database.py"}
+deployment/recovery/prepare_recovery.py:133:    target = destination / "mcs_recover.py"
+install.sh:990:        plan_line "6/6 復旧" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
+integration/test_mcs_recovery_narrative.py:876:        assert mcs_update.recover_interrupted() == 0
+integration/test_mcs_recovery_narrative.py:958:def test_mcs_recovery_narrative(tmp_path, reply_cards):
+integration/test_mcs_recovery_narrative.py:1089:    mcs_update.recover_interrupted()
+mcs/core/mcs_config.py:117:def recovery_python_problem(path, update_repo=None, *, checkout=REPO):
+mcs/extract/attachment_cloud_identity.py:54:def recovery_rows(db, *, project_id, unit_key, binding, request_fp, owner, scope):
+mcs/ingest/health_recovery.py:221:        path = Path(__file__).resolve().parents[2] / "deployment/recovery/mcs_recover.py"
+mcs/llm/cloud_inference.py:308:            def recover():
+mcs/llm/cloud_policy.py:1376:def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
+mcs/notify/notify_recovery.py:456:def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
+mcs/notify/notify_recovery.py:524:def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
+mcs/notify/notify_spool.py:120:    if marker is not None and marker.get("by") in ("mcs_update", "mcs_recover"):
+mcs/notify/notify_spool.py:228:def recover(ledger, cfg, result) -> dict:
+mcs/ops/diagnostics/runtime_inspection.py:94:def recovery_python(cfg) -> str:
+mcs/ops/diagnostics/runtime_inspection.py:106:def recovery_executable(plist) -> str | None:
+mcs/ops/diagnostics/runtime_inspection.py:122:                or Path(argv[8]).name != "mcs_recover.py"):
+mcs/ops/diagnostics/runtime_inspection.py:133:def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=None) -> mcs_runtime.RuntimeFacts | None:
+mcs/ops/diagnostics/runtime_inspection.py:148:                    or tool != str(Path(helper).parent / "mcs_recover.py")):
+mcs/ops/install_options.py:246:                   'mcs_recover.py', 'mcs_update.py', '/mcs/ingest/', '/mcs/semantic/',
+mcs/ops/mcs_cli.py:35:        tool = Path.home() / ".mcs-recovery" / "mcs_recover.py"
+mcs/ops/mcs_update.py:15:            the independent launchd watchdog via mcs_recover.py)
+mcs/ops/mcs_update.py:314:    reinstall_done as reinstall_done,
+mcs/ops/mcs_update.py:321:    recover_interrupted as recover_interrupted,
+mcs/ops/services/service_management.py:95:def recovery_owned(*, paths: ServicePaths) -> bool:
+mcs/ops/services/service_management.py:103:        for name, path, mode in (('tool', root / 'mcs_recover.py', 448), ('pointer', root / 'repo_path', 384), ('plist', Path(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), 384)):
+mcs/ops/services/service_management.py:120:            return argv[1:] == [str(root / 'mcs_recover.py'), '--if-stale']
+mcs/ops/services/service_management.py:125:                and argv[8] == str(root / 'mcs_recover.py')
+mcs/ops/services/service_management.py:167:def recovery_repair_pending(cfg, *, paths: ServicePaths) -> bool:
+mcs/ops/services/service_management.py:325:    tool = os.path.join(paths.recovery_dir, 'mcs_recover.py')
+mcs/ops/services/service_management.py:341:            if deployed != Path(paths.checkout, 'deployment', 'recovery', 'mcs_recover.py').read_bytes():
+mcs/ops/services/service_management.py:779:    """Cron wrapper names MCS owns (read at call time); mcs_recover is not cron."""
+mcs/ops/services/service_management.py:1052:    success criterion for mcs_setup/mcs_update (mcs_recover.py and
+mcs/ops/update/update_policy.py:127:    if last.get("reinstall") and not last.get("reinstall_done"):
+mcs/ops/update/update_policy.py:242:                                         reinstall: bool, reinstall_done: bool) -> str:
+mcs/ops/update/update_policy.py:246:    if reinstall and not reinstall_done:
+mcs/ops/update_apply.py:86:    recover_interrupted,
+mcs/ops/update_apply.py:190:                return recover_interrupted()
+mcs/ops/update_apply.py:361:                # same report-only freeze as recover_interrupted's escalate: an
+mcs/ops/update_apply.py:397:                    return recover_interrupted()
+mcs/ops/update_apply.py:629:        return recover_interrupted()
+mcs/ops/update_apply.py:646:            return recover_interrupted()
+mcs/ops/update_cli.py:56:    recover_interrupted,
+mcs/ops/update_cli.py:57:    reinstall_done,
+mcs/ops/update_cli.py:185:        return recover_interrupted()
+mcs/ops/update_cli.py:295:        fn=lambda args: recover_interrupted(_resume_provider_migration=True))
+mcs/ops/update_cli.py:298:                   ).set_defaults(fn=lambda args: reinstall_done())
+mcs/ops/update_lifecycle_context.py:56:            "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
+mcs/ops/update_lifecycle_context.py:591:    stderr stay out). Identical in mcs_recover.py so both tools dedup
+mcs/ops/update_lifecycle_context.py:627:    in mcs_recover.py (both tools share recovery_report.json)."""
+mcs/ops/update_recovery.py:95:def reinstall_done() -> int:
+mcs/ops/update_recovery.py:99:    already promoted — reinstall_done, then lets recover converge."""
+mcs/ops/update_recovery.py:112:        if not rec or not rec.get("reinstall") or rec.get("reinstall_done"):
+mcs/ops/update_recovery.py:118:        rec["reinstall_done"] = True
+mcs/ops/update_recovery.py:122:    return recover_interrupted(_resume_provider_migration=True) if applying else 0
+mcs/ops/update_recovery.py:233:def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: bool = False) -> int:
+mcs/ops/update_recovery.py:377:            freeze instead (canonical; mcs_recover.py mirrors it): the
+mcs/ops/update_recovery.py:555:                    reinstall_done=bool(applying.get("reinstall_done")))
+mcs/ops/update_restore.py:94:    mcs_recover's rollback_shaped check): target is entry's prev_sha."""
+mcs/ops/update_restore.py:444:        # = deployment/recovery/mcs_recover._replace_database: same lexists
+mcs/ops/update_runtime_migration.py:114:    if not applying.get("reinstall") or applying.get("reinstall_done"):
+mcs/ops/update_runtime_migration.py:166:    applying["reinstall_done"] = True
+mcs/ops/update_runtime_migration.py:333:                    and applying.get("reinstall") is True and applying.get("reinstall_done") is True)):
+mcs/ops/update_runtime_migration.py:399:                if applying.get("reinstall") and not applying.get("reinstall_done"):
+mcs/ops/update_runtime_migration.py:406:            if applying.get("reinstall") and not applying.get("reinstall_done"):
+mcs/ops/update_runtime_migration.py:408:                journal(state, "reinstall")      # persists reinstall_done
+mcs/ops/update_runtime_migration.py:435:        "reinstall_done": applying.get("reinstall_done", False),
+mcs_standalone/runtime.py:884:    def recover_inflight(self):
+scripts/evaluation/llm_lane_bench.sh:59:    # 113 = not found is the only proof the agent is unloaded (mcs_recover
+=== _run_native_release callers ===
+mcs/ops/release_apply_owner.py:826:def _run_native_release(control, monitor, *, runtime_home, repository, operation_id,
+tests/ops/test_release_apply_owner_native_apply.py:461:    result=owner._run_native_release(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,expected_registration_id=None,artifact_source=bundle,carrier=carrier,deadline=time.monotonic()+120)
+tests/ops/test_release_apply_owner_native_apply.py:507:   try:owner._run_native_release(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,expected_registration_id=None,artifact_source=bundle,carrier=lambda frame:(_ for _ in ()).throw(AssertionError('stored grant replayed')),deadline=time.monotonic()+120)
+=== install.sh callers ===
+adapters/sdc/release_artifact.py:388:                       'deployment/requirements-standalone.txt', 'install.sh')},
+ci/gates.py:601:    """install.sh must pin hermes-agent to a 40-hex commit, not float."""
+ci/gates.py:603:    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+ci/gates.py:606:        bad.append("install.sh: HERMES_PIN missing or not a 40-hex commit")
+ci/gates.py:608:        bad.append("install.sh: HERMES_REPO pin missing")
+deployment/install/runtime.sh:2:# Sourced only by the verified install.sh after preflight and write guards.
+deployment/install/runtime.sh:15:    # install.sh EXIT trap can still name this run's last stage.
+deployment/install/runtime.sh:47:その後 install.sh を再実行してください（基本ソフトを別途管理する場合は --no-brew）"
+deployment/install/runtime.sh:132:    || die "Hermes の安全な依存設定を使うため uv が必要です。brew install uv を実行し、install.sh を再実行してください"
+deployment/install/runtime.sh:139:        || die "Hermes の導入には git が必要です。brew install git または xcode-select --install を実行後、install.sh を再実行してください"
+deployment/install/runtime.sh:146:            || die "$HERMES_REPO の取得に失敗しました。github.com への接続を確認し install.sh を再実行してください"
+deployment/install/runtime.sh:157:    || die "$HERMES_DIR は存在しますが Git で取得したフォルダではありません。退避（mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")）後、install.sh を再実行してください"
+deployment/install/runtime.sh:159:    || die "$HERMES_DIR の現在の版（HEAD）を読み取れません。修復または退避して install.sh を再実行してください"
+deployment/install/runtime.sh:170:        || die "取得した版 $HEAD_SHA は指定版 $HERMES_PIN と一致しません。install.sh を再実行してください"
+deployment/install/runtime.sh:239:        || die "Hermes には Python 3.14 が必要です（3.15以降は対象外）。brew install python@3.14 を実行して install.sh を再実行してください"
+deployment/install/runtime.sh:248:    uv venv --python "$PYBIN" "$VENV" || die "uv による Python 環境の作成に失敗しました。上のエラーを確認し install.sh を再実行してください"
+deployment/install/runtime.sh:262:        || die "$VENV への Hermes 導入に失敗しました。上のエラー（通信・コンパイラ等）を解消し install.sh を再実行してください。失敗した導入を再試行します"
+deployment/install/runtime.sh:268:    || die "$VENV_PY がないか Python 3.14 ではありません。$VENV の内容を確認・退避してから install.sh を再実行してください"
+deployment/install/runtime.sh:270:    || die "導入後も $VENV_HERMES がありません。$VENV の内容を確認・退避してから install.sh を再実行してください"
+deployment/install/runtime.sh:549:        die "$PLUGIN_LINK はリンクではありません。内容を確認・退避してから install.sh を再実行してください"
+deployment/install/runtime.sh:563:        die "プラグインの有効化に失敗しました。Hermes の設定を修復するか、プロファイルの config.yaml の plugins.enabled に mcs-discord-commands を追加して install.sh を再実行してください"
+deployment/install/runtime.sh:638:                    || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $MODEL_FILE.part）"
+deployment/install/runtime.sh:643:                die "モデルの整合性が確認できません（SHA256: ${_got}）。取得途中のファイルを削除しました。install.sh を再実行してください"
+deployment/install/runtime.sh:661:                || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+deployment/install/runtime.sh:675:                || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+deployment/install/runtime.sh:698:    die "常駐サービスの登録に問題があります。deployment/launchagents/README.md を確認し install.sh を再実行してください"
+deployment/install/runtime.sh:739:                || die "復旧監視を起動できません。$WATCH_PLIST を確認してください（起動: launchctl bootstrap gui/$(id -u) $(shell_quote "$WATCH_PLIST")）。その後 install.sh を再実行してください"
+deployment/install/runtime.sh:773:# `-m` resolves only from the checkout: install.sh may run from elsewhere.
+deployment/recovery/mcs_recover.py:823:                # install.sh is never re-run unattended; the operator
+deployment/recovery/mcs_recovery_core.py:19:    """The checkout install.sh recorded next to this tool — install and
+install.sh:10:# 使い方: ./install.sh [オプション] [HERMES_HOME]
+install.sh:206:    [ "$(id -u)" -ne 0 ] || die "install.sh は root や sudo で実行しないでください。通常のユーザーで再実行してください"
+install.sh:208:    [ "$_lock_uid" -ne 0 ] || die "install.sh は root や sudo で実行しないでください。通常のユーザーで再実行してください"
+install.sh:562:BREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+install.sh:755:        rm -f "$1" || die "一時ファイル $1 を削除できません。アクセス権を確認して install.sh を再実行してください"
+install.sh:759:    mv -f "$1" "$2" || die "$2 を配置できません。アクセス権と空き容量を確認して install.sh を再実行してください"
+install.sh:911:        pf_warn "Git の作業用フォルダ（${REPO}）から実行しています。サービスとプラグインはこの場所を参照するため、削除すると動かなくなります" "恒久的に使うメインのフォルダから install.sh を実行してください"
+install.sh:915:        pf_ng "既存の導入先は別のフォルダです: $_c" "$(shell_quote "$_c/install.sh") を実行してください。$REPO へ切り替える場合は --force-repo を指定します"
+install.sh:1015:[ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
+install.sh:1026:    [ "$FORCE_REPO" -eq 1 ] || die "この Mac は別フォルダ（${CONFLICT}）から導入されています。その場所の install.sh を実行してください。プラグイン・復旧・サービスを $REPO へ切り替える場合は --force-repo を指定します"
+mcs/ops/diagnostics/environment_diagnostics.py:244:                      "通知を送信できません。install.shでHermesの導入状態を確認してください")
+mcs/ops/diagnostics/runtime_inspection.py:160:    """Why the configured recovery interpreter is unusable, or None (install.sh shares it)."""
+mcs/ops/hermes_credential_setup.py:28:# The shim install.sh writes (install.sh: SHIM_BODY): only this exact form is run through
+mcs/ops/mcs_cli.py:29:        os.execv("/bin/sh", ["/bin/sh", str(REPO / "install.sh"), *rest])
+mcs/ops/mcs_setup.py:377:        # schedule and the Slack/Discord connection belong to install.sh
+mcs/ops/mcs_setup.py:379:              f"`./install.sh --mode {mcs_runtime.mode(cfg)}`で実行環境を導入し、"
+mcs/ops/mcs_setup.py:789:    return "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください"
+mcs/ops/mcs_setup.py:833:            "実行中の場合は完了を待ち、終了していれば install.sh を同じ引数で再実行すると途中から再開します")
+mcs/ops/mcs_setup.py:1283:# install.sh-owned labels that must never enter MCS ownership (S5).
+mcs/ops/mcs_setup.py:1310:        print("設定ツールにはPython 3.14以上が必要です。install.shで導入したPythonを使ってください", file=sys.stderr)
+mcs/ops/release_apply_checks.py:555:                    else 'install.sh')
+mcs/ops/release_dependency_lock.py:310:    install = read_regular_nofollow(Path(repo) / 'install.sh', MAX_LOCK, LockError)
+mcs/ops/release_dependency_lock.py:855:    """install.sh専用の固定入口。秘密や私有pathを表示しない。"""
+mcs/ops/release_dependency_lock.py:876:                install = read_regular_nofollow(Path(args.repo) / 'install.sh', MAX_LOCK, LockError)
+mcs/ops/release_owner_source.py:19:SOURCE_FILES = ('install.sh', 'pyproject.toml', 'scripts/mcs')
+mcs/ops/services/service_contract.py:74:    """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
+mcs/ops/services/service_management.py:281:    return f"`{os.path.join(paths.checkout, 'install.sh')}`を再実行してください（{stage}）"
+mcs/ops/services/service_management.py:494:    space only, never install.sh-owned labels (S5)."""
+mcs/ops/services/service_management.py:900:            'install.shを実行し、ログ処理プログラムの準備を完了してください')
+mcs/ops/services/service_management.py:1053:    install.sh keep standalone copies of the same semantics).
+mcs/ops/setup/lifecycle_io.py:192:    """Read config.json for install.sh: a regular file the user owns, bounded, a JSON object."""
+mcs/ops/update/update_policy.py:14:REINSTALL_ERRORS = ("install_sh_changed", "standalone_requirements_changed", "ocr_requirements_changed")
+mcs/ops/update/update_policy.py:61:    if "install.sh" in names:
+mcs/ops/update/update_policy.py:62:        notes.append("導入手順（install.sh）が変わっています。必要なソフトが増える可能性があるため、"
+mcs/ops/update/update_policy.py:182:        'Hermesコマンドが見つかりません（{}）。通知を送信できません。install.shでHermesの導入状態を確認してください',
+mcs/ops/update_cli.py:281:                      help="更新後にinstall.shを実行し、必要なソフトと設定を再導入する")
+mcs/ops/update_cli.py:297:                   help="中断したinstall.shを手動で完了させた後、完了を記録する"
+mcs/ops/update_execution.py:304:        # install.sh stops on that drift after merge; services repairs it
+mcs/ops/update_lifecycle_context.py:357:                       "lineworks_adapter", "deployment", "scripts", "install.sh", "pyproject.toml")
+mcs/ops/update_preflight.py:137:    """Refuse before merge what install.sh would refuse mid-migration."""
+mcs/ops/update_preflight.py:167:        # (decided before the pin rules, exactly as install.sh does)
+mcs/ops/update_preflight.py:182:    """The interpreter install.sh's find_py would pick (3.14 <= v < 3.15)."""
+mcs/ops/update_preflight.py:199:    """[project].requires-python checked by that interpreter, same script as install.sh."""
+mcs/ops/update_preflight.py:327:    if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
+mcs/ops/update_preflight.py:329:        errors.append("install_sh_changed")
+mcs/ops/update_preflight.py:334:    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
+mcs/ops/update_recovery.py:96:    """Operator acknowledgement, after finishing install.sh by hand
+mcs/ops/update_recovery.py:568:                    # an interrupted install.sh is never re-run unattended
+mcs/ops/update_runtime_migration.py:110:    """Operator-requested install.sh re-run (scripts/mcs_upgrade.py
+mcs/ops/update_runtime_migration.py:150:                ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
+mcs/ops/update_runtime_migration.py:170:    """Journal the venv move BEFORE install.sh may perform it. The apply
+mcs/ops/update_runtime_migration.py:191:        # (the migration's install.sh needs both): roll back and leave the
+mcs/ops/update_runtime_migration.py:270:        # install.sh may have moved the checkout before (or without) the venv;
+scripts/development/ci_local.sh:210:    shellcheck install.sh scripts/*.sh scripts/development/*.sh scripts/evaluation/*.sh deployment/scripts/*.sh deployment/install/*.sh
+scripts/development/release_notes.py:248:                       "install.sh", "scripts/mcs", "scripts/install_local.py",
+scripts/install_local.py:5:install.sh points services and plugins at the checkout it runs from, so
+scripts/install_local.py:7:or --dest), then runs that checkout's install.sh with the remaining
+scripts/install_local.py:9:is moved. Hermes/standalone runtimes follow install.sh as before.
+scripts/install_local.py:11:    python3 scripts/install_local.py [--dest DIR] [--dry-run] [install.sh options]
+scripts/install_local.py:13:Runs on the macOS system Python (3.9+) so it works before install.sh has
+scripts/install_local.py:28:RECORDED_REPO = "~/.mcs-recovery/repo_path"  # written by install.sh stage 6
+scripts/install_local.py:115:                notes.append("既存の導入先（install.sh の記録）を使います")
+scripts/install_local.py:144:            # Running the destination's own (other-version) install.sh would leave the
+scripts/install_local.py:206:                        help="計画だけを表示し、何も書き込まない（install.sh --dry-run も実行）")
+scripts/install_local.py:234:    sys.stdout.flush()   # keep this summary ahead of install.sh output
+scripts/install_local.py:239:            # install.sh plans against its own location; the clone does not exist yet.
+scripts/install_local.py:247:        return subprocess.run(["sh", os.path.join(dest, "install.sh"),
+scripts/install_local.py:258:    return subprocess.run(["sh", os.path.join(dest, "install.sh"), *passthrough],
+scripts/mcs_upgrade.py:6:to re-run install.sh before v1.0.11) does not decide the update route:
+=== mcs_upgrade callers ===
+CHANGELOG.md:587:- 根拠: scripts/mcs_upgrade.py、install.sh
+CHANGELOG.md:952:- 根拠: scripts/mcs_upgrade.py
+CHANGELOG.md:992:- 根拠: mcs/ops/setup/slack_channel_setup.py、adapters/slack/provision.py、mcs/ops/mcs_setup.py、scripts/mcs_upgrade.py
+CHANGELOG.md:1010:- 根拠: mcs/ops/setup/slack_channel_setup.py、scripts/mcs_upgrade.py
+CHANGELOG.md:1080:- 根拠: scripts/mcs_upgrade.py、mcs/ops/update_preflight.py
+CHANGELOG.md:1265:- 根拠: mcs/ops/mcs_cli.py、scripts/mcs_upgrade.py、mcs/ops/update_planning.py、mcs/ops/update/update_policy.py、mcs/ops/update_apply.py
+CHANGELOG.md:3567:- **通常の更新ツールを使用してください。** `mcs_upgrade.py` / `mcs update` はサービス設定の作り直しと再起動を行います。公開前の候補も更新ガイド§2-Aの固定SHA適用を使い、稼働checkoutへ先にGitだけで取り込まないでください。Hermes gateway・抽出worker・独立host・使用中のLINE WORKSアダプターに新しいコードが反映されたことを確認してください。旧配置の同名Pythonファイルが残ると、安全のため起動を停止します。履歴と保持先を確認せず削除しないでください。再導入を求められた場合は、更新ガイドに従い `--reinstall` と以前の省略オプションを維持します。
+CHANGELOG.md:4614:- 更新時の注意: 通常の更新ツール（mcs_upgrade.py / mcs update）で更新してください。gitで直接取り込む場合は、取り込んだ直後に python3 mcs/ops/mcs_setup.py services を実行し、Hermes gateway・抽出worker・独立hostを再起動してください。再起動するまで、更新前から動いているプロセスは移動したモジュールを読み込めず、表示や通知の処理が失敗します。抽出workerの起動設定も、作り直すまで旧パスを指したままになります。
+CHANGELOG.md:5315:- scripts/mcs_upgrade.py applyは、更新プログラムが0で終了してもHEADが指定版でなければ説明を表示して2を返す。
+CHANGELOG.md:5316:- 根拠: hermes_plugin/card_workers.py、adapters/lineworks/__main__.py、deployment/recovery/mcs_recover.py、mcs/ops/mcs_update.py、scripts/mcs_upgrade.py
+CHANGELOG.md:5531:- 根拠: install.sh、mcs/ops/mcs_setup.py、mcs/ops/mcs_update.py、scripts/mcs_upgrade.py、deployment/recovery/mcs_recover.py
+CHANGELOG.md:5832:- UPGRADE_AGENT.md の起動役取得を "${TAG}:scripts/mcs_upgrade.py" に直した。zsh では "$TAG:s…" が変数修飾子として解釈され、起動役の代わりにtag情報が書き出されていた。
+CHANGELOG.md:7491:- リリースタグの文法を mcs_requests.RELEASE_TAG_RE と release_tag に一本化した。更新検出・通知（mcs_update）、承認の検証（mcs_operations）、mcs update の --to（mcs_cli）が同じ判定を使う。scripts/mcs_upgrade.py はリポジトリを import しない契約のため同じ正規表現の写しを持ち、テストで一致を確認する。
+CHANGELOG.md:7495:- 根拠: mcs/ops/mcs_requests.py、mcs/ops/mcs_operations.py、mcs/ops/mcs_update.py、mcs/ops/mcs_cli.py、scripts/mcs_upgrade.py
+CHANGELOG.md:7831:- 1.0.18からの更新は更新ツールで通常どおり行えます。1.0.17以前からの更新は、1.0.18と同じく更新ツール（scripts/mcs_upgrade.py）でPython 3.14へ移行します。このとき過去の固定commit以外のHermes checkoutを使っている環境は、plan と apply に --keep-hermes-checkout と、そのcheckoutの40桁のcommitを付けます。指定しない場合と、commitの不一致・ローカル変更あり・Python 3.14非対応の場合は、従来どおり更新前の確認で止まり何も変更しません。
+CHANGELOG.md:7840:- scripts/mcs_upgrade.py は40桁のcommitだけを受け付け、更新処理とinstall.shへ MCS_UPDATE_KEEP_HERMES_CHECKOUT として渡す。環境に残っていた古い値は使わない。
+CHANGELOG.md:7854:> 更新前の確認：1.0.18への更新は更新ツール（scripts/mcs_upgrade.py）で行ってください。Python 3.14未満の実行環境を3.14へ移行します。1.0.17以前の自動更新では移行できず、元の版に戻ります。
+CHANGELOG.md:12339:- 対象タグの照合箇所: `scripts/mcs_upgrade.py`、`mcs/views/message_metadata.py`。
+deployment/install/runtime.sh:176:    # Operator-confirmed (mcs_upgrade --keep-hermes-checkout): keep this exact,
+mcs/core/mcs_util.py:23:# checkout root; scripts/mcs_upgrade.py runs a target tag's code from a
+mcs/ops/mcs_cli.py:132:            cmd = [sys.executable, str(REPO / "scripts/mcs_upgrade.py"),
+mcs/ops/update/update_policy.py:19:# CLI share it; scripts/mcs_upgrade.py keeps a self-contained copy.
+mcs/ops/update_execution.py:218:    # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
+mcs/ops/update_lifecycle_context.py:500:            # launcher copy (scripts/mcs_upgrade.py): this code's Ledger
+mcs/ops/update_planning.py:91:    """Read-only upgrade plan for scripts/mcs_upgrade.py and
+mcs/ops/update_recovery.py:703:                    "scripts/mcs_upgrade.py で再度更新してください", notice_code="runtime_rolled_back")
+mcs/ops/update_runtime_migration.py:110:    """Operator-requested install.sh re-run (scripts/mcs_upgrade.py
+mcs/ops/update_runtime_migration.py:192:        # boundary to scripts/mcs_upgrade.py.
+mcs/ops/update_runtime_migration.py:403:                                          "（scripts/mcs_upgrade.py apply --reinstall）で実行してください")
+scripts/development/release_notes.py:249:                       "scripts/mcs_upgrade.py", "scripts/keychain_to_env.py"} for p in paths)
+scripts/mcs_upgrade.py:9:  WORK=$(mktemp -d); git -C ~/.mcs show v1.0.13:scripts/mcs_upgrade.py > "$WORK/mcs_upgrade.py"
+scripts/mcs_upgrade.py:10:  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs plan --to v1.0.13
+scripts/mcs_upgrade.py:11:  "$PY" "$WORK/mcs_upgrade.py" --repo ~/.mcs apply --to v1.0.13 [--reinstall]
+scripts/mcs_upgrade.py:589:        tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
+=== settings_migration_receipt callers ===
+mcs/ops/install_options.py:14:import settings_migration_receipt  # noqa: E402
+mcs/ops/install_options.py:153:            if check_pending and settings_migration_receipt.pending(Path(legacy_path).parent):
+mcs/ops/install_options.py:176:                        or (check_pending and settings_migration_receipt.pending(Path(legacy_path).parent))
+mcs/ops/install_options.py:542:            or settings_migration_receipt.pending(root / 'data')):
+mcs/ops/install_options.py:558:            or settings_migration_receipt.pending(root / 'data')):
+mcs/ops/install_options.py:591:            or settings_migration_receipt.pending(root / 'data')):
+mcs/ops/install_options.py:600:    if checked['mode'] != 'split' or settings_migration_receipt.pending(root / 'data'):
+mcs/ops/install_options.py:660:            or settings_migration_receipt.pending(root / 'data')):
+mcs/ops/install_options.py:670:    if checked['mode'] != 'split' or settings_migration_receipt.pending(root / 'data'):
+mcs/ops/install_options.py:796:    if settings_migration_receipt.pending(Path(legacy_path).parent):
+mcs/ops/mcs_update.py:65:import settings_migration_receipt as settings_migration_receipt
+mcs/ops/settings_migration_reconcile.py:19:import settings_migration_receipt as receipt  # noqa: E402
+mcs/ops/update_apply.py:13:import settings_migration_receipt  # noqa: E402
+mcs/ops/update_apply.py:145:    if settings_migration_receipt.pending(DATA):
+mcs/ops/update_apply.py:486:                    receipt = settings_migration_receipt.Receipt(DATA, options_base, legacy_digest)
+mcs/ops/update_lifecycle_context.py:18:import settings_migration_receipt  # noqa: E402
+mcs/ops/update_lifecycle_context.py:238:    if settings_migration_receipt.pending(DATA):
+mcs/ops/update_lifecycle_context.py:252:    if settings_migration_receipt.pending(DATA):
+mcs/ops/update_planning.py:11:import settings_migration_receipt  # noqa: E402
+mcs/ops/update_planning.py:143:        if settings_migration_receipt.pending(DATA):
+mcs/ops/update_planning.py:195:              "import update_migrations, settings_migration_receipt as receipt; "

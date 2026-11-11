@@ -32,9 +32,14 @@ LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
-NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json'}
+NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json', 'release-consent-confirmation.json', 'runtime-entry.lock'}
+_RELEASE_SIDECAR_NAMES = frozenset({'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json',
+                                    'release-planning.json', 'release-plan.json', 'release-change.json',
+                                    'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json',
+                                    'release-health.json'})
 LIMITS.update({'release-successor.json': 2 * 1024 * 1024 + 65536, 'release-change.json': 131072, 'release-plan.json': 65536, 'release-planning.json': 16384, 'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
-               'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0})
+               'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0,
+               'release-start-intent.json': 32 * 1024, 'release-migration-v3.json': 65536, 'release-health.json': 65536, 'release-consent-confirmation.json': 65536, 'runtime-entry.lock': 0})
 _IDS = ('claim_id', 'device_id', 'key_id', 'rotation_id')
 _STOP = ('state', 'enabled', 'disconnected', 'central_suspended', 'enrollment_hold')
 _OPERATIONS = {'connect': {'initial-key', 'claim-key-id', 'reenroll-key'},
@@ -80,6 +85,9 @@ class Store:
         self._release_entry_thread = None
         self._release_entry_shared = None
         self._release_authority_fd = self._release_authority_thread = None
+        self._runtime_entry_fd = None
+        self._runtime_entry_thread = None
+        self._runtime_entry_shared = None
         repo = Path(__file__).resolve().parents[2]
         if self.root.is_relative_to(repo) or '..' in self.root.parts:
             raise ValueError('SDC_PRIVATE_ROOT_REQUIRED')
@@ -274,6 +282,20 @@ class Store:
             self._keychain_store = self._keychain_factory(self._keychain_account)
         return self._keychain_store
 
+    def read_migration_raw(self, name):
+        """Exact stored bytes of a release sidecar for migration evidence; None when absent."""
+        if name not in _RELEASE_SIDECAR_NAMES:
+            raise ValueError('SDC_INVALID_FILE')
+        try:
+            fd = self._open(name)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, 'rb') as stream:
+            raw = stream.read(LIMITS[name] + 1)
+        if len(raw) > LIMITS[name]:
+            raise ValueError('SDC_FILE_TOO_LARGE')
+        return raw
+
     def read(self, name, default=None):
         self._name(name)
         if name == 'endpoint.json':
@@ -283,7 +305,7 @@ class Store:
             from .provision import support_bootstrap
             value = self._managed_or_legacy(name, support_bootstrap(self))
             return default if value is None else value
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json', 'release-consent-confirmation.json'):
             # Local consent/disable has its own root binding and needs no monitor endpoint.
             return self._read_file(name, default)
         marker = self._marker()
@@ -551,7 +573,7 @@ class Store:
             return
         if name in ('endpoint.json', 'support-bootstrap.json') and self._read_file('provision-state.json', _MISSING) is not _MISSING:
             raise ValueError('SDC_PROVISION_MANAGED_ROOT')
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json', 'release-bootstrap.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json', 'release-bootstrap.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json', 'release-consent-confirmation.json'):
             self._write_file(name, value)
             return
         if name == 'credential-store.json':
@@ -680,6 +702,33 @@ class Store:
                 yield fd
             finally:
                 self._release_entry_fd = self._release_entry_thread = self._release_entry_shared = None
+
+    def install_runtime_entry_lock(self):
+        """Create the Q inode exactly once during v3 migration; never recreate it afterwards."""
+        fd = self._open('runtime-entry.lock', os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            os.fsync(fd)
+            os.fsync(self.fd)
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def runtime_entry_lock(self, *, shared=False):
+        """Q: business-process lifetime SH / code-switch EX. Never creates the inode —
+        absence means the device is pre-v3 and callers must take the legacy path."""
+        if type(shared) is not bool or self._runtime_entry_fd is not None:
+            raise ValueError('SDC_RUNTIME_ENTRY_LOCK_REENTRY')
+        fd = self._open('runtime-entry.lock', os.O_RDWR)
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+            self._runtime_entry_fd, self._runtime_entry_thread = fd, threading.get_ident()
+            self._runtime_entry_shared = shared
+            try:
+                yield fd
+            finally:
+                self._runtime_entry_fd = self._runtime_entry_thread = self._runtime_entry_shared = None
+        finally:
+            os.close(fd)
 
     @contextmanager
     def _file_lock(self, name, *, shared=False):

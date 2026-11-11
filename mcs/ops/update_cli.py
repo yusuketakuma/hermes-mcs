@@ -192,8 +192,59 @@ def cmd_check() -> int:
         return apply(picked["tag"], picked["target_sha"],
                      picked["command_id"], picked.get("base_sha"))
     if auto:
+        # v3 owner stateが存在する(または読めない)限りlegacy auto適用を抑止。
+        # 人間承認済みpicked経路は従来どおり(auto無人経路のみが対象)。
+        if _v3_auto_blocked():
+            return 0
         return apply(auto[0], auto[1], None)
     return 0
+
+
+def _v3_state_root():
+    """v3 release stateのcontrol root。v3正本はcontrol_root(runtime_home)配下。
+
+    sdc.state_rootはSDC端末stateでありrelease owner正本ではない —
+    spec 02/03・runtime_entry・run_migration・_open_release_gateが全て
+    control rootを指す。dir未作成=未移行の判定は呼出側が行う。
+    """
+    try:
+        from runtime_entry import control_root
+        return str(control_root(HOME))
+    except Exception:
+        return None
+
+
+def _v3_auto_blocked() -> bool:
+    """v3 owner state存在/読取不能でlegacy auto適用を抑止する(fail-closed)。
+
+    control root未作成=未移行のみFalse。dirがあるのにStoreが開けない・
+    owner stateが読めない場合はTrue — 状態不明でlegacy経路を開かない。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        return False
+    try:
+        from adapters.sdc.storage import Store
+        import release_auto_status as v3_status
+        with Store(root) as store:
+            return v3_status.legacy_auto_blocked(store)
+    except Exception:
+        return True
+
+
+def _v3_status_dto():
+    """cmd_status用のv3 DTO。storeを開けない場合はunreadable固定形。"""
+    base = {'schema_version': 'mcs.release-status-local.v1',
+            'phase': None, 'reason': None, 'verified_release': None,
+            'pending_outbox': None, 'consent': None, 'health': None}
+    root = _v3_state_root()
+    if root is None:
+        return None
+    try:
+        import release_auto_status as v3_status
+        return v3_status.status_dto_at(root)
+    except Exception:
+        return {**base, 'state': 'unreadable'}
 
 
 def cmd_status() -> int:
@@ -202,9 +253,182 @@ def cmd_status() -> int:
         print("update_state.jsonを読み取れず、更新状況を確認できません。削除せず管理者に確認してください")
         return 2
     cur_tag, cur_sha = _current_version()
-    print(json.dumps({"current_tag": cur_tag, "current_sha": cur_sha,
-                      "state": state}, ensure_ascii=False, indent=2,
-                     default=str))
+    out = {"current_tag": cur_tag, "current_sha": cur_sha,
+           "state": state}
+    v3 = _v3_status_dto()
+    if v3 is not None:
+        out['v3'] = v3
+    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def cmd_auto_disable(_args) -> int:
+    """v3 auto-updateのlocal撤回(spec 02 §revocationのauto-disable)。
+
+    consentをenabled=false・local_consent_epoch増分でowner stateへ先に
+    耐久保存する。中央consent-revokeは本番wire配線後のtrusted経路が担う
+    ため、ここではlocal撤回のみを行い結果をJSONで返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        import release_auto_consent as v3_consent
+        with Store(root) as store:
+            result = v3_consent.disable_auto(store)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "AUTO_DISABLE_FAILED")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok", **result}, ensure_ascii=False))
+    return 0
+
+
+def _v3_consent_wire():
+    """v3 consent経路のwire。transport/credential/pinsの本番配線はW14待ち。"""
+    return None
+
+
+_CONSENT_TERM_KEYS = ('scope', 'profile', 'allowed_class', 'timezone', 'windows',
+                      'max_prepare_seconds', 'max_prepare_attempts_24h',
+                      'max_prepare_seconds_24h', 'early_adopter',
+                      'local_consent_epoch', 'policy_epoch',
+                      'central_policy_id', 'central_policy_sha256',
+                      'consent_expires_at', 'expires_at',
+                      'rollout_policy_sha256')
+
+
+class _WallClock:
+    def wall_ms(self):
+        return int(time.time() * 1000)
+
+
+def cmd_consent_confirm(args) -> int:
+    """v3 standing consentの人間確認付き確定(spec 03 SEM10)。
+
+    --preview-fileのConsentPreview payloadをschema検証してconsent_termsを
+    表示する。--confirm-humanと--reasonが揃った時だけ、preview bytesへ束縛した
+    私有証拠receiptを発行してconfirm_standing_policyへ渡す。wire未配線
+    (本番transport/credential/pinsはW14待ち)ではunavailableを返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        if not os.path.isfile(args.preview_file):
+            raise ValueError
+        with open(args.preview_file, 'rb') as fh:
+            raw = fh.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError
+        preview = json.loads(raw.decode('utf-8'))
+    except Exception:
+        print(json.dumps({"status": "error", "code": "CONSENT_PREVIEW_FILE"},
+                         ensure_ascii=False))
+        return 2
+    try:
+        from adapters.sdc import release_auto_contract as contract
+        import release_auto_consent as v3_consent
+        preview = contract.parse_typed(
+            contract.canonical_typed(preview, 'ConsentPreview'),
+            'ConsentPreview', max_bytes=contract.AUTO_INPUT_BYTES)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_PREVIEW")},
+                         ensure_ascii=False))
+        return 2
+    terms = {k: preview[k] for k in _CONSENT_TERM_KEYS if k in preview}
+    terms['preview_id'] = preview.get('preview_id')
+    terms['central_proposal_id'] = preview.get('central_proposal_id')
+    if args.confirm_human is not True \
+            or not mcs_util.valid_text(args.reason, 2000):
+        print(json.dumps({"status": "confirmation_required",
+                          "consent_terms": terms,
+                          "hint": "--confirm-human と --reason を付けて再実行"},
+                         ensure_ascii=False))
+        return 0
+    wire = _v3_consent_wire()
+    if wire is None:
+        print(json.dumps({"status": "unavailable",
+                          "reason": "consent wire未配線(W14)",
+                          "consent_terms": terms}, ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        clock = _WallClock()
+        with Store(root) as store:
+            receipt_id = v3_consent.ensure_confirmation_receipt(
+                store, preview, clock.wall_ms(), reason=args.reason)
+            consent = v3_consent.confirm_standing_policy(
+                store, wire, preview=preview, clock=clock,
+                confirmation_receipt_id=receipt_id)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_CONFIRM")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok",
+                      "consent_id": consent.get("consent_id"),
+                      "expires_at": consent.get("expires_at"),
+                      "confirmation_receipt_id": receipt_id},
+                     ensure_ascii=False))
+    return 0
+
+
+def cmd_consent_preview(args) -> int:
+    """v3 ConsentPreviewを中央から取得し--outputへJSON保存する。
+
+    scope/profile_sha256はowner state正本から取り、central_proposal_idは
+    --proposal-idで指定する。wire未配線(本番transport/credential/pinsは
+    W14待ち)ではunavailableを返す。
+    """
+    root = _v3_state_root()
+    if root is None or not os.path.isdir(root):
+        print(json.dumps({"status": "unavailable",
+                          "reason": "v3 release stateなし(未移行)"},
+                         ensure_ascii=False))
+        return 1
+    wire = _v3_consent_wire()
+    if wire is None:
+        print(json.dumps({"status": "unavailable",
+                          "reason": "consent wire未配線(W14)"},
+                         ensure_ascii=False))
+        return 1
+    try:
+        from adapters.sdc.storage import Store
+        from adapters.sdc import release_auto_state as auto_state
+        import release_auto_consent as v3_consent
+        with Store(root) as store:
+            owner = auto_state.load(store)
+            preview = v3_consent.request_consent_preview(
+                wire, scope=owner['scope'],
+                profile_sha256=owner['profile']['profile_sha256'],
+                central_proposal_id=args.proposal_id)
+        if not isinstance(preview, dict):
+            raise ValueError
+        raw = json.dumps(preview, ensure_ascii=False,
+                         separators=(',', ':')).encode('utf-8')
+        if len(raw) > 1024 * 1024:
+            raise ValueError
+        with open(args.output, 'wb') as fh:
+            fh.write(raw)
+    except Exception as e:
+        print(json.dumps({"status": "error",
+                          "code": getattr(e, "code", "CONSENT_PREVIEW")},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"status": "ok", "preview_file": args.output,
+                      "preview_id": preview.get("preview_id"),
+                      "expires_at": preview.get("expires_at")},
+                     ensure_ascii=False))
     return 0
 
 
@@ -290,6 +514,23 @@ def _build_parser() -> argparse.ArgumentParser:
     pl_p.set_defaults(fn=lambda args: cmd_plan(args))
     sub.add_parser("check", help="新しい版を確認し、設定・承認に従って更新する（省略時の動作）").set_defaults(fn=lambda args: cmd_check())
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
+    sub.add_parser("auto-disable", help="v3自動更新の同意を撤回する（local_consent_epochを増分）").set_defaults(
+        fn=lambda args: cmd_auto_disable(args))
+    cp_p = sub.add_parser("consent-preview",
+                          help="v3 ConsentPreviewを中央から取得してファイル保存する")
+    cp_p.add_argument("--proposal-id", required=True,
+                      help="中央が発行したconsent proposalのID")
+    cp_p.add_argument("--output", required=True,
+                      help="preview JSONの保存先パス")
+    cp_p.set_defaults(fn=lambda args: cmd_consent_preview(args))
+    cc_p = sub.add_parser("consent-confirm",
+                          help="v3 standing consentを人間確認のうえ確定する（--preview-file必須）")
+    cc_p.add_argument("--preview-file", required=True,
+                      help="request_consent_previewで取得したConsentPreviewのJSONファイル")
+    cc_p.add_argument("--confirm-human", action="store_true",
+                      help="consent_termsを確認し同意したことを明示する")
+    cc_p.add_argument("--reason", help="人間確認の理由（監査用・必須）")
+    cc_p.set_defaults(fn=lambda args: cmd_consent_confirm(args))
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted(_resume_provider_migration=True))

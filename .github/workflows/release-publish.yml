@@ -1,0 +1,363 @@
+name: release-publish
+
+# spec 01 §3.2: ci→publisherの2段chainのみ。releaseイベントの再連鎖なし。
+# 全jobはpublisher source(default branch)のhelperのみを使い、candidate
+# tagのhelperを署名/write権限で起動しない(package jobはcandidateを
+# データとして読むだけで実行しない)。環境`mcs-release-publish`(PUB04:
+# Selected branches=main)と中央API/policy/pins設定が揃うまでfail-closed。
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 受入登録済みrequest_id(手動復旧経路)
+        required: true
+        type: string
+      acceptance_id:
+        description: 対象SHAへの正式受入acceptance_id
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcs-release-publisher
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  identify:
+    # upstream ci runとtag/acceptanceを照合し固定BuildRequestを出力(PUB10)。
+    # publication-request hintは未信頼データ — build_request.pyがrun APIで
+    # event/head_sha/pathを再照合する。acceptance文書のartifact輸送は
+    # 暫定規約(upstream runの'release-acceptance' artifact)。
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: mcs-release-publish
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
+      - name: fetch upstream hint and acceptance artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p hint acceptance
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            gh run download "$UPSTREAM_RUN_ID" -n publication-request \
+              -D hint --repo "$REPO"
+            # release-acceptance artifactはcollector側の生成物。
+            # 未生成ならここでfail-closed停止する(空acceptanceを作らない)。
+            gh run download "$UPSTREAM_RUN_ID" -n release-acceptance \
+              -D acceptance --repo "$REPO"
+          fi
+          test -f hint/publication-request.json 2>/dev/null || true
+          test -f acceptance/acceptance.json || true
+      - name: resolve build request (PUB10)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MCS_PUBLISH_GITHUB_REPO: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REPOSITORY_OWNER_ID: ${{ github.event.repository.owner.id }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          PUBLISHER_SOURCE_COMMIT: ${{ github.sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          ACCEPTANCE_ID: ${{ inputs.acceptance_id }}
+        run: |
+          set -euo pipefail
+          # hintは未信頼 — build_request.pyがrun APIで再照合する。
+          # acceptance文書が無ければfail-closedで停止する。
+          # (dispatch経路のacceptance供給は未pin — 現状は停止する)
+          test -f acceptance/acceptance.json
+          HINT_ARG=""
+          if [ -f hint/publication-request.json ]; then
+            HINT_ARG="--hint hint/publication-request.json"
+          fi
+          # shellcheck disable=SC2086
+          python3 scripts/development/build_request.py --from-env $HINT_ARG \
+            --expect-request-id "${REQUEST_ID:-}" \
+            --expect-acceptance-id "${ACCEPTANCE_ID:-}" \
+            --policy deployment/release-publisher/policy.json \
+            --acceptance acceptance/acceptance.json \
+            --output build-request.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: build-request
+          path: build-request.json
+          retention-days: 7
+          if-no-files-found: error
+
+  package:
+    # 固定BuildRequestのcandidateをデータとして読み、完全bundleと
+    # core材料を生成する。candidateのbuild/install/import/実行はしない。
+    needs: identify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: fetch build request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" -n build-request \
+            -D work --repo "$REPO"
+      - name: read target tag
+        id: tag
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          req = json.load(open('work/build-request.json'))
+          print('value=' + req['source']['tag'])
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.value }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # publisher helperはtrigger時sha(default branch)から取得し、
+          # candidate tagのhelperを実行しない。
+          ref: ${{ github.sha }}
+          path: publisher-src
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          # lock・policy等のdeployment資料はpublisher source側にある。
+          python3 publisher-src/scripts/development/publisher_toolchain.py check \
+            --lock publisher-src/deployment/release-publisher/publisher-toolchain.lock
+      - name: create complete git bundle (PUB20)
+        run: |
+          set -euo pipefail
+          python3 publisher-src/scripts/development/release_publish.py \
+            create-bundle --request work/build-request.json \
+            --repo "$GITHUB_WORKSPACE" --output-dir bundle-out \
+            --output bundle-proof.json
+      - name: collect release assets
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          cp bundle-out/hermes-mcs.bundle assets/
+          # candidate assetはbundle+画像のみ。4metadata
+          # (release-core/attestation.initial/compatibility/acceptance)は
+          # 中央finalizeが生成するためここでは作らない。
+          # 画像はnotesが参照する許可済み説明図 — 慣例の
+          # docs/releases/<tag>/ 配下のpng/svgを同梱する。
+          TAG=$(python3 -c "import json;print(json.load(open('work/build-request.json'))['source']['tag'])")
+          if [ -d "docs/releases/$TAG" ]; then
+            find "docs/releases/$TAG" -maxdepth 1 -type f \
+              \( -name '*.png' -o -name '*.svg' \) -exec cp {} assets/ \;
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: release-assets
+          path: |
+            assets/
+            bundle-proof.json
+          retention-days: 7
+          if-no-files-found: error
+
+  authorize-publish:
+    # 中央予約・署名・artifact永久保存。固定PublishPlanを返す。
+    needs: [identify, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: mcs-release-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
+      - name: fetch artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" -n build-request -D work --repo "$REPO"
+          gh run download "$GITHUB_RUN_ID" -n release-assets -D rel --repo "$REPO"
+      - name: central reserve + objects + finalize
+        env:
+          MCS_PUBLISH_EXECUTE: "1"
+          MCS_PUBLISH_API_BASE: ${{ vars.MCS_PUBLISH_API_BASE }}
+          MCS_PUBLISH_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # release-core/compatibility/pinsはdeployment側の固定資料。
+          # 欠落時はauthorizeがfail-closedで停止する。
+          python3 scripts/development/release_publish.py authorize \
+            --build-request work/build-request.json \
+            --assets-dir rel/assets \
+            --release-core deployment/release-publisher/release-core.json \
+            --compatibility deployment/release-publisher/compatibility-payloads.json \
+            --pins deployment/release-publisher/pins.json \
+            --output authorize-result.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: authorize-result
+          path: |
+            authorize-result.json
+            rel/assets/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    # 固定PublishPlanのassetを同一Release/draftへ照合・upload・publish。
+    # candidate sourceはcheckoutしない — plan.assetsのbytesだけを使う。
+    needs: authorize-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: mcs-release-publish
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
+      - name: fetch authorize result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" -n authorize-result \
+            -D work --repo "$REPO"
+      - name: github release draft/upload/publish
+        env:
+          MCS_PUBLISH_EXECUTE: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MCS_PUBLISH_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 scripts/development/release_publish.py publish \
+            --authorize work/authorize-result.json \
+            --assets-dir work/rel/assets \
+            --pins deployment/release-publisher/pins.json \
+            --output publish-observation.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: publish-observation
+          path: publish-observation.json
+          retention-days: 7
+          if-no-files-found: error
+
+  verify-register:
+    # GitHub公式verify・再download hash照合・中央登録。成功後のみ配信可能。
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: mcs-release-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: verify publisher toolchain lock
+        run: |
+          set -euo pipefail
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
+      - name: fetch artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" -n authorize-result -D work --repo "$REPO"
+          gh run download "$GITHUB_RUN_ID" -n publish-observation -D obs --repo "$REPO"
+      - name: gh release verify + verify-asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(python3 -c "import json;print(json.load(open('work/authorize-result.json'))['publish_plan']['request']['source']['tag'])")
+          gh release verify "$TAG" -R "$GITHUB_REPOSITORY"
+          # assetごとの整合検証: GitHubから再downloadしてsha256/sizeを
+          # plan値と照合する(verify-asset相当を自前でfail-closed実施)。
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, sys
+          plan = json.load(open('work/authorize-result.json'))
+          tag = plan['publish_plan']['request']['source']['tag']
+          repo = os.environ['GITHUB_REPOSITORY']
+          os.makedirs('redownload', exist_ok=True)
+          for asset in plan['publish_plan']['assets']:
+              name = asset['name']
+              path = os.path.join('redownload', name)
+              subprocess.run(
+                  ['gh', 'release', 'download', tag, '-p', name,
+                   '-D', 'redownload', '--clobber', '-R', repo],
+                  check=True)
+              data = open(path, 'rb').read()
+              if len(data) != asset['size'] \
+                      or hashlib.sha256(data).hexdigest() != asset['sha256']:
+                  sys.exit('asset digest mismatch: ' + name)
+          PY
+      - name: central register
+        env:
+          MCS_PUBLISH_EXECUTE: "1"
+          MCS_PUBLISH_API_BASE: ${{ vars.MCS_PUBLISH_API_BASE }}
+          MCS_PUBLISH_GITHUB_REPO: ${{ github.repository }}
+          MCS_VERIFIER_CLOSURE_SHA256: ${{ vars.MCS_VERIFIER_CLOSURE_SHA256 }}
+          MCS_PUBLISH_TOOLCHAIN_SHA256: ${{ vars.MCS_PUBLISH_TOOLCHAIN_SHA256 }}
+        run: |
+          set -euo pipefail
+          python3 scripts/development/release_publish.py verify-register \
+            --authorize work/authorize-result.json \
+            --observation obs/publish-observation.json \
+            --pins deployment/release-publisher/pins.json \
+            --output publication-record.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: publication-record
+          path: publication-record.json
+          retention-days: 90
+          if-no-files-found: error

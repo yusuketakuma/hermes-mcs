@@ -1,0 +1,139 @@
+{
+  "schema_version": "mcs.auto-contract-bundle.v3",
+  "document_version": "3.0",
+  "created_date": "2026-11-10",
+  "status": "specification_not_production_authority",
+  "bundle_digest": "7c97c21d34dee7328a532536bb07185836614c822963b56efa9102704e45c1c3",
+  "entries": [
+    {
+      "path": "03_CONTRACTS.md",
+      "size": 32386,
+      "sha256": "afeacc433d5c15dadcb6be5270ac7e03fe7457ba33eef2a2c4c57db7aae6ad22"
+    },
+    {
+      "path": "07_CSDC_BACKEND.md",
+      "size": 19091,
+      "sha256": "002698ab942838c35e1286417fbbed897836e30b6a8e5c7768b6da27b90ab262"
+    },
+    {
+      "path": "08_STAGED_ROLLOUT.md",
+      "size": 17494,
+      "sha256": "9f6eb34a6c77bb47c08dd2c154f1bfc081eda3f2403eee5750e6d1876e91806f"
+    },
+    {
+      "path": "contracts/FIELD_CATALOG.md",
+      "size": 54742,
+      "sha256": "53d97cea9144f32b74567ddf3324f85edbc881a404a84941d9fae05c69f1cf72"
+    },
+    {
+      "path": "contracts/README.md",
+      "size": 858,
+      "sha256": "60c8fa3ce1a36f8be6a8c71061f535bdb550ce0ffe777df59efd6114f7effb85"
+    },
+    {
+      "path": "contracts/api-contract.json",
+      "size": 9389,
+      "sha256": "49e355d031c05e8a59adead425fb0fe76915be13a8c79387eba05fc365c89738"
+    },
+    {
+      "path": "contracts/contracts-v3.schema.json",
+      "size": 122163,
+      "sha256": "e635b99ac76f4d0d4b8210fbad56b4c20be9060b9d20a29447710c5769ac6d37"
+    },
+    {
+      "path": "examples/README.md",
+      "size": 682,
+      "sha256": "8666863b71db366fe901e0659d14a6cdd384beb61dfc43eaac51f59dbdce69cd"
+    },
+    {
+      "path": "examples/acceptance-composed.json",
+      "size": 5795,
+      "sha256": "9b9ab1bf8c9ec52d80f0a83b788a4e27263d93dc363f283a8efa0ea8d923e395"
+    },
+    {
+      "path": "examples/acceptance-full.json",
+      "size": 5630,
+      "sha256": "ba92e9a3664200d75338ddc99d2db664fd1ff5af238d18ba1b599516218c8df6"
+    },
+    {
+      "path": "examples/compatibility.json",
+      "size": 2163,
+      "sha256": "7d615270c2546f9ce5126c1b794e2782c60d2104b3d1ea8813d9e1d6bbc4400f"
+    },
+    {
+      "path": "examples/file-identity-64bit.json",
+      "size": 306,
+      "sha256": "0542772fce67125343f75dbc3145d923b18f22d03c7cab149fab46c25f5b068b"
+    },
+    {
+      "path": "examples/health-ack.json",
+      "size": 828,
+      "sha256": "b694c269e5564a1823a50610e7798006f458a1e26a8d36462042f75f42278b39"
+    },
+    {
+      "path": "examples/health-observation.json",
+      "size": 1758,
+      "sha256": "31320d5483d894d044e40c0509285a6fae1f41496e9c3774af1b5b65e6878bf5"
+    },
+    {
+      "path": "examples/negative-vectors.json",
+      "size": 48884,
+      "sha256": "fc47b8515b2aac104351e6c74f3425f08057fbb6647057443af2b371fc9ca393"
+    },
+    {
+      "path": "examples/object-manifest.json",
+      "size": 643,
+      "sha256": "54395a5e54fa6694a2d6716760cc3e54602c5ccae305dca74ce7784ffb521d18"
+    },
+    {
+      "path": "examples/offer.json",
+      "size": 2100,
+      "sha256": "76fe10d895e73699d2c586a7801c08fde60fcde3d73e565f6a1375bd1e392bd4"
+    },
+    {
+      "path": "examples/outcome-ack.json",
+      "size": 911,
+      "sha256": "b2e66b7e14152c5487bd3643693726abbb0d59259672376531eaaf7baf94c92b"
+    },
+    {
+      "path": "examples/outcome-verified.json",
+      "size": 2480,
+      "sha256": "739f11bb926238fdbc4f164c54164a9ee411e0a0990b1b905827242df2218fca"
+    },
+    {
+      "path": "examples/prepared-public.json",
+      "size": 2081,
+      "sha256": "a2be038dee494d92885a0eb19ecbaff813e409965f01f6910474a5999bdde1bf"
+    },
+    {
+      "path": "examples/rollout-action.json",
+      "size": 674,
+      "sha256": "fb1cfec4bb79fae7fa483e88c9353edeb525da8001f42ef8a2dced29b1c0a28d"
+    },
+    {
+      "path": "examples/rollout-policy.json",
+      "size": 1882,
+      "sha256": "7d02bf6296d12fcf0dcb6fb9cc446e9ced5e31ae7b089150db9eaf6ccbeb2525"
+    },
+    {
+      "path": "examples/rollout-preview.json",
+      "size": 1279,
+      "sha256": "81e299e3f9e70320f61445d046f2de4e68c0a107753538b4caf5e0bd2386eaf8"
+    },
+    {
+      "path": "examples/standing-consent.json",
+      "size": 1674,
+      "sha256": "af9632dcfc221c0e7679ccf66bf7905cd67cf25e08648d31f391854e35351c86"
+    },
+    {
+      "path": "examples/start-grant.json",
+      "size": 2624,
+      "sha256": "02b752652df2ab3e9644c336b04ed0a6c583b608e7510a96dd512f9a8652801a"
+    },
+    {
+      "path": "examples/start-request.json",
+      "size": 3814,
+      "sha256": "0adb0138e8cfc5129fd1fb50a3c7e767d1d4be9e445825c4f062def156401e11"
+    }
+  ]
+}

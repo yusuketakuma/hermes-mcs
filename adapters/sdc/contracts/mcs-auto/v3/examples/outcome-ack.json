@@ -1,0 +1,25 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "OutcomeAck",
+  "data": {
+    "schema_version": "mcs.outcome-ack.v3",
+    "request_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+    "request_nonce": "0bb36bd88ef2f9f8e0e0fd70a66e5631c41b0c5a751a7f7c4d6762732d73f677",
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "operation_id": "9bf5a24e-4aa7-4998-9ac4-1f1a0f8713ec",
+    "report_id": "845e9183-1319-489c-8d65-6bdb80c278ac",
+    "outcome_sha256": "918b0b71b93ff03ad8b3a6e6e40d352f826d60de176ca4fc93da77b665d82978",
+    "state": "received",
+    "received_at": 1794268821000,
+    "issued_at": 1794268821000,
+    "expires_at": 1794268851000
+  }
+}

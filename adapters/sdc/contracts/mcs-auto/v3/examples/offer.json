@@ -1,0 +1,49 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "Offer",
+  "data": {
+    "schema_version": "mcs.offer.v3",
+    "request_id": "b1a36d25-d963-4ed2-ac04-939fcb614ccb",
+    "request_nonce": "38af6f54eae67ecbaf93e1605e5285bfc510dc1a833ec297c3392ee820d84360",
+    "scope": {
+      "product": "hermes-mcs",
+      "tenant": "synthetic",
+      "installation": "synthetic-mini",
+      "device_id": "263a4dbe-4148-4fb8-b214-b0032339dbb9",
+      "realm_epoch": "synthetic-realm-1",
+      "environment": "synthetic",
+      "stream_id": "synthetic-stable"
+    },
+    "profile_sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+    "rollout_epoch": 1,
+    "status": "candidate",
+    "reason": "ELIGIBLE",
+    "selected": {
+      "release": {
+        "release_id": "1fd844a760dc1a8a81fba47ae557c7f3e21e916c81c94e7c4357fb53112bad64",
+        "code_seq": 2,
+        "source_commit": "b9469a95e64ad83017429739bd95b527100cdfec",
+        "artifact_sha256": "41e13e5872dd3fedca6f5f5f561c6596ac66faa24903c2c39be6d405b37f3d25",
+        "artifact_size": 4096
+      },
+      "manifest_digest": "05b3abf2579a5eb66403cd78be557fd860633a1fe2103c7642030defe32c657f",
+      "compatibility_sha256": "64bdd5f65a9676ec11989c6c23b626fad0d1b4d83af3c8e45b9bdd747379fcc4",
+      "publication_id": "3f662004-cb46-46be-8aa8-eae1a6a2328a",
+      "publication_proof_sha256": "c401abdd99f01a4d0e131f0e0676b69221ed032e884daa7838be813d5135c08b",
+      "acceptance_sha256": "3440bd1d40b51c8905ed60eefe460bbca50929a08363930d876470ba443baef2",
+      "rollout": {
+        "rollout_id": "10000000-0000-4000-8000-000000000001",
+        "assignment_id": "10000000-0000-4000-8000-000000000002",
+        "policy_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "cohort_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "allocation_epoch": 1,
+        "authorization_epoch": 1,
+        "stage": "self",
+        "wave_index": 1
+      }
+    },
+    "issued_at": 1794268800000,
+    "not_before": 1794268800000,
+    "expires_at": 1794268860000
+  }
+}

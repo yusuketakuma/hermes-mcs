@@ -1,0 +1,11 @@
+{
+  "category": "added",
+  "title": "v3 recovery closure世代の検証CLIを追加",
+  "summary": "自動更新の復旧用closure世代（runtime-<sha256>ディレクトリ）が改竄・混在・欠落なく配備されているかを、単体でread-only検査できる`verify`コマンドを追加しました。descriptor（sdc-update-control.json）からmanifestを自己導出し、ディレクトリ名・全ファイルのpath/mode/sha256を一式照合します。状態の変更・外部送信は一切行いません。",
+  "upgrade": "追加操作は不要です。復旧closureの点検が必要な場合のみ `python -m mcs.ops.release_auto_recovery verify --generation-dir <dir>` を実行してください。通常運用では呼ばれません。",
+  "details": [
+    "verifyは世代ディレクトリ名がcanonical manifestのsha256と一致すること、descriptor bytesが一致すること、manifest記載の全ファイルが存在しhash/modeが一致すること、未知ファイル・symlink・欠落がないことを検査します。",
+    "status/tickなど状態を扱う操作はstoreとdepsの注入が必要なため、このCLIには含めずtrusted driver側の責務としています。"
+  ],
+  "refs": ["mcs/ops/release_auto_recovery.py", "tests/ops/test_release_auto_recovery.py"]
+}

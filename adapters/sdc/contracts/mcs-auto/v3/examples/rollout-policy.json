@@ -1,0 +1,69 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "RolloutPolicy",
+  "data": {
+    "schema_version": "mcs.rollout-policy.v3",
+    "policy_id": "10000000-0000-4000-8000-000000000010",
+    "policy_revision": 1,
+    "product_scope": {
+      "product": "hermes-mcs",
+      "trust_domain": "synthetic",
+      "environment": "test",
+      "stream_id": "stable"
+    },
+    "promotion_mode": "manual",
+    "start_self_on_registration": false,
+    "stages": [
+      {
+        "stage": "self",
+        "cumulative_basis_points": 0,
+        "soak_ms": 3600000,
+        "min_new_verified": 1,
+        "requires_manual_advance": true
+      },
+      {
+        "stage": "pilot",
+        "cumulative_basis_points": 0,
+        "soak_ms": 86400000,
+        "min_new_verified": 1,
+        "requires_manual_advance": true
+      },
+      {
+        "stage": "pct10",
+        "cumulative_basis_points": 1000,
+        "soak_ms": 86400000,
+        "min_new_verified": 1,
+        "requires_manual_advance": true
+      },
+      {
+        "stage": "pct50",
+        "cumulative_basis_points": 5000,
+        "soak_ms": 86400000,
+        "min_new_verified": 1,
+        "requires_manual_advance": true
+      },
+      {
+        "stage": "general",
+        "cumulative_basis_points": 10000,
+        "soak_ms": 3600000,
+        "min_new_verified": 1,
+        "requires_manual_advance": false
+      }
+    ],
+    "max_parallel_devices": 10,
+    "max_parallel_per_tenant": 1,
+    "health_interval_ms": 300000,
+    "max_health_gap_ms": 900000,
+    "max_health_observation_age_ms": 600000,
+    "assignment_wait_ms": 604800000,
+    "max_tenants": 1000,
+    "max_devices": 4096,
+    "max_profiles": 8,
+    "rank_key_id": "synthetic-ranking-key",
+    "issued_at": 1794265200000,
+    "expires_at": 1796857200000,
+    "max_wave_tenants": 10,
+    "wave_soak_ms": 3600000,
+    "tenant_canary_soak_ms": 3600000
+  }
+}

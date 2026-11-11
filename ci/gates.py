@@ -254,6 +254,7 @@ _PLUGIN_FORBIDDEN_TEXT = re.compile(r"\bos\.environ\b|\bshutil\.rmtree\b")
 # retain their exact existing sandbox. Privileges belong only to these files.
 _LINEWORKS_IMPORTS = {
     "sdc/transport.py": {"urllib"},  # Fixed-origin SDC transport only.
+    "sdc/release_auto_transport.py": {"urllib"},  # Fixed-origin v3 device transport only.
     "sdc/keychain_owner.py": {"subprocess"},  # Fixed local native Keychain owner child only.
     "lineworks/client.py": {"subprocess", "urllib"},
     "lineworks/server.py": {"http"},

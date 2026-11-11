@@ -230,3 +230,12 @@ def sign_release_apply(config, path, raw, state, key, *, now, nonce):
         return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)
     except (ValueError, TypeError, KeyError, OverflowError):
         raise ValueError('SDC_REQUEST_INVALID') from None
+
+
+def sign_release_auto(config, path, raw, state, key, *, now, nonce):
+    """Sign only the fixed v3 device POSTs — same HMAC contract, path-bound to /v3/mcs/releases/*."""
+    from .release_auto_transport import ALL_PATHS
+    if (type(path) is not str or path not in ALL_PATHS or type(raw) is not bytes
+            or not raw or len(raw) > 16384):
+        raise ValueError('SDC_REQUEST_INVALID')
+    return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)

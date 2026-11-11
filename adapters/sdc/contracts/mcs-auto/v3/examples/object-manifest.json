@@ -1,0 +1,21 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "ObjectManifestRequest",
+  "data": {
+    "schema_version": "mcs.object-manifest-request.v3",
+    "request_id": "10000000-0000-4000-8000-000000000016",
+    "publication_id": "10000000-0000-4000-8000-000000000017",
+    "expected_revision": 1,
+    "fencing_token": 1,
+    "sha256": "eb9c69823b01fe43d73f1e8082e7a8103fd7e4e917240cfb1c557673a00150b0",
+    "size": 52,
+    "content_type": "application/octet-stream",
+    "chunks": [
+      {
+        "index": 0,
+        "sha256": "eb9c69823b01fe43d73f1e8082e7a8103fd7e4e917240cfb1c557673a00150b0",
+        "size": 52
+      }
+    ]
+  }
+}

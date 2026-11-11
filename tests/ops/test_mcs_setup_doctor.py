@@ -426,6 +426,32 @@ def test_unreadable_legacy_config_blocks_before_probes(tmp_path, monkeypatch, ca
     assert config.read_text() == raw
 
 
+def test_doctor_reports_v3_release_status(local_config, monkeypatch, capsys, tmp_path):
+    control = tmp_path / "release-control"
+    control.mkdir(mode=0o700)
+    import runtime_entry
+    monkeypatch.setattr(runtime_entry, "control_root", lambda *a, **k: control)
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: {
+        "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
+    assert mcs_setup.main(["doctor", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["v3"]["schema_version"] == "mcs.release-status-local.v1"
+    assert report["v3"]["state"] == "uninitialized"
+
+
+def test_doctor_v3_uninitialized_without_control_root(local_config, monkeypatch, capsys, tmp_path):
+    import runtime_entry
+    monkeypatch.setattr(runtime_entry, "control_root",
+                        lambda *a, **k: tmp_path / "never-created")
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
+    assert mcs_setup.main(["doctor", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["v3"]["state"] == "uninitialized"
+
+
 def test_diagnostic_missing_legacy_config_is_unconfigured(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(setup_config_snapshot, "CONF_PATH", str(tmp_path / "config.json"))

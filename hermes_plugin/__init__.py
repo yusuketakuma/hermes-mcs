@@ -1,6 +1,9 @@
 """Register MCS commands and card workers with Hermes without importing SDKs or adapters."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from .bridge import _ensure_repo_root
 
 
@@ -27,6 +30,13 @@ def register(ctx) -> None:
         data_root = None
     if _standalone_owned(data_root):
         return
+    _ensure_repo_root()
+    mcs_dir = str(Path(__file__).resolve().parents[1] / "mcs")
+    if mcs_dir not in sys.path:
+        sys.path.insert(0, mcs_dir)
+    import _mcs_path  # noqa: E402,F401  (flat module roots before runtime_entry)
+    import runtime_entry  # noqa: E402
+    runtime_entry.acquire()  # Q SH for the gateway process lifetime (v3 devices; legacy no-op)
     ctx.register_command(
         "mcs", handler=_make_handler(ctx),
         description="Read the configured MCS snapshot or preview/confirm a request.",

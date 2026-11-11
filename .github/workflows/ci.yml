@@ -20,6 +20,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  publication-request:
+    # W12: tag push時のみ、後続のrelease-publish workflowへ渡す非信頼hintを出力。
+    # 値はrepo ID/tag/tag OID/source SHA/upstream run ID/attemptのみで4KiB未満。
+    # 権威ある照合(tag peel・repo/owner ID・acceptance)はpublisher側identifyが行い、
+    # このartifactを信用しない。plain main push/PR/schedule/dispatchでは動かない。
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: write publication request hint
+        env:
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          HEAD_COMMIT_ID: ${{ github.event.head_commit.id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python3 scripts/development/publication_request.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: publication-request
+          path: publication-request.json
+          retention-days: 7
+          if-no-files-found: error
+
   lint-test:
     runs-on: ubuntu-latest
     # The 2026-11-01 suite was still progressing at 93% after 45 min.

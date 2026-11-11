@@ -1,0 +1,18 @@
+{
+  "fixture_kind": "synthetic-not-authority",
+  "definition": "RolloutActionRequest",
+  "data": {
+    "schema_version": "mcs.rollout-action-request.v3",
+    "action_id": "10000000-0000-4000-8000-000000000015",
+    "request_nonce": "6666666666666666666666666666666666666666666666666666666666666666",
+    "rollout_id": "10000000-0000-4000-8000-000000000001",
+    "action": "advance",
+    "expected_revision": 2,
+    "expected_health_revision": 300,
+    "expected_authorization_epoch": 1,
+    "preview_sha256": "cc72c6670a9a5cb2cf067d764813a3187ef75ff2a15ba2fed1162d293e9f8767",
+    "target_stage": "pct10",
+    "assignment_ids": [],
+    "reason_code": "STAGE_ACCEPTED"
+  }
+}

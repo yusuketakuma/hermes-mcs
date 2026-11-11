@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "v3自動更新の同意撤回コマンド `mcs update auto-disable` を追加",
+  "summary": "v3自動更新のstanding consentを本人の操作で撤回できる `auto-disable` サブコマンドを追加しました。consentを無効化しlocal_consent_epochを増分してowner stateへ先に耐久保存するため、通信なしでも撤回は確定します。v3状態が未作成の環境では unavailable を返し、既存の更新・監視動作には影響しません。",
+  "upgrade": "追加操作は不要です。v3自動更新はAUTO_ELIGIBLE=falseのまま無効で、通常の更新・監視には影響しません。v3へ移行済みの環境で自動更新の同意を止めたい場合だけ `mcs update auto-disable` を実行してください。中央への撤回通知は本番wire配線後のtrusted経路が送信します。",
+  "details": [
+    "mcs/ops/release_auto_consent.py: ConsentPreview取得・ConsentConfirm・ConsentRevokeの3経路を実装。request_id/nonce/各種IDは論理内容から決定論的に導出しretryを中央のrequest hash冪等へ乗せる。",
+    "confirm_standing_policy: previewのpolicy項目をStandingConsentへ完全一致で写し、ConsentReceipt(active)検証後にだけowner stateへ保存。期限切れ・receipt不一致はfail-closed。",
+    "disable_auto: consentをenabled=false・local_consent_epoch+1で先に耐久保存し、その後中央consent-revokeを送る。通信失敗でもlocal撤回は戻さず、再呼出は同じ冪等requestで中央へ再送する。",
+    "mcs/ops/update_cli.py: `auto-disable` サブコマンドを追加。v3 state未作成はunavailable、consent無しはnoopをJSONで返す。"
+  ],
+  "refs": ["mcs/ops/release_auto_consent.py", "mcs/ops/update_cli.py"]
+}

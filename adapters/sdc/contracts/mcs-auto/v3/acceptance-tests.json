@@ -1,0 +1,2394 @@
+{
+  "document_version": "3.0",
+  "product_tests_executed": false,
+  "tests": [
+    {
+      "id": "AT001",
+      "group": "PUB",
+      "scenario": "tagのみ、Release未公開",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "START/SPENT/effect=0。現在の正常版を継続。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV15"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT002",
+      "group": "PUB",
+      "scenario": "draft/prerelease表示だけ変更",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "登録済み正式candidate以外を開始しない。mutable表示から認可しない。",
+      "invariants": [
+        "INV01",
+        "INV02"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT003",
+      "group": "PUB",
+      "scenario": "workflow_run側SHAがmainの別commit",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "upstream run head_shaとpeeled tagを採用し、publisher SHAをtargetにしない。",
+      "invariants": [
+        "INV01"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT004",
+      "group": "PUB",
+      "scenario": "annotated tag多段/循環/別OID",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "8段まで正確にpeel。上限/循環/変更は拒否。正常lightweightも通る。",
+      "invariants": [
+        "INV01",
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT005",
+      "group": "PUB",
+      "scenario": "main非祖先とmain先行進行",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "非祖先拒否。同一snapshot祖先でmainが先行する正常候補は受入。",
+      "invariants": [
+        "INV01"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT006",
+      "group": "PUB",
+      "scenario": "fork/PR起因の同名ci workflow",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "repo/workflow/event/IDを検証し、署名・write権限を渡さない。",
+      "invariants": [
+        "INV02"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT007",
+      "group": "PUB",
+      "scenario": "candidate helper/cache/workspace汚染",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "privileged jobは固定closureだけを実行。候補artifactはデータとして扱う。",
+      "invariants": [
+        "INV01",
+        "INV18"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT008",
+      "group": "PUB",
+      "scenario": "GITHUB_TOKEN公開後release event不発",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "verify-registerは明示jobとして動き、イベント再帰に依存しない。",
+      "invariants": [
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT009",
+      "group": "PUB",
+      "scenario": "OIDC正署名だが別repo/env/workflow/audience",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "全claimsとclosureを照合。job_workflow_ref不存在の通常jobを誤って必須化しない。",
+      "invariants": [
+        "INV02",
+        "INV18"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT010",
+      "group": "PUB",
+      "scenario": "workflow差分によるcreate404/403",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "権限HOLD。盲目createループやPAT/Workflows権限自動拡張なし。",
+      "invariants": [
+        "INV02",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT011",
+      "group": "PUB",
+      "scenario": "composed受入：実測再利用＋失敗再検証",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "正式policyと影響証拠で公開可能。元GitHub job failureをsuccessへ書換えない。",
+      "invariants": [
+        "INV16",
+        "INV20"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT012",
+      "group": "PUB",
+      "scenario": "未修正製品failureをinfraと偽装",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "受入票拒否。必要lane重複/欠落/未知skipを通さない。",
+      "invariants": [
+        "INV16",
+        "INV20"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT013",
+      "group": "PUB",
+      "scenario": "同名artifact別run/attemptと2page目のjob",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "全page/attempt/ID結合。自己申告attemptだけでは採用しない。",
+      "invariants": [
+        "INV01",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT014",
+      "group": "PUB",
+      "scenario": "Actions artifact期限切れ",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "中央に固定保存済み原証拠があれば使える。原証拠不明なら拒否。",
+      "invariants": [
+        "INV01",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT015",
+      "group": "PUB",
+      "scenario": "concurrency pending置換/queue上限",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "durable registryから未完requestを識別。queueを完了台帳にしない。",
+      "invariants": [
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT016",
+      "group": "PUB",
+      "scenario": "高番号公開後に低番号build完了",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "配信current/epoch非後退、既実行operation不変。",
+      "invariants": [
+        "INV05",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT017",
+      "group": "PUB",
+      "scenario": "同tagで異bytesを再build",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "初回CASの固定bytes再利用だけ。異bytes/異tagOIDはconflict。",
+      "invariants": [
+        "INV01",
+        "INV05"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT018",
+      "group": "PUB",
+      "scenario": "24時間後にattestation更新",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "release_id/core/artifact固定。新manifestで古いplan/grantを流用しない。",
+      "invariants": [
+        "INV01",
+        "INV06"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT019",
+      "group": "PUB",
+      "scenario": "公開後GitHub release証拠生成",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "公開後asset追加をしない。中央にattestation/検証証拠を保持。",
+      "invariants": [
+        "INV01",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT020",
+      "group": "PUB",
+      "scenario": "publish応答timeout、実際は公開済み",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "同Release IDを照会・照合。再公開/同version置換なし。",
+      "invariants": [
+        "INV01",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT021",
+      "group": "PUB",
+      "scenario": "upload502→starter asset残存",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "state/size/hashを確認しHOLD。無承認削除と無限uploadなし。",
+      "invariants": [
+        "INV01",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT022",
+      "group": "PUB",
+      "scenario": "filename正規化とduplicate422",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "予定ASCII名と集合を完全照合。不一致は上書きせず拒否。",
+      "invariants": [
+        "INV01"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT023",
+      "group": "PUB",
+      "scenario": "asset metadata digest一致、download bytes相違",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "実bytes hashと公式verify-assetの両方で拒否。",
+      "invariants": [
+        "INV01"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT024",
+      "group": "PUB",
+      "scenario": "自動生成source ZIPを配布物と指定",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "明示bundle asset以外拒否。source archiveをverify済みと主張しない。",
+      "invariants": [
+        "INV01"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT025",
+      "group": "PUB",
+      "scenario": "API404/不完全pagination/immutable false",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "不存在・未取得・公開未検証を区別、登録しない。",
+      "invariants": [
+        "INV01",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT026",
+      "group": "PUB",
+      "scenario": "release eventで1版のノートだけ修正",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "そのtagだけsync。manual無指定の既存一括動作は別に回帰確認。",
+      "invariants": [
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT027",
+      "group": "PUB",
+      "scenario": "検証後タグ移動・別repository同名復活",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "rawOID/repo数値IDの最終再照合で拒否。",
+      "invariants": [
+        "INV01",
+        "INV05"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT028",
+      "group": "PUB",
+      "scenario": "environmentがprotected onlyだがbranch保護なし",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "enablement gateが拒否。Selected mainと実effective保護を確認。",
+      "invariants": [
+        "INV02"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT029",
+      "group": "ART",
+      "scenario": "source manifestあり依存lockなし",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "LOCK_MISSING拒否。タグ前に実lockが揃う正常系は検査成功。",
+      "invariants": [
+        "INV01",
+        "INV17"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT030",
+      "group": "ART",
+      "scenario": "通常app変更とprivileged closure変更",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "前者は署名/互換性成立で更新可、後者はbridge要求。",
+      "invariants": [
+        "INV17",
+        "INV18"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT031",
+      "group": "ART",
+      "scenario": "targetは無害だが過去packに秘密canary",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "全packの公開検査で拒否。無関係branchを含めない。",
+      "invariants": [
+        "INV12",
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT032",
+      "group": "ART",
+      "scenario": "symlink/submodule/.gitattributes/case/NFC衝突",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "既存tree検査を保持。git cleanで消さない。",
+      "invariants": [
+        "INV01",
+        "INV10"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT033",
+      "group": "ART",
+      "scenario": "圧縮爆弾/深いdelta/prerequisite/切断",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "上限/deadlineで停止。不足objectをネットワーク補完しない。",
+      "invariants": [
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT034",
+      "group": "ART",
+      "scenario": "期限切れmetadataと304/cache",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "新START不可、現在業務は継続。期限を受信時刻で延長しない。",
+      "invariants": [
+        "INV06",
+        "INV15"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT035",
+      "group": "ART",
+      "scenario": "鍵ローテーションと未pin鍵",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "旧/新threshold chainは通り、自己提示の新keyは拒否。",
+      "invariants": [
+        "INV02",
+        "INV18"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT036",
+      "group": "CON",
+      "scenario": "重複/escape重複/NaN/float/-0/bool-as-int",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "strict parse拒否。unknown schema/propertyを補正しない。",
+      "invariants": [
+        "INV13"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT037",
+      "group": "CON",
+      "scenario": "v1署名をv2 purposeへ再解釈",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "domain/purpose/key用途不一致で拒否。v1正常fixtureは維持。",
+      "invariants": [
+        "INV07",
+        "INV18"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT038",
+      "group": "CON",
+      "scenario": "signed payload 8KiB、envelope16KiB境界",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "境界以内正常、超過拒否。catalogは該当profile一件へ分離。",
+      "invariants": [
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT039",
+      "group": "CON",
+      "scenario": "stat ns=1.7e18、inode64bit",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "private decimalstringでlossless照合。JSsafe intへ丸めない。",
+      "invariants": [
+        "INV13",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT040",
+      "group": "CON",
+      "scenario": "別tenant/device/realm/profile正署名",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "保存scope/credential由来expectedと不一致でSTARTなし。",
+      "invariants": [
+        "INV02"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT041",
+      "group": "CON",
+      "scenario": "backup/config/pathをwireへ混入",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "closedDTOとallowlistで拒否。公開artifact hashは正常に送る。",
+      "invariants": [
+        "INV12"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT042",
+      "group": "NET",
+      "scenario": "JSON transportへ巨大bundle",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "専用streamのみ。既存16KiB/10秒制約不変。",
+      "invariants": [
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT043",
+      "group": "NET",
+      "scenario": "redirect/proxy/TLS不正",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "端末拒否。中央の限定redirectでも別hostへ認証headerを転送しない。",
+      "invariants": [
+        "INV12",
+        "INV14"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT044",
+      "group": "NET",
+      "scenario": "stream size超過/Content-Encoding変更/総deadline",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "最初の違反で中止、stageは非採用、現行業務継続。",
+      "invariants": [
+        "INV14",
+        "INV15"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT045",
+      "group": "NET",
+      "scenario": "429/Retry-After・GET障害",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "有限backoff、stateとrequest identity保持。通信失敗を候補なしにしない。",
+      "invariants": [
+        "INV15",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT046",
+      "group": "DEV",
+      "scenario": "update.mode=autoのみ、standing consentなし",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "prepareさえ開始しない。旧modeから同意を昇格させない。",
+      "invariants": [
+        "INV02",
+        "INV07"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT047",
+      "group": "DEV",
+      "scenario": "同意撤回とgrantの競合",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "effect前に観測した撤回で停止、SPENTは残す。effect後は整合確定のみ。",
+      "invariants": [
+        "INV02",
+        "INV04"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT048",
+      "group": "DEV",
+      "scenario": "保守窓跨ぎ/夏時間/clock後退",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "明示timezone、window境界、monotonic照合。過去lease再生なし。",
+      "invariants": [
+        "INV02",
+        "INV14"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT049",
+      "group": "DEV",
+      "scenario": "worker通信中にRを解放",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "drain中Rを保持せず結果/費用を既存規則で確定。未drainで切替しない。",
+      "invariants": [
+        "INV08",
+        "INV11"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT050",
+      "group": "DEV",
+      "scenario": "lockless bookkeeping/第3worker/LINE WORKS残存",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "profile別必要集合で未退役を検出、Q EX取れず延期。",
+      "invariants": [
+        "INV08"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT051",
+      "group": "DEV",
+      "scenario": "長時間inflight、prepare期限超過",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "新STARTなし。元の同じserviceのみ再開、別hold維持。",
+      "invariants": [
+        "INV08",
+        "INV15"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT052",
+      "group": "DEV",
+      "scenario": "operation/release変更で準備予算回避",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "rolling24h3回/360秒をinstallation単位で維持。",
+      "invariants": [
+        "INV14",
+        "INV15"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT053",
+      "group": "DEV",
+      "scenario": "PREPARED後ロック解放中に別Updater",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "耐久fence/nonceで二重開始不可。正常grant取得は全lock外。",
+      "invariants": [
+        "INV03",
+        "INV08"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT054",
+      "group": "DEV",
+      "scenario": "grant待ち中config/credential/source/inode変更",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "final witness/CASで拒否。設定を元へ上書きしない。",
+      "invariants": [
+        "INV02",
+        "INV10"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT055",
+      "group": "DEV",
+      "scenario": "Q EX保持中に新processのQ SH ready待ち",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "検出・修正。APPLIED後Q/R等解放して起動、deadlockなし。",
+      "invariants": [
+        "INV03",
+        "INV08"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT056",
+      "group": "DEV",
+      "scenario": "A/M/G/U/Q/R/C/O競合とcallback再入",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "DAG逆順/再入拒否、有限deadline、同意取消を失わない。",
+      "invariants": [
+        "INV03",
+        "INV14"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT057",
+      "group": "DEV",
+      "scenario": "grant timeout再送",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "同request同bytesのみ。別ID/自動期限延長禁止。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT058",
+      "group": "DEV",
+      "scenario": "未STARTの正当なprestart abortとACK喪失",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "ローカル耐久終結→中央CAS。旧nonce grant拒否、次prepare可。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT059",
+      "group": "DEV",
+      "scenario": "START intent不明なのにprestart abort",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "拒否。timeout/旧HEADだけでは未実行にしない。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT060",
+      "group": "DEV",
+      "scenario": "start-intentの各write/fsync点でkill",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "beforeを証明できなければUNKNOWN、capabilityなし。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT061",
+      "group": "DEV",
+      "scenario": "SPENT rename後directory fsync失敗",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "RAMcapなし。再起動で再実行せず全証拠保全。",
+      "invariants": [
+        "INV04",
+        "INV05"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT062",
+      "group": "DEV",
+      "scenario": "copy/fork/保存JSON/CLIでcapability偽造",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "同processlive factory以外拒否。二重claimは一勝者。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT063",
+      "group": "DEV",
+      "scenario": "別スレッドが同capabilityを同時claim",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "exactly一回effect、FD同一性/状態不変。",
+      "invariants": [
+        "INV03",
+        "INV04"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT064",
+      "group": "DEV",
+      "scenario": "初回effect直前にgrant期限切れ",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "effect0、SPENT保全。同生存ownerだけno-effect終結可能。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT065",
+      "group": "DEV",
+      "scenario": "開始後にgrant期限切れ",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "同じ有限操作の整合性確定は可能、新操作/再試行不可。",
+      "invariants": [
+        "INV04",
+        "INV06"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT066",
+      "group": "DEV",
+      "scenario": "Git merge/post-merge失敗",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "v2はcode reset/DB置換なし。v1人承認rollback回帰を維持。",
+      "invariants": [
+        "INV07",
+        "INV10"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT067",
+      "group": "DEV",
+      "scenario": "Git child停止結果不明",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "子の退役を証明せずfence解放/成功化しない。",
+      "invariants": [
+        "INV03",
+        "INV08"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT068",
+      "group": "DEV",
+      "scenario": "アプリimport中のcode切替要求",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "Q SHの寿命中はcode切替不可。candidateimport前bootstrap固定。",
+      "invariants": [
+        "INV08",
+        "INV18"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT069",
+      "group": "DEV",
+      "scenario": "同mtime/sizeの古いpyc",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "世代cacheとloadedsource検証で旧bytecode不採用。-B単独に頼らない。",
+      "invariants": [
+        "INV08",
+        "INV09"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT070",
+      "group": "DEV",
+      "scenario": "HEAD新版、旧PID・古いheartbeat・PID再利用",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "runtime proof拒否。実loaded identity/newgenerationを要求。",
+      "invariants": [
+        "INV09"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT071",
+      "group": "DEV",
+      "scenario": "quarantine constructorが通信/DB移行",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "profile資格拒否。実APIや臨床writeでヘルスチェックしない。",
+      "invariants": [
+        "INV10",
+        "INV11"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT072",
+      "group": "DEV",
+      "scenario": "timer/disabled serviceの正常起動",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "desired状態のproofを受入。非residentへ常時PIDを要求しない。",
+      "invariants": [
+        "INV09",
+        "INV15"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT073",
+      "group": "DEV",
+      "scenario": "新processが自己申告だけtarget",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "native birth/起動nonce/importrootとの照合で拒否。",
+      "invariants": [
+        "INV09",
+        "INV18"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT074",
+      "group": "DEV",
+      "scenario": "activation前後で同意・別hold変更",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "自op以外のhold保持。activation証拠なしに業務開始不可。",
+      "invariants": [
+        "INV02",
+        "INV11"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT075",
+      "group": "DEV",
+      "scenario": "VERIFIED保存とoutbox保存の間でkill",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "一つのatomic owner保存。部分成功ならUNKNOWN/観測確定。",
+      "invariants": [
+        "INV04",
+        "INV09"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT076",
+      "group": "DEV",
+      "scenario": "A→B→C、B ACKだけ喪失",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "2操作が個別VERIFIED、B raw再送可、旧B grant再実行拒否。",
+      "invariants": [
+        "INV05",
+        "INV06",
+        "INV19"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT077",
+      "group": "DEV",
+      "scenario": "遅れたACKと新grant witness競合",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "ACKはrevisionだけ更新。execution_revision不変で正規grantを誤拒否しない。",
+      "invariants": [
+        "INV03",
+        "INV19"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT078",
+      "group": "DEV",
+      "scenario": "unknown→実際に既完了の観測",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "historical署名/同op/activation/proofで終結可、追加effect0。",
+      "invariants": [
+        "INV06",
+        "INV09"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT079",
+      "group": "DEV",
+      "scenario": "unknownでservice未起動",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "観測だけでは成功不可。旧grantでstartせず別承認保守。",
+      "invariants": [
+        "INV06",
+        "INV09"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT080",
+      "group": "DEV",
+      "scenario": "別op ACK/同report異bytes/sequence後退",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "拒否。正しい重複ACKだけ冪等。",
+      "invariants": [
+        "INV05",
+        "INV19"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT081",
+      "group": "DEV",
+      "scenario": "owner容量は残るが完了予約量不足",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "START前にHOLD。履歴削除や上限引上げなし。",
+      "invariants": [
+        "INV05",
+        "INV14"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT082",
+      "group": "DEV",
+      "scenario": "download/pack/backupが別filesystemの容量不足",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "各mountの同時ピーク検査。患者data掃除なし。",
+      "invariants": [
+        "INV10",
+        "INV14"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT083",
+      "group": "DEV",
+      "scenario": "完了記録disk full/atomic replace不明",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "成功断定なし、同op証拠保持、再applyなし。",
+      "invariants": [
+        "INV04",
+        "INV16"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT084",
+      "group": "DEV",
+      "scenario": "backup後新着/送信receiptが増加",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "自動DB復元なし。attempt/budget/notification履歴不変。",
+      "invariants": [
+        "INV10",
+        "INV11"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT085",
+      "group": "DEV",
+      "scenario": "patch版だがDB/SDK/model/config/default権限変更",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "実diff/profile検査でcode-only拒否。版番号で許可しない。",
+      "invariants": [
+        "INV11",
+        "INV17"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT086",
+      "group": "MIG",
+      "scenario": "v1 spent/unknown/pending successorあり",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "移行しない。旧bytes削除・成功化なし。",
+      "invariants": [
+        "INV05",
+        "INV07"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT087",
+      "group": "MIG",
+      "scenario": "migration intent/oldarchive/replace各点でcrash",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "同before/afterだけ照合。legacy入口が開かない。",
+      "invariants": [
+        "INV03",
+        "INV07"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT088",
+      "group": "MIG",
+      "scenario": "recovery entry/support混成、.prev起動",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "混成拒否、旧版は自世代support利用。",
+      "invariants": [
+        "INV07",
+        "INV18"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT089",
+      "group": "MIG",
+      "scenario": "全disk復元・他deviceへcredential/ownerコピー",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "中央floor/realm/root不一致でHOLD。fresh扱いなし。",
+      "invariants": [
+        "INV05",
+        "INV07"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT090",
+      "group": "MIG",
+      "scenario": "旧別checkout/非協調manual writer",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "AUTO_ELIGIBLE拒否。Qだけで全process検証済みとしない。",
+      "invariants": [
+        "INV08",
+        "INV18"
+      ],
+      "required_execution": "product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT091",
+      "group": "OPS",
+      "scenario": "FileVault/未ログイン/Keychain locked/再起動",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "未稼働を正常扱いしない。root化/自動ログインで回避しない。",
+      "invariants": [
+        "INV15",
+        "INV16"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": true
+    },
+    {
+      "id": "AT092",
+      "group": "OPS",
+      "scenario": "self/pilot成功未観測・offline",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "未STARTと開始後不明を区別。後者でbatch拡大停止。",
+      "invariants": [
+        "INV09",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT093",
+      "group": "OPS",
+      "scenario": "途中cohort増減・新Release出現",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "固定assignment/target、二重STARTなし。",
+      "invariants": [
+        "INV05",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT094",
+      "group": "OPS",
+      "scenario": "同commitを別tag/再圧縮して再配布",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "attempt_keyが一致し消費済み枠復活なし。",
+      "invariants": [
+        "INV05",
+        "INV06"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT095",
+      "group": "OPS",
+      "scenario": "server停止・報告未送信",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "正常アプリ継続。新grantは停止、結果は同bytesoutbox保持。",
+      "invariants": [
+        "INV15",
+        "INV19"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT096",
+      "group": "OPS",
+      "scenario": "fixture鍵/mock backend/空profileの有効化",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "本番gate拒否。実装済みと配備済みを分ける。",
+      "invariants": [
+        "INV16",
+        "INV20"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT097",
+      "group": "OPS",
+      "scenario": "全失敗ケースHOLD、正常系も進まない実装",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "正常end-to-endと2連続更新を必須にし、全HOLDを合格にしない。",
+      "invariants": [
+        "INV09",
+        "INV20"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT098",
+      "group": "OPS",
+      "scenario": "旧人承認restore・課金unknownに更新を適用",
+      "arrange": "完全合成の一時HOME/DB/Git/署名fixture、偽transportと偽service。該当する既存正常系も併置。",
+      "act": "scenarioの境界で故障・競合・改変を注入し、正規の公開/更新入口から一度実行する。",
+      "assertions": "別ゲート/不確定履歴の意味不変。更新同意で解除しない。",
+      "invariants": [
+        "INV07",
+        "INV11"
+      ],
+      "required_execution": "product_contract_or_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT099",
+      "group": "PAR",
+      "scenario": "両repoのcontract mirrorが1byteだけ異なる",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "C0/I1を拒否。独自optional fieldで継続しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT100",
+      "group": "PAR",
+      "scenario": "CSDC/ClientのHEADが受入票と変わった",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "両SHAとdigestを再記録し影響範囲再検証。古い成功を新実行と表示しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT101",
+      "group": "CON",
+      "scenario": "旧提案v2のpayloadを新v3へ送る",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "schema/purpose/path不一致を拒否、v1既存API不変。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT102",
+      "group": "CON",
+      "scenario": "JS/PythonのCJSON・hash・PS256用途を相互検証",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同じfixtureが相互検証でき、duplicate/-0/別purposeは両側拒否。テスト鍵のみ。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT103",
+      "group": "CEN",
+      "scenario": "旧支援operationとautoが同時に枠取得",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同一commit current guardで一方だけ。勝者を逆にした正例/反例も通る。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT104",
+      "group": "CEN",
+      "scenario": "旧restart/config/release-v1とautoの各同時開始",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "各family両方向で競合拒否。case制限とintegrity holdを保持。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT105",
+      "group": "CEN",
+      "scenario": "同tenantの別Macへ同時start、異tenantへ並行start",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同tenantは最大1、異tenantはglobal上限内で前進。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT106",
+      "group": "CEN",
+      "scenario": "11台が同時にglobal cap10へreserve",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "signing reservationを含め最大10。後続が検証済みslot解放後に進む。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT107",
+      "group": "CEN",
+      "scenario": "grant期限切れで応答喪失、端末がoffline",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "timerだけでslot/attemptを解放せずunknown保持。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT108",
+      "group": "CEN",
+      "scenario": "request_commitsが24h cleanupで消えた後同request",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "専用durable receiptからsame bytes、grant/副作用再生成なし。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT109",
+      "group": "CEN",
+      "scenario": "pause/同意撤回とsigning-reserved→grant commit競合",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "現在guard敗者の署名bytesを返さない。先に発行済みなら30秒以内残存を正しく扱う。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT110",
+      "group": "CEN",
+      "scenario": "resultがflagOFF、pause、古いauthorization_epochで到着",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "元grantへ照合して過去結果を受領。新STARTは拒否。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT111",
+      "group": "CEN",
+      "scenario": "credential正規rotation後に同じ結果bytesを再送",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同device/realm/current認証と元operation照合で受領、scope変更/compromised keyは拒否。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT112",
+      "group": "CEN",
+      "scenario": "監視/R4 case同意だけでauto enrollment",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "拒否。専用standing previewと実local確認/中央ACKを要求。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT113",
+      "group": "CEN",
+      "scenario": "local撤回の中央通知が失敗",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "localは直ちに新STARTを拒否。古い同意へ戻さない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT114",
+      "group": "ROL",
+      "scenario": "N=1/2/10/30、pilot=1又は4の対象件数",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "08章の累積capと一致。pilot込み。rank閾値で近似しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT115",
+      "group": "ROL",
+      "scenario": "顧客N=0でselfだけ正常",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "self検証だけとして表示し、顧客配信完了を偽装しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT116",
+      "group": "ROL",
+      "scenario": "freeze後の新tenant/device/profile登録",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "元cohort/hash/Nに追加なし。次campaignへ。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT117",
+      "group": "ROL",
+      "scenario": "freeze途中で停止、rank再計算時に元registryが変化",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同snapshot不変行だけから再計算。変更registryから同IDへ作り直さない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT118",
+      "group": "ROL",
+      "scenario": "pilotが全runtime profileを覆わない",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "未coverage profileの昇格/start拒否。他profile成功で代用しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT119",
+      "group": "ROL",
+      "scenario": "pilot割合が10%を上回る小母集団",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "明示pilot_minimum_exception承認・表示。10%厳守と誤表示しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT120",
+      "group": "ROL",
+      "scenario": "self→generalの飛越し、pausedからadvance",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "拒否。前stageとresume/advanceの責任を分離。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT121",
+      "group": "ROL",
+      "scenario": "次stageの新対象0件",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "NO_NEW_TARGETSを記録し明示skip可。重複適用/二重成功件数なし。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT122",
+      "group": "ROL",
+      "scenario": "同tenantに複数profile/複数Mac",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "各profile canaryを直列適用し60分観測前に残端末へ広げない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT123",
+      "group": "ROL",
+      "scenario": "concurrency10だがverified直後に次々100台開始要求",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "wave対象最大10tenant、前wave60分healthy完了前は次waveを開かない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT124",
+      "group": "ROL",
+      "scenario": "新Releaseが進行中に公開",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "既存grant/assignment target不変。同stream未解決を新campaignで隠さない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT125",
+      "group": "ROL",
+      "scenario": "HMAC鍵を交換して再poll",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "保存済み順位は再計算/変更しない。鍵IDとsnapshotを維持。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT126",
+      "group": "ROL",
+      "scenario": "未許可canaryの高いcode_seqが存在",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "auto selectは適格exact releaseだけ返し、不必要にhighest_seenを上げない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT127",
+      "group": "HLT",
+      "scenario": "同じhealthy reportを24時間再送",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "受信fresh時刻/soakを進めない。same hashだけ冪等ACK。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT128",
+      "group": "HLT",
+      "scenario": "報告を止めたまま24時間が経過",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "soak成功にしない。gapを検知し停止/未確認表示。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT129",
+      "group": "HLT",
+      "scenario": "boot変更/世代変更/長いgap後にhealthy",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "新しいtrusted runtime proofで連続区間をリセット。旧grantを新bootの開始許可にしない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT130",
+      "group": "HLT",
+      "scenario": "future timestamp、過去sequence、同ID異bytes",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "freshとして採用しない。異bytesはintegrity hold。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT131",
+      "group": "HLT",
+      "scenario": "別device/op/target/profileのhealthy報告",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "scopeと元verified outcomeへのbinding不一致で拒否。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT132",
+      "group": "HLT",
+      "scenario": "advance preview後にlate critical outcomeがcommit",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "health_revision CASでadvance拒否。逆順なら以後pauseし新grant停止。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT133",
+      "group": "HLT",
+      "scenario": "grant前offline期限切れ/発行後offlineを比較",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "前者だけ理由付き未START延期可能。後者unknownで昇格停止/slot保持。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT134",
+      "group": "HLT",
+      "scenario": "全割当を未START除外して成功sample0",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "profile必須coverageと最低1成功を満たさず昇格しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT135",
+      "group": "ADM",
+      "scenario": "tenant_adminが別tenant/全campaignを操作",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "Access/CSRF/current membership/グローバル許可で拒否。自tenant停止のみ許可。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT136",
+      "group": "ADM",
+      "scenario": "同じaction_idを同/異bodyで再送",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "同bytesは同receipt、異bytesは409。二回stageを進めない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT137",
+      "group": "ADM",
+      "scenario": "GitHub workflowにstage100%を直接入力",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "中央承認済みticketが無ければ拒否。GitHub environmentの存在だけで許可しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT138",
+      "group": "ADM",
+      "scenario": "private CSDCでGitHub required reviewersが使えない",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "Console承認で運用可能。有料plan追加や公開化を自動実行しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT139",
+      "group": "OBJ",
+      "scenario": "256MiB artifactを一括PUTしようとする",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "対象routeなし/上限拒否。16MiB×16chunk正常系は全hash一致でREADY。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT140",
+      "group": "OBJ",
+      "scenario": "chunk欠損/順序変更/同index別hash/最終size不一致",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "READY禁止。同publication異bytes上書き不可。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT141",
+      "group": "OBJ",
+      "scenario": "R2 put成功後D1 commit失敗、又は逆側停止",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "未READYの存在だけで配信せず、same bytes再照合。証拠無断削除なし。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT142",
+      "group": "OBJ",
+      "scenario": "途中stream失敗/不正Content-Encoding/過大response",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "MCSは未採用、size/hash/absolute deadline維持。metadata上限を広げない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT143",
+      "group": "OBJ",
+      "scenario": "WorkerのCPU/memory/subrequest実上限が不足",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "本番gate HOLD。全量arrayBufferや費用変更で隠さない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT144",
+      "group": "DB",
+      "scenario": "D1 batchの最初の条件付きINSERTが0行",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "後続write0、成功レスポンス禁止。SQL例外だけを根拠にしない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT145",
+      "group": "DB",
+      "scenario": "途中SQL unique制約エラー",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "batch全体rollback。slot/receipt片側だけ成功を作らない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT146",
+      "group": "DB",
+      "scenario": "別realm/installationのownerを同deviceへcopy",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "中央floorとscopeが拒否。新realmで未解決attemptを消さない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT147",
+      "group": "E2E",
+      "scenario": "A→B完了のACK喪失後、同じ環境へB→C",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "両製品handlerで2連続VERIFIED、B旧grant拒否、C結果をBへ誤帰属しない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT148",
+      "group": "E2E",
+      "scenario": "CSDC旧Workerと新autoWorkerが同じD1へ混在",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "全旧family guard対応完了までauto enable拒否。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT149",
+      "group": "E2E",
+      "scenario": "本仕様参照modelがgreenだが製品handler未実装",
+      "arrange": "完全合成の両repo handler/validator、一時HOME/Git/SQLite、fake GitHub/OIDC/D1/R2/service。正常対応caseを併置。",
+      "act": "該当する並行、再送、停止、改変を正規入口に注入する。",
+      "assertions": "I6未完と報告。stubs/mockだけを本番完成としない。",
+      "invariants": [
+        "INV01",
+        "INV02",
+        "INV05",
+        "INV15",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    },
+    {
+      "id": "AT150",
+      "group": "CON",
+      "scenario": "tenant別proposal後に保守窓/pilot opt-in/profileを変更して古いpreviewでconfirm",
+      "arrange": "完全合成のcurrent tenant membership/proposal/端末receipt。正常な同一proposalも併置。",
+      "act": "中央と端末の確認間にproposal又はscopeを差し替える。",
+      "assertions": "proposal/rollout両hashとrevisionを照合して拒否。中央proposalだけでlocal同意を作らない。",
+      "invariants": [
+        "INV02",
+        "INV07",
+        "INV20"
+      ],
+      "required_execution": "cross_repository_product_integration",
+      "execution_status": "NOT_RUN",
+      "macos_native_required": false
+    }
+  ]
+}
