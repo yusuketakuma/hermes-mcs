@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "添付ファイルの配送同一性を別途の人承認で証明し更新を再開",
+  "summary": "過去に配送済みとなった添付ファイルについて、封緘された配送記録が残っていない場合でも、ops.attachment_identity_confirmによる人の承認が配送履歴と完全一致すれば、そのファイルを既存IDで再利用する更新が保留されずに再開します。承認のない行や承認範囲外の行は従来どおり保留のままです。",
+  "upgrade": "追加操作は不要です。保留中の添付同一性確認は従来どおり人の承認操作で行ってください。確認記録が失われた・改竄された場合は自動では昇格しません。",
+  "details": [
+    "ops.attachment_identity_confirmの適用済みreceiptについて、scopeに未知のキーがあるreceiptは全体を拒否し、検証済みrequestの値だけから履歴を再照合する。scope末尾の任意キーでrequestをすり替える経路を閉じた。",
+    "digest照合済みの確認receiptが正確に束縛する配送行は、封緘specもcollected経路も証明できない行（create render上のoperator_part_resolve配送など）でもoperator_verifiedとして扱い、同一remoteの後続再利用を可能にする。昇格はreceiptが証明した行の組だけに限る。"
+  ],
+  "refs": ["mcs/notify/notify_parts.py", "tests/notify/test_attachment_upload_identity.py", "tests/notify/test_notification_tracking_file_ack.py"]
+}

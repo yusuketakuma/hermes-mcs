@@ -12,8 +12,8 @@ from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
 from notify_render import SECTION_RULE, card_body_text, own_post, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
-                          scope_matches, stored_scope, _body_witness_proofs,
-                          _attachment_identity_witness_proofs)
+                          scope_fields, scope_matches, stored_scope,
+                          _body_witness_proofs, _attachment_identity_witness_proofs)
 
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
@@ -551,9 +551,39 @@ def _collected_attachment_identity(row):
         return None
 
 
+def _part_resolution_request(saved, receipt, row, *, part_state):
+    """Reconstruct only an exact validated human request for the stored outcome."""
+    from notify_recovery import validate_card_part_resolve
+    try:
+        if (part_state not in ('delivered', 'not_sent')
+                or receipt['kind'] != 'ops.card_part_resolve' or receipt['outcome'] != 'applied'
+                or receipt['part_state'] != part_state or receipt['command_id'] != saved['command_id']
+                or receipt['attempt_id'] != row['part_attempt']
+                or receipt['manifest_sha256'] != row['payload_hash']
+                or receipt['payload_sha256'] != row['payload_sha256']
+                or receipt['delivery_id'] != row['delivery_id'] or receipt['part_id'] != row['part_id']
+                or not scope_matches(row, receipt['scope'])):
+            return None
+        base = {'version': 1, 'cmd': 'ops.card_part_resolve', 'human_confirmed': True,
+                'result': 'mark_' + part_state, **receipt['scope'], **{k: receipt[k] for k in (
+                    'command_id', 'actor', 'reason', 'delivery_id', 'part_id', 'attempt_id',
+                    'manifest_sha256', 'payload_sha256', 'evidence')}}
+        # The original receipt omits expected_state. Its digest proves which
+        # allowed request was approved; this never infers a delivery outcome.
+        states = ('unknown',) if part_state == 'delivered' else ('unknown', 'pending', 'not_sent')
+        for expected in states:
+            remotes = ({'remote_id': row['remote_id']},) if part_state == 'delivered' else ({}, {'remote_id': None})
+            for remote in remotes:
+                req = {**base, 'expected_state': expected, **remote}
+                if validate_card_part_resolve(req) is None and payload_hash(req) == saved['payload_hash']:
+                    return req
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        pass
+    return None
+
+
 def _manual_edit_receipts(db, rows):
     """Bind a manual caption edit to the exact human-approved command digest."""
-    from notify_recovery import validate_card_part_resolve
     if not any(row["part_error"] == "operator_part_resolve" for row in rows):
         return {}
     matches = {}
@@ -580,23 +610,8 @@ def _manual_edit_receipts(db, rows):
         if len(candidates) != 1:
             continue
         saved, receipt = candidates[0]
-        try:
-            if (receipt["outcome"] != "applied" or receipt["part_state"] != "delivered"
-                    or receipt["command_id"] != saved["command_id"]
-                    or receipt["attempt_id"] != row["part_attempt"]
-                    or receipt["manifest_sha256"] != row["payload_hash"]
-                    or receipt["payload_sha256"] != row["payload_sha256"]
-                    or not scope_matches(row, receipt["scope"])):
-                continue
-            req = {"version": 1, "cmd": "ops.card_part_resolve", "human_confirmed": True,
-                   "expected_state": "unknown", "result": "mark_delivered", "remote_id": row["remote_id"],
-                   **receipt["scope"], **{k: receipt[k] for k in (
-                       "command_id", "actor", "reason", "delivery_id", "part_id", "attempt_id",
-                       "manifest_sha256", "payload_sha256", "evidence")}}
-            if validate_card_part_resolve(req) is None and payload_hash(req) == saved["payload_hash"]:
-                verified[key] = True
-        except (ValueError, TypeError, KeyError, AttributeError):
-            continue
+        if _part_resolution_request(saved, receipt, row, part_state='delivered') is not None:
+            verified[key] = True
     return verified
 
 
@@ -624,13 +639,17 @@ def _confirmed_upload_identities(db, card):
                 or not valid_hash(receipt.get("sha256"))
                 or type(receipt.get("bytes")) is not int or receipt["bytes"] < 0
                 or not isinstance(receipt.get("name"), str) or not 0 < len(receipt["name"]) <= 200
-                or not isinstance(receipt.get("remote_id"), str) or not receipt["remote_id"]
-                or not scope_matches(card, receipt.get("scope"))):
+                or not isinstance(receipt.get("remote_id"), str) or not receipt["remote_id"]):
+            continue
+        scope = receipt.get("scope")
+        if (not isinstance(scope, dict)
+                or scope.keys() - {"transport", *scope_fields("slack")}
+                or not scope_matches(card, scope)):
             continue
         req = {"version": 1, "cmd": "ops.attachment_identity_confirm",
                "command_id": command_id, "actor": receipt.get("actor"),
                "human_confirmed": True, "reason": receipt.get("reason"),
-               "transport": (receipt.get("scope") or {}).get("transport", "slack"),
+               "transport": scope.get("transport", "slack"),
                "card_id": receipt.get("card_id"), "card_key": receipt.get("card_key"),
                "thread_id": receipt.get("thread_id"), "message_id": receipt.get("message_id"),
                "root_message_id": receipt.get("root_message_id"),
@@ -645,16 +664,17 @@ def _confirmed_upload_identities(db, card):
                "manifest_sha256": receipt.get("manifest_sha256"),
                "payload_sha256": receipt.get("payload_sha256"), "expected_state": "held",
                "evidence": receipt.get("evidence"),
-               **{key: value for key, value in (receipt.get("scope") or {}).items()
-                  if key != "transport"}}
+               **{key: scope.get(key) for key in scope_fields("slack")}}
         if (notify_recovery.validate_attachment_identity_confirm(req) is not None
                 or payload_hash(req) != stored_digest):
             continue
+        # The digest-verified request is the only identity source: history is
+        # read from it, never from the receipt's unverified top-level copy.
         history = notify_recovery._confirmed_history_rows(
-            db, card, receipt["part_id"], receipt["attachment_id"],
-            receipt["sha256"], receipt["bytes"], through_rev=receipt["through_rev"])
+            db, card, req["part_id"], req["attachment_id"],
+            req["sha256"], req["bytes"], through_rev=req["through_rev"])
         if (not history or notify_recovery._confirmed_history_digest(history)
-                != receipt["history_sha256"]):
+                != req["history_sha256"]):
             continue
         # Promotion is bound to the exact rows the approval attested — a later
         # delivered row carrying the same tuple is never promoted by it.
@@ -761,15 +781,30 @@ def _same_thread_delivered_parts(db, card):
                     identity = (*identity[:5], "private_operator_edit", *identity[6:])
                 if identity is None and not operator and proofs is None and not row["private_stage_render"]:
                     identity = _collected_attachment_identity(row)
+                confirmed_key = (row["delivery_id"], row["part_id"], row["render_rev"],
+                                 row["part_attachment_id"], row["payload_sha256"],
+                                 row["part_bytes"], row["name"], str(row["remote_id"]))
                 if (identity is not None and identity[5] == "collected"
-                        and (row["delivery_id"], row["part_id"], row["render_rev"],
-                             row["part_attachment_id"], row["payload_sha256"],
-                             row["part_bytes"], row["name"],
-                             str(row["remote_id"])) in confirmed):
+                        and confirmed_key in confirmed):
                     # An applied ops.attachment_identity_confirm receipt attests
                     # this collected upload — distinguishable from a sealed file
                     # proof and never auto-promoted.
                     identity = (*identity[:5], "operator_verified", *identity[6:])
+                elif (identity is None and confirmed_key in confirmed
+                        and type(row["part_attachment_id"]) is int and row["part_attachment_id"] > 0
+                        and valid_hash(row["payload_sha256"])
+                        and type(row["part_bytes"]) is int and row["part_bytes"] >= 0
+                        and isinstance(row["part_id"], str) and row["part_id"]
+                        and isinstance(row["name"], str) and 0 < len(row["name"]) <= 200
+                        and type(row["render_rev"]) is int and row["render_rev"] > 0):
+                    # The same digest-bound receipt also attests a delivered row no
+                    # sealed or collected path could prove — e.g. an
+                    # operator_part_resolve delivery on a create render. Only the
+                    # exact tuple the approval covered is promoted; a None proof
+                    # would otherwise poison every later reuse of this remote.
+                    identity = (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
+                                row["part_bytes"], row["name"], "operator_verified",
+                                row["render_rev"], False, row["op"] == "create")
                 if (identity is not None and row["private_stage_render"]
                         and identity[5] in ("file", "collected")):
                     identity = None  # Private preparation never proves public delivery.

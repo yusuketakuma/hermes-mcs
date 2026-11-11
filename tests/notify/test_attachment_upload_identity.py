@@ -725,6 +725,75 @@ def test_approval_never_promotes_later_unapproved_collected_row(led, uploaded):
     assert later[5] == "collected"
 
 
+def test_scope_tail_cannot_smuggle_request_fields_into_confirmed_identities(led, uploaded):
+    """A receipt whose scope carries non-scope request fields is rejected whole.
+
+    The forged receipt keeps the approved top-level identity fields but moves
+    the entire original request into ``scope`` — only strict scope-key
+    filtering keeps the reconstructed request from silently becoming the
+    approved one while history is read from the unverified top-level copy.
+    """
+    world, prior, latest, held, part, attachment_id = _held_collected(led, uploaded)
+    from notify_recovery import (attachment_identity_confirm_plan,
+                                 apply_attachment_identity_confirm,
+                                 _confirmed_history_rows, _confirmed_history_digest)
+    import notify_parts
+    plan = attachment_identity_confirm_plan(led.db, latest["delivery_id"], held["part_id"])
+    req = _confirm_req(plan, 0xF7)
+    assert apply_attachment_identity_confirm(led, req)["outcome"] == "applied"
+    card = led.db.execute("SELECT * FROM notification_cards WHERE card_id=?",
+                          (latest["card_id"],)).fetchone()
+    assert notify_parts._confirmed_upload_identities(led.db, card)
+    # A second delivered identity that no approval covers.
+    new_did = "d0ffee00-0000-4000-8000-0000000000f7"
+    new_rev = prior["render_rev"] + 50
+    old_render = dict(led.db.execute(
+        "SELECT * FROM notification_renders WHERE delivery_id=?",
+        (prior["delivery_id"],)).fetchone())
+    old_part = led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (prior["delivery_id"], part["part_id"])).fetchone()
+    thread = led.db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='thread'",
+        (prior["delivery_id"],)).fetchone()
+    with led.db:
+        render = {**old_render, "delivery_id": new_did, "render_rev": new_rev,
+                  "spec_json": None, "correlation": "ffffffff-0000-4000-8000-0000000000f7"}
+        cols = ",".join(render)
+        led.db.execute(f"INSERT INTO notification_renders({cols}) "
+                       f"VALUES({','.join('?' * len(render))})", tuple(render.values()))
+        for src, pid in ((old_part, "attach:9999"), (thread, None)):
+            row = {**src, "delivery_id": new_did,
+                   **({"part_id": pid} if pid else {})}
+            cols = ",".join(row)
+            led.db.execute(f"INSERT INTO notification_render_parts({cols}) "
+                           f"VALUES({','.join('?' * len(row))})", tuple(row.values()))
+    history = _confirmed_history_rows(led.db, card, "attach:9999", req["attachment_id"],
+                                      req["sha256"], req["bytes"], through_rev=new_rev)
+    assert history
+    saved = led.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                           (req["command_id"],)).fetchone()[0]
+    receipt = json.loads(saved)
+    forged = {**receipt, "delivery_id": new_did, "part_id": "attach:9999",
+              "through_rev": new_rev,
+              "history_sha256": _confirmed_history_digest(history),
+              "scope": {**receipt["scope"], **req}}
+    with led.db:
+        led.db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                       (json.dumps(forged), req["command_id"]))
+    # The whole receipt is refused: no confirmed identity survives the forgery.
+    assert notify_parts._confirmed_upload_identities(led.db, card) == set()
+    with led.db:
+        led.db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                       (saved, req["command_id"]))
+    assert notify_parts._confirmed_upload_identities(led.db, card)
+    _body, _att, identities = notify_parts._same_thread_delivered_parts(led.db, card)
+    proofs = [proof for group in identities.values() for proof in group]
+    later = [proof for proof in proofs
+             if proof is not None and proof[0] == "attach:9999" and proof[6] == new_rev]
+    assert later and all(proof[5] != "operator_verified" for proof in later)
+
+
 def test_two_attachments_sequential_approval_then_gc_continuity(led, tmp_path, monkeypatch):
     """Sequential per-part approvals; the last one unholds; GC of the sealed
     spec keeps receipts so recovery continues."""
