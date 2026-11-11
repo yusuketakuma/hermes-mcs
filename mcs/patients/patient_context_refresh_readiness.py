@@ -208,16 +208,24 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
     eligible = bool(complete and patient_context_refresh_state.options(cfg)["publication"] and not scope.get("is_archived")
                     and (source_keys is not None or fetch_allowed))
     if source_keys is not None:
-        # Scoped publication proves the selected cohort only: whole-patient
-        # cloud/acquisition/attachment completion stays reported by `complete`
-        # and `status`, never by this eligibility.
-        eligible = bool(current and patient_context_refresh_state.options(cfg)["publication"]
-                        and not scope.get("is_archived")
-                        and not patient_context_refresh_state._out_of_scope(snapshot)
-                        and snapshot["dependencies"]["complete"]
-                        and snapshot["attachment_coverage"]["mode"] != "invalid"
+        # Scoped publication proves the selected cohort only: the same
+        # verification components as `complete` (current summary, scan
+        # audit coverage, progress hold/failure, dependencies, intake)
+        # minus the whole-patient-only clauses (cloud extraction,
+        # acquisition and attachment completion, unreflected backlog).
+        # Whole state stays reported by `complete` and `status`.
+        eligible = bool(not patient_context_refresh_state._out_of_scope(snapshot)
+                        and patient_context_refresh_state.options(cfg)["enabled"]
+                        and acquired_empty
                         and counts["eligible"] == counts["audited"] + counts["skipped"]
-                        and not counts["incomplete"])
+                        and not counts["incomplete"]
+                        and (progress.get('source_sig') != snapshot['source_sig']
+                             or not progress.get("held") and not progress.get("failure"))
+                        and current
+                        and patient_context_refresh_state.options(cfg)["publication"]
+                        and not scope.get("is_archived")
+                        and snapshot["dependencies"]["complete"]
+                        and snapshot["attachment_coverage"]["mode"] != "invalid")
     if publication is not None:
         eligible = publication['publication_eligible']
         complete = complete and publication['complete']
@@ -751,13 +759,20 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
     if policy['mode'] == 'off':
         return _raw_extraction_current(db, row, cfg)[0]
     if material:
-        # Material adoption keeps adverse semantic evidence closed
-        # (held/failed/repair_required/permission/scope) while a merely
-        # scheduled reprocessing does not invalidate the selected artifact.
-        # 'pending' is adoptable only before the semantic pipeline engages
-        # the member at all: an existing audit row — even a PENDING one —
-        # is incomplete evaluation evidence, not absence of evidence.
+        # Material adoption verifies the exact selected final artifact:
+        # its retained progress witness replays and no newer marked
+        # artifact blocks it (pending_pred already bound actionable QC
+        # and human denial to that same artifact id).
         if row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked'):
+            return False
+        import extract_llm
+        from mcs_queries import qc_source_id, selected_artifact_proof_valid
+        selected = db.execute(
+            f"SELECT {qc_source_id('m', version=extract_llm.EXTRACT_VERSION)} AS artifact_id"
+            " FROM messages m WHERE m.message_id=?", (mid,)).fetchone()
+        if selected is None or selected['artifact_id'] is None:
+            return False
+        if not selected_artifact_proof_valid(db, selected['artifact_id']):
             return False
         state = semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
             **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {}))
@@ -765,9 +780,16 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
             return True
         if state != 'pending':
             return False
-        return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND message_id=? "
-                          "AND (project_id=? OR project_id IS NULL) LIMIT 1",
-                          (semantic_policy.KIND_AUDIT, mid, pid)).fetchone() is None
+        # 'pending' adopts only before the semantic pipeline engages the
+        # CURRENT generation: a current-fingerprint audit row — even a
+        # PENDING one — is incomplete evaluation evidence, while audits
+        # bound to older source/generations never block the material.
+        bundle = semantic_store.thread_bundle(db, pid, row['parent_id'] or mid, [mid])
+        if bundle is None:
+            return False
+        return semantic_store.current_artifact(
+            db, semantic_policy.KIND_AUDIT, mid, bundle['source_fingerprint'],
+            semantic_store.policy_fingerprint(policy)) is None
     return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
         **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
 
