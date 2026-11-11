@@ -849,3 +849,97 @@ def test_legacy_pending_without_origin_markers_resumes_under_same_prior(db, monk
     # A further pass must not re-dispatch or rewrite the held evidence.
     third_run = extract_llm.run_pending(db, limit=1, budget_s=300)
     assert len(calls) == 2 and third_run["held_prior"] == 0
+
+
+def _pending_first_run(db, monkeypatch, body, first):
+    """Persist one pending first candidate via a budget-cut local run."""
+    db.save_messages([_message(body=body)])
+    calls, clock = [], [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def reply(piece):
+        calls.append(piece)
+        clock[0] += 20
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(first, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
+    assert first_run["deferred"] == 1 and len(calls) == 1
+    return calls
+
+
+def _chunk_rows(db):
+    return db.db.execute("SELECT artifact_id, meta, content FROM artifacts "
+                         "WHERE kind='extract_llm_chunk' AND message_id=1 "
+                         "ORDER BY artifact_id").fetchall()
+
+
+def test_pending_with_explicit_null_prior_ref_is_refused_not_admitted(db, monkeypatch):
+    """meta.protected_prior_ref recorded as explicit null is an invalid
+    record, not missing legacy: with no current protected prior the job
+    still defers — evidence preserved, zero new sends — instead of
+    admitting an unprovable basis."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+                           "evidence": "父は昨日、咳がありました。"}]}
+    calls = _pending_first_run(db, monkeypatch, body, first)
+    rows = _chunk_rows(db)
+    assert rows
+    with db.db:
+        for artifact_id, meta, _content in rows:
+            meta_obj = json.loads(meta)
+            meta_obj["protected_prior_ref"] = None
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta_obj, ensure_ascii=False), artifact_id))
+    rows_before = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    rows_after = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+    assert len(calls) == 1, "unprovable basis dispatched a repair"
+    assert rows_after == rows_before, "refused evidence was replaced"
+    assert second_run["done"] == 0 and second_run["deferred"] == 1, second_run
+
+
+def test_pending_with_tampered_piece_hash_refuses_sticky(db, monkeypatch):
+    """A selected pending record whose recorded piece hash no longer matches
+    the current piece fails admission: the whole job defers before claim
+    with the evidence rows untouched — never a fresh paid slot."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+                           "evidence": "父は昨日、咳がありました。"}]}
+    calls = _pending_first_run(db, monkeypatch, body, first)
+    rows = _chunk_rows(db)
+    assert rows
+    with db.db:
+        for artifact_id, meta, _content in rows:
+            meta_obj = json.loads(meta)
+            meta_obj["piece_sha256"] = "0" * 64
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta_obj, ensure_ascii=False), artifact_id))
+    rows_before = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    rows_after = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+    assert len(calls) == 1, "unverifiable checkpoint freed a fresh dispatch"
+    assert rows_after == rows_before, "refused evidence was replaced"
+    assert second_run["done"] == 0 and second_run["deferred"] == 1, second_run
+
+
+def test_resume_promotion_refusal_is_shared_with_runner():
+    """The promote-conflict verdict uses the same hint-coverage judgment at
+    runner admission as inside the engine preflight: an unresolved plain
+    leaf under a refused basis stops the job before claim."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    leaf = {"_resume_promote_conflict": "protected_basis_conflict"}
+    r = {"body_text": body, "_chunk_size": 100000, "_splits": {},
+         "posted_at": None}
+    assert extract_llm_runner._resume_admission_refused(r, {0: leaf}, None)
+    assert r["_resume_refused"] is True
+    r2 = {"body_text": body, "_chunk_size": 100000, "_splits": {},
+          "posted_at": None}
+    assert not extract_llm_runner._resume_admission_refused(
+        r2, {0: {"summary": "咳があります"}}, None)
