@@ -166,11 +166,14 @@ jobs:
           set -euo pipefail
           mkdir -p assets
           cp bundle-out/hermes-mcs.bundle assets/
-          # release-core.json/compatibility-payloads/画像はpackage材料。
-          # 未整備ならauthorize側でfail-closedする。ここでは存在分だけ集める。
-          for f in release-core.json compatibility-payloads.json; do
-            [ -f "$f" ] && cp "$f" assets/ || true
-          done
+          # candidate assetはbundle+画像のみ。4metadata
+          # (release-core/attestation.initial/compatibility/acceptance)は
+          # 中央finalizeが生成するためここでは作らない。
+          # 画像はnotesが参照する許可済み説明図 — 配備側が
+          # release-materials/images/へ配置した場合のみ同梱する。
+          if [ -d release-materials/images ]; then
+            cp release-materials/images/* assets/ 2>/dev/null || true
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: release-assets
