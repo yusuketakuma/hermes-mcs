@@ -127,7 +127,8 @@ def test_exact_original_negative_approval_allows_only_receipt_closure(history, m
     assert notify_scope.incomplete_parts_health(history.db, NOW + 7, SLACK)['acknowledged_unresolved_total'] == 1
 
 
-@pytest.mark.parametrize('fault', ['missing', 'receipt', 'digest', 'part', 'attempt', 'scope', 'successor', 'resolution_id'])
+@pytest.mark.parametrize('fault', ['missing', 'receipt', 'digest', 'part', 'attempt', 'scope',
+                                   'scope_result', 'part_state', 'successor', 'resolution_id'])
 def test_changed_original_proof_or_scope_cannot_close_history(history, fault):
     req = copy.deepcopy(history.ack)
     with history.db:
@@ -138,6 +139,20 @@ def test_changed_original_proof_or_scope_cannot_close_history(history, fault):
                                      (history.resolution['command_id'],)).fetchone()
             receipt = json.loads(row[0])
             receipt['actor'] = 'synthetic-forged'
+            history.db.execute('UPDATE command_receipts SET receipt_json=? WHERE command_id=?',
+                               (json.dumps(receipt), history.resolution['command_id']))
+        elif fault == 'scope_result':
+            row = history.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                                     (history.resolution['command_id'],)).fetchone()
+            receipt = json.loads(row[0])
+            receipt['scope'] = {**receipt['scope'], 'result': 'mark_delivered', 'remote_id': 'FORGED'}
+            history.db.execute('UPDATE command_receipts SET receipt_json=? WHERE command_id=?',
+                               (json.dumps(receipt), history.resolution['command_id']))
+        elif fault == 'part_state':
+            row = history.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                                     (history.resolution['command_id'],)).fetchone()
+            receipt = json.loads(row[0])
+            receipt['part_state'] = 'delivered'
             history.db.execute('UPDATE command_receipts SET receipt_json=? WHERE command_id=?',
                                (json.dumps(receipt), history.resolution['command_id']))
         elif fault == 'digest':
@@ -160,6 +175,22 @@ def test_changed_original_proof_or_scope_cannot_close_history(history, fault):
     result = tracking.apply(history.ledger, req, SLACK, NOW + 4)
     assert result['outcome'] == 'rejected' and result['error'] == 'tracking_ack_stale_plan'
     assert originals(history.db) == before
+
+
+def test_scope_keys_reject_request_fields():
+    slack = {'transport': 'slack', 'profile': 'P', 'application_id': 'A',
+             'team_id': 'T', 'channel_id': 'C'}
+    assert notify_scope.scope_keys_allowed(slack)
+    assert notify_scope.scope_keys_allowed({'profile': 'P', 'application_id': 'A',
+                                            'guild_id': 'G', 'channel_id': 'C'})
+    for polluted in ({**slack, 'result': 'mark_delivered'},
+                     {**slack, 'remote_id': 'x'},
+                     {'transport': 'slack', 'result': 'mark_not_sent'},
+                     {'profile': 'P', 'remote_id': 'x'},
+                     {'transport': 'bogus', 'team_id': 'T'},
+                     {'transport': 'discord', 'team_id': 'T', 'channel_id': 'C'},
+                     'not-a-dict', None):
+        assert not notify_scope.scope_keys_allowed(polluted)
 
 
 def test_current_or_non_operator_file_failure_never_becomes_history_ack(history):
