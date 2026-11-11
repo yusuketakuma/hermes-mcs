@@ -1,8 +1,8 @@
 {
   "category": "changed",
   "title": "CSDC専用ジョブの既定を有効に変更",
-  "summary": "config.sdc.enabledを省略した環境では、CSDCの専用ジョブ（状態送信・pollのlaunchdエージェント）が既定で登録・管理されるようになります。明示的にfalseを設定した環境では従来どおり登録されません。ジョブが動いても、接続（mcs connect）と別の送信同意、私有領域のstate_root設定がない限り状態の送信・登録は行われません。",
-  "upgrade": "追加操作は不要です。専用ジョブを登録しない場合はconfig.sdc.enabledにfalseを設定してください。既にsdc.enabled=trueを設定している環境や、sdc節自体がない環境の動作は、ジョブ登録の有無だけが変わり、送信の開始条件（接続・同意・state_root）は変わりません。",
+  "summary": "config.sdc.enabledを省略した環境では、CSDCの専用ジョブ（状態送信・pollのlaunchdエージェント）が既定で登録・管理されるようになります。明示的にfalseを設定した環境では従来どおり登録されません。ジョブが動いても、接続（mcs connect）と別の送信同意、私有領域のstate_root設定がない限り状態の送信・登録は行われません。ただしstate_root設定済みでenabledを省略している既存環境では、保存済みの同意の範囲で送信が開始される場合があります。",
+  "upgrade": "追加操作は不要です。専用ジョブを登録しない場合はconfig.sdc.enabledにfalseを設定してください。明示的なfalseは保持されます。state_rootが未設定の環境では送信は開始されません。state_root設定済みでenabledを省略している環境では、保存済みの同意の範囲で送信が開始される場合があります。",
   "details": [
     "service_contract.desired_agent_labelsのsdc.enabled既定をfalseからtrueへ変更し、明示的な真偽値以外は従来どおりsdc_config_invalidで拒否する。",
     "sdc_cli._enrollment_config_admitsも同じ既定に揃え、enabled省略時はstate_rootが一致すれば接続処理を許可する。",
