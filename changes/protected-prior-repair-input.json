@@ -1,0 +1,26 @@
+{
+  "category": "added",
+  "title": "保存済み保護属性を単回修復へ渡す内部受付を追加",
+  "summary": "抽出器の内部受付に保存済みの保護対象を渡すと、原文で再確認できる属性の欠落を既存の単回修復で扱います。通常ジョブへの修復入力の接続と、修復属性の出所を照合する採用経路は未実装です。この変更だけで既存の保留は解消しません。",
+  "upgrade": "通常の呼出しは既定値のままです。修復回数や品質条件は変更しません。採用経路の実装と検証が完了するまで、本番へ適用しないでください。",
+  "details": [
+    "保護対象の列挙は既存の比較器と共有し、旧属性を再検証で落としたり、先頭の一部だけへ切り詰めたりしない。",
+    "修復結果は現行の原文検証と品質改善条件を満たし、当該範囲の保護属性を保持する場合だけ採用候補にする。未復元の出力は保護喪失として残る。",
+    "完了済みまたは送信済みか不明な修復記録から、新しい修復枠を作らない。原本・過去の失敗・配送結果・課金履歴は変更しない。",
+    "保護対象を含む旧データは、推論の準備段階で内容・モデル・metadata・artifact IDを固定する。ローカル推論とクラウド処理の現行性確認、checkpointの書込み、採用トランザクションで同じ旧データとの一致を要求し、差替えを検出したら保留する。",
+    "固定した旧データには版・artifact ID・同一性hash・source bindingを持つ厳密参照を併記し、参照の照合は既知項目だけを受理して、改竄・別artifact・別message・source差替え・保護対象を失った本文を拒否する。採用証跡への接続は未実装。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_quality.py",
+    "mcs/extract/llm/extract_llm_engine.py",
+    "mcs/extract/llm/extract_llm_prompts.py",
+    "tests/extract/llm/test_inference_v1_protected_prior.py",
+    "mcs/extract/llm/extract_llm_qc.py",
+    "mcs/extract/llm/extract_llm_prepare.py",
+    "mcs/extract/llm/extract_llm_context.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "tests/extract/llm/test_extract_upgrade_preservation.py",
+    "tests/extract/llm/test_stale_context_commit_loop.py"
+  ]
+}

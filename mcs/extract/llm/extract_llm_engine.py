@@ -62,7 +62,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None, quality_qc_src=None,
-                medication_hints=None, medication_guard=None
+                medication_hints=None, medication_guard=None, protected_prior=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -100,6 +100,7 @@ def llm_extract(body: str, *, context: str | None = None,
     if type(chunk_size) is not int or not 1 <= chunk_size <= _CHUNK_SIZE:
         raise ValueError("extract_chunk_size_invalid")
 
+    protected_prior = extract_quality.protected_assertions(protected_prior, body)
     saved = chunks_in or {}
     splits = dict(splits_in or {})
     sizes = []
@@ -280,12 +281,16 @@ def llm_extract(body: str, *, context: str | None = None,
         # the merged result via meta.thin below.
         thin = piece == body and extract_quality.is_thin(v, body)
         completeness = extract_quality.completeness_issues(v, piece_hints, piece)
+        piece_prior = extract_quality.protected_assertions(protected_prior, piece)
+        protected_loss = extract_quality.protected_lost(piece_prior, v, body) if piece_prior else {}
+        quality_repair_needed = bool(completeness or protected_loss)
 
         if not quality_status and any(
                 note.get('finish_reason') == 'stop' and note.get('reused_response') is not True
                 for note in notes[call_start:]):
             bump('first_pass_evaluated_chunks')
-            bump('first_pass_accepted_chunks', int(v is not None and not drops and not thin and not completeness))
+            bump('first_pass_accepted_chunks', int(v is not None and not drops and not thin
+                                                   and not completeness and not protected_loss))
 
         quality_record = None
         repair_proof = None
@@ -298,7 +303,7 @@ def llm_extract(body: str, *, context: str | None = None,
 
         quality_note("dispatch_unknown" if quality_status == "started" or not isinstance(piece_hints, dict)
                      else "pending" if completeness else "hint_gaps_resolved")
-        if d is not None and quality_status != "started" and (v is None or drops or thin or completeness):
+        if d is not None and quality_status != "started" and (v is None or drops or thin or quality_repair_needed):
             # Bounded repair: one re-ask showing the rejected output
             # and the concrete failures — converts a would-be failure
             # (or a lossy/under-complete extraction) into a clean one
@@ -316,13 +321,15 @@ def llm_extract(body: str, *, context: str | None = None,
                 hist["completeness"] += len(completeness)
                 hist["thin"] += int(thin)
             issues.extend(completeness)
+            if protected_loss:
+                issues.append("保存済みの保護対象にある主体・否定・状態が欠落しています。対象本文の根拠を再確認してください")
             if thin:
                 issues.append(
                     "本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
                     "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を"
                     "全て抽出してください")
             repair_deadline = deadline - remaining * _MIN_CALL_S if deadline is not None else None
-            if completeness and v is not None:
+            if quality_repair_needed and v is not None:
                 if origin is None and on_chunk is not None and first_response is not None:
                     try:
                         if feedback and quality_qc_src is None:
@@ -351,7 +358,7 @@ def llm_extract(body: str, *, context: str | None = None,
             if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
                 repair_client = None
                 distinct_profile = False
-                if completeness and v is not None and on_chunk is not None:
+                if quality_repair_needed and v is not None and on_chunk is not None:
                     base_selection = getattr(provider, "selection", None)
                     profile_cfg = getattr(provider, "_profile_cfg", None)
                     if base_selection is not None and profile_cfg is not None:
@@ -394,7 +401,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 medication_reference = extraction_medications.block(
                     medication_hints, body, start, piece, private=provider is None and repair_client is None)
                 repair_prompt = _repair_prompt(posted_at, issues, d, piece_hints, reference,
-                    medication_reference) + piece + _PROMPT_TAIL
+                    medication_reference, **({"protected_prior": piece_prior} if piece_prior else {})) + piece + _PROMPT_TAIL
                 rd, repair_provider = evidenced_call(repair_prompt, deadline=repair_deadline,
                     need_s=_MIN_REPAIR_S, kind="repair", provider_override=repair_client)
                 repair_response = getattr(_CALL_NOTES, "cloud_response", None)
@@ -423,8 +430,9 @@ def llm_extract(body: str, *, context: str | None = None,
                     if rv is not None and not context:
                         rv.pop("reply", None)
                     # a replacement must see every change in the message, so only an unsplit body
-                    if (extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
-                            if completeness else extract_quality.improves(rv, v)):
+                    if ((extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
+                             if quality_repair_needed else extract_quality.improves(rv, v))
+                            and (not piece_prior or not extract_quality.protected_lost(piece_prior, rv, body))):
                         if distinct_profile:
                             try:
                                 active, request, answer, finish = repair_response

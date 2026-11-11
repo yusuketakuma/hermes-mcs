@@ -83,6 +83,7 @@ from extract_llm_qc import (
     _current,
     _prior_extract,
     _prior_identity,
+    _prior_matches,
     _thin_retry_content,
 )
 from extract_llm_selection import (
@@ -506,7 +507,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
-                current=lambda: _owns_current_source(ledger, r, r["_cloud_lease"]),
+                current=lambda: (_owns_current_source(ledger, r, r["_cloud_lease"])
+                                 and _prior_matches(ledger.db, r, r.get("_expected_prior"))),
                 dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
                 cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True)))

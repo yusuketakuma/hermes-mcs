@@ -179,8 +179,10 @@ def _medication_reference_current(db, r, *, cfg=None, deadline=None):
 
 
 def _extraction_dispatch_current(ledger, r, lease, deadline):
+    from extract_llm_qc import _prior_matches
     try:
         return (time.monotonic() < deadline and _owns_current_source(ledger, r, lease)
+                and _prior_matches(ledger.db, r, r.get("_expected_prior"))
                 and _medication_reference_current(ledger.db, r, deadline=deadline))
     except (mcs_util.ProviderSettingsUnreadable, OSError, sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
         return False

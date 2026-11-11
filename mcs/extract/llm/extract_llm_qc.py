@@ -67,6 +67,58 @@ def _prior_identity(prior):
     return tuple(prior[key] for key in ("artifact_id", "project_id", "message_id", "content", "model", "meta"))
 
 
+def _prior_matches(db, r, expected):
+    """Match a caller-pinned prior artifact before dispatch or a guarded write."""
+    if expected is None:
+        return True
+    prior = _prior_extract(db, r)
+    return prior is not None and _prior_identity(prior) == expected
+
+
+_PROTECTED_PRIOR_FIELDS = ("artifact_id", "kind", "project_id", "message_id",
+                           "content", "model", "meta")
+
+
+def _protected_prior_reference(prior, source_binding):
+    """Strict reference to the pinned protected prior; not authorization."""
+    if (not isinstance(prior, dict) or type(prior.get("artifact_id")) is not int
+            or prior["artifact_id"] <= 0 or prior.get("kind") != KIND
+            or not mcs_util.valid_hash(source_binding)):
+        return None
+    record = {name: prior.get(name) for name in _PROTECTED_PRIOR_FIELDS}
+    return {"version": 1, "artifact_id": prior["artifact_id"],
+            "identity_sha256": mcs_util.payload_hash(record),
+            "source_binding": source_binding}
+
+
+def _resolve_protected_prior_reference(db, r, reference):
+    """Resolve a stored reference to the exact prior row, or None."""
+    if (not isinstance(reference, dict)
+            or set(reference) != {"version", "artifact_id", "identity_sha256", "source_binding"}
+            or reference.get("version") != 1
+            or type(reference.get("artifact_id")) is not int or reference["artifact_id"] <= 0
+            or not mcs_util.valid_hash(reference.get("identity_sha256"))
+            or not mcs_util.valid_hash(reference.get("source_binding"))
+            or reference["source_binding"] != r.get("_source_binding")):
+        return None
+    row = db.execute(
+        "SELECT * FROM artifacts WHERE artifact_id=? AND kind=? "
+        "AND project_id=? AND message_id=?",
+        (reference["artifact_id"], KIND, r["project_id"], r["message_id"])).fetchone()
+    if row is None:
+        return None
+    record = {name: row[name] for name in _PROTECTED_PRIOR_FIELDS}
+    meta = mcs_util.loads_dict(row["meta"])
+    content = mcs_util.loads_dict(row["content"])
+    body = r.get("body_text")
+    if (mcs_util.payload_hash(record) != reference["identity_sha256"]
+            or not isinstance(meta, dict) or meta.get("hash") != r.get("content_hash")
+            or not isinstance(content, dict) or not isinstance(body, str)
+            or not extract_quality.protected_assertions(content, body)):
+        return None
+    return row
+
+
 def _hold_sql(*, human=False, released=False):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
     ``released`` matches the same receipt minted under an older code contract."""

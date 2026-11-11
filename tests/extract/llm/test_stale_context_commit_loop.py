@@ -82,7 +82,7 @@ def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(checkpo
 @pytest.mark.parametrize("boundary,reason", [
     ("transaction", "transaction"), ("owner", "source_or_owner"),
     ("conflict", "checkpoint"), ("missing_checkpoint", "checkpoint"),
-    ("layout", "checkpoint"), ("prior", "prior_changed"),
+    ("layout", "checkpoint"), ("prior", "prior_changed"), ("pinned_prior", "prior_changed"),
     ("completeness", "completeness_coverage"), ("context", "context"),
     ("reference", "reference"), ("medication", "medication"),
 ])
@@ -101,6 +101,8 @@ def test_commit_rejection_retains_only_fixed_diagnostic_and_preserves_rows(check
         row["_checkpoint_layout"] = ("synthetic-different-layout",)
     elif boundary == "prior":
         prior = ()
+    elif boundary == "pinned_prior":
+        row["_expected_prior"] = ()
     elif boundary == "completeness":
         integrity = {"completeness_chunks": 1, "completeness": {
             "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 999}}}
@@ -139,3 +141,33 @@ def test_unknown_commit_diagnostic_never_retains_arbitrary_data():
     row = {}
     assert worker._commit_rejected(row, "synthetic-private-detail /synthetic/path") == "rejected"
     assert row == {"_commit_reject_reason": "commit_rejected"}
+
+
+@pytest.mark.parametrize("change", ["content", "meta", "model", "new_artifact"])
+def test_changed_prior_blocks_dispatch_and_checkpoint_without_consuming_evidence(checkpointed, change):
+    import time
+    import extract_llm_qc
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    ledger, row, frame, _attempt, lease, value, _antecedent = checkpointed
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+            "source_binding": row["_source_binding"], "extract_version": worker.EXTRACT_VERSION - 1}
+    aid = ledger.artifact_add(worker.KIND, json.dumps(value), project_id=row["project_id"],
+                              message_id=row["message_id"], model="synthetic-model", meta=meta)
+    prior = ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
+    row["_expected_prior"] = extract_llm_qc._prior_identity(prior)
+    assert extract_llm_context._extraction_dispatch_current(ledger, row, lease, time.monotonic() + 60)
+    if change == "new_artifact":
+        ledger.artifact_add(worker.KIND, prior["content"], project_id=row["project_id"],
+                            message_id=row["message_id"], model=prior["model"], meta=meta)
+    else:
+        changed = (json.dumps({"summary": "別の合成結果"}) if change == "content" else
+                   json.dumps({**meta, "synthetic_revision": 2}) if change == "meta" else "synthetic-new-model")
+        with ledger.db:
+            ledger.db.execute(f"UPDATE artifacts SET {change}=? WHERE artifact_id=?", (changed, aid))
+    before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    assert not extract_llm_context._extraction_dispatch_current(ledger, row, lease, time.monotonic() + 60)
+    assert not worker._persist_chunks(ledger, row, {0: value}, frame["text"],
+        chunk_size=row["_chunk_size"], lease=lease, guard=row["_checkpoint_guard"])
+    assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    assert not ledger.db.in_transaction

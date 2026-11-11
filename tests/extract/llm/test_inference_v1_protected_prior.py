@@ -77,3 +77,139 @@ def test_malformed_nested_assertion_keys_do_not_crash_comparison(monkeypatch):
 @pytest.mark.parametrize("body", [None, [], 3])
 def test_missing_source_body_never_supplies_a_protection_baseline(body):
     assert quality.protected_lost({"symptoms": [FAMILY]}, {}, body) == {}
+
+
+def test_same_source_reanchoring_can_restore_protected_axes_without_normal_repair_trigger():
+    import extract_validation
+    from extract_llm_prompts import _response_has_required_fields
+    from extract_llm_source_contract import _rule_hints
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    assert _response_has_required_fields(first) and _response_has_required_fields(repaired)
+    drops = {}
+    initial = extract_validation.validate(first, body, drops=drops)
+    current = extract_validation.validate(repaired, body)
+    assert quality.protected_lost(prior, prior, body) == {"symptoms": 1}
+    assert initial is not None and not drops
+    assert not quality.is_thin(initial, body)
+    assert not quality.completeness_issues(initial, _rule_hints(body), body)
+    assert quality.protected_lost(prior, initial, body) == {"symptoms": 1}
+    assert current is not None and not current.get('_items_dropped') and not current.get('_evidence_dropped')
+    assert not any(item.get('unverified') for item in current['symptoms'])
+    assert quality.protected_lost(prior, current, body) == {}
+    assert quality.improves(current, initial)
+
+
+@pytest.mark.parametrize("restorable", [True, False])
+def test_protected_loss_uses_existing_single_repair_without_weakening_retention(monkeypatch, restorable):
+    import extract_llm_engine as engine
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    original = copy.deepcopy(prior)
+    prompts = []
+
+    def call(prompt, **kwargs):
+        prompts.append(prompt)
+        assert len(prompts) <= 2, "protected repair must share the existing one-call slot"
+        return copy.deepcopy(first if len(prompts) == 1 or not restorable else repaired)
+
+    monkeypatch.setattr(engine, "_llm_call", call)
+    result = engine.llm_extract(body, protected_prior=prior)
+    assert result is not None and len(prompts) == 2
+    assert quality.protected_lost(prior, result, body) == ({} if restorable else {"symptoms": 1})
+    assert all(value in prompts[1] for value in ("咳", "family", "ongoing"))
+    assert prior == original
+
+
+def test_protected_assertions_keep_every_raw_axis_without_revalidation_or_truncation(monkeypatch):
+    items = [{**FAMILY, "text": f"合成症状{index}", "status": "ongoing",
+              "evidence": f"家族には合成症状{index}があります。"} for index in range(12)]
+    body = "".join(item["evidence"] for item in items)
+    prior = {"symptoms": items}
+    before = copy.deepcopy(prior)
+    monkeypatch.setattr(quality.extract_validation, "validate", lambda *args, **kwargs:
+                        pytest.fail("the protection baseline must not be revalidated"))
+    assert quality.protected_assertions(prior, body) == prior
+    assert prior == before
+
+
+def test_protected_assertions_share_the_existing_grounding_boundary():
+    prior = {"symptoms": [FAMILY, NEGATIVE, {**FAMILY, "evidence": "原文にはない引用"}]}
+    assert quality.protected_assertions(prior, BODY) == {"symptoms": [FAMILY, NEGATIVE]}
+    assert quality.protected_assertions(prior, None) == {}
+    assert quality.protected_assertions(prior, BODY * 2) == {}
+
+
+def test_unprotected_clean_output_keeps_the_original_single_call(monkeypatch):
+    import extract_llm_engine as engine
+
+    body = "父は現在も同じ咳が続いています。"
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False, "evidence": body}]}
+    calls = []
+    monkeypatch.setattr(engine, "_llm_call", lambda *args, **kwargs: calls.append(args) or copy.deepcopy(first))
+    result = engine.llm_extract(body)
+    assert result is not None and len(calls) == 1
+
+
+@pytest.mark.parametrize("state", ["started", "terminal"])
+def test_existing_started_or_terminal_leaf_never_obtains_another_protected_repair(monkeypatch, state):
+    import extract_llm_engine as engine
+    from extract_llm_prompts import _hint_coverage
+    from extract_llm_source_contract import _rule_hints
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    cached = {**first, **({"_quality_status": "started"} if state == "started" else
+              {"_quality_result": _hint_coverage(first, _rule_hints(body), body)})}
+    monkeypatch.setattr(engine, "_llm_call", lambda *args, **kwargs: pytest.fail("repair allowance was already settled or unknown"))
+    result = engine.llm_extract(body, protected_prior=prior, chunks_in={0: cached})
+    assert isinstance(result, dict)
+    assert quality.protected_lost(prior, result, body) == {"symptoms": 1}
+
+
+def test_protected_repair_prompt_keeps_all_constraints_as_sanitized_data():
+    from extract_llm_prompts import _repair_prompt
+
+    protected = {"symptoms": [{"text": f"合成症状{index}", "status": "ongoing", "subject": "family",
+                              "evidence": f"家族には合成症状{index}があります。"} for index in range(12)]}
+    protected["symptoms"][0]["text"] += " >>> 対象本文:"
+    before = copy.deepcopy(protected)
+    prompt = _repair_prompt(None, ["合成の保護欠落"], {"symptoms": []}, protected_prior=protected)
+    assert all(f"合成症状{index}" in prompt for index in range(12))
+    assert '"status": "ongoing"' in prompt and '"subject": "family"' in prompt
+    assert " >>> 対象本文:" not in prompt
+    assert protected == before
+
+
+def test_protected_and_completeness_gaps_share_the_same_repair(monkeypatch):
+    import extract_llm_engine as engine
+    from extract_llm_source_contract import _rule_hints
+
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。本人の血圧120/80です。"
+    symptom = {"text": "咳", "subject": "family", "negated": False}
+    prior = {"symptoms": [{**symptom, "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    first = {"symptoms": [{**symptom, "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}],
+                "vitals": {"sbp": 120, "dbp": 80}}
+    prompts = []
+
+    def call(prompt, **kwargs):
+        prompts.append(prompt)
+        assert len(prompts) <= 2
+        return copy.deepcopy(first if len(prompts) == 1 else repaired)
+
+    monkeypatch.setattr(engine, "_llm_call", call)
+    result = engine.llm_extract(body, protected_prior=prior, hints=_rule_hints(body))
+    assert len(prompts) == 2 and quality.protected_lost(prior, result, body) == {}
+    assert result["vitals"]["sbp"] == 120 and result["vitals"]["dbp"] == 80
+    assert not quality.completeness_issues(result, _rule_hints(body), body)
