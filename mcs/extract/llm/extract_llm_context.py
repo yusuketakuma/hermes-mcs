@@ -354,7 +354,9 @@ def _pending_context_frame(db, r, *, attempt, enabled):
     for record, witness, content_hash, plain_plan in records:
         matched = _match_pending_record(db, r, record, witness, content_hash, plain_plan, frames,
             lambda target, text: _chunk_context(target, text, checkpoint=True))
-        if len(matched) != 1:
+        if len(matched) > 1:
+            raise ValueError("pending_context_unverifiable")
+        if not matched:
             unmatched.append((record, witness, content_hash, plain_plan))
             continue
         frame, target = matched[0]
