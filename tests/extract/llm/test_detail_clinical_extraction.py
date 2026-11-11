@@ -624,3 +624,44 @@ def test_repair_length_attempt_is_counted_before_local_split(monkeypatch):
     meta = {}
     assert extract_llm.llm_extract(body, meta_out=meta) is not None
     assert meta["repairs"] == 1 and meta["length_stops"] == 1
+
+
+def test_protected_prior_repair_commits_and_replays_without_reselect(db, monkeypatch):
+    """The real runner re-extracts a pending protected prior: the first answer
+    drops the stored protected assertion, the bounded repair restores it, the
+    atomic commit replaces the prior and consumes the checkpoints, and progress
+    reads the finished state without another selection or backend call."""
+    body = "父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+    db.save_messages([_message(body=body)])
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    prior_content = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+        "status": "ongoing", "evidence": "父は昨日、咳がありました。"}]}
+    prior = db.artifact_add("extract_llm", json.dumps(prior_content, ensure_ascii=False),
+        project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+              "source_binding": dependency_loss.source_binding(db.db, 1, 1),
+              "extract_version": extract_llm.EXTRACT_VERSION - 1})
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+        "evidence": "父は現在も同じ咳が続いています。"}]}
+    repaired = {"symptoms": [{**first["symptoms"][0], "status": "ongoing"}]}
+    calls = []
+
+    def reply(piece):
+        calls.append(piece)
+        answer = first if len(calls) == 1 else repaired
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(answer, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    result = extract_llm.run_pending(db, limit=1, budget_s=200)
+    assert result["done"] == 1 and result["failed"] == 0
+    assert len(calls) == 2 and all(piece == body for piece in calls)
+    final = db.db.execute("SELECT content,meta,model FROM artifacts WHERE kind='extract_llm'").fetchone()
+    assert json.loads(final["content"])["symptoms"][0]["status"] == "ongoing"
+    assert db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (prior,)).fetchone() is None
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk' "
+                         "AND message_id=1").fetchone()[0] == 0
+    framed = _framed_source(db, db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    assert extract_llm.progress_for_message(db.db, framed, model=final["model"])["state"] == "complete"
+    assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
+    assert len(calls) == 2
