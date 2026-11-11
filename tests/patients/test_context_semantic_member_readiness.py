@@ -133,6 +133,15 @@ def test_root_wait_does_not_release_stale_or_unverified_member(runtime, damage):
             # Refusal must be the real adverse/unknown outcome, not a broken hash.
             assert json.loads(newest['meta'])['audit_content_hash'] == payload_hash(json.loads(newest['content']))
     assert _status(led, cfg) not in ('current', 'current_skipped')
+    if damage == 'new_reply':
+        # A later reply never enters the existing members' thread context:
+        # their saved material proofs still replay and only the thread
+        # semantic fingerprint moved, so members 1/2 stay adoptable.
+        assert _keys(runtime, cfg) == (1, 2)
+        assert readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600, source_keys=[1])
+        result = step(runtime, cfg=cfg)
+        assert result['status'] == 'progressed'
+        return
     assert not _keys(runtime, cfg)
     assert not readiness._inference_ready(led, 1, cfg, deadline=clock.mono + 600, source_keys=[1])
     result = step(runtime, cfg=cfg)

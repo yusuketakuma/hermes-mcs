@@ -334,6 +334,7 @@ from extract_llm_progress import (
     _progress_probe as _progress_probe,
     _finish_progress as _finish_progress,
     progress_for_message as progress_for_message,
+    material_proof_for_message as material_proof_for_message,
     _batch_progress_probes as _batch_progress_probes,
     _progress_interrupted as _progress_interrupted,
     _progress_page as _progress_page,

@@ -756,13 +756,13 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
                     or hashlib.sha256(html.encode('utf-8')).hexdigest() != row['content_hash'] or html_to_text(html) != ''):
                 return False
         return True
-    if policy['mode'] == 'off':
-        return _raw_extraction_current(db, row, cfg)[0]
     if material:
         # Material adoption verifies the exact selected final artifact:
-        # its retained progress witness replays and no newer marked
-        # artifact blocks it (pending_pred already bound actionable QC
-        # and human denial to that same artifact id).
+        # its retained material witness replays — source binding, frame
+        # references, clinical validation and marked proof — while thin or
+        # upgrade scheduling alone never invalidates it (pending_pred
+        # already bound actionable QC and human denial to that artifact).
+        # This applies even when the semantic policy mode is off.
         if row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked'):
             return False
         import extract_llm
@@ -772,8 +772,10 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
             " FROM messages m WHERE m.message_id=?", (mid,)).fetchone()
         if selected is None or selected['artifact_id'] is None:
             return False
-        if not selected_artifact_proof_valid(db, selected['artifact_id']):
+        if not selected_artifact_proof_valid(db, selected['artifact_id'], material=True):
             return False
+        if policy['mode'] == 'off':
+            return True
         state = semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
             **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {}))
         if state in ('current', 'current_skipped'):
@@ -790,6 +792,8 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
         return semantic_store.current_artifact(
             db, semantic_policy.KIND_AUDIT, mid, bundle['source_fingerprint'],
             semantic_store.policy_fingerprint(policy)) is None
+    if policy['mode'] == 'off':
+        return _raw_extraction_current(db, row, cfg)[0]
     return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,
         **({'deadline': deadline} if policy['summary_mode'] == 'off' and policy['loop_mode'] != 'off' else {})) in ('current', 'current_skipped')
 

@@ -71,10 +71,22 @@ def cloud_completion(db, row, contract):
     return result["state"] if result.get("execution_verified") is True else None
 
 
-def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, required_contract=None):
-    """Apply the shared progress decision, yielding only independent SQL probes."""
+def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, required_contract=None,
+                    material=False):
+    """Apply the shared progress decision, yielding only independent SQL probes.
+
+    ``material`` verifies the exact selected final artifact for adoption:
+    queued/held scheduling probes and the thin-retry clause of the review
+    probe are skipped, so a merely scheduled thin or upgrade retry never
+    reads as invalid material. Adverse evidence — actionable QC flags and
+    human reports — still blocks through ``review_material``."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
-    if not isinstance(model, str) or not model or not row or row["body_state"] != "full":
+    if not row:
+        return out
+    # Material adoption shares ELIGIBLE_MESSAGE's legacy contract: a NULL
+    # body_state is a full body, never a deletion.
+    full_body = row["body_state"] == "full" or (material and row["body_state"] is None)
+    if not isinstance(model, str) or not model or not full_body:
         return out
     r = dict(row)
     r["_source_binding"] = yield ("binding", r["project_id"], r["message_id"])
@@ -139,11 +151,13 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
         else:
             total += 1
     out.update(completed=completed, total=total)
-    queued = yield ("queued", r["project_id"], r["message_id"])
-    if not queued:
-        held = yield ("held", r["project_id"], r["message_id"])
-        if held:
-            return out
+    queued = False
+    if not material:
+        queued = yield ("queued", r["project_id"], r["message_id"])
+        if not queued:
+            held = yield ("held", r["project_id"], r["message_id"])
+            if held:
+                return out
     binding = _chunk_context(r, context)
     if final:
         try:
@@ -174,7 +188,7 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
             return out
         valid = extract_validation.validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
-        review = yield ("review", r["project_id"], r["message_id"])
+        review = yield (("review_material" if material else "review"), r["project_id"], r["message_id"])
         if (bound and (review or any(
                 isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                 for key in ("qc_fix", "human_fix")))):
@@ -273,6 +287,11 @@ def _progress_probe(db, probe):
                          "FROM messages m WHERE m.message_id=? AND m.project_id=?",
                          (message_id, project_id)).fetchone()
         return bool(row and row[0])
+    if kind == "review_material":
+        row = db.execute(f"SELECT ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
+                         "FROM messages m WHERE m.message_id=? AND m.project_id=?",
+                         (message_id, project_id)).fetchone()
+        return bool(row and row[0])
     raise ValueError("invalid_progress_probe")
 
 
@@ -289,6 +308,16 @@ def _finish_progress(db, iterator, probe=None):
 def progress_for_message(db, row, *, model: str | None, expected_artifact_id=None) -> dict:
     """Read current bound leaf counts; no source text or payload leaves."""
     return _finish_progress(db, _progress_steps(db, row, model=model, expected_artifact_id=expected_artifact_id))
+
+
+def material_proof_for_message(db, row, *, model: str | None, expected_artifact_id=None) -> dict:
+    """Exact-final material validity for adoption: the selected artifact's own
+    source binding, frame references, clinical validation and marked inline
+    proof — with thin or upgrade scheduling separated out. ``state`` reaches
+    ``'complete'`` under the same bound/valid/completeness contract as
+    progress, minus the scheduling probes that never invalidate material."""
+    return _finish_progress(db, _progress_steps(db, row, model=model,
+        expected_artifact_id=expected_artifact_id, material=True))
 
 
 def _batch_progress_probes(db, probes):
@@ -319,6 +348,11 @@ def _batch_progress_probes(db, probes):
         return [message_id in matches for _, _, message_id in probes]
     if kind == "review":
         condition = f"({_thin_pending_sql(db)}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()})"
+        matches = {(row[0], row[1]) for row in db.execute(
+            "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
+        return [(project_id, message_id) in matches for _, project_id, message_id in probes]
+    if kind == "review_material":
+        condition = f"({_qc_flagged_sql()}) OR ({_human_flagged_sql()})"
         matches = {(row[0], row[1]) for row in db.execute(
             "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
         return [(project_id, message_id) in matches for _, project_id, message_id in probes]

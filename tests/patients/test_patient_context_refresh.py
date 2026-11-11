@@ -753,7 +753,10 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     body_reads = [q for q in queries if q.startswith('SELECT body_text FROM messages')]
     assert len(body_reads) == 11  # Every displayed source is validated once; no history re-extraction.
     assert not any('SELECT m.*' in q for q in queries)
-    extraction_reads = [q for q in queries if 'FROM artifacts a JOIN messages m' in q]
+    # Exact per-artifact material proofs are separate witness reads; the
+    # metadata aggregate itself must still run once, not per source.
+    extraction_reads = [q for q in queries if 'a.message_id,a.artifact_id,a.kind,a.content,a.model,a.meta '
+                        'FROM artifacts a JOIN messages m' in q]
     assert len(extraction_reads) == 1, 'metadata aggregation must not query each source separately'
 
 
@@ -769,9 +772,12 @@ def test_marked_extract_keeps_exact_proof_check(runtime, monkeypatch):
                        "'$.internal_proof_hash',?) WHERE artifact_id=?", ('9' * 64, marked_id))
     calls_to = _proof_spy(monkeypatch)
     view = patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
-    # Only the marked row defers to the exact witness check; its invalid
-    # proof drops the summary and the stored signature no longer matches.
-    assert calls_to == [marked_id]
+    # Material adoption verifies every row, marked or not; only the marked
+    # row's invalid proof drops the summary and the stored signature no
+    # longer matches.
+    other_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='extract_llm' "
+                              "AND message_id=2 ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]
+    assert sorted(calls_to) == sorted([marked_id, other_id])
     assert view is None
 
 
@@ -790,25 +796,28 @@ def test_source_generator_drops_stale_summary_after_consumer_write(runtime, monk
     seed(led)
     seed(led, mid=2, body='合成の未分類記録その2。')
     calls_to = _proof_spy(monkeypatch)
+    first_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='extract_llm' "
+                              "AND message_id=1").fetchone()[0]
     led.db.execute('BEGIN')
     gen = mcs_queries.patient_context_sources(led.db, 1, hydrate=False)
     try:
         first = next(gen)
         assert led.db.in_transaction
-        # Unchanged: the aggregate's newer-marked exclusion stood in, so no
-        # per-artifact proof query ran and the summary was adopted.
+        # Material adoption verifies unmarked rows too: the aggregate's
+        # newer-marked exclusion no longer stands in for binding/clinical proof.
         assert first['message_id'] == 1 and first['derived_summary_chars'] > 0
-        assert calls_to == []
+        assert calls_to == [first_id]
         # A same-connection write between yields must not let the second
         # source reuse the exclusion: the new marker sends its row back
         # through the exact witness check, which rejects it.
         led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.internal_proof_version',1,"
                        "'$.internal_proof_hash',?) WHERE kind='extract_llm' AND message_id=2",
                        ('9' * 64,))
+        second_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE "
+                                   "kind='extract_llm' AND message_id=2").fetchone()[0]
         second = next(gen)
         assert second['message_id'] == 2 and second['derived_summary_chars'] == 0
-        assert calls_to == [led.db.execute("SELECT artifact_id FROM artifacts WHERE "
-                                           "kind='extract_llm' AND message_id=2").fetchone()[0]]
+        assert calls_to == [first_id, second_id]
     finally:
         gen.close()
         led.db.rollback()
@@ -819,17 +828,21 @@ def test_source_generator_rechecks_after_rollback(runtime, monkeypatch):
     seed(led)
     seed(led, mid=2, body='合成の未分類記録その2。')
     calls_to = _proof_spy(monkeypatch)
+    first_id = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='extract_llm' "
+                              "AND message_id=1").fetchone()[0]
     led.db.execute('BEGIN')
     gen = mcs_queries.patient_context_sources(led.db, 1, hydrate=False)
     try:
         first = next(gen)
         assert led.db.in_transaction and first['derived_summary_chars'] > 0
-        assert calls_to == []
+        # Material adoption verifies unmarked rows too, so the first row
+        # already went through the exact per-artifact check.
+        assert calls_to == [first_id]
         led.db.rollback()
         # The rolled-back baseline cannot stand in: the next row goes
         # through the exact per-artifact check and keeps its summary.
         second = next(gen)
-        assert second['derived_summary_chars'] > 0 and calls_to
+        assert second['derived_summary_chars'] > 0 and len(calls_to) == 2
     finally:
         gen.close()
         led.db.rollback()
@@ -928,9 +941,13 @@ def test_quote_keeps_preceding_family_plan_and_negation_paragraph(runtime, monke
 
 def test_legacy_null_body_state_is_analyzed_as_full(runtime):
     led, _, calls = runtime
-    seed(led)
+    seed(led, proof=False)
     led.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=1')
     led.db.commit()
+    # body_state is part of the source occurrence fence: the extraction and
+    # semantic proofs must be bound under the legacy NULL state itself.
+    _raw_proof(led, 1, 1)
+    _semantic_proof(led, 1, 1)
     finish(runtime)
     coverage = document(led)['coverage']
     assert coverage['fetched'] == 1 and coverage['incomplete'] == 0

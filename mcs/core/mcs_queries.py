@@ -111,8 +111,15 @@ def current_message_read_scope(db):
         anchor.close()
 
 
-def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION):
-    """Check a marked extraction against its exact retained progress witness."""
+def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION,
+                                  material=False):
+    """Check a marked extraction against its exact retained progress witness.
+
+    ``material`` is the patient-context adoption contract: unmarked rows are
+    verified too (source binding, frame references, clinical validation), and
+    the witness is the material proof — thin or upgrade scheduling alone never
+    invalidates it, while actionable QC and human reports still do. The
+    default keeps the strict progress-complete contract for other readers."""
     if type(artifact_id) is not int or artifact_id <= 0:
         return False
     db.execute('SAVEPOINT selected_artifact_proof')
@@ -131,7 +138,7 @@ def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_V
                 f'AND EXISTS ({newer})', (artifact_id,)).fetchone()
             if blocked:
                 return False
-        if not row['marked']:
+        if not row['marked'] and not material:
             return True
         if _proof_read_active.get():
             return False
@@ -141,17 +148,23 @@ def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_V
         if selected is None:
             return False
         content, meta = strict_json(selected['content']), strict_json(selected['meta'])
-        if (not isinstance(content, dict) or not isinstance(meta, dict)
-                or not isinstance(content.get(_INTERNAL_PROOF), dict)
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            return False
+        if row['marked'] and (not isinstance(content.get(_INTERNAL_PROOF), dict)
                 or type(meta.get('internal_proof_version')) is not int or meta['internal_proof_version'] != 1
-                or not valid_hash(meta.get('internal_proof_hash'))
-                or not isinstance(selected['model'], str) or not selected['model']):
+                or not valid_hash(meta.get('internal_proof_hash'))):
+            return False
+        if not isinstance(selected['model'], str) or not selected['model']:
             return False
         import extract_llm
         token = _proof_read_active.set(True)
         try:
-            result = extract_llm.progress_for_message(db, selected, model=selected['model'],
-                                                       expected_artifact_id=artifact_id)
+            if material:
+                result = extract_llm.material_proof_for_message(
+                    db, selected, model=selected['model'], expected_artifact_id=artifact_id)
+            else:
+                result = extract_llm.progress_for_message(
+                    db, selected, model=selected['model'], expected_artifact_id=artifact_id)
             return isinstance(result, dict) and result.get('state') == 'complete'
         finally:
             _proof_read_active.reset(token)
@@ -904,7 +917,8 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
 
 
 def extraction_kind_map(art_rows, content_hash, *,
-                        inference_target: str = CURRENT_VERSION, db=None) -> dict:
+                        inference_target: str = CURRENT_VERSION, db=None,
+                        material: bool = False) -> dict:
     by_kind: dict = {}
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
@@ -915,7 +929,9 @@ def extraction_kind_map(art_rows, content_hash, *,
         entry = {"state": st["state"],
                  "artifact_id": st["artifact_id"]}
         if (db is not None and kind == 'extract_llm' and entry['state'] == 'current'
-                and not selected_artifact_proof_valid(db, entry['artifact_id'], inference_target=inference_target)):
+                and not selected_artifact_proof_valid(db, entry['artifact_id'],
+                                                      inference_target=inference_target,
+                                                      material=material)):
             entry.update(state='unknown', artifact_id=None, _proof_unverified=True)
         if st["last_error"]:
             entry["last_error"] = True
@@ -929,7 +945,7 @@ def extraction_kind_map(art_rows, content_hash, *,
 
 
 
-def _context_inputs(db, message, *, by_kind=None, art_rows=None):
+def _context_inputs(db, message, *, by_kind=None, art_rows=None, material=False):
     """(art_rows, by_kind, body) for a full-body message, or None when it has no body."""
     if message.get("body_state") not in (None, "full"):
         return None
@@ -942,7 +958,8 @@ def _context_inputs(db, message, *, by_kind=None, art_rows=None):
             (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
              *EXTRACTION_KINDS)).fetchall()
     if by_kind is None:
-        by_kind = extraction_kind_map(art_rows, message["content_hash"], db=db)
+        by_kind = extraction_kind_map(art_rows, message["content_hash"], db=db,
+                                      material=material)
     body = message.get("body_text")
     if body is None:
         row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
@@ -953,9 +970,11 @@ def _context_inputs(db, message, *, by_kind=None, art_rows=None):
     return art_rows, by_kind, body
 
 
-def source_patient_context(db, message, *, by_kind=None, art_rows=None):
+def source_patient_context(db, message, *, by_kind=None, art_rows=None,
+                           material=False):
     """Read source-bound context independently of canonical extraction precedence."""
-    inputs = _context_inputs(db, message, by_kind=by_kind, art_rows=art_rows)
+    inputs = _context_inputs(db, message, by_kind=by_kind, art_rows=art_rows,
+                             material=material)
     if inputs is None:
         return []
     art_rows, by_kind, body = inputs
@@ -1385,18 +1404,19 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
     return result
 
 
-def _derived_summary_proof_valid(db, row, fresh):
+def _derived_summary_proof_valid(db, row, fresh, *, material=False):
     content, meta = (loads_dict(row[3]), loads_dict(row[5])) if fresh else (None, None)
-    if (isinstance(content, dict) and isinstance(meta, dict)
+    if (not material and isinstance(content, dict) and isinstance(meta, dict)
             and _INTERNAL_PROOF not in content
             and "internal_proof_version" not in meta
             and "internal_proof_hash" not in meta):
         # The aggregate's newer-marked exclusion already proved this unmarked row.
         return True
-    return selected_artifact_proof_valid(db, row[1])
+    return selected_artifact_proof_valid(db, row[1], material=material)
 
 
-def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None):
+def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
+                               material=False):
     summaries, identities = [], []
     fresh = False
     if proof_state is not None and proof_state[0] is not None:
@@ -1411,7 +1431,8 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None):
     for row in sorted(rows, key=lambda row: (row[2], row[1])):
         if row[2] not in ("extract_v1", "extract_llm"):
             continue
-        if row[2] == "extract_llm" and not _derived_summary_proof_valid(db, row, fresh):
+        if row[2] == "extract_llm" and not _derived_summary_proof_valid(db, row, fresh,
+                                                                       material=material):
             continue
         text = (loads_dict(row[3]) or {}).get("summary")
         if not isinstance(text, str) or not text.strip():
@@ -1441,8 +1462,13 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None):
                                     message["content_hash"], identities])
 
 
-def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
-    """Read original records with current derived summaries as supplemental inputs."""
+def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
+                            material=True):
+    """Read original records with current derived summaries as supplemental inputs.
+
+    ``material`` (default) applies the adoption proof: an exact selected
+    extraction stays usable while only thin or upgrade work is scheduled;
+    pass ``material=False`` for the strict progress-complete contract."""
     from patient_context import context_items, extract_context, project_context_items
     from patient_context_plan import source_digest
     extractions = {}
@@ -1485,11 +1511,13 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None):
         rows = extractions.get(message["message_id"], [])
         message["extraction_sig"] = source_digest(sorted((r[2], extraction_input_signature(r[3], r[5], r[4])) for r in rows))
         derived, derived_sig = _context_derived_summaries(db, message, rows, cfg,
-                                                          proof_state=proof_state)
+                                                          proof_state=proof_state,
+                                                          material=material)
         message["derived_summaries"] = derived if hydrate else []
         message["derived_summary_sig"] = derived_sig
         message["derived_summary_chars"] = sum(len(summary["text"]) for summary in derived)
-        items = source_patient_context(db, message, art_rows=list(reversed(rows))) if hydrate else []
+        items = source_patient_context(db, message, art_rows=list(reversed(rows)),
+                                       material=material) if hydrate else []
         source = {key: message.get(key) for key in
                   ("project_id", "message_id", "content_hash", "posted_at_ts")}
         items = project_context_items(items, "detail", source)

@@ -409,7 +409,9 @@ def test_coverage_distinguishes_unacquired_empty_and_failed_without_publishing_o
 def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_endless_retry(runtime, monkeypatch):
     led, _, calls = runtime
     value = '棚'*(refresh.context_plan.SCAN_CHUNK+1)
-    body = '薬の保管場所は'+value+'です。'
+    # No pharmacy/vital/request cues: the seeded extraction's completeness
+    # claim verifies, so the source stays material-eligible for the scan.
+    body = '生活環境: 合成の記録は'+value+'です。'
     seed(led, body=body)
     item = assertion(body, details=[{'key':'storage_place','value':value,'evidence':body}])
     monkeypatch.setattr(patient_context, 'extract_context', lambda text: [item] if text == body else [])
@@ -836,10 +838,14 @@ def test_source_or_generation_change_after_inference_cannot_commit_a_chunk(runti
 def test_null_body_and_archived_sources_progress_after_active_patients(runtime):
     led,_,_ = runtime
     seed(led,1,pid=1,body='合成の現在患者の記録です。')
-    seed(led,2,pid=2,body='合成の保存済み患者の記録です。')
+    seed(led,2,pid=2,body='合成の保存済み患者の記録です。', proof=False)
     with led.db:
         led.db.execute('UPDATE patients SET is_archived=1 WHERE project_id=2')
         led.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=2')
+    # body_state is part of the source occurrence fence: bind the proofs
+    # under the legacy NULL state itself.
+    _raw_proof(led, 2, 2)
+    _semantic_proof(led, 2, 2)
     result = step(runtime)
     assert result['status'] == 'progressed' and result['lane'] == 'B'
     assert document(led, patient_context_refresh_state.SCAN, pid=1) is not None
