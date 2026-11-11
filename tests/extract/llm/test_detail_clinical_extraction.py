@@ -667,15 +667,19 @@ def test_protected_prior_repair_commits_and_replays_without_reselect(db, monkeyp
     assert len(calls) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="prior basis mismatch re-bases paid pending evidence "
-                                        "(task83 r50 defect; fix pending product IF)")
+@pytest.mark.xfail(strict=True, reason="prior basis mismatch re-bases pending evidence on the "
+                                        "shared dispatch path (task83 r50 defect; local-path RED, "
+                                        "not a paid-billing proof; fix pending product IF)")
 def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db, monkeypatch):
     """A pending first candidate persisted while protected prior A was current
     carries meta.protected_prior_ref=A. When a newer valid prior B supersedes A,
-    re-prepare must not silently re-base the paid A-era evidence onto B: the
-    stored candidate is re-evaluated against B's wider protected set, so without
-    a basis check the runner dispatches a repair whose paid basis changed.
-    Expected safe outcome: evidence preserved, no new paid call, fixed defer."""
+    re-prepare must not silently re-base the A-era evidence onto B: the stored
+    candidate is re-evaluated against B's wider protected set, so without a
+    basis check the runner dispatches another send on the shared dispatch path.
+    _fake_backend is the local chat path, so this pins local send counts and
+    shared-path behaviour — it is not a paid reservation/re-billing proof.
+    Expected safe outcome (final pin, pending Oracle IF): all checkpoint rows
+    byte-identical, zero new started rows, zero new sends, fixed defer."""
     body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
             "母は頭痛があります。記録確認をお願いします。")
     db.save_messages([_message(body=body)])
@@ -709,18 +713,23 @@ def test_pending_candidate_minted_under_prior_a_does_not_repair_under_prior_b(db
     assert first_run["done"] == 0 and first_run["deferred"] == 1
     assert len(calls) == 1
     chunks = db.db.execute("SELECT meta, content FROM artifacts WHERE kind='extract_llm_chunk' "
-                           "AND message_id=1").fetchall()
+                           "AND message_id=1 ORDER BY artifact_id").fetchall()
     assert chunks
-    refs = {json.dumps(json.loads(meta[0]).get("protected_prior_ref"), sort_keys=True)
-            for meta in chunks}
+    refs = {json.dumps(json.loads(meta).get("protected_prior_ref"), sort_keys=True)
+            for meta, _content in chunks}
     assert len(refs) == 1 and "null" not in refs
+    rows_before = [(meta, content) for meta, content in chunks]
 
     seed_prior([dict(family_cough), dict(family_headache)])
     second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
-    assert len(calls) == 1, "paid repair dispatched under a different protected prior"
-    assert second_run["done"] == 0
-    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk' "
-                         "AND message_id=1").fetchone()[0] == len(chunks)
+    rows_after = [(meta, content) for meta, content in db.db.execute(
+        "SELECT meta, content FROM artifacts WHERE kind='extract_llm_chunk' "
+        "AND message_id=1 ORDER BY artifact_id").fetchall()]
+    assert len(calls) == 1, "repair dispatched under a different protected prior"
+    assert rows_after == rows_before, "checkpoint evidence was replaced, not preserved"
+    assert not any(json.loads(meta).get("quality_status") == "started"
+                   for meta, _content in rows_after)
+    assert second_run["done"] == 0 and second_run["deferred"] == 1, second_run
 
 
 def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, monkeypatch):
@@ -775,6 +784,12 @@ def test_started_candidate_under_prior_a_is_not_redispatched_under_prior_b(db, m
     assert len(calls) == 2, "started checkpoint was re-dispatched under a new prior"
     remaining = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
                               "AND message_id=1").fetchall()
+    # Current-spec observation only: today's engine consumes the started
+    # checkpoint as attention. Under the pending Oracle IF for basis mismatch
+    # (pre-dispatch defer + evidence preservation) the final requirement is
+    # expected to be the remaining original rows unchanged — do not read this
+    # assert as that acceptance. The normal-basis started terminal-cleanup
+    # control is covered separately in the checkpoint tests.
     assert not remaining, f"started checkpoint not consumed: {third_run} {states}"
 
 
