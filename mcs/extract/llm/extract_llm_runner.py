@@ -187,7 +187,7 @@ def _resume_admission_refused(r, saved, hints):
     unresolved under this run's hints refuses the whole job. Detecting a
     promote refusal here marks the row so later captures and checkpoint
     writes stay refused instead of re-arming the slot."""
-    if r.get("_resume_refused"):
+    if r.get("_resume_refused") or r.get("_checkpoint_conflict"):
         return True
     if not saved:
         return False
