@@ -62,7 +62,9 @@ class LaunchdDrain:
                 or len(set(labels)) != len(labels)
                 or any(type(x) is not str or not x for x in labels)):
             raise ServiceError('SERVICE_INVENTORY')
-        if type(runtime_generation) is not int or runtime_generation <= 0:
+        if (not callable(runtime_generation)
+                and (type(runtime_generation) is not int
+                     or runtime_generation <= 0)):
             raise ServiceError('SERVICE_INVENTORY')
         self._labels = list(labels)
         self._agent_pid = agent_pid
@@ -163,9 +165,12 @@ class LaunchdDrain:
         try:
             boot_id = self._boot_id() if callable(self._boot_id) \
                 else self._boot_id
+            generation = self._generation() if callable(self._generation) \
+                else self._generation
         except Exception as e:
             raise ServiceError('SERVICE_EVIDENCE') from e
-        if not isinstance(boot_id, str) or len(boot_id) != 64:
+        if (not isinstance(boot_id, str) or len(boot_id) != 64
+                or type(generation) is not int or generation <= 0):
             raise ServiceError('SERVICE_EVIDENCE')
         out = []
         for label in self._labels:
@@ -181,7 +186,7 @@ class LaunchdDrain:
             out.append({
                 'service_id': label,
                 'process_instance_id': process_instance_id(label, pid, birth),
-                'generation': self._generation,
+                'generation': generation,
                 'boot_id': boot_id,
                 'birth_witness': birth_witness(label, pid, birth),
                 'retired': True})

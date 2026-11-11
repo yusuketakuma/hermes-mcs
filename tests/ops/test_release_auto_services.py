@@ -185,3 +185,44 @@ def test_stop_intake_and_restart():
     with pytest.raises(ServiceError) as e:
         drain3.restart_same_version()
     assert e.value.code == 'SERVICE_RESTART'
+
+
+def test_callable_services_fresh_inventory():
+    # services providerは呼出毎にfresh評価される
+    state = {'svcs': [dict(SERVICES[0])], 'calls': 0}
+
+    def provider():
+        state['calls'] += 1
+        return [dict(s) for s in state['svcs']]
+
+    drain, st, _ = make_drain(services=provider,
+                              stoppers=lambda svc: lambda s: None,
+                              probers=lambda svc: lambda s: {'ok': True})
+    first = drain.managed_services()
+    assert [s['id'] for s in first] == [SERVICES[0]['id']]
+    # providerが増えたserviceを返すと次回呼出で反映
+    state['svcs'] = [dict(s) for s in SERVICES]
+    second = drain.managed_services()
+    assert len(second) == 3
+    assert state['calls'] == 2
+
+
+def test_callable_stoppers_probers():
+    drain, state, _ = make_drain(
+        stoppers=lambda svc: state['stopped'].append(svc['id']),
+        probers=lambda svc: {'pid': 1})
+    for service in drain.managed_services():
+        drain.request_stop(service)
+    assert sorted(state['stopped']) == sorted(s['id'] for s in SERVICES)
+    evidence = drain.await_retirement(state['now'] + 60_000)
+    assert drain.retirement_complete(evidence, drain.managed_services())
+
+
+def test_await_uses_managed_services_snapshot():
+    # managed_servicesで得た集合がawait/completeの対象
+    drain, state, _ = make_drain()
+    svcs = drain.managed_services()
+    drain.request_stop(svcs[0])
+    evidence = drain.await_retirement(state['now'] + 60_000)
+    # request_stopしていない残りは未証明
+    assert drain.retirement_complete(evidence, svcs) is False
