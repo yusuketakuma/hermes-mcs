@@ -137,6 +137,87 @@ def test_package_rejects_empty_asset_set(tmp_path):
     assert 'ASSET_SET_EMPTY' in result.stderr
 
 
+def _git_repo(tmp_path):
+    """実git repoを合成 — 3 commitの到達履歴を持つ。"""
+    import subprocess as sp
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_AUTHOR_NAME='t',
+               GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
+               GIT_COMMITTER_EMAIL='t@t')
+    def git(*args):
+        return sp.run(['/usr/bin/git', '-C', str(repo), *args],
+                      capture_output=True, text=True, env=env, check=True)
+    git('init', '--quiet')
+    for i in range(3):
+        (repo / f'f{i}.txt').write_text(str(i))
+        git('add', '.')
+        git('commit', '--quiet', '-m', f'c{i}')
+    return repo, git
+
+
+def test_create_bundle_happy(tmp_path):
+    repo, git = _git_repo(tmp_path)
+    commit = git('rev-parse', 'HEAD').stdout.strip()
+    req = tmp_path / 'req.json'
+    req.write_text(json.dumps({'commit': commit, 'tag': 'v1.2.3'}))
+    out_dir = tmp_path / 'out'
+    proof = tmp_path / 'proof.json'
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(out_dir),
+                  '--output', str(proof))
+    assert result.returncode == 0, result.stderr
+    doc = json.loads(proof.read_text())
+    bundle = out_dir / 'hermes-mcs.bundle'
+    assert bundle.is_file()
+    assert doc['asset']['name'] == 'hermes-mcs.bundle'
+    assert doc['asset']['size'] == bundle.stat().st_size
+    assert len(doc['asset']['sha256']) == 64
+    assert doc['reachable_commits'] == 3
+    assert doc['commit'] == commit
+    # 一時refは除去済み — repoにmcs-publish refが残らない
+    refs = git('for-each-ref', 'refs/mcs-publish').stdout.strip()
+    assert refs == ''
+
+
+def test_create_bundle_rejects_missing_commit(tmp_path):
+    repo, _git = _git_repo(tmp_path)
+    req = tmp_path / 'req.json'
+    req.write_text(json.dumps({'commit': 'd' * 40, 'tag': 'v1.2.3'}))
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
+                  '--output', str(tmp_path / 'p.json'))
+    assert result.returncode != 0
+    assert 'GIT_FAILED' in result.stderr
+
+
+def test_create_bundle_rejects_bad_tag(tmp_path):
+    repo, git = _git_repo(tmp_path)
+    commit = git('rev-parse', 'HEAD').stdout.strip()
+    req = tmp_path / 'req.json'
+    req.write_text(json.dumps({'commit': commit, 'tag': 'nightly'}))
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
+                  '--output', str(tmp_path / 'p.json'))
+    assert result.returncode != 0
+    assert 'TAG_INVALID' in result.stderr
+
+
+def test_create_bundle_partial_history(tmp_path):
+    """root commitを対象にするとその到達履歴のみ — reachable数で検証。"""
+    repo, git = _git_repo(tmp_path)
+    first = git('rev-list', '--max-parents=0', 'HEAD').stdout.strip()
+    req = tmp_path / 'req.json'
+    req.write_text(json.dumps({'commit': first, 'tag': 'v1.0.0'}))
+    proof = tmp_path / 'proof.json'
+    result = _run('create-bundle', '--request', str(req),
+                  '--repo', str(repo), '--output-dir', str(tmp_path / 'o'),
+                  '--output', str(proof))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(proof.read_text())['reachable_commits'] == 1
+
+
 def test_external_commands_are_dry_run_by_default(tmp_path):
     """reserve/publish/verify-registerは既定で外部を変更しない。"""
     req = tmp_path / 'req.json'
