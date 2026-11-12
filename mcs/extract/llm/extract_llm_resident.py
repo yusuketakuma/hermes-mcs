@@ -1,5 +1,6 @@
 """Run the resident extraction controller while preserving carry and update fences."""
 import argparse
+import contextlib
 import extract_llm_call_context
 import hashlib
 import json
@@ -64,6 +65,7 @@ from extract_llm_source_contract import (
     _RESIDENT_WRITE_WAIT_S,
     _SEMANTIC_RECENT_TURNS,
     TIMEOUT,
+    _WRITER_STATE,
     _writer_current,
     _writer_current_diagnostic,
 )
@@ -95,12 +97,18 @@ def _recent_arrivals(ledger) -> set:
         (time.time() - _ARRIVAL_CARRY_S,))}
 
 
-def _background_semantic(ledger, stop=None):
-    """Serve one oldest semantic/QC job on this worker's background slot."""
+def _background_semantic(ledger, stop=None, lock_fd=None):
+    """Serve one due semantic/QC job on this worker's background slot.
+
+    The oldest due job goes first; with cloud mode on, patients are ordered
+    by recent activity first. A run-lock fd passed by the caller is used
+    as is and stays the caller's to close."""
     import semantic_drain
-    lock_fd = acquire_run_lock()
-    if lock_fd is None:
-        return {"skipped": "lock_busy"}
+    owned = lock_fd is None
+    if owned:
+        lock_fd = acquire_run_lock()
+        if lock_fd is None:
+            return {"skipped": "lock_busy"}
     try:
         cfg = load_config()
         budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
@@ -115,7 +123,22 @@ def _background_semantic(ledger, stop=None):
         out["errors"] = result["errors"]
         return out
     finally:
-        os.close(lock_fd)
+        if owned:
+            os.close(lock_fd)
+
+
+def _semantic_lock(stop):
+    """Take the run lock for a semantic turn, waiting at most the resident write window."""
+    lock_fd = acquire_run_lock()
+    if lock_fd is None:
+        wait_s = _RESIDENT_WRITE_WAIT_S
+        if stop is not None:
+            wait_s = min(wait_s, max(0.0, stop - time.monotonic()))
+        # wait_run_lock gives back a lock won right after an updater.
+        lock_fd = writer_lock.wait_run_lock(
+            writer_lock.RUN_LOCK, wait_s=wait_s, expected_code_stamp=_WRITER_STATE[1],
+            marker_path=os.path.join(HOME, "data", writer_lock.UPDATE_MARKER_NAME))
+    return lock_fd
 
 
 def _context_memory_available() -> bool:
@@ -534,7 +557,10 @@ def _main() -> int:
                         cloud_pool.sync(load_config(), ledger=led)
                     if context_lane:
                         # lane 3 serves patient context first; it yields to
-                        # semantic/extraction only when nothing is due. A
+                        # semantic/extraction only when nothing is due. With
+                        # cloud mode on the cloud child serves context and this
+                        # local refresh returns off, so lane 3 goes on to
+                        # semantic/extraction. A
                         # carried result gets its lock attempt first and its
                         # claim lease renewed, so the context units it waits
                         # through cannot outlive the claim. While a local
@@ -629,9 +655,25 @@ def _main() -> int:
                     carry = parked + (r.pop("carry", None) or [])  # internal; never logged
                     sem = None
                     ran_semantic = False
-                    if args.semantic and not carry:
+                    if args.semantic:
+                        # A carried result does not skip the semantic turn: under
+                        # the same lock it is saved first, and semantic work starts
+                        # only once nothing is carried (one job can outlast a lease).
                         started = time.monotonic()
-                        sem = _background_semantic(led, stop)
+                        lock_fd = _semantic_lock(stop)
+                        try:
+                            if lock_fd is None:
+                                sem = {"skipped": "lock_busy"}
+                            else:
+                                if carry and _writer_current_diagnostic(full=True):
+                                    _settle_carry(led, carry, final=False, fence=context_state,
+                                                  lock_context=contextlib.nullcontext(True),
+                                                  preserve_on_fence_loss=True)
+                                sem = ({"skipped": "carry_unsettled"} if carry
+                                       else _background_semantic(led, stop, lock_fd))
+                        finally:
+                            if lock_fd is not None:
+                                os.close(lock_fd)
                         print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
                                           "elapsed_s": round(time.monotonic() - started, 1),
                                           "ts": time.time()},
