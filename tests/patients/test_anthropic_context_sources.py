@@ -738,6 +738,37 @@ def test_nondefinitive_source_quality_never_consumes_an_extraction_repair(runtim
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 
+def test_unresolved_source_repair_evidence_holds_the_lane_instead_of_deferring_forever(runtime, source_repair):
+    led, clock, _ = runtime
+    source_repair['qa_fault'] = 'ambiguous'
+    held = None
+    for _ in range(90):
+        step(runtime)
+        clock.wall += 61
+        snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
+        scans = patient_context_refresh_sources._current_scans(
+            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        for scan in scans.values():
+            if scan.get('quality_state') == 'held':
+                held = scan
+        if held is not None:
+            break
+    assert held is not None and not held.get('audited')
+    assert not patient_context_refresh_readiness._ready(held, clock.wall)
+    pending = patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2]
+    assert not pending['C']
+    receipts = led.artifacts('patient_context_source_quality_v1', project_id=1)
+    for _ in range(12):
+        step(runtime)
+        clock.wall += 61
+    snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
+    scans = patient_context_refresh_sources._current_scans(
+        led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    assert all(scan.get('quality_state') == 'held' or not scan.get('complete') for scan in scans.values())
+    assert len(led.artifacts('patient_context_source_quality_v1', project_id=1)) == len(receipts)
+    assert not source_repair['sent']
+
+
 def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_evidence(runtime, cloud, monkeypatch):
     import semantic_runtime
     led, _, _ = runtime

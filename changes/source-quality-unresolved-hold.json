@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "原典品質監査の判定不能が無期限の再試行で監査レーンを占有する問題を修正",
+  "summary": "患者コンテキストの原典Jev照合で、監査回答が修復の前提（全項目が確信を持った非曖昧な判定）を満たさない場合、修復へ進めず延期を無限に繰り返し、当該ソースが監査レーンの先頭適格として残り続けていました。確信不足・曖昧・未評価の証拠では修復を証明できないため、入力（ソース・抽出・設定・判定方針）が変わるまで監査を保留（held）する終端状態へ変更しました。保留中のソースは公開対象に含まれず、fail-closedは維持されます。",
+  "upgrade": "追加操作は不要です。適用後の次回監査サイクルで、修復証拠が不十分なまま延期され続けていたソースは自動的にheldへ移行し、監査レーンの再試行対象から外れます。抽出や設定が変われば従来どおり監査が再開されます。",
+  "details": [
+    "_source_quality_repair_step で _source_repair_inputs が patient_context_source_repair_unresolved を投げた場合、例外をそのまま延期へ流さず 'held' を返すよう変更しました。",
+    "held は既存の quality_state 機構で終端化され、quality_hold_key（設定・判定方針・スコープ・原本・source_sig・chunks_sig の束縛）と一致する間は監査レーンの選択対象から外れます。入力が変わればキー不一致で自動的に再開します。",
+    "監査回答が確信を持って修復可能な場合の既存修復経路、合格時の audited 記録、fail-closed の公開条件は変更していません。"
+  ],
+  "refs": ["mcs/patients/patient_context_quality_controller.py", "tests/patients/test_anthropic_context_sources.py"]
+}
