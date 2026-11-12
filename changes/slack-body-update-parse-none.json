@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "Slackのスレッド本文の更新を、投稿時と同じ解釈で送るよう修正",
+  "summary": "Slackのスレッドに出した本文をあとから書き換えるとき、投稿時と同じく文字列をそのまま扱う指定（parse=none）を付けます。これまでは指定がなく、Slack側の既定が投稿（none）と更新（client）で異なるため、上限内の本文でも更新だけが長さ超過（msg_too_long）で拒否されることがありました。",
+  "upgrade": "追加操作は不要です。Slackで通知している導入先だけが対象です。Hermesモードではgatewayの再起動後に反映されます。",
+  "details": [
+    "根拠はSlack公式のchat.updateの説明（parseの既定値がchat.postMessageと異なる）です。実際のSlackでの送信は確認していません。",
+    "患者カード本体の送信と更新は、以前から同じ指定を付けています。"
+  ],
+  "refs": [
+    "adapters/slack/delivery.py",
+    "tests/adapters/slack/test_mcs_slack_updates.py"
+  ]
+}
