@@ -7,11 +7,13 @@
     "保存済みの保護項目を候補へ戻すとき、旧項目の値は編集も補完もしない。",
     "同じ引用の短い形は旧項目に置き換え、引用を共有する別ラベルの項目は、両方が持つ属性がすべて一致する場合だけ並べて残す。",
     "パス記録の llm_calls に、戻した件数 protected_carried と食い違った件数 protected_conflict を件数だけ出す。",
+    "保護喪失の保留記録に、失った項目の理由別件数 lost_class（absent・conflict・prior_unverifiable・unlocated）を追加する。本文・症状名・引用は記録しない。記録の内容が変わるため、同じ投稿の保留記録が1回だけ新しく作られる。",
     "採用の条件（held_prior の判定）、人の指摘と QC 指摘の経路、クラウド結果と修復証跡の束縛は変えない。"
   ],
   "refs": [
     "mcs/extract/llm/extract_quality.py",
     "mcs/extract/llm/extract_llm_engine.py",
-    "mcs/extract/llm/extract_llm_admission.py"
+    "mcs/extract/llm/extract_llm_admission.py",
+    "mcs/extract/llm/extract_llm_store.py"
   ]
 }
