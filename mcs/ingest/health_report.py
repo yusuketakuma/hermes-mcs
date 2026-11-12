@@ -569,6 +569,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     if cloud_reason:
         reasons.append(f"cloud_llm_{cloud_reason}")
     if notify_scope.interactive_enabled(cfg):
+        import card_worker_status
         transport = notify_scope.active_transport(cfg)
         _phase("card_queue_oldest")
         oldest = db.execute(
@@ -597,10 +598,13 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
                                        if v is not None and v <= now), default=None)
             if latest_progress is None or now - latest_progress > CARD_STALL_S:
                 reasons.append("card_delivery_stalled")
-                import card_worker_status
                 worker = card_worker_status.diagnose(notify_spool.data_root(db), cfg)
                 if worker["state"] in ("unknown", "disabled"):
                     reasons.append(worker["reason"])
+        _phase("card_worker_restart")
+        if ("worker_restart_required" not in reasons
+                and card_worker_status.restart_overdue(notify_spool.data_root(db), cfg, now)):
+            reasons.append("worker_restart_required")
         _phase("card_restore_holds")
         if db.execute("SELECT 1 FROM notification_restore_holds "
                       "WHERE released_at IS NULL LIMIT 1").fetchone():
