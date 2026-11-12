@@ -78,7 +78,15 @@ def test_context_retry_delay_backs_off_for_busy_and_workless_scans():
     assert cloud_backlog._context_retry_delay(
         {"done": 0, "reason": "patient_context_selection_busy"}) == 20
     for reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
-        assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 60
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": True}) == 60
+        # A partial slice (or a refused scan) must not stall the rotation.
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False}) == 5
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False,
+             "scan_refusal": "bookmark_cas"}) == 5
+        assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 5
     assert cloud_backlog._context_retry_delay(
         {"done": 0, "reason": "run_lock"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
