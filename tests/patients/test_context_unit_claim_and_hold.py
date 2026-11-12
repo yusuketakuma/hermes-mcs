@@ -1,14 +1,16 @@
 """Patient context units report fixed wait causes, hold unresolved sources and claim patients."""
+from contextlib import closing
 import json
 import os
 
 import pytest
 
+from ledger import Ledger
 import cloud_client
 import cloud_inference
 import patient_context_refresh as refresh
 import patient_context_refresh_state as state
-from test_patient_context_refresh import finish, runtime, seed, step
+from test_patient_context_refresh import CFG, finish, runtime, seed, step
 
 __all__ = ['runtime']
 
@@ -143,3 +145,72 @@ def test_other_source_scan_saved_during_inference_reports_scans(runtime, monkeyp
     result = step(runtime)
     assert len(calls) == 1
     assert result['status'] == 'source_changed' and result['changed'] == 'scans'
+
+
+def _progress(led, pid):
+    return state._latest(led.db, state.PROGRESS, pid)[0]
+
+
+@pytest.mark.parametrize('marked', [True, False])
+def test_concurrent_worker_skips_a_patient_with_a_unit_in_flight(runtime, monkeypatch, marked):
+    led, clock, calls = runtime
+    seed(led, mid=1, pid=1)
+    if marked:
+        seed(led, mid=2, pid=2)
+    else:
+        # Control: without the mark the second worker takes the same unit.
+        monkeypatch.setattr(refresh, '_unit_claimed', lambda progress, now: False)
+    chat = refresh.local_llm.admitted_chat
+    db_path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    nested = {}
+
+    def chat_with_second_worker(owner, text, **kwargs):
+        answer = chat(owner, text, **kwargs)
+        if not nested:
+            nested['pid'] = next(pid for pid in (1, 2) if _progress(led, pid).get('unit_claim'))
+            nested['claim'] = _progress(led, nested['pid'])['unit_claim']
+            with closing(Ledger(db_path)) as other:
+                nested['result'] = refresh.run_due(other, CFG, deadline=clock.mono + 600, admit=lambda: True)
+        return answer
+
+    monkeypatch.setattr(refresh.local_llm, 'admitted_chat', chat_with_second_worker)
+    first = step(runtime)
+    assert nested['claim']['until'] <= clock.wall - 1 + refresh._UNIT_CLAIM_SECONDS
+    if marked:
+        assert nested['result']['wait_unit_claimed'] == 1
+        assert nested['result']['status'] == 'progressed'
+        assert first['status'] == 'progressed' and first['done'] == 1
+        assert 'unit_claim' not in _progress(led, nested['pid'])
+        assert all('unit_claim' not in _progress(led, pid) for pid in (1, 2))
+    else:
+        assert nested['result']['status'] == 'progressed'
+        assert first['status'] == 'source_changed' and first['changed'] == 'scans'
+
+
+def test_deferred_unit_releases_its_mark(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, pid=1)
+    _refuse_local(monkeypatch, {1}, ValueError('synthetic'))
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'nightly_cloud_not_sent'
+    assert 'unit_claim' not in _progress(led, 1)
+    again = step(runtime)
+    assert again['wait_unit_claimed'] == 0 and again['reason'] == 'nightly_cloud_not_sent'
+
+
+@pytest.mark.parametrize('offset', [-1, 600])
+def test_only_an_unexpired_mark_steers_selection(runtime, offset):
+    led, clock, calls = runtime
+    seed(led, mid=1, pid=1)
+    content, meta = state._latest(led.db, state.PROGRESS, 1)
+    state._replace(led, state.PROGRESS, 1, {**content, 'unit_claim': {
+        'token': 'f' * 32, 'until': clock.wall + offset}}, meta)
+    led.db.commit()
+    result = step(runtime)
+    if offset < 0:
+        assert result['status'] == 'progressed' and result['wait_unit_claimed'] == 0
+    else:
+        assert result['status'] == 'deferred' and result['reason'] == 'patient_context_waiting'
+        assert result['wait_unit_claimed'] == 1 and not calls
+        # Another worker's mark is never removed by this worker.
+        assert _progress(led, 1)['unit_claim']['token'] == 'f' * 32
