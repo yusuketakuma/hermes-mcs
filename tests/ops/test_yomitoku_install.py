@@ -12,6 +12,7 @@ import json
 import sys
 from types import SimpleNamespace
 import ocr_model_contract
+import mcs_util
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -45,7 +46,7 @@ def fake_runtime(monkeypatch, root):
     def run(args, *, env):
         assert 'PYTHONPATH' not in env
         assert 'HF_HUB_OFFLINE' not in env
-        assert env['HF_HOME'] == str(Path.home() / '.cache/huggingface')
+        assert env['HF_HOME'] == str(ocr_model_contract.hf_home(Path(mcs_util.HOME) / 'data'))
         assert 'HF_HUB_CACHE' not in env
         calls.append(args)
         if args[1] == 'venv':

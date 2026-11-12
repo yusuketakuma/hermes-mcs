@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "OCRモデルキャッシュを ~/.cache から ~/.mcs/data 配下へ移し清掃による消失を防止",
+  "summary": "添付OCR(yomitoku)のHugging Faceモデルキャッシュは従来 ~/.cache/huggingface に保存されていましたが、システムのキャッシュ清掃で削除されると全OCRが engine_load_failed で停止する障害が発生しました。インストール時のモデル取得(scripts/setup_yomitoku.py)と推論時の読込(mcs/extract/attachment_ocr.py)の両方で、キャッシュを MCS のデータディレクトリ配下(<data>/huggingface)に統一しました。sandboxプロファイルも許可するhubディレクトリを新しい場所だけに限定し、旧 ~/.cache 側は引き続き拒否されます。offline/local-only動作とモデルのpinned revision契約は変更ありません。",
+  "upgrade": "追加操作は不要です。初回適用後、既存キャッシュを <data>/huggingface へ移すか scripts/setup_yomitoku.py を再実行してモデルを再取得してください。移行までは engine_load_failed が継続する場合があります。",
+  "details": [
+    "mcs/extract/ocr_model_contract.py: hf_home(data_dir) を追加。<data_dir>/huggingface を返す共有helper。",
+    "mcs/extract/attachment_ocr.py: _runtime に hf 引数を追加し環境変数 HF_HOME を新パスへ。_sandbox_profile に hub 引数を追加し readable を新しい hub のみに限定。run_pending で root=_data_root(ledger) から hf=hf_home(root) を導出して _runtime へ渡す。",
+    "scripts/setup_yomitoku.py: HF_HOME を mcs_util.HOME/data/huggingface(MCS_ROOT考慮)に変更。PYTHONPATH等の除去と offline強制は従来どおり。",
+    "tests/extract/test_attachment_ocr.py: _runtime fake を5引数化し hf が <ledger親>/huggingface を指すことを断言。sandbox実機テストのhubを data/huggingface/hub に変更し、旧 ~/.cache/huggingface/hub 配下が拒否されることを回帰確認。",
+    "tests/ops/test_yomitoku_install.py: HF_HOME が mcs_util.HOME/data/huggingface と一致することを断言するよう更新。"
+  ],
+  "refs": [
+    "mcs/extract/ocr_model_contract.py",
+    "mcs/extract/attachment_ocr.py",
+    "scripts/setup_yomitoku.py",
+    "tests/extract/test_attachment_ocr.py",
+    "tests/ops/test_yomitoku_install.py"
+  ]
+}

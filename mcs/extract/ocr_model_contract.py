@@ -1,6 +1,7 @@
 """Pin the OCR engine and model revisions used by installation and inference."""
 import hashlib
 import json
+from pathlib import Path
 
 ENGINE_VERSION = "0.16.1"
 MODELS = {
@@ -16,3 +17,8 @@ MODELS = {
 MODEL_JSON = json.dumps(MODELS, sort_keys=True, separators=(",", ":"))
 MODEL_DIGEST = hashlib.sha256(MODEL_JSON.encode()).hexdigest()
 RUNTIME_CONTRACT = f"yomitoku-{ENGINE_VERSION}-cpu-lite-text-first/table-grid-v2/{MODEL_DIGEST}"
+
+
+def hf_home(data_dir):
+    """HF cache kept inside the MCS data directory so cache cleaners cannot drop it."""
+    return Path(data_dir) / "huggingface"

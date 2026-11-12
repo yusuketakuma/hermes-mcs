@@ -12,7 +12,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcs"))
 import _mcs_path  # noqa: E402,F401
-from ocr_model_contract import ENGINE_VERSION as VERSION, MODEL_JSON  # noqa: E402
+import mcs_util  # noqa: E402
+from ocr_model_contract import ENGINE_VERSION as VERSION, MODEL_JSON, hf_home  # noqa: E402
 
 
 def run(args, *, env):
@@ -32,7 +33,7 @@ def setup(root: Path, repo: Path):
     for name in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE',
                  'HF_HOME', 'HF_HUB_CACHE', 'HUGGINGFACE_HUB_CACHE', 'XDG_CACHE_HOME'):
         env.pop(name, None)
-    env["HF_HOME"] = str(Path.home() / ".cache" / "huggingface")
+    env["HF_HOME"] = str(hf_home(Path(mcs_util.HOME) / "data"))
     if not python.exists():
         if venv.exists():
             raise ValueError('Incomplete OCR environment; preserve it and choose a new location before retrying')

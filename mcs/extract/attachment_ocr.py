@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 
-from ocr_model_contract import ENGINE_VERSION, MODELS, RUNTIME_CONTRACT
+from ocr_model_contract import ENGINE_VERSION, MODELS, RUNTIME_CONTRACT, hf_home
 
 import writer_lock
 import patient_priority
@@ -476,8 +476,7 @@ def _symlink_chain(path):
     raise ValueError("runtime_symlink_loop")
 
 
-def _sandbox_profile(executable, python, source):
-    hub = Path.home() / ".cache" / "huggingface" / "hub"
+def _sandbox_profile(executable, python, source, hub):
     readable = [Path(path) for path in ("/System", "/usr", "/Library", "/private/var/db", "/dev")]
     readable += [Path(executable).parent.parent.resolve(), Path(python).resolve().parent.parent,
                  hub, source.parent.resolve()]
@@ -495,18 +494,17 @@ def _sandbox_profile(executable, python, source):
             + '(allow file-write* (subpath ' + json.dumps(str(source.parent.resolve())) + '))')
 
 
-def _runtime(executable, source, output, timeout):
+def _runtime(executable, source, output, timeout, hf):
     python = str(Path(executable).parent / "python")
-    cache = str(Path.home() / ".cache")
     env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "LANG": "en_US.UTF-8",
-           "TMPDIR": str(source.parent), "HF_HOME": str(Path(cache) / "huggingface"),
+           "TMPDIR": str(source.parent), "HF_HOME": str(hf),
            "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1",
            "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
            "ORT_DISABLE_TELEMETRY": "1",
            "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
            "VECLIB_MAXIMUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1", "TOKENIZERS_PARALLELISM": "false"}
     # Models remain readable; the runtime cannot write anywhere outside its private snapshot.
-    profile = _sandbox_profile(executable, python, source)
+    profile = _sandbox_profile(executable, python, source, Path(hf) / "hub")
     command = ["/usr/bin/sandbox-exec", "-p", profile, python, "-I", "-c", _BOOTSTRAP, str(source), str(output)]
     process = None
     previous = {}
@@ -684,6 +682,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1, retry_failed_before=None
     if type(limit) is not int or not 1 <= limit <= 30 or ledger.db.in_transaction:
         raise ValueError("ocr_run_args")
     root = _data_root(ledger)
+    hf = hf_home(root)
     fd = writer_lock.acquire_run_lock(str(root / "attachment_ocr.lock"))
     if fd is None:
         return {**counts, "reason": "busy"}
@@ -765,7 +764,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1, retry_failed_before=None
                         with open(snapshot, "xb") as stream:
                             os.chmod(snapshot, 0o600)
                             stream.write(blob)
-                        pages = _runtime(executable, snapshot, private / "result.json", timeout)
+                        pages = _runtime(executable, snapshot, private / "result.json", timeout, hf)
                     state, reason = ("complete" if any(page["text"].strip() for page in pages) else "empty"), ""
             except subprocess.TimeoutExpired:
                 reason = "timeout"

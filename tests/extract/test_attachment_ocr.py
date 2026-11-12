@@ -46,7 +46,8 @@ def setup(tmp_path, monkeypatch):
     pages = [{"page": 1, "engine": "yomitoku", "text": "合成資料", "text_hash": ocr._hash("合成資料")}]
     calls = []
 
-    def runtime(executable, snapshot, output, timeout):
+    def runtime(executable, snapshot, output, timeout, hf):
+        assert Path(hf) == Path(ledger.path).resolve().parent / "huggingface"
         assert Path(snapshot).name == "source.png"
         assert Path(snapshot).read_bytes() == blob
         assert Path(snapshot).stat().st_mode & 0o777 == 0o600
@@ -282,7 +283,7 @@ def test_runtime_timeout_kills_group_without_capturing_private_output(tmp_path, 
     monkeypatch.setattr(ocr.os, "killpg", lambda *args: killed.append(args))
     monkeypatch.setattr(ocr, "reap_worker", lambda process: None)
     with pytest.raises(subprocess.TimeoutExpired):
-        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1)
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1, tmp_path / "hf")
     assert killed
 
 
@@ -295,7 +296,7 @@ def test_runtime_rejects_symlink_output(tmp_path, monkeypatch):
     monkeypatch.setattr(ocr.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(ocr.os, "killpg", lambda *args: None)
     with pytest.raises(OSError):
-        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", output, 1)
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", output, 1, tmp_path / "hf")
 
 
 @pytest.mark.parametrize("config", [{"enabled": "yes"}, {"enabled": True, "executable": "relative"},
@@ -428,14 +429,14 @@ def test_bootstrap_broken_native_pdf_control_characters_fall_back_to_ocr(tmp_pat
 @pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="macOS sandbox runtime only")
 def test_actual_sandbox_boots_python_through_alias_and_confines_source_and_cache(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    hub = home / ".cache" / "huggingface" / "hub"
+    hub = tmp_path / "data" / "huggingface" / "hub"
     hub.mkdir(parents=True)
     model = hub / "synthetic-model"
     model.write_text("synthetic model")
     token = hub.parent / "token"
     token.write_text("synthetic token")
-    other_cache = home / ".cache" / "unrelated"
+    other_cache = home / ".cache" / "huggingface" / "hub" / "stale-model"
+    other_cache.parent.mkdir(parents=True)
     other_cache.write_text("synthetic unrelated cache")
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
@@ -450,7 +451,7 @@ def test_actual_sandbox_boots_python_through_alias_and_confines_source_and_cache
     source.write_text("synthetic source")
     denied = tmp_path / "outside"
     denied.write_text("synthetic outside")
-    profile = ocr._sandbox_profile(str(venv / "bin" / "yomitoku"), str(python), source)
+    profile = ocr._sandbox_profile(str(venv / "bin" / "yomitoku"), str(python), source, hub)
     code = """import json, sys
 from pathlib import Path
 result = []
@@ -740,7 +741,7 @@ def test_parent_signal_kills_runtime_group_and_restores_handler(tmp_path, monkey
     monkeypatch.setattr(ocr.os, "killpg", lambda *args: killed.append(args))
     monkeypatch.setattr(ocr, "reap_worker", lambda process: None)
     with pytest.raises(SystemExit) as caught:
-        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1)
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1, tmp_path / "hf")
     assert caught.value.code == 128 + number
     assert killed and ocr.signal.getsignal(number) == old
 
@@ -964,7 +965,7 @@ def test_runtime_failure_exit_maps_only_fixed_reason(tmp_path, monkeypatch, code
     monkeypatch.setattr(ocr.subprocess, "Popen", popen)
     monkeypatch.setattr(ocr.os, "killpg", lambda *args: None)
     with pytest.raises(ValueError, match="^" + reason + "$"):
-        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1)
+        ocr._runtime("/synthetic/bin/yomitoku", tmp_path / "source.pdf", tmp_path / "out.json", 1, tmp_path / "hf")
 
 
 def test_bootstrap_control_exception_is_not_mislabeled(tmp_path, monkeypatch):
