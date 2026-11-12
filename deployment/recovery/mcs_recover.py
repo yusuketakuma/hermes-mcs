@@ -16,6 +16,7 @@
 承認待ちは自動解除しません。結果は data/recovery_report.json に保存します。
 定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
 復旧を保留した場合は理由を表示し、同じ保留は復旧結果の記録に一度だけ残します。
+定期監視で更新記録が新しい間と、導入先フォルダーを確認できない場合は記録しません。
 問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
 import ast as ast
@@ -752,7 +753,7 @@ def _recover_legacy(if_stale=False):
     if not applying and not stages \
             and not os.path.exists(mcs_recovery_core.MARKER_PATH):
         _clear_hold()
-        return 0                            # nothing to recover in any settings state
+        return 0                            # nothing to recover in any provider settings state
     provider_state = _provider_settings_state()
     if provider_state not in ("legacy", "split"):
         return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
