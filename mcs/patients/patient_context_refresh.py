@@ -1104,9 +1104,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             try:
                                 quality_status, quality_result = patient_context_quality_controller._quality_step(
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source)
-                            except (patient_context_refresh_state.Deferred, ValueError, RuntimeError):
+                            except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                                 result = None
-                                raise patient_context_refresh_state.Deferred("source_quality_unavailable") from None
+                                detail = str(exc) if isinstance(exc, patient_context_refresh_state.Deferred) else type(exc).__name__
+                                raise patient_context_refresh_state.Deferred(
+                                    "source_quality_unavailable:" + (detail or type(exc).__name__)) from None
                             if quality_status == "source_candidate":
                                 quality_status, quality_result = patient_context_quality_controller._quality_step(
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source,

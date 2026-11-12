@@ -137,11 +137,14 @@ def test_requested_cloud_failure_falls_back_to_verified_local_context(runtime, c
     else:
         pytest.fail('verified local fallback did not become usable')
     assert local_calls and not cloud[0]
-    assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
-    assert patient_context_refresh_readiness.status(led.db, CFG)['history_pending'] == 1
+    # A verified local fallback is the terminal state for the unit: coverage
+    # completes without further cloud sends or local re-processing.
+    coverage = patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)
+    assert coverage['complete'] and coverage['publication_eligible']
+    assert patient_context_refresh_readiness.status(led.db, CFG)['history_pending'] == 0
     count = len(local_calls)
     for _ in range(3):
-        assert step(runtime)['status'] != 'complete'
+        assert step(runtime)['status'] == 'complete'
     assert len(local_calls) == count and not cloud[0]
 
 
