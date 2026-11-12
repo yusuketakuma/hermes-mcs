@@ -713,12 +713,17 @@ def _context_retry_delay(result):
     holds the selection lock (usually scanning, not necessarily doing work);
     a scan that covered every patient and found nothing startable rarely
     finds work seconds later. A partial slice or a refused scan keeps the
-    short wait so the rotation reaches the remaining patients."""
+    short wait so the rotation reaches the remaining patients. A shared scan
+    idle (scan_idle_s) sleeps until it expires, so one worker scans next and
+    the others meet selection_busy."""
     if result.get("done"):
         return 1
     reason = result.get("reason")
     if reason == "patient_context_selection_busy":
         return 20
+    idle = result.get("scan_idle_s")
+    if type(idle) in (int, float) and idle > 0:
+        return min(60, max(5, idle))
     if (reason in ("patient_context_waiting", "patient_context_scan_incomplete")
             and result.get("covered") is True):
         return 60
