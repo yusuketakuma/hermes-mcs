@@ -384,7 +384,90 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("source_label", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate", "patient_context_schedule", "patient_readiness_witness"])
+def _patch_loaded_digests(monkeypatch, changed):
+    monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {**llm._LOADED_SOURCE_DIGESTS, **changed})
+    monkeypatch.setattr(extract_llm_context, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+    monkeypatch.setattr(extract_llm_qc, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+    monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
+
+
+@pytest.mark.parametrize("source_label", ["mcs_queries", "mcs_util", "semantic_assembly", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_notice", "semantic_render", "semantic_send_gate", "patient_context_schedule", "patient_readiness_witness", "cloud_backlog", "cloud_policy", "patient_context_refresh", "local_llm", "extract_llm_runner", "extract_llm_store"])
+def test_an_update_outside_the_hold_sources_keeps_the_hold_and_the_patient_complete(
+        tmp_path, monkeypatch, source_label):
+    # Every production update used to release each hold and send the same
+    # post back through the local model, which un-completed its patient.
+    import semantic_candidate
+    db, aid, row = seed(tmp_path)
+    try:
+        assert not llm._replace_current(db, row, '{"summary":"合成の候補"}')
+        assert llm.patient_extraction_complete(db, 1)
+        contract = llm._upgrade_contract()
+        fingerprint = semantic_candidate.candidate_fingerprint({})
+        assert len(llm._LOADED_SOURCE_DIGESTS[source_label]) == 64
+        _patch_loaded_digests(monkeypatch, {source_label: "synthetic-changed-loaded-source"})
+        assert llm._upgrade_contract() == contract
+        assert semantic_candidate.candidate_fingerprint({}) != fingerprint     # other bindings still move
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
+        assert llm.patient_extraction_complete(db, 1)
+        assert len(db.artifacts(llm.UPGRADE_KIND)) == 1
+        assert db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0] == json.dumps(PRIOR, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def test_the_hold_epoch_releases_every_hold_on_request(tmp_path, monkeypatch):
+    db, aid, row = seed(tmp_path)
+    try:
+        assert not llm._replace_current(db, row, '{"summary":"合成の候補"}')
+        contract = llm._upgrade_contract()
+        monkeypatch.setattr(extract_llm_qc, "HOLD_EPOCH", extract_llm_qc.HOLD_EPOCH + 1)
+        assert llm._upgrade_contract() != contract
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
+        assert not llm.patient_extraction_complete(db, 1)
+    finally:
+        db.close()
+
+
+def test_every_hold_source_is_a_loaded_source():
+    assert extract_llm_qc._HOLD_SOURCES <= set(llm._LOADED_SOURCE_DIGESTS)
+
+
+# First-party modules the candidate and comparison code import directly but
+# that were reviewed as not deciding an extraction result: storage, query and
+# entry-point helpers, the provider/accounting plumbing and the proof bookkeeping.
+_REVIEWED_NOT_DECIDING = frozenset({
+    "mcs_util", "mcs_queries", "stats_math", "inference_dependency_loss", "drug_map",
+    "cloud_inference", "cloud_policy", "extract_llm_call_context", "extract_llm_proofs",
+    "extract_llm_provider", "extract_llm_source_contract", "extraction_provenance",
+    "_mcs_path", "ledger", "writer_lock", "original_source_keys"})
+
+
+def test_a_new_import_in_the_deciding_code_must_be_classified():
+    """Import closure reaches the whole tree, so the set is declared; this
+    forces a decision whenever the deciding code gains a first-party import."""
+    import ast
+    from pathlib import Path
+    paths = {name: Path(path) for name, path in llm._LOADED_SOURCE_PATHS.items()}
+    modules = {path.stem: name for name, path in paths.items()}
+    first_party = {path.stem for path in Path(llm.__file__).resolve().parents[2].rglob("*.py")}
+    unclassified = {}
+    for name in sorted(extract_llm_qc._HOLD_SOURCES):
+        tree = ast.parse(paths[name].read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".")[0])
+        missing = {module for module in imported & first_party
+                   if module != paths[name].stem and modules.get(module) not in extract_llm_qc._HOLD_SOURCES
+                   and module not in _REVIEWED_NOT_DECIDING}
+        if missing:
+            unclassified[name] = sorted(missing)
+    assert unclassified == {}
+
+
+@pytest.mark.parametrize("source_label", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "clinical_values", "clinical_chunking", "clinical_events", "inference_version", "extract", "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions", "patient_state_context", "intervention_schedule", "semantic_quantities", "semantic_facts"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, source_label):
     import semantic_candidate
     db, aid, row = seed(tmp_path)

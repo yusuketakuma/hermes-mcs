@@ -27,6 +27,8 @@ from extract_llm_source_contract import (
     UPGRADE_KIND,
     _INFERENCE_VERSION,
     _LOADED_SOURCE_DIGESTS,
+    HOLD_EPOCH,
+    _HOLD_SOURCES,
 )
 
 _AUTO_RETRY_SQL = ("(CASE WHEN json_type(meta,'$.auto_retry')='integer' "
@@ -49,8 +51,10 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
 
 
 def _upgrade_contract() -> str:
-    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, EXTRACT_VERSION, PATIENT_CONTEXT_VERSION,
-        _LOADED_SOURCE_DIGESTS], sort_keys=True).encode()).hexdigest()
+    """Identity an automatic hold stays valid under (see _HOLD_SOURCES)."""
+    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, HOLD_EPOCH,
+        {name: _LOADED_SOURCE_DIGESTS[name] for name in sorted(_HOLD_SOURCES)}],
+        sort_keys=True).encode()).hexdigest()
 
 
 def _prior_extract(db, r):
