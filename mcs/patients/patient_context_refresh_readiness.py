@@ -510,11 +510,19 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
         or snapshot.get('source_coverage', {}).get('unreflected')
         or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
         or not snapshot["attachment_coverage"]["complete"] or any(not patient_context_refresh_sources._scan_ready(scan) for scan in required_scans))
+    incomplete = [scan for scan in required_scans if not scan.get("complete")]
+    unaudited = [scan for scan in scans if scan.get("complete") and (not patient_context_refresh_sources._scan_ready(scan)
+                 or recheck_available and scan.get("_audit_skipped"))]
     pending = {"A": (summary_needed or cloud_summary_needed and cloud_ready) and local_ready and _ready(progress, now),
-               "B": any(not scan.get("complete") and _ready(scan, now) for scan in required_scans),
-               "C": any(scan.get("complete") and (not patient_context_refresh_sources._scan_ready(scan)
-                         or recheck_available and scan.get("_audit_skipped")) and _ready(scan, now)
-                        for scan in scans)}
+               "B": any(_ready(scan, now) for scan in incomplete),
+               "C": any(_ready(scan, now) for scan in unaudited)}
+    if observed_out is not None:
+        # Fixed codes only: why each lane cannot start now.
+        observed_out["lane_blocks"] = {
+            "A": None if pending["A"] else "not_needed" if not (summary_needed or cloud_summary_needed)
+                 else "local_not_ready" if not (local_ready and (summary_needed or cloud_ready)) else "backoff",
+            "B": None if pending["B"] else "backoff" if incomplete else "none_incomplete",
+            "C": None if pending["C"] else "backoff" if unaudited else "none_unaudited"}
     return snapshot, progress, pending
 
 
