@@ -247,6 +247,46 @@ def test_released_carry_is_counted_even_when_reported(tmp_path, monkeypatch, cap
         led.close()
 
 
+def _held_run_lock(tmp_path, monkeypatch, release_at):
+    """A real run lock held by another fd; released once the fake clock reaches ``release_at``."""
+    path = str(tmp_path / 'synthetic-run.lock')
+    holder = [worker.writer_lock.acquire_run_lock(path)]
+    assert holder[0] is not None
+    clock, attempts = [0.0], []
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if release_at is not None and clock[0] >= release_at and holder[0] is not None:
+            os.close(holder[0])
+            holder[0] = None
+
+    def acquire():
+        attempts.append(clock[0])
+        return worker.writer_lock.acquire_run_lock(path)
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current_diagnostic', lambda **kw: True)
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    return clock, attempts, holder
+
+
+def test_write_lock_wins_a_sub_second_gap(tmp_path, monkeypatch):
+    clock, attempts, holder = _held_run_lock(tmp_path, monkeypatch, release_at=0.5)
+    with extract_llm_errors._write_lock(True, wait_s=3) as held:
+        assert held is True and clock[0] < 1.0
+    assert len(attempts) == 4 and holder[0] is None
+
+
+def test_write_lock_gives_up_within_the_same_bound(tmp_path, monkeypatch):
+    clock, attempts, holder = _held_run_lock(tmp_path, monkeypatch, release_at=None)
+    try:
+        with extract_llm_errors._write_lock(True, wait_s=3) as held:
+            assert held is False
+        assert clock[0] == pytest.approx(3.0) and attempts[-1] == pytest.approx(3.0)
+    finally:
+        os.close(holder[0])
+
+
 def test_unwritten_failure_is_counted_without_charging_an_attempt(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     try:
