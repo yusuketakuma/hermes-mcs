@@ -329,14 +329,15 @@ def llm_extract(body: str, *, context: str | None = None,
             # counts as a protected fact in the thin/repair decisions
             v.pop("reply", None)
         piece_prior = extract_quality.protected_assertions(protected_prior, piece)
-        if not quality_status:
-            v = carry(v, d, piece_prior, piece, start, piece_context)
         # Thin-nudge only when the prompt covered the WHOLE body — a
         # sparse chunk legitimately yields few fields, and the nudge's
         # "extract everything" ask is only fair when one call saw the
         # entire message. Multi-chunk thin output is still recorded on
-        # the merged result via meta.thin below.
+        # the merged result via meta.thin below. Judged on the model's own
+        # output: carried prior items must not hide an under-extraction.
         thin = piece == body and extract_quality.is_thin(v, body)
+        if not quality_status:
+            v = carry(v, d, piece_prior, piece, start, piece_context)
         completeness = extract_quality.completeness_issues(v, piece_hints, piece)
         protected_loss = extract_quality.protected_lost(piece_prior, v, body) if piece_prior else {}
         quality_repair_needed = bool(completeness or protected_loss)
