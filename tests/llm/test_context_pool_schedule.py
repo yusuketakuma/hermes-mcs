@@ -279,3 +279,26 @@ def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
         assert key not in cloud_backlog._context_pass_observation({'status': 'deferred', key: invalid})
     assert 'wait_unregistered' not in cloud_backlog._context_pass_observation({
         'status': 'deferred', 'wait_unregistered': 1})
+
+
+def test_context_pass_lane_breakdown_keys_match_the_engine():
+    import patient_context_refresh
+    assert cloud_backlog._NO_DUE_LANE_KEYS == patient_context_refresh._NO_DUE_LANE_KEYS
+
+
+def test_context_pass_reports_fixed_change_cause_detail_and_lane_breakdown():
+    result = {"status": "source_changed", "done": 0, "changed": "scans",
+              "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(result) == {
+        "status": "source_changed", "done": 0, "changed": "scans",
+        "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "changed": "合成の非公開値"})["changed"] == "unclassified"
+    assert "changed" not in cloud_backlog._context_pass_observation({"status": "deferred", "changed": "scans"})
+    assert "wait_no_due_A_backoff" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "wait_no_due_A_backoff": 17})
+    record = cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable:RuntimeStale", "detail": "RuntimeStale"})
+    assert record == {"status": "deferred", "reason": "source_quality_unavailable", "detail": "RuntimeStale"}
+    assert cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable", "detail": "合成 本文"})["detail"] == "unclassified"
