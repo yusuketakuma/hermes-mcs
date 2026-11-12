@@ -12,6 +12,7 @@ import extract_llm_runner
 import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
+import contextlib
 import gc
 import json
 import os
@@ -22,7 +23,7 @@ import pytest
 import cloud_inference
 import extract_llm as worker
 from extract_testkit import _ledger, _message
-from test_lane_slot_and_lock import _carry_one, _claims
+from test_lane_slot_and_lock import _carry_one, _claims, _lock_stub
 from test_anthropic_runtime import (
     routed as routed, old, _use_real_cloud_accounting, _current_artifacts,
 )
@@ -228,3 +229,41 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
     assert len(context_calls) == int(lane == 3)
     assert clock[0] == 10 and not pending
     assert 'SYNTH-NEVER-LOG-CARRY' not in capsys.readouterr().out
+
+
+def test_released_carry_is_counted_even_when_reported(tmp_path, monkeypatch, capsys):
+    led = _ledger(tmp_path)
+    try:
+        _lock, carry = _carry_one(led, monkeypatch, tmp_path)
+        capsys.readouterr()
+        settled, count, _pids = worker._settle_carry(
+            led, carry, write=False, lock_context=contextlib.nullcontext(True))
+        assert count == 0 and carry == [] and _claims(led) == []
+        assert settled['deferred'] == 1 and settled['defer_reasons'] == {'update_fence': 1}
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [row['carry_settled'] for row in rows if 'carry_settled' in row] == [settled]
+        assert not led.artifacts('extract_llm')
+    finally:
+        led.close()
+
+
+def test_unwritten_failure_is_counted_without_charging_an_attempt(tmp_path, monkeypatch):
+    led = _ledger(tmp_path)
+    try:
+        led.save_messages([_message(body='合成の本文です。' * 20)])
+        state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
+        monkeypatch.setattr(worker, '_llm_up', lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
+
+        def extract(body, **_kw):
+            state['blocked'] = None
+            return None
+        monkeypatch.setattr(worker, 'llm_extract', extract)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+        result = worker.run_pending(led, limit=1, budget_s=30, per_write_lock=True,
+                                    write_wait_s=1, carry=[])
+        assert result['failed'] == result['unwritten'] == 1
+        assert result['deferred'] == 0 and result['carry'] == []
+        assert led.artifacts('extract_llm', message_id=1) == [] and _claims(led) == []
+    finally:
+        led.close()
