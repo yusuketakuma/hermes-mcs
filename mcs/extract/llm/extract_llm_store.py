@@ -566,6 +566,10 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
         return False
     if not replay and ledger.db.in_transaction:
         return False
+    if not replay and (r.get("_resume_refused") or r.get("_checkpoint_conflict")):
+        # A sticky resume-admission or checkpoint conflict refuses every
+        # later checkpoint write, split and compensation from this job.
+        return False
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
     inserted_witness = None
     with _checkpoint_write(ledger.db, replay=replay):

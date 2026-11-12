@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "保護priorが切り替わった後の途中再開を誤った基準で修復しないよう修正",
+  "summary": "抽出の途中状態（pending/startedチェックポイント）を保存した時点と異なる保護priorが現在有効な場合、その証拠を使った修復 dispatch を行わず、証拠を保持したまま処理を延期します。あわせて、明示的に記録された初回応答originが検証できない・両キーが存在する・参照先の基準が一致しない場合も、従来の「origin記録なし」扱いへ変換せず拒否します。",
+  "upgrade": "追加操作は不要です。保護priorの記録を持たない旧来のpending/startedが、保護priorが存在する状態で再開される場合は、基準を証明できないため修復せず延期されます（証拠は削除されません）。同一priorでの再開・最終証明の履歴再生・従来のlegacy-local経路は従来どおり動作します。",
+  "details": [
+    "保存checkpointのmeta.protected_prior_refと今回prepareの基準を全体照合し、不一致・今回側欠落・記録の不正をlive再開で拒否する。",
+    "__quality_origin_v1/__quality_origin_ref_v1のキー有無をpop前に区別し、明示null・不正型・参照切れ・証拠不一致・両キー存在をmissing legacyへ潰さず拒否する。",
+    "origin_ref参照先の起点checkpointに記録された基準も今回基準と照合する。",
+    "status/resultを持たない保存leafがhint coverageで実効pendingへ昇格する経路にも同じ判定を適用し、job全体を最初の副作用より前にpreflightする。",
+    "prepare時点で既知の拒否はclaim前に延期し、claim後の初検出は_ensure_v1/provider/checkpoint書込みより前に停止する。拒否はstickyで、checkpoint書込み・分割・補償callbackを拒否し、空き枠や旧行fallback・local切替えへ変換しない。",
+    "最終v1/inline履歴再生(proof_rows)にはlive admissionを適用せず、v1互換とv2三者照合を維持する。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_proofs.py", "mcs/extract/llm/extract_llm_engine.py", "mcs/extract/llm/extract_llm_runner.py", "mcs/extract/llm/extract_llm_store.py"]
+}

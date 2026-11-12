@@ -32,6 +32,7 @@ from extract_llm_prompts import (
     _target_head,
 )
 from extract_llm_proofs import (
+    _chunk_span,
     _quality_record_consistent,
 )
 from extract_llm_provider import (
@@ -90,7 +91,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None, quality_qc_src=None,
                 medication_hints=None, medication_guard=None, request_guard=None,
-                protected_prior=None, protected_prior_ref=None
+                protected_prior=None, protected_prior_ref=None, resume_refused=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -244,7 +245,8 @@ def llm_extract(body: str, *, context: str | None = None,
             {"body_text": piece, "posted_at": posted_at})
         if key in saved and quality_status is None:
             result = {k: value for k, value in cached.items()
-                      if k not in ("_quality_result", "_provider_leaf")}
+                      if k not in ("_quality_result", "_provider_leaf",
+                                   "_resume_refused", "_resume_promote_conflict")}
             record = cached.get("_quality_result")
             if not isinstance(record, dict):
                 record = _hint_coverage(result, piece_hints, piece)
@@ -525,6 +527,40 @@ def llm_extract(body: str, *, context: str | None = None,
                     meta_out["_quality_hold"] = True
                 return _DEFERRED
         return [v]
+
+    def _resume_preflight_refusal():
+        """Job-wide live-resume admission before the first side effect.
+
+        A refused pending/started leaf or a plain leaf whose hint coverage
+        would promote it under an unproven/conflicting basis stops the whole
+        job — earlier chunks must not dispatch ahead of a later refusal."""
+        for leaf in saved.values():
+            if isinstance(leaf, dict) and leaf.get("_resume_refused"):
+                return leaf["_resume_refused"]
+        for key, leaf in saved.items():
+            if not isinstance(leaf, dict) or not leaf.get("_resume_promote_conflict"):
+                continue
+            found = _chunk_span(body, chunk_size, key, splits)
+            if found is None:
+                continue
+            piece, _start = found
+            piece_hints = hints if piece == body and isinstance(hints, dict) else _rule_hints(
+                {"body_text": piece, "posted_at": posted_at})
+            result = {k: value for k, value in leaf.items()
+                      if k not in ("_quality_result", "_provider_leaf",
+                                   "_resume_refused", "_resume_promote_conflict")}
+            if _hint_coverage(result, piece_hints, piece)["state"] == "unresolved":
+                return leaf["_resume_promote_conflict"]
+        return None
+
+    resume_refusal = _resume_preflight_refusal()
+    if resume_refused is True and resume_refusal is None:
+        resume_refusal = "quality_checkpoint_unverified"
+    if resume_refusal is not None:
+        _CALL_NOTES.defer_reason = "quality_checkpoint_unverified"
+        if meta_out is not None:
+            meta_out.update(failure_reason="quality_checkpoint_unverified", _quality_hold=True)
+        return _DEFERRED
 
     with pin_target(_resolved_llm()):
         outs = []

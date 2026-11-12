@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "修復証明の再生失敗を再開拒否として保持し有償dispatchの無料スロット化を防止",
+  "summary": "チェックポイント再開時に、結合済みの分割証明・修復葉証明・provider封緘のいずれかがライブ再生で一致しない場合、従来はその証拠が単に読み飛ばされ、同じ内容へ新たな有償dispatchが割り当てられる余地がありました。今回、再生不一致を_resume_refusedとして行へ記録し、llm_extractのresume_refused引数経由でresume_refusal=\"quality_checkpoint_unverified\"として安全に延期します。証拠が再生できない限り新規の有償送信は行われず、拒否はfail-closed方向のみです。",
+  "upgrade": "追加操作は不要です。対象は抽出エンジンの内部経路で、保存済みの証明・checkpoint形式に変更はありません。再開時に再生不一致が検出された行は、有償dispatchへ進まず延期として記録されます。",
+  "details": [
+    "mcs/extract/llm/extract_llm_proofs.py: _saved_chunk_stateで、結合分割証明・修復葉証明・provider_leaf封緘のライブ再生が不一致となった場合にr[\"_resume_refused\"]=Trueを設定します。対象はproof_rowsがNoneの未シール経路に限定し、シール済み記録の扱いは変えていません。",
+    "mcs/extract/llm/extract_llm_engine.py: llm_extractにresume_refusedキーワードを追加し、他の拒否理由がない場合にresume_refusal=\"quality_checkpoint_unverified\"を設定して_DEFERREDを返します。",
+    "mcs/extract/llm/extract_llm_runner.py: run_pendingからresume_refusedをllm_extractへ引き渡します。",
+    "tests/extract/llm/test_legacy_negation_paid_proof.py: _resume_under_new_priorヘルパーへresume_refusedの引き渡しを追加しました。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_proofs.py", "mcs/extract/llm/extract_llm_engine.py", "mcs/extract/llm/extract_llm_runner.py", "tests/extract/llm/test_legacy_negation_paid_proof.py"]
+}
