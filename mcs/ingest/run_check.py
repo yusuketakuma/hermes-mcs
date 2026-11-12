@@ -104,9 +104,8 @@ def _write_health(ledger, result: dict, status: str,
             f"health_write_failed: {type(e).__name__}")
         if not ledger.db.in_transaction:
             with suppress(Exception):
-                ledger.outbox_add("health_write_failed", None,
-                                  {"detail": type(e).__name__,
-                                   "run_id": run_id})
+                collection_stages.queue_run_alert(
+                    ledger, "health_write_failed", run_id, type(e).__name__)
 LOCK_WAIT_S = 150
 
 

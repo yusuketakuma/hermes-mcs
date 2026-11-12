@@ -48,14 +48,19 @@ def queue_run_alert(ledger, kind: str, run_id: int, detail: str) -> bool:
     not re-alert on every tick: one per kind per ALERT_MIN_INTERVAL_S
     keeps it visible without flooding the channel. The run row and
     health file still record every occurrence; only the notification
-    is gated."""
+    is gated. Suppressed incidents never reached the channel, so they
+    must not hold the throttle either — a healed blip followed by a new
+    failure still alerts."""
     last = ledger.db.execute(
         "SELECT MAX(created_at) t FROM notify_outbox"
-        " WHERE kind=?", (kind,)).fetchone()["t"]
+        " WHERE kind=? AND state NOT IN ('suppressed','withdrawn')",
+        (kind,)).fetchone()["t"]
     if last is not None \
             and time.time() - float(last) < ALERT_MIN_INTERVAL_S:
         return False
-    ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail})
+    import alert_recovery
+    ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail},
+                      next_try=alert_recovery.next_try_for(kind))
     return True
 
 

@@ -385,6 +385,10 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
     if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
+        import alert_recovery
+        reason = alert_recovery.suppression_reason(ledger.db, ev)
+        if reason is not None:
+            raise semantic_send_gate.StaleSend(reason)
         return _system_event_text(ev["kind"], payload), []
     if ev["kind"] == "daily_digest":
         # frozen at enqueue (ids and counts only); turning the digest

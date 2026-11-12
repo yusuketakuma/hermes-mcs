@@ -1002,8 +1002,9 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         return self._outbox_insert(kind, project_id, payload, next_try,
                                    route)
 
-    def outbox_add(self, kind: str, project_id: int | None, payload: dict) -> int:
-        rid = self.outbox_add_tx(kind, project_id, payload)
+    def outbox_add(self, kind: str, project_id: int | None, payload: dict,
+                   next_try: float | None = None) -> int:
+        rid = self.outbox_add_tx(kind, project_id, payload, next_try)
         self.db.commit()
         return rid
 
