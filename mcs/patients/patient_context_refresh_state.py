@@ -4,7 +4,6 @@ import hashlib
 import json
 import math
 from pathlib import Path
-import re
 import time as time
 from writer_lock import acquire_run_lock as acquire_run_lock
 import local_llm
@@ -70,9 +69,6 @@ CONTRACT = "patient-context-nightly/1"
 
 
 CALL_SECONDS = 300
-
-
-_FAILURE_CODE = re.compile(r"nightly_[a-z_]{1,60}")
 
 
 _CHECKS = hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()

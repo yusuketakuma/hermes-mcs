@@ -527,6 +527,29 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
     assert calls
 
 
+@pytest.mark.parametrize('raised,expected', [
+    ('cloud_result_discarded', 'cloud_result_discarded'),
+    ('patient_source_quality_incomplete', 'patient_source_quality_incomplete'),
+    ('free text /tmp/x', 'ValueError')])
+def test_pass_failure_records_registered_code_verbatim(runtime, monkeypatch, raised, expected):
+    led, _, _ = runtime
+    seed(led)
+    monkeypatch.setattr(patient_context_quality_controller, '_scan',
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError(raised)))
+    scan = None
+    for _ in range(12):
+        step(runtime)
+        row = led.db.execute('SELECT content FROM artifacts WHERE kind=? AND project_id=? '
+                             'ORDER BY artifact_id DESC LIMIT 1',
+                             (patient_context_refresh_state.SCAN, 1)).fetchone()
+        if row:
+            scan = json.loads(row[0])
+            if scan.get('failure'):
+                break
+    assert scan is not None and scan['failure'] == expected
+    assert scan['held'] is False
+
+
 def test_crossing_midnight_during_inference_commits_once_under_start_day(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
