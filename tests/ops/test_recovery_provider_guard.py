@@ -678,3 +678,15 @@ def test_hold_during_a_fresh_apply_is_printed_but_not_recorded(watchdog, monkeyp
     assert watchdog._recover_legacy() == 2
     report = json.loads(report_path.read_text())
     assert report["held"] is True and (report["alert_key"], report["notified_at"]) == ("synthetic-alert", 1.0)
+
+
+def test_untrusted_root_hold_is_printed_only(watchdog, tmp_path, monkeypatch, capsys):
+    link = tmp_path / "synthetic-root"
+    link.symlink_to(tmp_path / "synthetic-missing", target_is_directory=True)
+    data = link / "data"
+    for name, value in {"DATA": data, "STATE_PATH": data / "update_state.json",
+                        "REPORT_PATH": data / "recovery_report.json"}.items():
+        patch_lifecycle_lookup(monkeypatch, watchdog, name, str(value))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_report", lambda *_a, **_k: pytest.fail("untrusted root recorded"))
+    assert watchdog.recover() == 2
+    assert "導入先フォルダーを確認できない" in capsys.readouterr().out

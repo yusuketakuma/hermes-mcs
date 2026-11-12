@@ -306,7 +306,7 @@ def recover(if_stale=False):
             root = mcs_recovery_core._RecoveryRoot(os.path.dirname(mcs_recovery_core.DATA))
         except FileNotFoundError:
             if os.path.lexists(os.path.dirname(mcs_recovery_core.DATA)):
-                return 2
+                return _hold("provider_directory_unverified", 2, trusted=False)
         mcs_recovery_core._RECOVERY_ROOT = root
         # The root anchor precedes the gate and every recovery read.
         with ExitStack() as scope:
@@ -316,8 +316,17 @@ def recover(if_stale=False):
                 return 0
             mcs_recovery_core._check_recovery_root()
             return _recover_legacy(if_stale=if_stale)
-    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged):
-        return 2
+    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged) as exc:
+        if exc.args != ("release_entry_hold",):
+            return _hold("recovery_unverified", 2, trusted=False)
+        try:
+            trusted = _provider_settings_state() != "provider_directory_unverified"
+        except mcs_recovery_core._RecoveryRootChanged:
+            trusted = False
+        try:
+            return _hold("release_entry_hold", 2, trusted=trusted)
+        except mcs_recovery_core._RecoveryRootChanged:
+            return 2                        # reason printed; the root moved before the record
     finally:
         mcs_recovery_core._RECOVERY_ROOT = previous
         if root is not None:
@@ -633,6 +642,12 @@ _HOLD_TEXT = {
                                "split settings rollback is left to the target updater"),
     "provider_migration_pending": ("提供元設定の初回分離を確認できないため復旧を保留します。移行先の版の mcs_update.py recover で復旧してください。",
                                    "provider migration requires target updater recovery; writer status unverified"),
+    "release_entry_hold": ("リリース管理の記録があるか、その管理フォルダーを確認できないため、独立復旧監視は復旧を保留します。"
+                           "記録を削除せず、mcs_update.py status で確認してください。",
+                           "release owner state is present or its control directory is unverified"),
+    "recovery_unverified": ("導入先フォルダーまたは復旧に使うファイルを確認できないため復旧を保留します。"
+                            "設定と保留記録を保持し、--status と復旧結果の記録を確認してください。",
+                            "recovery root or files are unverified"),
     "provider_migration_hold_unverified": ("復旧の保留記録を確認できません。保留記録と設定を保持し、担当者に確認してください。",
                                            "provider hold marker could not be verified"),
 }

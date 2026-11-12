@@ -57,18 +57,32 @@ def test_new_watchdog_stops_before_recovery_when_receipt_exists(rec, monkeypatch
     assert '移行結果を確認できません' in capsys.readouterr().out
 
 
-def test_release_fence_holds_before_recovery_reports_or_lock_cleanup(rec, monkeypatch):
+def test_release_fence_holds_before_recovery_reports_or_lock_cleanup(rec, monkeypatch, capsys):
     import release_apply_owner
     runtime = os.path.dirname(rec.mcs_recovery_core.DATA)
     with release_apply_owner._control_store(runtime) as store:
         store.write('release-owner-activation.json', {'synthetic': True})
-    monkeypatch.setattr(rec.mcs_recovery_core, '_report', lambda *_a, **_k: pytest.fail('report before release hold'))
+    original = rec.mcs_recovery_core._report
+
+    def hold_only(result, *args, **kwargs):
+        # Only the visible hold itself may be recorded.
+        if (result, kwargs.get('held')) != ('release_entry_hold', True):
+            pytest.fail('report before release hold')
+        original(result, *args, **kwargs)
+    monkeypatch.setattr(rec.mcs_recovery_core, '_report', hold_only)
     monkeypatch.setattr(rec, '_report_alert', lambda *_a, **_k: pytest.fail('alert before release hold'))
     monkeypatch.setattr(rec.mcs_recovery_core, '_try_lock', lambda *_a: pytest.fail('old locks before release hold'))
     monkeypatch.setattr(rec.mcs_recovery_core, '_remove_marker', lambda: pytest.fail('cleanup before release hold'))
     assert rec.recover() == 2
     assert rec.mcs_recovery_core._RELEASE_GATE_FD is None
-    assert not Path(rec.mcs_recovery_core.REPORT_PATH).exists()
+    report_path = Path(rec.mcs_recovery_core.REPORT_PATH)
+    report = json.loads(report_path.read_text())
+    assert report['result'] == 'release_entry_hold' and report['held'] is True
+    assert runtime not in report_path.read_text()
+    first = (report_path.stat().st_ino, report_path.read_bytes())
+    assert rec.recover() == 2
+    assert (report_path.stat().st_ino, report_path.read_bytes()) == first
+    assert 'リリース管理の記録' in capsys.readouterr().out
 
 
 def test_recovery_owned_child_inherits_gate_only_during_scope(rec, monkeypatch):
