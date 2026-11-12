@@ -64,7 +64,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None, quality_qc_src=None,
                 medication_hints=None, medication_guard=None, protected_prior=None,
-                protected_prior_ref=None
+                protected_prior_ref=None, resume_refused=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -521,6 +521,8 @@ def llm_extract(body: str, *, context: str | None = None,
         return None
 
     resume_refusal = _resume_preflight_refusal()
+    if resume_refused is True and resume_refusal is None:
+        resume_refusal = "quality_checkpoint_unverified"
     if resume_refusal is not None:
         _CALL_NOTES.defer_reason = "quality_checkpoint_unverified"
         if meta_out is not None:

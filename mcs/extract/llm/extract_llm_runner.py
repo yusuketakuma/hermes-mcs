@@ -599,6 +599,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            protected_prior=(loads_dict(r["_protected_prior"]["content"])
                                if isinstance(r.get("_protected_prior"), dict) else None),
                            protected_prior_ref=r.get("_protected_prior_ref"),
+                           resume_refused=r.get("_resume_refused"),
                            chunk_size=r["_chunk_size"],
                            splits_in=r["_splits"],
                            on_split=(lambda key, size: _queue_checkpoint(index, key, size, True))

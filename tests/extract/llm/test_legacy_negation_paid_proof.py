@@ -519,7 +519,8 @@ def _resume_under_new_prior(routed, monkeypatch, led, body, source_id, prior_a_r
             chunk_size=row["_chunk_size"], provider=provider,
             medication_hints=worker._frame_medications(row),
             protected_prior=mcs_util.loads_dict(row["_protected_prior"]["content"]),
-            protected_prior_ref=row.get("_protected_prior_ref"))
+            protected_prior_ref=row.get("_protected_prior_ref"),
+            resume_refused=row.get("_resume_refused"))
     return result, row
 
 

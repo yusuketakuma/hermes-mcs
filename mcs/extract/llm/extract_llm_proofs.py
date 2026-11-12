@@ -474,6 +474,10 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                             or size != max(1, len(piece) // 2)
                             or not _replay_repair_leaf(db, r, context, key, chunk_size, splits, split_repair,
                                                        None, records=proof_lookup, finish_reason="length")):
+                        if proof_rows is None:
+                            # Bound split proof that fails live replay must not
+                            # become a free slot for a fresh paid dispatch.
+                            r["_resume_refused"] = True
                         continue
                     splits[key] = size
             continue
@@ -517,6 +521,10 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     matches = _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, content,
                                                   records=proof_lookup)
                 if repair is not None and not matches:
+                    if proof_rows is None:
+                        # A recorded repair proof that fails live replay is
+                        # refused evidence, not an empty slot.
+                        r["_resume_refused"] = True
                     continue
                 if matches:
                     validated = _EvidenceLeaf(validated, evidence)
@@ -541,6 +549,11 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             # (including retained losses) reproduce exactly. New content loss,
             # increased losses and unproven legacy payloads remain unreadable.
             if repeated_loss and not matches:
+                if (proof_rows is None and isinstance(strict_meta, dict)
+                        and "provider_leaf" in strict_meta):
+                    # A bound provider seal that cannot reproduce is refused
+                    # evidence; only unsealed legacy payloads stay unreadable.
+                    r["_resume_refused"] = True
                 continue
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
