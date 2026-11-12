@@ -40,6 +40,7 @@ from extract_llm_context import (
     _frame_refs,
 )
 from extract_llm_engine import (
+    _resume_promotion_refusal,
     first_request_prompt,
     llm_extract,
 )
@@ -178,6 +179,26 @@ def _run_batch_call(tups, target, deadline: float,
                 extract_validation.apply_vital_policy(v, r["body_text"], vital_policy)
             out[index] = v
     return "ok", out, meta
+
+
+def _resume_admission_refused(r, saved, hints):
+    """Live-resume admission shared with the engine preflight.
+
+    A sticky refused flag or a promote candidate that would stay
+    unresolved under this run's hints refuses the whole job. Detecting a
+    promote refusal here marks the row so later captures and checkpoint
+    writes stay refused instead of re-arming the slot."""
+    if r.get("_resume_refused") or r.get("_checkpoint_conflict"):
+        return True
+    if not saved:
+        return False
+    if _resume_promotion_refusal(
+            saved, body=r["body_text"], chunk_size=r["_chunk_size"],
+            splits=r["_splits"], hints=hints,
+            posted_at=r["posted_at"]) is not None:
+        r["_resume_refused"] = True
+        return True
+    return False
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
@@ -975,7 +996,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r, ctx, saved, hints, qc = candidate
             if circuit_s and r.get("_cloud_mode") != "on":
                 continue
-            if r.get("_resume_refused"):
+            if _resume_admission_refused(r, saved, hints):
                 # Prepare already proved this job's saved resume evidence
                 # cannot be admitted; defer before any claim or side effect.
                 deferred += 1
@@ -992,7 +1013,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 saved = _capture_checkpoint_state(ledger.db, r, ctx)
                 jobs[index] = (r, ctx, saved, hints, qc)
                 claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
-                if r.get("_resume_refused"):
+                if _resume_admission_refused(r, saved, hints):
                     # First detected after the claim: stop before _ensure_v1,
                     # provider construction or any checkpoint write. The claim
                     # itself may already have written, so this is not a

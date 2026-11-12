@@ -131,21 +131,55 @@ def _chunk_span(body, chunk_size, key, splits, *, root_plan=None):
     return piece, start
 
 
-def _resume_basis_reason(recorded, stored, prepared):
+def _resume_basis_reason(db, r, recorded, stored, prepared):
     """Live-resume basis verdict for one recorded protected-prior reference.
 
     ``recorded`` distinguishes an absent meta key from an explicit value;
     ``prepared`` is this run's _protected_prior_ref. An explicit record that
     differs from — or survives while — the prepared basis refuses; an
     unrecorded legacy basis only refuses when this run would claim a
-    protected basis it cannot prove."""
+    protected basis it cannot prove. An explicit value must resolve through
+    the same reference contract as admission — explicit null, wrong types
+    and unresolvable references are invalid records, not missing legacy."""
     if not recorded:
         return "protected_basis_unrecorded" if prepared is not None else None
-    return None if stored == prepared else "protected_basis_conflict"
+    if _resolve_protected_prior_reference(db, r, stored) is None:
+        return "protected_basis_invalid"
+    # Canonical bytes keep JSON type distinctions dict equality collapses
+    # (true vs 1, 1.0 vs 1) so only the exact recorded basis is admitted.
+    return None if mcs_util.canonical(stored) == mcs_util.canonical(prepared) \
+        else "protected_basis_conflict"
 
 
-def _mark_live_resume(r, meta, leaf, *, has_inline_origin, has_origin_ref,
-                      origin, origin_ref, origin_basis):
+_RESUME_BOUND_MARKERS = ("__quality_repair_v1", "__quality_origin_v1",
+                         "__quality_origin_ref_v1", "__quality_prior_kind_v1")
+
+
+def _resume_bound_content(content):
+    """Explicit repair/origin evidence inside a raw or parsed checkpoint payload."""
+    value = content if isinstance(content, dict) else _provider_strict_dict(content)
+    return isinstance(value, dict) and any(
+        marker in value for marker in _RESUME_BOUND_MARKERS)
+
+
+def _refuse_live_checkpoint(r, saved, key, meta, *, bound=False, content=None):
+    """A selected record carrying explicit resume-bound evidence that fails
+    admission keeps its evidence and refuses the whole job — never a fresh
+    paid slot. Bound means an unfinished pending/started status or explicit
+    repair/origin markers in the payload; unsealed legacy rows keep the
+    existing drop path. The sentinel stays pending-shaped so progress readers
+    report the chunk as unfinished rather than completed."""
+    if not (bound or meta.get("quality_status") in ("pending", "started")
+            or (content is not None and _resume_bound_content(content))):
+        return
+    r["_resume_refused"] = True
+    saved[key] = {"_resume_refused": "quality_checkpoint_unverified",
+                  "_quality_status": "pending"}
+
+
+def _mark_live_resume(db, r, meta, leaf, *, has_inline_origin, has_origin_ref,
+                      origin, origin_ref, origin_basis,
+                      provider_seal_unverified=False):
     """Flag live resume targets whose recorded basis/origin cannot be admitted.
 
     Live admission only: proof_rows replay never reaches this marker. Pending
@@ -159,7 +193,7 @@ def _mark_live_resume(r, meta, leaf, *, has_inline_origin, has_origin_ref,
     if not active and status is not None:
         return
     reasons = []
-    reason = _resume_basis_reason("protected_prior_ref" in meta,
+    reason = _resume_basis_reason(db, r, "protected_prior_ref" in meta,
                                   meta.get("protected_prior_ref"),
                                   r.get("_protected_prior_ref"))
     if reason is not None:
@@ -172,10 +206,15 @@ def _mark_live_resume(r, meta, leaf, *, has_inline_origin, has_origin_ref,
         if origin_ref is None or getattr(leaf, "quality_origin", None) is None:
             reasons.append("origin_unverified")
         else:
-            reason = _resume_basis_reason(origin_basis[0], origin_basis[1],
+            reason = _resume_basis_reason(db, r, origin_basis[0], origin_basis[1],
                                           r.get("_protected_prior_ref"))
             if reason is not None:
                 reasons.append(reason)
+    if provider_seal_unverified:
+        # A recorded provider seal that cannot be reproduced is corrupt
+        # explicit evidence, not missing legacy: it must not degrade to an
+        # ordinary unsealed leaf.
+        reasons.append("provider_seal_unverified")
     if reasons:
         if active:
             leaf["_resume_refused"] = reasons[0]
@@ -458,10 +497,15 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         meta, content, artifact_project, artifact_model, raw_meta, artifact_id = records[key]
         piece = _chunk_piece(r["body_text"], chunk_size, key, splits, root_plan=(roots, starts))
         if piece is None:
+            # Unreachable in the current selected layout (e.g. an old child
+            # shadowed by a terminal root): evidence stays immutable but must
+            # not hold the job — only reachable refusals do.
             continue
         sha = hashlib.sha256(piece.encode()).hexdigest()
         legacy_complete = type(key) is int and "split_size" not in meta
         if meta.get("piece_sha256", sha if legacy_complete else None) != sha:
+            if proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta, content=content)
             continue
         if "split_size" in meta:
             size = meta["split_size"]
@@ -475,16 +519,20 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                             or not _replay_repair_leaf(db, r, context, key, chunk_size, splits, split_repair,
                                                        None, records=proof_lookup, finish_reason="length")):
                         if proof_rows is None:
-                            # Bound split proof that fails live replay must not
-                            # become a free slot for a fresh paid dispatch.
-                            r["_resume_refused"] = True
+                            _refuse_live_checkpoint(r, saved, key, meta, bound=True)
                         continue
                     splits[key] = size
+                elif proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta, content=content)
+            elif proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta, content=content)
             continue
         raw_content = content
         try:
             content = json.loads(raw_content)
         except (ValueError, TypeError, RecursionError):
+            if proof_rows is None:
+                _refuse_live_checkpoint(r, saved, key, meta, content=content)
             continue
         has_inline_origin = isinstance(content, dict) and "__quality_origin_v1" in content
         has_origin_ref = isinstance(content, dict) and "__quality_origin_ref_v1" in content
@@ -520,12 +568,6 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                 if matches and repair is not None:
                     matches = _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, content,
                                                   records=proof_lookup)
-                if repair is not None and not matches:
-                    if proof_rows is None:
-                        # A recorded repair proof that fails live replay is
-                        # refused evidence, not an empty slot.
-                        r["_resume_refused"] = True
-                    continue
                 if matches:
                     validated = _EvidenceLeaf(validated, evidence)
                     validated.repair_proof = repair
@@ -544,16 +586,22 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                         validated.quality_origin_id = origin_ref if validated.quality_origin is not None else None
                         if meta.get("quality_status") == "started" and prior_kind in ("raw", "cached"):
                             validated.quality_prior_kind = prior_kind
+            # An explicit repair marker is bound evidence even when the outer
+            # seal condition failed before matches could be computed: refuse
+            # live resume and never adopt the leaf as an ordinary terminal.
+            if repair is not None and not matches:
+                if proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta, bound=True)
+                continue
             # A known uncertainty may be counted again during validation. Keep
             # it only when the complete source-bound provider seal and payload
             # (including retained losses) reproduce exactly. New content loss,
             # increased losses and unproven legacy payloads remain unreadable.
             if repeated_loss and not matches:
-                if (proof_rows is None and isinstance(strict_meta, dict)
-                        and "provider_leaf" in strict_meta):
-                    # A bound provider seal that cannot reproduce is refused
-                    # evidence; only unsealed legacy payloads stay unreadable.
-                    r["_resume_refused"] = True
+                if proof_rows is None:
+                    _refuse_live_checkpoint(r, saved, key, meta,
+                                            bound=repair is not None or has_inline_origin
+                                            or has_origin_ref)
                 continue
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
@@ -562,10 +610,15 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                 validated["_quality_result"] = {"state": meta["quality_status"],
                                                 "remaining_hint_candidates": meta.get("quality_remaining")}
             if proof_rows is None:
-                _mark_live_resume(r, meta, validated,
+                _mark_live_resume(db, r, meta, validated,
                                   has_inline_origin=has_inline_origin, has_origin_ref=has_origin_ref,
-                                  origin=origin, origin_ref=origin_ref, origin_basis=origin_ref_basis)
+                                  origin=origin, origin_ref=origin_ref, origin_basis=origin_ref_basis,
+                                  provider_seal_unverified=proof is not None and not matches)
             saved[key] = validated
+        elif proof_rows is None:
+            _refuse_live_checkpoint(r, saved, key, meta,
+                                    bound=repair is not None or has_inline_origin
+                                    or has_origin_ref)
     return splits, saved
 
 

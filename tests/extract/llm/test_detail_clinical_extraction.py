@@ -849,3 +849,232 @@ def test_legacy_pending_without_origin_markers_resumes_under_same_prior(db, monk
     # A further pass must not re-dispatch or rewrite the held evidence.
     third_run = extract_llm.run_pending(db, limit=1, budget_s=300)
     assert len(calls) == 2 and third_run["held_prior"] == 0
+
+
+def _pending_first_run(db, monkeypatch, body, first):
+    """Persist one pending first candidate via a budget-cut local run."""
+    db.save_messages([_message(body=body)])
+    calls, clock = [], [100.0]
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def reply(piece):
+        calls.append(piece)
+        clock[0] += 20
+        return {"status": 200, "finish_reason": "stop",
+                "text": json.dumps(first, ensure_ascii=False)}
+
+    _fake_backend(monkeypatch, reply)
+    first_run = extract_llm.run_pending(db, limit=1, budget_s=80)
+    assert first_run["deferred"] == 1 and len(calls) == 1
+    return calls
+
+
+def _chunk_rows(db):
+    return db.db.execute("SELECT artifact_id, meta, content FROM artifacts "
+                         "WHERE kind='extract_llm_chunk' AND message_id=1 "
+                         "ORDER BY artifact_id").fetchall()
+
+
+def test_pending_with_explicit_null_prior_ref_is_refused_not_admitted(db, monkeypatch):
+    """meta.protected_prior_ref recorded as explicit null is an invalid
+    record, not missing legacy: with no current protected prior the job
+    still defers — evidence preserved, zero new sends — instead of
+    admitting an unprovable basis."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+                           "evidence": "父は昨日、咳がありました。"}]}
+    calls = _pending_first_run(db, monkeypatch, body, first)
+    rows = _chunk_rows(db)
+    assert rows
+    with db.db:
+        for artifact_id, meta, _content in rows:
+            meta_obj = json.loads(meta)
+            meta_obj["protected_prior_ref"] = None
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta_obj, ensure_ascii=False), artifact_id))
+    rows_before = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    rows_after = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+    assert len(calls) == 1, "unprovable basis dispatched a repair"
+    assert rows_after == rows_before, "refused evidence was replaced"
+    assert second_run["done"] == 0 and second_run["deferred"] == 1, second_run
+
+
+def test_pending_with_tampered_piece_hash_refuses_sticky(db, monkeypatch):
+    """A selected pending record whose recorded piece hash no longer matches
+    the current piece fails admission: the whole job defers before claim
+    with the evidence rows untouched — never a fresh paid slot."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    first = {"symptoms": [{"text": "咳", "subject": "family", "negated": False,
+                           "evidence": "父は昨日、咳がありました。"}]}
+    calls = _pending_first_run(db, monkeypatch, body, first)
+    rows = _chunk_rows(db)
+    assert rows
+    with db.db:
+        for artifact_id, meta, _content in rows:
+            meta_obj = json.loads(meta)
+            meta_obj["piece_sha256"] = "0" * 64
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta_obj, ensure_ascii=False), artifact_id))
+    rows_before = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+
+    second_run = extract_llm.run_pending(db, limit=1, budget_s=300)
+    rows_after = [(meta, content) for _aid, meta, content in _chunk_rows(db)]
+    assert len(calls) == 1, "unverifiable checkpoint freed a fresh dispatch"
+    assert rows_after == rows_before, "refused evidence was replaced"
+    assert second_run["done"] == 0 and second_run["deferred"] == 1, second_run
+
+
+def test_resume_promotion_refusal_is_shared_with_runner():
+    """The promote-conflict verdict uses the same hint-coverage judgment at
+    runner admission as inside the engine preflight: an unresolved plain
+    leaf under a refused basis stops the job before claim."""
+    body = ("父は昨日、咳がありました。父は現在も同じ咳が続いています。"
+            "本人の血圧120/80です。")
+    leaf = {"_resume_promote_conflict": "protected_basis_conflict"}
+    r = {"body_text": body, "_chunk_size": 100000, "_splits": {},
+         "posted_at": None}
+    assert extract_llm_runner._resume_admission_refused(r, {0: leaf}, None)
+    assert r["_resume_refused"] is True
+    r2 = {"body_text": body, "_chunk_size": 100000, "_splits": {},
+          "posted_at": None}
+    assert not extract_llm_runner._resume_admission_refused(
+        r2, {0: {"summary": "咳があります"}}, None)
+
+
+def test_checkpoint_conflict_alone_refuses_runner_admission():
+    """A post-capture checkpoint conflict is a job-level stop even with no
+    saved leaves and no resume flag: admission refuses before ensure_v1 or
+    provider construction."""
+    r = {"_checkpoint_conflict": True, "body_text": "合成",
+         "_chunk_size": 100000, "_splits": {}, "posted_at": None}
+    assert extract_llm_runner._resume_admission_refused(r, {}, None)
+
+
+@pytest.mark.parametrize("fault", ["repair", "size"])
+def test_bound_split_record_failure_refuses_instead_of_fresh_parent(db, fault):
+    """A split parent row carries no quality_status of its own; its bound
+    evidence is the repair marker inside the payload. An invalid repair
+    proof — or a broken split size — must refuse the job rather than
+    silently returning to a fresh parent dispatch."""
+    body = "完全合成区間です。" * 10
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    size = len(body) // 2
+    assert extract_llm._persist_chunks(db, row, {0: {}}, split_size=size)
+    meta = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
+    if fault == "size":
+        meta["split_size"] = 99999
+    db.artifact_add("extract_llm_chunk",
+                    json.dumps({"__quality_repair_v1": {"bogus": 1}}),
+                    project_id=1, message_id=1, meta=meta)
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert splits == {}
+    assert saved == {0: {"_resume_refused": "quality_checkpoint_unverified",
+                        "_quality_status": "pending"}}
+    assert row["_resume_refused"] is True
+
+
+def test_terminal_repair_marker_failure_refuses_job(db):
+    """A terminal sealed record carrying an explicit repair marker that can
+    no longer be admitted is bound evidence too — not a droppable legacy
+    row. The marker survives the seal check only to fail admission, so the
+    whole job refuses instead of falling back to a fresh dispatch."""
+    body = "合成の本文です。" * 12
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    value = extract_llm._EvidenceLeaf({"summary": "合成の部分結果"},
+                                    extract_llm._provider_evidence(["local"], True))
+    assert extract_llm._persist_chunks(db, row, {0: value})
+    raw = db.db.execute("SELECT artifact_id, meta, content FROM artifacts "
+                        "WHERE kind='extract_llm_chunk'").fetchone()
+    meta = json.loads(raw["meta"])
+    meta["quality_pass"] = extract_quality._QUALITY_CHECKPOINT
+    meta["quality_status"] = "hint_gaps_resolved"
+    content = json.loads(raw["content"])
+    content["__quality_repair_v1"] = {"bogus": 1}
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=?, content=? WHERE artifact_id=?",
+                      (json.dumps(meta, ensure_ascii=False),
+                       json.dumps(content, ensure_ascii=False), raw["artifact_id"]))
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert splits == {}
+    assert saved == {0: {"_resume_refused": "quality_checkpoint_unverified",
+                        "_quality_status": "pending"}}
+    assert row["_resume_refused"] is True
+
+
+def test_terminal_repair_marker_outer_seal_failure_refuses_job(db):
+    """A terminal record carrying an explicit repair marker whose outer seal
+    condition fails before matches is computed (provider_leaf absent) is
+    still bound evidence: the shared refusal fires outside the seal AND so
+    the leaf is never adopted as an ordinary cached terminal."""
+    body = "合成の本文です。" * 12
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    value = extract_llm._EvidenceLeaf({"summary": "合成の部分結果"},
+                                    extract_llm._provider_evidence(["local"], True))
+    assert extract_llm._persist_chunks(db, row, {0: value})
+    raw = db.db.execute("SELECT artifact_id, meta, content FROM artifacts "
+                        "WHERE kind='extract_llm_chunk'").fetchone()
+    meta = json.loads(raw["meta"])
+    meta["quality_pass"] = extract_quality._QUALITY_CHECKPOINT
+    meta["quality_status"] = "hint_gaps_resolved"
+    meta.pop("provider_leaf", None)
+    content = json.loads(raw["content"])
+    content["__quality_repair_v1"] = {"bogus": 1}
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=?, content=? WHERE artifact_id=?",
+                      (json.dumps(meta, ensure_ascii=False),
+                       json.dumps(content, ensure_ascii=False), raw["artifact_id"]))
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert splits == {}
+    assert saved == {0: {"_resume_refused": "quality_checkpoint_unverified",
+                        "_quality_status": "pending"}}
+    assert row["_resume_refused"] is True
+
+
+def test_unreachable_pending_child_does_not_hold_job(db):
+    """A pending record whose key cannot resolve under the current selected
+    layout (shadowed by a terminal root) is unreachable evidence: it stays
+    immutable but must not refuse the whole job."""
+    body = "合成の本文です。" * 12
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    assert extract_llm._persist_chunks(db, row, {0: {}})
+    meta = json.loads(db.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+        "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
+    meta.update(chunk="0:0", quality_pass=extract_quality._QUALITY_CHECKPOINT,
+                quality_status="pending", piece_sha256="0" * 64)
+    db.artifact_add("extract_llm_chunk", "{}", project_id=1, message_id=1, meta=meta)
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert saved == {0: {}}
+    assert not row.get("_resume_refused")
+
+
+def test_broken_provider_seal_marks_promote_conflict_not_legacy(db):
+    """A plain leaf whose recorded provider seal cannot be reproduced is
+    corrupt explicit evidence: live resume marks it as a promote conflict
+    instead of treating the absent origin as legacy."""
+    body = "合成の本文です。" * 12
+    db.save_messages([_message(body=body)])
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    value = extract_llm._EvidenceLeaf({}, extract_llm._provider_evidence(["local"], True))
+    assert extract_llm._persist_chunks(db, row, {0: value})
+    raw = db.db.execute("SELECT artifact_id, meta FROM artifacts "
+                        "WHERE kind='extract_llm_chunk'").fetchone()
+    meta = json.loads(raw["meta"])
+    meta["provider_leaf"]["result_hash"] = "0" * 64
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                      (json.dumps(meta, ensure_ascii=False), raw["artifact_id"]))
+    splits, saved = extract_llm._saved_chunk_state(db.db, row)
+    assert splits == {}
+    assert saved[0]["_resume_promote_conflict"] == "provider_seal_unverified"
+    assert not row.get("_resume_refused")

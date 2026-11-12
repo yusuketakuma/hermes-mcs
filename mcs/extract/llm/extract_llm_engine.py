@@ -78,6 +78,31 @@ def first_request_prompt(body, *, context, hints, medication_hints, references,
                         piece_hints, medication_hints, private=True)
 
 
+def _resume_promotion_refusal(saved, *, body, chunk_size, splits, hints,
+                              posted_at):
+    """First plain leaf whose hint coverage would promote it under a
+    refused resume basis; None when no promote candidate stays unresolved.
+
+    Shared by the engine preflight and the runner's pre/post-claim
+    admission so a known mismatch stops before claim, provider creation
+    or any checkpoint write rather than only inside extraction."""
+    for key, leaf in saved.items():
+        if not isinstance(leaf, dict) or not leaf.get("_resume_promote_conflict"):
+            continue
+        found = _chunk_span(body, chunk_size, key, splits)
+        if found is None:
+            continue
+        piece, _start = found
+        piece_hints = hints if piece == body and isinstance(hints, dict) else _rule_hints(
+            {"body_text": piece, "posted_at": posted_at})
+        result = {k: value for k, value in leaf.items()
+                  if k not in ("_quality_result", "_provider_leaf",
+                               "_resume_refused", "_resume_promote_conflict")}
+        if _hint_coverage(result, piece_hints, piece)["state"] == "unresolved":
+            return leaf["_resume_promote_conflict"]
+    return None
+
+
 def llm_extract(body: str, *, context: str | None = None,
                 hints: dict | None = None,
                 deadline: float | None = None,
@@ -537,21 +562,9 @@ def llm_extract(body: str, *, context: str | None = None,
         for leaf in saved.values():
             if isinstance(leaf, dict) and leaf.get("_resume_refused"):
                 return leaf["_resume_refused"]
-        for key, leaf in saved.items():
-            if not isinstance(leaf, dict) or not leaf.get("_resume_promote_conflict"):
-                continue
-            found = _chunk_span(body, chunk_size, key, splits)
-            if found is None:
-                continue
-            piece, _start = found
-            piece_hints = hints if piece == body and isinstance(hints, dict) else _rule_hints(
-                {"body_text": piece, "posted_at": posted_at})
-            result = {k: value for k, value in leaf.items()
-                      if k not in ("_quality_result", "_provider_leaf",
-                                   "_resume_refused", "_resume_promote_conflict")}
-            if _hint_coverage(result, piece_hints, piece)["state"] == "unresolved":
-                return leaf["_resume_promote_conflict"]
-        return None
+        return _resume_promotion_refusal(
+            saved, body=body, chunk_size=chunk_size, splits=splits,
+            hints=hints, posted_at=posted_at)
 
     resume_refusal = _resume_preflight_refusal()
     if resume_refused is True and resume_refusal is None:
