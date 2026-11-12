@@ -700,7 +700,7 @@ def _context_pass_observation(result):
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
-                       ("wait_dependency_incomplete", 16),
+                       ("wait_dependency_incomplete", 16), ("wait_unit_claimed", 8),
                        *((key, 16) for key in _NO_DUE_LANE_KEYS)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
