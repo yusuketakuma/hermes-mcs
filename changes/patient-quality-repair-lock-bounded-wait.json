@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキスト品質修復のrun.lock待機を期限付きへ統一",
+  "summary": "患者コンテキストの品質監査で不合格となったソース・要約のクラウド修復は、有償予約の送信・修復候補の保存・修復シールの各永続化ポイントがrun.lockを1回だけ取得する実装でした。長時間ジョブがrun.lockを保持し続ける環境では取得に失敗し、修復が延期され続けて品質PASSへ進めない状態でした。今回、品質レシート経路と同じ最大60秒・呼出し期限で打ち切る期限付き待機(_acquire)へ統一しました。待機に失敗した場合は従来どおり延期・保留となり、取得後の所有権・世代・出典の再検査は変わりません。",
+  "upgrade": "追加操作は不要です。進行中の監査・修復はそのまま継続します。修復の各永続化でrun.lock解放を最大全体60秒待つ場合があり、その間ワーカーの当該処理は滞在しますが、期限を超えて待つことはありません。",
+  "details": [
+    "mcs/patients/patient_context_quality_controller.py: _quality_repair_candidateのreserve_dispatchと修復候補保存、_source_quality_repair_stepのreserve_dispatch、_source_repair_sealの4箇所をpatient_context_quality_receipts._acquire(current, deadline)へ置き換えました。_source_repair_sealにはdeadline引数を追加し、2箇所の呼出しから渡しています。",
+    "既に期限付き再試行を持っていた修復ユニット保存(同ファイル435行付近)と、shadow比較の機会主義的取得(patient_context_refresh.py)は変更していません。",
+    "ロック取得後の_quality_owns・current()フェンス・CAS検査・有償予約の会計契約は従来どおりで、待機が成功や採用へ化けることはありません。"
+  ],
+  "refs": ["mcs/patients/patient_context_quality_controller.py", "mcs/patients/patient_context_quality_receipts.py", "tests/patients/test_anthropic_context_repairs.py", "tests/patients/test_patient_summary_quality.py"]
+}

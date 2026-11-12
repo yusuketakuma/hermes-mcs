@@ -167,7 +167,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     def reserve_dispatch(fn):
         if ledger.db.in_transaction or not current():
             raise patient_context_refresh_state.Deferred("patient_summary_quality_source_changed")
-        fd = patient_context_refresh_state.acquire_run_lock()
+        fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
         if fd is None:
             raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
         try:
@@ -217,7 +217,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             proof = patient_context_quality_receipts._new_summary_repair_response(ledger.db, pid, identity, provider, prompt, response, summary)
         except (ValueError, TypeError, KeyError, AttributeError):
             return "held", None
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
     if fd is None:
         return "held", None
     try:
@@ -326,7 +326,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
             patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, origin['contract'], ref)
             return 'source_candidate', ref
     if header and header['phase'] == 'sealing':
-        return _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current)
+        return _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current, deadline)
     saved = {key:header[key] for key in ('cursor','split') if header and key in header}
     chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
@@ -376,7 +376,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
     def reserve_dispatch(fn):
         if ledger.db.in_transaction or not current():
             raise patient_context_refresh_state.Deferred('nightly_source_repair_changed')
-        fd = patient_context_refresh_state.acquire_run_lock()
+        fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
         if fd is None:
             raise patient_context_refresh_state.Deferred('nightly_source_repair_lock')
         try:
@@ -491,13 +491,13 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
     if not result['complete']:
         return 'pending', None
     header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
-    status, ref = _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current)
+    status, ref = _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current, deadline)
     # The final unit was durably saved. Resume its seal on the next tick;
     # a later attempt that makes no progress keeps the ordinary backoff.
     return ('pending' if status == 'deferred' else status), ref
 
 
-def _source_repair_seal(ledger, pid, source, contract, protected, header, identity, claim, current):
+def _source_repair_seal(ledger, pid, source, contract, protected, header, identity, claim, current, deadline):
     """Seal only a complete verified pass; this checkpoint resumes without another POST."""
     repair_key = identity['source_input_key']
     if not header or header['phase'] != 'sealing' or not current():
@@ -508,7 +508,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
         return 'held', None
     next_header = {'phase':'ready','cursor':header['cursor'],'split':header.get('split',0),
         'candidate_key':patient_context_refresh_state._digest(sorted(patient_context_refresh_state._facts_sig([fact]) for fact in facts.values())), 'chunks_sig':signature}
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
     if fd is None:
         return 'deferred', None
     try:
