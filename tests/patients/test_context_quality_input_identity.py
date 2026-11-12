@@ -135,5 +135,5 @@ def test_empty_summary_has_a_bound_input_while_nonempty_capacity_still_refuses(m
     monkeypatch.setattr(context_plan, 'MAX_PROMPT_CHARS', 2000)
     fact = {'id': 'synthetic', 'project_id': 1, 'category': 'living', 'posted_at': None,
             'subject': 'unspecified', 'text': '完全合成の居住記録。'}
-    with pytest.raises(ValueError, match='^nightly_summary_capacity$'):
+    with pytest.raises(ValueError, match='^patient_context_summary_capacity$'):
         controller._summary_input([fact], signature)

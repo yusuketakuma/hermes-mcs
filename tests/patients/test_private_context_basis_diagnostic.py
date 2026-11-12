@@ -44,13 +44,13 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
                                             source_keys=scope_keys)
             scoped_proof = proof_for(scoped_snap, cfg)
             _, _, _, scoped_facts, scoped_state = sources._all_facts(
-                db, 1, scoped_snap, meta.get('night_id'), include_all=True, cfg=cfg,
+                db, 1, scoped_snap, meta.get('workday_id'), include_all=True, cfg=cfg,
                 read_proof=scoped_proof)
             if doc:
                 policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
                 assert not errors
                 try:
-                    captured = sources._quality_capture(db, 1, cfg, meta.get('night_id'),
+                    captured = sources._quality_capture(db, 1, cfg, meta.get('workday_id'),
                         doc.get('summary'), state._quality_assessment(policy),
                         doc.get('temporal_view'), contract=contract, read_proof=scoped_proof,
                         source_keys=scope_keys)

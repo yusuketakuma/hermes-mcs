@@ -64,7 +64,7 @@ def test_patient_unknown_remains_blocked_across_source_and_night_changes(tmp_pat
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         reservation = _reserve(ledger, 'synthetic prompt', route='patient_context', unit='old-unit',
-                               owner={'night_id': 'old', 'source_sig': 'old'}, message_id=1)
+                               owner={'workday_id': 'old', 'source_sig': 'old'}, message_id=1)
         cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
         if legacy:
             with ledger.db:
@@ -72,7 +72,7 @@ def test_patient_unknown_remains_blocked_across_source_and_night_changes(tmp_pat
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         with pytest.raises(anthropic_client.AnthropicError) as caught:
             _reserve(ledger, 'synthetic prompt', 'openai', route='patient_context', unit='new-unit',
-                     owner={'night_id': 'new', 'source_sig': 'new'}, message_id=1)
+                     owner={'workday_id': 'new', 'source_sig': 'new'}, message_id=1)
         assert caught.value.detail == 'cloud_unit_unresolved'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
@@ -82,10 +82,10 @@ def test_patient_unknown_does_not_block_distinct_message(tmp_path, monkeypatch):
     with closing(_db(tmp_path)) as ledger:
         ledger.save_messages([_message(mid=2)])
         reservation = _reserve(ledger, 'synthetic prompt', route='patient_context', unit='old-unit',
-                               owner={'night_id': 'old', 'source_sig': 'old'}, message_id=1)
+                               owner={'workday_id': 'old', 'source_sig': 'old'}, message_id=1)
         cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
         _reserve(ledger, 'synthetic prompt', 'openai', route='patient_context', unit='new-unit',
-                 owner={'night_id': 'new', 'source_sig': 'new'}, message_id=2)
+                 owner={'workday_id': 'new', 'source_sig': 'new'}, message_id=2)
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
@@ -93,11 +93,11 @@ def test_patient_settled_success_allows_distinct_model_and_different_prompt(tmp_
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
         previous = _reserve(ledger, 'synthetic prompt', route='patient_context', unit='old',
-                            owner={'night_id': 'old', 'source_sig': 'old'})
+                            owner={'workday_id': 'old', 'source_sig': 'old'})
         cloud_policy.record_result(ledger, previous, {
             **_result(previous, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}})
         _reserve(ledger, 'synthetic prompt', 'openai', route='patient_context', unit='new',
-                 owner={'night_id': 'new', 'source_sig': 'new'})
+                 owner={'workday_id': 'new', 'source_sig': 'new'})
         _reserve(ledger, 'another synthetic prompt', 'openai', route='patient_context', unit='third')
         assert len(ledger.artifacts('cloud_usage_reserve')) == 3
 
@@ -340,7 +340,7 @@ def _openai_usage():
 def test_unknown_survives_generation_unit_and_effort_changes(tmp_path, monkeypatch, route, legacy):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
-        owner = _owner() if route == 'semantic_backlog' else {'night_id': 'old', 'source_sig': 'old'}
+        owner = _owner() if route == 'semantic_backlog' else {'workday_id': 'old', 'source_sig': 'old'}
         old = _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='old', owner=owner)
         cloud_policy.record_result(ledger, old, _result(old, 'timeout', 'timeout'))
         if legacy:
@@ -350,7 +350,7 @@ def test_unknown_survives_generation_unit_and_effort_changes(tmp_path, monkeypat
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         selected = _medium_selection(route)
         owner = _owner('new-generation') if route == 'semantic_backlog' else {
-            'night_id': 'new', 'source_sig': 'new'}
+            'workday_id': 'new', 'source_sig': 'new'}
         with pytest.raises(anthropic_client.AnthropicError) as caught:
             _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='new', owner=owner,
                      max_tokens=selected['max_tokens'], selection=selected)
@@ -362,12 +362,12 @@ def test_unknown_survives_generation_unit_and_effort_changes(tmp_path, monkeypat
 def test_validated_legacy_low_success_allows_same_model_medium(tmp_path, monkeypatch, route):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
-        owner = _owner() if route == 'semantic_backlog' else {'night_id': 'old', 'source_sig': 'old'}
+        owner = _owner() if route == 'semantic_backlog' else {'workday_id': 'old', 'source_sig': 'old'}
         old = _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='old', owner=owner)
         cloud_policy.record_result(ledger, old, {**_result(old, 'http_200', None), 'usage': _openai_usage()})
         selected = _medium_selection(route)
         owner = _owner('new-generation') if route == 'semantic_backlog' else {
-            'night_id': 'new', 'source_sig': 'new'}
+            'workday_id': 'new', 'source_sig': 'new'}
         _reserve(ledger, 'synthetic prompt', 'openai', route=route, unit='new', owner=owner,
                  max_tokens=selected['max_tokens'], selection=selected)
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2

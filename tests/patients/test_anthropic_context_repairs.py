@@ -209,7 +209,7 @@ def test_uncertain_source_repair_unit_is_never_resent_on_restart_or_another_day(
         monkeypatch.setattr(worker.cloud_policy, 'usage_reserver', factory)
     else:
         monkeypatch.setattr(patient_context_refresh_sources, '_source_repair_update_tx',
-            lambda *args: (_ for _ in ()).throw(ValueError('nightly_synthetic_save_failure')))
+            lambda *args: (_ for _ in ()).throw(ValueError('context_synthetic_save_failure')))
     for _ in range(25):
         step(runtime)
         if led.artifacts(patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, project_id=1):
@@ -323,7 +323,7 @@ def test_source_repair_never_reinjects_rejected_seed_and_preserves_local_union(r
     def record(text):
         return {'category':'living','subject':'patient','text':text,'evidence':text,'details':[]}
     source['items'] = [record(other)]
-    protected = context_plan.source_facts(source, [record(_REPAIR_HOME)], night_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    protected = context_plan.source_facts(source, [record(_REPAIR_HOME)], workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     asked = []
     def answer(*args, **kwargs):
         asked.append(True)
@@ -351,7 +351,7 @@ def test_historical_karte_repair_retains_original_question_and_answer(runtime, c
     source = next(item for item in mcs_queries.patient_context_sources(led.db, 1) if item['source'] == 'karte_summary')
     assert not source['historical']
     record = {'category': 'living', 'subject': 'patient', 'text': _REPAIR_HOME, 'evidence': _REPAIR_HOME, 'details': []}
-    facts = context_plan.source_facts(source, [record], night_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source, [record], workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 1 and facts[0]['historical'] is False
     contract = patient_context_refresh_state._contract(CFG, 1)
     occurrence = patient_context_refresh_sources._source_occurrence(led.db, 1, source)
@@ -434,7 +434,7 @@ def test_source_repair_forbids_the_scan_helpers_hidden_second_question(runtime, 
         asked.append(True)
         return {'patient_context':[{'category':'living','subject':'patient','text':'not in source','evidence':'not in source','details':[]}]}
     monkeypatch.setattr(patient_context_quality_controller, '_ask', invalid)
-    with pytest.raises(ValueError, match='nightly_unsupported_items'):
+    with pytest.raises(ValueError, match='patient_context_unsupported_items'):
         patient_context_quality_controller._scan(CFG, source, {}, 'synthetic', clock.mono + 600, lambda: True,
             source_repair={'codes':['missing'],'protected':[]})
     assert asked == [True]
@@ -660,7 +660,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
 
     deadline = clock.mono + 600
     if stage == 'summary':
-        with pytest.raises(ValueError, match='nightly_length_stop'):
+        with pytest.raises(ValueError, match='patient_context_length_stop'):
             patient_context_quality_controller._summary(CFG, facts, deadline, lambda:True, provider=length_only)
     else:
         # Seed the negative assessment/owner boundary; retain the real one-use repair reservation.
@@ -755,7 +755,7 @@ def test_scope_aba_holds_an_unproven_original_cursor_without_reposting_or_overwr
                                                 (patient_context_refresh_state.CHUNK,))] == originals
     checkpoint = led.artifacts(patient_context_refresh_state.SCAN, project_id=1)[-1]
     stored = json.loads(checkpoint['content'])
-    assert stored['held'] and stored['failure'] == 'nightly_original_unit_unverified'
+    assert stored['held'] and stored['failure'] == 'patient_context_original_unit_unverified'
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 

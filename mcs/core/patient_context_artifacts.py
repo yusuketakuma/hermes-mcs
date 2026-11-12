@@ -591,7 +591,7 @@ def source_occurrence(db, pid, source):
                dependency_loss.source_binding(db, pid, source["message_id"],
                    **({"source_key":context_plan.source_key(source)} if isinstance(context_plan.source_key(source), str) else {})))
     if not scope or not valid_hash(binding):
-        raise ValueError("nightly_source_repair_changed")
+        raise ValueError("patient_context_source_repair_changed")
     return {"source_binding":binding, "first_seen":source.get("first_seen"),
             "scope":{key:scope.get(key) for key in ("project_id","project_type","karte_id","is_archived")}}
 
@@ -606,11 +606,11 @@ def source_repair_inputs(db, pid, captured, threshold):
         ids = identity['fact_ids'][offset:offset + 12]
         evidence = semantic_runtime.patient_source_question_evidence(db, pid, identity, ids)
         if evidence['problems'] or set(evidence['answers']) != set(ids) or set(evidence['references']) != set(ids):
-            raise ValueError('nightly_source_repair_unresolved')
+            raise ValueError('patient_context_source_repair_unresolved')
         for fid in ids:
             answer = evidence['answers'][fid]
             if answer['confidence'] < threshold or answer['choice'] == 'ambiguous':
-                raise ValueError('nightly_source_repair_unresolved')
+                raise ValueError('patient_context_source_repair_unresolved')
             evidence_hash.update(bytes.fromhex(_digest([fid, evidence['references'][fid]])))
             if fid in by_id and answer['choice'] == 'supports':
                 protected[fid] = by_id[fid]
@@ -619,9 +619,9 @@ def source_repair_inputs(db, pid, captured, threshold):
             elif fid not in by_id and answer['choice'] == 'missing':
                 codes.add('missing')
             elif answer['choice'] != identity['passing_choices'][fid]:
-                raise ValueError('nightly_source_repair_unresolved')
+                raise ValueError('patient_context_source_repair_unresolved')
     if not codes or not quality_failed(db, pid, identity):
-        raise ValueError('nightly_source_repair_unresolved')
+        raise ValueError('patient_context_source_repair_unresolved')
     return list(protected.values()), sorted(codes), evidence_hash.hexdigest()
 
 
@@ -635,7 +635,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             or not valid_hash(origin.get('source_sig'))
             or type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
             or not cloud_inference.is_supported_cloud_contract(origin.get('repair_provider'))):
-        raise ValueError('nightly_source_repair_invalid')
+        raise ValueError('patient_context_source_repair_invalid')
     db.execute('SAVEPOINT source_repair_replay')
     try:
         if isinstance(source_key, str) and 'original_source_sig' in origin:
@@ -644,7 +644,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
         else:
             source = context_queries.patient_context_source(db, pid, source_key)
         if source is None:
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         source = {**source, 'items': []}
         occurrence = source_occurrence(db, pid, source)
         expected = (context_plan.original_source_signature(source) if 'original_source_sig' in origin
@@ -652,7 +652,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
         if (_digest(occurrence) != _digest(origin['source_occurrence'])
                 or origin.get('original_source_sig', origin['source_sig']) != expected
                 or source['body_length'] != origin['body_length']):
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         bindings = {}
         for (raw,) in db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=? "
                                  "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=?",
@@ -665,7 +665,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             binding = {key: meta.get(key) for key in ('contract', 'provider')}
             bindings[_digest(binding)] = binding
         if len(bindings) != 1:
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         scan_meta = {'source_sig':origin['source_sig'], **next(iter(bindings.values()))}
         scan_content = {'complete':True, 'source_occurrence_version':1, 'source_occurrence':occurrence,
                         'audited_chunks_sig':origin['original_chunks_sig']}
@@ -677,21 +677,21 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             document = loads_dict(row['content'])
             values = document.get('facts') if isinstance(document, dict) else None
             if not isinstance(values, list) or len(context_plan.validated_source_facts(source, values)) != len(values):
-                raise ValueError('nightly_source_repair_invalid')
+                raise ValueError('patient_context_source_repair_invalid')
             for fact in values:
                 if fact['id'] in facts and facts_signature([facts[fact['id']]]) != facts_signature([fact]):
-                    raise ValueError('nightly_source_repair_invalid')
+                    raise ValueError('patient_context_source_repair_invalid')
                 facts[fact['id']] = fact
         identity, _ = semantic_audit.patient_source_quality_identity(source, list(facts.values()), occurrence,
             origin['contract'], origin['original_chunks_sig'], assessment)
         if (identity['source_input_key'] != origin['repair_input_key']
                 or identity['audit_key'] != origin['original_audit_key']
                 or identity['failure_key'] != origin['original_failure_key']):
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         protected, codes, receipts = source_repair_inputs(db, pid, {'identity':identity, 'facts':list(facts.values())}, threshold)
         if (receipts != origin['original_receipts_sig']
                 or facts_signature(sorted(protected, key=lambda fact:fact['id'])) != origin['protected_sig']):
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         groups = {}
         for row in rows:
             meta, doc = strict_json(row['meta']), strict_json(row['content'])
@@ -700,14 +700,15 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             parts.sort(key=lambda part: part[2]['part'])
             row, meta, first = parts[0]
             proof = repair_response(first)
+            workday_key = 'workday_id' if isinstance(proof, dict) and 'workday_id' in proof else 'night_id'
             if (not isinstance(proof, dict)
-                    or set(proof) != {'version','answer_text','cursor','split','night_id','receipt_sig','finish_reason'}
+                    or set(proof) != {'version','answer_text','cursor','split',workday_key,'receipt_sig','finish_reason'}
                     or type(proof['version']) is not int or proof['version'] != 1
                     or type(proof['cursor']) is not int or type(proof['split']) is not int
-                    or not isinstance(proof['night_id'], str) or not valid_hash(proof['receipt_sig'])
+                    or not isinstance(proof[workday_key], str) or not valid_hash(proof['receipt_sig'])
                     or proof['finish_reason'] not in ('stop', 'length')
                     or any(_INTERNAL_PROOF in part[2] or 'repair_response' in part[2] for part in parts[1:])):
-                raise ValueError('nightly_source_repair_invalid')
+                raise ValueError('patient_context_source_repair_invalid')
             planned, cursor, normalized, _, _ = context_plan.scan_plan(
                 source, {'cursor':proof['cursor'], 'split':proof['split']})
             start = sum(map(len, planned[:cursor]))
@@ -716,7 +717,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                     or first['chunk_span'] != span
                     or unit_key != _digest(['source-repair-unit/1', origin['repair_input_key'], span,
                                              proof['split'], PLAN_VERSION])):
-                raise ValueError('nightly_source_repair_invalid')
+                raise ValueError('patient_context_source_repair_invalid')
             def replay(payload):
                 evidence = cloud_inference.verify_cloud_repair_evidence(db,
                     reservation_artifact_id=meta['reservation_artifact_id'], reservation_id=meta['reservation_id'],
@@ -726,11 +727,11 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                     contract=origin['repair_provider'], finish_reason=proof['finish_reason'])
                 if (evidence['witness'] != proof['receipt_sig'] or evidence['witness'] != first['receipt_sig']
                         or evidence['result'].get('answer_finish_reason_v1') != proof['finish_reason']):
-                    raise ValueError('nightly_source_repair_invalid')
+                    raise ValueError('patient_context_source_repair_invalid')
                 if proof['finish_reason'] == 'length':
-                    raise ValueError('nightly_length_stop')
+                    raise ValueError('patient_context_length_stop')
                 return strict_json(proof['answer_text'])
-            result = context_scan.scan_source(source, {'cursor':proof['cursor'], 'split':proof['split']}, proof['night_id'],
+            result = context_scan.scan_source(source, {'cursor':proof['cursor'], 'split':proof['split']}, proof[workday_key],
                 answer_for=replay, clock=time.time, source_repair={'codes':codes, 'protected':protected,
                     'historical_by_id':{fid:{'historical':fact['historical']} if 'historical' in fact else {}
                                         for fid, fact in facts.items()}})
@@ -742,6 +743,6 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                         or replay_facts(result['facts']) != replay_facts(saved_facts)
                         or any(type(fact.get('found_at')) not in (int, float)
                                or not math.isfinite(fact['found_at']) for fact in saved_facts))):
-                raise ValueError('nightly_source_repair_invalid')
+                raise ValueError('patient_context_source_repair_invalid')
     finally:
         db.execute('RELEASE source_repair_replay')

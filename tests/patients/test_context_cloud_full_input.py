@@ -84,5 +84,5 @@ def test_supplemental_summary_cannot_supply_an_original_quote(runtime):
     def answer(payload):
         return {"patient_context": [{"category": "living", "text": derived,
             "evidence": derived, "subject": "unspecified", "details": []}]}
-    with pytest.raises(ValueError, match="nightly_unsupported_items"):
+    with pytest.raises(ValueError, match="patient_context_unsupported_items"):
         scan.scan_source(source, {}, "synthetic", answer_for=answer, clock=lambda: clock.wall)

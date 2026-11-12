@@ -79,7 +79,7 @@ def test_identical_read_only_republication_does_not_reserve_again(runtime, monke
     assert step(runtime)['status'] == 'progressed'
     original = _records(led)
     called = len(calls)
-    cfg = {**CFG, 'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
+    cfg = {**CFG, 'extract': {'patient_context': {'enabled': True, 'publication': False}}}
     assert step(runtime, cfg=cfg)['status'] == 'progressed'
     assert _records(led) == original and len(calls) == called
 

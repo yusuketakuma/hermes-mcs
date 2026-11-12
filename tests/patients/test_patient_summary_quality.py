@@ -549,7 +549,7 @@ def repair(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: repair_cfg)
-    def capture(db, pid, cfg, night_id, repaired, contract, projection, *, source_keys=None):
+    def capture(db, pid, cfg, workday_id, repaired, contract, projection, *, source_keys=None):
         assert source_keys is None
         assert db.in_transaction and pid == 1 and contract == assessment
         key = patient_context_refresh_state._digest(sorted((row['fact_ids'][0], row['text']) for row in repaired))
@@ -601,14 +601,14 @@ def test_distinct_summary_repair_requires_exact_response_and_receipt(monkeypatch
     text = json.dumps({'fact_ids': [fact_id]})
     proof = {'version': 1, 'answer_text': text, 'reservation_artifact_id': 17,
              'reservation_id': '1' * 32, 'contract': {'backend': 'openai', 'model': 'synthetic', 'prompt': '2' * 16},
-             'night_id': 'synthetic-night', 'original_audit_key': original['audit_key'],
+             'workday_id': 'synthetic-night', 'original_audit_key': original['audit_key'],
              'original_ids': ['3' * 64], 'receipt_sig': '4' * 64}
     content = {'fact_ids': [fact_id], '__mcs_internal_proof_v1': proof}
     meta = {'input_key': original['input_key'], 'original_failure_key': original['failure_key'],
             'candidate_key': repaired['candidate_key'], 'audit_key': repaired['audit_key']}
     def evidence(_db, **kwargs):
         assert kwargs['prompt'] == 'synthetic prompt'
-        assert kwargs['owner'] == {'night_id': 'synthetic-night', 'source_sig': original['input_key']}
+        assert kwargs['owner'] == {'workday_id': 'synthetic-night', 'source_sig': original['input_key']}
         return {'witness': '4' * 64}
     monkeypatch.setattr(cloud_inference, 'verify_cloud_repair_evidence', evidence)
     if damage == 'answer':

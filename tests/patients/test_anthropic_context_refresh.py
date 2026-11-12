@@ -316,7 +316,7 @@ def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, clo
     assert result["status"] == "progressed"
     assert led.artifacts(patient_context_refresh_state.SCAN)
     meta = led.db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=1", (patient_context_refresh_state.SCAN,)).fetchone()
-    assert json.loads(meta[0])["night_id"] == "2026-10-17"
+    assert json.loads(meta[0])["workday_id"] == "2026-10-17"
     assert not led.synthetic_cloud_dispositions
     before = len(cloud[0])
     drain(runtime)
@@ -572,7 +572,7 @@ def test_summary_comparison_resolves_source_and_reported_subject(runtime):
     led, _, _ = runtime
     seed(led, body="生活環境: 完全合成の居住記録。")
     source = patient_context_refresh_sources._snapshot(led.db, 1, CFG)["sources"][0]
-    facts = context_plan.source_facts(source, source["items"], night_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source, source["items"], workday_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
     assert facts
     first = facts[0]
     other_source = {**source, "message_id": 2}
@@ -592,7 +592,7 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
     seed(led, body="生活環境: 完全合成の前半記録。\n\n【補足記録】\n" + "完全合成の後半記録です。" * 400)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
-    prefix = context_plan.source_facts(source, source["items"], night_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
+    prefix = context_plan.source_facts(source, source["items"], workday_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
     assert prefix
     chunks = context_refresh.context_plan.scan_plan(source, {})[0]
     assert len(chunks) > 1
@@ -639,7 +639,7 @@ def test_pending_estimate_uses_exact_current_contract_without_credentials(runtim
     assert estimate["targets"] == estimate["scan_sources"] == 1
     assert estimate["summary_units"] == 0  # Cloud summary waits for source scans and audits.
     assert estimate["scan_chunks_estimate"] >= 1 and estimate["input_chars"] > 0
-    cfg = {**CFG, "extract": {"patient_context_nightly": {"enabled": False}}}
+    cfg = {**CFG, "extract": {"patient_context": {"enabled": False}}}
     assert not any(patient_context_refresh_readiness.pending_estimate(led.db, 1, cfg, contract=contract).values())
 
 
@@ -852,17 +852,17 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
         result = step(runtime, local_admit=lambda: False)
         if result["status"] == "failed":
             break
-    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed" and result["lane"] == "B"
+    assert result["status"] == "failed" and result["reason"] == "patient_context_cloud_failed" and result["lane"] == "B"
     assert not local_calls and len(sent) == 1
     stored = document(led, patient_context_refresh_state.SCAN)
-    assert stored["failure"] == "nightly_cloud_failed" and stored["attempts"] == 1 and stored["next_try"] > 0
+    assert stored["failure"] == "patient_context_cloud_failed" and stored["attempts"] == 1 and stored["next_try"] > 0
     # The failed attempt remains bound to the requested cloud route and source.
     meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (patient_context_refresh_state.SCAN,)).fetchone()[0])
     contract = patient_context_refresh_state._contract(CFG, 1)
     assert meta["provider"] == contract["provider"] and meta["model"] == contract["provider"]["model"]
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     saved = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], contract)[1]
-    assert saved["failure"] == "nightly_cloud_failed" and saved["attempts"] == 1 and saved["next_try"] > 0
+    assert saved["failure"] == "patient_context_cloud_failed" and saved["attempts"] == 1 and saved["next_try"] > 0
     # the backoff keeps the next tick from re-sending the same unit
     assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
 
@@ -883,7 +883,7 @@ def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtim
         result = step(runtime, local_admit=lambda: local_ready)
         if result["status"] == "failed":
             break
-    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+    assert result["status"] == "failed" and result["reason"] == "patient_context_cloud_failed"
     scan = document(led, patient_context_refresh_state.SCAN)
     assert scan["attempts"] == 1 and scan["next_try"] > 0
     assert calls == [True] and not local_calls
@@ -913,7 +913,7 @@ def test_scope_change_after_unknown_attempt_fences_retry_to_source(runtime, clou
     if source_changed:
         assert result["status"] == "source_changed" and scan is None
     else:
-        assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+        assert result["status"] == "failed" and result["reason"] == "patient_context_cloud_failed"
         assert scan["attempts"] == 1 and scan["next_try"] > 0
         assert step(runtime, local_admit=lambda: False)["status"] != "failed" and calls == [True]
 
@@ -939,12 +939,12 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
         result = step(runtime, local_admit=lambda: False)
         if result["status"] == "failed":
             break
-    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+    assert result["status"] == "failed" and result["reason"] == "patient_context_cloud_failed"
     assert not local_calls and len(sent) == 1
     # the retry stays on the cloud backend: no local record of a cloud cursor
     scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])[1]
     assert scan["_provider_contract"] == snapshot["contract"]["provider"]
-    assert scan["failure"] == "nightly_cloud_failed" and scan["next_try"] > 0
+    assert scan["failure"] == "patient_context_cloud_failed" and scan["next_try"] > 0
 
 
 def test_shadow_unit_stays_pending_when_the_run_lock_is_busy_after_measuring(runtime, cloud, monkeypatch):

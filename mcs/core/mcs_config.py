@@ -392,9 +392,11 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         errors.append("extract.prefilter: true（有効）かfalse（無効）を指定してください")
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
         errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
-    if isinstance(ext, dict) and "patient_context_nightly" in ext:
-        context_settings = ext["patient_context_nightly"]
-        prefix = "extract.patient_context_nightly"
+    context_key = ("patient_context" if "patient_context" in ext else "patient_context_nightly") \
+        if isinstance(ext, dict) else None
+    if context_key is not None and context_key in ext:
+        context_settings = ext[context_key]
+        prefix = f"extract.{context_key}"
         if not isinstance(context_settings, dict):
             errors.append(f"{prefix}: JSONオブジェクト（キーと値の組）を指定してください")
         else:

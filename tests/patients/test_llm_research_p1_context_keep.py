@@ -1,4 +1,4 @@
-"""Synthetic acceptance of the run-lock wait after a finished nightly inference (p1)."""
+"""Synthetic acceptance of the run-lock wait after a finished context inference (p1)."""
 
 import patient_context_refresh_state
 import json

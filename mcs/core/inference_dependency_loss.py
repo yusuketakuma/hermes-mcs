@@ -291,7 +291,7 @@ def _verified_cloud_context(db, pid, key, scan):
                 prior = facts_by_id.get(fact['id'])
                 def meaning(value):
                     return plan.source_digest([{k:v for k,v in value.items()
-                        if k not in ('found_at','found_night_id','discovery')}])
+                        if k not in ('found_at','found_night_id','found_workday_id','discovery')}])
                 if prior is not None and meaning(prior) != meaning(fact):
                     return False
                 facts_by_id.setdefault(fact['id'], fact)

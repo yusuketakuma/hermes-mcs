@@ -59,12 +59,12 @@ def test_changes_separate_new_reports_from_older_records_found_at_night(ctx):
                             "coverage": {"analyzed": 6}, "facts": [
         {"id": "f1", "category": "living", "text": "家族が服薬支援", "quote": "家族が服薬支援",
          "subject": "family", "message_id": 1, "content_hash": "h", "posted_at_ts": T0 + DAY,
-         "discovery": "backfill_found", "found_night_id": "2026-10-18"},
+         "discovery": "backfill_found", "found_workday_id": "2026-10-18"},
         {"id": "f2", "category": "diagnoses", "text": "架空病B", "quote": "病名: 架空病B", "message_id": 4,
          "subject": "unspecified", "content_hash": _hash_of(ctx.db,4),
          "discovery": "new_report", "temporality": "current"}]}
     ev = pcv.evidence(ctx.db.db, 1)
-    by_id = {f["id"]: f for f in ev["nightly_facts"]}
+    by_id = {f["id"]: f for f in ev["context_facts"]}
     assert [by_id[i]["text"] for s in ev["summary"] for i in s["fact_ids"]] == ["家族が服薬支援"]
     merged = next(i for i in ev["items"] if i["text"] == "架空病B")
     assert merged["temporality"] == "current" and merged["quote"] == "病名: 架空病B"
@@ -109,8 +109,8 @@ def test_changes_classify_by_observation_record(ctx):
 def test_unpublished_context_refresh_adds_nothing(ctx):
     ctx.context_refresh["value"] = None
     ev = pcv.evidence(ctx.db.db, 1)
-    assert all(i["discovery"] is None for i in ev["items"]) and ev["coverage"]["nightly"] is None
-    assert ev["nightly_facts"] == [] and ev["summary"] == []
+    assert all(i["discovery"] is None for i in ev["items"]) and ev["coverage"]["context"] is None
+    assert ev["context_facts"] == [] and ev["summary"] == []
 
 
 def _historical_karte(ctx, *, updated="2026-09-01T09:00:00+09:00", pid=1):
@@ -331,7 +331,7 @@ def test_enclosing_quote_does_not_absorb_distinct_assertions(ctx):
     line = "対象薬: 架空薬"
     ctx.context_refresh["value"] = {"as_of": T0, "facts": [
         {"category": "medication_management", "text": line + "\n残薬: 3日分", "quote": line + "\n残薬: 3日分",
-         "message_id": 2, "discovery": "backfill_found", "found_night_id": "2026-10-18"}]}
+         "message_id": 2, "discovery": "backfill_found", "found_workday_id": "2026-10-18"}]}
     items = [i for i in pcv.evidence(ctx.db.db, 1)["items"] if i["message_id"] == 2]
     assert len(items) == 3
     assert sum(i["discovery"] == "backfill_found" for i in items) == 1
@@ -536,11 +536,11 @@ def test_cli_passes_current_settings_to_the_context_refresh_gate(ctx, monkeypatc
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
         context_view_read=lambda conn, pid, cfg=None: (seen.append(cfg),
             {"complete": False, "status": "scan_pending", "sources": {"pending": 6}})))
-    monkeypatch.setattr("mcs_util.load_config", lambda *a, **k: {"extract": {"patient_context_nightly": {
+    monkeypatch.setattr("mcs_util.load_config", lambda *a, **k: {"extract": {"patient_context": {
         "enabled": True, "publication": False}}})
     mcs_view.View._patient_context(SimpleNamespace(db=ctx.db.db, meta={"generated_at": T0}), 1,
                                    "background", None, None, None)
-    assert seen == [{"extract": {"patient_context_nightly": {"enabled": True, "publication": False}}}]
+    assert seen == [{"extract": {"patient_context": {"enabled": True, "publication": False}}}]
 
 
 def test_cli_view_dispatch(ctx):

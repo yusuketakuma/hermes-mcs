@@ -225,7 +225,7 @@ def test_listed_vitals_follow_current_extraction_and_context_evidence(tmp_path, 
                           "evidence": body, "details": details})
         _artifact(db, "extract_llm", 1, {"patient_context": items}, {"hash": _hash_of(db, 1)})
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
-        facts = context_plan.source_facts(source, items, night_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
+        facts = context_plan.source_facts(source, items, workday_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
         assert facts and context_plan.validated_source_facts(source, facts) == facts
         monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
             "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
@@ -430,7 +430,7 @@ def test_actual_evidence_and_refresh_require_explicit_patient_bound_to_measureme
         item = {"category": "observations", "subject": "patient", "text": body, "evidence": body, "details": details}
         _artifact(db, "extract_llm", 1, {"patient_context": [item]}, {"hash": _hash_of(db, 1)})
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
-        facts = context_plan.source_facts(source, [item], night_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
+        facts = context_plan.source_facts(source, [item], workday_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
         assert facts and context_plan.validated_source_facts(source, facts) == facts
         monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
             "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
@@ -450,7 +450,7 @@ def test_actual_split_headings_do_not_transfer_a_prior_person_to_a_measurement(t
         items = extract_context(body)
         _artifact(db, "extract_v1", 1, {"patient_context": items}, {"hash": _hash_of(db, 1)})
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
-        facts = context_plan.source_facts(source, items, night_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
+        facts = context_plan.source_facts(source, items, workday_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
         assert facts and context_plan.validated_source_facts(source, facts) == facts
         monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
             "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
@@ -471,7 +471,7 @@ def test_real_evidence_cannot_strip_a_prior_family_sentence(tmp_path, monkeypatc
         item = {"category": "observations", "subject": "patient", "text": quote, "evidence": quote, "details": details}
         _artifact(db, "extract_llm", 1, {"patient_context": [item]}, {"hash": _hash_of(db, 1)})
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
-        facts = context_plan.source_facts(source, [item], night_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
+        facts = context_plan.source_facts(source, [item], workday_id="2026-10-03", discovery="new_report", found_at=patient_context_refresh.time.time())
         assert facts and context_plan.validated_source_facts(source, facts) == facts
         monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
             "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))

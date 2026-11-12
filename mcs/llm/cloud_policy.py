@@ -823,11 +823,11 @@ def guard_context_origins(ledger, project_id, origins):
                            or (not legacy_refs or ref['witness'] is not None)
                            and not valid_hash(ref['witness']) for ref in refs)
                     or len({ref['artifact_id'] for ref in refs}) != len(refs)):
-                raise ValueError('nightly_cloud_source_unverified')
+                raise ValueError('patient_context_cloud_source_unverified')
             for ref in refs:
                 proof = binding, ref['witness']
                 if ref['artifact_id'] in expected and expected[ref['artifact_id']] != proof:
-                    raise ValueError('nightly_cloud_source_unverified')
+                    raise ValueError('patient_context_cloud_source_unverified')
                 expected[ref['artifact_id']] = proof
         evidence = reservation_evidence_batch(ledger.db, expected)
         for aid, ((mid, unit, model), witness) in expected.items():
@@ -836,7 +836,7 @@ def guard_context_origins(ledger, project_id, origins):
             if (reservation.get('route') != 'patient_context' or reservation['project_id'] != project_id
                     or reservation.get('message_id') != mid or reservation['unit_key'] != unit
                     or reservation['model'] != model or witness is not None and proof['witness'] != witness):
-                raise ValueError('nightly_cloud_source_unverified')
+                raise ValueError('patient_context_cloud_source_unverified')
 
 def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, request_factory):
     """Prove local substitution safe without sending, reserving, or changing accounting."""

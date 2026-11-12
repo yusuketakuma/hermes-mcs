@@ -513,7 +513,7 @@ def _main() -> int:
                             continue
                         context_refresh = _background_context_refresh(led, context_state, stop)
                         if context_refresh.get("status") != "off":
-                            print(json.dumps({"nightly": context_refresh, "ts": time.time()},
+                            print(json.dumps({"patient_context": context_refresh, "ts": time.time()},
                                              ensure_ascii=False), flush=True)
                         if context_refresh.get("run_lock_lost") == "updated":
                             _settle_carry(led, carry, write=False)

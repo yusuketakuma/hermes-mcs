@@ -107,7 +107,7 @@ def test_doctor_cli_preserves_probe_and_invalid_config_boundaries(evidence, tmp_
     observed = json.loads(capsys.readouterr().out)['collection']
     assert observed['status'] == 'warning'
     assert observed['counts']['errors']['reasons']['deadline'] == 1
-    cfg['extract'] = {'patient_context_nightly': {'enabled': 1}}
+    cfg['extract'] = {'patient_context': {'enabled': 1}}
     monkeypatch.setattr(health_watch, 'classify_health', lambda *_: pytest.fail('invalid config read health'))
     assert mcs_setup.main(['doctor', '--json', '--probe', 'data']) == 1
     assert json.loads(capsys.readouterr().out)['collection']['status'] == 'not_checked'

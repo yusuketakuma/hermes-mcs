@@ -122,7 +122,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     assert saved['reservation_id'] == json.loads(reserves[0]['meta'])['reservation_id']
     assert saved.get('disposition') != 'discarded_workday'
     if unknown:
-        assert result['status'] == 'failed' and result['reason'] == 'nightly_cloud_failed'
+        assert result['status'] == 'failed' and result['reason'] == 'patient_context_cloud_failed'
         assert document(led) is None
         assert saved['usage'] is None and saved['error_kind'] == 'pricing_unverified'
         assert saved['cost_usd'] == json.loads(reserves[0]['meta'])['max_cost_usd']

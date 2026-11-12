@@ -220,7 +220,7 @@ def test_context_pool_defers_cloud_decisions_to_engine(tmp_path, monkeypatch, bl
 def test_context_pool_keeps_enable_mode_and_memory_gates(tmp_path, monkeypatch, blocked):
     (tmp_path / "data").mkdir()
     cfg = {"cloud_llm": {"mode": "off" if blocked == "off" else "on", "project_ids": [1]},
-           "extract": {"patient_context_nightly": {"enabled": blocked != "disabled"}}}
+           "extract": {"patient_context": {"enabled": blocked != "disabled"}}}
     monkeypatch.setattr(backlog, "memory_workers", lambda _: 0 if blocked == "memory" else 1)
     monkeypatch.setattr(backlog.subprocess, "Popen", lambda *a, **kw: pytest.fail("context child started"))
     pool = backlog.CloudBacklogPool(tmp_path, context_only=True)

@@ -67,7 +67,7 @@ def summary_reports(facts):
             reports.append(item)
             used += size
     if not reports:
-        raise ValueError("nightly_summary_capacity")
+        raise ValueError("patient_context_summary_capacity")
     return reports
 
 
@@ -82,7 +82,7 @@ def summary_selection(answer, reports):
     by_id = {f["id"]: f for f in reports}
     if (set(answer) != {"fact_ids"} or not isinstance(ids, list) or not 1 <= len(ids) <= MAX_SUMMARY
             or any(not isinstance(i, str) or i not in by_id for i in ids) or len(set(ids)) != len(ids)):
-        raise ValueError("nightly_unsupported_summary")
+        raise ValueError("patient_context_unsupported_summary")
     return [{"text": by_id[i]["text"], "fact_ids": [i]} for i in ids]
 
 
@@ -151,15 +151,15 @@ def scan_items(answer, chunk):
     """Reject malformed, unsupported or changed grounded attributes."""
     raw = answer.get("patient_context")
     if isinstance(raw, list) and len(raw) > MAX_SCAN_ITEMS:
-        raise ValueError("nightly_scan_capacity")
+        raise ValueError("patient_context_scan_capacity")
     if (set(answer) != {"patient_context"} or not isinstance(raw, list)
             or any(not isinstance(item, dict) or set(item) - {
                 "category", "text", "evidence", "subject", "details"} for item in raw)):
-        raise ValueError("nightly_invalid_items")
+        raise ValueError("patient_context_invalid_items")
     checked = context_items(answer, chunk)
     if len(checked) != len(raw) or any(
             item.get("details", []) != valid.get("details", []) for item, valid in zip(raw, checked)):
-        raise ValueError("nightly_unsupported_items")
+        raise ValueError("patient_context_unsupported_items")
     return checked
 
 
@@ -198,7 +198,7 @@ def assertion_parts(text, details):
         span = locate_quote_span(text, value) if isinstance(value, str) else None
         if span is not None:
             if span[1] - span[0] > SCAN_CHUNK:
-                raise ValueError("nightly_unsplittable_assertion")
+                raise ValueError("patient_context_unsplittable_assertion")
             protected.append(span)
     parts, start = [], 0
     for planned in plan_chunks(text, SCAN_CHUNK):
@@ -218,7 +218,7 @@ def assertion_parts(text, details):
             while any(left < end < right for left, right in protected):
                 end = min(left for left, right in protected if left < end < right)
             if end <= start:
-                raise ValueError("nightly_unsplittable_assertion")
+                raise ValueError("patient_context_unsplittable_assertion")
             parts.append(text[start:end])
             start = end
     return parts
@@ -240,7 +240,7 @@ def source_digest(value):
                                      separators=(",", ":")).encode()).hexdigest()
 
 
-def source_facts(source, items, *, night_id, discovery, found_at, offset=0, chunk=None):
+def source_facts(source, items, *, workday_id, discovery, found_at, offset=0, chunk=None):
     """Keep atomic assertions and source spans separate from their modifier context."""
     body = source["body_text"]
     unit = body if chunk is None else chunk
@@ -288,7 +288,7 @@ def source_facts(source, items, *, night_id, discovery, found_at, offset=0, chun
                      "project_id": source["project_id"], "message_id": source["message_id"],
                      "content_hash": source["content_hash"], "posted_at": source.get("posted_at"),
                      "posted_at_ts": source.get("posted_at_ts"), "sender": source.get("sender_name"),
-                     "discovery": discovery, "found_night_id": night_id, "found_at": found_at}
+                     "discovery": discovery, "found_workday_id": workday_id, "found_at": found_at}
             value["assertion"] = {key: value[key] for key in
                                   ("category", "text", "evidence", "evidence_span", "reported_subject", "details")}
             value["temporal"] = context_state.annotate(value, body)
@@ -314,7 +314,7 @@ def validated_source_facts(source, facts):
                 or fact.get("evidence") != body[span[0]:span[1]]):
             continue
         candidate = {**fact, "subject": fact.get("reported_subject")}
-        rebuilt = source_facts(source, [candidate], night_id=fact.get("found_night_id"),
+        rebuilt = source_facts(source, [candidate], workday_id=fact.get("found_workday_id") or fact.get("found_night_id"),
                          discovery=fact.get("discovery"), found_at=fact.get("found_at"),
                          offset=span[0], chunk=body[span[0]:span[1]])
         if rebuilt and all(rebuilt[0][key] == fact.get(key) for key in

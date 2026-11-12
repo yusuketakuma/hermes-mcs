@@ -31,7 +31,7 @@ def test_category_fairness_and_summary_source_identity(monkeypatch):
     {"fact_ids": ["unknown"]}, {"fact_ids": [1]}, {"fact_ids": ["a"], "text": "推論"}])
 def test_summary_rejects_unbound_or_generated_content(answer):
     reports = plan.summary_reports([fact("a", "living", "原文は未確認。", 0)])
-    with pytest.raises(ValueError, match="nightly_unsupported_summary"):
+    with pytest.raises(ValueError, match="patient_context_unsupported_summary"):
         plan.summary_selection(answer, reports)
 
 
@@ -45,9 +45,9 @@ def test_scan_cursor_and_complete_quoted_unit_do_not_mutate_inputs():
     assert chunks == [item["text"]] and cursor == 0 and reusable == {}
     assert items == [item] and covered is False  # A complete quote does not prove complete extraction.
     assert plan.scan_items({"patient_context": [item]}, chunks[0]) == [item]
-    with pytest.raises(ValueError, match="nightly_unsupported_items"):
+    with pytest.raises(ValueError, match="patient_context_unsupported_items"):
         plan.scan_items({"patient_context": [{**item, "text": "家族は転居を希望しています。"}]}, chunks[0])
-    with pytest.raises(ValueError, match="nightly_invalid_items"):
+    with pytest.raises(ValueError, match="patient_context_invalid_items"):
         plan.scan_items({"patient_context": [{**item, "status": "current"}]}, chunks[0])
     assert (source, saved) == original
 

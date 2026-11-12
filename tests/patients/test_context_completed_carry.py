@@ -180,7 +180,7 @@ def test_completed_cloud_unit_rechecks_save_fences_without_resending(
             led.db.execute("UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1")
     elif changed == "config":
         cfg = copy.deepcopy(cfg)
-        cfg["extract"]["patient_context_nightly"]["publication"] = False
+        cfg["extract"]["patient_context"]["publication"] = False
     elif changed == "owner":
         monkeypatch.setattr(worker, "_writer_current", lambda **_: False)
         monkeypatch.setattr(extract_llm_carry, '_writer_current', worker._writer_current)

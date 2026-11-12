@@ -160,7 +160,7 @@ def _extend_source_candidate(led):
     assert text in source['body_text']
     extra = context_plan.source_facts(source, [{'category': 'living', 'text': text,
         'evidence': text, 'subject': 'unspecified', 'details': []}],
-        night_id='synthetic', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
+        workday_id='synthetic', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
     assert len(extra) == 1
     row = led.db.execute('SELECT artifact_id,content FROM artifacts WHERE kind=? AND message_id=1 '
                          'ORDER BY artifact_id LIMIT 1', (patient_context_refresh_state.CHUNK,)).fetchone()

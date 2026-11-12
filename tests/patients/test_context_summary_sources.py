@@ -59,7 +59,7 @@ def test_stale_foreign_old_or_unproven_local_summary_is_excluded(tmp_path, overr
             # Exercise the reader against a pre-guard/corrupt foreign artifact.
             led.db.execute("DROP TRIGGER g1_artifacts_msg_ins")
         _local(led, **override)
-        led.artifact_add("patient_context_nightly", json.dumps({"summary": "過去の再帰要約"}), project_id=1)
+        led.artifact_add("patient_context", json.dumps({"summary": "過去の再帰要約"}), project_id=1)
         assert _source(led)["derived_summaries"] == []
         assert _source(led)["derived_summary_sig"] == empty
     finally:

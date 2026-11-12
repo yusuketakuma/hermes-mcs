@@ -48,7 +48,7 @@ def test_ocr_paid_binding_preserves_retention_and_rejects_changed_content(source
     led.db.execute('UPDATE attachments SET downloaded_at=2 WHERE attachment_id=1')
     assert refresh._cloud_input_binding(led.db, 1, snapshot) == before
     led.db.execute("UPDATE attachments SET sha256=? WHERE attachment_id=1", ('b' * 64,))
-    with pytest.raises(ValueError, match='nightly_cloud_source_changed'):
+    with pytest.raises(ValueError, match='patient_context_cloud_source_changed'):
         refresh._cloud_input_binding(led.db, 1, snapshot)
 
 
@@ -58,7 +58,7 @@ def test_ocr_quality_sources_and_facts_require_exact_original_quotes(source_stor
     source = next(mcs_queries.patient_context_sources(led.db, 1, mid=key))
     body = source['body_text']
     items = [{'category': 'medication_management', 'text': body, 'evidence': body, 'subject': 'patient', 'details': []}]
-    facts = plan.source_facts(source, items, night_id='synthetic', discovery='scan', found_at=1)
+    facts = plan.source_facts(source, items, workday_id='synthetic', discovery='scan', found_at=1)
     assert facts and plan.validated_source_facts(source, facts) == facts
     index = semantic_audit._patient_quality_sources([source])
     assert semantic_audit._patient_quality_facts(facts, index)
@@ -232,7 +232,7 @@ def test_clinical_medication_seed_preserves_quote_subject_and_negation(subject, 
     assert len(items) == 1 and items[0]['subject'] == subject
     assert items[0]['evidence'] == items[0]['text'] == quote
     assert items[0]['details'] == [{'key': 'drug_name', 'value': '合成薬A', 'evidence': quote}]
-    facts = plan.source_facts(source, items, night_id='synthetic', discovery='seed', found_at=1)
+    facts = plan.source_facts(source, items, workday_id='synthetic', discovery='seed', found_at=1)
     assert facts and facts[0]['source_key'] == source['source_key']
     assert facts[0]['posted_at_ts'] is facts[0]['sender'] is None
     assert facts[0]['temporal']['event_day'] == '2026-10-01'

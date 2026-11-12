@@ -30,7 +30,7 @@ import cloud_inference
 import patient_context_refresh as context_refresh
 
 
-CFG = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': True}},
+CFG = {'extract': {'patient_context': {'enabled': True, 'publication': True}},
        'semantic': {'mode': 'assist', 'summary_mode': 'assist', 'project_ids': None}}
 
 
@@ -265,8 +265,8 @@ def test_workday_window(at, day):
     assert patient_context_refresh_state.workday_window(stamp(at)) == (day, end)
 
 
-@pytest.mark.parametrize('cfg', [None, {'extract': {'patient_context_nightly': {'enabled': False}}},
-    {'extract': {'patient_context_nightly': {'enabled': 1}}}])
+@pytest.mark.parametrize('cfg', [None, {'extract': {'patient_context': {'enabled': False}}},
+    {'extract': {'patient_context': {'enabled': 1}}}])
 def test_explicit_off_or_invalid_config_never_touches_queue(runtime, cfg):
     led, _, calls = runtime
     seed(led)
@@ -346,7 +346,7 @@ def test_legacy_0330_day_id_does_not_reset_an_existing_chunk_checkpoint(runtime)
         for row in led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind IN (?,?,?)',
                                   (patient_context_refresh_state.KIND, patient_context_refresh_state.SCAN, patient_context_refresh_state.CHUNK)).fetchall():
             meta = json.loads(row['meta'])
-            meta['night_id'] = '2026-10-17'
+            meta['workday_id'] = '2026-10-17'
             led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
     assert step(runtime)['lane'] == 'B'
     assert document(led, patient_context_refresh_state.SCAN)['cursor'] == 2
@@ -367,8 +367,8 @@ def test_legacy_workday_progress_preserves_retry_and_hold_across_midnight(runtim
     row = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=1',
                          (patient_context_refresh_state.PROGRESS,)).fetchone()
     progress, meta = json.loads(row['content']), json.loads(row['meta'])
-    progress.update(night_id='2026-10-17', held=held)
-    meta['night_id'] = '2026-10-17'
+    progress.update(workday_id='2026-10-17', held=held)
+    meta['workday_id'] = '2026-10-17'
     with led.db:
         led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
                        (json.dumps(progress), json.dumps(meta), row['artifact_id']))
@@ -428,7 +428,7 @@ def test_changed_deleted_or_remapped_sources_hide_previous_summary(runtime, muta
 def test_publication_off_keeps_generated_artifact_private(runtime):
     led, _, _ = runtime
     seed(led)
-    shadow = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
+    shadow = {'extract': {'patient_context': {'enabled': True, 'publication': False}}}
     finish(runtime, cfg=shadow)
     assert document(led)
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=shadow) is None
@@ -513,10 +513,10 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
             break
         assert result['status'] == 'progressed', result
     # the fixed check code is kept (and logged), not just the exception type
-    assert result['status'] == 'failed' and result['lane'] == 'A' and result['reason'] == 'nightly_length_stop'
+    assert result['status'] == 'failed' and result['lane'] == 'A' and result['reason'] == 'patient_context_length_stop'
     progress = document(led, patient_context_refresh_state.PROGRESS)
     assert progress['next_try'] > clock.wall and progress['attempts'] == 1
-    assert progress['failure'] == 'nightly_length_stop'
+    assert progress['failure'] == 'patient_context_length_stop'
     assert patient_context_refresh_readiness.status(led.db, CFG)['failed'] == 1
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     for _ in range(6):
@@ -542,7 +542,7 @@ def test_crossing_midnight_during_inference_commits_once_under_start_day(runtime
     assert step(runtime)['status'] == 'progressed'
     assert document(led)
     meta = led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1', (patient_context_refresh_state.KIND,)).fetchone()
-    assert json.loads(meta[0])['night_id'] == '2026-10-17'
+    assert json.loads(meta[0])['workday_id'] == '2026-10-17'
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     finish(runtime)
     calls = len(runtime[2])
@@ -889,7 +889,7 @@ def test_source_generator_propagates_control_exceptions(runtime, monkeypatch):
 def test_shadow_can_be_published_without_repeating_inference(runtime):
     led, _, calls = runtime
     seed(led)
-    shadow = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
+    shadow = {'extract': {'patient_context': {'enabled': True, 'publication': False}}}
     finish(runtime, cfg=shadow)
     generated = document(led)
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
@@ -1037,7 +1037,7 @@ def test_family_medication_detail_survives_source_revalidation(runtime):
     items = [{'category': 'medication_management', 'subject': 'family',
               'text': body, 'evidence': body,
               'details': [{'key': 'residual_quantity', 'value': '3錠', 'evidence': body}]}]
-    facts = context_plan.source_facts(source, items, night_id='2026-10-17', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source, items, workday_id='2026-10-17', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
     assert facts[0]['details'] == items[0]['details']
     assert facts[0]['subject'] == 'unspecified' and facts[0]['reported_subject'] == 'family'
     assert context_plan.validated_source_facts(source, facts) == facts
@@ -1266,7 +1266,7 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "chat", busy)
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
-    with pytest.raises(patient_context_refresh_state.Deferred, match="nightly_turn_busy"):
+    with pytest.raises(patient_context_refresh_state.Deferred, match="patient_context_turn_busy"):
         patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
 
 
@@ -1339,7 +1339,7 @@ def test_the_finest_plan_still_stopping_is_an_ordinary_failure(runtime, monkeypa
         result = step(runtime)
         if result['status'] == 'failed':
             break
-    assert result['reason'] == 'nightly_length_stop'
+    assert result['reason'] == 'patient_context_length_stop'
     scan = document(led, patient_context_refresh_state.SCAN)
     assert scan['attempts'] == 1 and 1 <= scan.get('split', 0) <= context_refresh.context_plan.MAX_SCAN_SPLIT
     assert not scan.get('complete')
@@ -1375,7 +1375,7 @@ def test_a_failed_repair_stays_an_unsupported_failure(runtime, monkeypatch):
         result = step(runtime)
         if result['status'] == 'failed':
             break
-    assert result['reason'] == 'nightly_unsupported_items'
+    assert result['reason'] == 'patient_context_unsupported_items'
     assert len(scans) == 2                           # one answer, one bounded repair
     lanes = patient_context_refresh_readiness.lane_metrics(led.db)['lanes']
     assert lanes['B']['unsupported'] == 1 and lanes['B']['repair'] == 0
@@ -1451,7 +1451,7 @@ def test_a_repair_must_keep_what_the_first_answer_grounded(runtime, monkeypatch,
     reasons = [r.get('reason') for r in results if r['status'] == 'failed']
     scan = document(led, patient_context_refresh_state.SCAN)
     if failed:   # the chunk is not completed by dropping what was grounded
-        assert reasons[:1] == ['nightly_unsupported_items'] and not scan.get('complete')
+        assert reasons[:1] == ['patient_context_unsupported_items'] and not scan.get('complete')
     else:
         assert not reasons and scan['complete'] and len(scan['facts']) == 1
 
@@ -1476,7 +1476,7 @@ def test_health_counts_context_progress_without_patients(runtime, monkeypatch):
     assert health_report.patient_context_health(led.db, CFG, 20.0, 'synthetic-source')['published'] == 9
     assert health_report.patient_context_health(led.db, CFG, 20.0, 'other')['published'] == 2
     # publication always follows the current config, even on a reused block
-    private = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
+    private = {'extract': {'patient_context': {'enabled': True, 'publication': False}}}
     reused = health_report.patient_context_health(led.db, private, 20.0, 'synthetic-source')
     assert reused['published'] == 9 and reused['publication'] is False
     assert health_report.patient_context_health(led.db, None, 20.0, 'synthetic-source')['publication'] is None
@@ -1525,20 +1525,20 @@ def test_initial_context_unit_can_start_at_any_hour(runtime, at):
     assert result['status'] == 'progressed' and result['lane'] == 'A'
     assert len(calls) == before_calls + 1 and document(led) is not None
     progress = document(led, patient_context_refresh_state.PROGRESS)
-    assert progress['night_id'] == '2026-10-17'
+    assert progress['workday_id'] == '2026-10-17'
 
 
 @pytest.mark.parametrize('field', ['held', '_quality_held'])
 def test_daily_retry_never_releases_protected_holds(field):
     progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'next_try': 1000, 'failure_at': 1000, field: True}
+                'failure': 'context_timeout', 'next_try': 1000, 'failure_at': 1000, field: True}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 10 * 86400)
 
 
 @pytest.mark.parametrize('attempts', [5, 6, 100])
 def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
     progress = {'attempts': attempts, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'next_try': 1000}
+                'failure': 'context_timeout', 'next_try': 1000}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 86400 - 1)
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
     progress.update(failure_at=500, next_try=500 + 86400)
@@ -1551,13 +1551,13 @@ def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
     ('failure_at', True), ('failure_at', '1000'), ('failure_at', 10**1000)])
 def test_daily_retry_keeps_unverified_dates_and_counters_waiting(field, value):
     progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'next_try': 1000, 'failure_at': 1000, field: value}
+                'failure': 'context_timeout', 'next_try': 1000, 'failure_at': 1000, field: value}
     assert not patient_context_refresh_readiness._ready(progress, 1e9)
 
 
 def test_other_lanes_cannot_postpone_an_exhausted_summary_daily_retry():
     progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
-                'failure': 'nightly_timeout', 'failure_at': 1000,
+                'failure': 'context_timeout', 'failure_at': 1000,
                 'next_try': 1000 + 86400, 'last_attempt': 1000 + 86399}
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
     progress['last_attempt'] += 86400
@@ -1565,8 +1565,8 @@ def test_other_lanes_cannot_postpone_an_exhausted_summary_daily_retry():
 
 
 @pytest.mark.parametrize('exc,expected', [
-    (patient_context_refresh_state.Deferred('nightly_source_repair_lock'), 'nightly_source_repair_lock'),
-    (ValueError('nightly_audit_mismatch'), 'nightly_audit_mismatch'),
+    (patient_context_refresh_state.Deferred('patient_context_source_repair_lock'), 'patient_context_source_repair_lock'),
+    (ValueError('patient_context_audit_mismatch'), 'patient_context_audit_mismatch'),
     (ValueError('patient_summary_request_missing'), 'patient_summary_request_missing'),
     (ValueError('synthetic private detail with spaces'), 'ValueError'),
     (RuntimeError('boom'), 'RuntimeError'),

@@ -111,7 +111,7 @@ def test_unavailable_or_exhausted_observation_is_unknown(runtime, monkeypatch):
     seed(led)
     monkeypatch.setattr(progress, 'READ_SECONDS', 0)
     assert progress.read(led.db, 1, SAFE_CFG)['percent'] is None
-    assert progress.read(led.db, 1, {'extract': {'patient_context_nightly': {'enabled': False}}})['stage'] == 'inactive'
+    assert progress.read(led.db, 1, {'extract': {'patient_context': {'enabled': False}}})['stage'] == 'inactive'
 
 
 def test_control_pause_retains_independently_verified_partial_coverage(observed, monkeypatch):

@@ -7,10 +7,10 @@ import patient_context_plan as context_plan
 def facts_signature(facts):
     """Bind meaning and relations apart from discovery bookkeeping."""
     return context_plan.source_digest([{k: v for k, v in fact.items()
-        if k not in ("found_at", "found_night_id", "discovery")} for fact in facts])
+        if k not in ("found_at", "found_night_id", "found_workday_id", "discovery")} for fact in facts])
 
 
-def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, source_repair=None):
+def scan_source(source, saved, workday_id, *, answer_for, clock, metrics=None, source_repair=None):
     """Validate one answer through the shared scan and protected-fact rules."""
     chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
     chunk = chunks[cursor]
@@ -20,7 +20,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
     # passed bounded repairs on this source: a health/status count, never content
     repairs = saved.get("repairs", 0) if type(saved.get("repairs")) is int else 0
     prior_repairs = repairs
-    original = (context_plan.source_facts(source, source["items"], night_id=night_id, discovery="new_report", found_at=clock())
+    original = (context_plan.source_facts(source, source["items"], workday_id=workday_id, discovery="new_report", found_at=clock())
                 if source_repair is None else source_repair["protected"])
     if source_repair is not None:
         items = []  # No unverified seed from the rejected original candidate.
@@ -44,7 +44,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
                     # Leave envelope room and allow six-character JSON escapes.
                     room = context_plan.MAX_PROMPT_CHARS - len(json.dumps(body, ensure_ascii=False)) - 512
                     if room < 6:
-                        raise ValueError("nightly_prompt_capacity")
+                        raise ValueError("patient_context_prompt_capacity")
                     width = min(context_plan.SCAN_CHUNK, room // 6)
                     for summary in summaries:
                         start = 0
@@ -75,7 +75,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
                             merged.append(item)
                 return {"patient_context": merged}, None
             except ValueError as exc:
-                finer = str(exc) == "nightly_length_stop" and context_plan.split_scan(source, saved, cursor)
+                finer = str(exc) == "patient_context_length_stop" and context_plan.split_scan(source, saved, cursor)
                 if not finer:
                     raise
                 # nothing was accepted from this chunk: resume on the finer plan, keeping facts
@@ -87,12 +87,12 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
         try:
             checked = context_plan.scan_items(answer, chunk)
         except ValueError as exc:
-            if str(exc) == "nightly_scan_capacity":
+            if str(exc) == "patient_context_scan_capacity":
                 finer = context_plan.split_scan(source, saved, cursor)
                 if finer:
                     return {**finer, "complete": False, "facts": [], "audited": False, "repairs": repairs}
-                raise ValueError("nightly_unsplittable_assertion") from exc
-            if str(exc) == "nightly_invalid_items" and source_repair is None:
+                raise ValueError("patient_context_unsplittable_assertion") from exc
+            if str(exc) == "patient_context_invalid_items" and source_repair is None:
                 # a malformed answer on an over-dense chunk gets the same finer
                 # re-plan as a length stop; each finer chunk is still validated whole
                 finer = context_plan.split_scan(source, saved, cursor)
@@ -100,7 +100,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
                     return {**finer, "complete": False, "facts": saved.get("facts", []),
                             "audited": False, **({"repairs": repairs} if repairs else {})}
                 raise
-            if str(exc) != "nightly_unsupported_items" or source_repair is not None:
+            if str(exc) != "patient_context_unsupported_items" or source_repair is not None:
                 raise
             # one bounded repair: name the refused items by index and fixed reason only;
             # it must pass whole and keep every item that already passed on its own
@@ -116,7 +116,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
             try:
                 checked = context_plan.scan_items(answer, chunk)
                 if any(item not in checked for item in kept):
-                    raise ValueError("nightly_unsupported_items")
+                    raise ValueError("patient_context_unsupported_items")
             except ValueError:
                 # the bounded repair could not ground this chunk either: resume on
                 # the finer plan instead of failing the whole source at this size
@@ -132,7 +132,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
         metrics["repairs"] = repairs - prior_repairs
     facts = {f["id"]: f for f in original if offset <= f["evidence_span"][0] < offset + len(chunk)}
     known = {f["id"] for f in original}
-    for fact in context_plan.source_facts(source, items, night_id=night_id, discovery="backfill_found", offset=offset, chunk=chunk, found_at=clock()):
+    for fact in context_plan.source_facts(source, items, workday_id=workday_id, discovery="backfill_found", offset=offset, chunk=chunk, found_at=clock()):
         if source_repair is not None and fact["id"] in source_repair.get("historical_by_id", {}):
             # A Karte moving into history changes display placement, not the
             # meaning of an existing support question or its original answer.
@@ -142,7 +142,7 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
             fact["discovery"] = "new_report"
         if source_repair is not None and fact["id"] in facts:
             if facts_signature([facts[fact["id"]]]) != facts_signature([fact]):
-                raise ValueError("nightly_source_repair_protected")
+                raise ValueError("patient_context_source_repair_protected")
             continue  # Retain the original supported fact, including its bookkeeping.
         facts[fact["id"]] = fact
     return {"chunk_span": [offset, offset + len(chunk)], "cursor": cursor + 1, "chunks": len(chunks), "complete": cursor + 1 == len(chunks),

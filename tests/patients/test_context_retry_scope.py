@@ -12,7 +12,7 @@ from test_patient_context_refresh import CFG, _prepare_summary, document, runtim
 def _failed_progress(led, clock, *, source_keys=None):
     snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=source_keys)
     progress = {'source_sig': snapshot['source_sig'], 'attempts': 3,
-                'next_try': clock.wall + 3600, 'failure': 'nightly_length_stop',
+                'next_try': clock.wall + 3600, 'failure': 'patient_context_length_stop',
                 'held': True, 'checks': state._CHECKS, 'quality_state': 'held'}
     if source_keys is not None:
         progress['source_scope'] = source_keys
@@ -40,7 +40,7 @@ def test_whole_observer_keeps_scoped_failure_without_changing_snapshot(runtime, 
     assert observed['source_sig'] == whole['source_sig'] and 'source_scope' not in observed
     assert progress['source_sig'] == stored['source_sig']
     assert progress['attempts'] == stored['attempts'] and progress['next_try'] == stored['next_try']
-    assert progress['held'] is held and progress['failure'] == 'nightly_length_stop'
+    assert progress['held'] is held and progress['failure'] == 'patient_context_length_stop'
     assert not pending['A'] and readiness.status(led.db, CFG)['failed'] == 1
 
 

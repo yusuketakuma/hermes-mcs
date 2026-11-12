@@ -23,7 +23,7 @@ def source(mid, body, *, day=1, content_hash=None):
 
 
 def facts_for(row):
-    return context_plan.source_facts(row, extract_context(row["body_text"]), night_id=1, discovery="new_report", found_at=refresh.time.time())
+    return context_plan.source_facts(row, extract_context(row["body_text"]), workday_id=1, discovery="new_report", found_at=refresh.time.time())
 
 
 def category_fact(row, category):

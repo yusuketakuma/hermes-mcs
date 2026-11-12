@@ -49,7 +49,7 @@ def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, c
             or len(ids) != len(set(ids))):
         return False
     original_summary = [{'text': context_plan.summary_text(by_id[fid]), 'fact_ids': [fid]} for fid in ids]
-    original = patient_context_refresh_sources._quality_capture(db, pid, cfg, proof.get('night_id'), original_summary, assessment,
+    original = patient_context_refresh_sources._quality_capture(db, pid, cfg, proof.get('workday_id') or proof.get('night_id'), original_summary, assessment,
                                 doc['temporal_view'], contract=contract, read_proof=read_proof,
                                 source_keys=meta.get('source_scope'))['identity']
     if not patient_context_quality_receipts._quality_failed(db, pid, original):
@@ -105,7 +105,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
             if latest != doc or latest_meta != meta:
                 return False
             patient_context_quality_receipts._quality_integrity(db, pid)
-            captured = patient_context_refresh_sources._quality_capture(db, pid, cfg, meta.get("night_id"), doc.get("summary"), assessment,
+            captured = patient_context_refresh_sources._quality_capture(db, pid, cfg, meta.get("workday_id") or meta.get("night_id"), doc.get("summary"), assessment,
                                         doc.get("temporal_view"), contract=contract, read_proof=read_proof, source_keys=meta.get('source_scope'))
             if not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy, captured["sources"]):
                 return False
@@ -562,7 +562,9 @@ def pending_estimate(db, pid, cfg, *, now=None, contract=None):
     return totals
 
 
-_LANE_CODES = {"nightly_length_stop": "length_stop", "nightly_unsupported_items": "unsupported",
+_LANE_CODES = {"patient_context_length_stop": "length_stop", "patient_context_unsupported_items": "unsupported",
+               "patient_context_unsupported_summary": "unsupported",
+               "nightly_length_stop": "length_stop", "nightly_unsupported_items": "unsupported",
                "nightly_unsupported_summary": "unsupported"}
 
 
@@ -600,9 +602,10 @@ def lane_metrics(db) -> dict:
             lanes["B"]["repair"] += row[3]
     published = db.execute(
         "SELECT COUNT(*) FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
-        "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND " + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
+        "WHERE a.kind IN (?,?) AND COALESCE(p.is_archived,0)=0 AND " + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
         + " AND CASE WHEN json_valid(a.meta) "
-        "THEN json_extract(a.meta,'$.published')=1 ELSE 0 END", (patient_context_refresh_state.KIND,)).fetchone()[0]
+        "THEN json_extract(a.meta,'$.published')=1 ELSE 0 END", (patient_context_refresh_state.KIND,
+        patient_context_refresh_state.LEGACY_KIND)).fetchone()[0]
     return {"lanes": lanes, "published": published}
 
 

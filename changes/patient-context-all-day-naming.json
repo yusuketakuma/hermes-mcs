@@ -1,0 +1,32 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの内部識別子を終日処理に合う名称へ整理",
+  "summary": "患者コンテキスト作成は終日動作しますが、保存形式や設定に夜間を意味する nightly 系の名前が残っていました。新規の記録は patient_context・workday_id・patient_context_* の名称へ改め、旧識別子は引き続き読み取れるようにしました。利用者が行う操作や表示内容に変更はありません。",
+  "upgrade": "追加操作は不要です。既存の config.json の extract.patient_context_nightly 設定はそのまま有効で、新しい extract.patient_context を書くとそちらが優先されます。保存済みの患者コンテキスト・予約・証明は旧識別子のまま読み続け、新しい記録から順に新名称へ移行します。処理契約の文字列 patient-context-nightly/1 は保存済み契約との一致照合に使うため維持します。",
+  "details": [
+    "設定キーは extract.patient_context を優先し、未指定時は extract.patient_context_nightly を読みます。新旧どちらも省略時は生成・限定閲覧とも有効で、不正な型や未対応の項目は従来どおり両方を無効とします。",
+    "artifact 種別は patient_context_v1 で新規保存し、旧 patient_context_nightly_v1 の行も読み取り対象に含めます。置き換え時は旧種別の行も同じ対象として整理します。",
+    "保存JSONの作業日idは workday_id・found_workday_id、イベント項目は context_facts・coverage.context、失敗コードは patient_context_* を新規に使います。旧 night_id・found_night_id・nightly_facts・coverage.nightly・nightly_* は読み取り互換として残します。",
+    "失敗コードの接頭辞を patient_context_* としたのは、抽出コンテキスト経路が既に使う context_source_changed などの context_* 名前と衝突しないためです。",
+    "mcs doctor の診断JSONとレーン3の状態出力のキーも patient_context へ改めました。これらは表示用の項目名で、保存データの識別子ではありません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh_state.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_scan.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/patients/patient_context_quality_receipts.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/core/patient_context_artifacts.py",
+    "mcs/core/mcs_config.py",
+    "mcs/core/error_codes.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/notify/notify_views.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/extract/llm/extract_llm_resident.py",
+    "mcs/ops/mcs_setup.py",
+    "docs/specs/patient-context.md",
+    "tests/patients/test_patient_context_legacy_compat.py"
+  ]
+}

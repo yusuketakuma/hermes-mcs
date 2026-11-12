@@ -35,7 +35,7 @@ def stored(tmp_path, monkeypatch):
         quote = source['body_text']
         facts += patient_context_plan.source_facts(source,
             [{'category': 'medication_management', 'text': quote, 'evidence': quote,
-              'subject': 'patient', 'details': []}], night_id='synthetic', discovery='scan', found_at=1)
+              'subject': 'patient', 'details': []}], workday_id='synthetic', discovery='scan', found_at=1)
     monkeypatch.setattr(patient_context_refresh, 'context_view_read', lambda *a, **kw: ({
         'facts': facts, 'summary': [{'text': '合成の文書要約', 'fact_ids': [fact['id']]} for fact in facts],
         'coverage': {}, 'as_of': 2}, {}))
@@ -63,7 +63,7 @@ def test_invalidated_original_is_not_presented_as_current(stored, change):
     led.db.execute(change)
     ev = patient_context_view.evidence(led.db, 1, cfg=CFG)
     assert not any(item['source'] == 'attachment_ocr' for item in ev['items'])
-    assert not ev['summary'] and not ev['nightly_facts']
+    assert not ev['summary'] and not ev['context_facts']
 
 
 def test_private_rows_link_to_existing_room_and_name_parent_attachment_page(stored):

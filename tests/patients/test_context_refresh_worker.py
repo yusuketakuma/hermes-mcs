@@ -30,7 +30,7 @@ LANES = worker.local_llm.LANES
 @pytest.fixture
 def capacity(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
-    cfg = {"extract": {"patient_context_nightly": {"enabled": True}}}
+    cfg = {"extract": {"patient_context": {"enabled": True}}}
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[3])
     monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
@@ -103,7 +103,7 @@ def test_other_lanes_never_enter_engine(capacity, monkeypatch, slot):
 
 
 def test_disabled_has_no_probes(capacity, monkeypatch):
-    capacity[1]["extract"]["patient_context_nightly"]["enabled"] = False
+    capacity[1]["extract"]["patient_context"]["enabled"] = False
     for probe in ("_context_memory_available", "disk_free_mb", "circuit_open_s"):
         monkeypatch.setattr(worker, probe, lambda *a: pytest.fail("probe while off"))
     assert run(capacity)["status"] == "off"
@@ -388,7 +388,7 @@ def test_update_during_engine_signals_resident_exit(capacity, monkeypatch):
 def test_configuration_change_cancels_publication(capacity, monkeypatch):
     assert run(capacity)["done"] == 1
     monkeypatch.setattr(worker, "load_config", lambda: {
-        "extract": {"patient_context_nightly": {"enabled": False}}})
+        "extract": {"patient_context": {"enabled": False}}})
     monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
@@ -408,6 +408,6 @@ def test_omitted_options_enable_idle_worker(capacity):
 
 @pytest.mark.parametrize("value", [None, [], {"enabled": "true"}, {"unknown": True}])
 def test_malformed_options_fail_closed(capacity, value):
-    capacity[1]["extract"]["patient_context_nightly"] = value
+    capacity[1]["extract"]["patient_context"] = value
     assert run(capacity)["status"] == "off"
     assert not capacity[2]

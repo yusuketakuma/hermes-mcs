@@ -621,10 +621,11 @@ def _new_summary_repair_response(db, pid, identity, provider, prompt, response, 
     if len(rows) != 1:
         raise ValueError("patient_summary_repair_evidence_invalid")
     owner = reservation["owner"]
-    if owner.get("source_sig") != identity["input_key"] or not isinstance(owner.get("night_id"), str):
+    workday_key = "workday_id" if "workday_id" in owner else "night_id"
+    if owner.get("source_sig") != identity["input_key"] or not isinstance(owner.get(workday_key), str):
         raise ValueError("patient_summary_repair_evidence_invalid")
     proof = {"version": 1, "answer_text": response[0][1], "reservation_artifact_id": rows[0][0],
-             "reservation_id": rid, "contract": provider.contract, "night_id": owner["night_id"],
+             "reservation_id": rid, "contract": provider.contract, workday_key: owner[workday_key],
              "original_audit_key": identity["audit_key"],
              "original_ids": [row["fact_ids"][0] for row in summary]}
     evidence = cloud_inference.verify_cloud_repair_evidence(
@@ -641,10 +642,11 @@ _repair_response = context_artifacts.repair_response
 def _summary_repair_response(db, pid, original, repaired, content, meta, prompt):
     import cloud_inference
     proof = _repair_response(content)
+    workday_key = "workday_id" if isinstance(proof, dict) and "workday_id" in proof else "night_id"
     if (not isinstance(proof, dict) or set(proof) != {"version", "answer_text", "reservation_artifact_id",
-            "reservation_id", "contract", "night_id", "original_audit_key", "original_ids", "receipt_sig"}
+            "reservation_id", "contract", workday_key, "original_audit_key", "original_ids", "receipt_sig"}
             or type(proof["version"]) is not int or proof["version"] != 1
-            or not isinstance(proof["night_id"], str) or not valid_hash(proof["original_audit_key"])
+            or not isinstance(proof[workday_key], str) or not valid_hash(proof["original_audit_key"])
             or proof["original_audit_key"] != original["audit_key"]
             or not isinstance(proof["original_ids"], list) or not valid_hash(proof["receipt_sig"])
             or meta.get("input_key") != original["input_key"]
@@ -657,7 +659,7 @@ def _summary_repair_response(db, pid, original, repaired, content, meta, prompt)
         raise ValueError("patient_summary_repair_evidence_invalid") from None
     if answer != {"fact_ids": content.get("fact_ids")}:
         raise ValueError("patient_summary_repair_evidence_invalid")
-    owner = {"night_id": proof["night_id"], "source_sig": original["input_key"]}
+    owner = {workday_key: proof[workday_key], "source_sig": original["input_key"]}
     evidence = cloud_inference.verify_cloud_repair_evidence(
         db, reservation_artifact_id=proof["reservation_artifact_id"], reservation_id=proof["reservation_id"],
         route="patient_context", project_id=pid, message_id=None, unit_key="summary_quality_repair",

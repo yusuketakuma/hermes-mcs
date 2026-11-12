@@ -108,9 +108,9 @@ def test_partial_cloud_draft_uses_only_audited_sources_then_expands(cloud_schedu
     led.db.commit()
     quality_inputs = []
     original_quality = patient_context_quality_controller._quality_step
-    def quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs):
+    def quality(_ledger, pid, _cfg, workday_id, doc, deadline, admit, **kwargs):
         if kwargs.get('source') is not None:
-            return original_quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs)
+            return original_quality(_ledger, pid, _cfg, workday_id, doc, deadline, admit, **kwargs)
         scope = kwargs['base_meta']['source_scope']
         snapshot = patient_context_refresh_sources._snapshot(led.db, pid, cfg, source_keys=scope)
         scans = patient_context_refresh_sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)

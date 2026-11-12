@@ -31,7 +31,7 @@ def _seed(ctx, mid, body):
     ledger.save_messages([replace(_message(mid, body=body), posted_at="2026-10-03T09:00:00+09:00")], project_id=1)
     source = {**dict(ledger.db.execute("SELECT * FROM messages WHERE project_id=1 AND message_id=?", (mid,)).fetchone()),
               "source": "chat"}
-    created = context_plan.source_facts(source, extract_context(body), night_id="2026-10-03", discovery="new_report", found_at=refresh.time.time())
+    created = context_plan.source_facts(source, extract_context(body), workday_id="2026-10-03", discovery="new_report", found_at=refresh.time.time())
     assert created
     for fact in created:
         fact["view_bucket"] = "unknown"
@@ -108,7 +108,7 @@ def test_independent_family_allergy_does_not_block_the_patient_record(ctx):
     assert _records(ctx) == [fact]
 
 
-def test_current_evidence_correction_absent_from_nightly_facts_blocks_notice(ctx):
+def test_current_evidence_correction_absent_from_context_facts_blocks_notice(ctx):
     _seed(ctx, 1, "アレルギー: 本人はペニシリンのアレルギーがある。")
     body = "アレルギー: 訂正、ペニシリンアレルギーがあるのは本人ではなく母です。"
     _seed(ctx, 2, body)

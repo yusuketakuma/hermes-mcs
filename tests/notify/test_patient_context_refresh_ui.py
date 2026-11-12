@@ -10,7 +10,7 @@ from semantic_testkit import _message
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
-ENABLED = {**CFG, "extract": {"patient_context_nightly": {"enabled": True, "publication": True}}}
+ENABLED = {**CFG, "extract": {"patient_context": {"enabled": True, "publication": True}}}
 
 
 def click(led, token, *, actor="discord:1001", now=NOW, cfg=ENABLED):
@@ -28,7 +28,7 @@ def open_section(led, spec, *, now=NOW, cfg=ENABLED, entry=0):
 
 def test_explicitly_disabled_summary_unchanged(led):
     spec = _delivered_card(led)
-    cfg = {**CFG, "extract": {"patient_context_nightly": {"enabled": False}}}
+    cfg = {**CFG, "extract": {"patient_context": {"enabled": False}}}
     result = click(led, _token_for(spec, "summary"), cfg=cfg)
     assert result["action"] == "summary"
     assert "navigation" not in result
@@ -74,8 +74,8 @@ def test_context_waiting_reason_survives_each_transport_without_pending_messages
 
     _delivered_card(led)
     monkeypatch.setattr(patient_context_view, "evidence", lambda *a, **k: {
-        "project_id": 1, "items": [], "summary": [], "nightly_facts": [], "as_of": None,
-        "coverage": {"nightly": None, "inference": {"complete": False, "status": state,
+        "project_id": 1, "items": [], "summary": [], "context_facts": [], "as_of": None,
+        "coverage": {"context": None, "inference": {"complete": False, "status": state,
                                                       "sources": {}}}})
     view = notify_views.patient_context_list(led.db, 1, "background", cfg=ENABLED, since=0, now=NOW)
     assert expected in view["notes"]
@@ -127,7 +127,7 @@ def test_all_ten_profession_orders_cycle_back_to_standard(led):
 
 def test_shadow_does_not_expose_navigation(led):
     spec = _delivered_card(led)
-    cfg = {**ENABLED, "extract": {"patient_context_nightly": {"enabled": True, "publication": False}}}
+    cfg = {**ENABLED, "extract": {"patient_context": {"enabled": True, "publication": False}}}
     result = click(led, _token_for(spec, "summary"), cfg=cfg)
     assert result["action"] == "summary"
     assert "navigation" not in result
@@ -248,7 +248,7 @@ def test_context_refresh_summary_uses_fact_id_not_same_text_source(led, monkeypa
         ev = original(db, pid, **kw)
         common = {"category": "living", "text": "合成の同じ引用", "quote": "合成の同じ引用",
                   "posted_at_ts": NOW, "source": "chat"}
-        ev["nightly_facts"] = [{**common, "id": "source1", "message_id": 100, "sender": "合成職員A"},
+        ev["context_facts"] = [{**common, "id": "source1", "message_id": 100, "sender": "合成職員A"},
                                {**common, "id": "source2", "message_id": 101, "sender": "合成職員B"}]
         ev["summary"] = [{"text": "合成の同じ引用", "fact_ids": ["source2"]}]
         return ev

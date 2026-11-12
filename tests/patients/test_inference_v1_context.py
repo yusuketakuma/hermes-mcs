@@ -174,7 +174,7 @@ def test_explicit_correction_targets_only_the_named_source_assertion():
 @pytest.mark.parametrize('span', [[True, 5], [-1, 2], [0, 999], [1, 4]])
 def test_comparison_rejects_invalid_absolute_span_instead_of_guessing(span):
     body = '合成の原文です。'
-    facts = context_plan.source_facts(source(body), [assertion(body)], night_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source(body), [assertion(body)], workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     facts[0]['evidence_span'] = span
     with pytest.raises(ValueError, match='cloud_comparison'):
         patient_context_refresh_state._comparison_context({'facts': facts}, [source(body)])
@@ -183,8 +183,8 @@ def test_comparison_rejects_invalid_absolute_span_instead_of_guessing(span):
 def test_comparison_distinguishes_repeated_source_quotes_by_absolute_position():
     text = '合成の確認記録です。'
     raw = source(text+'別の記録。'+text)
-    first = context_plan.source_facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', chunk=text, found_at=patient_context_refresh_state.time.time())
-    last = context_plan.source_facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', offset=len(text+'別の記録。'), chunk=text, found_at=patient_context_refresh_state.time.time())
+    first = context_plan.source_facts(raw, [assertion(text)], workday_id='synthetic', discovery='new_report', chunk=text, found_at=patient_context_refresh_state.time.time())
+    last = context_plan.source_facts(raw, [assertion(text)], workday_id='synthetic', discovery='new_report', offset=len(text+'別の記録。'), chunk=text, found_at=patient_context_refresh_state.time.time())
     assert patient_context_refresh_state._comparison_context({'facts': first}, [raw]) != patient_context_refresh_state._comparison_context({'facts': last}, [raw])
 
 
@@ -203,7 +203,7 @@ def test_same_paragraph_preserves_distinct_subjects_attributes_and_absolute_span
     body = first+second
     items = [assertion(first,details=[{'key':'residual_quantity','value':'3錠','evidence':first}]),
              assertion(second,subject='family',details=[{'key':'residual_quantity','value':'7錠','evidence':second}])]
-    facts = context_plan.source_facts(source(body),items,night_id='synthetic',discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source(body),items,workday_id='synthetic',discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 2 and len({f['id'] for f in facts}) == 2
     assert [f['evidence_span'] for f in facts] == [[0,len(first)],[len(first),len(body)]]
     assert [f['reported_subject'] for f in facts] == ['patient','family']
@@ -218,11 +218,11 @@ def test_atomic_identity_changes_with_details_not_discovery_or_item_order():
     body = '薬剤Aの残薬は3錠、保管場所は棚です。'
     a = assertion(body,details=[{'key':'residual_quantity','value':'3錠','evidence':body}])
     b = assertion(body,details=[{'key':'storage_place','value':'棚','evidence':body}])
-    first = context_plan.source_facts(source(body),[a,b],night_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())
-    second = context_plan.source_facts(source(body),[b,a],night_id='next',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
+    first = context_plan.source_facts(source(body),[a,b],workday_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    second = context_plan.source_facts(source(body),[b,a],workday_id='next',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
     assert len({f['id'] for f in first}) == 2
     assert {f['id'] for f in first} == {f['id'] for f in second}
-    assert {f['id'] for f in first} != {f['id'] for f in context_plan.source_facts(source(body),[a],night_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())}
+    assert {f['id'] for f in first} != {f['id'] for f in context_plan.source_facts(source(body),[a],workday_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())}
 
 
 def test_summary_signature_binds_relation_and_details_but_not_discovery_time():
@@ -231,13 +231,13 @@ def test_summary_signature_binds_relation_and_details_but_not_discovery_time():
                  'project_id':1,'message_id':2,'content_hash':'b'*64,'fingerprint':'c'*64,
                  'parent_fingerprint':'d'*64,'posted_at_ts':123}
     value = assertion(body,details=[{'key':'storage_place','value':'棚','evidence':body,'refers_to':reference}])
-    facts = context_plan.source_facts(source(body),[value],night_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source(body),[value],workday_id='old',discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert facts[0]['details'][0]['refers_to'] == reference
     changed = copy.deepcopy(facts)
     changed[0]['details'][0]['refers_to']['fingerprint'] = 'e'*64
     assert patient_context_refresh_state._facts_sig(changed) != patient_context_refresh_state._facts_sig(facts)
     changed = copy.deepcopy(facts)
-    changed[0].update(found_at=99,found_night_id='new',discovery='backfill_found')
+    changed[0].update(found_at=99,found_workday_id='new',discovery='backfill_found')
     assert patient_context_refresh_state._facts_sig(changed) == patient_context_refresh_state._facts_sig(facts)
 
 
@@ -245,7 +245,7 @@ def test_repeated_quote_is_bound_by_its_known_chunk_offset():
     text = '本人は訪問日を確認しました。'
     body = text+'別の合成記録。'+text
     start = len(text+'別の合成記録。')
-    facts = context_plan.source_facts(source(body),[assertion(text)],night_id='synthetic',discovery='backfill_found',offset=start,chunk=text, found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source(body),[assertion(text)],workday_id='synthetic',discovery='backfill_found',offset=start,chunk=text, found_at=patient_context_refresh_state.time.time())
     assert facts[0]['evidence_span'] == [start,len(body)]
     assert context_plan.validated_source_facts(source(body),facts) == facts
     tampered = copy.deepcopy(facts)
@@ -255,7 +255,7 @@ def test_repeated_quote_is_bound_by_its_known_chunk_offset():
 
 def test_long_unbroken_paragraph_is_structured_and_can_be_selected_without_summary_hold():
     body = ''.join(f'合成記録{i:04d}では生活環境を確認しました。' for i in range(1200))
-    facts = context_plan.source_facts(source(body),[assertion(body)],night_id='synthetic',discovery='new_report', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source(body),[assertion(body)],workday_id='synthetic',discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) > 1 and ''.join(f['evidence'] for f in facts) == body
     assert all(len(f['quote']) <= refresh.context_plan.SCAN_CHUNK for f in facts)
     assert all(f['reference_context']['span'] == [0,len(body)] for f in facts)
@@ -417,7 +417,7 @@ def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_e
     monkeypatch.setattr(patient_context, 'extract_context', lambda text: [item] if text == body else [])
     result = step(runtime)
     assert result['status'] == 'failed' and result['lane'] == 'B'
-    assert result['reason'] == 'nightly_unsplittable_assertion'
+    assert result['reason'] == 'patient_context_unsplittable_assertion'
     waiting = step(runtime)
     assert waiting['status'] == 'deferred' and waiting['reason'] == 'patient_context_waiting'
     assert waiting['done'] == 0 and calls == []
@@ -531,7 +531,7 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
 
 def _delete_supported_stop(led, mid=2, *, pid=1):
     raw, item = _clinical_source(led, mid, '本人は本日薬剤Aを中止しました。', '2026-10-02', pid=pid)
-    facts = context_plan.source_facts(raw, [item], night_id='synthetic', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(raw, [item], workday_id='synthetic', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
     assert facts[0]['temporal']['use_state'] == 'stopped'
     with led.db:
         aid = led.artifact_add_tx(patient_context_refresh_state.CHUNK, json.dumps({'facts':facts}), project_id=pid, message_id=mid,
@@ -632,7 +632,7 @@ def test_adopted_context_proofs_advance_analysis_epoch_but_reads_and_publication
         pytest.fail('synthetic proof stages did not finish')
     assert patient_context_refresh_readiness.inference_coverage(led.db,1,CFG)['complete']
     patient_context_refresh_readiness.status(led.db,CFG)
-    private = {'extract':{'patient_context_nightly':{'enabled':True,'publication':False}}}
+    private = {'extract':{'patient_context':{'enabled':True,'publication':False}}}
     assert step(runtime,cfg=private)['lane']=='A'
     final = json.loads(led.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic_sched'").fetchone()[0])
     assert final['analysis_epoch']==previous and final.get('source_epoch',0)==0
@@ -685,7 +685,7 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
     items = [assertion(clinical,details=[{'key':'drug_name','value':'薬剤A','evidence':clinical},
                                        {'key':'actual_dose','value':'5mg','evidence':clinical}])]
     items += [{'category':'living','text':line,'evidence':line,'subject':'unspecified','details':[]} for line in lines[1:]]
-    facts = context_plan.source_facts(raw,items,night_id='synthetic',discovery='backfill_found',found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(raw,items,workday_id='synthetic',discovery='backfill_found',found_at=patient_context_refresh_state.time.time())
     assert len(facts) == len({fact['id'] for fact in facts}) == 129
     assert [fact['evidence'] for fact in facts] == lines
     assert context_plan.validated_source_facts(raw,facts) == facts
@@ -897,7 +897,7 @@ def test_karte_relative_time_uses_only_aware_original_time_and_keeps_the_origina
     assert raw['source_key'] == 'karte:'+str(row[0]) and raw['source_artifact_id'] == row[0]
     assert raw['content_hash'] == patient_context_refresh_state._digest(json.loads(row[1]))
     item = assertion(body, details=[{'key':'drug_name','value':'薬剤A','evidence':body}])
-    fact = context_plan.source_facts(raw,[item],night_id='synthetic',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())[0]
+    fact = context_plan.source_facts(raw,[item],workday_id='synthetic',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())[0]
     assert fact['temporal']['event_day'] == expected
     assert fact['temporal']['posted_day'] == expected
     assert (raw['posted_at_ts'] is None) == (expected is None)
@@ -925,7 +925,7 @@ def test_same_content_karte_originals_have_distinct_fact_and_capture_occurrences
     ids, facts = [], []
     with led.db:
         for raw in originals:
-            fact = context_plan.source_facts(raw,[item],night_id='synthetic',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())[0]
+            fact = context_plan.source_facts(raw,[item],workday_id='synthetic',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())[0]
             facts.append(fact)
             ids.append(patient_context_refresh_state._replace(led,patient_context_refresh_state.CHUNK,1,{'facts':[fact]},
                 {'source_key':raw['source_key'],'chunk_key':raw['source_key']},0))

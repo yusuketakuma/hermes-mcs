@@ -372,7 +372,7 @@ def test_crash_before_config_load_reports_backup_unknown(
 
 def test_tick_waits_for_a_run_lock_released_between_batches(
         tmp_path, monkeypatch):
-    """The nightly drain releases run.lock between batches — a tick
+    """The context drain releases run.lock between batches — a tick
     must win it within its wait budget instead of exiting on one try."""
     _point_run_check_at(tmp_path, monkeypatch)
     fake_fd = os.open(str(tmp_path / "fake_lock"), os.O_CREAT | os.O_RDWR)

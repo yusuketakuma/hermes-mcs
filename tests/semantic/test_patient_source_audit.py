@@ -69,11 +69,11 @@ def test_support_and_coverage_preserve_subject_negation_unknown_time_and_all_att
         assertion={'text': facts[0]['text'], 'negated': True},
         details=[{'key': 'synthetic_detail', 'value': 'unknown'}],
         relations=[{'kind': 'contradicts', 'target_fact_id': facts[1]['id']}],
-        found_at=123, found_night_id='synthetic_day', discovery='new_report')
+        found_at=123, found_workday_id='synthetic_day', discovery='new_report')
     planned = list(plan(sources[0], facts))
     actual = planned[0]['state']['target']['facts'][0]['fact']
     expected = {key: value for key, value in facts[0].items()
-                if key not in ('found_at', 'found_night_id', 'discovery')}
+                if key not in ('found_at', 'found_workday_id', 'discovery')}
     assert actual == planned[-1]['state']['target']['candidate_facts'][0] == expected
     assert actual['quote_span'] == facts[0]['quote_span'] and actual['evidence_span'] == facts[0]['evidence_span']
     assert actual['temporal']['event_time'] == 'unknown'
@@ -87,7 +87,7 @@ def test_coverage_logical_id_ignores_only_discovery_bookkeeping_and_input_order(
     _, facts, sources = sample()
     first = list(plan(sources[0], facts))[-1]['fact_ids']
     for fact in facts:
-        fact.update(found_at=987, found_night_id='other_day', discovery='backfill_found')
+        fact.update(found_at=987, found_workday_id='other_day', discovery='backfill_found')
     assert list(plan(sources[0], list(reversed(facts))))[-1]['fact_ids'] == first
     facts[0]['temporal'] = {'status': 'past'}
     assert list(plan(sources[0], facts))[-1]['fact_ids'] != first
@@ -271,7 +271,7 @@ def test_support_question_identity_survives_page_sharding_order_and_bookkeeping(
     fact = {**facts[0], 'id': 'f' * 64}
     original = list(plan(source, [fact]))[0]['question_keys'][fact['id']]
     others = [{**facts[0], 'id': payload_hash(['synthetic_other', index])} for index in range(24)]
-    fact.update(found_at=123, found_night_id='another_day', discovery='backfill_found')
+    fact.update(found_at=123, found_workday_id='another_day', discovery='backfill_found')
     source.update(extraction_sig='new_generated_output', canonical_context=True)
     new_pages = list(plan(source, [fact, *reversed(others)]))
     [changed] = [page['question_keys'][fact['id']] for page in new_pages[:-1] if fact['id'] in page['question_keys']]

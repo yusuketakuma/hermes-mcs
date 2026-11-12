@@ -144,7 +144,7 @@ def test_repair_origin_missing_source_signature_has_a_fixed_validation_error(pai
     assert 'original_source_sig' in origin
     origin = dict(origin)
     origin.pop('source_sig')
-    with pytest.raises(ValueError, match='^nightly_source_repair_invalid$'):
+    with pytest.raises(ValueError, match='^patient_context_source_repair_invalid$'):
         artifacts.verify_source_repair_rows(ledger.db, 1, key, origin, rows)
     assert not ledger.db.in_transaction
     assert receipts(ledger) == before and len(posts) == sent

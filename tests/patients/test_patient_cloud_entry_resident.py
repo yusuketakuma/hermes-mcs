@@ -70,7 +70,7 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
             'content': [{'type': 'text', 'text': '{"patient_context":[]}'}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
-    def scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, **kwargs):
+    def scan(cfg, source, saved, workday_id, deadline, admit, *, provider=None, **kwargs):
         answers.append(patient_context_quality_controller._ask(cfg, {'source': 'synthetic resident input'}, deadline, admit, provider=provider))
         # Suspend after accounting before persisting this source's scan cursor.
         raise patient_context_refresh_state.Deferred('synthetic_after_answer')
@@ -118,7 +118,7 @@ def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud
             raise cloud_inference.CloudFallback('cloud_send_blocked')
     monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Blocked)
     result = cloud_step(runtime)
-    assert result['status'] == 'deferred' and result['reason'] == 'nightly_cloud_budget'
+    assert result['status'] == 'deferred' and result['reason'] == 'patient_context_cloud_budget'
     assert not local and len(seen) == 1
     saved = patient_context_refresh_sources._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'])[1]
     assert saved['_provider_contract'] == snapshot['contract']['provider'] and saved['cursor'] == 1

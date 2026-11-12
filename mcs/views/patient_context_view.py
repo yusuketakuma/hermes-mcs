@@ -279,7 +279,7 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
     for fact in scoped_facts:
         extra = {"temporality": fact.get("temporality"), "discovery": fact.get("discovery"),
                  **{key: fact.get(key) for key in ("evidence", "evidence_span", "reference_context", "assertion", "temporal", "view_bucket", "relations")},
-                 "found_night_id": fact.get("found_night_id"), "found_at": fact.get("found_at")}
+                 "found_workday_id": fact.get("found_workday_id") or fact.get("found_night_id"), "found_at": fact.get("found_at")}
         entry = {"category": fact.get("category"), "text": fact.get("text"),
                  "quote": fact.get("quote"), "subject": fact.get("subject"),
                  "reported_subject": fact.get("reported_subject"), "details": fact.get("details") or [],
@@ -327,9 +327,9 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
             "historical_items": _historical_karte_items(db, project_id, context_refresh),
             "summary": summary,
             # summary fact_ids resolve here; empty when unpublished or no longer valid
-            "nightly_facts": scoped_facts,
+            "context_facts": scoped_facts,
             "as_of": (context_refresh or {}).get("as_of"),
-            "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage"),
+            "coverage": {"read_model": coverage, "context": (context_refresh or {}).get("coverage"),
                          "inference": inference}}
 
 
@@ -366,15 +366,15 @@ def allergy_posted_records(db, ev):
     pid = ev.get("project_id")
     coverage = ev.get("coverage") or {}
     inference = coverage.get("inference") or {}
-    nightly = coverage.get("nightly") or {}
-    attachments = nightly.get("attachments") or {}
-    karte = nightly.get("karte_records") or {}
-    facts = ev.get("nightly_facts") or []
+    context_cov = coverage.get("context") or coverage.get("nightly") or {}
+    attachments = context_cov.get("attachments") or {}
+    karte = context_cov.get("karte_records") or {}
+    facts = ev.get("context_facts") or []
     if (not db.in_transaction or type(pid) is not int or pid <= 0 or inference.get("complete") is not True
             or inference.get("publication_eligible") is not True or attachments.get("count") != 0
             or karte.get("stored") != 0
-            or nightly.get("unreflected") != 0 or nightly.get("incomplete") != 0
-            or nightly.get("unscanned") != 0 or not isinstance(facts, list)):
+            or context_cov.get("unreflected") != 0 or context_cov.get("incomplete") != 0
+            or context_cov.get("unscanned") != 0 or not isinstance(facts, list)):
         return []
     candidates = [f for f in facts if isinstance(f, dict) and f.get("category") == "allergies"
                   and (f.get("temporal") or {}).get("subject") not in ("family", "other")]

@@ -85,5 +85,5 @@ def test_summary_short_ids_map_back_to_frozen_evidence_without_new_prose(monkeyp
     assert result == [{'text': facts[1]['text'], 'fact_ids': ['b' * 64]},
                       {'text': facts[0]['text'], 'fact_ids': ['a' * 64]}]
     monkeypatch.setattr(quality, '_ask', lambda *_a, **_k: {'fact_ids': ['3']})
-    with pytest.raises(ValueError, match='nightly_unsupported_summary'):
+    with pytest.raises(ValueError, match='patient_context_unsupported_summary'):
         quality._summary(CFG, facts, 100, lambda: True)

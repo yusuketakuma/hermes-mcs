@@ -150,7 +150,7 @@ def _source_chunk_marker_matches(meta, scan):
 def _source_occurrence_disposition(db, pid, source, contract, scan):
     """Recognize new raw input only after the stored selection is self-consistent."""
     if type(scan.get("source_occurrence_version")) is not int or scan["source_occurrence_version"] != 1:
-        raise ValueError("nightly_source_repair_invalid")
+        raise ValueError("patient_context_source_repair_invalid")
     stored = scan.get("source_occurrence")
     actual = _source_occurrence(db, pid, source)
     if patient_context_refresh_state._digest(actual) == patient_context_refresh_state._digest(stored):
@@ -159,7 +159,7 @@ def _source_occurrence_disposition(db, pid, source, contract, scan):
     if ref is not None:
         header = _source_repair_header(db, pid, ref.get("repair_input_key"))
         if header is None or patient_context_refresh_state._digest(header["meta"].get("source_occurrence")) != patient_context_refresh_state._digest(stored):
-            raise ValueError("nightly_source_repair_invalid")
+            raise ValueError("patient_context_source_repair_invalid")
         context_artifacts.candidate_rows(db, pid, context_plan.source_key(source), ref,
             source_sig=header["meta"].get("source_sig"), contract=header["meta"].get("contract"),
             source_binding=stored.get("source_binding"), source_occurrence=stored,
@@ -293,7 +293,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                         **({"_provider_contract":scan["_provider_contract"]} if scan.get("_provider_contract") else {})}
                     continue
             except (ValueError, TypeError, KeyError, OSError):
-                scan.update(complete=False, audited=False, held=True, failure="nightly_source_repair_invalid")
+                scan.update(complete=False, audited=False, held=True, failure="patient_context_source_repair_invalid")
                 scan["_chunks_sig"] = ""
                 continue
         if scan.get("accepted_candidate_ref") is not None:
@@ -304,7 +304,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                 scan["_chunks_sig"] = scan["accepted_candidate_ref"]["chunks_sig"]
                 hydrate_ids[key] = [chunk["_artifact_id"] for chunk in selected]
             except (ValueError, TypeError, KeyError, OSError):
-                scan.update(complete=False, audited=False, held=True, failure="nightly_source_repair_invalid")
+                scan.update(complete=False, audited=False, held=True, failure="patient_context_source_repair_invalid")
                 scan["_chunks_sig"] = ""
         else:
             scan["_chunks_sig"] = patient_context_refresh_state._digest(sorted(proofs.get(key, [])))
@@ -313,7 +313,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
         if scan.get("complete") and not context_plan.ranges_complete(ranges.get(key, []), by_key[key].get("body_length", 0)):
             scan.update(complete=False, audited=False, cursor=0)
             if any(span is None for span in ranges.get(key, [])):
-                scan.update(held=True, failure="nightly_chunk_proof_invalid")
+                scan.update(held=True, failure="patient_context_chunk_proof_invalid")
         if scan.get("quality_state") in ("held", "failed"):
             scan["_quality_held"] = (cfg is None or scan.get("quality_hold_key") ==
                 patient_context_refresh_state._source_quality_hold_key(db, pid, cfg, by_key[key], scan["_chunks_sig"]))
@@ -372,13 +372,13 @@ def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
     for source in sources:
         _scan_check(ledger.db)
         if patient_context_refresh_state.time.monotonic() >= deadline:
-            raise ValueError('nightly_cloud_source_unverified')
+            raise ValueError('patient_context_cloud_source_unverified')
         key = context_plan.source_key(source)
         scan = scans.get(key, {})
         if not scan.get('_provider_contract'):
             continue
         if not scan.get('complete'):
-            raise ValueError('nightly_cloud_source_unverified')
+            raise ValueError('patient_context_cloud_source_unverified')
         # Accepted repairs retain their existing financial checks as well.
         list(_source_chunks(ledger.db, pid, source, contract, scan))
         meta = scan['_source_meta']
@@ -395,10 +395,10 @@ def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
             binding = (source.get('message_id') or None, unit, origin['provider']['model'])
             origins.append((*binding, origin))
         if not selected:
-            raise ValueError('nightly_cloud_source_unverified')
+            raise ValueError('patient_context_cloud_source_unverified')
     cloud_policy.guard_context_origins(ledger, pid, origins)
     if patient_context_refresh_state.time.monotonic() >= deadline:
-        raise ValueError('nightly_cloud_source_unverified')
+        raise ValueError('patient_context_cloud_source_unverified')
 
 
 def _scan_facts(db, pid, source, contract, scan):
@@ -476,7 +476,7 @@ def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
             and (bool(summary) if facts else summary == []))
 
 
-def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=False, cfg=None, read_proof=None):
+def _all_facts(db, pid, snapshot, workday_id, *, projected=False, include_all=False, cfg=None, read_proof=None):
     facts = {}
     historical = {}
     scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
@@ -487,7 +487,7 @@ def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=Fals
         # Cloud C audits the selected chunk set. Rejected source.items must
         # not re-enter A through a union outside that accepted set.
         if not snapshot["contract"].get("provider"):
-            for fact in context_plan.source_facts(source, source["items"], night_id=night_id, discovery="new_report", found_at=patient_context_refresh_state.time.time()):
+            for fact in context_plan.source_facts(source, source["items"], workday_id=workday_id, discovery="new_report", found_at=patient_context_refresh_state.time.time()):
                 dest[fact["id"]] = fact
         for fact in _scan_facts(db, pid, source, snapshot["contract"], scans.get(context_plan.source_key(source), {})):
             dest[fact["id"]] = fact
@@ -603,7 +603,7 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
                 raw_occurrences])}
 
 
-def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None, source_keys=None):
+def _quality_capture(db, pid, cfg, workday_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None, source_keys=None):
     """Read and validate quality inputs within an already-open SQLite snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
@@ -625,7 +625,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             scan = scans.get(context_plan.source_key(source), {})
             if not _scan_ready(scan):
                 raise ValueError("patient_summary_quality_source_incomplete")
-    _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True, cfg=cfg, read_proof=read_proof)
+    _, _, _, facts, state = _all_facts(db, pid, snapshot, workday_id, include_all=True, cfg=cfg, read_proof=read_proof)
     identity = _quality_input(db, pid, snapshot, facts, state, summary, assessment_contract, display_projection)
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
 
@@ -744,11 +744,11 @@ def _source_repair_header(db, pid, repair_input_key):
         meta, content = loads_dict(row[2]), loads_dict(row[1])
         if (not meta or read_version(meta) is None or not valid_hash(meta.get('repair_input_key'))
                 or not isinstance(content, dict) or content.get('phase') not in ('scanning','sealing','ready','held','unknown')):
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         if meta['repair_input_key'] == repair_input_key:
             found.append({'artifact_id':row[0], 'raw_content':row[1], 'raw_meta':row[2], **content, 'meta':meta})
     if len(found) > 1:
-        raise ValueError('nightly_source_repair_invalid')
+        raise ValueError('patient_context_source_repair_invalid')
     return found[0] if found else None
 
 
@@ -759,7 +759,7 @@ def _source_repair_update_tx(db, row, content):
         (json.dumps(content, ensure_ascii=False, separators=(',', ':')), row['artifact_id'], patient_context_refresh_state.SOURCE_REPAIR,
          row['raw_content'], row['raw_meta']))
     if changed.rowcount != 1:
-        raise ValueError('nightly_source_repair_changed')
+        raise ValueError('patient_context_source_repair_changed')
 
 
 def _source_repair_units(db, pid, repair_input_key):
@@ -773,11 +773,11 @@ def _source_repair_units(db, pid, repair_input_key):
                 or not valid_hash(meta.get('unit_key')) or not valid_hash(meta.get('request_fp'))
                 or type(meta.get('reservation_artifact_id')) is not int or meta['reservation_artifact_id'] <= 0
                 or not isinstance(meta.get('reservation_id'), str)):
-            raise ValueError('nightly_source_repair_invalid')
+            raise ValueError('patient_context_source_repair_invalid')
         if meta['repair_input_key'] == repair_input_key:
             content = loads_dict(row[1])
             if not content or content.get('phase') not in ('reserved','complete','split'):
-                raise ValueError('nightly_source_repair_invalid')
+                raise ValueError('patient_context_source_repair_invalid')
             rows.append({'artifact_id':row[0], 'raw_content':row[1], 'raw_meta':row[2], 'meta':meta, **content})
     return rows
 
@@ -792,7 +792,7 @@ def _source_repair_chunks(db, pid, source, contract, candidate_ref, *, occurrenc
         candidate_ref["repair_input_key"], rows=rows, occurrence=occurrence)
     if (patient_context_refresh_state._digest(sorted(patient_context_refresh_state._facts_sig([fact]) for fact in facts.values())) != candidate_ref["candidate_key"]
             or signature != candidate_ref["chunks_sig"]):
-        raise ValueError("nightly_source_repair_changed")
+        raise ValueError("patient_context_source_repair_changed")
     return chunks
 
 
@@ -816,10 +816,10 @@ def _source_repair_parts(db, pid, source, contract, repair_input_key, *, require
             continue
         facts = doc["facts"]
         if len(facts) > context_plan.MAX_SOURCE_FACTS or len(context_plan.validated_source_facts(source, facts)) != len(facts):
-            raise ValueError("nightly_source_repair_invalid")
+            raise ValueError("patient_context_source_repair_invalid")
         for fact in facts:
             if fact["id"] in unique and patient_context_refresh_state._facts_sig([unique[fact["id"]]]) != patient_context_refresh_state._facts_sig([fact]):
-                raise ValueError("nightly_source_repair_invalid")
+                raise ValueError("patient_context_source_repair_invalid")
             unique[fact["id"]] = fact
         chunks.append({key:doc[key] for key in ("chunk_span","part","parts","facts")}
                       | {"_artifact_id":row["artifact_id"]})

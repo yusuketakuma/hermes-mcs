@@ -1190,7 +1190,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
 
     if section == "background":
         view = views.role_order(views.background(ev), role)
-        facts = {fact["id"]: fact for fact in ev.get("nightly_facts", [])}
+        facts = {fact["id"]: fact for fact in ev.get("context_facts", ev.get("nightly_facts", []))}
         add(views.allergy_posted_records(db, ev), "アレルギー · 投稿時点の記載", "allergies")
         for sentence in view["summary"]:
             add([facts[key] for key in sentence["fact_ids"] if key in facts], "患者コンテキスト")
@@ -1405,7 +1405,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
                        if row["quotes"] else tail)
-    context_coverage = ev["coverage"].get("nightly") or {}
+    context_coverage = ev["coverage"].get("context") or ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     document_coverage = view.get("document_coverage")
     if document_coverage is not None:

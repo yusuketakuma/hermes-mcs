@@ -42,7 +42,7 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
     seed(led, body='生活環境: 合成の居住記録。')
     snapshot = sources._snapshot(led.db, 1, cfg, source_keys=[1])
     source, = snapshot['sources']
-    known = plan.source_facts(source, source['items'], night_id='synthetic',
+    known = plan.source_facts(source, source['items'], workday_id='synthetic',
                               discovery='new_report', found_at=clock.wall)
     known_ids = {fact['id'] for fact in known}
     assert known_ids and snapshot['contract'].get('provider')
@@ -97,11 +97,11 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
         if index:
             clock.wall = document(led, state.PROGRESS)['next_try'] + 1
         result = step(runtime, cfg=cfg)
-        assert (result['status'], result['lane'], result['reason']) == ('failed', 'A', 'nightly_length_stop')
+        assert (result['status'], result['lane'], result['reason']) == ('failed', 'A', 'patient_context_length_stop')
         assert document(led, state.PROGRESS)['attempts'] == index + 1
     before = document(led, state.PROGRESS)
     assert before['source_scope'] == [1] and before['source_sig'] == snapshot['source_sig']
-    assert before['next_try'] > clock.wall and before['failure'] == 'nightly_length_stop'
+    assert before['next_try'] > clock.wall and before['failure'] == 'patient_context_length_stop'
     assert sum('reports' in payload for payload in local_calls) == attempts
     assert not posts and document(led) is None
 

@@ -23,7 +23,7 @@ def test_share_projects_fixed_facts_and_discards_private_details():
                    "gateway": {"source_revision": None, "pid": 321, "started_at": 1000}},
         "collection": {"status": "warning", "counts": observation(["deadline_exceeded " + secret])},
         "card_worker": {"restore_delivery_held": True, "profile": secret},
-        "runtimes": {"path": secret}, "patient_context_nightly": {"complete": 111},
+        "runtimes": {"path": secret}, "patient_context": {"complete": 111},
         "operations": {"raw": secret}, "unknown": secret,
     }
     result = support_diagnostics.shared_report(report)

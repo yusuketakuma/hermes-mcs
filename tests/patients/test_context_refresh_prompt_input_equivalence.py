@@ -1,4 +1,4 @@
-"""Original nightly detail fields remain byte-identical at the scan prompt boundary."""
+"""Original context detail fields remain byte-identical at the scan prompt boundary."""
 
 import patient_context_quality_controller
 import patient_context_refresh_readiness
@@ -53,7 +53,7 @@ def test_scan_requests_grounded_attributes_and_rejects_invented_values(tmp_path,
                     {'key': 'support_method', 'value': '一包化', 'evidence': body}]}]}
         monkeypatch.setattr(patient_context_quality_controller, '_ask', ask)
         if unsupported:
-            with pytest.raises(ValueError, match='^nightly_unsupported_items$'):
+            with pytest.raises(ValueError, match='^patient_context_unsupported_items$'):
                 patient_context_quality_controller._scan({}, source, {}, 'synthetic', 1000, lambda: True)
             assert len(calls) == 2
         else:

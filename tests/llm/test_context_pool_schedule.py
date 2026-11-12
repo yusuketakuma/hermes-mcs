@@ -93,7 +93,7 @@ def test_context_pass_reports_only_fixed_bounded_diagnostics():
 
 @pytest.mark.parametrize("reason", [
     "source_quality_unavailable:RuntimeStale",
-    "source_quality_unavailable:nightly_audit_mismatch",
+    "source_quality_unavailable:patient_context_audit_mismatch",
     "summary_quality_unavailable:ValueError",
     "patient_context_waiting:anything",
 ])

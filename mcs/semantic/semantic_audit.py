@@ -762,7 +762,7 @@ def patient_source_question_keys(body, *, source_input_key, assessment):
                 raise ValueError
             _patient_quality_facts(target["candidate_facts"], sources)
             all_meaning = sorted(({key: value for key, value in item.items()
-                                   if key not in ("found_at", "found_night_id", "discovery")}
+                                   if key not in ("found_at", "found_night_id", "found_workday_id", "discovery")}
                                   for item in target["candidate_facts"]), key=lambda item: item["id"])
             source_ref = {key: value for key, value in source_context.items() if key not in ("id", "role", "text")}
             [coverage] = indexed.values()
@@ -784,7 +784,7 @@ def patient_source_question_keys(body, *, source_input_key, assessment):
             fact = indexed[qid]
             candidates = target["candidate_facts"] if kind == "source_coverage" else [fact]
             meaning = sorted(({key: value for key, value in item.items()
-                               if key not in ("found_at", "found_night_id", "discovery")}
+                               if key not in ("found_at", "found_night_id", "found_workday_id", "discovery")}
                               for item in candidates), key=lambda item: item["id"])
             output[fact["id"]] = payload_hash(["patient-source-question/v1", source_input_key,
                 source_context, kind, meaning, question, passing, assessment, body["model"]])
@@ -808,7 +808,7 @@ def patient_source_quality_pages(source, facts, *, source_input_key, assessment)
     # Discovery bookkeeping is not interpretation. Reordering or rescanning the
     # same assertions must not give a normal negative answer a new logical ID.
     candidates = sorted((deepcopy({k: v for k, v in fact.items()
-                                  if k not in ("found_at", "found_night_id", "discovery")})
+                                  if k not in ("found_at", "found_night_id", "found_workday_id", "discovery")})
                          for fact, _ in checked), key=lambda fact: fact["id"])
     source_ref = {k: source.get(k) for k in _PATIENT_SOURCE_CONTEXT_FIELDS}
     source_ref["source_key"] = source.get("source_key", source["message_id"])
@@ -1076,7 +1076,7 @@ def patient_source_quality_identity(source, facts, occurrence, contract, chunks_
         raise ValueError('patient_source_identity_invalid')
     input_key = payload_hash(['source', source_input_key])
     candidate_key = payload_hash(sorted(payload_hash([{key:value for key,value in fact.items()
-        if key not in ('found_at','found_night_id','discovery')}]) for fact in facts))
+        if key not in ('found_at','found_night_id','found_workday_id','discovery')}]) for fact in facts))
     material = [[page['fact_ids'], page['state'], page['questions'], page['passing_choices']] for page in pages]
     failure_key = payload_hash(['source', input_key, candidate_key, assessment])
     identity = {'purpose':'source', 'input_key':input_key, 'candidate_key':candidate_key,

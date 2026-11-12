@@ -16,16 +16,16 @@ import patient_context_refresh
     {'publication': []}, {'window': 'all-day'}])
 def test_context_refresh_options_reject_invalid_shape_and_values(value):
     errors, _ = mcs_setup.validate_config({'mcs_login_id': 'synthetic',
-        'extract': {'patient_context_nightly': value}})
-    assert any('extract.patient_context_nightly' in e for e in errors)
+        'extract': {'patient_context': value}})
+    assert any('extract.patient_context' in e for e in errors)
 
 
 @pytest.mark.parametrize('value', [{}, {'enabled': False, 'publication': False},
     {'enabled': True}, {'enabled': True, 'publication': True}])
 def test_context_refresh_options_accept_explicit_booleans(value):
     errors, _ = mcs_setup.validate_config({'mcs_login_id': 'synthetic',
-        'extract': {'patient_context_nightly': value}})
-    assert not any('extract.patient_context_nightly' in e for e in errors)
+        'extract': {'patient_context': value}})
+    assert not any('extract.patient_context' in e for e in errors)
 
 
 def test_unprobed_diagnostic_does_not_open_database(monkeypatch):
@@ -51,7 +51,7 @@ def test_probe_uses_readonly_connection_and_whitelists_counts(synthetic_database
             db.execute('INSERT INTO synthetic VALUES (1)')
         return {**counts, 'patient_name': 'synthetic-private-name'}
     monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(options=patient_context_refresh.options, status=status))
-    report = mcs_setup._doctor_context_refresh({'extract': {'patient_context_nightly': {
+    report = mcs_setup._doctor_context_refresh({'extract': {'patient_context': {
         'enabled': True, 'publication': False}}}, probe=True)
     assert report == {'status': 'warning', 'enabled': True, 'publication': False,
                       'counts': counts, 'lanes': None}
@@ -108,8 +108,8 @@ def test_doctor_respects_explicit_data_probe_and_invalid_config(tmp_path, monkey
         'restore_delivery_held': None})
     for args in [['doctor', '--json'], ['doctor', '--json', '--probe', 'data']]:
         assert mcs_setup.main(args) == 0
-        assert 'patient_context_nightly' in json.loads(capsys.readouterr().out)
-    cfg['extract'] = {'patient_context_nightly': {'enabled': 1}}
+        assert 'patient_context' in json.loads(capsys.readouterr().out)
+    cfg['extract'] = {'patient_context': {'enabled': 1}}
     assert mcs_setup.main(['doctor', '--json', '--probe', 'data']) == 1
     assert calls == [False, True, False]
 
@@ -151,6 +151,6 @@ def test_zero_counts_are_distinct_from_missing_status(synthetic_database, monkey
     ({'enabled': True, 'unknown': True}, {'enabled': False, 'publication': False}),
 ])
 def test_doctor_uses_engine_defaults_and_fails_closed(settings, expected):
-    result = mcs_setup._doctor_context_refresh({'extract': {'patient_context_nightly': settings}}, probe=False)
+    result = mcs_setup._doctor_context_refresh({'extract': {'patient_context': settings}}, probe=False)
     assert {key: result[key] for key in expected} == expected
     assert result['status'] == 'not_checked' and result['counts'] is None

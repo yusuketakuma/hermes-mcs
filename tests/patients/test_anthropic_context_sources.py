@@ -163,7 +163,7 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
     source = patient_context_refresh_sources._snapshot(led.db, 1, CFG)["sources"][0]
     items = [{"category": "living", "text": text, "evidence": text,
               "subject": "unspecified", "details": []} for text in statements]
-    facts = context_plan.source_facts(source, items, night_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
+    facts = context_plan.source_facts(source, items, workday_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
     assert len(facts) == count
     contract = patient_context_refresh_state._contract(CFG, 1)
     meta = {"source_sig": context_plan.source_signature(source), "source_key": 1,
@@ -210,7 +210,7 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
     source = patient_context_refresh_sources._snapshot(led.db, 1, CFG)['sources'][0]
     facts = context_plan.source_facts(source, [{'category': 'living', 'text': text, 'evidence': text,
                                             'subject': 'unspecified', 'details': []}],
-                                   night_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
+                                   workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 1
     fact = facts[0]
     start, end = fact['evidence_span']
@@ -219,7 +219,7 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
     meta = {'source_sig': context_plan.source_signature(source), 'source_key': 1,
             'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
     repeated = {**fact, 'found_at': fact['found_at'] + 1, 'discovery': 'backfill_found',
-                'found_night_id': 'later-synthetic'}
+                'found_workday_id': 'later-synthetic'}
     with led.db:
         patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1,
             {'cursor': 2, 'chunks': 2, 'complete': True, 'audited': False, 'facts': []}, meta, 1)
@@ -263,7 +263,7 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
             mid = source['message_id']
             facts = context_plan.source_facts(source, [{'category': 'living', 'text': text, 'evidence': text,
                                                      'subject': 'unspecified', 'details': []}],
-                                           night_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
+                                           workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
             assert len(facts) == 1
             expected_ids.append(facts[0]['id'])
             meta = {'source_sig': context_plan.source_signature(source), 'source_key': mid,
@@ -546,7 +546,7 @@ def test_context_reader_shares_source_receipt_validation_within_one_snapshot(run
     if reader == 'evidence':
         result = patient_context_view.evidence(led.db, 1, cfg=CFG)
         assert result['coverage']['inference']['complete'] and result['summary']
-        assert any(fact['evidence'] == body for fact in result['nightly_facts'])
+        assert any(fact['evidence'] == body for fact in result['context_facts'])
     else:
         assert patient_context_refresh_readiness.status(led.db, CFG)['complete'] == 1
     assert calls == [True] and not led.db.in_transaction
@@ -592,7 +592,7 @@ def test_context_only_early_return_never_reads_a_runtime_route_or_credentials(ru
             led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.published',json('false')) WHERE kind=?",
                            (patient_context_refresh_state.KIND,))
     elif early in ('disabled', 'publication_off'):
-        cfg = {**CFG, 'extract': {'patient_context_nightly': {
+        cfg = {**CFG, 'extract': {'patient_context': {
             'enabled': early != 'disabled', 'publication': early != 'publication_off'}}}
     elif early == 'cfg_none':
         cfg = None
@@ -780,7 +780,7 @@ def test_source_pass_content_checks_each_logical_page_once(runtime, cloud, monke
     source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1))
     items = [{'category': 'living', 'text': text, 'evidence': text,
               'subject': 'unspecified', 'details': []} for text in texts]
-    facts = context_plan.source_facts(source, items, night_id='synthetic', discovery='new_report',
+    facts = context_plan.source_facts(source, items, workday_id='synthetic', discovery='new_report',
                                       found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 24
     scfg, errors = semantic_policy.semantic_config(CFG, key_present=True)

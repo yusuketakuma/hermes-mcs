@@ -1068,7 +1068,7 @@ def cmd_doctor(args) -> int:
         report = {"mode": "invalid", "python": sys.version.split()[0], "sqlite": sqlite3.sqlite_version,
                   "checks": checks, "collection": {"status": "not_checked", "counts": None},
                   "runtimes": {"selected": None, "recovery": None, "desired_recovery": None},
-                  "patient_context_nightly": {"status": "not_checked", "enabled": None, "counts": None},
+                  "patient_context": {"status": "not_checked", "enabled": None, "counts": None},
                   "optional_features": None, "operations": None, "card_worker": None,
                   "providers": None, "source": None,
                   "recovery_selection": {"explicit": None, "matches_deployed": None},
@@ -1166,7 +1166,7 @@ def cmd_doctor(args) -> int:
               "runtimes": runtimes,
               "operations": operations, "v3": _doctor_v3_status(cfg),
               "card_worker": worker,
-              "patient_context_nightly": context_refresh_result, "collection": collection, "providers": providers,
+              "patient_context": context_refresh_result, "collection": collection, "providers": providers,
               "source": environment_diagnostics.source_status(cfg, probe="services" in probes and not config_errors, paths=_service_paths()),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}

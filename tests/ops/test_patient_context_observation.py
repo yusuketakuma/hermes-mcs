@@ -77,7 +77,7 @@ def test_lane_counts_exclude_archived_and_reject_invalid_current_json(tmp_path):
     db.executemany("INSERT INTO patients(project_id,patient_name,is_archived) VALUES (?,'synthetic',?)", [(1, 0), (2, 1)])
     meta = {VERSION_KEY: CURRENT_VERSION, 'published': True}
     for pid in (1, 2):
-        ledger.artifact_add(context.PROGRESS, json.dumps({'failure': 'nightly_length_stop'}), project_id=pid, meta=meta)
+        ledger.artifact_add(context.PROGRESS, json.dumps({'failure': 'patient_context_length_stop'}), project_id=pid, meta=meta)
         ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'split': 1, 'repairs': 1}), project_id=pid, meta=meta)
         ledger.artifact_add(context.KIND, '{}', project_id=pid, meta=meta)
     result = context.lane_metrics(db)

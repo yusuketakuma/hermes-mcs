@@ -195,7 +195,7 @@ def _completed_cloud_receipts(ledger, provider, *, answered_only=False):
             or {r["reservation"]["reservation_id"] for r in evidence.values()} != set(wanted)
             or any(r["reservation"] != wanted[r["reservation"]["reservation_id"]]
                    for r in evidence.values())):
-        raise ValueError("nightly_cloud_receipt_changed")
+        raise ValueError("patient_context_cloud_receipt_changed")
     return evidence
 
 
@@ -293,9 +293,9 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     hydrated = patient_context_refresh_sources._snapshot(
         db, pid, cfg, contract=snapshot['contract'], source_keys=snapshot.get('source_scope'))
     if hydrated['source_sig'] != snapshot['source_sig']:
-        raise ValueError('nightly_source_changed')
-    night_id, _ = patient_context_refresh_state.workday_window(now)
-    facts, _ = patient_context_refresh_sources._all_facts(db, pid, hydrated, night_id, cfg=cfg)
+        raise ValueError('patient_context_source_changed')
+    workday_id, _ = patient_context_refresh_state.workday_window(now)
+    facts, _ = patient_context_refresh_sources._all_facts(db, pid, hydrated, workday_id, cfg=cfg)
     old, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
     same = (bool(old) and old.get('facts_sig') == patient_context_refresh_state._facts_sig(facts)
         and meta.get('source_sig') == snapshot['source_sig']
@@ -539,7 +539,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     window = patient_context_refresh_state.workday_window(now)
     if not patient_context_refresh_state.options(cfg)["enabled"] or not window:
         return {"status": "off", "done": 0}
-    night_id, _ = window
+    workday_id, _ = window
     if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     selection_fd, selection_reason = _selection_lock(ledger.db)
@@ -602,7 +602,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         ledger.db, patient_context_refresh_state.PROGRESS, pid)
                 progress = {**progress, "last_attempt": now,
                             "last_attempt_unit": rotation.get("units", 0) + 1,
-                            "night_id": night_id,
+                            "workday_id": workday_id,
                             **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
@@ -629,7 +629,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         snapshot = hydrated
     frozen_scan_sig = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
     meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
-            "model": snapshot["contract"]["model"], "night_id": night_id}
+            "model": snapshot["contract"]["model"], "workday_id": workday_id}
     if lane == 'A' and source_keys is not None:
         meta.update(source_scope=source_keys, source_coverage=snapshot['source_coverage'])
     result = None
@@ -739,7 +739,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 stamp = patient_context_refresh_state.time.time()
                 remaining = deadline - patient_context_refresh_state.time.monotonic()
                 if remaining <= patient_context_refresh_state.COMMIT_MARGIN:
-                    raise patient_context_refresh_state.Deferred('nightly_capacity_or_deadline')
+                    raise patient_context_refresh_state.Deferred('patient_context_capacity_or_deadline')
                 decision = context_quota.reserve_tx(ledger.db, pid, generation_plan['input_key'], now=stamp,
                     lease_until=stamp + remaining + patient_context_refresh_state.COMMIT_MARGIN,
                     catchup=generation_plan['catchup'])
@@ -806,7 +806,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return cloud_inference.CloudInferenceUnit(ledger, cfg, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
             current=provider_current,
-            dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]},
+            dispatch=lambda fn, **kw: fn(), owner={"workday_id": workday_id, "source_sig": snapshot["source_sig"]},
             selection=cloud_selection, input_binding=cloud_input)
 
     def guard_provider(unit):
@@ -846,7 +846,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError):
             generation_uncertain = True
-            raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
+            raise patient_context_refresh_state.Deferred("patient_context_cloud_not_sent") from None
 
     def guard_local_input(unit_key, mid, prompt):
         nonlocal generation_uncertain
@@ -854,11 +854,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             with cloud_policy._accounting_snapshot(ledger.db):
                 cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
                     message_id=mid, unit_key=unit_key,
-                    owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
+                    owner={"workday_id": workday_id, "source_sig": snapshot["source_sig"]})
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError):
             generation_uncertain = True
-            raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
+            raise patient_context_refresh_state.Deferred("patient_context_cloud_not_sent") from None
         if (unit_key, mid, prompt) not in local_checks:
             local_checks.append((unit_key, mid, prompt))
 
@@ -903,11 +903,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         meta['model'] = provider.model
                     provider = None
                     if paid:
-                        raise ValueError('nightly_cloud_failed') from error
-                    raise patient_context_refresh_state.Deferred("nightly_cloud_source_changed") from error
+                        raise ValueError('patient_context_cloud_failed') from error
+                    raise patient_context_refresh_state.Deferred("patient_context_cloud_source_changed") from error
                 if (str(error) == "cloud_send_blocked" and saved and saved.get("_provider_contract")):
                     # A fresh unsent remainder does not release a persisted cloud cursor.
-                    raise patient_context_refresh_state.Deferred("nightly_cloud_budget") from error
+                    raise patient_context_refresh_state.Deferred("patient_context_cloud_budget") from error
                 if paid:
                     meta["provider"] = provider.contract
                     meta["model"] = provider.model
@@ -925,13 +925,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         local_route()
                     if isinstance(error, ValueError):
                         raise
-                    raise ValueError("nightly_cloud_failed") from error
+                    raise ValueError("patient_context_cloud_failed") from error
         if local_saved:
             saved.update(local_saved)
             if saved.get("complete"):
-                raise patient_context_refresh_state.Deferred("nightly_cloud_pending")
+                raise patient_context_refresh_state.Deferred("patient_context_cloud_pending")
         if not local_admit():
-            raise patient_context_refresh_state.Deferred("nightly_local_capacity")
+            raise patient_context_refresh_state.Deferred("patient_context_local_capacity")
         def guard_local(prompt):
             guard_local_input(unit_key, mid, prompt)
             local_route()
@@ -945,11 +945,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     try:
         if lane == "A":
             guard_summary_sources()
-            facts, total, projected = patient_context_refresh_sources._all_facts(ledger.db, pid, snapshot, night_id, projected=True, cfg=cfg)
+            facts, total, projected = patient_context_refresh_sources._all_facts(ledger.db, pid, snapshot, workday_id, projected=True, cfg=cfg)
             old, old_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
             changed = patient_context_refresh_state._facts_sig(facts)
             if generation_plan is None or generation_plan['input_key'] != _generation_input(snapshot, facts):
-                raise patient_context_refresh_state.Deferred('nightly_source_changed')
+                raise patient_context_refresh_state.Deferred('patient_context_source_changed')
             summary_scans = patient_context_refresh_sources._current_scans(
                 ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
@@ -984,7 +984,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     meta['model'] = old_meta['model']
                 try:
                     quality_status, quality_result = patient_context_quality_controller._quality_step(
-                        ledger, pid, cfg, night_id, old, deadline, generation_admit, base_meta=old_meta)
+                        ledger, pid, cfg, workday_id, old, deadline, generation_admit, base_meta=old_meta)
                     repaired = None
                     if quality_status == "candidate":
                         if quality_result.get("repair_ref") is not None:
@@ -1000,7 +1000,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             "facts_total": len(quality_result["facts"]),
                             "truncated": len(quality_result["facts"]) > len(selected_facts)}
                         quality_status, quality_result = patient_context_quality_controller._quality_step(
-                            ledger, pid, cfg, night_id, repaired, deadline, generation_admit, base_doc=old, base_meta=old_meta)
+                            ledger, pid, cfg, workday_id, repaired, deadline, generation_admit, base_doc=old, base_meta=old_meta)
                 except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                     raise patient_context_refresh_state.Deferred(
                         "summary_quality_unavailable:" + (_quality_unavailable_detail(exc) or type(exc).__name__)) from None
@@ -1089,9 +1089,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                 (patient_context_refresh_state.CHUNK, pid, prior_unit)).fetchone():
                             # A past equal input is not a new dispatch right. A
                             # lost checkpoint cannot infer a completed cursor.
-                            raise ValueError("nightly_original_unit_unverified")
+                            raise ValueError("patient_context_original_unit_unverified")
                         result = infer(lambda backend, reset, metrics=None, comparison=False, local_guard=None: patient_context_quality_controller._scan(cfg, source,
-                            {} if reset else {**saved, "facts": []} if comparison else saved, night_id, deadline,
+                            {} if reset else {**saved, "facts": []} if comparison else saved, workday_id, deadline,
                             admit if backend else local_admit, local_guard=local_guard,
                             **({"provider": backend} if backend else {}),
                             **({"metrics": metrics} if metrics is not None else {})),
@@ -1110,20 +1110,20 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         audited_ids = []
                         for part in patient_context_refresh_sources._source_chunks(ledger.db, pid, source, snapshot["contract"], saved):
                             if len(context_plan.validated_source_facts(source, part.get("facts"))) != len(part.get("facts", [])):
-                                raise ValueError("nightly_audit_mismatch")
+                                raise ValueError("patient_context_audit_mismatch")
                             audited_ids.append(part["_artifact_id"])
                         result["_audited_chunk_ids"] = audited_ids
                         if cloud_requested or patient_context_quality_receipts._has_prior_quality_failure(ledger.db, pid, purpose='source'):
                             try:
                                 quality_status, quality_result = patient_context_quality_controller._quality_step(
-                                    ledger, pid, cfg, night_id, {}, deadline, admit, source=source)
+                                    ledger, pid, cfg, workday_id, {}, deadline, admit, source=source)
                             except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                                 result = None
                                 raise patient_context_refresh_state.Deferred(
                                     "source_quality_unavailable:" + (_quality_unavailable_detail(exc) or type(exc).__name__)) from None
                             if quality_status == "source_candidate":
                                 quality_status, quality_result = patient_context_quality_controller._quality_step(
-                                    ledger, pid, cfg, night_id, {}, deadline, admit, source=source,
+                                    ledger, pid, cfg, workday_id, {}, deadline, admit, source=source,
                                     source_candidate_ref=quality_result)
                             if quality_status not in ("passed", "skipped"):
                                 result = None
@@ -1155,7 +1155,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         deferred_reason = str(exc) or "patient_context_waiting"
         if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
                 and not generation_uncertain and not generation_contacted and deferred_reason in (
-                    'nightly_capacity_or_deadline', 'nightly_admission_deferred', 'nightly_turn_busy', 'nightly_local_capacity')
+                    'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_local_capacity')
                 and (provider is None or not provider.possibly_sent)):
             return_generation('unsent', proven_unsent=True)
         discard_if_changed()
@@ -1190,7 +1190,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
         try:
-            refreshed_quality = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, night_id, result["summary"],
+            refreshed_quality = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, result["summary"],
                                                   quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
             if refreshed_quality["identity"] != quality_identity:
                 return {"status": "source_changed", "done": 0}
@@ -1239,7 +1239,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 # receipt remains and cannot authorize another POST.
                 deadline = min(deadline, resume_deadline)
                 if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
-                    return {"status": "deferred", "done": 0, "reason": "nightly_completed_expired"}
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_completed_expired"}
                 import notify_spool
                 if (not admit() or not extract_llm._writer_current(full=True)
                         or not extract_llm._same_but_operating_limits(resume_cfg, completed_cfg)
@@ -1248,7 +1248,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 try:
                     guard_provider(provider)
                     if _completed_cloud_receipts(ledger, provider) != completed_receipts:
-                        raise ValueError("nightly_cloud_receipt_changed")
+                        raise ValueError("patient_context_cloud_receipt_changed")
                 except cloud_inference.CloudObservationIncomplete:
                     return {"status": "deferred", "done": 0, "reason": "patient_context_readiness_unverified"}
                 except cloud_inference.CloudFallback:
@@ -1280,13 +1280,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     guard_summary_sources()
                 except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
-                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_cloud_not_sent"}
             for local_unit, local_mid, local_prompt in local_checks:
                 try:
                     guard_local_input(local_unit, local_mid, local_prompt)
                 except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
-                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_cloud_not_sent"}
             if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
                                                  or ledger.db.total_changes != changes):
                 ledger.db.rollback()
@@ -1394,12 +1394,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 adoption_cfg = patient_context_refresh_state._digest(live_cfg)
             prior = progress if lane == "A" else saved
             attempts = prior.get("attempts", 0) + 1 if failure else 0
-            retry = {"failure": failure, "held": failure in ("nightly_unsplittable_assertion", "nightly_original_unit_unverified"),
+            retry = {"failure": failure, "held": failure in ("patient_context_unsplittable_assertion", "patient_context_original_unit_unverified"),
                      "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
                      "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
             progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
-                        "night_id": night_id,
+                        "workday_id": workday_id,
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
@@ -1506,7 +1506,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     left=left, right=None, rejected=None, held=None, repairs=None, unit=shadow_unit, pending=True)
             if generation_claim is not None:
                 outcome = ('complete' if not failure and deferred_reason is None else
-                    'failed' if (failure in ('nightly_length_stop', 'nightly_invalid_response', 'nightly_unsupported_summary')
+                    'failed' if (failure in ('patient_context_length_stop', 'patient_context_invalid_response', 'patient_context_unsupported_summary')
                     or deferred_reason == 'summary_quality_failed') and not generation_uncertain else 'unknown')
                 if not context_quota.finish_tx(ledger.db, pid, generation_claim,
                         now=patient_context_refresh_state.time.time(), outcome=outcome):

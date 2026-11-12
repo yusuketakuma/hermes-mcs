@@ -21,7 +21,10 @@ import patient_context_projection as context_state
 
 
 
-KIND = "patient_context_nightly_v1"
+KIND = "patient_context_v1"
+
+
+LEGACY_KIND = "patient_context_nightly_v1"
 
 
 SCAN = "patient_context_scan_v1"
@@ -72,7 +75,7 @@ CONTRACT = "patient-context-nightly/1"
 CALL_SECONDS = 300
 
 
-_FAILURE_CODE = re.compile(r"nightly_[a-z_]{1,60}")
+_FAILURE_CODE = re.compile(r"(?:nightly|patient_context)_[a-z_]{1,60}")
 
 
 _CHECKS = hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
@@ -111,7 +114,7 @@ _facts_sig = context_artifacts.facts_signature
 def options(cfg):
     """Enabled by default; explicit opt-out and malformed settings stay closed."""
     ext = cfg.get("extract", {}) if isinstance(cfg, dict) else None
-    opt = ext.get("patient_context_nightly", {}) if isinstance(ext, dict) else None
+    opt = ext.get("patient_context", ext.get("patient_context_nightly", {})) if isinstance(ext, dict) else None
     if (not isinstance(opt, dict) or set(opt) - {"enabled", "publication"}
             or any(type(v) is not bool for v in opt.values())):
         return {"enabled": False, "publication": False}
@@ -128,10 +131,12 @@ def workday_window(now):
 
 def _latest(db, kind, pid, mid=None):
     mid = None if kind in (SCAN, CHUNK) and mid == 0 else mid
-    row = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+    kinds = (kind, LEGACY_KIND) if kind == KIND else (kind,)
+    row = db.execute("SELECT content,meta FROM artifacts WHERE kind IN ("
+                     + ",".join("?" for _ in kinds) + ") AND project_id=? "
                      "AND message_id IS ? AND " + current_meta_pred("meta", target=CURRENT_VERSION)
                      + " ORDER BY artifact_id DESC LIMIT 1",
-                     (kind, pid, mid)).fetchone()
+                     (*kinds, pid, mid)).fetchone()
     return (loads_dict(row[0]) or {}, loads_dict(row[1]) or {}) if row else ({}, {})
 
 
@@ -139,8 +144,8 @@ def _published_version(db, pid):
     """Newest context/progress row of this patient: the selection-time
     inputs are stale once it moves."""
     return db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE project_id=? "
-                      "AND kind IN (?,?) AND " + current_meta_pred("meta", target=CURRENT_VERSION),
-                      (pid, KIND, PROGRESS)).fetchone()[0]
+                      "AND kind IN (?,?,?) AND " + current_meta_pred("meta", target=CURRENT_VERSION),
+                      (pid, KIND, LEGACY_KIND, PROGRESS)).fetchone()[0]
 
 
 def _artifact_meta(kind, meta, mid):
@@ -157,19 +162,21 @@ def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
     # Linked summaries have no messages row; their checkpoint is patient-scoped.
     meta = _artifact_meta(kind, meta, mid)
     mid = None if kind in (SCAN, CHUNK) and mid == 0 else mid
+    kinds = (kind, LEGACY_KIND) if kind == KIND else (kind,)
     # Keep previous inference generations and distinct original karte records.
-    deleted = ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
+    deleted = ledger.db.execute("DELETE FROM artifacts WHERE kind IN ("
+                      + ",".join("?" for _ in kinds) + ") AND project_id=? AND message_id IS ? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END IS ?"
                       + (" AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.backend_slot') END=?" if kind == SCAN else "")
                       + (" AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.chunk_key') END=?" if kind == CHUNK else ""),
-                      (kind, pid, mid, meta.get("source_key"), *([meta['backend_slot']] if kind == SCAN else []),
+                      (*kinds, pid, mid, meta.get("source_key"), *([meta['backend_slot']] if kind == SCAN else []),
                        *([meta["chunk_key"]] if kind == CHUNK else [])))
     artifact_id = ledger.artifact_add_tx(kind, json.dumps(content, ensure_ascii=False),
                                          project_id=pid, message_id=mid, model=meta.get("model", ""), meta=meta)
     if write_count is not None:
         if deleted.rowcount < 0:
-            raise ValueError("nightly_source_adoption_changed")
+            raise ValueError("patient_context_source_adoption_changed")
         write_count[0] += deleted.rowcount + 1
     return artifact_id
 
@@ -218,7 +225,7 @@ def _adoption_epoch_expected(db):
     state = loads_dict(row[1])
     value = state.get('analysis_epoch', 0) if isinstance(state, dict) else None
     if type(value) is not int or not 0 <= value < 2**63 - 1:
-        raise ValueError("nightly_source_adoption_epoch")
+        raise ValueError("patient_context_source_adoption_epoch")
     expected = db.execute("SELECT json_set(?, '$.analysis_epoch', ?)", (row[1], value + 1)).fetchone()[0]
     return row[0], expected
 
@@ -257,7 +264,7 @@ def _cloud_input_binding(db, pid, snapshot):
         if isinstance(context_plan.source_key(source), str):
             bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
     if any(not valid_hash(binding) for binding in bindings):
-        raise ValueError('nightly_cloud_source_changed')
+        raise ValueError('patient_context_cloud_source_changed')
     return _digest([snapshot['source_sig'], snapshot['contract'], bindings,
                     [(context_plan.source_key(s), s.get('first_seen')) for s in snapshot['sources']]])
 

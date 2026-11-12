@@ -15,7 +15,7 @@ import patient_context_refresh_sources
 import patient_context_refresh_state
 
 
-def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, current,
+def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim, current,
                               deadline, admit, facts, assessment, threshold, quality_state, *, source_keys=None):
     """Stage one repaired selection; the owner must re-audit it before publication.
 
@@ -117,7 +117,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             return "held", None
         ledger.db.execute("BEGIN")
         try:
-            captured = patient_context_refresh_sources._quality_capture(ledger.db, pid, extract_llm.load_config(), night_id,
+            captured = patient_context_refresh_sources._quality_capture(ledger.db, pid, extract_llm.load_config(), workday_id,
                                         repaired, assessment, display_projection, source_keys=source_keys)
         except (TypeError, ValueError, KeyError):
             return "held", None
@@ -158,7 +158,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
             input_bound=cloud_policy.input_bound(request_texts), selection=selection):
         return "deferred", None
-    owner = {"night_id": night_id, "source_sig": identity["input_key"]}
+    owner = {"workday_id": workday_id, "source_sig": identity["input_key"]}
     def on_reserved(reserving, reservation, artifact_id):
         if reserving is not ledger:
             raise ValueError("patient_summary_quality_source_changed")
@@ -202,7 +202,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         return "held", None
     ledger.db.execute("BEGIN")
     try:
-        captured = patient_context_refresh_sources._quality_capture(ledger.db, pid, extract_llm.load_config(), night_id,
+        captured = patient_context_refresh_sources._quality_capture(ledger.db, pid, extract_llm.load_config(), workday_id,
                                     repaired, assessment, display_projection, source_keys=source_keys)
     except (TypeError, ValueError, KeyError):
         return "held", None
@@ -260,7 +260,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         os.close(fd)
 
 
-def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, current, deadline, admit, threshold):
+def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, current, deadline, admit, threshold):
     """Advance one reserved source repair unit; no saved slot may dispatch again."""
     import extract_llm
     import cloud_client
@@ -346,12 +346,12 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                 or reservation.get('unit_key') != unit_key or reservation.get('project_id') != pid
                 or reservation.get('message_id') != (source['message_id'] or None)
                 or reservation.get('owner') != {'repair_input_key':repair_key,'unit_key':unit_key}):
-            raise ValueError('nightly_source_repair_changed')
+            raise ValueError('patient_context_source_repair_changed')
         actual = patient_context_refresh_sources._source_repair_header(owner.db, pid, repair_key)
         if (header is None) != (actual is None) or header and actual != header:
-            raise ValueError('nightly_source_repair_changed')
+            raise ValueError('patient_context_source_repair_changed')
         if any(row['meta']['unit_key'] == unit_key for row in patient_context_refresh_sources._source_repair_units(owner.db, pid, repair_key)):
-            raise ValueError('nightly_source_repair_spent')
+            raise ValueError('patient_context_source_repair_spent')
         writes = 0
         if actual is None:
             owner.artifact_add_tx(patient_context_refresh_state.SOURCE_REPAIR, json.dumps({'phase':'scanning','cursor':0,'split':0}),
@@ -369,16 +369,16 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                 or stored_slot is None or tuple(stored_slot[:3]) != (patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, pid, source['message_id'] or None)
                 or loads_dict(stored_slot[3]) != {'phase':'reserved','chunk_span':span,'part':0,'parts':1,'facts':[]}
                 or stored_slot[4] != reservation['model'] or loads_dict(stored_slot[5]) != meta):
-            raise ValueError('nightly_source_repair_changed')
+            raise ValueError('patient_context_source_repair_changed')
         if not current(1 + writes + 1):
-            raise ValueError('nightly_source_repair_changed')
+            raise ValueError('patient_context_source_repair_changed')
         return writes + 1
     def reserve_dispatch(fn):
         if ledger.db.in_transaction or not current():
-            raise patient_context_refresh_state.Deferred('nightly_source_repair_changed')
+            raise patient_context_refresh_state.Deferred('patient_context_source_repair_changed')
         fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
         if fd is None:
-            raise patient_context_refresh_state.Deferred('nightly_source_repair_lock')
+            raise patient_context_refresh_state.Deferred('patient_context_source_repair_lock')
         try:
             # A committed reservation must reach the client's post-reservation
             # guard, which records a genuine not_sent result if the source changed.
@@ -393,7 +393,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         purpose='quality_repair', selection=selection, input_binding=patient_context_refresh_state._digest(origin))
     try:
         response = []
-        result = _scan(cfg, source, saved, night_id, deadline, admit, provider=provider,
+        result = _scan(cfg, source, saved, workday_id, deadline, admit, provider=provider,
                        **({'evidence_out': response} if distinct else {}),
                        source_repair={'codes':codes, 'protected':protected,
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
@@ -426,7 +426,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         except ValueError:
             return 'unknown', None
         proof = {'version':1, 'answer_text':response[0][1], 'cursor':cursor,
-                 'split':saved.get('split', 0), 'night_id':night_id,
+                 'split':saved.get('split', 0), 'workday_id':workday_id,
                  'receipt_sig':verified['witness'], 'finish_reason':finish_reason}
     shard_count = 1 if split else max(1, math.ceil(len(result['facts']) / context_plan.MAX_SOURCE_FACTS))
     content = {'phase':'split' if split else 'complete','chunk_span':span,
@@ -443,12 +443,12 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         ledger.db.execute('BEGIN IMMEDIATE')
         try:
             if not current() or not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity['input_key'], claim):
-                raise ValueError('nightly_source_repair_changed')
+                raise ValueError('patient_context_source_repair_changed')
             header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
             actual = next((row for row in patient_context_refresh_sources._source_repair_units(ledger.db, pid, repair_key)
                            if row['artifact_id'] == slot[0]), None)
             if not header or actual != owned[0]:
-                raise ValueError('nightly_source_repair_changed')
+                raise ValueError('patient_context_source_repair_changed')
             before_writes = ledger.db.total_changes
             expected_writes = shard_count + 1  # every part plus the one header CAS
             for part in range(shard_count):
@@ -461,7 +461,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                     changed = ledger.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=? AND content=? AND meta=?',
                         (encoded, slot[0], owned[0]['raw_content'], owned[0]['raw_meta']))
                     if changed.rowcount != 1:
-                        raise ValueError('nightly_source_repair_changed')
+                        raise ValueError('patient_context_source_repair_changed')
                     aid = slot[0]
                 else:
                     aid = ledger.artifact_add_tx(patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, encoded, project_id=pid,
@@ -470,7 +470,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                 if (stored is None or tuple(stored[:3]) != (patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, pid, source['message_id'] or None)
                         or loads_dict(stored[3]) != shard or stored[4] != provider.model
                         or loads_dict(stored[5]) != owned[0]['meta']):
-                    raise ValueError('nightly_source_repair_changed')
+                    raise ValueError('patient_context_source_repair_changed')
             next_header = {'phase':'sealing' if result['complete'] else 'scanning',
                            'cursor':result['cursor'],'split':result.get('split',0)}
             patient_context_refresh_sources._source_repair_update_tx(ledger.db, header, next_header)
@@ -481,7 +481,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                     or stored_header is None or stored_header['meta'] != header['meta']
                     or any(stored_header.get(key) != value for key, value in next_header.items())
                     or not current(expected_writes)):
-                raise ValueError('nightly_source_repair_changed')
+                raise ValueError('patient_context_source_repair_changed')
             ledger.db.commit()
         except BaseException:
             ledger.db.rollback()
@@ -516,7 +516,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
         try:
             if (not current() or not patient_context_quality_receipts._quality_owns(ledger.db, pid, identity['input_key'], claim)
                     or patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key) != header):
-                raise ValueError('nightly_source_repair_changed')
+                raise ValueError('patient_context_source_repair_changed')
             before_writes = ledger.db.total_changes
             patient_context_refresh_sources._source_repair_update_tx(ledger.db, header, next_header)
             stored_header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
@@ -524,7 +524,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
                     or stored_header is None or stored_header['meta'] != header['meta']
                     or any(stored_header.get(key) != value for key, value in next_header.items())
                     or not current(1)):
-                raise ValueError('nightly_source_repair_changed')
+                raise ValueError('patient_context_source_repair_changed')
             ledger.db.commit()
         except BaseException:
             ledger.db.rollback()
@@ -537,7 +537,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
     return 'source_candidate', ref
 
 
-def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=None, base_meta=None, source=None, source_candidate_ref=None):
+def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_doc=None, base_meta=None, source=None, source_candidate_ref=None):
     """Audit one bounded page of the current candidate outside DB and run locks."""
     import extract_llm
     import cloud_policy
@@ -610,7 +610,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         initial = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, cfg, context_plan.source_key(source), assessment,
                     candidate_ref=source_candidate_ref)
                    if source is not None else
-                   patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, night_id, summary, assessment, display_projection, source_keys=source_keys))
+                   patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, summary, assessment, display_projection, source_keys=source_keys))
         if not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, scfg, initial["sources"]):
             return "deferred", None
     finally:
@@ -674,7 +674,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 refreshed = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, live, context_plan.source_key(source), assessment,
                                 candidate_ref=source_candidate_ref)
                              if source is not None else
-                             patient_context_refresh_sources._quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection, source_keys=source_keys))
+                             patient_context_refresh_sources._quality_capture(ledger.db, pid, live, workday_id, summary, assessment, display_projection, source_keys=source_keys))
                 if (refreshed["identity"] != identity
                         or source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]
                         or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"])):
@@ -836,12 +836,12 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             if purpose == "source":
                 if source_candidate_ref is not None:
                     return "held", identity
-                return _source_quality_repair_step(ledger, pid, cfg, night_id, initial,
+                return _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
                     claim, current, deadline, admit, scfg["match_threshold"])
             if not current():
                 return "deferred", None
             repair_status, candidate = _quality_repair_candidate(
-                ledger, pid, cfg, night_id, doc, identity, claim, current, deadline, admit,
+                ledger, pid, cfg, workday_id, doc, identity, claim, current, deadline, admit,
                 initial["facts"], assessment, scfg["match_threshold"], initial["state"], source_keys=source_keys)
             if repair_status == "candidate":
                 return "candidate", {**candidate, "facts": initial["facts"], "state": initial["state"]}
@@ -858,10 +858,10 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
 
 def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, local_guard=None):
     if not admit() or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline:
-        raise patient_context_refresh_state.Deferred("nightly_capacity_or_deadline")
+        raise patient_context_refresh_state.Deferred("patient_context_capacity_or_deadline")
     prompt = json.dumps(payload, ensure_ascii=False)
     if len(prompt) > context_plan.MAX_PROMPT_CHARS:
-        raise ValueError("nightly_prompt_capacity")
+        raise ValueError("patient_context_prompt_capacity")
     if provider is not None:
         selection = getattr(provider, "selection", None)
         selected_tokens = selection.get("max_tokens") if selection is not None else None
@@ -884,21 +884,21 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
                                          extra_payload={"id_slot": local_llm.request_slot()},
                                          error_out=err, turn_min_s=patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN)
     if response and response.get("admission"):
-        raise patient_context_refresh_state.Deferred("nightly_admission_deferred")
+        raise patient_context_refresh_state.Deferred("patient_context_admission_deferred")
     if provider is None and response is None and err.get("kind") == "busy":
         # lane 2 held the GPU turn for the whole call window: nothing
         # was sent, so the patient is not charged a failure
-        raise patient_context_refresh_state.Deferred("nightly_turn_busy")
+        raise patient_context_refresh_state.Deferred("patient_context_turn_busy")
     if (evidence_out is not None and isinstance(response, dict) and response.get("status") == 200
             and isinstance(response.get("text"), str)):
         evidence_out.append((prompt, response["text"]))
     if response and response.get("status") == 200 and response.get("finish_reason") == "length":
-        raise ValueError("nightly_length_stop")
+        raise ValueError("patient_context_length_stop")
     if not response or response.get("finish_reason") != "stop" or response.get("status") != 200:
-        raise ValueError("nightly_incomplete_response")
+        raise ValueError("patient_context_incomplete_response")
     answer = loads_dict(response.get("text"))
     if answer is None:
-        raise ValueError("nightly_invalid_response")
+        raise ValueError("patient_context_invalid_response")
     return answer
 
 
@@ -933,12 +933,12 @@ def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None, source
     return result
 
 
-def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metrics=None, source_repair=None,
+def _scan(cfg, source, saved, workday_id, deadline, admit, *, provider=None, metrics=None, source_repair=None,
           evidence_out=None, replay=None, local_guard=None):
     def answer(payload):
         if replay is not None:
             return replay(payload)
         return _ask(cfg, payload, deadline, admit, local_guard=local_guard, **({"provider": provider} if provider else {}),
                     **({"evidence_out": evidence_out} if evidence_out is not None else {}))
-    return context_scan.scan_source(source, saved, night_id, answer_for=answer, clock=patient_context_refresh_state.time.time,
+    return context_scan.scan_source(source, saved, workday_id, answer_for=answer, clock=patient_context_refresh_state.time.time,
                                     metrics=metrics, source_repair=source_repair)

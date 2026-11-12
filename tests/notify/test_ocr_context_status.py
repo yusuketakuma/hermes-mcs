@@ -23,7 +23,7 @@ import patient_context_view
      '解析状況不明・OCR文字起こし完了 1件'),
 ])
 def test_attachment_notes_follow_coverage(monkeypatch, attachments, expected):
-    ev = {'coverage': {'nightly': {'attachments': {'count': 1, **attachments}}}}
+    ev = {'coverage': {'context': {'attachments': {'count': 1, **attachments}}}}
     monkeypatch.setattr(patient_context_view, 'evidence', lambda *a, **kw: ev)
     monkeypatch.setattr(patient_context_view, 'timeline', lambda *a, **kw: {'items': []})
     monkeypatch.setattr(__import__('patient_context_view'), 'document_timelines', lambda *a, **kw: ({'documents': [], 'events': [], 'coverage': {}}, {'events': [], 'coverage': {}}))

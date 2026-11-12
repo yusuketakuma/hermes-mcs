@@ -1,4 +1,4 @@
-"""A role-extraction generation change makes old nightly scans unusable and reruns them."""
+"""A role-extraction generation change makes old context scans unusable and reruns them."""
 import patient_context_plan as context_plan
 import json
 

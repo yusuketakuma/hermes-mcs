@@ -25,7 +25,7 @@ def _seed(db, body, subject=None):
             item["subject"] = subject
     _artifact(db, "extract_v1", 1, {"patient_context": items}, {"hash": _hash_of(db, 1)})
     source = _source(db, 1)
-    facts = context_plan.source_facts(source, items, night_id="2026-10-01", discovery="new_report", found_at=refresh.time.time())
+    facts = context_plan.source_facts(source, items, workday_id="2026-10-01", discovery="new_report", found_at=refresh.time.time())
     assert facts and context_plan.validated_source_facts(source, facts) == facts
     return source, facts
 
@@ -50,8 +50,8 @@ def test_identical_real_source_fact_has_one_visible_row_and_retains_annotations(
         assert rows[0]["discovery"] == fact["discovery"]
         assert rows[0]["temporal"] == fact["temporal"]
         assert rows[0]["view_bucket"] == "unknown"
-        assert ev["nightly_facts"][0]["id"] == fact["id"]
-        assert ev["coverage"]["nightly"]["analyzed"] == 1
+        assert ev["context_facts"][0]["id"] == fact["id"]
+        assert ev["coverage"]["context"]["analyzed"] == 1
 
 
 @pytest.mark.parametrize("subject,body", [
@@ -77,7 +77,7 @@ def test_foreign_project_fact_is_not_exposed_or_merged(tmp_path, monkeypatch):
         _publish(monkeypatch, [fact])
         ev = views.evidence(db.db, 1)
         assert "別患者の合成記載" not in str(ev)
-        assert ev["nightly_facts"] == []
+        assert ev["context_facts"] == []
 
 
 @pytest.mark.parametrize("same_id", [False, True])

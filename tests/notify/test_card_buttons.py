@@ -437,7 +437,7 @@ def test_roster_falls_back_to_own_station_senders(led):
 # ---------- 🧾 summary -----------------------------------------------------
 
 def test_summary_without_rollup_says_so(led, monkeypatch):
-    monkeypatch.setitem(CFG, "extract", {"patient_context_nightly": {"enabled": False}})
+    monkeypatch.setitem(CFG, "extract", {"patient_context": {"enabled": False}})
     spec = _delivered_card(led)
     r = _click(led, spec, "summary")
     assert r["outcome"] == "applied" and r["action"] == "summary"
@@ -457,7 +457,7 @@ def test_summary_with_rollup_and_coverage(led, monkeypatch):
     import extract
     import rollup
 
-    monkeypatch.setitem(CFG, "extract", {"patient_context_nightly": {"enabled": False}})
+    monkeypatch.setitem(CFG, "extract", {"patient_context": {"enabled": False}})
     spec = _delivered_card(led)
     led.db.execute("UPDATE patients SET history_floor=-1,"
                    "fetch_state='incomplete',fetch_reason='network_error'")

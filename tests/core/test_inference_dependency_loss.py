@@ -1093,7 +1093,7 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
                   'scope': dict(store.db.execute('SELECT project_id,project_type,karte_id,is_archived '
                                                 'FROM patients WHERE project_id=1').fetchone())}
     facts = plan.source_facts(source, [{'category':'living', 'text':text, 'evidence':text,
-                                        'subject':'patient', 'details':[]}], night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+                                        'subject':'patient', 'details':[]}], workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
     assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
     policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
     assert not errors
@@ -1168,7 +1168,7 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
     source = list(patient_context_sources(store.db, 1, mid=source_key))[0]
     facts = plan.source_facts(source, [{'category':'medication_management', 'text':text, 'evidence':text,
         'subject':'patient', 'details':[{'key':'drug_name','value':'合成薬A','evidence':text}]}],
-        night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+        workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
     assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
     if not with_fact:
         facts = []
@@ -1225,7 +1225,7 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
         correction_facts = plan.source_facts(correction_source, [{'category':'medication_management',
             'text':correction_text, 'evidence':correction_text, 'subject':'patient',
             'details':[{'key':'drug_name','value':'合成薬A','evidence':correction_text}]}],
-            night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+            workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
         assert len(correction_facts) == 1 and correction_facts[0]['temporal']['corrections']
         correction_id = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts':correction_facts}),
             project_id=1, message_id=2, meta={VERSION_KEY:CURRENT_VERSION,
