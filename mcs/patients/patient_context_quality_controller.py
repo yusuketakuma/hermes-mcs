@@ -285,7 +285,14 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
     try:
         if other_spent(ledger.db):
             return 'held', None
-        protected, codes, receipt_sig = patient_context_refresh_sources._source_repair_inputs(ledger.db, pid, captured, threshold)
+        try:
+            protected, codes, receipt_sig = patient_context_refresh_sources._source_repair_inputs(ledger.db, pid, captured, threshold)
+        except ValueError as exc:
+            # Uncertain or incomplete audit evidence cannot prove a repair;
+            # hold until the bound inputs change instead of deferring forever.
+            if str(exc) != 'patient_context_source_repair_unresolved':
+                raise
+            return 'held', None
         header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
         existing_units = patient_context_refresh_sources._source_repair_units(ledger.db, pid, repair_key)
         reserved_units = [row for row in existing_units if row['phase'] == 'reserved']
