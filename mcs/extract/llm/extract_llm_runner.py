@@ -13,6 +13,7 @@ import writer_lock
 import cloud_client
 import cloud_backlog
 import cloud_inference
+import cloud_policy
 import extract_schema
 import extract_validation
 import extract_quality
@@ -352,6 +353,21 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         rows = []  # local refill retains one candidate page, never all refused bodies
     while candidates and not cloud_only:
         refused = []
+        if not allow_cloud:
+            # A local-only pass never adopts a unit a durable reservation owns:
+            # only the cloud path runs its recovery and unresolved hold.
+            owned_cfg = load_config()
+            local = []
+            for row in candidates:
+                if cloud_policy.owns_request(ledger.db, route="reextract", project_id=row["project_id"],
+                                             message_id=row["message_id"]) \
+                        and not cloud_policy.scope_revoked(owned_cfg, "reextract", row["project_id"]):
+                    refused.append((dict(row), "cloud_unit_unresolved"))
+                    prepare_reasons["cloud_unit_unresolved"] = prepare_reasons.get("cloud_unit_unresolved", 0) + 1
+                    context_blocked += 1
+                else:
+                    local.append(row)
+            candidates = local
         prepared, row_skipped, row_blocked = _prepare_jobs(
             ledger, candidates, target, prefilter, allow_cloud=allow_cloud, background=background,
             cloud_only=False, load_checkpoints=False, deadline=deadline,
