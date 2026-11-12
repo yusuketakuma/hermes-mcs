@@ -99,6 +99,12 @@ def _write_health(ledger, result: dict, status: str,
         result["health"] = health
         safe_io.atomic_publish_text(
             health_report.HEALTH_FILE, json.dumps(health, ensure_ascii=False))
+        if health["health_watch"]["stalled"]:
+            # the watcher is the alert path for everything else, so only the
+            # producer's own outbox can say that it stopped
+            with suppress(Exception):
+                collection_stages.queue_run_alert(
+                    ledger, "health_watch_stalled", run_id, health["health_watch"]["state"])
     except Exception as e:
         result["errors"].append(
             f"health_write_failed: {type(e).__name__}")

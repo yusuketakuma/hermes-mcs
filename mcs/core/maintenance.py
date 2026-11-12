@@ -69,7 +69,7 @@ RETENTION_BATCH = 5000
 # or history evidence (semantic_notice delivery keys, signal cooldowns,
 # urgent daily caps, digest supersession, attachment followups)
 RETAINED_ALERT_KINDS = ("session_expired", "session_recovered", "run_failed",
-                        "health_write_failed")
+                        "health_write_failed", "health_watch_stalled")
 # held sends older than this that still pin expired attachments are
 # surfaced in health (the files are kept: a release may still send them)
 HELD_PIN_WARN_S = 30 * 86400
