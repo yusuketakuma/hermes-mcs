@@ -644,6 +644,14 @@ _SCAN_REFUSALS = frozenset({
 })
 
 
+_SOURCE_CHANGED_CODES = frozenset({
+    "quota", "source", "scans", "version", "contract", "occurrence", "fence", "adoption", "deadline",
+})
+_NO_DUE_LANE_KEYS = tuple(f"wait_no_due_{lane}_{code}" for lane, codes in (
+    ("A", ("not_needed", "local_not_ready", "backoff", "source_incomplete")),
+    ("B", ("none_incomplete", "backoff")), ("C", ("none_unaudited", "backoff"))) for code in codes)
+
+
 def _bounded_pass_code(value):
     """Identifier-shaped failure identity only; free text never qualifies."""
     return (type(value) is str and value.isascii() and value.isidentifier()
@@ -680,13 +688,20 @@ def _context_pass_observation(result):
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
+    changed = result.get("changed")
+    if record["status"] == "source_changed" and changed is not None:
+        record["changed"] = changed if type(changed) is str and changed in _SOURCE_CHANGED_CODES else "unclassified"
+    detail = result.get("detail")
+    if "reason" in record and detail is not None:
+        record["detail"] = detail if _bounded_pass_code(detail) else "unclassified"
     # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
-                       ("wait_dependency_incomplete", 16)):
+                       ("wait_dependency_incomplete", 16),
+                       *((key, 16) for key in _NO_DUE_LANE_KEYS)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
             record[key] = value
