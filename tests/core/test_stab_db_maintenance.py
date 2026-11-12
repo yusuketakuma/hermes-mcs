@@ -160,7 +160,7 @@ def test_urgent_snapshot_changes_skip_the_interval(tmp_path, snapdir, change):
             db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
                           (now,))
         elif change == "schema":
-            db.db.execute("CREATE INDEX synthetic_idx ON messages(posted_ts)")
+            db.db.execute("CREATE INDEX synthetic_idx ON synthetic_rows(x)")
         elif change == "rowid_fell":
             db.db.execute("DELETE FROM synthetic_rows WHERE rowid=2")
         else:
