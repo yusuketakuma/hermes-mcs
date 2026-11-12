@@ -253,9 +253,11 @@ def test_guard_admits_a_different_fingerprint_and_holds_same_or_absent(
         _guard(ledger, cfg, "完全合成の別の現在要求。")
 
 
-def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch):
+@pytest.mark.parametrize("allow_cloud", [True, False])
+def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch, allow_cloud):
     """Positive: an owned different-fp reservation stays untouched while the
-    migrated row completes a current local final through the real guard."""
+    migrated row completes a current local final through the real guard —
+    also on a local-only pass, whose ownership refusal skips superseded rows."""
     ledger, cfg, calls, reserved, results = routed
     row, frame = _frozen(ledger)
     _persist(ledger, row, frame, _old_context(row, frame))
@@ -271,8 +273,9 @@ def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch):
         return {"symptoms": [], "summary": "合成の要約"}
 
     monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
-    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    report = worker.run_pending(ledger, limit=1, budget_s=180, allow_cloud=allow_cloud)
     assert report["done"] == 1 and prompts
+    assert "cloud_unit_unresolved" not in (report.get("defer_reasons") or {})
     assert calls == [] and reserved == [] and results == []
     # the old paid unit is preserved exactly: ownership, reservation rows,
     # and every pre-existing checkpoint/frame row are byte-for-byte unchanged
@@ -291,9 +294,11 @@ def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch):
     assert json.loads(current[0]["content"])["summary"] == "合成の要約"
 
 
-def test_same_fingerprint_history_holds_the_migration(routed, monkeypatch):
+@pytest.mark.parametrize("allow_cloud", [True, False])
+def test_same_fingerprint_history_holds_the_migration(routed, monkeypatch, allow_cloud):
     """A reservation bound to the exact current prompt is the same request:
-    the guard holds and no local dispatch or artifact happens."""
+    the guard holds and no local dispatch or artifact happens, on a
+    local-only pass too."""
     ledger, cfg, _calls, _reserved, _results = routed
     row, frame = _frozen(ledger)
     _persist(ledger, row, frame, _old_context(row, frame))
@@ -304,16 +309,42 @@ def test_same_fingerprint_history_holds_the_migration(routed, monkeypatch):
         return extract_llm_engine._DEFERRED
 
     monkeypatch.setattr(extract_llm_engine, "_llm_call", capture)
-    first = worker.run_pending(ledger, limit=1, budget_s=180)
+    first = worker.run_pending(ledger, limit=1, budget_s=180, allow_cloud=allow_cloud)
     assert first["done"] == 0 and len(prompts) == 1
     _real_reserve(ledger, cfg, monkeypatch, prompt=prompts[0])
-    second = worker.run_pending(ledger, limit=1, budget_s=180)
+    second = worker.run_pending(ledger, limit=1, budget_s=180, allow_cloud=allow_cloud)
     assert second["done"] == 0 and len(prompts) == 1   # guard fired before dispatch
     assert not ledger.db.execute(
         "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
         "WHERE a.kind=? " + mcs_queries.current_extract_pred()
         + " AND json_extract(a.meta,'$.extract_version')=?",
         (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+
+
+def test_known_cloud_failure_falls_back_locally_while_its_reservation_stays(routed, monkeypatch):
+    """The fallback after a known cloud outcome prepares with allow_cloud=False but
+    never applies the local-only pass's ownership refusal."""
+    import extract_llm_runner
+    from test_cloud_response_recovery import legacy_cloud_routes
+    ledger, _cfg, calls, *_ = routed
+    old(ledger)
+    local = []
+
+    def infer(_body, **kwargs):
+        provider = kwargs.get("provider")
+        if provider is not None:
+            provider("synthetic complete request", deadline=kwargs["deadline"], max_tokens=100)
+            # synthetic durable reservation left behind by the known attempt
+            ledger.artifact_add(cloud_policy.KINDS[0], "{}", project_id=1, message_id=1,
+                                model="synthetic-model", meta={"reservation_id": "synthetic-reservation"})
+            raise cloud_inference.CloudFallback("synthetic_failed_unit")
+        local.append(cloud_policy.owns_request(ledger.db, route="reextract", project_id=1, message_id=1))
+        return {}
+    monkeypatch.setattr(worker, "llm_extract", infer)
+    monkeypatch.setattr(extract_llm_runner, "llm_extract", worker.llm_extract)
+    with legacy_cloud_routes():
+        report = worker.run_pending(ledger, budget_s=180)
+    assert report["done"] == 1 and local == [True] and len(calls) == 1
 
 
 def test_superseded_row_never_receives_the_stored_protected_prior(routed, monkeypatch):
