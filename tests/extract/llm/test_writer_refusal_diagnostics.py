@@ -101,7 +101,8 @@ def test_maintenance_lock_refusal_preserves_wait_and_short_circuit(monkeypatch, 
     monkeypatch.setattr(resident, "Ledger", lambda *_: pytest.fail("ledger opened"))
     monkeypatch.setattr(resident.sys, "argv", ["extract_llm", "--revive-failed"])
     assert resident.main() == 1
-    assert calls == ["acquire", ("sleep", 1)]
+    # wait_s=0: one attempt, and no sleep after the last attempt
+    assert calls == ["acquire"]
     assert json.loads(capsys.readouterr().out) == {
         "ok": False, "error": "writer_unavailable",
         "writer_reason": "run_lock_not_acquired", "writer_stage": "write_lock",
