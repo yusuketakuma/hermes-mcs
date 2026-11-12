@@ -219,8 +219,7 @@ def _quality_skip_evidence(db, pid, identity, selected, threshold):
     for offset in range(0, len(identity["fact_ids"]), 12):
         ids = identity["fact_ids"][offset:offset + 12]
         answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
-        if any(answer["confidence"] < threshold
-               or answer["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected)
+        if any(answer["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected)
                for fid, answer in answers.items()):
             return False
     return True
@@ -361,7 +360,7 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
                                                       list(answers), purpose=purpose) != answers:
                 raise ValueError("patient_summary_quality_answers_unverified")
             if (any(answer["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected_ids)
-                    or answer["confidence"] < threshold for fid, answer in answers.items())
+                    for fid, answer in answers.items())
                     and not _quality_failed(ledger.db, pid, identity)):
                 ledger.artifact_add_tx(patient_context_refresh_state._quality_kind(patient_context_refresh_state.QUALITY_FAIL, identity), "{}", project_id=pid,
                     meta={VERSION_KEY: patient_context_refresh_state.CURRENT_VERSION, "input_key": identity["input_key"],
@@ -455,8 +454,7 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
             ids = identity["fact_ids"][start:start + 12]
             answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if set(answers) != set(ids) or any(
-                    answers[fid]["confidence"] < threshold
-                    or answers[fid]["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected_ids)
+                    answers[fid]["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected_ids)
                     for fid in ids):
                 raise ValueError("patient_summary_quality_incomplete")
         pass_content = _quality_pass_content(ledger.db, pid, identity, threshold=threshold, descriptor=descriptor)

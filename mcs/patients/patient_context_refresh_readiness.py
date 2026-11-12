@@ -21,7 +21,7 @@ def inference_coverage(db, pid, cfg):
         return _inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg), proof_for=proof_for)
 
 
-def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract, threshold, *, read_proof=None):
+def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract, *, read_proof=None):
     identity = captured['identity']
     rows = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.input_key') END=? "
@@ -63,7 +63,7 @@ def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, c
         for fid in page:
             answer = answers[fid]
             choice = answer['choice']
-            if answer['confidence'] < threshold or choice == 'ambiguous':
+            if choice == 'ambiguous':
                 return False
             if fid in selected and choice in ('not_supported', 'contradicts'):
                 rejected.add(fid)
@@ -114,7 +114,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
                     or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"])
                     or patient_context_quality_receipts._quality_failed(db, pid, identity)
                     or not _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract,
-                                                       policy['match_threshold'], read_proof=read_proof)):
+                                                       read_proof=read_proof)):
                 return False
             selected = {row["fact_ids"][0] for row in doc["summary"]}
             if meta.get("quality_audit_status") == "SKIPPED":
@@ -125,8 +125,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
                 ids = identity["fact_ids"][start:start + 12]
                 answers = patient_context_quality_receipts._quality_answers(db, pid, identity["audit_key"], ids)
                 if set(answers) != set(ids) or any(
-                        answers[fid]["confidence"] < policy["match_threshold"]
-                        or answers[fid]["choice"] != ("supports" if fid in selected else "omission_ok")
+                        answers[fid]["choice"] != ("supports" if fid in selected else "omission_ok")
                         for fid in ids):
                     return False
             return True

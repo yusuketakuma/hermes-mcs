@@ -56,8 +56,8 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
             if set(answers) != set(ids[offset:offset + 12]):
                 return "deferred", None
             for fact_id, answer in answers.items():
-                choice, confidence = answer["choice"], answer["confidence"]
-                if confidence < threshold or choice == "ambiguous":
+                choice = answer["choice"]
+                if choice == "ambiguous":
                     return "held", None
                 if fact_id in selected and choice in ("not_supported", "contradicts"):
                     rejected.add(fact_id)
@@ -784,7 +784,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             page_key = patient_context_refresh_state._digest(ids)
             prior = patient_context_quality_receipts._quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if any(answer["choice"] != patient_context_refresh_state._quality_expected(identity, fid, selected)
-                   or answer["confidence"] < scfg["match_threshold"] for fid, answer in prior.items()):
+                   for fid, answer in prior.items()):
                 patient_context_quality_receipts._quality_store_answers(ledger, pid, identity, claim, prior, current,
                                        scfg["match_threshold"], selected)
             if len(prior) == len(ids):

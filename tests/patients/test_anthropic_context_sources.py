@@ -725,7 +725,7 @@ def test_paired_read_rechecks_originals_and_receipts_after_the_previous_read_end
     assert second[0] is None and not second[1]['complete']
 
 
-@pytest.mark.parametrize('quality_state', ['ambiguous','low_confidence','invalid','unknown'])
+@pytest.mark.parametrize('quality_state', ['ambiguous','invalid','unknown'])
 def test_nondefinitive_source_quality_never_consumes_an_extraction_repair(runtime, source_repair, quality_state):
     led, clock, _ = runtime
     source_repair['qa_fault'] = quality_state
@@ -816,10 +816,11 @@ def test_source_pass_content_checks_each_logical_page_once(runtime, cloud, monke
     finally:
         led.db.rollback()
     assert calls == [tuple(ids[:12]), tuple(ids[12:24]), tuple(ids[24:])]
-    if problem == 'none':
+    if problem in ('none', 'low'):
         assert result['question_count'] == 25 and result['source_fact_count'] == 24
         assert len(result['answer_refs_sig']) == 64
         assert result['descriptor'] == descriptor
+        assert result['low_confidence'] == ([] if problem == 'none' else [ids[-1]])
     else:
         assert result is None
 
@@ -842,7 +843,7 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
     pass_id, raw_content, raw_meta = pass_rows[0]
     original = json.loads(raw_content)
     descriptor = original.pop('descriptor')
-    assert set(original) == {'question_count', 'source_fact_count', 'answer_refs_sig'}
+    assert set(original) == {'question_count', 'source_fact_count', 'low_confidence', 'answer_refs_sig'}
     answer = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? '
                             'AND project_id=1 ORDER BY artifact_id LIMIT 1', (answer_kind,)).fetchone()
     assert answer
@@ -873,8 +874,8 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
             led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
                            (json.dumps(changed, separators=(',', ':')), answer_id))
             if damage == 'low_confidence':
-                # Bind the lower confidence to the original reservation, so this
-                # tests the threshold as well as receipt integrity.
+                # Bind the lower confidence to the original reservation; the pass
+                # content records it, so the stored PASS no longer verifies.
                 usage_meta['quality_result']['answers'][answer_fid]['answer_hash'] = payload_hash(changed)
                 led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
                                (json.dumps(usage_meta, separators=(',', ':')), usage_id))
@@ -892,9 +893,7 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
                                              lambda: True, source=source)
 
     if damage in ('pass_content', 'low_confidence'):
-        expected = ('patient_source_quality_receipt_missing' if damage == 'pass_content'
-                    else 'patient_summary_quality_incomplete')
-        with pytest.raises(ValueError, match=expected):
+        with pytest.raises(ValueError, match='patient_source_quality_receipt_missing'):
             recheck()
     else:
         status, _ = recheck()

@@ -642,17 +642,20 @@ def patient_source_pass_content(db, pid, identity, descriptor):
             or identity['source_fact_count'] != len(ids) - 1):
         raise ValueError('patient_source_identity_invalid')
     references = hashlib.sha256()
+    low_confidence = []
     for start in range(0, len(ids), 12):
         page = ids[start:start + 12]
         evidence = patient_source_question_evidence(db, pid, identity, page)
         if (evidence['problems'] or set(evidence['answers']) != set(page)
                 or set(evidence['references']) != set(page)
-                or any(evidence['answers'][fid]['choice'] != keys['passing_choices'][fid]
-                       or evidence['answers'][fid]['confidence'] < hi for fid in page)):
+                or any(evidence['answers'][fid]['choice'] != keys['passing_choices'][fid] for fid in page)):
             return None
+        low_confidence.extend(fid for fid in page
+                              if evidence['answers'][fid]['confidence'] < hi)
         for fid in page:
             references.update(bytes.fromhex(payload_hash([fid, evidence['references'][fid]])))
     return {'question_count': len(ids), 'source_fact_count': identity['source_fact_count'],
+            'low_confidence': sorted(low_confidence),
             'answer_refs_sig': references.hexdigest(), 'descriptor': descriptor}
 
 

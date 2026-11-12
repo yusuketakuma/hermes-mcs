@@ -322,6 +322,40 @@ def test_quality_pass_requires_every_source_bound_question(tmp_path, monkeypatch
         led.close()
 
 
+def test_quality_gate_uses_choice_not_confidence(tmp_path, monkeypatch):
+    """Expected choices pass below the confidence threshold; wrong choices still fail."""
+    led = _ledger(tmp_path)
+    try:
+        led.ensure_patient(1)
+        monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock',
+                            lambda: os.open(os.devnull, os.O_RDONLY))
+        base = {'candidate_key': 'd' * 64, 'failure_key': 'f' * 64,
+                'fact_ids': ['c' * 64, 'e' * 64]}
+        identity = {**base, 'input_key': '1' * 64, 'audit_key': '2' * 64}
+        claim = patient_context_quality_receipts._quality_claim(
+            led, 1, identity['input_key'], time.monotonic() + 60, lambda *_: True)
+        patient_context_quality_receipts._quality_store_answers(led, 1, identity, claim,
+            {'c' * 64: {'choice': 'supports', 'confidence': 0.4},
+             'e' * 64: {'choice': 'omission_ok', 'confidence': 0.5}},
+            lambda *_: True, 0.9, {'c' * 64})
+        assert not patient_context_quality_receipts._quality_failed(led.db, 1, identity)
+        assert patient_context_quality_receipts._quality_mark_pass(
+            led, 1, identity, claim, {'c' * 64}, lambda *_: True, 0.9)
+        assert patient_context_quality_receipts._quality_passed(led.db, 1, identity)
+        patient_context_quality_receipts._quality_release(led, 1, identity['input_key'], claim)
+        identity = {**base, 'input_key': '3' * 64, 'audit_key': '4' * 64}
+        claim = patient_context_quality_receipts._quality_claim(
+            led, 1, identity['input_key'], time.monotonic() + 60, lambda *_: True)
+        patient_context_quality_receipts._quality_store_answers(led, 1, identity, claim,
+            {'c' * 64: {'choice': 'supports', 'confidence': 0.99},
+             'e' * 64: {'choice': 'supports', 'confidence': 0.99}},
+            lambda *_: True, 0.9, {'c' * 64})
+        assert patient_context_quality_receipts._quality_failed(led.db, 1, identity)
+        patient_context_quality_receipts._quality_release(led, 1, identity['input_key'], claim)
+    finally:
+        led.close()
+
+
 def test_quality_retry_and_hard_failure_stay_distinct_from_budget_defer(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     try:
