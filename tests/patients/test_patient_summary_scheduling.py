@@ -55,6 +55,9 @@ def cloud_schedule(runtime, monkeypatch):
         def discard(self):
             return None
     monkeypatch.setattr(cloud_inference, 'CloudInferenceUnit', Cloud)
+    # The stub unit performs no reservation accounting, so paid-origin receipts
+    # cannot exist; the financial guard is covered by the real-cloud fixtures.
+    monkeypatch.setattr(patient_context_refresh_sources, 'guard_cloud_sources', lambda *_a, **_kw: None)
     return runtime, cfg
 
 
