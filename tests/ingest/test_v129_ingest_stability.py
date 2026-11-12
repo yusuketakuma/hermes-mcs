@@ -94,6 +94,7 @@ def test_early_warnings_are_codes_and_numbers_only(db, tmp_path, monkeypatch):
     (backups / "ledger-20260101.db").write_bytes(b"x" * 10)
     (backups / "hand-copy.db").write_bytes(b"y" * 7)
     monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
     monkeypatch.setattr(health_report, "WAL_WARN_BYTES", -1)
     monkeypatch.setattr(health_report, "disk_floor_mb", lambda: 512)
     monkeypatch.setattr(health_report, "prev_health",
@@ -117,6 +118,17 @@ def test_early_warnings_are_codes_and_numbers_only(db, tmp_path, monkeypatch):
     assert health_report.early_warnings(db.db, result, None)["snapshot_verify_slow_runs"] == 0
     assert health_report.early_warnings(db.db, {}, None)["snapshot_verify_slow_runs"] == 1
     assert os.path.exists(backups / "hand-copy.db")       # never deleted
+
+
+@pytest.mark.parametrize("age, stale", [(None, False), (1800.0, False),
+                                        (health_report.SNAPSHOT_STALE_WARN_S + 1, True)])
+def test_early_warnings_report_published_snapshot_age(db, tmp_path, monkeypatch, age, stale):
+    monkeypatch.setattr(health_report, "HOME", str(tmp_path))
+    monkeypatch.setattr(health_report, "prev_health", lambda: {})
+    monkeypatch.setattr(maintenance, "snapshot_published_age_s", lambda: age)
+    out = health_report.early_warnings(db.db, {}, None)
+    assert out["snapshot_age_s"] == (None if age is None else round(age))
+    assert ("snapshot_stale" in out["warnings"]) is stale
 
 
 def test_quarantine_count_reads_only_the_queues_and_is_bounded(tmp_path, monkeypatch):

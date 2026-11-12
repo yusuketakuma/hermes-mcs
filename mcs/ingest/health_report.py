@@ -24,6 +24,9 @@ ATTACH_DISK_MARGIN_MB = 2048
 DISK_WARN_MARGIN_MB = 2 * ATTACH_DISK_MARGIN_MB   # warn before disk_low
 WAL_WARN_BYTES = 256 * 1024 * 1024
 SNAPSHOT_VERIFY_WARN_RATIO = 0.6
+# the hourly forced republish plus two ticks of slack: an older published
+# copy means publishing is failing, not merely waiting out the interval
+SNAPSHOT_STALE_WARN_S = maintenance.SNAPSHOT_MAX_AGE_S + 1200
 DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
 DB_MAINT_STATE_MAX_BYTES = 65536
 
@@ -308,6 +311,10 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
     out["snapshot_verify_slow_runs"] = slow
     if slow >= 2:
         out["warnings"].append("snapshot_verify_near_budget")
+    age = maintenance.snapshot_published_age_s()
+    out["snapshot_age_s"] = None if age is None else round(age)
+    if age is not None and age > SNAPSHOT_STALE_WARN_S:
+        out["warnings"].append("snapshot_stale")
     floor = disk_floor_mb()
     if floor and free_mb is not None and not attachment_disk_low(free_mb) \
             and free_mb < floor + DISK_WARN_MARGIN_MB:

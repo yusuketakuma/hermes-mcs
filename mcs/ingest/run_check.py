@@ -1081,7 +1081,8 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
 
     try:
         # H4: a full copy + quick_check only when the ledger changed, the
-        # notification flag asks for it, or the copy is an hour old
+        # notification flag asks for it, or the copy is an hour old; an
+        # append-only change within SNAPSHOT_MIN_INTERVAL_S is 'deferred'
         dirty = notify_cards.snapshot_dirty(ledger)
         hard = _hard_deadline()
         snapshot_deadline = (None if hard is None else
