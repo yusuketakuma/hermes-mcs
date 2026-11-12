@@ -127,8 +127,8 @@ def test_slack_update_rewrites_the_earlier_reply_of_a_changed_chunk(led):
     assert out == {"result": "delivered", "remote_id": our_ts}
     assert len(w.client.thread_posts) == posted
     assert _updates(w) == [{"channel": SCOPE["channel_id"], "ts": our_ts,
-                            "text": "変更後の本文", "link_names": False,
-                            "mrkdwn": False}]
+                            "text": "変更後の本文", "parse": "none",   # the post's parsing, not chat.update's default
+                            "link_names": False, "mrkdwn": False}]
     assert replies[0]["text"] == "変更後の本文"
 
 
@@ -163,7 +163,7 @@ def test_slack_rewrite_keeps_special_characters_literal_and_reuses_same_id(led):
     assert out == {"result": "delivered", "remote_id": prior}
     update = _updates(w)[-1]
     assert "<!here>" not in update["text"] and "<@U0OP>" not in update["text"]
-    assert unescape(update["text"]) == body and update["link_names"] is False
+    assert unescape(update["text"]) == body and update["link_names"] is False and update["parse"] == "none"
     assert _rewrite(w, spec, body, prior) == out
     assert len(_updates(w)) == 1 and len(w.client.thread_posts) == posted
 
