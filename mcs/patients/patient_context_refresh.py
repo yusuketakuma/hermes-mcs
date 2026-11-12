@@ -1274,7 +1274,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return {"status": "deferred", "done": 0, "lane": lane, "reason": deferred_reason,
                 **({"detail": detail} if detail else {}), **stats}
     # Rebuild the source signature outside the write lock. A data-version
-    # fence seals the read against any concurrent writer before publication.
+    # fence seals each read; the save transaction re-verifies these inputs
+    # under its writer lock when another connection committed meanwhile.
     quality_fence = None
     source_pass_content = None
     if source_quality_identity is not None:
@@ -1393,10 +1394,35 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
-            if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                                                 or ledger.db.total_changes != changes):
-                ledger.db.rollback()
-                return {"status": "source_changed", "done": 0, "changed": "fence"}
+            # The quality fence is this patient's inputs, not the whole database:
+            # after any foreign commit they are re-verified under this writer
+            # lock. Own unexpected writes still refuse. ``version`` stays the
+            # pre-lock value for the scan-signature refresh below.
+            quality_version = version
+            if quality_identity is not None or source_quality_identity is not None:
+                if ledger.db.total_changes != changes:
+                    ledger.db.rollback()
+                    return {"status": "source_changed", "done": 0, "changed": "fence"}
+                quality_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
+                if quality_version != version:
+                    try:
+                        if source_quality_identity is not None and (
+                                not patient_context_refresh_sources._source_quality_verified(
+                                    ledger.db, pid, source, snapshot["contract"], cfg, result)
+                                or not source_quality_skipped and patient_context_quality_receipts._quality_pass_content(
+                                    ledger.db, pid, source_quality_identity) != source_pass_content):
+                            ledger.db.rollback()
+                            return {"status": "source_changed", "done": 0, "changed": "fence"}
+                        if quality_identity is not None:
+                            recaptured = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, night_id, result["summary"],
+                                quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
+                            if recaptured["identity"] != quality_identity:
+                                ledger.db.rollback()
+                                return {"status": "source_changed", "done": 0, "changed": "fence"}
+                            refreshed_quality = recaptured
+                    except (ValueError, KeyError, TypeError):
+                        ledger.db.rollback()
+                        return {"status": "source_changed", "done": 0, "changed": "fence"}
             if quality_identity is not None:
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
@@ -1604,7 +1630,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and patient_context_refresh_state.time.monotonic() < deadline
-                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
+                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == quality_version
                     and ledger.db.total_changes == adoption_before + adoption_writes[0])
                 if not valid_adoption:
                     ledger.db.rollback()
