@@ -634,7 +634,8 @@ def _main() -> int:
                                         write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                         carry=carry)
                     except BaseException:
-                        carry = parked + carry
+                        if parked:
+                            carry = parked + carry
                         raise
                     elapsed = time.monotonic() - started
                     if oldest_turn:
@@ -648,9 +649,14 @@ def _main() -> int:
                         # returned before run_pending could include it.
                         if "carry" in r:
                             carry = r.pop("carry") or []
-                        carry = parked + carry
+                        if parked:
+                            carry = parked + carry
                         return retire()
-                    carry = parked + (r.pop("carry", None) or [])  # internal; never logged
+                    # internal; never logged. Keep the returned list itself
+                    # unless results were parked for a lookahead pass.
+                    carry = r.pop("carry", None) or []
+                    if parked:
+                        carry = parked + carry
                     sem = None
                     ran_semantic = False
                     if args.semantic:
