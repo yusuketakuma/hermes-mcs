@@ -524,3 +524,62 @@ def test_scope_cache_contents_do_not_replace_cached_definition_coverage(monkeypa
         return ()
     monkeypatch.setattr(wrapper.__wrapped__, "__code__", changed.__code__)
     assert semantic_candidate._sources()["clinical_scope"] != before["clinical_scope"]
+
+
+def test_prepare_pins_the_exact_raw_protected_prior_before_inference(tmp_path, monkeypatch):
+    db, aid, _ = seed(tmp_path)
+    try:
+        monkeypatch.setattr(extract_llm_prepare, "load_config", lambda: {})
+        pending, _ = llm._select_pending(db, 1, None, None, False)
+        jobs, skipped, blocked = extract_llm_prepare._prepare_jobs(
+            db, pending, ("", "synthetic-local"), False, allow_cloud=False)
+        assert len(jobs) == 1 and skipped == blocked == 0
+        row = jobs[0][0]
+        prior = db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
+        assert row["_protected_prior"] == dict(prior)
+        assert row["_expected_prior"] == extract_llm_qc._prior_identity(prior)
+        assert json.loads(row["_protected_prior"]["content"]) == PRIOR
+        assert extract_llm_qc._prior_matches(db.db, row, row["_expected_prior"])
+        ref = row["_protected_prior_ref"]
+        assert set(ref) == {"version", "artifact_id", "identity_sha256", "source_binding"}
+        assert ref["version"] == 1 and ref["artifact_id"] == aid
+        assert ref["source_binding"] == row["_source_binding"]
+        assert extract_llm_qc._resolve_protected_prior_reference(
+            db.db, row, ref)["artifact_id"] == aid
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("fault", ["digest", "binding", "artifact", "shape", "version",
+                                   "extra", "meta_hash", "unprotected", "source"])
+def test_protected_prior_reference_resolution_fails_closed(tmp_path, fault):
+    db, aid, row = seed(tmp_path)
+    try:
+        prior = dict(db.db.execute(
+            "SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+        ref = extract_llm_qc._protected_prior_reference(prior, row["_source_binding"])
+        r = dict(row)
+        if fault == "digest":
+            ref["identity_sha256"] = "0" * 64
+        elif fault == "binding":
+            ref["source_binding"] = "1" * 64
+        elif fault == "artifact":
+            ref["artifact_id"] = aid + 1000
+        elif fault == "shape":
+            ref = ["not", "a", "dict"]
+        elif fault == "version":
+            ref["version"] = 2
+        elif fault == "extra":
+            ref["extra"] = True
+        elif fault == "meta_hash":
+            with db.db:
+                db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                              (json.dumps({**json.loads(prior["meta"]), "hash": "0" * 64}),
+                               aid))
+        elif fault == "unprotected":
+            r["body_text"] = "関係のない本文です。"
+        else:
+            r["_source_binding"] = "2" * 64
+        assert extract_llm_qc._resolve_protected_prior_reference(db.db, r, ref) is None
+    finally:
+        db.close()

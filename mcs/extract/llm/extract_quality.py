@@ -1116,16 +1116,12 @@ def retains_assertion(prior, candidate):
     return type(prior) is type(candidate) and prior == candidate
 
 
-def protected_lost(prior, candidate, body):
-    """Count grounded negation/nonpatient assertions lost by an automatic replacement."""
-    # The stored assertion is the protection baseline, not a new candidate:
-    # stricter validation must not erase an old protected assertion before
-    # comparison. The caller binds that artifact to this exact source.
+def protected_assertions(prior, body):
+    """List stored protected assertions whose original quotes uniquely belong to this source."""
     old = prior if isinstance(prior, dict) else {}
-    lost = {}
     if not isinstance(body, str):
-        return lost
-    new = extract_validation.validate(candidate if isinstance(candidate, dict) else {}, body) or {}
+        return {}
+    protected = {}
     for field in _FACT_LIST_FIELDS:
         items = old.get(field)
         if not isinstance(items, list):
@@ -1136,6 +1132,21 @@ def protected_lost(prior, candidate, body):
                     or not isinstance(item.get("evidence"), str)
                     or locate_quote_span(body, item.get("evidence")) is None):
                 continue
+            protected.setdefault(field, []).append(item)
+    return protected
+
+
+def protected_lost(prior, candidate, body):
+    """Count grounded negation/nonpatient assertions lost by an automatic replacement."""
+    # The stored assertion is the protection baseline, not a new candidate:
+    # stricter validation must not erase an old protected assertion before
+    # comparison. The caller binds that artifact to this exact source.
+    lost = {}
+    if not isinstance(body, str):
+        return lost
+    new = extract_validation.validate(candidate if isinstance(candidate, dict) else {}, body) or {}
+    for field, items in protected_assertions(prior, body).items():
+        for item in items:
             if not any(retains_assertion(item, other) for other in new.get(field) or []):
                 lost[field] = lost.get(field, 0) + 1
     return lost

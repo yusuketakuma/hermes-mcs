@@ -826,3 +826,512 @@ def test_verify_register_rejects_tampered_observation(tmp_path, monkeypatch):
         assert 'ASSET_MISMATCH' in str(error)
     else:
         raise AssertionError('expected failure')
+
+
+def _fake_http_open(seen):
+    """api_request試験用のno-network opener。Authorization headerを記録する。"""
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, limit=-1):
+            return b'{"ok":true}'
+
+    def open_fn(req, timeout=None):
+        seen.append(req.get_header('Authorization'))
+        return FakeResponse()
+
+    return open_fn
+
+
+def test_api_request_evaluates_token_provider_per_request(tmp_path):
+    """callable tokenはrequest送信の共通境界(api_request)で毎回評価され、
+    request毎に異なるBearerが付く。str tokenは従来通りそのまま使える。"""
+    module = _load_cli()
+    api = module._api
+    seen = []
+    tokens = iter(['oidc-1', 'oidc-2', 'oidc-3'])
+
+    def provider():
+        return next(tokens)
+
+    api.api_request('POST', 'https://pub.example/a', token=provider,
+                    opener=_fake_http_open(seen))
+    api.api_request('PUT', 'https://pub.example/b', token=provider,
+                    raw=b'x', opener=_fake_http_open(seen))
+    api.api_request('POST', 'https://pub.example/c', token='static',
+                    opener=_fake_http_open(seen))
+    assert seen == ['Bearer oidc-1', 'Bearer oidc-2', 'Bearer static']
+
+
+def test_api_request_provider_failure_blocks_send(tmp_path):
+    """token providerの取得失敗はRequest構築前に拒否し、送信しない。"""
+    module = _load_cli()
+    api = module._api
+    seen = []
+
+    def broken():
+        raise RuntimeError('oidc endpoint down')
+
+    try:
+        api.api_request('POST', 'https://pub.example/a', token=broken,
+                        opener=_fake_http_open(seen))
+    except api.PublishApiError as error:
+        assert error.code == 'OIDC_UNAVAILABLE'
+    else:
+        raise AssertionError('expected OIDC_UNAVAILABLE')
+    assert seen == []
+
+
+def test_authorize_uses_fresh_oidc_token_per_request(tmp_path, monkeypatch):
+    """authorize全phase: request毎にoidc_token()が呼ばれ、wire上のtokenは
+    全て異なる。MCS_PUBLISH_OIDC_TOKEN static値は複数request経路では
+    参照されない(fresh OIDCのみ)。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'static-must-not-be-used')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.delenv('ACTIONS_ID_TOKEN_REQUEST_URL', raising=False)
+    monkeypatch.delenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', raising=False)
+    issued = []
+    seq = iter(range(1, 100))
+
+    def fake_oidc_token(env=None, *, opener=None):
+        value = 'oidc-jwt-%d' % next(seq)
+        issued.append(value)
+        return value
+
+    monkeypatch.setattr(module._api, 'oidc_token', fake_oidc_token)
+    calls = []
+    pub_id = '12345678-1234-4234-8234-123456789abc'
+    reservation = {'schema_version': 'mcs.publication-reservation.v3',
+                   'publication_id': pub_id,
+                   'request_id': 'r' * 64, 'code_seq': 1,
+                   'revision': 1, 'fencing_token': 7,
+                   'issued_at': 1700000000, 'expires_at': 1700086400}
+    request_doc = json.loads(_build_request(tmp_path).read_text())
+    envelope, plan_doc = _publish_plan(pub_id, request_doc)
+
+    def resolve(token):
+        return token() if callable(token) else token
+
+    def fake_reserve(base, token, body, **kw):
+        calls.append(('reserve', resolve(token)))
+        return reservation
+
+    def fake_manifest(base, token, body, **kw):
+        calls.append(('manifest', resolve(token)))
+        return {'state': 'manifest_fixed'}
+
+    def fake_put(base, token, **kw):
+        calls.append(('put', resolve(token)))
+        return {'state': 'chunks_incomplete'}
+
+    def fake_verify(base, token, **kw):
+        calls.append(('verify', resolve(token)))
+        return {'state': 'ready'}
+
+    def fake_finalize(base, token, body, **kw):
+        calls.append(('finalize', resolve(token)))
+        return envelope
+
+    monkeypatch.setattr(module._api, 'reserve', fake_reserve)
+    monkeypatch.setattr(module._api, 'register_manifest', fake_manifest)
+    monkeypatch.setattr(module._api, 'put_chunk', fake_put)
+    monkeypatch.setattr(module._api, 'verify_object', fake_verify)
+    monkeypatch.setattr(module._api, 'finalize', fake_finalize)
+    monkeypatch.setattr(module._api, 'decode_plan', lambda env: plan_doc)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {'ok': True})
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    out = tmp_path / 'result.json'
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(out)
+    args += ['--pins', str(pins)]
+    module.main(args)
+    result = json.loads(out.read_text())
+    assert result['dry_run'] is False
+    kinds = [c[0] for c in calls]
+    assert kinds[0] == 'reserve' and kinds[-1] == 'finalize'
+    # 2 assets x (manifest+put+verify) + reserve + finalize = 8 requests
+    assert len(calls) == 8
+    wire_tokens = [c[1] for c in calls]
+    # request毎にfresh JWT — 同一tokenの再利用がない
+    assert len(set(wire_tokens)) == 8
+    assert all(t.startswith('oidc-jwt-') for t in wire_tokens)
+    # static overrideは複数request経路では使われない
+    assert 'static-must-not-be-used' not in wire_tokens
+    # providerはrequest毎(8回)に評価された
+    assert issued == wire_tokens
+
+
+def test_authorize_oidc_failure_blocks_before_first_send(tmp_path, monkeypatch):
+    """OIDC token取得失敗は最初の中央request送信前に拒否される。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'req-tok')
+    monkeypatch.delenv('ACTIONS_ID_TOKEN_REQUEST_URL', raising=False)
+    monkeypatch.delenv('MCS_PUBLISH_OIDC_TOKEN', raising=False)
+    sent = []
+
+    def broken_oidc(env=None, *, opener=None):
+        raise module._api.PublishApiError('OIDC_UNAVAILABLE')
+
+    monkeypatch.setattr(module._api, 'oidc_token', broken_oidc)
+    monkeypatch.setattr(module._api, '_opener',
+                        lambda: type('O', (), {
+                            'open': lambda self, req, timeout=None:
+                            sent.append(req)})())
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(tmp_path / 'out.json')
+    args += ['--pins', str(pins)]
+    try:
+        module.main(args)
+    except Exception as error:
+        assert getattr(error, 'code', '') == 'OIDC_UNAVAILABLE' or \
+            'OIDC' in str(error)
+    else:
+        raise AssertionError('expected OIDC failure')
+    assert sent == []
+
+
+def _authorize_fake_opener(module, monkeypatch, seen, *, envelope, plan_doc,
+                           pub_id, reservation, used_bearers=None):
+    """reserve/manifest/chunk/verify/finalizeを実API wrapper経由で通す
+    schema-valid応答を返すfake opener。各requestのBearerを記録し、
+    used_bearers指定時は同一JWT再利用を中央recordJti同様に拒否する。"""
+    import types
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, limit=-1):
+            return self._payload
+
+    def receipt(state):
+        return json.dumps({
+            'schema_version': 'mcs.object-receipt.v3',
+            'request_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            'publication_id': pub_id,
+            'manifest_sha256': 'a' * 64, 'sha256': 'b' * 64,
+            'size': 1, 'state': state,
+            'accepted_at': 1700000000}).encode()
+
+    def open_fn(req, timeout=None):
+        bearer = req.get_header('Authorization')
+        if used_bearers is not None:
+            assert bearer not in used_bearers, \
+                'same JWT reused across different requests'
+            used_bearers.add(bearer)
+        seen.append((req.full_url, bearer))
+        url = req.full_url
+        if url.endswith('/reserve'):
+            payload = json.dumps(reservation).encode()
+        elif url.endswith('/object-manifests'):
+            payload = receipt('manifest_fixed')
+        elif '/chunks/' in url:
+            payload = receipt('chunks_incomplete')
+        elif url.endswith('/objects/verify'):
+            payload = receipt('ready')
+        elif url.endswith('/finalize'):
+            payload = json.dumps(envelope).encode()
+        else:
+            raise AssertionError('unexpected url ' + url)
+        return FakeResponse(payload)
+
+    monkeypatch.setattr(module._api, '_opener',
+                        lambda: types.SimpleNamespace(open=open_fn))
+    monkeypatch.setattr(module._api, 'decode_plan', lambda env: plan_doc)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {'ok': True})
+
+
+def _reservation(publication_id):
+    return {'schema_version': 'mcs.publication-reservation.v3',
+            'publication_id': publication_id,
+            'request_id': 'e' * 64, 'code_seq': 1,
+            'revision': 1, 'fencing_token': 7,
+            'issued_at': 1700000000, 'expires_at': 1700086400}
+
+
+def test_authorize_real_api_path_fresh_token_per_chunk(tmp_path, monkeypatch):
+    """authorize全phaseを実API wrapper(reserve/manifest/put/verify/finalize)
+    経由でfake openerまで通す。CHUNK_BYTESを小さくして複数chunkを実
+    api_request境界へ流し、request毎にfresh JWTが付き、同一JWTの異なる
+    request再利用はfake側(recordJti相当)が拒否することをpinする。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'static-must-not-be-used')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'req-tok')
+    monkeypatch.delenv('ACTIONS_ID_TOKEN_REQUEST_URL', raising=False)
+    monkeypatch.setattr(module._api, 'CHUNK_BYTES', 4)
+    issued = []
+    seq = iter(range(1, 1000))
+
+    def fake_oidc(env=None, *, opener=None):
+        value = 'jwt-%d' % next(seq)
+        issued.append(value)
+        return value
+
+    monkeypatch.setattr(module._api, 'oidc_token', fake_oidc)
+    pub_id = '12345678-1234-4234-8234-123456789abc'
+    request_doc = json.loads(_build_request(tmp_path).read_text())
+    envelope, plan_doc = _publish_plan(pub_id, request_doc)
+    seen = []
+    used = set()
+    _authorize_fake_opener(
+        module, monkeypatch, seen, envelope=envelope, plan_doc=plan_doc,
+        pub_id=pub_id, reservation=_reservation(pub_id), used_bearers=used)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    out = tmp_path / 'out.json'
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(out)
+    args += ['--pins', str(pins)]
+    module.main(args)
+    result = json.loads(out.read_text())
+    assert result['dry_run'] is False
+    # bundle 12B→3chunk, png 9B→3chunk: reserve1+2*(manifest1+put3+verify1)
+    # +finalize1 = 12 requests、全て実api_request経由
+    assert len(seen) == 12
+    assert sum(1 for url, _ in seen if '/chunks/' in url) == 6
+    wire_bearers = [bearer.removeprefix('Bearer ') for _, bearer in seen]
+    assert len(set(wire_bearers)) == 12
+    assert issued == wire_bearers
+    assert all(bearer.startswith('Bearer ') for _, bearer in seen)
+    assert 'static-must-not-be-used' not in wire_bearers
+
+
+def test_authorize_oidc_failure_mid_flow_stops_sends(tmp_path, monkeypatch):
+    """実API経路でprovider失敗が起きたrequest以降は送信されない
+    (失敗時点までのsend数でpin)。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'static-must-not-be-used')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'req-tok')
+    monkeypatch.delenv('ACTIONS_ID_TOKEN_REQUEST_URL', raising=False)
+    calls = []
+
+    def flaky_oidc(env=None, *, opener=None):
+        calls.append(1)
+        if len(calls) >= 3:
+            raise module._api.PublishApiError('OIDC_UNAVAILABLE')
+        return 'jwt-%d' % len(calls)
+
+    monkeypatch.setattr(module._api, 'oidc_token', flaky_oidc)
+    pub_id = '12345678-1234-4234-8234-123456789abc'
+    request_doc = json.loads(_build_request(tmp_path).read_text())
+    envelope, plan_doc = _publish_plan(pub_id, request_doc)
+    seen = []
+    _authorize_fake_opener(
+        module, monkeypatch, seen, envelope=envelope, plan_doc=plan_doc,
+        pub_id=pub_id, reservation=_reservation(pub_id))
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(tmp_path / 'out.json')
+    args += ['--pins', str(pins)]
+    try:
+        module.main(args)
+    except Exception as error:
+        assert getattr(error, 'code', '') == 'OIDC_UNAVAILABLE'
+    else:
+        raise AssertionError('expected OIDC failure')
+    # provider成功2回=reserve+manifest送信済み、3回目のprovider失敗で
+    # それ以降のchunk/verify/finalizeは1件も送られない
+    assert len(seen) == 2
+    assert len(calls) == 3
+
+
+def test_api_request_failures_suppress_exception_cause(tmp_path):
+    """provider/transport/OIDC失敗のcause連鎖を遮断し、固定codeのみを
+    残す — 例外message中の秘密値(canary)が__cause__/messageへ出ない。"""
+    module = _load_cli()
+    api = module._api
+    canary = 'CANARY-secret-7f3a9b2c'
+
+    def broken_provider():
+        raise RuntimeError('provider detail ' + canary)
+
+    try:
+        api.api_request('POST', 'https://pub.example/a', token=broken_provider,
+                        opener=_fake_http_open([]))
+    except api.PublishApiError as error:
+        assert error.code == 'OIDC_UNAVAILABLE'
+        assert error.__cause__ is None and error.__suppress_context__
+        assert canary not in str(error)
+    else:
+        raise AssertionError('expected OIDC_UNAVAILABLE')
+
+    def broken_open(req, timeout=None):
+        raise RuntimeError('transport detail ' + canary)
+
+    try:
+        api.api_request('POST', 'https://pub.example/a', token='t',
+                        opener=broken_open)
+    except api.PublishApiError as error:
+        assert error.code == 'TRANSPORT_ERROR'
+        assert error.__cause__ is None and error.__suppress_context__
+        assert canary not in str(error)
+    else:
+        raise AssertionError('expected TRANSPORT_ERROR')
+
+    try:
+        api.oidc_token({'ACTIONS_ID_TOKEN_REQUEST_URL': 'https://oidc.example/t',
+                        'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'req'},
+                       opener=broken_open)
+    except api.PublishApiError as error:
+        assert error.code == 'OIDC_UNAVAILABLE'
+        assert error.__cause__ is None and error.__suppress_context__
+        assert canary not in str(error)
+    else:
+        raise AssertionError('expected OIDC_UNAVAILABLE')
+
+
+def test_authorize_cli_stderr_hides_provider_canary(tmp_path):
+    """隔離CLI subprocess: OIDC endpoint URLに合成canaryを埋めて実経路の
+    例外連鎖を再現し、stderr tracebackへcanaryが出ないこと・固定codeの
+    OIDC_UNAVAILABLEで非0終了することを確認する。URL schemeを不正にして
+    DNS/networkへ出ない。"""
+    canary = 'CANARY-cli-9d2e4f'
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('MCS_PUBLISH_')
+           and k != 'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+           and k != 'ACTIONS_ID_TOKEN_REQUEST_URL'}
+    env.update({'MCS_PUBLISH_EXECUTE': '1',
+                'MCS_PUBLISH_API_BASE': 'https://pub.example',
+                'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'req-tok',
+                'ACTIONS_ID_TOKEN_REQUEST_URL':
+                    'not-a-valid-url-' + canary})
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    args = _authorize_args(tmp_path)
+    args[args.index('--output') + 1] = str(tmp_path / 'out.json')
+    args += ['--pins', str(pins)]
+    result = subprocess.run(
+        [sys.executable, str(CLI), *args],
+        capture_output=True, text=True, timeout=30, env=env)
+    assert result.returncode != 0
+    assert 'OIDC_UNAVAILABLE' in result.stderr
+    assert canary not in result.stderr
+    assert canary not in result.stdout
+
+
+def test_verify_register_static_token_single_request(tmp_path, monkeypatch):
+    """verify-registerのregisterは単発request — static overrideは
+    この経路では従来通り使える(同一JWTを複数requestへ流用しない)。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('MCS_PUBLISH_OIDC_TOKEN', 'tok')
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('GITHUB_RUN_ID', '123')
+    monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
+    monkeypatch.setenv('MCS_VERIFIER_CLOSURE_SHA256', 'a' * 64)
+    monkeypatch.setenv('MCS_PUBLISH_TOOLCHAIN_SHA256', 'b' * 64)
+    auth, _ = _authorize_result(tmp_path)
+    obs = _observation(tmp_path, auth)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    captured = {}
+
+    def fake_register(base, token, body, **kw):
+        captured['token'] = token() if callable(token) else token
+        captured['body'] = body
+        return {'schema_version': 'mcs.publication-record.v3',
+                'publication_id': body['publication_id'],
+                'immutable': True}
+
+    monkeypatch.setattr(module._api, 'register', fake_register)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {})
+    out = tmp_path / 'rec.json'
+    module.main(['verify-register', '--authorize', str(auth),
+                 '--observation', str(obs), '--pins', str(pins),
+                 '--output', str(out)])
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is False
+    assert captured['token'] == 'tok'
+
+
+def test_verify_register_uses_fresh_oidc_without_static(tmp_path, monkeypatch):
+    """static未設定時はverify-registerもOIDC endpointからfresh取得する。"""
+    module = _load_cli()
+    monkeypatch.setenv('MCS_PUBLISH_EXECUTE', '1')
+    monkeypatch.setenv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'req-tok')
+    monkeypatch.delenv('MCS_PUBLISH_OIDC_TOKEN', raising=False)
+    monkeypatch.setenv('MCS_PUBLISH_API_BASE', 'https://pub.example')
+    monkeypatch.setenv('GITHUB_RUN_ID', '123')
+    monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
+    monkeypatch.setenv('MCS_VERIFIER_CLOSURE_SHA256', 'a' * 64)
+    monkeypatch.setenv('MCS_PUBLISH_TOOLCHAIN_SHA256', 'b' * 64)
+    calls = []
+
+    def fake_oidc_token(env=None, *, opener=None):
+        calls.append('oidc')
+        return 'fresh-jwt'
+
+    monkeypatch.setattr(module._api, 'oidc_token', fake_oidc_token)
+    auth, _ = _authorize_result(tmp_path)
+    obs = _observation(tmp_path, auth)
+    pins = tmp_path / 'pins.json'
+    pins.write_text('{}')
+    captured = {}
+
+    def fake_register(base, token, body, **kw):
+        captured['token'] = token() if callable(token) else token
+        return {'schema_version': 'mcs.publication-record.v3',
+                'publication_id': body['publication_id'],
+                'immutable': True}
+
+    monkeypatch.setattr(module._api, 'register', fake_register)
+    monkeypatch.setattr(module._sig, 'verify_v3_envelope',
+                        lambda raw, **kw: {})
+    out = tmp_path / 'rec.json'
+    module.main(['verify-register', '--authorize', str(auth),
+                 '--observation', str(obs), '--pins', str(pins),
+                 '--output', str(out)])
+    doc = json.loads(out.read_text())
+    assert doc['dry_run'] is False
+    assert captured['token'] == 'fresh-jwt'
+    assert calls == ['oidc']
+
+
+def test_opener_disables_env_proxy_and_redirect(tmp_path, monkeypatch):
+    """共通openerはenv proxyを明示的に無効化しredirectを追わない。
+    proxy環境変数のcanary値がhandlerへ漏れないことも確認する。"""
+    module = _load_cli()
+    api = module._api
+    monkeypatch.setenv('HTTP_PROXY', 'http://canary-proxy.invalid:8888')
+    monkeypatch.setenv('HTTPS_PROXY', 'http://canary-proxy.invalid:8888')
+    monkeypatch.setenv('http_proxy', 'http://canary-proxy.invalid:8888')
+    monkeypatch.setenv('https_proxy', 'http://canary-proxy.invalid:8888')
+    monkeypatch.setenv('ALL_PROXY', 'http://canary-proxy.invalid:8888')
+    # ProxyHandler({})はproxy methodを持たずdispatch tableへ残らないため、
+    # handlers一覧ではなく「env proxy値がどのhandlerにも露出しない」ことで検証する
+    # (既定ProxyHandler()はenvを読みcanary値をproxiesへ格納する — 回帰を検出できる)。
+    opener = api._opener()
+    exposed = [getattr(h, 'proxies', None) for h in opener.handlers]
+    assert 'canary-proxy' not in str(exposed)
+    assert all(not proxies for proxies in exposed if proxies is not None)
+    assert any(isinstance(h, api._NoRedirect) for h in opener.handlers)

@@ -250,7 +250,7 @@ _REPAIR_CLOSE = """
 
 def _repair_prompt(posted_at: str | None, issues: list[str],
                    prior: dict, hints: dict | None = None,
-                   reference: str = "", medication_reference: str = "") -> str:
+                   reference: str = "", medication_reference: str = "", *, protected_prior=None) -> str:
     """Feedback prompt for the bounded repair retry — ends with the
     OPEN target fence; the caller appends the body then _PROMPT_TAIL.
     `issues` are the concrete validation failures; `prior` is
@@ -263,6 +263,12 @@ def _repair_prompt(posted_at: str | None, issues: list[str],
     prompt += _sanitize_ctx(json.dumps(prior, ensure_ascii=False))
     prompt += _REPAIR_CLOSE
     prompt += reference
+    if protected_prior:
+        prompt += ("保存済みの保護対象(未検証の参考データ):\n<<<\n"
+                   + _sanitize_ctx(json.dumps(protected_prior, ensure_ascii=False, sort_keys=True))
+                   + "\n>>>\n"
+                   "各属性を対象本文で再確認し、同じ主体・否定・状態を保持する完全一致引用へ結び付ける。"
+                   "参考データだけを根拠に転記・補完しない。本文で裏付けられない属性を創作しない。\n")
     hint = _hint_block(hints) if hints else ""
     if hint:
         prompt += _HINT_HEAD + hint + _HINT_TAIL

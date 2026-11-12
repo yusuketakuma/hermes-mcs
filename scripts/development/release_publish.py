@@ -530,7 +530,7 @@ def verify_register(authorize_path, observation_path, pins_path, output):
         expected_revision=plan.get('revision'),
         fencing_token=plan.get('fencing_token'),
         verification=verification)
-    token = _publisher_token()
+    token = _publisher_token_provider()
     base = _api.api_base()
     record = _api.register(base, token, reg_req)
     result_doc = {'schema_version': 'mcs.release-publication-record.local.v1',
@@ -572,11 +572,24 @@ def _candidate_assets(assets_dir):
     return out
 
 
-def _publisher_token():
-    token = os.environ.get('MCS_PUBLISH_OIDC_TOKEN')
-    if token:
-        return token
-    return _api.oidc_token()
+def _publisher_token_provider(*, fresh_only=False):
+    """中央API request毎に評価するOIDC token providerを返す。
+
+    返り値はapi_request境界で各HTTP request直前に呼ばれる。OIDC JWTは
+    request毎にfresh取得が必要 — 同一JWT(同一jti)の複数request流用は
+    中央recordJtiが409 OIDC_REPLAYで拒否する。
+
+    MCS_PUBLISH_OIDC_TOKEN は明示overrideで、単発request(verify-register
+    のregister等)にのみ使う。fresh_only=Trueの複数request経路(authorize)
+    ではstatic値を参照せず常にOIDC endpointから毎回取得する — env static
+    だけではfreshを満たせないため、endpoint未設定なら最初のrequest送信前に
+    OIDC_UNAVAILABLEで拒否される。
+    """
+    if not fresh_only:
+        static = os.environ.get('MCS_PUBLISH_OIDC_TOKEN')
+        if static:
+            return lambda: static
+    return _api.oidc_token
 
 
 def _verify_plan_envelope(envelope, pins_path, publication_id, request):
@@ -628,7 +641,9 @@ def authorize(build_request_path, assets_dir, release_core_path,
         _dump(output, plan)
         return plan
     _require(pins_path, 'PINS_REQUIRED')
-    token = _publisher_token()
+    # authorizeはreserve/manifest/chunk/verify/finalizeの複数requestを送る
+    # ためfresh provider必須 — static overrideの同一JWT流用を残さない。
+    token = _publisher_token_provider(fresh_only=True)
     base = _api.api_base()
     reservation = _api.reserve(base, token, request)
     pub_id = reservation['publication_id']

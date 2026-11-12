@@ -14,6 +14,7 @@ import json
 import secrets
 
 from adapters.sdc import protocol, release_auto_contract as contract, release_contract
+from adapters.sdc.release_auto_transport import ReleaseAutoError
 from adapters.sdc.support_contract import canonical
 from sdc_support_signatures import verify_release_attestation, verify_v3_envelope
 
@@ -49,11 +50,20 @@ _SENDABLE = frozenset(_PATH_PURPOSE) | {METADATA_PATH}
 
 
 class WireError(RuntimeError):
-    """wire deps失敗。codeは固定token。"""
+    """wire deps失敗。codeは固定token。
 
-    def __init__(self, code='WIRE_FAILED'):
+    transport境界(ReleaseAutoError)の拒否はstatus/remote_code/
+    retry_after_msへ退避する — mcs.release-error.v3のcodeと
+    retry_after_msを失わず、呼出側がretry分類できるようにする。
+    """
+
+    def __init__(self, code='WIRE_FAILED', *, status=None,
+                 remote_code=None, retry_after_ms=None):
         super().__init__(code)
         self.code = code
+        self.status = status
+        self.remote_code = remote_code
+        self.retry_after_ms = retry_after_ms
 
 
 def _sha256_canonical(value):
@@ -215,6 +225,10 @@ class Wire:
         headers = self._sign(path, raw_bytes)
         try:
             return self._transport.send_json(path, raw_bytes, headers)
+        except ReleaseAutoError as e:
+            raise WireError('WIRE_SEND', status=e.status,
+                            remote_code=e.code,
+                            retry_after_ms=e.retry_after_ms) from e
         except Exception as e:
             raise WireError('WIRE_SEND') from e
 
@@ -248,6 +262,10 @@ class Wire:
                 ARTIFACT_PATH, request_raw, headers,
                 expected_sha256=expected_sha256,
                 expected_size=expected_size, sink=sink)
+        except ReleaseAutoError as e:
+            raise WireError('WIRE_FETCH', status=e.status,
+                            remote_code=e.code,
+                            retry_after_ms=e.retry_after_ms) from e
         except Exception as e:
             raise WireError('WIRE_FETCH') from e
 

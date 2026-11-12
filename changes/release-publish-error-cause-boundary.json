@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "release公開の失敗時にOIDC・通信エラーの内部詳細がstderrへ出ないよう修正",
+  "summary": "release-publishワークフローのauthorize・verify-register工程でOIDCトークン取得や中央APIとの通信が失敗したとき、これまでは元の例外メッセージが連鎖表示され、OIDCエンドポイントURLや接続先の詳細がログへ残る可能性がありました。失敗は固定のエラーコード（OIDC_UNAVAILABLE・TRANSPORT_ERROR等）のみを表示し、内部例外の内容を出さないようにしました。失敗の切り分けはエラーコードと実行環境側のログで行います。",
+  "upgrade": "追加操作は不要です。失敗時のstderr出力から元例外の詳細行が消えるため、過去のログと見比べる場合はエラーコードを手がかりにしてください。",
+  "details": [
+    "scripts/development/release_publish_api.py: api_request・oidc_token・github_requestの4箇所で、失敗をPublishApiErrorへ変換する際の例外連鎖（from error）を解除しfrom Noneへ変更。__cause__/__context__が残らず、tracebackには固定codeのみが出る。",
+    "tests/meta/test_release_publish.py: provider・transport・OIDC各経路で例外連鎖が遮断されcanary文字列が漏れないことの単体確認と、実CLI subprocessでOIDCエンドポイントURLへ埋め込んだcanaryがstderr/stdoutへ出ないことの回帰を追加。"
+  ],
+  "refs": ["scripts/development/release_publish_api.py", "tests/meta/test_release_publish.py"]
+}

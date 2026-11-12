@@ -70,7 +70,8 @@ from extract_llm_qc import (
     _commit_rejected,
     _current,
     _prior_extract,
-    _prior_identity,
+    _prior_matches,
+    _protected_prior_current,
     _rerender_cards,
     _upgrade_contract,
     _verify_created_artifact_tx,
@@ -482,10 +483,12 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                                    else _current(ledger, r["message_id"], r["content_hash"]))
                 if already_current:
                     return "current"
-            if expected_prior is not None:
-                prior = _prior_extract(ledger.db, r)
-                if prior is None or _prior_identity(prior) != expected_prior:
-                    return _commit_rejected(r, "prior_changed")
+            pinned_prior = r.get("_expected_prior")
+            if ((pinned_prior is not None and expected_prior is not None and pinned_prior != expected_prior)
+                    or not _prior_matches(ledger.db, r, pinned_prior if expected_prior is None else expected_prior)):
+                return _commit_rejected(r, "prior_changed")
+            if not _protected_prior_current(ledger.db, r):
+                return _commit_rejected(r, "prior_changed")
             _, _, current = state
             # The existing checkpoint cleanup is safe only after every adopted
             # repaired leaf has been copied into the protected final artifact.
@@ -568,7 +571,9 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     with _checkpoint_write(ledger.db, replay=replay):
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
-        if not _source_writable(ledger.db, r):
+        if (not _source_writable(ledger.db, r)
+                or not _prior_matches(ledger.db, r, r.get("_expected_prior"))
+                or not _protected_prior_current(ledger.db, r)):
             return False
         if (replay and lease is None) or (lease is not None and not _owns_current_source(ledger, r, lease)):
             return False
@@ -621,6 +626,9 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 meta["split_size"] = split_size
                 meta["checkpoint_provider_contract"] = r.get("_provider_contract")
                 meta.update(_frame_meta(r))
+            prior_ref = r.get("_protected_prior_ref")
+            if isinstance(prior_ref, dict):
+                meta["protected_prior_ref"] = prior_ref
             evidence = _leaf_evidence(value)
             quality_status = value.get("_quality_status")
             quality_origin = getattr(value, "quality_origin", None)

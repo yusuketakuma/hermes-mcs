@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "保護対象の旧抽出参照をproof v2へ埋め込み、採用まで同一性を照合",
+  "summary": "保護属性を持つ旧抽出を修復・再利用する経路で、固定した保護prior参照が推論受付・チャンク永続化・原子コミット・proof埋め込みの各時点で現在の原文束縛へ再解決できることを確認するようにしました。参照が解決できない場合はprior_changed/extract_proof_prior_missingで拒否し、leaf metaへprotected_prior_refを引き継ぎます。proof形式はprotected_priorを含む場合にversion 2となり、recordは厳密なPROTECTED_PRIOR_FIELDS集合と参照再計算で検証します。",
+  "upgrade": "追加操作は不要です。保護priorを持つ修復対象で原文側の参照が変化していた場合、従来は採用され得たものがprior_changedで拒否され、単回修復の受付条件へ戻ります。",
+  "details": [
+    "mcs/extract/llm/extract_llm_qc.py: _protected_prior_currentを追加し、固定参照がlive sourceで解決できるかを判定。",
+    "mcs/extract/llm/extract_llm_context.py/extract_llm_runner.py/extract_llm_store.py: 参照現在性をmedication参照・run_pending選定・_persist_chunks・_commit_extraction_atomicへ配線。コミット時はprior_changedで拒否。",
+    "mcs/extract/llm/extract_llm_proofs.py: proofへprotected_priorレコードを埋め込みversion 2化。record集合・artifact_kind・project/message一致・参照再計算を検証し、leaf replayでprotected_prior_ref不一致を拒否。",
+    "mcs/extract/llm/extract_llm_provider.py: leaf metaへprotected_prior_refを伝播。",
+    "tests/extract/llm/test_stale_context_commit_loop.py: 参照消失・改変時の拒否とproof v2往復の回帰を追加。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_qc.py",
+    "mcs/extract/llm/extract_llm_proofs.py",
+    "mcs/extract/llm/extract_llm_context.py",
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "mcs/extract/llm/extract_llm_provider.py",
+    "tests/extract/llm/test_stale_context_commit_loop.py"
+  ]
+}

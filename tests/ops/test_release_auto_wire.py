@@ -221,6 +221,59 @@ def test_verify_retains_offer_and_wraps_failures(monkeypatch):
     assert e.value.code == 'WIRE_VERIFY'
 
 
+def test_signed_send_preserves_transport_error_detail():
+    """ReleaseAutoErrorのstatus/code/retry_after_msをWireErrorへ退避し、
+    retry分類に必要な中央拒否詳細を失わない。"""
+    from adapters.sdc.release_auto_transport import ReleaseAutoError
+
+    def responder(path, raw, headers):
+        raise ReleaseAutoError(409, 'OFFER_EXPIRED', 5000)
+
+    wire = make_wire(FakeTransport(responder))
+    with pytest.raises(WireError) as e:
+        wire.signed_send(STATUS_PATH, req_bytes({'a': 1}))
+    err = e.value
+    assert err.code == 'WIRE_SEND'
+    assert err.status == 409
+    assert err.remote_code == 'OFFER_EXPIRED'
+    assert err.retry_after_ms == 5000
+    assert isinstance(err.__cause__, ReleaseAutoError)
+
+
+def test_signed_send_plain_failure_has_no_remote_detail():
+    def responder(path, raw, headers):
+        raise RuntimeError('net')
+
+    wire = make_wire(FakeTransport(responder))
+    with pytest.raises(WireError) as e:
+        wire.signed_send(STATUS_PATH, req_bytes({'a': 1}))
+    assert e.value.code == 'WIRE_SEND'
+    assert e.value.status is None
+    assert e.value.remote_code is None
+    assert e.value.retry_after_ms is None
+
+
+def test_fetch_artifact_preserves_transport_error_detail():
+    from adapters.sdc.release_auto_transport import ReleaseAutoError
+
+    transport = FakeTransport()
+
+    def failing(*a, **k):
+        raise ReleaseAutoError(0, 'NETWORK_UNAVAILABLE')
+
+    transport.fetch_artifact = failing
+    wire = make_wire(transport)
+    with pytest.raises(WireError) as e:
+        wire.fetch_artifact(req_bytes({'release_id': 'r'}),
+                            expected_sha256='f' * 64, expected_size=10,
+                            sink=io.BytesIO())
+    err = e.value
+    assert err.code == 'WIRE_FETCH'
+    assert err.status == 0
+    assert err.remote_code == 'NETWORK_UNAVAILABLE'
+    assert err.retry_after_ms == 0
+
+
 def test_fetch_artifact_delegates_with_bounds():
     transport = FakeTransport(artifact_result={'sha256': 'f' * 64, 'size': 10})
     wire = make_wire(transport)

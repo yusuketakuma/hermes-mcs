@@ -116,6 +116,8 @@ def _leaf_record(meta, r, evidence, content):
             "chunk_size": meta["chunk_size"], "plan_version": meta["plan_version"],
             "extract_version": EXTRACT_VERSION, "inference_version": _INFERENCE_VERSION,
             "model": meta["actual_model"], "provider_contract": r.get("_provider_contract"),
+            **({"protected_prior_ref": meta["protected_prior_ref"]}
+               if "protected_prior_ref" in meta else {}),
             **({"quality_lease": meta["quality_lease"]} if "quality_lease" in meta else {})}
 
 

@@ -4,6 +4,8 @@ import extract_llm_context
 import extract_llm_errors
 import extract_llm_prepare
 import extract_llm_progress
+import extract_llm_proofs
+import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
 import extract_llm_selection
@@ -82,7 +84,7 @@ def test_pending_checkpoint_never_reenters_commit_with_a_stale_reference(checkpo
 @pytest.mark.parametrize("boundary,reason", [
     ("transaction", "transaction"), ("owner", "source_or_owner"),
     ("conflict", "checkpoint"), ("missing_checkpoint", "checkpoint"),
-    ("layout", "checkpoint"), ("prior", "prior_changed"),
+    ("layout", "checkpoint"), ("prior", "prior_changed"), ("pinned_prior", "prior_changed"),
     ("completeness", "completeness_coverage"), ("context", "context"),
     ("reference", "reference"), ("medication", "medication"),
 ])
@@ -101,6 +103,8 @@ def test_commit_rejection_retains_only_fixed_diagnostic_and_preserves_rows(check
         row["_checkpoint_layout"] = ("synthetic-different-layout",)
     elif boundary == "prior":
         prior = ()
+    elif boundary == "pinned_prior":
+        row["_expected_prior"] = ()
     elif boundary == "completeness":
         integrity = {"completeness_chunks": 1, "completeness": {
             "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 999}}}
@@ -139,3 +143,110 @@ def test_unknown_commit_diagnostic_never_retains_arbitrary_data():
     row = {}
     assert worker._commit_rejected(row, "synthetic-private-detail /synthetic/path") == "rejected"
     assert row == {"_commit_reject_reason": "commit_rejected"}
+
+
+@pytest.mark.parametrize("change", ["content", "meta", "model", "new_artifact"])
+def test_changed_prior_blocks_dispatch_and_checkpoint_without_consuming_evidence(checkpointed, change):
+    import time
+    import extract_llm_qc
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    ledger, row, frame, _attempt, lease, value, _antecedent = checkpointed
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+            "source_binding": row["_source_binding"], "extract_version": worker.EXTRACT_VERSION - 1}
+    aid = ledger.artifact_add(worker.KIND, json.dumps(value), project_id=row["project_id"],
+                              message_id=row["message_id"], model="synthetic-model", meta=meta)
+    prior = ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
+    row["_expected_prior"] = extract_llm_qc._prior_identity(prior)
+    assert extract_llm_context._extraction_dispatch_current(ledger, row, lease, time.monotonic() + 60)
+    if change == "new_artifact":
+        ledger.artifact_add(worker.KIND, prior["content"], project_id=row["project_id"],
+                            message_id=row["message_id"], model=prior["model"], meta=meta)
+    else:
+        changed = (json.dumps({"summary": "別の合成結果"}) if change == "content" else
+                   json.dumps({**meta, "synthetic_revision": 2}) if change == "meta" else "synthetic-new-model")
+        with ledger.db:
+            ledger.db.execute(f"UPDATE artifacts SET {change}=? WHERE artifact_id=?", (changed, aid))
+    before = [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    assert not extract_llm_context._extraction_dispatch_current(ledger, row, lease, time.monotonic() + 60)
+    assert not worker._persist_chunks(ledger, row, {0: value}, frame["text"],
+        chunk_size=row["_chunk_size"], lease=lease, guard=row["_checkpoint_guard"])
+    assert [tuple(saved) for saved in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    assert not ledger.db.in_transaction
+
+
+def _pin_synthetic_prior(ledger, row):
+    prior_content = {"meds": [{"name": "薬A", "subject": "family", "negated": True,
+                               "evidence": "残薬"}]}
+    meta = {"hash": row["content_hash"], "source_binding": row["_source_binding"],
+            "extract_version": worker.EXTRACT_VERSION - 1}
+    aid = ledger.artifact_add(worker.KIND, json.dumps(prior_content, ensure_ascii=False),
+        project_id=row["project_id"], message_id=row["message_id"], meta=meta)
+    prior = dict(ledger.db.execute(
+        "SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+    row["_protected_prior"] = prior
+    row["_expected_prior"] = extract_llm_qc._prior_identity(prior)
+    row["_protected_prior_ref"] = extract_llm_qc._protected_prior_reference(
+        prior, row["_source_binding"])
+    return aid
+
+
+def test_protected_prior_reference_rides_new_checkpoint_proof(checkpointed):
+    ledger, row, frame, _attempt, lease, value, _antecedent = checkpointed
+    metas = [json.loads(saved[0]) for saved in ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=?",
+        (row["message_id"],))]
+    assert metas and all("protected_prior_ref" not in meta for meta in metas)
+    _pin_synthetic_prior(ledger, row)
+    ref = row["_protected_prior_ref"]
+    leaf = worker._EvidenceLeaf(dict(value), worker._provider_evidence(["local"], True))
+    assert worker._persist_chunks(ledger, row, {0: leaf}, frame["text"],
+        chunk_size=row["_chunk_size"], lease=lease, guard=row["_checkpoint_guard"])
+    metas = [json.loads(saved[0]) for saved in ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? ORDER BY artifact_id",
+        (row["message_id"],))]
+    assert "protected_prior_ref" not in metas[0]
+    assert metas[-1]["protected_prior_ref"] == ref
+    assert metas[-1]["provider_leaf"]["protected_prior_ref"] == ref
+    _splits, saved = worker._saved_chunk_state(ledger.db, row, frame["text"],
+                                             chunk_size=row["_chunk_size"])
+    assert 0 in saved
+
+
+def test_protected_prior_reference_flows_into_inline_proof_v2(checkpointed):
+    ledger, row, frame, _attempt, lease, value, _antecedent = checkpointed
+    aid = _pin_synthetic_prior(ledger, row)
+    leaf = worker._EvidenceLeaf(dict(value), worker._provider_evidence(["local"], True))
+    assert worker._persist_chunks(ledger, row, {0: leaf}, frame["text"],
+        chunk_size=row["_chunk_size"], lease=lease, guard=row["_checkpoint_guard"])
+    proof = extract_llm_proofs._extract_inline_proof(ledger.db, row, frame["text"], (0,))
+    assert proof["version"] == 2
+    assert set(proof["protected_prior"]) == {
+        "artifact_id", "kind", "project_id", "message_id", "content", "model", "meta"}
+    assert proof["protected_prior"]["artifact_id"] == aid
+    _splits, saved = worker._saved_chunk_state(ledger.db, row, frame["text"],
+                                             chunk_size=row["_chunk_size"])
+    leaf_doc = {key: item for key, item in saved[0].items()
+                if key not in ("_quality_result", "_provider_leaf")}
+    document = {**leaf_doc, "_model": extract_llm_proofs._actual_model(row)}
+    assert extract_llm_proofs._verify_inline_extract_proof(
+        ledger.db, row, frame["text"], document, proof)
+    with ledger.db:
+        ledger.db.execute("DELETE FROM artifacts WHERE artifact_id=?", (aid,))
+    assert extract_llm_proofs._verify_inline_extract_proof(
+        ledger.db, row, frame["text"], document, proof)
+    tampered = json.loads(json.dumps(proof))
+    tampered["protected_prior"]["artifact_id"] = aid + 1000
+    assert not extract_llm_proofs._verify_inline_extract_proof(
+        ledger.db, row, frame["text"], document, tampered)
+    tampered = json.loads(json.dumps(proof))
+    for proof_row in tampered["rows"]:
+        row_meta = json.loads(proof_row["meta"])
+        row_meta["protected_prior_ref"]["artifact_id"] = aid + 1000
+        proof_row["meta"] = json.dumps(row_meta, ensure_ascii=False)
+    assert not extract_llm_proofs._verify_inline_extract_proof(
+        ledger.db, row, frame["text"], document, tampered)
+    tampered = json.loads(json.dumps(proof))
+    tampered["version"] = 3
+    assert not extract_llm_proofs._verify_inline_extract_proof(
+        ledger.db, row, frame["text"], document, tampered)

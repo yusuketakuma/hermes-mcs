@@ -47,6 +47,8 @@ from extract_llm_provider import (
     _leaf_record,
 )
 from extract_llm_qc import (
+    _PROTECTED_PRIOR_FIELDS,
+    _protected_prior_reference,
     _qc_feedback,
     _repair_qc_snapshot_feedback,
     _snapshot_repair_qc,
@@ -235,6 +237,8 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                 or meta.get("ver") != EXTRACT_VERSION or not inference.is_current(meta, target=_INFERENCE_VERSION)
                 or type(meta.get("quality_lease")) not in (int, float)
                 or not math.isfinite(meta["quality_lease"]) or meta["quality_lease"] <= 0):
+            return False
+        if meta.get("protected_prior_ref") != r.get("_protected_prior_ref"):
             return False
         old_proof = meta.get("provider_leaf")
         old_evidence = _leaf_evidence(_EvidenceLeaf({}, old_proof))
@@ -559,9 +563,20 @@ def _extract_inline_proof(db, r, context, keys):
             if not isinstance(previous, dict) or type(previous.get("__quality_origin_ref_v1")) is not int:
                 raise ValueError("extract_proof_origin_missing")
             include(previous["__quality_origin_ref_v1"])
-    return {"version": 1, "chunk_size": r["_chunk_size"], "qc": _snapshot_repair_qc(db, r),
-            "vital_policy": r.get("_proof_vital_policy"),
-            "rows": [rows[key] for key in sorted(rows)]}
+    proof = {"version": 1, "chunk_size": r["_chunk_size"], "qc": _snapshot_repair_qc(db, r),
+             "vital_policy": r.get("_proof_vital_policy"),
+             "rows": [rows[key] for key in sorted(rows)]}
+    ref = r.get("_protected_prior_ref")
+    prior = r.get("_protected_prior")
+    if ref is not None or prior is not None:
+        record = ({name: prior.get(name) for name in _PROTECTED_PRIOR_FIELDS}
+                  if isinstance(prior, dict) else None)
+        if (record is None or not isinstance(ref, dict)
+                or _protected_prior_reference(record, r.get("_source_binding")) != ref):
+            raise ValueError("extract_proof_prior_missing")
+        proof["version"] = 2
+        proof["protected_prior"] = record
+    return proof
 
 
 def _quality_record_consistent(record, expected):
@@ -709,15 +724,52 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
         return reject("completeness_validation")
 
 
+def _proof_prior_record_valid(record, r):
+    """A v2 proof's embedded prior record must reproduce a strict reference."""
+    if (not isinstance(record, dict) or set(record) != set(_PROTECTED_PRIOR_FIELDS)
+            or type(record.get("artifact_id")) is not int or record["artifact_id"] <= 0
+            or record.get("kind") != KIND or record.get("project_id") != r["project_id"]
+            or record.get("message_id") != r["message_id"]):
+        return False
+    meta = mcs_util.loads_dict(record.get("meta"))
+    content = mcs_util.loads_dict(record.get("content"))
+    body = r.get("body_text")
+    try:
+        digest = mcs_util.payload_hash(record)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return False
+    return (mcs_util.valid_hash(digest)
+            and isinstance(meta, dict) and meta.get("hash") == r.get("content_hash")
+            and isinstance(content, dict)
+            and isinstance(body, str)
+            and bool(extract_quality.protected_assertions(content, body)))
+
+
 def _verify_inline_extract_proof(db, r, context, document, proof):
     """Replay protected leaves and compare their deterministic final clinical result."""
     try:
-        if (not isinstance(proof, dict) or set(proof) != {"version", "chunk_size", "vital_policy", "rows", "qc"}
-                or proof["version"] != 1 or type(proof["chunk_size"]) is not int
+        if not isinstance(proof, dict):
+            return False
+        version = proof.get("version")
+        expected_keys = {"version", "chunk_size", "vital_policy", "rows", "qc"}
+        if version == 2:
+            expected_keys = expected_keys | {"protected_prior"}
+        if (set(proof) != expected_keys or version not in (1, 2)
+                or type(proof["chunk_size"]) is not int
                 or not 1 <= proof["chunk_size"] <= _CHUNK_SIZE or not isinstance(proof["rows"], list)
                 or not 1 <= len(proof["rows"]) <= _PROGRESS_MAX_NODES * 3):
             return False
         r = dict(r)
+        if version == 2:
+            record = proof["protected_prior"]
+            if not _proof_prior_record_valid(record, r):
+                return False
+            binding = r.get("_source_binding")
+            if mcs_util.valid_hash(binding):
+                r["_protected_prior_ref"] = {
+                    "version": 1, "artifact_id": record["artifact_id"],
+                    "identity_sha256": mcs_util.payload_hash(record),
+                    "source_binding": binding}
         if proof["qc"] is not None:
             qc = _repair_qc_snapshot_feedback(r, proof["qc"])
             if qc is None or r.get("qc_src", qc["src"]) != qc["src"]:
@@ -742,6 +794,9 @@ def _verify_inline_extract_proof(db, r, context, document, proof):
                     or meta.get("ver") != EXTRACT_VERSION or not inference.is_current(meta, target=_INFERENCE_VERSION)
                     or meta.get("chunk_size") != proof["chunk_size"]
                     or meta.get("context") != _chunk_context(r, context, checkpoint=True)):
+                return False
+            if (version == 2 and meta.get("protected_prior_ref") is not None
+                    and meta["protected_prior_ref"] != r.get("_protected_prior_ref")):
                 return False
             latest[key] = row
         # Only selected (newest per key) records participate in the layout;
