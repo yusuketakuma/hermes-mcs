@@ -695,12 +695,15 @@ def _context_pass_observation(result):
 
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
-    holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer."""
+    holds the selection lock (usually scanning, not necessarily doing work);
+    a scan that found nothing startable rarely finds work seconds later."""
     if result.get("done"):
         return 1
-    if result.get("reason") == "patient_context_selection_busy":
+    reason = result.get("reason")
+    if reason == "patient_context_selection_busy":
         return 20
+    if reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
+        return 60
     return 5
 
 
