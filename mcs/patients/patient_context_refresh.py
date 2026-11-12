@@ -870,11 +870,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     meta['cloud_receipts'] = [{'artifact_id': aid, 'witness': proof['witness']}
                                               for aid, proof in sorted(evidence.items())]
                 return value
-            except cloud_client.CloudNotSent as error:
+            except cloud_client.CloudNotSent:
                 generation_contacted = generation_contacted or provider.possibly_sent
                 if getattr(provider, 'unresolved', provider.possibly_sent):
                     generation_uncertain = True
-                    raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from error
                 provider = None
             except cloud_inference.CloudObservationIncomplete as error:
                 raise patient_context_refresh_state.Deferred('patient_context_readiness_unverified') from error
