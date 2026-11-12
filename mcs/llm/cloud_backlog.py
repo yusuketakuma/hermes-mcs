@@ -649,7 +649,7 @@ _SOURCE_CHANGED_CODES = frozenset({
 })
 _NO_DUE_LANE_KEYS = tuple(f"wait_no_due_{lane}_{code}" for lane, codes in (
     ("A", ("not_needed", "local_not_ready", "backoff", "source_incomplete")),
-    ("B", ("none_incomplete", "backoff")), ("C", ("none_unaudited", "backoff"))) for code in codes)
+    ("B", ("none_incomplete", "backoff", "cloud_hold")), ("C", ("none_unaudited", "backoff"))) for code in codes)
 
 
 def _bounded_pass_code(value):
