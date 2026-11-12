@@ -1,15 +1,20 @@
 """Stored protected assertions are carried into a lost-shape candidate, never merged over a disagreement."""
 import copy
 import json
+import os
 
 import pytest
 
 import extract_llm
 import extract_llm_engine
+import extract_llm_errors
+import extract_llm_runner
 import extract_quality as quality
 import extract_validation
 import inference_dependency_loss
-from extract_testkit import _hash, _ledger, _message
+from extract_testkit import _hash, _ledger, _message, _qc_artifact
+from test_anthropic_runtime import routed as routed
+from test_cloud_response_recovery import legacy_cloud_routes
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from extract_llm_prompts import _hint_coverage
 from extract_llm_proofs import _quality_record_consistent
@@ -198,5 +203,142 @@ def test_hold_receipt_records_loss_classes_and_still_matches_the_hold(tmp_path):
         assert sum(receipt["lost_class"]["symptoms"].values()) == receipt["lost"]["symptoms"]
         # The current-contract hold still matches, so the source is not re-selected.
         assert not db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred(db.db)).fetchone()
+    finally:
+        db.close()
+
+
+# run_pending wiring: the runner passes the stored prior to plain local re-extractions only.
+SHORT = {"summary": "合成", "symptoms": [{"text": "発熱", "negated": True, "evidence": QUOTE}]}
+FLIPPED = {"summary": "合成", "symptoms": [{**PRIOR_FEVER, "negated": False}]}
+
+
+def _seed_prior(db, *, version=None):
+    db.save_messages([_message(body=BODY)])
+    binding = inference_dependency_loss.source_binding(db.db, 1, 1)
+    return db.artifact_add(
+        "extract_llm", json.dumps({"summary": "合成の旧抽出", "symptoms": [PRIOR_FEVER]}, ensure_ascii=False),
+        project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db), "source_binding": binding,
+              "extract_version": extract_llm.EXTRACT_VERSION - 1 if version is None else version})
+
+
+def _local(monkeypatch, document, on_call=None):
+    def model(prompt, **kwargs):
+        if on_call is not None:
+            on_call()
+        return copy.deepcopy(document)
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", model)
+    monkeypatch.setattr(extract_llm_runner, "_prefilter_enabled", lambda: False)
+
+
+def _spy(monkeypatch, *, result=None):
+    """Record the runner's llm_extract kwargs; delegate unless a fixed result is given."""
+    seen = []
+    original = extract_llm_runner.llm_extract
+
+    def spy(*args, **kwargs):
+        seen.append(dict(kwargs))
+        return original(*args, **kwargs) if result is None else copy.deepcopy(result)
+    monkeypatch.setattr(extract_llm_runner, "llm_extract", spy)
+    return seen
+
+
+def _current_keeps_prior_fever(db):
+    [current] = db.artifacts("extract_llm", message_id=1)
+    content = json.loads(current["content"])
+    assert json.loads(current["meta"])["extract_version"] == extract_llm.EXTRACT_VERSION
+    assert any(all(item.get(k) == v for k, v in PRIOR_FEVER.items()) for item in content.get("symptoms") or [])
+    return quality.protected_lost({"symptoms": [PRIOR_FEVER]}, content, BODY) == {}
+
+
+def test_run_pending_carries_the_stored_prior_into_a_short_local_candidate(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        _seed_prior(db)
+        _local(monkeypatch, SHORT)
+        seen = _spy(monkeypatch)
+        res = extract_llm.run_pending(db, limit=1, budget_s=60)
+        assert seen and "protected_prior" in seen[0]
+        assert (res["done"], res.get("held_prior", 0), res["deferred"]) == (1, 0, 0)
+        assert res["llm_calls"]["protected_carried"] >= 1
+        assert _current_keeps_prior_fever(db)
+        assert not db.artifacts(extract_llm.UPGRADE_KIND)
+    finally:
+        db.close()
+
+
+def test_run_pending_keeps_a_disagreeing_local_candidate_held(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        aid = _seed_prior(db)
+        original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+        _local(monkeypatch, FLIPPED)
+        res = extract_llm.run_pending(db, limit=1, budget_s=60)
+        assert (res["done"], res["held_prior"]) == (0, 1)
+        assert res["llm_calls"]["protected_conflict"] >= 1
+        assert dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()) == original
+        [receipt] = db.artifacts(extract_llm.UPGRADE_KIND)
+        assert json.loads(receipt["content"])["lost_class"]["symptoms"].get("conflict", 0) >= 1
+        assert extract_llm.run_pending(db, limit=1, budget_s=60)["selected"] == 0
+    finally:
+        db.close()
+
+
+def test_cloud_runs_never_receive_the_stored_prior(routed, monkeypatch):
+    led, _cfg, calls, reserved, _results = routed
+    _seed_prior(led)
+    seen = _spy(monkeypatch)
+    with legacy_cloud_routes():
+        extract_llm.run_pending(led, limit=1, budget_s=180)
+    assert calls and reserved and seen
+    assert all(kwargs.get("provider") is not None and "protected_prior" not in kwargs for kwargs in seen)
+
+
+@pytest.mark.parametrize("route", ["qc", "human"])
+def test_qc_and_human_corrections_never_receive_the_stored_prior(tmp_path, monkeypatch, route):
+    from adapters.common import envelopes
+    import mcs_requests
+    db = _ledger(tmp_path)
+    try:
+        aid = _seed_prior(db, version=extract_llm.EXTRACT_VERSION if route == "qc" else None)
+        if route == "qc":
+            _qc_artifact(db, 1, aid, _hash(db), {"qc": "done", "items": [{
+                "section": "symptoms", "verdict": "NO_MATCH", "item": PRIOR_FEVER}]})
+        else:
+            request = envelopes.extract_feedback("synthetic-operator", {"project_id": 1, "extract_ref": {
+                "message_id": 1, "artifact_id": aid}}, "symptoms", "合成の確認結果")
+            assert mcs_requests.apply_command(db, request)["outcome"] == "applied"
+        monkeypatch.setattr(extract_llm_runner, "_prefilter_enabled", lambda: False)
+        seen = _spy(monkeypatch, result={"summary": "合成の訂正候補"})
+        extract_llm.run_pending(db, limit=1, budget_s=60)
+        assert len(seen) == 1 and "protected_prior" not in seen[0]
+        assert (seen[0]["feedback"] is not None) is (route == "qc")
+    finally:
+        db.close()
+
+
+def test_a_carried_save_wait_keeps_the_carried_prior(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        _seed_prior(db)
+        blocked = [False]
+
+        def acquire():
+            return None if blocked[0] else os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600)
+        monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
+        monkeypatch.setattr(extract_llm_errors, "acquire_run_lock", acquire)
+        monkeypatch.setattr(extract_llm.time, "sleep", lambda seconds: None)
+        _local(monkeypatch, SHORT, on_call=lambda: blocked.__setitem__(0, True))
+        first = extract_llm.run_pending(db, limit=1, budget_s=60, per_write_lock=True,
+                                        write_wait_s=1, carry=[])
+        assert len(first["carry"]) == 1 and first["lock_lost"] == 1 and first["done"] == 0
+        assert first["llm_calls"]["protected_carried"] >= 1
+        [kept] = db.artifacts("extract_llm", message_id=1)
+        assert json.loads(kept["meta"])["extract_version"] == extract_llm.EXTRACT_VERSION - 1
+        blocked[0] = False
+        resumed = extract_llm.run_pending(db, limit=1, budget_s=60, per_write_lock=True,
+                                          write_wait_s=1, carry=first["carry"])
+        assert resumed["done"] == 1 and resumed["carry"] == []
+        assert _current_keeps_prior_fever(db)
     finally:
         db.close()
