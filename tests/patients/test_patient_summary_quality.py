@@ -270,6 +270,30 @@ def test_quality_answer_checkpoint_is_claimed_idempotent_and_source_fenced(tmp_p
         led.close()
 
 
+def test_quality_acquire_retries_briefly_then_gives_up(monkeypatch):
+    tries, sleeps = [], []
+    def contended():
+        tries.append(1)
+        return None if len(tries) < 3 else os.open(os.devnull, os.O_RDONLY)
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', contended)
+    monkeypatch.setattr(patient_context_refresh_state.time, 'sleep', lambda s: sleeps.append(s), raising=False)
+    fd = patient_context_quality_receipts._acquire(current=lambda: True)
+    assert fd is not None and len(tries) == 3 and sleeps == [1, 1]
+    os.close(fd)
+
+    monkeypatch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
+    sleeps.clear()
+    assert patient_context_quality_receipts._acquire(current=lambda: True) is None
+    assert len(sleeps) == patient_context_quality_receipts._QUALITY_LOCK_WAIT_S
+
+    checks = []
+    def dead():
+        checks.append(1)
+        return False
+    assert patient_context_quality_receipts._acquire(current=dead) is None
+    assert checks == [1] and len(sleeps) == patient_context_quality_receipts._QUALITY_LOCK_WAIT_S + 10
+
+
 def test_quality_pass_requires_every_source_bound_question(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
     try:
@@ -797,6 +821,7 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
         def denied(*args, **kwargs):
             with monkeypatch.context() as patch:
                 patch.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
+                patch.setattr(patient_context_refresh_state.time, 'sleep', lambda *_: None, raising=False)
                 return original(*args, **kwargs)
         with monkeypatch.context() as patch:
             patch.setattr(patient_context_quality_receipts, '_quality_store_answers', denied)

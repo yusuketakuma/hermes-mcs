@@ -51,13 +51,37 @@ def _profiled_summary_repair_exists(db, pid, input_key):
     return False
 
 
+_QUALITY_LOCK_WAIT_S = 60
+_QUALITY_FENCE_EVERY_S = 10
+
+
+def _acquire(current=None, deadline=None):
+    """Wait briefly for the run lock: long ticks hold it for minutes, so one
+    non-blocking try almost always loses. Ownership and freshness are
+    re-checked inside the writer transaction, so a stale wait still fails
+    closed."""
+    fd = patient_context_refresh_state.acquire_run_lock()
+    waited = 0
+    while fd is None and waited < _QUALITY_LOCK_WAIT_S:
+        if (deadline is not None
+                and patient_context_refresh_state.time.monotonic()
+                + patient_context_refresh_state.COMMIT_MARGIN >= deadline):
+            return None
+        if waited and waited % _QUALITY_FENCE_EVERY_S == 0 and current is not None and not current():
+            return None
+        patient_context_refresh_state.time.sleep(1)
+        waited += 1
+        fd = patient_context_refresh_state.acquire_run_lock()
+    return fd
+
+
 def _quality_claim(ledger, pid, input_key, deadline, current):
     """Claim one patient's quality work; inputs are checked inside the writer transaction."""
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire(current=current, deadline=deadline)
     if fd is None:
         return None
     try:
@@ -129,7 +153,7 @@ def _quality_integrity(db, pid):
 def _quality_release(ledger, pid, input_key, claim):
     if ledger.db.in_transaction:
         return
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire()
     if fd is None:
         return
     try:
@@ -240,7 +264,7 @@ def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, thres
         ledger.db.rollback()
     if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
         raise ValueError("patient_summary_quality_source_changed")
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire(current=current)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
@@ -302,7 +326,7 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
         raise ValueError("patient_summary_quality_answers_invalid")
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire(current=current)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
@@ -442,7 +466,7 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
         ledger.db.rollback()
     if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
         raise ValueError("patient_summary_quality_source_changed")
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire(current=current)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:
@@ -534,7 +558,7 @@ def _quality_record_failure(ledger, pid, identity, claim, page_key, failure_clas
         raise RuntimeError("patient_summary_transaction_active")
     if failure_class not in ("retry", "failed") or not current():
         raise ValueError("patient_summary_quality_source_changed")
-    fd = patient_context_refresh_state.acquire_run_lock()
+    fd = _acquire(current=current)
     if fd is None:
         raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
     try:

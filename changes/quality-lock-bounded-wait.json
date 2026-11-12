@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "患者コンテキスト品質監査の書込みロック待機を追加",
+  "summary": "患者コンテキストの品質監査（Jev監査）は、監査クレーム・回答保存・合格/失敗記録・解放の各永続化で実行ロックを1回だけ試行しており、長時間の収集実行がロックを保持し続ける間はほぼ常に取得に失敗して監査全体が延期され続けていました。各書込みで最大60秒・1秒間隔の期限付き待機を行い、待機中も所有権と鮮度のフェンスを定期的に再確認します。ロックが解放されない場合や期限・フェンスが切れた場合は従来どおり延期として扱い、失敗を成功へ変えることはありません。",
+  "upgrade": "追加操作は不要です。品質ゲートの判定条件・閾値・公開条件は変更していません。ロック取得の待機方法のみの変更です。",
+  "details": [
+    "mcs/patients/patient_context_quality_receipts.py に _acquire を追加し、_quality_claim・_quality_release・_quality_mark_skipped・_quality_store_answers・_quality_mark_pass・_quality_record_failure の6箇所の単発取得を期限付き待機へ置き換えました。",
+    "mcs/patients/patient_context_quality_controller.py の reserve_locked（Jev予約）と seal_not_sent（未送信確定）も同じ待機を使います。",
+    "待機は最大60秒で、_quality_claim と reserve_locked・seal_not_sent では処理期限（deadline）を毎回確認し、その他では10秒ごとに current() フェンスを再評価して早期に打ち切ります。",
+    "書込みトランザクション内での所有権（_quality_owns）と current() の再検査は従来どおり行うため、古い所有者や期限切れの書込みは引き続き拒否されます。"
+  ],
+  "refs": ["mcs/patients/patient_context_quality_receipts.py", "mcs/patients/patient_context_quality_controller.py", "tests/patients/test_patient_summary_quality.py"]
+}

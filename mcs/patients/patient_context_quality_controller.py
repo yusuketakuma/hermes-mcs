@@ -745,7 +745,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         def reserve_locked(body, timeout):
             if not current():
                 raise semantic_runtime.RuntimeStale("jev_reserve")
-            fd = patient_context_refresh_state.acquire_run_lock()
+            fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
             if fd is None:
                 raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
             try:
@@ -764,7 +764,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             return "deferred", None
         def seal_not_sent(unsent, reason):
             # committed, but its POST never started: settle it so the page can be asked again
-            fd = patient_context_refresh_state.acquire_run_lock()
+            fd = patient_context_quality_receipts._acquire(current=current, deadline=deadline)
             if fd is None:
                 return
             try:
