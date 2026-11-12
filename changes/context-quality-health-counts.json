@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "患者コンテキスト品質状態の件数をヘルス観測へ追加",
+  "summary": "患者コンテキストのレーン別結果と公開件数は10分毎のヘルス収集（patient_context_health → health.json）で観測されていましたが、原典品質監査（lane C）の状態別件数は含まれていませんでした。held・failed・unavailable などの品質状態が滞留しても件数として見えず、品質パイプラインの停滞をヘルス監視から検知できませんでした。lane_metrics に quality カウントを追加し、現行スキャン artifact の quality_state を状態別（none/pending/deferred/held/failed/unavailable/unknown/budget/disabled/other）に集計して health.json の patient_context 節へ載せるようにしました。unavailable:コード の接尾辞は状態名へ畳み、患者・ソース・本文は一切含まれません。",
+  "upgrade": "追加操作は不要です。適用後、10分毎のヘルス観測の patient_context 節に quality オブジェクト（状態別件数のみ・患者識別情報なし）が含まれます。既存の lanes/published/抽出件数の形式は変わりません。",
+  "details": [
+    "patient_context_refresh_readiness.lane_metrics が、現行バージョンの scan artifact を source_key 毎の最新へ絞り、quality_state を状態別に集計する quality 辞書を返すようにしました。",
+    "quality_state の unavailable:コード 等の接尾辞はコロン前の状態名へ畳み、未知の値は other へ集約します。quality_state 未設定の artifact は none に計上します。",
+    "アーカイブ患者・旧バージョン artifact は既存の lanes 集計と同じ条件で除外されます。",
+    "回帰テストを追加し、状態別集計・source_key 置き換え・archived 除外・接尾辞の畳み込みを検証しました。"
+  ],
+  "refs": ["mcs/patients/patient_context_refresh_readiness.py", "tests/ops/test_patient_context_observation.py"]
+}

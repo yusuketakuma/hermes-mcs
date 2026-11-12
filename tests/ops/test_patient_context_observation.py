@@ -84,7 +84,38 @@ def test_lane_counts_exclude_archived_and_reject_invalid_current_json(tmp_path):
     assert result['published'] == 1
     assert result['lanes']['A']['length_stop'] == 1
     assert result['lanes']['B']['split'] == result['lanes']['B']['repair'] == 1
+    assert result['quality'] == {'none': 1, 'pending': 0, 'deferred': 0, 'held': 0,
+                               'failed': 0, 'unavailable': 0, 'unknown': 0,
+                               'budget': 0, 'disabled': 0, 'other': 0}
     ledger.artifact_add(context.SCAN, '{', project_id=1, meta=meta)
     with pytest.raises(ValueError, match='invalid patient context observation'):
         context.lane_metrics(db)
+    ledger.close()
+
+
+def test_lane_quality_counts_group_scan_states_and_supersede(tmp_path):
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.executemany("INSERT INTO patients(project_id,patient_name,is_archived) VALUES (?,'synthetic',?)",
+                   [(1, 0), (2, 1), (3, 0)])
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    # pid1: held→deferred の置き換えで最新のみ deferred に集計、suffix は state へ畳む
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'held'}),
+                        project_id=1, meta={**meta, 'source_key': 's1'})
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'deferred'}),
+                        project_id=1, meta={**meta, 'source_key': 's1'})
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True,
+                        'quality_state': 'unavailable:patient_summary_quality_source_changed'}),
+                        project_id=1, meta={**meta, 'source_key': 's2'})
+    # pid2 は archived で除外、pid3 は quality_state なしで none
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'quality_state': 'failed'}),
+                        project_id=2, meta={**meta, 'source_key': 's1'})
+    ledger.artifact_add(context.SCAN, json.dumps({'complete': True}),
+                        project_id=3, meta={**meta, 'source_key': 's1'})
+    result = context.lane_metrics(db)
+    assert result['quality']['deferred'] == 1
+    assert result['quality']['unavailable'] == 1
+    assert result['quality']['none'] == 1
+    assert result['quality']['held'] == result['quality']['failed'] == 0
+    assert sum(v for k, v in result['quality'].items() if k != 'other') == 3
     ledger.close()
