@@ -1150,3 +1150,95 @@ def protected_lost(prior, candidate, body):
             if not any(retains_assertion(item, other) for other in new.get(field) or []):
                 lost[field] = lost.get(field, 0) + 1
     return lost
+
+
+# The identifying label of one item per field; other attributes must agree.
+_CARRY_LABEL = {"meds": "name", "symptoms": "text", "labs": "name", "event_records": "kind",
+                "requests": "action", "patient_context": "text"}
+_CARRY_IGNORED = ("evidence", "span", "normalized", "unverified")
+
+
+def _agrees(item, other, label):
+    """Every attribute both items state, besides the label, has the same value."""
+    return all(other[key] == item[key] for key in other
+               if key != label and key in item and key not in _CARRY_IGNORED
+               and not key.startswith("_") and other[key] is not None and item[key] is not None)
+
+
+def _carry_one(field, item, current, body, validate_item, raw=()):
+    """Decide one lost stored assertion against the candidate items of its field.
+
+    ``raw`` holds the provider's own items before validation: a value the
+    validator removed as unsupported still disagrees. Returns (code,
+    revalidated item, candidate items kept beside it); code is "absent" when
+    the revalidated item can be added unchanged."""
+    checked = validate_item(field, item)
+    checked = checked.get(field) if isinstance(checked, dict) else None
+    if not isinstance(checked, list) or len(checked) != 1 or not retains_assertion(item, checked[0]):
+        return "prior_unverifiable", None, None
+    kept_item, label = checked[0], _CARRY_LABEL.get(field)
+    span = locate_quote_span(body, kept_item.get("evidence"))
+    kept = []
+    for other in current:
+        if not isinstance(other, dict):
+            kept.append(other)
+            continue
+        quote = other.get("evidence")
+        other_span = locate_quote_span(body, quote) if isinstance(quote, str) else None
+        overlap = span is not None and other_span is not None and other_span[0] < span[1] and span[0] < other_span[1]
+        if (retains_assertion({key: value for key, value in other.items() if key != "span"}, kept_item)
+                and (overlap or other_span is None)):
+            continue                    # the same assertion in a shorter form or narrower span
+        same = label is not None and other.get(label) == kept_item.get(label)
+        if not same and not overlap:
+            kept.append(other)
+            continue
+        if not same and _agrees(kept_item, other, label):
+            kept.append(other)          # an adjacent assertion sharing the quote
+            continue
+        return "conflict", None, None
+    for other in raw:
+        quote = other.get("evidence") if isinstance(other, dict) else None
+        other_span = locate_quote_span(body, quote) if isinstance(quote, str) else None
+        if isinstance(other, dict) and (
+                (label is not None and other.get(label) == kept_item.get(label))
+                or (span is not None and other_span is not None
+                    and other_span[0] < span[1] and span[0] < other_span[1])) \
+                and not _agrees(kept_item, other, label):
+            return "conflict", None, None
+    return "absent", kept_item, kept
+
+
+def carry_protected(prior, candidate, piece, body, *, validate_item, raw=None):
+    """Add back stored protected assertions a candidate lost, revalidated and unchanged.
+
+    Only quotes inside ``piece`` are considered; ``raw`` is the provider output
+    the candidate was validated from. Returns (merged, counts), or (None,
+    counts) when any lost assertion cannot be revalidated or disagrees with a
+    candidate or raw item; the caller then keeps the candidate as it was."""
+    counts = {}
+    if not isinstance(candidate, dict) or not isinstance(piece, str):
+        return None, counts
+    merged = dict(candidate)
+    carried = {}
+    for field, item in ((field, item) for field, items in protected_assertions(prior, body).items()
+                        for item in items):
+        if locate_quote_span(piece, item["evidence"]) is None:
+            continue                    # another piece's quote, or one across a chunk boundary
+        current = merged.get(field) if isinstance(merged.get(field), list) else []
+        if any(retains_assertion(item, other) for other in current):
+            continue
+        raw_items = raw.get(field) if isinstance(raw, dict) else None
+        code, kept_item, kept = _carry_one(field, item, current, body, validate_item,
+                                           raw_items if isinstance(raw_items, list) else ())
+        if code != "absent":
+            counts[code] = counts.get(code, 0) + 1
+            return None, counts
+        merged[field] = [*kept, kept_item]
+        carried.setdefault(field, []).append(item)
+        counts["carried"] = counts.get("carried", 0) + 1
+    if carried and protected_lost(carried, merged, body):
+        counts["conflict"] = counts.get("conflict", 0) + 1
+        return None, counts
+    return merged, counts
+
