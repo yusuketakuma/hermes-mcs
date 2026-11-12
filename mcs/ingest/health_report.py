@@ -9,7 +9,8 @@ import stat
 import time
 from contextlib import closing, suppress
 
-from health_policy import HEALTH_REL, STATUS_MAX_BYTES, freshness_deadline
+from health_policy import (HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL,
+                           freshness_deadline)
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -482,6 +483,34 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     marks = prev_health().get("stall_marks")
     at = marks.get(key) if isinstance(marks, dict) else None
     return at if finite_number(at) and 0 <= at <= now else now
+
+
+def watcher_health(data_dir: str, cfg, now: float) -> dict:
+    """Is the independent watcher itself still observing?
+
+    Nothing else reads its status file, so a watcher that never starts, hangs
+    or cannot save would leave every later incident unannounced. The bound is
+    the watcher's own staleness rule for this producer (freshness_deadline):
+    six missed 300 s watcher runs by default. A status that was never written
+    or cannot be read is given the same time before it counts as stalled."""
+    deadline = freshness_deadline(cfg if isinstance(cfg, dict) else {})
+    path = os.path.join(data_dir, os.path.basename(WATCH_STATUS_REL))
+    watched = None
+    try:
+        doc = safe_io.read_json_nofollow(path, STATUS_MAX_BYTES)
+        watched = doc.get("watched_at") if isinstance(doc, dict) else None
+        state = "unreadable"
+        if finite_number(watched) and watched <= now + RUN_GRACE_S:
+            state = "ok" if now - watched <= deadline else "stale"
+    except FileNotFoundError:
+        state = "unreadable" if os.path.lexists(path) else "missing"
+    except (OSError, ValueError, RecursionError):
+        state = "unreadable"
+    since = carried_since("health_watch_bad_since", state != "ok", now)
+    block = {"state": state, "deadline_s": deadline, "observed_at": now, "bad_since": since,
+             "watched_at": watched if state in ("ok", "stale") else None,
+             "stalled": state == "stale" or (since is not None and now - since >= deadline)}
+    return block
 
 
 def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
@@ -1160,6 +1189,8 @@ def build_health(db, result: dict, status: str,
     backup_bad = backup["state"] not in ("ok", "disabled")
     import notify_spool
     ocr = attachment_ocr_health(notify_spool.data_root(db), cfg if checked else None, now)
+    watch = watcher_health(notify_spool.data_root(db), cfg if checked else None, now)
+    stall_marks["health_watch_bad_since"] = watch["bad_since"]
     ocr_bad = ocr["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
     disk_low = attachment_disk_low(free_mb) or skipped == "disk_low"
@@ -1247,6 +1278,9 @@ def build_health(db, result: dict, status: str,
             db, cfg if checked else None, now, source, seconds=remaining()),
         "stall_marks": stall_marks,
         "stall_check": stall_check,
+        # reported beside the verdict, not in it: a watcher that reads this
+        # file again has by that act disproved its own stall
+        "health_watch": watch,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }

@@ -137,6 +137,30 @@ _TRANSIENT_PROVIDER_READ = frozenset({
     "provider_file_changed", "provider_file_missing", "provider_snapshot_changed"})
 
 
+def _paid_routes_closed(common: dict) -> dict:
+    """Common settings with every provider-owned paid route closed."""
+    cfg = dict(common)
+    cloud = cfg.get("cloud_llm", {})
+    semantic = cfg.get("semantic", {})
+    if isinstance(cloud, dict):
+        cfg["cloud_llm"] = {**cloud, "mode": "off"}
+    if isinstance(semantic, dict):
+        cfg["semantic"] = {**semantic, "daily_request_budget": 0}
+    return cfg
+
+
+def alert_only_config(path: str = CONF_PATH) -> dict:
+    """Unverified common settings for monitoring alerts while provider settings are unreadable.
+
+    The watcher must still name the fault and reach the system channel; paid
+    routes stay closed and callers must not act on this view otherwise."""
+    try:
+        raw = parse_config(_read_local(path, CONFIG_MAX_BYTES))
+    except (OSError, ValueError, TypeError, RecursionError):
+        return {}
+    return _paid_routes_closed(raw) if isinstance(raw, dict) else {}
+
+
 def _load_config(path, *, allow_provider_unavailable=False):
     active = _provider_config_active(path)
     if active:
@@ -160,14 +184,7 @@ def _load_config(path, *, allow_provider_unavailable=False):
                     # wait briefly and re-verify rather than fail on the blip.
                     time.sleep(0.15)
             if state["mode"] == "provider_unavailable":
-                cfg = dict(state["common"])
-                cloud = cfg.get("cloud_llm", {})
-                semantic = cfg.get("semantic", {})
-                if isinstance(cloud, dict):
-                    cfg["cloud_llm"] = {**cloud, "mode": "off"}
-                if isinstance(semantic, dict):
-                    cfg["semantic"] = {**semantic, "daily_request_budget": 0}
-                return cfg
+                return _paid_routes_closed(state["common"])
             if state["mode"] != "split":
                 raise ValueError("provider_settings_unverified")
             selected, errors = cloud_policy.resolve_settings(state["common"], root)

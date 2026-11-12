@@ -9,9 +9,10 @@ blips — session_expired is already post-relogin-failure — so they keep
 their immediate path.
 """
 import json
+import os
 import time
 
-RECOVERABLE_KINDS = frozenset({"health_write_failed", "run_failed"})
+RECOVERABLE_KINDS = frozenset({"health_write_failed", "health_watch_stalled", "run_failed"})
 VERIFY_S = 1200
 
 
@@ -45,6 +46,24 @@ def _health_write_recovered(created_at):
     return type(at) in (int, float) and at > created_at
 
 
+def _health_watch_recovered(db, created_at):
+    """A watcher observation newer than the incident proves it runs again."""
+    if created_at is None:
+        return False
+    try:
+        import health_policy
+        import notify_spool
+        import safe_io
+        doc = safe_io.read_json_nofollow(
+            os.path.join(notify_spool.data_root(db),
+                         os.path.basename(health_policy.WATCH_STATUS_REL)),
+            health_policy.STATUS_MAX_BYTES)
+    except Exception:
+        return False
+    at = doc.get("watched_at") if isinstance(doc, dict) else None
+    return type(at) in (int, float) and at > created_at
+
+
 def _run_failed_recovered(db, ev, created_at):
     """A later run that did not fail proves the pipeline recovered."""
     try:
@@ -73,6 +92,8 @@ def suppression_reason(db, ev):
         return None
     created_at = _created_at(db, ev["event_id"])
     if kind == "health_write_failed" and _health_write_recovered(created_at):
+        return "recovered_before_send"
+    if kind == "health_watch_stalled" and _health_watch_recovered(db, created_at):
         return "recovered_before_send"
     if kind == "run_failed" and _run_failed_recovered(db, ev, created_at):
         return "recovered_before_send"

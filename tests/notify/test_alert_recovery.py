@@ -37,6 +37,7 @@ def test_next_try_only_delays_recoverable_kinds():
     now = 1000.0
     assert alert_recovery.next_try_for("run_failed", now) == now + alert_recovery.VERIFY_S
     assert alert_recovery.next_try_for("health_write_failed", now) == now + alert_recovery.VERIFY_S
+    assert alert_recovery.next_try_for("health_watch_stalled", now) == now + alert_recovery.VERIFY_S
     assert alert_recovery.next_try_for("session_expired", now) is None
     assert alert_recovery.next_try_for("update_notice", now) is None
     assert alert_recovery.next_try_for("new_messages", now) is None
@@ -124,3 +125,20 @@ def test_suppressed_incident_does_not_hold_throttle(led):
 def test_pending_incident_still_holds_throttle(led):
     assert collection_stages.queue_run_alert(led, "run_failed", 1, "x")
     assert not collection_stages.queue_run_alert(led, "run_failed", 2, "x")
+
+
+@pytest.mark.parametrize("watched_ago,expected", [(10.0, "recovered_before_send"), (120.0, None)])
+def test_health_watch_stalled_is_withheld_only_when_the_watcher_observed_again(
+        led, tmp_path, watched_ago, expected):
+    (tmp_path / "health_watch_status.json").write_text(
+        json.dumps({"watched_at": time.time() - watched_ago}))
+    rid = _outbox(led, "health_watch_stalled", created_ago=60.0)
+    assert alert_recovery.suppression_reason(led.db, _ev(led, rid)) == expected
+
+
+@pytest.mark.parametrize("content", [None, "{", "[]", '{"watched_at":"now"}', '{"watched_at":true}'])
+def test_health_watch_stalled_stays_due_without_a_readable_newer_observation(led, tmp_path, content):
+    if content is not None:
+        (tmp_path / "health_watch_status.json").write_text(content)
+    rid = _outbox(led, "health_watch_stalled", created_ago=60.0)
+    assert alert_recovery.suppression_reason(led.db, _ev(led, rid)) is None
