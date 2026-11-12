@@ -143,7 +143,28 @@ def test_a_quote_across_a_chunk_boundary_is_not_carried(monkeypatch):
     assert quality.protected_lost({"symptoms": [PRIOR_FEVER]}, result, body) == {"symptoms": 1}
 
 
-HOLD_BODY = "本人に息切れはありません。家族には軽い発熱があります。昨日は息切れがありました。"
+def test_carried_prior_items_do_not_hide_a_thin_extraction(monkeypatch):
+    # Two carried facts reach the thin minimum; the model's own output has none.
+    cough = {"text": "咳", "negated": True, "status": "ongoing", "subject": "patient", "evidence": "咳もありません"}
+    body = BODY + "咳もありません。" + "経過観察を継続します。" * 30
+    prior = {"symptoms": [PRIOR_FEVER, cough]}
+    prompts = []
+
+    def model(prompt, **kwargs):
+        prompts.append(prompt)
+        return {"summary": "合成", "symptoms": []}
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", model)
+    meta = {}
+    result = extract_llm.llm_extract(body, meta_out=meta, protected_prior=prior)
+    assert len(body) >= quality._THIN_BODY_MIN and meta["protected_carried"] >= 2
+    assert quality.thin_fact_count(result) >= quality._THIN_FACTS_MIN
+    # Neither completeness nor protected loss asks for the repair; only thinness does.
+    assert quality.protected_lost(prior, result, body) == {}
+    assert meta["repair_issues"]["thin"] == 1 and meta["repair_issues"]["completeness"] == 0
+    assert len(prompts) == 2
+
+
+HOLD_BODY ="本人に息切れはありません。家族には軽い発熱があります。昨日は息切れがありました。"
 HOLD_PRIOR = {"summary": "合成の報告", "symptoms": [
     {"text": "息切れ", "negated": True, "status": "ongoing", "subject": "patient", "evidence": "本人に息切れはありません。"},
     {"text": "発熱", "negated": False, "status": "ongoing", "subject": "family", "evidence": "家族には軽い発熱があります。"}]}
