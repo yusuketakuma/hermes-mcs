@@ -606,7 +606,23 @@ def lane_metrics(db) -> dict:
         + " AND CASE WHEN json_valid(a.meta) "
         "THEN json_extract(a.meta,'$.published')=1 ELSE 0 END", (patient_context_refresh_state.KIND,
         patient_context_refresh_state.LEGACY_KIND)).fetchone()[0]
-    return {"lanes": lanes, "published": published}
+    quality = dict.fromkeys(("none", "pending", "deferred", "held", "failed",
+                             "unavailable", "unknown", "budget", "disabled", "other"), 0)
+    for row in db.execute(
+            "SELECT json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.quality_state') AS qs, COUNT(*) "
+            "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
+            "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND "
+            + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
+            + " AND NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.kind=a.kind "
+            "AND b.project_id=a.project_id AND b.artifact_id>a.artifact_id AND "
+            + current_meta_pred("b.meta", target=patient_context_refresh_state.CURRENT_VERSION)
+            + " AND CASE WHEN json_valid(b.meta) THEN json_extract(b.meta,'$.source_key') END "
+            "IS CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.source_key') END) "
+            "GROUP BY 1", (patient_context_refresh_state.SCAN,)):
+        raw = row[0]
+        state = raw.partition(":")[0] if type(raw) is str and raw else "none"
+        quality[state if state in quality else "other"] += row[1]
+    return {"lanes": lanes, "quality": quality, "published": published}
 
 
 def status(db, cfg):
