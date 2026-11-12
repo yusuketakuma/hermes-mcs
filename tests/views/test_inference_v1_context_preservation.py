@@ -100,7 +100,9 @@ def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(m
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '合成の取得範囲')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     monkeypatch.setattr(notify_views, 'project_url', lambda *a: 'https://invalid.test/synthetic')
-    result = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=None, now=T0)
+    db = sqlite3.connect(':memory:')  # the UI path opens a savepoint on its connection
+    result = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=None, now=T0)
+    db.close()
     assert result['items'] == []
     if complete:
         assert result['empty'] == 'この範囲で該当する記録は見つかりません'

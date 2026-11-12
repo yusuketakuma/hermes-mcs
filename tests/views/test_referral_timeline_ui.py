@@ -1,5 +1,6 @@
 """Synthetic referral timelines keep document dates apart from clinical event dates."""
 import copy
+import sqlite3
 
 import pytest
 
@@ -88,13 +89,17 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
 
     monkeypatch.setattr(views, 'document_timelines', read)
     monkeypatch.setattr(views, 'evidence', lambda *args, **kw: ev)
+    # The care-event reader is outside this comparison; both paths skip it alike.
+    monkeypatch.setattr(views, 'care_events', lambda *args, **kw: None)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {'synthetic': True})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *args: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *args: '合成患者')
     cli = mcs_view.View.__new__(mcs_view.View)
-    cli.db, cli.meta = None, {'generated_at': 1}
+    db = sqlite3.connect(':memory:')  # the UI path opens a savepoint on its connection
+    cli.db, cli.meta = db, {'generated_at': 1}
     result = cli._patient_context(1, 'timeline', None, '', '')
-    ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
+    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
+    db.close()
     assert len(calls) == 2
     assert calls[0] == calls[1]
     assert result == views.timeline(ev, documents=projection, pumps={"events": [], "coverage": {}})
@@ -121,7 +126,9 @@ def test_unavailable_document_coverage_is_visible(monkeypatch, state, expected):
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
-    ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=0, now=1)
+    db = sqlite3.connect(':memory:')  # the UI path opens a savepoint on its connection
+    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=0, now=1)
+    db.close()
     assert f'紹介状: {expected}' in ui['notes']
 
 
