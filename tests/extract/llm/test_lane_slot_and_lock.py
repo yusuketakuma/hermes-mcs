@@ -61,8 +61,9 @@ def _lock_stub(monkeypatch, tmp_path, blocked_after_call):
 def test_lock_lost_result_is_written_later_in_run(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="合成の本文です。" * 20)])
-    # the in-handler wait (60 tries) all fail; the end-of-run retry wins
-    _lock_stub(monkeypatch, tmp_path, blocked_after_call=60)
+    # the in-handler wait (60 s at 0.2 s polls: 301 tries) all fail; the
+    # end-of-run retry wins
+    _lock_stub(monkeypatch, tmp_path, blocked_after_call=400)
     res = extract_llm.run_pending(db, limit=10, budget_s=30,
                                   per_write_lock=True)
     assert res["lock_lost"] == 1 and res["done"] == 1
@@ -699,7 +700,8 @@ def test_failure_write_waits_for_lock_instead_of_skipping(tmp_path, monkeypatch)
     monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
 
     def extract(body, **_kw):
-        state["blocked"] = 10   # longer than the resident wait, shorter than 60
+        # tries at 0.2 s polls: longer than the resident 3 s wait, shorter than 60 s
+        state["blocked"] = 100
         return None
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
