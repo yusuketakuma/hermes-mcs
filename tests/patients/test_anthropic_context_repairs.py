@@ -268,7 +268,9 @@ def test_paid_source_repair_resumes_after_candidate_save_failure_without_a_secon
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
 
 
-@pytest.mark.parametrize('tamper', ['duplicate_slot','duplicate_header','receipt','new_revision','scope','key','budget'])
+# 'key' is excluded: verified paid origins may continue without the cloud key
+# (see test_keyless_context_paid_history), so key absence alone is not changed evidence.
+@pytest.mark.parametrize('tamper', ['duplicate_slot','duplicate_header','receipt','new_revision','scope','budget'])
 def test_source_repair_rejects_changed_evidence_before_adoption(runtime, source_repair, monkeypatch, tamper):
     led, clock, _ = runtime
     original = patient_context_quality_controller._source_repair_seal
