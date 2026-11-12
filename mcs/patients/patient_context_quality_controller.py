@@ -260,6 +260,15 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         os.close(fd)
 
 
+# Input-deterministic scan refusals inside a paid repair dispatch: the same
+# bound inputs can never produce a different outcome, so retrying only spends.
+# nightly_* is the pre-rename spelling of the same persisted codes.
+_SOURCE_REPAIR_HELD_CODES = frozenset({
+    "patient_context_prompt_capacity", "nightly_prompt_capacity",
+    "patient_context_unsplittable_assertion", "nightly_unsplittable_assertion",
+})
+
+
 def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, current, deadline, admit, threshold):
     """Advance one reserved source repair unit; no saved slot may dispatch again."""
     import extract_llm
@@ -408,7 +417,15 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
                                                for fact in captured['facts']}})
         provider.commit_guard()
-    except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, patient_context_refresh_state.Deferred, ValueError):
+    except patient_context_refresh_state.Deferred:
+        return ('unknown' if slot[0] is not None else 'deferred'), None
+    except (cloud_inference.CloudFallback, cloud_client.CloudNotSent):
+        return ('unknown' if slot[0] is not None else 'deferred'), None
+    except ValueError as exc:
+        # Input-deterministic refusals cannot succeed on retry; each retry is
+        # a paid dispatch, so hold until the bound source/config/policy changes.
+        if str(exc) in _SOURCE_REPAIR_HELD_CODES:
+            return 'held', None
         return ('unknown' if slot[0] is not None else 'deferred'), None
     if slot[0] is None or not current():
         return 'unknown', None

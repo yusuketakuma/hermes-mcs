@@ -93,6 +93,38 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
 
 
+@pytest.mark.parametrize('code', ['patient_context_prompt_capacity', 'nightly_prompt_capacity',
+                                  'patient_context_unsplittable_assertion', 'nightly_unsplittable_assertion'])
+def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(runtime, source_repair, monkeypatch, code):
+    led, clock, _ = runtime
+    for _ in range(20):
+        step(runtime)
+        if led.artifacts('patient_context_source_quality_fail_v1', project_id=1):
+            break
+    else:
+        pytest.fail('independent source coverage oracle did not find the omitted bed')
+    monkeypatch.setattr(patient_context_quality_controller, '_scan',
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError(code)))
+    held = None
+    for _ in range(90):
+        step(runtime)
+        clock.wall += 61
+        snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
+        scans = patient_context_refresh_sources._current_scans(
+            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        for scan in scans.values():
+            if scan.get('quality_state') == 'held':
+                held = scan
+        if held is not None:
+            break
+    assert held is not None and not held.get('audited')
+    assert not patient_context_refresh_readiness._ready(held, clock.wall)
+    for _ in range(6):
+        step(runtime)
+        clock.wall += 61
+    assert not source_repair['sent']
+
+
 @pytest.mark.parametrize('stop', ['none', 'length', 'capacity'])
 @pytest.mark.parametrize('tamper', ['answer', 'missing_proof', 'duplicate_proof', 'strip_provider'])
 def test_openai_source_repair_replays_high_response_before_publication(runtime, source_repair, monkeypatch, stop, tamper):

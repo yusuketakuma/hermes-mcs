@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "原典品質修復の確定的な走査拒否が有料再試行を無限に繰り返す問題を修正",
+  "summary": "患者コンテキストの原典品質修復で、修復用の再走査が入力だけで決まる拒否（プロンプト容量超過・これ以上分割できない断言）を返した場合、従来はあらゆる ValueError を一律に延期として扱い、同じ入力で有料の修復ディスパッチを繰り返し続けていました。モデルや外部状態に依存せず同じ結果しか返せない拒否コードは held（保留）の終端状態へ変更し、入力・設定・判定方針が変わるまで再試行しません。一時的な拒否（ロック・予算・送信不確実）は従来どおり延期・不明として扱います。",
+  "upgrade": "追加操作は不要です。適用後、容量超過や分割不能で修復走査が必ず失敗するソースは held へ移行し、修復の有料再試行が止まります。ソース本文・設定・判定方針が変われば自動的に監査が再開されます。",
+  "details": [
+    "_source_quality_repair_step の修復ディスパッチで、ValueError をコード別に分類するよう変更しました。patient_context_prompt_capacity / patient_context_unsplittable_assertion（改名前の nightly_* 綴りを含む）は入力決定的な拒否のため 'held' を返します。",
+    "それ以外の ValueError と Deferred・CloudFallback・CloudNotSent は従来どおり 'deferred' または 'unknown'（予約済みスロットがある場合）を返し、一時的な失敗の再試行性を維持します。",
+    "held は既存の quality_hold_key 機構で終端化され、入力が変わるまで監査レーンの選択対象から外れます。fail-closed の公開条件と会計・予約の証跡は変更していません。"
+  ],
+  "refs": ["mcs/patients/patient_context_quality_controller.py", "tests/patients/test_anthropic_context_repairs.py"]
+}
