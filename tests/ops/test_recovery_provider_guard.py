@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -346,12 +347,19 @@ def _private(path, raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _settled(data, *, remnants=True, authority=None):
+COMMON = {"cloud_llm": {"mode": "off", "provider_budgets": {}}, "semantic": {"mode": "off"},
+          "note": "合成", "drug_map": {"synthetic": True}, "install_args": ["--synthetic"]}
+
+
+def _settled(data, *, remnants=True, authority=None, common=COMMON):
+    from provider_settings import common_policy_digest
+
+    (data.parent / "config.json").write_text(json.dumps(common, ensure_ascii=False), encoding="utf-8")
     directory = data / "provider_settings"
     directory.mkdir(mode=0o700)
     hashes = {name: _private(directory / (name + ".json"), ('{"note": "%s-%s"}' % (CANARY, name)).encode())
               for name in ("anthropic", "openai", "jev")}
-    value = {"version": 2, "state": "committed", "files": hashes, "common_policy_sha256": "b" * 64}
+    value = {"version": 2, "state": "committed", "files": hashes, "common_policy_sha256": common_policy_digest(common)}
     if authority is not None:
         value = authority(value)
     _private(data / ".provider-settings-authority.json", json.dumps(value).encode())
@@ -463,6 +471,17 @@ def _damage(name, data):
         (data / ".provider-settings-authority.json").unlink()
     elif name in in_flight:
         _private(data / in_flight[name], CANARY.encode())
+    elif name == "config_edited":
+        (data.parent / "config.json").write_text(json.dumps(dict(COMMON, note=CANARY)))
+    elif name == "config_missing":
+        (data.parent / "config.json").unlink()
+    elif name.startswith("config_ambiguous"):
+        overlap = {"config_ambiguous_model": {"cloud_llm": {"mode": "off", "model": CANARY}},
+                   "config_ambiguous_budget": {"cloud_llm": {"mode": "off", "provider_budgets": {"openai": {}}}},
+                   "config_ambiguous_jev": {"semantic": {"mode": "off", "until": CANARY}}}[name]
+        (data / ".provider-settings-authority.json").unlink()
+        shutil.rmtree(directory)
+        _settled(data, remnants=False, common=dict(COMMON, **overlap))
 
 
 @pytest.mark.parametrize("name,expected", [
@@ -474,6 +493,10 @@ def _damage(name, data):
     ("authority_missing", "provider_settings_unverified"), ("remnant_only", "provider_settings_unverified"),
     ("pending", "provider_settings_pending"), ("bootstrap_fresh", "provider_settings_pending"),
     ("bootstrap_complete", "provider_settings_pending"),
+    ("config_edited", "provider_settings_unverified"), ("config_missing", "provider_settings_unverified"),
+    ("config_ambiguous_model", "provider_settings_unverified"),
+    ("config_ambiguous_budget", "provider_settings_unverified"),
+    ("config_ambiguous_jev", "provider_settings_unverified"),
 ])
 def test_unsettled_split_holds_before_locks_and_reports_once(watchdog, monkeypatch, capsys, name, expected):
     data = Path(watchdog.DATA)
@@ -502,8 +525,8 @@ def test_split_namespace_change_during_check_holds(watchdog, monkeypatch):
     original = watchdog._provider_snapshot
     calls = []
 
-    def changing(fd):
-        result = original(fd)
+    def changing(*fds):
+        result = original(*fds)
         if not calls:
             _private(data / ".provider-settings-backup-synthetic-new.bin", CANARY.encode())
         calls.append(result)
@@ -517,8 +540,8 @@ def test_unrelated_data_churn_keeps_split_verified(watchdog, monkeypatch):
     _settled(data)
     original = watchdog._provider_snapshot
 
-    def churn(fd):
-        result = original(fd)
+    def churn(*fds):
+        result = original(*fds)
         (data / "synthetic-runtime-file").write_text("x")
         return result
     monkeypatch.setattr(watchdog, "_provider_snapshot", churn)
@@ -604,3 +627,33 @@ def test_doctor_reads_only_the_hold_token(tmp_path):
     assert service_management.recovery_hold(str(tmp_path)) is None
     report.write_text(json.dumps({"result": CANARY + " /etc", "held": True}))
     assert service_management.recovery_hold(str(tmp_path)) is None
+
+
+def test_independent_roots_do_not_unsettle_split(watchdog):
+    data = Path(watchdog.DATA)
+    _settled(data)
+    (data.parent / "config.json").write_text(json.dumps(dict(COMMON, drug_map={"edited": 1}, sdc={"x": 1})))
+    assert watchdog._provider_settings_state() == "split"
+
+
+@pytest.mark.parametrize("common", [
+    {}, COMMON, {"b": [1, 2.5, None, "é"], "a": {"z": True, "y": "\u65e5"}, "sdc": {"x": 1}},
+])
+def test_common_policy_digest_matches_provider_settings(watchdog, common):
+    from provider_settings import common_policy_digest
+
+    assert watchdog._common_policy_digest(common) == common_policy_digest(common)
+
+
+def test_split_checkout_hold_does_not_create_marker(watchdog, monkeypatch):
+    # An apply that died before quiesce left no marker; creating one would stop collection.
+    _settled(Path(watchdog.DATA))
+    Path(watchdog.STATE_PATH).write_text(json.dumps({
+        "v": 1, "applying": {"sha": HEAD, "prev_sha": "b" * 40}, "stages": [], "applied": []}))
+    _checkout(monkeypatch, watchdog, foreign=["mcs/core/mcs_util.py"])
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_clean_stale_git_locks", lambda: pytest.fail("hold cleaned locks"))
+    _no_effects(monkeypatch, watchdog)
+    assert watchdog._recover_legacy() == 1
+    assert not os.path.lexists(watchdog.MARKER_PATH)
+    report = json.loads(Path(watchdog.REPORT_PATH).read_text())
+    assert report["result"] == "provider_checkout_hold" and report["held"] is True

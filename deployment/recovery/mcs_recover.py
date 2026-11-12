@@ -386,14 +386,14 @@ def _file_identity(value):
             value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
-def _private_bytes(parent_fd, name):
-    """= provider_settings._read_file(private=True): stable bytes of a 0600 file."""
+def _private_bytes(parent_fd, name, private=True):
+    """= provider_settings._read_file: stable bytes of a regular (0600 when private) file."""
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent_fd)
     try:
         before = os.fstat(fd)
-        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
-                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
-                or before.st_size > _PROVIDER_FILE_MAX_BYTES):
+        if (not stat.S_ISREG(before.st_mode) or before.st_size > _PROVIDER_FILE_MAX_BYTES
+                or private and (before.st_uid != os.getuid()
+                                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1)):
             raise ValueError("provider_file_invalid")
         raw = b""
         while len(raw) <= _PROVIDER_FILE_MAX_BYTES:
@@ -411,20 +411,50 @@ def _private_bytes(parent_fd, name):
     return raw, _file_identity(after)
 
 
-def _authority_hashes(raw):
-    """Check the committed authority shape that provider_settings._read accepts."""
+def _strict_json(raw):
+    """= mcs_util.strict_json: no duplicate keys or nonfinite constants."""
     def unique(pairs):
         value = {}
         for key, item in pairs:
             if key in value:
-                raise ValueError("provider_authority_invalid")
+                raise ValueError("provider_json_invalid")
             value[key] = item
         return value
 
     def constant(_name):
-        raise ValueError("provider_authority_invalid")
+        raise ValueError("provider_json_invalid")
 
-    authority = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+
+
+def _common_policy_digest(common):
+    """= provider_settings.common_policy_digest over mcs_util.canonical."""
+    return hashlib.sha256(json.dumps(
+        {key: value for key, value in common.items() if key not in ("drug_map", "sdc", "install_args")},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def _check_common(raw, policy_hash):
+    """Hold unless config.json is the common policy the authority committed.
+
+    = provider_settings._read for verified provider files: the digest must match
+    and config.json must not also carry provider-owned values.
+    """
+    common = _strict_json(raw)
+    if not isinstance(common, dict) or _common_policy_digest(common) != policy_hash:
+        raise ValueError("provider_authority_invalid")
+    cloud, semantic = common.get("cloud_llm"), common.get("semantic")
+    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
+            or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
+            or isinstance(semantic, dict) and bool(semantic.keys() & {
+                "model", "daily_request_budget", "until", "attempt_timeout_seconds",
+                "max_attempts_per_try", "max_questions_per_request"})):
+        raise ValueError("provider_config_ambiguous")
+
+
+def _authority_hashes(raw):
+    """Check the committed authority shape that provider_settings._read accepts."""
+    authority = _strict_json(raw)
     required = {"version", "state", "files", "common_policy_sha256"}
     digest = re.compile(r"[0-9a-f]{64}")
     if (not isinstance(authority, dict)
@@ -438,13 +468,14 @@ def _authority_hashes(raw):
             or any(not isinstance(value, str) or digest.fullmatch(value) is None
                    for value in authority["files"].values())):
         raise ValueError("provider_authority_invalid")
-    return authority["files"]
+    return authority["files"], authority["common_policy_sha256"]
 
 
-def _provider_snapshot(data_fd):
+def _provider_snapshot(root_fd, data_fd):
     """One pass over data/: 'legacy', 'provider_settings_pending' or a split snapshot.
 
-    Only the authority JSON is parsed. Provider files are compared as opaque
+    Only the authority JSON and config.json (already read by _runtime_config)
+    are parsed. Provider files are compared as opaque
     bytes against its hashes; backup and stage remnants are never opened
     (they hold earlier settings and are retained by provider_settings._commit).
     """
@@ -472,7 +503,9 @@ def _provider_snapshot(data_fd):
     if '.provider-settings-pending.json' in names or '.provider-settings-authority.json' not in names:
         raise ValueError("provider_authority_missing")
     raw, authority = _private_bytes(data_fd, '.provider-settings-authority.json')
-    hashes = _authority_hashes(raw)
+    hashes, policy_hash = _authority_hashes(raw)
+    raw, common = _private_bytes(root_fd, "config.json", private=False)   # missing -> OSError -> hold
+    _check_common(raw, policy_hash)
     settings_fd = os.open('provider_settings', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                           dir_fd=data_fd)
     try:
@@ -490,7 +523,7 @@ def _provider_snapshot(data_fd):
             raise ValueError("provider_settings_changed")
     finally:
         os.close(settings_fd)
-    return (frozenset(names), authority, _file_identity(held), tuple(files))
+    return (frozenset(names), authority, common, _file_identity(held), tuple(files))
 
 
 def _provider_settings_state():
@@ -526,8 +559,8 @@ def _provider_settings_state():
                     or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)):
                 return unverified
             try:
-                first = _provider_snapshot(data_fd)
-                second = _provider_snapshot(data_fd)
+                first = _provider_snapshot(root_fd, data_fd)
+                second = _provider_snapshot(root_fd, data_fd)
             except (OSError, ValueError, TypeError, KeyError, RecursionError):
                 return "provider_settings_unverified"
             if first != second:
@@ -760,6 +793,11 @@ def _recover_legacy(if_stale=False):
             return 1
         if provider_state == "split":
             reason = _split_checkout_hold(applying)
+            if reason == "provider_checkout_hold":
+                # Keep an existing marker but never create one: an apply that
+                # died before quiesce left writers running, and no tool would
+                # remove a new marker on a tree the updater also refuses.
+                return _hold(reason, 1)
             if reason is not None:
                 return provider_migration_hold(reason)
         _clear_hold()
