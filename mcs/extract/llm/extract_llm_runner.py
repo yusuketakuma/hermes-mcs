@@ -22,7 +22,7 @@ from extraction_provenance import (
     EvidenceLeaf as _EvidenceLeaf,
     leaf_evidence as _leaf_evidence,
 )
-from mcs_util import load_config
+from mcs_util import load_config, loads_dict
 from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb
 
 from extract_llm_admission import (
@@ -650,9 +650,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return False
                 return True
             r["_superseded_guard"] = adoption_guard
+        # The stored protected prior steers only a plain local re-extraction:
+        # cloud: its repair prompt would send the stored items out and add paid calls;
+        # QC/human: carrying a flagged prior item back would undo the correction;
+        # shortcut: superseded rows keep the commit-time hold only; pass the prior once the migrated contract covers a repair request
+        protected = (provider is None and r.get("_protected_prior") and qc is None
+                     and not r["human_src"] and not r.get("_superseded_local"))
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
+                           **({"protected_prior": loads_dict(r["_protected_prior"]["content"])}
+                              if protected else {}),
                            quality_qc_src=r.get("qc_src"),
                            medication_hints=_frame_medications(r),
                            medication_guard=lambda: _owner_call(lambda: _extraction_dispatch_current(

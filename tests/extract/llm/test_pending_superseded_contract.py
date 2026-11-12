@@ -316,6 +316,36 @@ def test_same_fingerprint_history_holds_the_migration(routed, monkeypatch):
         (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
 
 
+def test_superseded_row_never_receives_the_stored_protected_prior(routed, monkeypatch):
+    """The migrated request guard refuses a repair, so the runner keeps the
+    stored prior out of a superseded local attempt; the commit hold decides."""
+    import extract_llm_runner
+    ledger, *_ = routed
+    body = "本日、発熱はありません。"
+    fever = {"text": "発熱", "negated": True, "status": "ongoing", "subject": "patient",
+             "evidence": "発熱はありません"}
+    row, frame = _frozen(ledger, body=body)
+    with ledger.db:
+        ledger.db.execute(
+            "UPDATE artifacts SET content=?, meta=json_set(meta,'$.hash',?) WHERE kind=? AND message_id=1",
+            (json.dumps({"symptoms": [fever]}, ensure_ascii=False), row['content_hash'], worker.KIND))
+    _persist(ledger, row, frame, _old_context(row, frame))
+    jobs, _skipped, _blocked, _reasons = _prepare(ledger, _pending_rows(ledger))
+    assert jobs[0][0]["_superseded_local"] is True and jobs[0][0].get("_protected_prior")
+    monkeypatch.setattr(extract_llm_engine, "_llm_call",
+                        lambda prompt, **_kw: {"symptoms": [], "summary": "合成の要約"})
+    seen = []
+    original = extract_llm_runner.llm_extract
+
+    def spy(*args, **kwargs):
+        seen.append(dict(kwargs))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(extract_llm_runner, "llm_extract", spy)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert len(seen) == 1 and "protected_prior" not in seen[0]
+    assert report["done"] + report["held_prior"] == 1
+
+
 def _artifact_rows(ledger, kinds):
     marks = ",".join("?" * len(kinds))
     return {row["artifact_id"]: tuple(row) for row in ledger.db.execute(
