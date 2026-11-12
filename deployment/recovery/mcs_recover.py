@@ -638,22 +638,39 @@ _HOLD_TEXT = {
 }
 
 
-def _hold(result, code, trusted=True):
+def _carried(last):
+    """Keys of the previous report that a hold record must not drop."""
+    return {key: last[key] for key, kinds in (("drainers_key", (str,)), ("alert_key", (str,)),
+                                              ("notified_at", (int, float)))
+            if type(last.get(key)) in kinds}
+
+
+def _hold(result, code, trusted=True, record=True):
     """Print the hold and record it once; an unchanged hold is not rewritten."""
     print(_HOLD_TEXT[result][0])
-    last = mcs_recovery_core._last_report()
-    if trusted and (last.get("result"), last.get("held")) != (result, True):
-        carried = {"drainers_key": last["drainers_key"]} if isinstance(last.get("drainers_key"), str) else {}
-        mcs_recovery_core._report(result, _HOLD_TEXT[result][1], held=True, writers_stopped=False, **carried)
+    if trusted and record:
+        last = mcs_recovery_core._last_report()
+        if (last.get("result"), last.get("held")) != (result, True):
+            mcs_recovery_core._report(result, _HOLD_TEXT[result][1], held=True, writers_stopped=False,
+                                      **_carried(last))
     return code
+
+
+def _journal_fresh(state):
+    """The newest journal entry is younger than STALE_S (an apply may still own it)."""
+    applying = state.get("applying")
+    if not applying and not state.get("stages"):
+        return False
+    last = max([s.get("at", 0) for s in state.get("stages", [])]
+               + [(applying or {}).get("at", 0)])
+    return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
 
 
 def _clear_hold():
     """Record once that an earlier hold no longer applies."""
     last = mcs_recovery_core._last_report()
     if last.get("held") is True and _provider_settings_state() != "provider_directory_unverified":
-        carried = {"drainers_key": last["drainers_key"]} if isinstance(last.get("drainers_key"), str) else {}
-        mcs_recovery_core._report("hold_cleared", "earlier watchdog hold no longer applies", **carried)
+        mcs_recovery_core._report("hold_cleared", "earlier watchdog hold no longer applies", **_carried(last))
 
 
 def _lock_provider_editor():
@@ -701,10 +718,13 @@ def _lock_provider_editor():
 
 def _recover_legacy(if_stale=False):
     mcs_recovery_core._check_recovery_root()
-    if _settings_migration_pending():
-        return _hold("settings_migration_hold", 2,
-                     trusted=_provider_settings_state() != "provider_directory_unverified")
     state = mcs_recovery_core._load_state()
+    # Without the locks a running apply looks like a hold: the periodic run
+    # prints it but leaves the record to a stale journal or the locked check.
+    record = not (if_stale and _journal_fresh(state))
+    if _settings_migration_pending():
+        return _hold("settings_migration_hold", 2, record=record,
+                     trusted=_provider_settings_state() != "provider_directory_unverified")
     if state.get("_corrupt"):
         mcs_recovery_core._report("corrupt_state",
                 "update_state.json unreadable — escalate, do nothing")
@@ -720,7 +740,7 @@ def _recover_legacy(if_stale=False):
         return 0                            # nothing to recover in any settings state
     provider_state = _provider_settings_state()
     if provider_state not in ("legacy", "split"):
-        return _hold(provider_state, 2, trusted=provider_state != "provider_directory_unverified")
+        return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
     upd_fd = mcs_recovery_core._try_lock(mcs_recovery_core.UPDATE_LOCK)
     if upd_fd is None:
         return 0                            # an apply is alive
@@ -740,13 +760,14 @@ def _recover_legacy(if_stale=False):
             return _hold("provider_editor_lock_invalid", 2)
         if editor_fd is None:
             return 2                        # an editor is publishing — retry
-        provider_state = _provider_settings_state()
-        if provider_state not in ("legacy", "split"):
-            return _hold(provider_state, 2, trusted=provider_state != "provider_directory_unverified")
         mcs_recovery_core._check_recovery_root()
         state = mcs_recovery_core._load_state()               # fresh view under the locks
+        record = not (if_stale and _journal_fresh(state))
+        provider_state = _provider_settings_state()
+        if provider_state not in ("legacy", "split"):
+            return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
         if _settings_migration_pending():
-            return _hold("settings_migration_hold", 2)
+            return _hold("settings_migration_hold", 2, record=record)
         if state.get("_corrupt"):
             mcs_recovery_core._report("corrupt_state", "update_state.json unreadable under lock")
             return 2
@@ -778,11 +799,8 @@ def _recover_legacy(if_stale=False):
                         or not head or head != prev or head == target)
             if hold:
                 return provider_migration_hold()
-        if if_stale and (applying or stages):
-            last = max([s.get("at", 0) for s in state.get("stages", [])]
-                       + [(applying or {}).get("at", 0)])
-            if last and time.time() - last < mcs_recovery_core.STALE_S:
-                return 0                    # newest locked journal is still fresh
+        if if_stale and _journal_fresh(state):
+            return 0                        # newest locked journal is still fresh
         if isinstance(applying, dict) and "runtime_migration" in applying:
             # Only the target updater may change an interrupted source+venv migration.
             _report_alert("runtime_migration_pending", state,

@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -657,3 +658,23 @@ def test_split_checkout_hold_does_not_create_marker(watchdog, monkeypatch):
     assert not os.path.lexists(watchdog.MARKER_PATH)
     report = json.loads(Path(watchdog.REPORT_PATH).read_text())
     assert report["result"] == "provider_checkout_hold" and report["held"] is True
+
+
+@pytest.mark.parametrize("name", ["pending", "config_edited"])
+def test_hold_during_a_fresh_apply_is_printed_but_not_recorded(watchdog, monkeypatch, capsys, name):
+    # A running apply owns a fresh journal; only a manual run or a stale journal records the hold.
+    _damage(name, Path(watchdog.DATA))
+    Path(watchdog.MARKER_PATH).write_text("synthetic marker")
+    Path(watchdog.STATE_PATH).write_text(json.dumps({"v": 1, "applying": {
+        "sha": HEAD, "prev_sha": "b" * 40, "at": time.time()}, "stages": [], "applied": []}))
+    report_path = Path(watchdog.REPORT_PATH)
+    report_path.write_text(json.dumps({"result": "escalate", "alert_key": "synthetic-alert", "notified_at": 1.0}))
+    before = report_path.read_bytes()
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_try_lock", lambda *_: pytest.fail("unsettled state took recovery lock"))
+    _no_effects(monkeypatch, watchdog)
+    assert watchdog._recover_legacy(if_stale=True) == 2
+    assert report_path.read_bytes() == before
+    assert capsys.readouterr().out.strip()
+    assert watchdog._recover_legacy() == 2
+    report = json.loads(report_path.read_text())
+    assert report["held"] is True and (report["alert_key"], report["notified_at"]) == ("synthetic-alert", 1.0)
