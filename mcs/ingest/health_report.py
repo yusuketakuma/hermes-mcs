@@ -3,6 +3,7 @@ from __future__ import annotations
 import llm_availability
 
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -59,6 +60,16 @@ def _ocr_ack_current(data, value, cfg=None):
         return False
 
 
+def _diagnostic_block(value) -> bool:
+    """A producer diagnostic of fixed codes and numbers only — never a path or text."""
+    code = re.compile(r"[a-z0-9_]{1,64}")
+    return isinstance(value, dict) and len(value) <= 16 and all(
+        isinstance(key, str) and code.fullmatch(key)
+        and (item is None or type(item) in (bool, int) or finite_number(item)
+             or isinstance(item, str) and code.fullmatch(item))
+        for key, item in value.items())
+
+
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
     import attachment_ocr
@@ -78,12 +89,17 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
+    snapshot_fields = ("snapshot_failure", "snapshot_timing")
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort'}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
+            raise ValueError("ocr_status_invalid")
+        # mcs_ocr records why its publish after new pages was deferred; the
+        # verdict below comes from 'reason', these are checked and not exposed.
+        if any(key in value and not _diagnostic_block(value[key]) for key in snapshot_fields):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
         known = {None, "disabled", "busy", "writer_busy", "writer_blocked", "config_invalid",

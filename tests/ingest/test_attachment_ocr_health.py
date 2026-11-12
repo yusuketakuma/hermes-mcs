@@ -430,3 +430,29 @@ def test_validated_partial_failure_snapshot_reaches_cause_specific_alert(tmp_pat
     assert 'doctor --share' in text and '元の添付' in text
     assert 'OCRの設定・実行環境' not in text
     assert '全件' not in text and 'すべて' not in text
+
+
+@pytest.mark.parametrize("extra", [
+    {"snapshot_failure": {"reason": "snapshot_lock_busy"}},
+    {"snapshot_failure": {"reason": "publish_window_exhausted"}},
+    {"snapshot_failure": {"reason": "copy_oserror", "errno": 28},
+     "snapshot_timing": {"copy_s": 1.5, "verify_s": 7.0, "budget_s": 180.0}},
+])
+def test_a_snapshot_deferral_written_by_the_ocr_job_is_deferred_not_corrupt(tmp_path, extra):
+    # mcs_ocr adds these diagnostics whenever its publish after new pages fails:
+    # reading that as a corrupt status hid the real, self-clearing cause.
+    _status(tmp_path, reason="snapshot_deferred", complete=1, local_done=0, local_deferred=0, **extra)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report["state"] == "deferred" and report["reason"] == "attachment_ocr_processing_deferred"
+    assert "snapshot_failure" not in report and "snapshot_timing" not in report
+
+
+@pytest.mark.parametrize("extra", [
+    {"snapshot_failure": "snapshot_lock_busy"}, {"snapshot_failure": {"reason": "Free Text"}},
+    {"snapshot_failure": {"reason": "copy_oserror", "path": "/synthetic/private"}},
+    {"snapshot_timing": {"copy_s": "1.5 s"}}, {"snapshot_timing": [1, 2]},
+])
+def test_malformed_snapshot_diagnostics_stay_corrupt(tmp_path, extra):
+    _status(tmp_path, reason="snapshot_deferred", complete=1, **extra)
+    assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
+        "state": "unknown", "reason": "attachment_ocr_status_corrupt"}
