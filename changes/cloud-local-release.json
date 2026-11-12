@@ -1,0 +1,20 @@
+{
+  "category": "added",
+  "title": "結果を確認できない古い外部AI要求を、人の承認でローカル処理へ回す操作を追加",
+  "summary": "課金済みで結果の記録がない外部AI要求や、結果を破棄した要求があると、同じ入力の患者コンテキストは再送もローカル処理もされず、入力が変わるまで止まったままでした。`cloud-llm release-local --confirm-human --reason '理由'` を実行すると、予約から1時間を超えたこれらの要求と同じ入力を、ローカルLLMで処理できます。外部APIへの再送はせず、記録も削除しません。予約額は上限の集計に計上したままです。",
+  "upgrade": "追加操作は不要です。人がこのコマンドを実行するまで、動作は変わりません。",
+  "details": [
+    "対象は、結果の記録がない要求、結果を破棄した要求、結果を精算できない要求です。正常に精算した応答がある要求と、予約から1時間以内の要求は保留のままです。",
+    "解除するのは患者コンテキストのローカル処理だけです。保存済み投稿の再抽出と意味解析の保留は変わりません。",
+    "操作は停止・再開と同じ承認記録（`--confirm-human`・`--reason`・`command_id`）に残します。承認記録と内容が一致しない解除の記録は無効として扱います。",
+    "1時間を超えた予約が1件もなければ `cloud_release_nothing` で終了し、解除は記録しません。出力の `through` は対象に含めた最後の予約記録の番号です。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/ops/cloud_cli.py",
+    "mcs/ops/commands/mcs_operations.py",
+    "mcs/ops/commands/mcs_requests.py",
+    "mcs/ops/commands/operation_contract.py",
+    "docs/guides/ANTHROPIC.md"
+  ]
+}

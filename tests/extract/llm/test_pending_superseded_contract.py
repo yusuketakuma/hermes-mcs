@@ -3,6 +3,7 @@ superseded — never resumed, never silently unverifiable (fully synthetic)."""
 import hashlib
 import json
 from unittest.mock import patch
+import uuid
 
 import pytest
 
@@ -17,6 +18,7 @@ import extract_llm_engine
 import extract_llm_historical
 import extraction_context as frames
 import mcs_queries
+import mcs_requests
 from anthropic_runtime_testkit import _use_real_cloud_accounting
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -251,6 +253,27 @@ def test_guard_admits_a_different_fingerprint_and_holds_same_or_absent(
             "UPDATE artifacts SET meta='not-json' WHERE kind='cloud_usage_reserve'")
     with pytest.raises((cloud_client.CloudError, ValueError)):
         _guard(ledger, cfg, "完全合成の別の現在要求。")
+
+
+def test_human_local_release_keeps_the_same_reextract_request_held(routed, monkeypatch):
+    """ops.cloud_release_local frees patient-context local work only: the
+    stricter reextract rule still holds a same-fingerprint request."""
+    ledger, cfg, *_ = routed
+    row, frame = _frozen(ledger)
+    _persist(ledger, row, frame, _old_context(row, frame))
+    _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の旧要求。")
+    with ledger.db:
+        ledger.db.execute(
+            "UPDATE artifacts SET created_at=created_at-? WHERE kind='cloud_usage_reserve'",
+            (2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S,))
+    receipt = mcs_requests.apply_command(ledger, {
+        'version': 1, 'cmd': 'ops.cloud_release_local', 'command_id': str(uuid.uuid4()),
+        'actor': 'synthetic human', 'human_confirmed': True, 'project_id': None,
+        'reason': 'synthetic approval'})
+    assert receipt['outcome'] == 'applied' and receipt['through'] > 0
+    with pytest.raises(cloud_client.CloudError):
+        _guard(ledger, cfg, "完全合成の旧要求。")            # same fp: still held
+    _guard(ledger, cfg, "完全合成の別の現在要求。")          # different fp: unchanged
 
 
 def test_owned_paid_history_still_migrates_to_local_final(routed, monkeypatch):
