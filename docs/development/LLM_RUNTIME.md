@@ -13,7 +13,7 @@
 |---|---|---|
 | 投稿の構造化抽出 | [extract_llm](../../mcs/extract/llm/extract_llm.py)が原文、ルールのヒント、必要な参考文脈を構成 | [extract_validation](../../mcs/extract/llm/extract_validation.py)がschemaと原文根拠を検証し、[extract_quality](../../mcs/extract/llm/extract_quality.py)が修復・置換の可否を判断。claim・carry・checkpoint・artifact保存はextract_llm |
 | 意味解析・修復 | [semantic_extraction](../../mcs/semantic/semantic_extraction.py)等が入力を構成し、[semantic_transport](../../mcs/semantic/semantic_transport.py)が形式probeと通信状態を所有 | [semantic_drain](../../mcs/semantic/semantic_drain.py)がjobのclaim・予算・保存・公開を統括。QCと候補承認は別の契約 |
-| 患者コンテキスト作成 | [patient_context_refresh](../../mcs/patients/patient_context_refresh.py)が一患者の根拠と差分を選択 | 同moduleがsource/config/scanの現行性を保存直前に再確認し、患者単位のartifactを原子的に置換 |
+| 患者コンテキスト作成 | [patient_context_refresh](../../mcs/patients/patient_context_refresh.py)が一患者の根拠と差分を選択 | 同moduleが保存直前に、この患者のsource/config/scanの入力を書込み排他の下で再確認し、患者単位のartifactを原子的に置換 |
 | 推論版と全件再処理 | [inference_version](../../mcs/core/inference_version.py)が推論版を定義し、既存workerが保存済み対象を有限件ずつ列挙 | [semantic_drain](../../mcs/semantic/semantic_drain.py)が既存の予約・進捗で各段階の現行性を確認。原文消失や保留を成功へ変換しない |
 | 時系列と現在状態の投影 | [patient_context_projection](../../mcs/patients/patient_context_projection.py)が根拠付きfactと依存喪失の記録を受け取る | 通信・DB書込みを行わない判断処理。保存と公開はcontext刷新・rollupの各所有者が行う |
 | 根拠が失われた場合の保全 | [inference_dependency_loss](../../mcs/core/inference_dependency_loss.py)が原文・派生物の破棄前に依存を捕捉 | 呼出元の既存transactionで、本文・引用・用量を含まない記録を保存。読取りでは現在状態への誤昇格を防ぎ、削除された原典の代わりに使わない |
