@@ -340,119 +340,139 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     scan_reads, scan_interrupts = 0, 0
     best, selected = {}, None
     rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+    # The scan holds the selection lock, so the bookmark advances in memory and
+    # is saved once before each patient evaluation (a slow patient can exhaust
+    # the deadline, after which no save is admitted) and once at the end.
+    bookmark = rotation[0].get('patient_scan')
+    unsaved = False
+
+    def persist():
+        nonlocal rotation, unsaved
+        unsaved = False
+        rotation = _advance_patient_scan(ledger, rotation, bookmark, deadline, admit,
+                                         observed_out=observed_out)
+        if rotation is None:
+            raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+
     covered = False
     try:
-        with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
-            for _ in range(8):
-                patient_context_refresh_sources._scan_check(reader.db)
-                original = rotation[0].get('patient_scan')
-                reserved = context_schedule.advance_turn(original)
-                rotation = _advance_patient_scan(ledger, rotation, reserved, deadline, admit,
-                                                 observed_out=observed_out)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
-                # Expensive activity ordering must not consume the fair turn's chance.
-                reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
-                try:
-                    plan = context_schedule.plan(reader.db, original)
-                finally:
-                    reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
-                rotation = _advance_patient_scan(ledger, rotation, plan['next'], deadline, admit,
-                                                 observed_out=observed_out)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
-                pid = plan['project_id']
-                if pid is None or pid in seen:
+        try:
+            with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
+                for _ in range(8):
+                    patient_context_refresh_sources._scan_check(reader.db)
+                    original = bookmark
+                    bookmark, unsaved = context_schedule.advance_turn(original), True
+                    # Expensive activity ordering must not consume the fair turn's chance.
+                    reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
+                    try:
+                        plan = context_schedule.plan(reader.db, original)
+                    finally:
+                        reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
+                    bookmark = plan['next']
+                    pid = plan['project_id']
+                    if pid is None or pid in seen:
+                        if _scan_covered(reader.db, seen):
+                            covered = True
+                            break
+                        continue
+                    persist()
+                    seen.add(pid)
+                    scanned += 1
+                    published = patient_context_refresh_state._published_version(reader.db, pid)
+                    whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
+                    keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
+                    if not keys and whole['sources']:
+                        if observed_out is not None:
+                            observed_out['wait_no_eligible_sources'] += 1
+                        waiting += 1
+                        continue
+                    source_keys = list(keys) if keys else None
+                    observed = {}
+                    scan_reads += 1
+                    snapshot, progress, pending = patient_context_refresh_readiness._pending(
+                        reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
+                        source_keys=source_keys, observed_out=observed)
+                    if patient_context_refresh_state._out_of_scope(snapshot):
+                        continue
+                    scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
+                    # Same candidate, connection, read transaction, scope,
+                    # contract, cfg and estimate: reuse the stored read
+                    # _pending just made instead of reading it again.
+                    scans = observed["scans"]
+                    summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
+                        if not context_plan.source_usable(source)
+                        or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
+                    if summary_keys or not snapshot['sources']:
+                        summary_keys = summary_keys or None
+                        if summary_keys == source_keys:
+                            scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
+                        else:
+                            scan_reads += 1
+                            summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
+                                reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
+                            scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
+                    for candidate, state, due, scope_keys, lanes in scopes:
+                        if ('A' in lanes and due['A']
+                                and (candidate.get('source_coverage', {}).get('unreflected')
+                                     or not candidate['acquisition']['complete'])
+                                and not any(context_plan.source_usable(source) for source in candidate['sources'])):
+                            due['A'] = False
+                        if not any(due[lane] for lane in lanes):
+                            if observed_out is not None:
+                                observed_out['wait_no_due_lane'] += 1
+                            waiting += int(candidate['unfinished'])
+                            continue
+                        if 'A' in lanes and due['A']:
+                            try:
+                                generation = _generation_plan(reader.db, pid, cfg, candidate, now)
+                                quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
+                                    now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
+                            except ValueError:
+                                generation, quota = None, {'allowed': False}
+                            candidate['_generation_plan'] = generation
+                            if not quota['allowed']:
+                                if observed_out is not None:
+                                    observed_out['wait_generation_quota'] += 1
+                                due['A'] = False
+                                waiting += 1
+                                if not any(due[lane] for lane in lanes):
+                                    continue
+                        changes = ledger.db.total_changes
+                        ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
+                            deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
+                        if ledger.db.total_changes != changes:
+                            proof = None
+                        if proof is not None:
+                            proof['writer'] = ledger.db
+                            proof['writer_changes'] = ledger.db.total_changes
+                        candidate['_readiness_proof'] = proof
+                        patient_context_refresh_sources._scan_check(reader.db)
+                        if not candidate['dependencies']['complete']:
+                            if observed_out is not None:
+                                observed_out['wait_dependency_incomplete'] += 1
+                            due['A'] = False
+                        if not ready and observed_out is not None:
+                            observed_out['wait_readiness_unverified'] += 1
+                        waiting += int(candidate['unfinished'] or not ready)
+                        if ready:
+                            best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
+                    if best:
+                        selected = pid
+                        break
                     if _scan_covered(reader.db, seen):
                         covered = True
                         break
-                    continue
-                seen.add(pid)
-                scanned += 1
-                published = patient_context_refresh_state._published_version(reader.db, pid)
-                whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
-                keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
-                if not keys and whole['sources']:
-                    if observed_out is not None:
-                        observed_out['wait_no_eligible_sources'] += 1
-                    waiting += 1
-                    continue
-                source_keys = list(keys) if keys else None
-                observed = {}
-                scan_reads += 1
-                snapshot, progress, pending = patient_context_refresh_readiness._pending(
-                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
-                    source_keys=source_keys, observed_out=observed)
-                if patient_context_refresh_state._out_of_scope(snapshot):
-                    continue
-                scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
-                # Same candidate, connection, read transaction, scope,
-                # contract, cfg and estimate: reuse the stored read
-                # _pending just made instead of reading it again.
-                scans = observed["scans"]
-                summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
-                    if not context_plan.source_usable(source)
-                    or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
-                if summary_keys or not snapshot['sources']:
-                    summary_keys = summary_keys or None
-                    if summary_keys == source_keys:
-                        scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
-                    else:
-                        scan_reads += 1
-                        summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
-                            reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
-                        scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
-                for candidate, state, due, scope_keys, lanes in scopes:
-                    if ('A' in lanes and due['A']
-                            and (candidate.get('source_coverage', {}).get('unreflected')
-                                 or not candidate['acquisition']['complete'])
-                            and not any(context_plan.source_usable(source) for source in candidate['sources'])):
-                        due['A'] = False
-                    if not any(due[lane] for lane in lanes):
-                        if observed_out is not None:
-                            observed_out['wait_no_due_lane'] += 1
-                        waiting += int(candidate['unfinished'])
-                        continue
-                    if 'A' in lanes and due['A']:
-                        try:
-                            generation = _generation_plan(reader.db, pid, cfg, candidate, now)
-                            quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
-                                now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
-                        except ValueError:
-                            generation, quota = None, {'allowed': False}
-                        candidate['_generation_plan'] = generation
-                        if not quota['allowed']:
-                            if observed_out is not None:
-                                observed_out['wait_generation_quota'] += 1
-                            due['A'] = False
-                            waiting += 1
-                            if not any(due[lane] for lane in lanes):
-                                continue
-                    changes = ledger.db.total_changes
-                    ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
-                        deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
-                    if ledger.db.total_changes != changes:
-                        proof = None
-                    if proof is not None:
-                        proof['writer'] = ledger.db
-                        proof['writer_changes'] = ledger.db.total_changes
-                    candidate['_readiness_proof'] = proof
-                    patient_context_refresh_sources._scan_check(reader.db)
-                    if not candidate['dependencies']['complete']:
-                        if observed_out is not None:
-                            observed_out['wait_dependency_incomplete'] += 1
-                        due['A'] = False
-                    if not ready and observed_out is not None:
-                        observed_out['wait_readiness_unverified'] += 1
-                    waiting += int(candidate['unfinished'] or not ready)
-                    if ready:
-                        best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
-                if best:
-                    selected = pid
-                    break
-                if _scan_covered(reader.db, seen):
-                    covered = True
-                    break
+        except Exception:
+            # Early exits keep the turns already consumed; the original error
+            # still decides the outcome when this save is refused.
+            if unsaved and rotation is not None:
+                try:
+                    persist()
+                except Exception:
+                    pass
+            raise
+        if unsaved:
+            persist()
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
