@@ -751,6 +751,15 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
     return report
 
 
+def apply_local_release_tx(db, req, now):
+    """Record the human release of old unresolved requests to local processing, with its receipt."""
+    through = policy.local_release_tx(
+        db, {"command_id": req["command_id"], "actor": req["actor"], "reason": req["reason"]}, now)
+    if through is None:
+        return "cloud_release_nothing", {}
+    return None, {"reason": req["reason"], "control": "local_release", "through": through}
+
+
 def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
     try:
@@ -798,7 +807,7 @@ def command(args):
             raise
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
-        if action in ("stop", "resume"):
+        if action in ("stop", "resume", "release-local"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -807,7 +816,7 @@ def command(args):
             from ledger import Ledger
             import mcs_requests
             import notify_spool
-            req = {"version": 1, "cmd": "ops.cloud_" + action,
+            req = {"version": 1, "cmd": "ops.cloud_" + action.replace("-", "_"),
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
             # Validate before opening a writer; malformed CLI input never creates a ledger.
@@ -835,7 +844,8 @@ def command(args):
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")
+                              + (("through",) if action == "release-local" else ())}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
             import cloud_observation
@@ -1123,8 +1133,11 @@ def add_parsers(sub):
     q.add_argument("--reextract-backlog-until", dest="reextract_backlog_until",
                    help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開（期間の上限額の設定が必要）。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
-    for action in ("stop", "resume"):
-        q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
+    for action in ("stop", "resume", "release-local"):
+        q = actions.add_parser(action, help=(
+            "結果を確認できない古い外部AI要求を待たず、同じ入力のローカル処理を許可（人の確認と記録を伴う。再送はしない）"
+            if action == "release-local"
+            else "人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開")))
         q.add_argument("--confirm-human", action="store_true")
         q.add_argument("--reason", required=True)
         q.add_argument("--actor", default="local-human")

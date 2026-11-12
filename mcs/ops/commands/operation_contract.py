@@ -350,6 +350,7 @@ _OPS_VALIDATORS = {
     "ops.drug_alias_rollback": _v_drug_alias,
     "ops.cloud_stop": _v_cloud_control,
     "ops.cloud_resume": _v_cloud_control,
+    "ops.cloud_release_local": _v_cloud_control,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,
