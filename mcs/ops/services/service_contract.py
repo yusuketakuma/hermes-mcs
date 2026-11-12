@@ -54,9 +54,9 @@ def desired_agent_labels(cfg: dict) -> list[str]:
     else:
         labels = [STANDALONE_LABEL, HEALTH_LABEL]
     sdc = cfg.get("sdc", {})
-    if not isinstance(sdc, dict) or type(sdc.get("enabled", False)) is not bool:
+    if not isinstance(sdc, dict) or type(sdc.get("enabled", True)) is not bool:
         raise ValueError("sdc_config_invalid")
-    return labels + ([SDC_LABEL] if sdc.get("enabled", False) else [])
+    return labels + ([SDC_LABEL] if sdc.get("enabled", True) else [])
 
 def diagnosed_agent_labels(cfg: dict) -> list[str]:
     """Agents doctor/check expect loaded: the owned set plus the LINE WORKS adapter.

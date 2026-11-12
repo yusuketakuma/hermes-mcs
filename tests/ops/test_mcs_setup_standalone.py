@@ -85,11 +85,12 @@ def test_every_cron_job_has_a_calendar_and_unsupported_fields_fail():
 
 
 def test_agent_labels_and_ownership_follow_the_runtime():
-    assert service_contract.desired_agent_labels({}) == service_contract.AGENT_LABELS
+    # sdc.enabled is on by default: the dedicated job is owned unless explicitly disabled.
+    assert service_contract.desired_agent_labels({}) == service_contract.AGENT_LABELS + [service_contract.SDC_LABEL]
     labels = service_contract.desired_agent_labels(config())
     cron = [service_contract.cron_label(s) for _, _, s in scheduled_jobs.CRON_JOBS]
     # the health watch stays outside the host it watches
-    assert labels == [service_contract.STANDALONE_LABEL, service_contract.HEALTH_LABEL]
+    assert labels == [service_contract.STANDALONE_LABEL, service_contract.HEALTH_LABEL, service_contract.SDC_LABEL]
     # The same host owns collection even without a card connection.
     assert service_contract.desired_agent_labels(config('off')) == labels
     for label in cron + [service_contract.STANDALONE_LABEL, "local.mcs-cmd"]:

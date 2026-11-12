@@ -83,12 +83,15 @@ def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python(tmp_p
     for mode in ('standalone', 'hermes'):
         cfg = {'runtime_mode': mode}
         original = service_contract.desired_agent_labels(cfg)
-        assert service_contract.SDC_LABEL not in original
-        for settings in ({}, {'enabled': False}):
+        # sdc.enabled defaults to on: only an explicit false removes the dedicated job.
+        assert service_contract.SDC_LABEL in original
+        for settings in ({'enabled': False},):
             cfg['sdc'] = settings
             assert service_contract.SDC_LABEL not in service_contract.desired_agent_labels(cfg)
+        for settings in ({}, {'enabled': True}):
+            cfg['sdc'] = settings
+            assert service_contract.SDC_LABEL in service_contract.desired_agent_labels(cfg)
         cfg['sdc'] = {'enabled': True, 'state_root': '/synthetic/private'}
-        assert service_contract.desired_agent_labels(cfg) == original + [service_contract.SDC_LABEL]
         values = service_contract.service_substitutions(cfg, root=str(base / 'root'), checkout=str(checkout), standalone_runtime_home='/synthetic/runtime', hermes_runtime_home='/synthetic/hermes', hermes_python='/synthetic/pinned/python', recovery_dir=str(base / 'recovery'))
         assert values['SDC_ROOT'] == '/synthetic/private'
         assert values['PYTHON'] == ('/synthetic/runtime/venv/bin/python3' if mode == 'standalone' else '/synthetic/pinned/python')
@@ -136,6 +139,26 @@ def test_stale_job_cannot_start_with_current_owner_off_or_invalid(tmp_path, monk
     before = {p.name: p.read_bytes() for p in root.iterdir()}
     assert sdc_cli.tick(root) == (1 if kind in ('non_object', 'broken', 'symlink') else 0)
     assert {p.name: p.read_bytes() for p in root.iterdir()} == before
+
+
+@pytest.mark.parametrize('sdc,admitted_root,want', [
+    ({'state_root': '{root}'}, '{root}', True),                            # enabled omitted: on by default
+    ({'enabled': True, 'state_root': '{root}'}, '{root}', True),
+    ({'enabled': False, 'state_root': '{root}'}, '{root}', False),
+    ({'enabled': 1, 'state_root': '{root}'}, '{root}', False),
+    ({'enabled': 'true', 'state_root': '{root}'}, '{root}', False),
+    ({'enabled': True}, '{root}', False),                                  # state_root missing
+    ({'enabled': True, 'state_root': '{other}'}, '{root}', False),         # mismatched root
+    ({'enabled': True, 'state_root': '{root}'}, '{other}', False),         # admitted root differs
+    ({}, '{root}', False),                                                 # no sdc section at all
+])
+def test_enrollment_config_admits_enabled_default_and_root_boundary(tmp_path, sdc, admitted_root, want):
+    root, other = tmp_path / 'private', tmp_path / 'other'
+    paths = {'{root}': root, '{other}': other}
+    settings = {key: paths.get(value, value) for key, value in sdc.items()}
+    settings = {key: (str(value) if isinstance(value, Path) else value) for key, value in settings.items()}
+    cfg = {'sdc': settings} if sdc else {}
+    assert sdc_cli._enrollment_config_admits(cfg, paths[admitted_root]) is want
 
 
 @pytest.mark.parametrize('revoke_at,expected', [
