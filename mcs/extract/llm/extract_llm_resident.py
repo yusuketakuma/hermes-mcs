@@ -439,7 +439,8 @@ def _main() -> int:
                     seconds = min(seconds, max(_IDLE_FLOOR_S, due))
                 print(json.dumps({"idle_s": round(seconds, 1),
                                   "due_in_s": None if due is None else round(due, 1),
-                                  "carried": len(carry), "ts": time.time()}), flush=True)
+                                  "carried": len(carry), "lane": args.lane, "pid": os.getpid(),
+                                  "ts": time.time()}), flush=True)
                 pause(seconds)
 
             total = {"done": 0, "failed": 0, "left": 0}
@@ -464,6 +465,11 @@ def _main() -> int:
                           file=sys.stderr, flush=True)
                 return 0
 
+            def carry_waiting():
+                # The lane 1/2 resume record has the same shape; carry rows are never logged.
+                print(json.dumps({"carry_waiting": True, "carried": len(carry), "lane": args.lane,
+                                  "pid": os.getpid(), "ts": time.time()}), flush=True)
+
             while True:
                 if not _writer_current(full=True):
                     return retire()
@@ -474,6 +480,8 @@ def _main() -> int:
                     import llm_slot_schedule
                     if not llm_slot_schedule.night():
                         _settle_carry(led, carry, final=False, fence=context_state)
+                        if carry:
+                            carry_waiting()
                         pause(_IDLE_FLOOR_S)
                         continue
                 try:
@@ -484,15 +492,19 @@ def _main() -> int:
                         if resume_budget <= 0:
                             total["stopped"] = "stop_after"
                             break
+                        started = time.monotonic()
                         resumed = run_pending(led, limit=1, budget_s=resume_budget,
                             per_write_lock=True, write_wait_s=_RESIDENT_WRITE_WAIT_S, carry=carry)
+                        elapsed = time.monotonic() - started
                         carry = resumed.pop("carry", carry)
                         if resumed.get("updated"):
                             return retire()
                         total["done"] += resumed["done"]
                         total["failed"] += resumed["failed"]
                         total["left"] = resumed["left"]
-                        print(json.dumps({**resumed, "ts": time.time()}, ensure_ascii=False), flush=True)
+                        print(json.dumps({**resumed, "lane": args.lane, "pid": os.getpid(),
+                                          "elapsed_s": round(elapsed, 1), "turn": "carry",
+                                          "ts": time.time()}, ensure_ascii=False), flush=True)
                         if carry:
                             pause(2)
                             continue
@@ -511,6 +523,7 @@ def _main() -> int:
                             return 0
                         _settle_carry(led, carry, final=False, fence=context_state)
                         if carry:
+                            carry_waiting()
                             pause(2)
                             continue
                         context_refresh = _background_context_refresh(led, context_state, stop)
@@ -549,6 +562,9 @@ def _main() -> int:
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on"
                                      and cloud_policy.send_route("reextract") else 1)
+                    turn = ("oldest" if oldest_turn else "recent_only" if semantic_priority
+                            else "normal")
+                    started = time.monotonic()
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
@@ -563,6 +579,7 @@ def _main() -> int:
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
+                    elapsed = time.monotonic() - started
                     if oldest_turn:
                         semantic_archive_turn = not semantic_archive_turn
                     if oldest_turn:
@@ -579,8 +596,10 @@ def _main() -> int:
                     sem = None
                     ran_semantic = False
                     if args.semantic and not carry:
+                        started = time.monotonic()
                         sem = _background_semantic(led, stop)
-                        print(json.dumps({"semantic": sem,
+                        print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
+                                          "elapsed_s": round(time.monotonic() - started, 1),
                                           "ts": time.time()},
                                          ensure_ascii=False), flush=True)
                         ran_semantic = any(
@@ -612,7 +631,9 @@ def _main() -> int:
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
-                print(json.dumps({**r, "ts": time.time()}, ensure_ascii=False),
+                print(json.dumps({**r, "lane": args.lane, "pid": os.getpid(),
+                                  "elapsed_s": round(elapsed, 1), "turn": turn,
+                                  "ts": time.time()}, ensure_ascii=False),
                       flush=True)
                 # a semantic-first pass extracts little: do not idle on it
                 if sem and (sem.get("done") or sem.get("progressed")
