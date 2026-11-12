@@ -153,7 +153,7 @@ def test_binding_hold_refills_independent_work(jobs_db, monkeypatch, prioritize,
     for job_id in held:
         row = jobs_db.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone()
         assert row['state'] == 'pending' and row['attempts'] == 0
-        assert row['next_try'] == row['updated_at'] + 60
+        assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
     assert semantic_drain._sched_state(jobs_db)['arrival_selected'] == 1
     assert 'payload_hold_cursors' not in semantic_drain._sched_state(jobs_db)
 
