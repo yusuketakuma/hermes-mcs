@@ -137,6 +137,22 @@ def test_context_pass_keeps_deferred_reasons_strictly_whitelisted():
         assert record["reason"] == "unclassified"
 
 
+@pytest.mark.parametrize("reason", [
+    "patient_context_generation_active",
+    "patient_context_generation_clock_changed",
+    "patient_context_generation_daily_limit",
+    "patient_context_generation_interval",
+    "patient_summary_quality_lock",
+    "patient_summary_quality_budget_changed",
+    "patient_summary_quality_source_changed",
+    "summary_quality_unknown",
+    "source_quality_unknown",
+])
+def test_context_pass_reports_known_deferral_reasons(reason):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "reason": reason})
+    assert record["reason"] == reason
+
+
 @pytest.mark.parametrize("value", [True, False, -1, 1.5, "synthetic-private", [], {}, 2**63])
 def test_context_pass_rejects_arbitrary_status_reasons_lanes_and_counts(value):
     result = {key: value for key in ("status", "reason", "lane", "done", "scanned", "scan_ms")}
