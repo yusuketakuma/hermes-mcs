@@ -553,11 +553,13 @@ def tick_world(tmp_path, monkeypatch):
             pass  # This fake models a settled credential; mutation holds use the real Store tests.
 
         def read(self, name, default=None):
-            assert name in ('state.json', 'endpoint.json', 'inventory-policy.json')
+            assert name in ('state.json', 'endpoint.json', 'inventory-policy.json', 'telemetry-policy.json')
             if name == 'state.json':
                 return {'state': 'active', 'enabled': t.r1_enabled}
             if name == 'endpoint.json':
                 return {'origin': 'https://monitor.invalid', 'environment': 'synthetic', 'audience': 'monitor:synthetic'}
+            if name == 'telemetry-policy.json':
+                return None
             return {'enabled': True} if t.inventory_enabled else None
 
     class FakeConnector:

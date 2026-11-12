@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "CSDCへの固定テレメトリ送信を別同意で追加",
+  "summary": "mcs telemetry enableで明示的に許可した場合だけ、ハードウェア・稼働状態・実行ログのイベント名・ヘルス状態の固定項目を1時間間隔でCSDCへ送信します。患者情報・秘密値・ホスト名・パス・シリアル・MACアドレス・ログ本文は送りません。状態監視の接続・別の送信同意・state_rootがない環境では送信されません。中央側の受信設定（TELEMETRY_ENABLED）が無効な間はサーバーが拒否します。",
+  "upgrade": "追加操作は不要です。利用する場合は mcs telemetry enable で項目を選んで許可し、mcs telemetry status で状態を確認、停止は mcs telemetry disable です。中央側でテレメトリ受信が有効でない環境では送信は受理されません。",
+  "details": [
+    "adapters/sdc/telemetry.pyがhardware/operations/logs/mcsの4セクションを固定collectorで収集し、sdc.device-telemetry.v1封筒（16KiB上限）へ組み立てる。logsはイベント名・時刻・重大度のみで本文を含めない。",
+    "adapters/sdc/telemetry_sender.pyがtelemetry-policy.jsonの同意範囲だけを3600秒間隔でPOST /v2/device/telemetryへ送り、応答のreport_id・sectionsを照合する。失敗は指数バックオフ、恒久的拒否は停止として記録する。",
+    "mcs telemetry enable/status/disableをmcs_cliへ追加し、内容を列挙した対話同意の後にだけtelemetry-policy.jsonを書く。",
+    "sdc_cli.tickへinventoryとdiagnosticsの間で配線し、実行環境・endpoint・device・時計の再確認を送信直前に行う。",
+    "adapters/sdc/contracts/telemetry/へCSDC正本のschemaとREADMEをbyte同一で複製し、sources.jsonへ出典を記録する。"
+  ],
+  "refs": ["adapters/sdc/telemetry.py", "adapters/sdc/telemetry_sender.py", "mcs/ops/sdc_telemetry_cli.py", "mcs/ops/sdc_cli.py", "adapters/sdc/contracts/telemetry/telemetry.schema.json"]
+}

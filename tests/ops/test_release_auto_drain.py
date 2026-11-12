@@ -214,6 +214,7 @@ def test_native_agent_pid_parsing():
             return _R(0, 'state = running\n\tpid = 4321\n')
         return _R(0)
 
+    previous = sys.modules.get('environment_diagnostics')
     sys.modules['environment_diagnostics'] = _fake_diag({4321: 99.0})
     try:
         drain = native_launchd_drain(
@@ -223,7 +224,10 @@ def test_native_agent_pid_parsing():
         assert services[0]['pid'] == 4321
         assert calls[0][:3] == ['launchctl', 'print', 'gui/501/ai.mcs.extract-drainer']
     finally:
-        del sys.modules['environment_diagnostics']
+        if previous is None:
+            del sys.modules['environment_diagnostics']
+        else:
+            sys.modules['environment_diagnostics'] = previous
 
 
 def test_native_agent_pid_absent_and_errors():
