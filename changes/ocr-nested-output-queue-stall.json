@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "壊れたOCR出力1件で添付の文字起こしが止まり続ける問題を修正",
+  "summary": "OCRエンジンの出力が極端に深い入れ子になっていた場合も、その添付だけを失敗として記録し、後続の添付の処理を続けます。これまでは同じ添付で毎回処理が中断し、その後ろの添付が読まれませんでした。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "解析できない深さの出力は、構造が壊れた出力（output_schema）として扱います。原本と失敗の記録は保持し、既存の回数と間隔で再試行します。"
+  ],
+  "refs": ["mcs/extract/attachment_ocr.py", "tests/extract/test_attachment_ocr.py"]
+}

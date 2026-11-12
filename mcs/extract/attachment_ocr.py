@@ -428,7 +428,11 @@ def _document_text(document):
 
 
 def _parse_output(raw):
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw)
+    except RecursionError:
+        # nesting past the parser's depth is a broken structure like any other
+        raise ValueError("output_schema") from None
     if not isinstance(value, dict) or value.get("engine_version") != ENGINE_VERSION:
         raise ValueError("engine_version")
     items = value.get("pages")
