@@ -645,10 +645,41 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     denied = False
     fence = [None]
 
+    def inputs_unchanged(live, live_semantic):
+        # The patient's own inputs: latest document, quality metadata, the
+        # captured source/summary identity and the allowed scope.
+        if source is None:
+            latest, latest_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
+            if (latest != base_doc if base_doc is not None else
+                    latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
+                return False
+            if base_meta is not None and latest_meta != base_meta:
+                return False
+        patient_context_quality_receipts._quality_integrity(ledger.db, pid)
+        refreshed = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, live, context_plan.source_key(source), assessment,
+                        candidate_ref=source_candidate_ref)
+                     if source is not None else
+                     patient_context_refresh_sources._quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection, source_keys=source_keys))
+        return (refreshed["identity"] == identity
+                and (source is None or refreshed["chunks_sig"] == initial["chunks_sig"])
+                and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"]))
+
     def current(own_writes=0):
-        nonlocal denied
         if denied:
             return False
+        if ledger.db.in_transaction:
+            return checked(own_writes)
+        # A commit elsewhere during this read only re-reads it (bounded);
+        # changed inputs still deny at once.
+        for _ in range(3):
+            moved = checked(own_writes)
+            if moved is not None:
+                return moved
+        return False
+
+    def checked(own_writes):
+        """Return True/False, or None when only the database moved during an own read."""
+        nonlocal denied
         owns_read = not ledger.db.in_transaction
         try:
             if owns_read:
@@ -687,35 +718,30 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 denied = True
                 return False
             if owns_read:
-                if source is None:
-                    latest, latest_meta = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.KIND, pid)
-                    if (latest != base_doc if base_doc is not None else
-                            latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
-                        denied = True
-                        return False
-                    if base_meta is not None and latest_meta != base_meta:
-                        denied = True
-                        return False
-                patient_context_quality_receipts._quality_integrity(ledger.db, pid)
-                refreshed = (patient_context_refresh_sources._source_quality_capture(ledger.db, pid, live, context_plan.source_key(source), assessment,
-                                candidate_ref=source_candidate_ref)
-                             if source is not None else
-                             patient_context_refresh_sources._quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection, source_keys=source_keys))
-                if (refreshed["identity"] != identity
-                        or source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]
-                        or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"])):
+                if not inputs_unchanged(live, live_semantic):
                     denied = True
                     return False
                 ledger.db.rollback()
                 after_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
-                if before_version != after_version or ledger.db.total_changes != before_changes:
+                if ledger.db.total_changes != before_changes:
                     denied = True
                     return False
+                if before_version != after_version:
+                    return None
                 fence[0] = (after_version, before_changes)
-            elif (fence[0] is None or ledger.db.execute("PRAGMA data_version").fetchone()[0] != fence[0][0]
-                  or ledger.db.total_changes != fence[0][1] + own_writes):
+            elif fence[0] is None or ledger.db.total_changes != fence[0][1] + own_writes:
                 denied = True
                 return False
+            elif ledger.db.execute("PRAGMA data_version").fetchone()[0] != fence[0][0]:
+                # Every in-transaction caller (_quality_claim, _quality_mark_skipped,
+                # _quality_store_answers, _quality_mark_pass, _quality_record_failure,
+                # semantic_runtime.reserve_artifact, _quality_reserve_repair_tx) holds
+                # BEGIN IMMEDIATE, so this re-check reads the latest committed inputs
+                # under the writer lock. A deferred read transaction must not call here.
+                if not inputs_unchanged(live, live_semantic):
+                    denied = True
+                    return False
+                fence[0] = (ledger.db.execute("PRAGMA data_version").fetchone()[0], fence[0][1])
             return True
         except (ValueError, KeyError, TypeError, OSError):
             denied = True

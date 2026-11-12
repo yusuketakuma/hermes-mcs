@@ -76,7 +76,11 @@ def _acquire(current=None, deadline=None):
 
 
 def _quality_claim(ledger, pid, input_key, deadline, current):
-    """Claim one patient's quality work; inputs are checked inside the writer transaction."""
+    """Claim one patient's quality work; current() re-verifies the inputs inside the writer transaction.
+
+    Inside the transaction current() compares data_version and this
+    connection's write count, and re-reads the patient's inputs only after
+    another connection committed."""
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if not current():
