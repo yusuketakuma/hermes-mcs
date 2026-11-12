@@ -54,18 +54,38 @@ from extract_llm_source_contract import (
     SEMANTIC_FIRST_S,
     _ARRIVAL_CARRY_S,
     _BATCH_K,
+    _CARRY_MARGIN_S,
     _INFERENCE_VERSION,
     _LOADED_SOURCE_DIGESTS,
     _LOADED_SOURCE_PATHS,
+    _MIN_CALL_S,
     _RESIDENT_STARTUP_POLL_S,
     _RESIDENT_STARTUP_WAIT_S,
     _RESIDENT_WRITE_WAIT_S,
     _SEMANTIC_RECENT_TURNS,
+    TIMEOUT,
     _writer_current,
     _writer_current_diagnostic,
 )
 
 _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
+# Completed results a resident may hold in memory while their save waits.
+_CARRY_LOOKAHEAD_MAX = 2
+_PAID_CARRY_MARKS = ("_cloud_owned", "_cloud_discard", "_cloud_guard")
+
+
+def _lookahead_budget(carry) -> float:
+    """Seconds one local-only pass may run while ``carry`` waits; 0 when none is allowed.
+
+    A paid result never gets company in memory, and the pass ends before the
+    earliest carried lease reaches the settle margin."""
+    if not carry or len(carry) >= _CARRY_LOOKAHEAD_MAX or any(
+            not isinstance(r, dict) or r.get("_cloud_mode") == "on"
+            or any(r.get(mark) for mark in _PAID_CARRY_MARKS)
+            for r, _lease, _commit in carry):
+        return 0.0
+    budget = min(lease for _r, lease, _commit in carry) - time.time() - _CARRY_MARGIN_S - TIMEOUT
+    return budget if budget >= _MIN_CALL_S else 0.0
 
 
 def _recent_arrivals(ledger) -> set:
@@ -485,6 +505,7 @@ def _main() -> int:
                         pause(_IDLE_FLOOR_S)
                         continue
                 try:
+                    look_budget = 0.0
                     if carry and not context_lane:
                         resume_budget = _RESIDENT_WRITE_WAIT_S + 1
                         if stop is not None:
@@ -505,37 +526,42 @@ def _main() -> int:
                         print(json.dumps({**resumed, "lane": args.lane, "pid": os.getpid(),
                                           "elapsed_s": round(elapsed, 1), "turn": "carry",
                                           "ts": time.time()}, ensure_ascii=False), flush=True)
-                        if carry:
+                        look_budget = _lookahead_budget(carry)
+                        if carry and not look_budget:
                             pause(2)
                             continue
-                    if cloud_pool is not None:
+                    if cloud_pool is not None and not look_budget:
                         cloud_pool.sync(load_config(), ledger=led)
                     if context_lane:
                         # lane 3 serves patient context first; it yields to
                         # semantic/extraction only when nothing is due. A
                         # carried result gets its lock attempt first and its
                         # claim lease renewed, so the context units it waits
-                        # through cannot outlive the claim.
+                        # through cannot outlive the claim. While a local
+                        # result still waits, only the bounded lookahead pass
+                        # runs; patient context waits for the save.
                         if writer_lock.updater_state() != context_state:
                             # an updater ran since the last pass: old code
                             # must not write the carried result either
                             _settle_carry(led, carry, write=False)
                             return 0
                         _settle_carry(led, carry, final=False, fence=context_state)
-                        if carry:
+                        look_budget = _lookahead_budget(carry)
+                        if carry and not look_budget:
                             carry_waiting()
                             pause(2)
                             continue
-                        context_refresh = _background_context_refresh(led, context_state, stop)
-                        if context_refresh.get("status") != "off":
-                            print(json.dumps({"nightly": context_refresh, "ts": time.time()},
-                                             ensure_ascii=False), flush=True)
-                        if context_refresh.get("run_lock_lost") == "updated":
-                            _settle_carry(led, carry, write=False)
-                            return 0
-                        if context_refresh.get("done"):
-                            pause(1)
-                            continue
+                        if not carry:
+                            context_refresh = _background_context_refresh(led, context_state, stop)
+                            if context_refresh.get("status") != "off":
+                                print(json.dumps({"nightly": context_refresh, "ts": time.time()},
+                                                 ensure_ascii=False), flush=True)
+                            if context_refresh.get("run_lock_lost") == "updated":
+                                _settle_carry(led, carry, write=False)
+                                return 0
+                            if context_refresh.get("done"):
+                                pause(1)
+                                continue
                     # the inner batch must also honor --stop-after: its
                     # budget is the remaining allowance, not a fresh 3600 s
                     # (F13)
@@ -562,23 +588,30 @@ def _main() -> int:
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on"
                                      and cloud_policy.send_route("reextract") else 1)
-                    turn = ("oldest" if oldest_turn else "recent_only" if semantic_priority
-                            else "normal")
+                    turn = ("lookahead" if look_budget else "oldest" if oldest_turn
+                            else "recent_only" if semantic_priority else "normal")
+                    # A lookahead pass parks the waiting results and admits one
+                    # local job; the next resume saves or renews them all.
+                    parked, carry = (carry, []) if look_budget else ([], carry)
                     started = time.monotonic()
-                    r = run_pending(led, limit=extract_limit if args.semantic else 8,
-                                    budget_s=min(budget, 900),
-                                    oldest_first=oldest_turn,
-                                    archived_first=oldest_turn and semantic_archive_turn and cloud_cfg["mode"] != "on",
-                                    fair_oldest=oldest_turn,
-                                    prioritize_patients=cloud_turn and cloud_cfg["mode"] == "on",
-                                    per_write_lock=True,
-                                    vital_policy=vpol,
-                                    workers=max(1, min(args.workers, 8)),
-                                    shard=shard, batch_k=args.batch,
-                                    admitted_ids=adm,
-                                    allow_cloud=True, background=True,
-                                    write_wait_s=_RESIDENT_WRITE_WAIT_S,
-                                    carry=carry)
+                    try:
+                        r = run_pending(led, limit=1 if parked else extract_limit if args.semantic else 8,
+                                        budget_s=min(budget, 900, look_budget) if parked else min(budget, 900),
+                                        oldest_first=oldest_turn,
+                                        archived_first=oldest_turn and semantic_archive_turn and cloud_cfg["mode"] != "on",
+                                        fair_oldest=oldest_turn,
+                                        prioritize_patients=cloud_turn and cloud_cfg["mode"] == "on",
+                                        per_write_lock=True,
+                                        vital_policy=vpol,
+                                        workers=max(1, min(args.workers, 8)),
+                                        shard=shard, batch_k=args.batch,
+                                        admitted_ids=adm,
+                                        allow_cloud=not parked, background=True,
+                                        write_wait_s=_RESIDENT_WRITE_WAIT_S,
+                                        carry=carry)
+                    except BaseException:
+                        carry = parked + carry
+                        raise
                     elapsed = time.monotonic() - started
                     if oldest_turn:
                         semantic_archive_turn = not semantic_archive_turn
@@ -591,8 +624,9 @@ def _main() -> int:
                         # returned before run_pending could include it.
                         if "carry" in r:
                             carry = r.pop("carry") or []
+                        carry = parked + carry
                         return retire()
-                    carry = r.pop("carry", None) or []  # internal; never logged
+                    carry = parked + (r.pop("carry", None) or [])  # internal; never logged
                     sem = None
                     ran_semantic = False
                     if args.semantic and not carry:
