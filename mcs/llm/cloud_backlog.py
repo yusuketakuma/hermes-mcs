@@ -205,11 +205,16 @@ class CloudBacklogPool:
         self.indices = {}
         self.lock = None
         self.last_sync = 0.0
+        # The context pool's owner also keeps the stored-message workers of a
+        # bounded reopening: they spawn only while that window is open.
+        self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
         import cloud_inference
         import cloud_policy
         import extract_llm
+        if self.backlog is not None:
+            self.backlog.sync(cfg, ledger=ledger)
         now = time.monotonic()
         if now - self.last_sync < 10:
             return
@@ -227,7 +232,7 @@ class CloudBacklogPool:
             # Cloud availability is decided inside run_due. A missing key or
             # a spend hold must not hide its existing local fallback/recovery.
         else:
-            if not (cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog")):
+            if not cloud_policy.reextract_planned(settings):
                 # Existing workers settle paid carry before retiring.
                 return
             if not cloud_policy.selected_key(self.root):
@@ -263,11 +268,13 @@ class CloudBacklogPool:
                  sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid()),
                  "--index", str(index), *(["--context-only"] if self.context_only else [])],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                close_fds=True)
+                close_fds=True, env={**os.environ, cloud_policy.BACKLOG_WORKER_ENV: "0" if self.context_only else "1"})
             self.children.append(child)
             self.indices[child] = index
 
     def close(self):
+        if self.backlog is not None:
+            self.backlog.close()
         for child in self.children:
             if child.poll() is None:
                 child.terminate()
@@ -442,8 +449,8 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
-                routes_open = (cloud_policy.send_route("reextract")
-                               and cloud_policy.send_route("semantic_backlog"))
+                routes_open = cloud_policy.reextract_planned(settings)
+                semantic_open = cloud_policy.send_route("semantic_backlog")
                 if index is not None:
                     retire = (settings["mode"] != "on" or not routes_open
                               or index >= settings["max_concurrency"])
@@ -478,12 +485,17 @@ def worker(parent, *, index=None, context_only=False):
                     continue
                 started = time.monotonic()
                 try:
+                    if phase % 2 and not semantic_open:
+                        phase += 1      # only the stored-message backlog is open: no semantic turn
+                        continue
                     if phase % 2 == 0:
                         waiting["code"] = None
                         with _phase_progress("extract"):
                             result = None
                             try_ocr, ocr_turn = ocr_turn, not ocr_turn
-                            if (try_ocr and not carry and isinstance(cfg.get('attachment_ocr'), dict)
+                            # attachment pages never reopen with the stored-message backlog
+                            if (try_ocr and not carry and cloud_policy.send_route("reextract")
+                                    and isinstance(cfg.get('attachment_ocr'), dict)
                                     and cfg['attachment_ocr'].get('enabled') is True):
                                 import attachment_inference
                                 ocr = attachment_inference.run_pending(ledger, cfg, stage='cloud',
