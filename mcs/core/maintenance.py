@@ -51,6 +51,14 @@ BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 # H4: the read-only snapshot is republished only when the ledger changed
 # (cheap marker, see _content_signature) or the published copy is this old
 SNAPSHOT_MAX_AGE_S = 3600
+# RC4: a change that only appended rows waits this long after the last
+# publish (about every other 10-minute tick) instead of copying ~1 GB each
+# tick; 0 restores publish-on-every-change. Urgent changes skip the wait.
+SNAPSHOT_MIN_INTERVAL_S = 900
+# marker keys a human acts on right away (schema, patient display fields,
+# requests and command receipts): any move publishes without the wait
+SNAPSHOT_URGENT_KEYS = frozenset({"", "patients@content", "requests@updated_at",
+                                  "command_receipts"})
 SNAPSHOT_SIG_NAME = ".publish-sig.json"
 # bookkeeping every tick writes; alone it never warrants a full copy
 SNAPSHOT_SIG_IGNORED = frozenset({"runs", "snapshot_meta"})
@@ -792,6 +800,32 @@ def _recent(at, now: float, interval: float) -> bool:
             and 0 <= now - at < interval)
 
 
+def _rows_appended_only(old, new: dict) -> bool:
+    """True when every marker move since ``old`` is a table's MAX(rowid)
+    growing and no urgent key moved. A table added or dropped, a lower or
+    vanished MAX(rowid) (restore, rollback) or any other change is False."""
+    if not isinstance(old, dict) or old.keys() != new.keys():
+        return False
+    for key, value in new.items():
+        before = old[key]
+        if before == value:
+            continue
+        if key in SNAPSHOT_URGENT_KEYS or type(value) is not int \
+                or not (before is None or (type(before) is int and value > before)):
+            return False
+    return True
+
+
+def snapshot_published_age_s(now: float | None = None) -> float | None:
+    """Seconds since the published copy was last replaced (its mtime);
+    None when there is no published copy."""
+    try:
+        mtime = os.stat(os.path.join(SNAPSHOT_DIR, "ledger-snapshot.db")).st_mtime
+    except OSError:
+        return None
+    return max(0.0, (time.time() if now is None else now) - mtime)
+
+
 def refresh_snapshot(db_path: str, *, force: bool = False,
                      now: float | None = None,
                      deadline: float | None = None,
@@ -800,13 +834,15 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
 
     Every tick used to copy and quick_check the whole ledger (144 full
     copies a day). Now a publish happens when ``force`` (the notification
-    snapshot_dirty flag), the content marker moved since the last
-    publish, no published copy exists, or the copy is SNAPSHOT_MAX_AGE_S
-    old. That age triggers another attempt, not a freshness guarantee
-    when publication fails. Returns 'published',
-    'unchanged', or None when a needed publish failed. The marker is
-    taken BEFORE the copy: a write landing in between only makes the
-    next tick publish again."""
+    snapshot_dirty flag), an urgent marker key moved or any MAX(rowid)
+    fell, no published copy or marker exists, or the copy is
+    SNAPSHOT_MAX_AGE_S old. A change that only appended rows publishes
+    once SNAPSHOT_MIN_INTERVAL_S has passed since the last publish and
+    is 'deferred' before that. The ages trigger another attempt, not a
+    freshness guarantee when publication fails. Returns 'published',
+    'unchanged', 'deferred', or None when a needed publish failed. The
+    marker is taken BEFORE the copy: a write landing in between only
+    makes the next tick publish again."""
     snapshots._reset_status()
     total_started = time.perf_counter()
     if deadline is not None and monotonic() >= deadline:
@@ -836,13 +872,19 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_f
     if deadline is not None and monotonic() >= deadline:
         snapshots._fail("signature_deadline")
         return None
-    if (not force and sig is not None and prev.get("sig") == sig
-            and _recent(prev.get("published_at"), now, SNAPSHOT_MAX_AGE_S)
-            and _plain_file(dest)):
+    skip = None
+    if not force and sig is not None and _plain_file(dest):
+        published_at = prev.get("published_at")
+        if prev.get("sig") == sig and _recent(published_at, now, SNAPSHOT_MAX_AGE_S):
+            skip = "unchanged"
+        elif (_recent(published_at, now, SNAPSHOT_MIN_INTERVAL_S)
+              and _rows_appended_only(prev.get("sig"), sig)):
+            skip = "deferred"   # the marker stays: the wait counts from the last publish
+    if skip is not None:
         if deadline is not None and monotonic() >= deadline:
             snapshots._fail("signature_deadline")
             return None
-        return "unchanged"
+        return skip
     if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
                             verification_context=verification_context):
         return None

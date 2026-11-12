@@ -46,6 +46,7 @@
     {"name": "backup_newest_age_s", "source": "health", "path": "backup.local.newest_age_s", "type": "number"},
     {"name": "ledger_wal_bytes", "source": "health", "path": "ledger_wal_bytes", "type": "int"},
     {"name": "snapshot_verify_slow_runs", "source": "health", "path": "snapshot_verify_slow_runs", "type": "int"},
+    {"name": "snapshot_age_s", "source": "health", "path": "snapshot_age_s", "type": "int"},
     {"name": "patient_context_status", "source": "health", "path": "patient_context.status", "type": "code"},
     {"name": "extract_poison_gated", "source": "health", "path": "extract_v2_coverage.poison_gated", "type": "int"},
     {"name": "cpu_count", "source": "host", "path": "cpu.count", "type": "int"},

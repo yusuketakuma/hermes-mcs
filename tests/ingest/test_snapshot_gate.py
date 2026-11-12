@@ -578,18 +578,20 @@ def test_finish_run_raises_gate_error_when_writes_left_forbidden(tmp_path, monke
     db.close()
 
 
-def test_finish_run_unchanged_without_gate_engagement(tmp_path, monkeypatch):
+@pytest.mark.parametrize("state", ["unchanged", "deferred"])
+def test_finish_run_unchanged_without_gate_engagement(tmp_path, monkeypatch, state):
     db, updater, lock_fd, baseline = _finish_env(tmp_path, monkeypatch)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda *a: False)
-    # 'unchanged' never reaches the publisher, so the gate stays unrun
-    # and _finish_run must not treat the idle flag as a gate failure.
-    monkeypatch.setattr(maintenance, "refresh_snapshot", lambda *a, **kw: "unchanged")
+    # 'unchanged'/'deferred' never reach the publisher, so the gate stays
+    # unrun and _finish_run must not treat the idle flag as a gate failure.
+    monkeypatch.setattr(maintenance, "refresh_snapshot", lambda *a, **kw: state)
     result = {"notify": {}, "errors": [], "incomplete": []}
     run_id = db.begin_run(None)
     assert run_check._finish_run(db, {}, result, run_id,
                                  deadline=time.monotonic() + 60,
                                  run_lock_fd=lock_fd, db_baseline=baseline) == "ok"
-    assert result["snapshot_state"] == "unchanged"
+    assert result["snapshot_state"] == state and result["snapshot"] is True
+    assert not result["errors"]
     os.close(lock_fd)
     db.close()
 
