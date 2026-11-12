@@ -351,6 +351,10 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
             warnings.append(f'復旧監視の対象は{recorded}です。この導入先{paths.checkout}とは異なります。' + fix)
         if not agent_loaded(contract.RECOVERY_LABEL, paths=paths):
             errors.append(f'復旧監視{contract.RECOVERY_LABEL}は導入済みですが読み込まれていません。起動方法: `launchctl bootstrap gui/{uid} {plist}`')
+        held = recovery_hold(paths.root)
+        if held:
+            warnings.append(f'復旧監視は保留中です（{held}）。中断した更新があっても自動では復旧しません。'
+                            '設定と保留記録を削除せず、`mcs_update.py status`と更新ガイド（UPGRADE_AGENT.md）§7を確認してください')
     if not any((agent_loaded(lb, paths=paths) for lb in contract.LLAMA_LABELS)):
         installed = [lb for lb in contract.LLAMA_LABELS if os.path.exists(os.path.join(paths.agents_dir, f'{lb}.plist'))]
         if installed:
@@ -359,6 +363,17 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
         else:
             warnings.append('ローカルAIの常駐設定がありません（' + ' / '.join(contract.LLAMA_LABELS) + '）。local_llm.urlの接続先で独自に管理している場合は問題ありません。それ以外は' + install_fix('手順4', paths=paths))
     return (errors, warnings)
+
+def recovery_hold(root: str) -> str | None:
+    """The watchdog's fixed hold token from recovery_report.json; never its detail."""
+    try:
+        raw = safe_io.read_regular_nofollow(os.path.join(root, 'data', 'recovery_report.json'), 65536, ValueError)
+        report = json.loads(raw) if len(raw) <= 65536 else None
+    except (OSError, ValueError, RecursionError):
+        return None
+    result = report.get('result') if isinstance(report, dict) and report.get('held') is True else None
+    return result if isinstance(result, str) and re.fullmatch(r'[a-z_]{1,64}', result) else None
+
 
 def write_service_file(path: str, body: str, mode: int | None=None) -> None:
     """tmp -> fsync -> chmod -> os.replace -> dir fsync — a mid-write
