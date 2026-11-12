@@ -1,14 +1,17 @@
 {
   "category": "fixed",
-  "title": "患者コンテキスト品質監査の延期理由に例外種別を残す",
-  "summary": "品質監査が例外で延期されたとき、これまでは原因が記録へ残らず追跡できませんでした。延期理由へ例外の種別または延期コードを付記し、次回発生時に原因を特定できるようにします。",
-  "upgrade": "追加設定は不要です。既存の更新手順で適用してください。延期理由の文字列に種別が付くため、監査状態 quality_state の unavailable 系の値が unavailable:<種別> の形で記録されます。held・failed・pending・skipped の判定には影響しません。",
+  "title": "患者コンテキスト品質監査の延期理由に例外種別を残し観測分類を固定化する",
+  "summary": "品質監査が例外で延期されたとき、これまでは原因が記録へ残らず追跡できませんでした。延期理由へ例外の種別または安全な延期コードを付記し、観測イベント側は接尾辞を除いた固定の理由分類へ戻すようにします。",
+  "upgrade": "追加設定は不要です。既存の更新手順で適用してください。監査状態 quality_state の unavailable 系の値が unavailable:<種別> の形で記録され、観測イベントの reason は source_quality_unavailable・summary_quality_unavailable などの固定分類に揃います。held・failed・pending・skipped の判定には影響しません。",
   "details": [
-    "source_quality_unavailable の延期理由へ、Deferred 例外はその延期コード、その他の例外は例外種別名を付記します。",
+    "source_quality_unavailable・summary_quality_unavailable の延期理由へ、Deferred 例外はその延期コード、安全な snake_case の ValueError はそのコード、それ以外は例外種別名を付記します。例外の本文は記録しません。",
+    "延期理由に付いた :<詳細> の接尾辞は、観測イベントでは固定の理由分類へ戻します。未知の接頭辞は従来どおり unclassified です。",
     "例外の握り潰し自体は変えません。理由文字列が変わるだけで、再試行・保留・公開の判定経路は同一です。"
   ],
   "refs": [
     "mcs/patients/patient_context_refresh.py",
-    "tests/patients/test_anthropic_context_refresh.py"
+    "mcs/llm/cloud_backlog.py",
+    "tests/patients/test_patient_context_refresh.py",
+    "tests/llm/test_context_pool_schedule.py"
   ]
 }
