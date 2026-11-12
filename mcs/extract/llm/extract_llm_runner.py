@@ -197,8 +197,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     list from the previous call's ``result["carry"]``) a finished result
     whose lock wait timed out keeps its claim lease and rides to the
     next call instead of being deferred. A call with carry only saves or
-    renews that previous pass: it admits no new inference, so a prolonged
-    run-lock wait cannot accumulate more completed passes in memory.
+    renews that previous pass and admits no new inference. The completed
+    results kept in memory during a save wait are bounded by the resident
+    loop: at most one extra local result from its lookahead pass, and none
+    while a paid result is carried.
     The result is dropped only when its lease nears expiry or its source
     moved, under the existing ownership and provider checks.
 
@@ -233,9 +235,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     carry_settled = dict.fromkeys(('done', 'held_prior', 'deferred'), 0)
     carry_count, carry_pids = 0, set()
     if carry:
-        # A retained pass owns the admission window until it is saved or
-        # rejected by the existing source/lease/provider checks. Never
-        # append new paid results while its run-lock wait is unresolved.
+        # A retained pass owns this call's admission window until it is saved
+        # or rejected by the existing source/lease/provider checks. Only the
+        # resident's bounded local lookahead (a separate call with carry=[])
+        # may infer meanwhile; it never adds paid results.
         if deadline - time.monotonic() > 1:
             wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
             carry_settled, carry_count, carry_pids = _settle_carry(
