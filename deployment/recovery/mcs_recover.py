@@ -801,7 +801,7 @@ def _recover_legacy(if_stale=False):
             if reason is not None:
                 return provider_migration_hold(reason)
         _clear_hold()
-        schema_rollback =(isinstance(applying, dict) and applying.get("rollback")
+        schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))
         if schema_rollback:
