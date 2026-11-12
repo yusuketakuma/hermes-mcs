@@ -105,9 +105,18 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
                                     "rejected": context_plan.rejected_items(answer, chunk)})
             if replan:
                 return replan
-            checked = context_plan.scan_items(answer, chunk)
-            if any(item not in checked for item in kept):
-                raise ValueError("nightly_unsupported_items")
+            try:
+                checked = context_plan.scan_items(answer, chunk)
+                if any(item not in checked for item in kept):
+                    raise ValueError("nightly_unsupported_items")
+            except ValueError:
+                # the bounded repair could not ground this chunk either: resume on
+                # the finer plan instead of failing the whole source at this size
+                finer = context_plan.split_scan(source, saved, cursor)
+                if finer:
+                    return {**finer, "complete": False, "facts": saved.get("facts", []),
+                            "audited": False, **({"repairs": repairs} if repairs else {})}
+                raise
             repairs += 1
         items += checked
     if metrics is not None:
