@@ -676,7 +676,7 @@ def test_summary_profiled_repair_cannot_hide_by_dropping_its_publication_ref(rep
     led.artifact_add('cloud_usage_reserve', '{}', project_id=1, meta={
         'route':'patient_context', 'unit_key':'summary_quality_repair',
         'owner':{'source_sig':identity['input_key']}, 'profile':'sol-high'})
-    assert not patient_context_refresh_readiness._summary_repair_publication(led.db, 1, {}, {}, {}, {'identity':identity}, {}, {}, 0.8)
+    assert not patient_context_refresh_readiness._summary_repair_publication(led.db, 1, {}, {}, {}, {'identity':identity}, {}, {})
 
 
 def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeypatch, tmp_path):

@@ -1284,7 +1284,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 try:
                     repair_verified = patient_context_refresh_readiness._summary_repair_publication(
                         ledger.db, pid, cfg, result, meta, refreshed_quality,
-                        quality_identity['assessment'], snapshot['contract'], live_policy['match_threshold'])
+                        quality_identity['assessment'], snapshot['contract'])
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
                 if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
