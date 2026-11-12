@@ -16,7 +16,7 @@ import cloud_inference as cloud_inference
 import inference_dependency_loss as dependency_loss
 from clinical_chunking import PLAN_VERSION as PLAN_VERSION
 from mcs_queries import JST as JST
-from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, strict_json as strict_json, valid_hash as valid_hash
+from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, safe_error_code as safe_error_code, strict_json as strict_json, valid_hash as valid_hash
 from inference_version import VERSION_KEY as VERSION_KEY, current_meta_pred as current_meta_pred, read_version as read_version
 import patient_context_plan as context_plan
 import patient_context_schedule as context_schedule
@@ -49,7 +49,6 @@ from patient_context_refresh_state import (
     SOURCE_REPAIR_CANDIDATE as SOURCE_REPAIR_CANDIDATE,
     _CHECKS as _CHECKS,
     _DEPENDENCY_CODE as _DEPENDENCY_CODE,
-    _FAILURE_CODE as _FAILURE_CODE,
     _INTERNAL_PROOF as _INTERNAL_PROOF,
     _STATE_CODE as _STATE_CODE,
     _adoption_artifact_matches as _adoption_artifact_matches,
@@ -1160,8 +1159,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             return_generation('unsent', proven_unsent=True)
         discard_if_changed()
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
-        code = str(exc)
-        failure = code if type(exc) is ValueError and patient_context_refresh_state._FAILURE_CODE.fullmatch(code) else type(exc).__name__
+        failure = safe_error_code(exc)
     if result is None and failure is None and deferred_reason is None:
         return {"status": "deferred", "done": 0}
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
