@@ -1258,6 +1258,47 @@ def stop(ledger):
     ledger.artifact_add("cloud_control", "paused")
 
 
+RESTORE_PAUSE = "database_restored"
+
+
+def pause_for_restore(db, restored_at, cfg, now=None) -> bool:
+    """Stop new cloud sends once for one database restore, inside the caller's transaction.
+
+    The replaced database lost every reservation, result and saved answer made
+    after its backup, and the repeat-request guard and the spending caps read
+    nothing else: a paid request could be sent and billed again. Resuming is
+    the existing human-confirmed operation. Only an installation with no
+    reservation, no cloud block and no provider key has nothing to protect."""
+    if type(restored_at) not in (int, float) or not math.isfinite(restored_at):
+        raise ValueError("restore_time_invalid")
+    restore = repr(float(restored_at))      # text: the lookup must not depend on float round-trips
+    if db.execute("SELECT 1 FROM artifacts WHERE kind='cloud_control' AND CASE WHEN json_valid(meta) "
+                  "THEN json_extract(meta,'$.restore') END=? LIMIT 1", (restore,)).fetchone():
+        return False       # already paused for this restore; a later human resume stands
+    if (isinstance(cfg, dict) and "cloud_llm" not in cfg and resolve_settings(cfg)[0]["mode"] == "off"
+            and not db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KINDS[0],)).fetchone()):
+        return False
+    db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+               ("cloud_control", "paused", MODEL,
+                json.dumps({"reason": RESTORE_PAUSE, "restore": restore}),
+                time.time() if now is None else now))
+    return True
+
+
+def restore_paused(db) -> bool:
+    """Whether the standing stop is the automatic one a database restore left."""
+    row = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_control' "
+                     "AND project_id IS NULL AND message_id IS NULL "
+                     "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    if row is None or row[0] != "paused":
+        return False
+    try:
+        meta = strict_json(row[1])
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return isinstance(meta, dict) and meta.get("reason") == RESTORE_PAUSE
+
+
 def resume(ledger):
     _circuit_result(ledger, None, reset=True)
     ledger.artifact_add("cloud_control", "running")

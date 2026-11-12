@@ -1082,6 +1082,10 @@ _CLOUD_REASON_JA = {
                                   f"契約・残高を確認し、{_CLOUD_RESUME} で再開"),
     "cloud_llm_pricing_unverified": ("外部AIの料金または使用量を確認できず、処理を停止しました",
                                      f"{_DOCTOR} で料金表と使用量を確認し、問題を解消してから {_CLOUD_RESUME} で再開"),
+    "cloud_llm_restore_paused": ("DBを復元したため、外部AIの新しい送信を止めています",
+                                 "復元時点より後の送信と課金の記録は、復元後のDBにありません。再開すると同じ内容を"
+                                 "再び送ることがあり、その分は上限の集計にも入りません。提供元の利用明細を確認してから "
+                                 f"{_CLOUD_RESUME} で再開"),
     "cloud_llm_circuit_open": ("外部AIへの要求が続けて失敗し、一時停止しています",
                                f"{_DOCTOR} で停止理由を確認し、待機期間後に再確認"),
 }
