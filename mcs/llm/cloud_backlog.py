@@ -657,6 +657,17 @@ def _context_pass_observation(result):
     return record
 
 
+def _context_retry_delay(result):
+    """Backoff for one context pass. selection_busy means another worker
+    holds the selection lock and is doing real work — retrying in seconds
+    just adds convoy noise, so wait longer."""
+    if result.get("done"):
+        return 1
+    if result.get("reason") == "patient_context_selection_busy":
+        return 20
+    return 5
+
+
 def _context_worker(ledger, initial, index):
     import cloud_inference
     import extract_llm_resident
@@ -679,7 +690,7 @@ def _context_worker(ledger, initial, index):
             _event("patient_context_pass", **record)
             if result.get("run_lock_lost") == "updated":
                 return
-            time.sleep(1 if result.get("done") else 5)
+            time.sleep(_context_retry_delay(result))
 
 
 def main():

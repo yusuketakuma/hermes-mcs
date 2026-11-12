@@ -71,6 +71,15 @@ def test_context_child_does_not_enter_after_source_generation_changes(runtime, r
     assert not posts and not document(ledger)
 
 
+def test_context_retry_delay_backs_off_only_for_selection_busy():
+    assert cloud_backlog._context_retry_delay({"done": 1}) == 1
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_waiting"}) == 5
+    assert cloud_backlog._context_retry_delay({"done": 0}) == 5
+
+
 def test_context_pass_reports_only_fixed_bounded_diagnostics():
     result = {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
               "scanned": 8, "scan_ms": 900000, "lane": "B", "project_id": 123,
