@@ -91,6 +91,26 @@ def test_context_pass_reports_only_fixed_bounded_diagnostics():
         "status": "complete", "done": 0}
 
 
+@pytest.mark.parametrize("reason", [
+    "source_quality_unavailable:RuntimeStale",
+    "source_quality_unavailable:nightly_audit_mismatch",
+    "summary_quality_unavailable:ValueError",
+    "patient_context_waiting:anything",
+])
+def test_context_pass_classifies_suffixed_reasons_by_fixed_base(reason):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "reason": reason})
+    assert record["reason"] == reason.partition(":")[0]
+    assert ":" not in record["reason"]
+
+
+@pytest.mark.parametrize("reason", [
+    "synthetic-private:detail", "unknown_base:x", ":leading", "a" * 100 + ":x",
+])
+def test_context_pass_rejects_suffixed_reasons_with_unknown_base(reason):
+    record = cloud_backlog._context_pass_observation({"status": "deferred", "reason": reason})
+    assert record["reason"] == "unclassified"
+
+
 @pytest.mark.parametrize("value", [True, False, -1, 1.5, "synthetic-private", [], {}, 2**63])
 def test_context_pass_rejects_arbitrary_status_reasons_lanes_and_counts(value):
     result = {key: value for key in ("status", "reason", "lane", "done", "scanned", "scan_ms")}

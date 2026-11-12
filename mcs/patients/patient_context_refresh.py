@@ -199,6 +199,19 @@ def _completed_cloud_receipts(ledger, provider, *, answered_only=False):
     return evidence
 
 
+_FAILURE_DETAIL = re.compile(r"[a-z][a-z0-9_]{2,80}")
+
+
+def _quality_unavailable_detail(exc):
+    """Bounded cause for quality-unavailable deferrals: delay codes, coded
+    snake_case ValueErrors and exception type names only — never payloads."""
+    if isinstance(exc, patient_context_refresh_state.Deferred):
+        return str(exc)
+    if type(exc) is ValueError and _FAILURE_DETAIL.fullmatch(str(exc)):
+        return str(exc)
+    return type(exc).__name__
+
+
 def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Advance one fair idle-lane unit, freezing inputs across inference and commit.
 
@@ -988,8 +1001,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             "truncated": len(quality_result["facts"]) > len(selected_facts)}
                         quality_status, quality_result = patient_context_quality_controller._quality_step(
                             ledger, pid, cfg, night_id, repaired, deadline, generation_admit, base_doc=old, base_meta=old_meta)
-                except (patient_context_refresh_state.Deferred, ValueError, RuntimeError):
-                    raise patient_context_refresh_state.Deferred("summary_quality_unavailable") from None
+                except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
+                    raise patient_context_refresh_state.Deferred(
+                        "summary_quality_unavailable:" + (_quality_unavailable_detail(exc) or type(exc).__name__)) from None
                 if quality_status not in ("passed", "skipped"):
                     raise patient_context_refresh_state.Deferred("summary_quality_" + quality_status)
                 quality_keys = quality_result.pop("_keys")
@@ -1105,9 +1119,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source)
                             except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                                 result = None
-                                detail = str(exc) if isinstance(exc, patient_context_refresh_state.Deferred) else type(exc).__name__
                                 raise patient_context_refresh_state.Deferred(
-                                    "source_quality_unavailable:" + (detail or type(exc).__name__)) from None
+                                    "source_quality_unavailable:" + (_quality_unavailable_detail(exc) or type(exc).__name__)) from None
                             if quality_status == "source_candidate":
                                 quality_status, quality_result = patient_context_quality_controller._quality_step(
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source,

@@ -1562,3 +1562,15 @@ def test_other_lanes_cannot_postpone_an_exhausted_summary_daily_retry():
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
     progress['last_attempt'] += 86400
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
+
+
+@pytest.mark.parametrize('exc,expected', [
+    (patient_context_refresh_state.Deferred('nightly_source_repair_lock'), 'nightly_source_repair_lock'),
+    (ValueError('nightly_audit_mismatch'), 'nightly_audit_mismatch'),
+    (ValueError('patient_summary_request_missing'), 'patient_summary_request_missing'),
+    (ValueError('synthetic private detail with spaces'), 'ValueError'),
+    (RuntimeError('boom'), 'RuntimeError'),
+    (ValueError(''), 'ValueError'),
+])
+def test_quality_unavailable_detail_is_bounded(exc, expected):
+    assert context_refresh._quality_unavailable_detail(exc) == expected

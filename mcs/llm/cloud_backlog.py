@@ -630,7 +630,10 @@ def _context_pass_observation(result):
         "off", "complete", "progressed", "deferred", "source_changed", "failed", "error"} else "unclassified"}
     reason = result.get("reason")
     if reason is not None or record["status"] in ("deferred", "failed", "error"):
-        record["reason"] = reason if type(reason) is str and reason in _CONTEXT_PASS_REASONS else "unclassified"
+        # Suffixed detail (e.g. source_quality_unavailable:RuntimeStale) classifies
+        # by its fixed base; exception-derived suffixes never enter the record.
+        base = reason.partition(":")[0] if type(reason) is str else None
+        record["reason"] = base if base in _CONTEXT_PASS_REASONS else "unclassified"
     for key, limit in (("done", 1), ("scanned", 8), ("scan_ms", 900000)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
