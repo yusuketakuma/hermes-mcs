@@ -142,6 +142,17 @@ def _needs_cloud_scan(scan, cloud_scan):
             and scan.get('_source_meta', {}).get('local_fallback') is not True)
 
 
+def _cloud_unit_held(scan, now):
+    """A paid lane-B unit that can be neither resent nor run locally defers only its own source.
+
+    The hold only reorders selection: the source stays unfinished and its
+    unit, reservation and discard records are untouched."""
+    hold = scan.get("cloud_unit_hold")
+    until = hold.get("until") if isinstance(hold, dict) else None
+    return (now is not None and type(until) in (int, float) and math.isfinite(until)
+            and until > now)
+
+
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=None):
     sources = snapshot["sources"]
     scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
@@ -455,7 +466,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     stored = patient_context_refresh_sources._scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
     if observed_out is not None:
         observed_out["scans"] = stored
-    scans, required_scans = [], []
+    scans, required_scans, cloud_held = [], [], []
     for source in snapshot["sources"]:
         patient_context_refresh_sources._scan_check(db)
         if context_plan.source_usable(source):
@@ -463,6 +474,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             scans.append(scan)
             # Local audits and summaries may advance while raw cloud inspection remains due.
             required_scans.append({} if _needs_cloud_scan(scan, cloud_scan) else scan)
+            cloud_held.append(_cloud_unit_held(scan, now))
     recheck_available = False
     quality_required = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     if (not estimate and quality_required
@@ -510,18 +522,19 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
         or snapshot.get('source_coverage', {}).get('unreflected')
         or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
         or not snapshot["attachment_coverage"]["complete"] or any(not patient_context_refresh_sources._scan_ready(scan) for scan in required_scans))
-    incomplete = [scan for scan in required_scans if not scan.get("complete")]
+    incomplete = [(scan, held) for scan, held in zip(required_scans, cloud_held) if not scan.get("complete")]
     unaudited = [scan for scan in scans if scan.get("complete") and (not patient_context_refresh_sources._scan_ready(scan)
                  or recheck_available and scan.get("_audit_skipped"))]
     pending = {"A": (summary_needed or cloud_summary_needed and cloud_ready) and local_ready and _ready(progress, now),
-               "B": any(_ready(scan, now) for scan in incomplete),
+               "B": any(_ready(scan, now) and not held for scan, held in incomplete),
                "C": any(_ready(scan, now) for scan in unaudited)}
     if observed_out is not None:
         # Fixed codes only: why each lane cannot start now.
         observed_out["lane_blocks"] = {
             "A": None if pending["A"] else "not_needed" if not (summary_needed or cloud_summary_needed)
                  else "local_not_ready" if not (local_ready and (summary_needed or cloud_ready)) else "backoff",
-            "B": None if pending["B"] else "backoff" if incomplete else "none_incomplete",
+            "B": None if pending["B"] else "backoff" if any(not held for _, held in incomplete)
+                 else "cloud_hold" if incomplete else "none_incomplete",
             "C": None if pending["C"] else "backoff" if unaudited else "none_unaudited"}
     return snapshot, progress, pending
 
