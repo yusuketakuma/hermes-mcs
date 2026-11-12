@@ -332,8 +332,48 @@ _NO_DUE_LANE_KEYS = tuple(f'wait_no_due_{lane}_{code}'
                           for lane, codes in _NO_DUE_LANE_CODES.items() for code in codes)
 _WAIT_COUNTER_KEYS = (
     'wait_no_eligible_sources', 'wait_no_due_lane', 'wait_generation_quota',
-    'wait_readiness_unverified', 'wait_dependency_incomplete',
+    'wait_readiness_unverified', 'wait_dependency_incomplete', 'wait_unit_claimed',
 ) + _NO_DUE_LANE_KEYS
+# A selected unit marks its patient so concurrent workers do not pick it and
+# discard each other's paid results. The mark only steers selection.
+_UNIT_CLAIM_SECONDS = 900
+
+
+def _unit_claimed(progress, now):
+    claim = progress.get('unit_claim')
+    until = claim.get('until') if isinstance(claim, dict) else None
+    return type(until) in (int, float) and math.isfinite(until) and until > now
+
+
+def _release_unit_claim(ledger, pid, token, deadline):
+    """Drop this unit's own selection mark when it ended without its final save."""
+    import extract_llm
+    if ledger.db.in_transaction:
+        return
+    try:
+        with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
+            ledger.db.execute('BEGIN IMMEDIATE')
+            try:
+                content, meta = patient_context_refresh_state._latest(
+                    ledger.db, patient_context_refresh_state.PROGRESS, pid)
+                claim = content.get('unit_claim')
+                if not (isinstance(claim, dict) and claim.get('token') == token
+                        and extract_llm._writer_current(full=True)):
+                    ledger.db.rollback()
+                    return
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid,
+                    {key: value for key, value in content.items() if key != 'unit_claim'}, meta)
+                if not extract_llm._writer_current(full=True):
+                    ledger.db.rollback()
+                    return
+                ledger.db.commit()
+            except BaseException:
+                ledger.db.rollback()
+                raise
+    except (sqlite3.Error, OSError):
+        # Unreleased marks expire with the unit deadline.
+        if ledger.db.in_transaction:
+            ledger.db.rollback()
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None):
@@ -383,6 +423,12 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     persist()
                     seen.add(pid)
                     scanned += 1
+                    if _unit_claimed(patient_context_refresh_state._latest(
+                            reader.db, patient_context_refresh_state.PROGRESS, pid)[0], now):
+                        if observed_out is not None:
+                            observed_out['wait_unit_claimed'] += 1
+                        waiting += 1
+                        continue
                     published = patient_context_refresh_state._published_version(reader.db, pid)
                     whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
                     keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
@@ -520,9 +566,14 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Keep one completed unit's existing save path resumable within its deadline."""
-    returned = []
+    returned, claimed = [], []
     result = yield from _run_due_unit(ledger, cfg, deadline=deadline, admit=admit,
-        complete=complete, local_admit=local_admit, returned=returned)
+        complete=complete, local_admit=local_admit, returned=returned, claimed=claimed)
+    if claimed:
+        try:
+            _release_unit_claim(ledger, *claimed[0])
+        except Exception:
+            pass  # the mark expires; keep the unit's own result
     # A normal return relinquishes only the usable quota lease. Suspended paid
     # work, exceptions and generator close retain their existing ownership.
     if returned:
@@ -560,7 +611,7 @@ def _selection_lock(db):
     return (fd, None) if fd is not None else (None, "patient_context_selection_busy")
 
 
-def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned):
+def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned, claimed):
     import extract_llm
     import cloud_inference
     import cloud_client
@@ -633,9 +684,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # Keep that attempt's retry state bound to its original input.
                     progress, _ = patient_context_refresh_state._latest(
                         ledger.db, patient_context_refresh_state.PROGRESS, pid)
+                claim = {"token": os.urandom(16).hex(), "until": patient_context_refresh_state.time.time() + min(
+                    _UNIT_CLAIM_SECONDS, deadline - patient_context_refresh_state.time.monotonic())}
                 progress = {**progress, "last_attempt": now,
                             "last_attempt_unit": rotation.get("units", 0) + 1,
-                            "night_id": night_id,
+                            "night_id": night_id, "unit_claim": claim,
                             **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
@@ -643,6 +696,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0, **stats}
                 ledger.db.commit()
+                claimed.append((pid, claim["token"], deadline))
             # Our scheduling write participates in the same publisher fence as later work.
             frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
         except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
@@ -1455,7 +1509,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                      "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
                      "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
-            progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
+            progress = {**{key: value for key, value in progress.items() if key != "unit_claim"},
+                        "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
                         "night_id": night_id,
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
@@ -1578,6 +1633,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     return {'status': 'source_changed', 'done': 0}
             ledger.db.commit()
             generation_claim = None
+            claimed.clear()  # this save already replaced the marked progress row
         except BaseException:
             ledger.db.rollback()
             raise
