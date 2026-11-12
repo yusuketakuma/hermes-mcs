@@ -623,17 +623,29 @@ _SCAN_REFUSALS = frozenset({
 })
 
 
+def _bounded_pass_code(value):
+    """Identifier-shaped failure identity only; free text never qualifies."""
+    return (type(value) is str and value.isascii() and value.isidentifier()
+            and len(value) <= 80)
+
+
 def _context_pass_observation(result):
     """Report bounded context progress and fixed reasons without source or exception values."""
     status = result.get("status")
     record = {"status": status if type(status) is str and status in {
         "off", "complete", "progressed", "deferred", "source_changed", "failed", "error"} else "unclassified"}
     reason = result.get("reason")
+    if reason is None and record["status"] == "error":
+        reason = result.get("error")
     if reason is not None or record["status"] in ("deferred", "failed", "error"):
         # Suffixed detail (e.g. source_quality_unavailable:RuntimeStale) classifies
         # by its fixed base; exception-derived suffixes never enter the record.
+        # failed/error carry safe_error_code output or a type name — both are
+        # bounded identifiers, so they pass through verbatim.
         base = reason.partition(":")[0] if type(reason) is str else None
-        record["reason"] = base if base in _CONTEXT_PASS_REASONS else "unclassified"
+        record["reason"] = base if base in _CONTEXT_PASS_REASONS or (
+                record["status"] in ("failed", "error") and _bounded_pass_code(base)) \
+            else "unclassified"
     for key, limit in (("done", 1), ("scanned", 8), ("scan_ms", 900000)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
