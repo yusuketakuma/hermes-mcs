@@ -1242,3 +1242,28 @@ def carry_protected(prior, candidate, piece, body, *, validate_item, raw=None):
         return None, counts
     return merged, counts
 
+
+def protected_loss_classes(prior, candidate, body, pieces=None):
+    """Classify each protected assertion protected_lost counts with fixed codes only.
+
+    "unlocated": the quote lies in no single piece; otherwise the
+    carry_protected decision for that assertion alone: "absent" (no candidate
+    item disagrees), "conflict" or "prior_unverifiable"."""
+    classes = {}
+    if not isinstance(body, str):
+        return classes
+    new = extract_validation.validate(candidate if isinstance(candidate, dict) else {}, body) or {}
+    for field, item in ((field, item) for field, items in protected_assertions(prior, body).items()
+                        for item in items):
+        current = new.get(field) if isinstance(new.get(field), list) else []
+        if any(retains_assertion(item, other) for other in current):
+            continue
+        if pieces is not None and not any(locate_quote_span(piece, item["evidence"]) is not None
+                                          for piece in pieces):
+            code = "unlocated"
+        else:
+            code = _carry_one(field, item, current, body,
+                              lambda name, value: extract_validation.validate({name: [value]}, body))[0]
+        target = classes.setdefault(field, {})
+        target[code] = target.get(code, 0) + 1
+    return classes
