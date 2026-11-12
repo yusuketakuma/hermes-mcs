@@ -17,7 +17,7 @@ import uuid
 from .keychain import KeychainCredentialStore, KeychainError
 from . import credential_mutation as mutation_contract
 
-NAMES = frozenset({'endpoint.json', 'credential', 'credential-store.json', 'state.json', 'tick.lock', 'inventory-policy.json', 'inventory-spool.json', 'inventory-status.json', 'enrollment-consent.json', 'support-state.json', 'support-state.lock', 'support-session.lock', 'support-bootstrap.json', 'restart-state.json', 'restart-state.lock', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'diagnostic-state.lock'})
+NAMES = frozenset({'endpoint.json', 'credential', 'credential-store.json', 'state.json', 'tick.lock', 'inventory-policy.json', 'inventory-spool.json', 'inventory-status.json', 'enrollment-consent.json', 'support-state.json', 'support-state.lock', 'support-session.lock', 'support-bootstrap.json', 'restart-state.json', 'restart-state.lock', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'diagnostic-state.lock', 'telemetry-policy.json', 'telemetry-status.json'})
 MAX_FILE = 8 * 1024 * 1024
 # Five <=8192-byte records, one JSON-escaped <=16384-byte request, fixed wrapper <1024.
 RESTART_STATE_MAX_BYTES = 5 * 8192 + 2 * 16384 + 1024
@@ -30,7 +30,8 @@ LIMITS = {'state.json': MAX_FILE, 'credential': 4096, 'endpoint.json': 4096, 'ti
           'credential-store.json': 1024, 'inventory-policy.json': 1024 * 1024, 'inventory-spool.json': 2 * 1024 * 1024, 'inventory-status.json': 16384, 'enrollment-consent.json': 16384, 'support-state.json': 65536, 'support-state.lock': 0, 'support-session.lock': 0, 'support-bootstrap.json': 16384, 'restart-state.json': RESTART_STATE_MAX_BYTES, 'restart-state.lock': 0, 'restart-execution.json': RESTART_EXECUTION_MAX_BYTES, 'restart-planning.json': RESTART_PLANNING_MAX_BYTES}
 LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision record enforces a tighter encoded bound.
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
-               'diagnostic-state.lock': 0})
+               'diagnostic-state.lock': 0,
+               'telemetry-policy.json': 16384, 'telemetry-status.json': 16384})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
 NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json', 'release-start-intent.json', 'release-migration-v3.json', 'release-health.json', 'release-consent-confirmation.json', 'runtime-entry.lock'}
 _RELEASE_SIDECAR_NAMES = frozenset({'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json',

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sdc.device-telemetry.v1",
+  "title": "Device telemetry report (POST /v2/device/telemetry)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_id", "sequence", "observed_at", "sections"],
+  "properties": {
+    "schema_version": {"const": "sdc.device-telemetry.v1"},
+    "report_id": {"type": "string", "format": "uuid"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "observed_at": {"type": "integer", "description": "epoch ms, producer clock"},
+    "sections": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 8,
+      "additionalProperties": false,
+      "properties": {
+        "hardware": {"$ref": "#/$defs/hardware"},
+        "operations": {"$ref": "#/$defs/operations"},
+        "logs": {"$ref": "#/$defs/logs"},
+        "mcs": {"$ref": "#/$defs/mcs"}
+      }
+    }
+  },
+  "$defs": {
+    "hardware": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"const": "sdc.telemetry.hardware.v1"},
+        "chip": {"type": "string", "maxLength": 64},
+        "model": {"type": "string", "maxLength": 32, "pattern": "^[A-Za-z0-9][A-Za-z0-9,(). -]{0,31}$"},
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "os_name": {"type": "string", "maxLength": 32},
+        "os_version": {"type": "string", "maxLength": 64},
+        "disk_total_bytes": {"type": "integer", "minimum": 0},
+        "disk_free_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "operations": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"const": "sdc.telemetry.operations.v1"},
+        "uptime_seconds": {"type": "integer", "minimum": 0},
+        "boot_id": {"type": "string", "maxLength": 64, "pattern": "^[0-9a-zA-Z][0-9a-zA-Z-]{0,63}$"},
+        "services": {
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "state"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+              "state": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"}
+            }
+          }
+        }
+      }
+    },
+    "logs": {
+      "type": "object",
+      "required": ["schema_version", "window_seconds", "entries"],
+      "properties": {
+        "schema_version": {"const": "sdc.telemetry.logs.v1"},
+        "window_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "dropped": {"type": "integer", "minimum": 0},
+        "entries": {
+          "type": "array", "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["at", "level", "source"],
+            "properties": {
+              "at": {"type": "integer"},
+              "level": {"enum": ["debug", "info", "notice", "warning", "error", "critical"]},
+              "source": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+              "message": {"type": "string", "maxLength": 512}
+            }
+          }
+        }
+      }
+    },
+    "mcs": {
+      "type": "object",
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"const": "sdc.telemetry.mcs.v1"},
+        "health_overall": {"enum": ["ok", "degraded", "failed", "unknown"]},
+        "run_status": {"enum": ["ok", "partial", "failed", "session_expired", "unknown"]},
+        "state_reasons": {"type": "array", "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"}},
+        "backup_state": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+        "last_ok_age_seconds": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

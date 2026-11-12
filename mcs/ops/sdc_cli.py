@@ -293,6 +293,24 @@ def tick(root=None):
             if not _enrollment_admitted(store.root):
                 return 0
             try:
+                from adapters.sdc import telemetry_sender
+                telemetry_policy = store.read('telemetry-policy.json')
+                if telemetry_policy and telemetry_policy.get('enabled'):
+                    cfg = mcs_util.load_config()
+                    if observed.get('mode') != mcs_runtime.mode(cfg) or os.path.realpath(os.path.dirname(mcs_runtime.python_executable(cfg))) != os.path.realpath(os.path.dirname(sys.executable)):
+                        print('SDC_TELEMETRY_RUNTIME_UNKNOWN', file=sys.stderr)
+                        return 0
+                    telemetry_sender.TelemetrySender(store, transport, data_dir=os.path.join(mcs_util.HOME, 'data')).tick(observed)
+            except TimeoutError:
+                if tick_alarm_fired or time.monotonic() >= end:
+                    raise
+                print('SDC_TELEMETRY_UNAVAILABLE', file=sys.stderr)
+            except Exception:
+                print('SDC_TELEMETRY_UNAVAILABLE', file=sys.stderr)
+            check_budget()
+            if not _enrollment_admitted(store.root):
+                return 0
+            try:
                 from adapters.sdc import diagnostic_sender, diagnostic_state
                 if diagnostic_state.status(store, now_ms=int(time.time() * 1000))['enabled']:
                     cfg = mcs_util.load_config()

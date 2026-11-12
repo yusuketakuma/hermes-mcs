@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 
-PATHS = frozenset({'/v2/enrollments/claim', '/v2/enrollments/status', '/v2/enrollments/confirm', '/v2/heartbeats', '/v2/device/suspend', '/v2/keys/prepare', '/v2/keys/commit', '/v2/keys/status', '/v2/inventory/pages'})
+PATHS = frozenset({'/v2/enrollments/claim', '/v2/enrollments/status', '/v2/enrollments/confirm', '/v2/heartbeats', '/v2/device/suspend', '/v2/keys/prepare', '/v2/keys/commit', '/v2/keys/status', '/v2/inventory/pages', '/v2/device/telemetry'})
 SUPPORT_PATHS = frozenset({'/v2/support/cases/preview', '/v2/support/cases/accept',
                            '/v2/support/requests/poll', '/v2/support/operations/admit',
                            '/v2/support/operations/grant', '/v2/support/operations/report',

@@ -21,7 +21,7 @@ from mcs_util import HOME, load_config  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     """Route arguments without shells, retaining downstream contracts."""
     ap = _JapaneseParser(description=__doc__)
-    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug", "recover", "connect", "connection", "disconnect", "rotate-key", "inventory", "support", "diagnostics", "jobs"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認 / recover: 中断した更新の復旧 / connect: 状態監視登録 / connection: 接続状態 / disconnect: 送信停止 / rotate-key: 鍵交換 / inventory: 公開構成の許可と停止 / support: 遠隔支援の同意と停止 / diagnostics: 固定診断コードの送信許可と停止 / jobs: 失敗ジョブの調査と再試行")
+    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug", "recover", "connect", "connection", "disconnect", "rotate-key", "inventory", "support", "diagnostics", "telemetry", "jobs"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認 / recover: 中断した更新の復旧 / connect: 状態監視登録 / connection: 接続状態 / disconnect: 送信停止 / rotate-key: 鍵交換 / inventory: 公開構成の許可と停止 / support: 遠隔支援の同意と停止 / diagnostics: 固定診断コードの送信許可と停止 / telemetry: 固定テレメトリ項目の許可と停止 / jobs: 失敗ジョブの調査と再試行")
     forwarded = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(forwarded[:1])
     rest = forwarded[1:]
@@ -94,6 +94,9 @@ def main(argv: list[str] | None = None) -> int:
         case "inventory":
             import sdc_inventory_cli
             return sdc_inventory_cli.main(rest)
+        case "telemetry":
+            import sdc_telemetry_cli
+            return sdc_telemetry_cli.main(rest)
         case "connect" | "connection" | "disconnect" | "rotate-key":
             import sdc_cli
             return sdc_cli.main([args.command, *rest])
