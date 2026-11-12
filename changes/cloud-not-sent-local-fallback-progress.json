@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストのクラウド未送信確定後に検証済みローカル代替へ進める",
+  "summary": "患者コンテキスト生成でクラウド送信が未送信または未解決のまま失敗した場合、これまではローカル代替の安全確認へ進まず毎回延期され続けることがありました。安全確認を通った場合に限り検証済みローカル代替で完了できるようにします。",
+  "upgrade": "追加設定は不要です。既存の更新手順で適用してください。クラウド側の状態が未解決のまま安全を確認できない場合は、これまでどおり延期のままです。",
+  "details": [
+    "CloudNotSent で未解決と判定された単位は、即時延期せずローカル経路の安全確認（guard_context_local）へ進みます。",
+    "ローカル代替が拒否された場合は従来どおり nightly_cloud_not_sent で延期し、未解決の有償クラウド作業を完了扱いしません。",
+    "検証済みローカル代替が記録された単位は local_fallback 契約どおり終端状態として扱われ、coverage complete・公開可能の判定に従います。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "tests/patients/test_context_fallback_cloud_progress.py",
+    "tests/patients/test_context_summary_sources.py",
+    "tests/patients/test_patient_context_refresh.py"
+  ]
+}
