@@ -216,6 +216,12 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
 
 
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+# 0 for a notifiable arrival (eligible, not notification_free), else 1; CASE
+# order keeps json_extract away from malformed payloads.
+_ARRIVAL_FIRST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 1 "
+                      "WHEN COALESCE(json_extract(payload,'$.eligible'),0)=1 "
+                      "AND COALESCE(json_extract(payload,'$.notification_free'),0)=0 "
+                      "THEN 0 ELSE 1 END")
 
 
 _MALFORMED_JOB_SQL = (
@@ -528,13 +534,15 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # the kind this worker served last goes second.
             # QC re-seeding refreshes next_try: its new generation must
             # queue behind QC that was already waiting, despite an old id.
+            # Notifiable semantic arrivals go ahead of reprocess backlog.
             priority = patient_priority.activity_order_sql('fetch_jobs.project_id') + ', ' if prioritize_patients else ''
             rows = [row for kind in sorted(
                         kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                     for row in ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
-                        + priority + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
+                        + ('' if kind == QC_JOB_KIND else _ARRIVAL_FIRST_SQL + ', ') + priority
+                        + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
         # hide the next runnable item. Work remains bounded by max_jobs.
