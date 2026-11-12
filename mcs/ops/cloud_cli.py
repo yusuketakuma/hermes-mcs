@@ -19,6 +19,7 @@ import mcs_util
 import semantic_jev as jev
 
 READ_SECONDS = 5.0
+FULL_READ_SECONDS = 300.0   # `outstanding --full`: a read-only snapshot never blocks the writers
 READ_ROWS = 100000
 READ_BYTES = 16 * 1024 * 1024
 
@@ -42,13 +43,13 @@ def _settings(cfg, root=None):
 
 
 @contextmanager
-def _reader(root=None):
+def _reader(root=None, *, seconds=None):
     path = Path(root or mcs_util.HOME) / "data" / "ledger.db"
     if path.is_symlink() or not path.is_file():
         raise ValueError("ledger_unavailable")
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=.25)) as db:
         consumed_rows, consumed_bytes = 0, 0
-        deadline = time.monotonic() + READ_SECONDS
+        deadline = time.monotonic() + (READ_SECONDS if seconds is None else seconds)
 
         def bounded_row(cursor, values):
             nonlocal consumed_rows, consumed_bytes
@@ -839,8 +840,9 @@ def command(args):
         if action == "outstanding":
             import cloud_observation
             try:
-                with _reader() as (db, _deadline):
-                    result = cloud_observation.observe(db)
+                full = getattr(args, "full", False) is True
+                with _reader(seconds=FULL_READ_SECONDS if full else None) as (db, _deadline):
+                    result = cloud_observation.observe(db, full=full)
             except (OSError, ValueError, sqlite3.Error):
                 result = cloud_observation.unknown("observation_unavailable")
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1101,6 +1103,8 @@ def add_parsers(sub):
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
     q = actions.add_parser("outstanding", help="未精算の外部AI利用記録を確認（送信しない）")
+    q.add_argument("--full", action="store_true",
+                   help="既定の上限（5秒・10万件）では確認しきれないとき、上限を広げて全件を確認（最長5分）")
     q.set_defaults(fn=command, cloud_action="outstanding")
     q = actions.add_parser("providers", help="AI利用先・優先順位・API別予算を表示・設定します")
     q.add_argument("--provider", choices=("anthropic", "openai", "auto"))

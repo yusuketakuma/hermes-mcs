@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "未精算の外部AI利用記録を全件確認するオプションを追加",
+  "summary": "`cloud-llm outstanding --full` で、読取り上限を広げて会計履歴の全件を確認できます。会計履歴が増えると、既定の上限（5秒・10万件）では常に `unknown` になり、未精算の要求を確認する手段がなくなっていました。",
+  "upgrade": "追加操作は不要です。既定の `cloud-llm outstanding` の動作と上限は変わりません。`--full` は最長で5分かかります。読取り専用で、収集や解析は止まりません。",
+  "details": [
+    "`--full` でも検証の内容は同じです。広げた上限（200万件）を超えた場合は、これまでどおり `unknown` と表示し、未確定の件数を0とは表示しません。"
+  ],
+  "refs": [
+    "mcs/ops/cloud_cli.py",
+    "mcs/ops/diagnostics/cloud_observation.py"
+  ]
+}
