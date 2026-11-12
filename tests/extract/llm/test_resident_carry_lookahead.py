@@ -19,6 +19,7 @@ import time
 import pytest
 
 import cloud_inference
+import cloud_policy
 import extract_llm as worker
 from extract_testkit import _ledger, _message
 from test_lane_slot_and_lock import _claims
@@ -384,3 +385,30 @@ def test_semantic_turn_leaves_the_carry_when_the_update_fence_moved(tmp_path, mo
         assert jobs == []
     finally:
         release()
+
+
+def test_local_only_pass_skips_a_row_a_cloud_reservation_owns(tmp_path, monkeypatch):
+    """The lookahead pass (allow_cloud=False) must not infer an owned row locally."""
+    led = _ledger(tmp_path)
+    led.save_messages([_message(mid=1, body=BODY, posted_at='2026-09-18T00:00:00+09:00'),
+                       _message(mid=2, body=BODY + '二')])
+    # synthetic unresolved paid reservation on message 1 (no route: conservative hold)
+    led.artifact_add(cloud_policy.KINDS[0], '{}', project_id=1, message_id=1, model='synthetic-model',
+                     meta={'reservation_id': 'synthetic-reservation'})
+    _resident_env(monkeypatch, tmp_path, led, [])
+    bodies = []
+
+    def extract(body, **_kw):
+        bodies.append(body)
+        return {'summary': '合成', 'vitals': {'bt': 37.0}, 'symptoms': [{'text': '咳'}]}
+    monkeypatch.setattr(worker, 'llm_extract', extract)
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+    try:
+        res = extract_llm_runner.run_pending(led, limit=1, budget_s=600, oldest_first=True,
+                                             allow_cloud=False, background=True, carry=[])
+        assert led.artifacts('extract_llm', message_id=1) == []
+        assert len(bodies) == 1 and (BODY + '二') in bodies[0]
+        assert len(led.artifacts('extract_llm', message_id=2)) == 1
+        assert not res.get('carry')
+    finally:
+        led.close()
