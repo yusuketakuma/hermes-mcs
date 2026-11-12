@@ -326,7 +326,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
 
 
 _NO_DUE_LANE_CODES = {'A': ('not_needed', 'local_not_ready', 'backoff', 'source_incomplete'),
-                      'B': ('none_incomplete', 'backoff'), 'C': ('none_unaudited', 'backoff')}
+                      'B': ('none_incomplete', 'backoff', 'cloud_hold'), 'C': ('none_unaudited', 'backoff')}
 # Each wait_no_due_lane hit adds one code per lane of that scope.
 _NO_DUE_LANE_KEYS = tuple(f'wait_no_due_{lane}_{code}'
                           for lane, codes in _NO_DUE_LANE_CODES.items() for code in codes)
@@ -699,6 +699,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     readiness_state = ["verified"]
     selected_source = [None]
     selected_occurrence = [None]
+    # Set only when the paid-history guard itself refused local substitution.
+    cloud_unit_refused = False
     cloud_input = patient_context_refresh_state._cloud_input_binding(ledger.db, pid, snapshot) if cloud_settings is not None else None
 
     def current(*, after_commit=False):
@@ -882,15 +884,16 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
 
     def guard_local_input(unit_key, mid, prompt):
-        nonlocal generation_uncertain
+        nonlocal generation_uncertain, cloud_unit_refused
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
                 cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
                     message_id=mid, unit_key=unit_key,
                     owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
-                OSError, RecursionError, OverflowError):
+                OSError, RecursionError, OverflowError) as exc:
             generation_uncertain = True
+            cloud_unit_refused = isinstance(exc, cloud_client.CloudError)
             raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
         if (unit_key, mid, prompt) not in local_checks:
             local_checks.append((unit_key, mid, prompt))
@@ -1085,6 +1088,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     saved, mode == "on"))
                 if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
+                if lane == "B" and patient_context_refresh_readiness._cloud_unit_held(saved, now):
+                    continue
                 if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
                     meta["source_sig"] = context_plan.source_signature(source)
@@ -1199,6 +1204,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
         discard_if_changed()
         return {"status": "deferred", "done": 0}
+    held_scan = (scans.get(context_plan.source_key(selected_source[0]), {})
+                 if lane == "B" and selected_source[0] is not None else {})
+    # A paid unit that can be neither resent nor run locally holds only this
+    # source for a while so the patient's other sources keep progressing.
+    cloud_hold = (lane == "B" and result is None and failure is None and cloud_unit_refused
+                  and deferred_reason == "nightly_cloud_not_sent" and selected_source[0] is not None
+                  and not patient_context_refresh_readiness._cloud_unit_held(held_scan, now))
+    if (lane != "A" and result is None and failure is None and deferred_reason is not None
+            and provider is None and shadow_call is None and not estimated_unit and generation_claim is None
+            and not cloud_hold and not (lane == "C" and deferred_reason.startswith("source_quality_"))):
+        # Nothing to save: selection already wrote this unit's progress row,
+        # so a deferral without a result never waits for the run lock.
+        detail = deferred_reason.partition(":")[2]
+        return {"status": "deferred", "done": 0, "lane": lane, "reason": deferred_reason,
+                **({"detail": detail} if detail else {}), **stats}
     # Rebuild the source signature outside the write lock. A data-version
     # fence seals the read against any concurrent writer before publication.
     quality_fence = None
@@ -1243,9 +1263,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                      'cloud': cloud_input is not None})
     fresh = ready_snapshot or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
     scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
-    # A finished inference is worth a short wait: the tick and lane 2 hold
-    # the run lock for minutes, and dropping the result would send the
-    # same prompt again on the next iteration.
+    # Saving waits briefly for the run lock (the tick and lane 2 hold it for
+    # minutes). Only a completed paid A/B success is retained across the
+    # wait; every other outcome is dropped when the wait ends.
     waited = 0
     completed_receipts = None
     completed_cfg = None
@@ -1448,6 +1468,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 progress.pop("quality_state", None)
             if failure and lane != "A":
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
+            if cloud_hold:
+                # Keep the stored scan (content and meta) and add only the hold;
+                # attempts and failure stay unchanged because nothing failed.
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid,
+                    {**{k: v for k, v in held_scan.items() if not k.startswith("_")},
+                     "cloud_unit_hold": {"until": now + 21600, "reason": "nightly_cloud_not_sent"}},
+                    held_scan.get("_source_meta") or meta, source["message_id"])
             if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
