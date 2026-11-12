@@ -99,21 +99,31 @@ def test_pass_records_carry_lane_pid_elapsed_and_turn(tmp_path, monkeypatch, cap
 BODY = '合成の本文です。' * 20
 
 
-def _real_run_lock(monkeypatch, tmp_path):
-    """Hold a real run lock on another fd; returns the release callback."""
+def _real_run_lock(monkeypatch, tmp_path, *, free_for_resident=False):
+    """Hold a real run lock on another fd; returns the release callback.
+
+    ``free_for_resident`` releases it when the resident loop itself (not a
+    result write) first asks for the lock, i.e. at its semantic turn."""
     path = str(tmp_path / 'synthetic-run.lock')
     holder = [worker.writer_lock.acquire_run_lock(path)]
     assert holder[0] is not None
-
-    def acquire():
-        return worker.writer_lock.acquire_run_lock(path)
-    for module in (worker, extract_llm_errors, extract_llm_resident):
-        monkeypatch.setattr(module, 'acquire_run_lock', acquire)
 
     def release():
         if holder[0] is not None:
             os.close(holder[0])
             holder[0] = None
+
+    def acquire():
+        return worker.writer_lock.acquire_run_lock(path)
+
+    def resident_acquire():
+        if free_for_resident:
+            release()
+        return acquire()
+    monkeypatch.setattr(worker.writer_lock, 'RUN_LOCK', path)
+    for module in (worker, extract_llm_errors):
+        monkeypatch.setattr(module, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(extract_llm_resident, 'acquire_run_lock', resident_acquire)
     return release
 
 
@@ -130,18 +140,18 @@ def _local_llm(monkeypatch, clock):
     return calls
 
 
-def _real_loop(tmp_path, monkeypatch, messages, release_at):
+def _real_loop(tmp_path, monkeypatch, messages, release_at, *, free_for_resident=False, stop_after=60):
     led = _ledger(tmp_path)
     led.save_messages([_message(mid=mid, body=BODY) for mid in messages])
     close = led.close
     monkeypatch.setattr(led, 'close', lambda: None)
-    release = _real_run_lock(monkeypatch, tmp_path)
+    release = _real_run_lock(monkeypatch, tmp_path, free_for_resident=free_for_resident)
 
     def on_sleep(now):
         if release_at is not None and now >= release_at:
             release()
     clock = _resident_env(monkeypatch, tmp_path, led,
-                          ['--lane', '2', '--semantic', '--stop-after', '60'],
+                          ['--lane', '2', '--semantic', '--stop-after', str(stop_after)],
                           stub_fence=False, on_sleep=on_sleep)
     return led, close, release, clock
 
@@ -254,3 +264,123 @@ def test_lane_three_lookahead_skips_patient_context(tmp_path, monkeypatch, capsy
     assert fresh and all(call['limit'] == 1 and call['allow_cloud'] is False for call in fresh)
     assert len(context_calls) == 1
     assert 'SYNTH-NEVER-LOG-LOOKAHEAD' not in capsys.readouterr().out
+
+
+def _semantic_jobs(monkeypatch, check=None):
+    """Stub the drain behind the real _background_semantic; records each job's lock fd."""
+    import semantic_drain
+    jobs = []
+
+    def run_due(ledger, cfg, result, deadline, **kwargs):
+        jobs.append((kwargs['run_lock_fd'], check() if check else None))
+        return {'done': 0}
+    monkeypatch.setattr(semantic_drain, 'run_due', run_due)
+    return jobs
+
+
+def _semantic_records(out):
+    return [row for row in _records(out) if 'semantic' in row]
+
+
+def test_semantic_turn_saves_the_carry_first_then_runs_one_job(tmp_path, monkeypatch, capsys):
+    led, close, release, clock = _real_loop(tmp_path, monkeypatch, (1,), release_at=None,
+                                            free_for_resident=True, stop_after=20)
+    try:
+        calls = []
+        monkeypatch.setattr(worker, 'llm_extract', lambda body, **kw: calls.append(clock[0]) or {
+            'summary': '合成', 'vitals': {'bt': 37.0}, 'symptoms': [{'text': '咳'}]})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+        jobs = _semantic_jobs(monkeypatch, lambda: len(led.artifacts('extract_llm', message_id=1)))
+        assert worker.main() == 0
+        rows = _records(capsys.readouterr().out)
+        first_pass = next(row for row in rows if 'turn' in row)
+        assert len(calls) == 1 and first_pass['lock_lost'] == 1
+        assert jobs and jobs[0][0] is not None and jobs[0][1] == 1
+        assert {'done': 1, 'held_prior': 0, 'deferred': 0} in [
+            row['carry_settled'] for row in rows if 'carry_settled' in row]
+        assert _claims(led) == []
+    finally:
+        release()
+        close()
+
+
+def test_semantic_turn_keeps_the_carry_when_the_lock_stays_busy(tmp_path, monkeypatch, capsys):
+    led, close, release, clock = _real_loop(tmp_path, monkeypatch, (1,), release_at=None, stop_after=20)
+    try:
+        monkeypatch.setattr(worker, 'llm_extract', lambda body, **kw: {
+            'summary': '合成', 'vitals': {'bt': 37.0}, 'symptoms': [{'text': '咳'}]})
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+        jobs = _semantic_jobs(monkeypatch)
+        assert worker.main() == 0
+        out = capsys.readouterr().out
+        semantic = _semantic_records(out)
+        assert semantic and all(row['semantic'] == {'skipped': 'lock_busy'} for row in semantic)
+        assert semantic[0]['elapsed_s'] == pytest.approx(3.0)
+        assert any(row.get('turn') == 'carry' and row.get('carry_waiting') for row in _records(out))
+        assert jobs == [] and led.artifacts('extract_llm') == [] and _claims(led) == []
+    finally:
+        release()
+        close()
+
+
+def test_semantic_turn_waits_out_a_short_hold(tmp_path, monkeypatch, capsys):
+    release = _real_run_lock(monkeypatch, tmp_path)
+
+    def on_sleep(now):
+        if now >= 3:
+            release()
+    clock = _resident_env(monkeypatch, tmp_path, _StubLedger(),
+                          ['--lane', '2', '--semantic', '--stop-after', '10'], on_sleep=on_sleep)
+    try:
+        def run(led, **kwargs):
+            clock[0] += 1
+            return {'done': 1, 'failed': 0, 'left': 1, 'selected': 1, 'carry': []}
+        monkeypatch.setattr(worker, 'run_pending', run)
+        monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
+        jobs = _semantic_jobs(monkeypatch)
+        assert worker.main() == 0
+        semantic = _semantic_records(capsys.readouterr().out)
+        assert semantic[0]['semantic'].get('skipped') is None
+        assert semantic[0]['elapsed_s'] == pytest.approx(2.0)
+        assert jobs and jobs[0][0] is not None
+    finally:
+        release()
+
+
+def test_semantic_turn_leaves_the_carry_when_the_update_fence_moved(tmp_path, monkeypatch, capsys):
+    clock = _resident_env(monkeypatch, tmp_path, _StubLedger(),
+                          ['--lane', '2', '--semantic', '--stop-after', '10'])
+    release = _real_run_lock(monkeypatch, tmp_path, free_for_resident=True)
+    state = [(False, 1)]
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: state[0])
+    row = ({'project_id': 1}, time.time() + 480,
+           lambda **kw: pytest.fail('old code must not write after an update'))
+    calls = []
+
+    def run(led, **kwargs):
+        calls.append(list(kwargs['carry']))
+        clock[0] += 1
+        state[0] = (False, 2)
+        carry = kwargs['carry'] or [row]
+        return {'done': 0, 'failed': 0, 'left': 1, 'selected': 1, 'carry': carry}
+    monkeypatch.setattr(worker, 'run_pending', run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
+    real_settle, kept = extract_llm_resident._settle_carry, []
+
+    def settle(led, carry, **kwargs):
+        if kwargs.get('lock_context') is not None:
+            real_settle(led, carry, **kwargs)
+            kept.append(list(carry))
+        elif kwargs.get('final', True):
+            carry.clear()
+        return {'done': 0, 'held_prior': 0, 'deferred': 0}, 0, set()
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', settle)
+    jobs = _semantic_jobs(monkeypatch)
+    try:
+        assert worker.main() == 0
+        semantic = _semantic_records(capsys.readouterr().out)
+        assert semantic and all(r['semantic'] == {'skipped': 'carry_unsettled'} for r in semantic)
+        assert kept and all(carry == [row] for carry in kept)
+        assert jobs == []
+    finally:
+        release()
