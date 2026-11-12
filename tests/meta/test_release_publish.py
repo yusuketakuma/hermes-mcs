@@ -1165,7 +1165,7 @@ def test_authorize_oidc_failure_mid_flow_stops_sends(tmp_path, monkeypatch):
 
 
 def test_api_request_failures_suppress_exception_cause(tmp_path):
-    """provider/transport/OIDC失敗のcause連鎖を遮断し、固定codeのみを
+    """provider/transport/OIDC/GitHub失敗のcause連鎖を遮断し、固定codeのみを
     残す — 例外message中の秘密値(canary)が__cause__/messageへ出ない。"""
     module = _load_cli()
     api = module._api
@@ -1207,6 +1207,16 @@ def test_api_request_failures_suppress_exception_cause(tmp_path):
         assert canary not in str(error)
     else:
         raise AssertionError('expected OIDC_UNAVAILABLE')
+
+    try:
+        api.github_request('GET', 'https://api.github.com/repos/o/r',
+                           token='t', opener=broken_open)
+    except api.PublishApiError as error:
+        assert error.code == 'TRANSPORT_ERROR'
+        assert error.__cause__ is None and error.__suppress_context__
+        assert canary not in str(error)
+    else:
+        raise AssertionError('expected TRANSPORT_ERROR')
 
 
 def test_authorize_cli_stderr_hides_provider_canary(tmp_path):

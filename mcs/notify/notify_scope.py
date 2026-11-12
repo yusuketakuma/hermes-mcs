@@ -26,6 +26,21 @@ def stored_scope(row) -> dict[str, str | None]:
     return scope
 
 
+def scope_keys_allowed(scope) -> bool:
+    """True when scope carries only the keys stored_scope can emit for its
+    transport — that transport's scope fields plus transport itself for
+    slack/lineworks. Request fields like result/remote_id are never scope keys."""
+    if not isinstance(scope, dict):
+        return False
+    transport = scope.get("transport", "discord")
+    if transport not in SUPPORTED_TRANSPORTS:
+        return False
+    allowed = set(scope_fields(transport))
+    if transport in ("slack", "lineworks"):
+        allowed.add("transport")
+    return scope.keys() <= allowed
+
+
 def scope_matches(card, origin) -> bool:
     origin = origin or {}
     transport = card["transport"]

@@ -198,7 +198,9 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
 
 
 def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=False,  # noqa: F811
-                thin=False, plain=False):
+                thin=False, plain=False, prior_content=None, answer_hook=None,
+                extract_extra=None, body=None, expected_sends=2, truncated=None,
+                pending_only=False, crash_after_started=False):
     """Shared partial-repair run: medium pass leaves vitals gaps, the cloud
     repair improves it and returns with evidence, then stops. ``thin`` pads a
     cue-free >=300-char body around a single-vital cue and keeps the fact
@@ -222,12 +224,12 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
 
-    body = ("合成の経過記録です。" * 35 + "本人の体温は36.5度です。" if thin
-            else "本人に発熱と咳があります。本人の血圧120/80です。")
+    body = body or ("合成の経過記録です。" * 35 + "本人の体温は36.5度です。" if thin
+                    else "本人に発熱と咳があります。本人の血圧120/80です。")
     led.save_messages([_message(1, body, project_id=1)])
     source_id = qc_id = None
     if not plain:
-        source_id = _extract_artifact(led, 1, {"symptoms": [{"text": "頭痛", "status": "ongoing",
+        source_id = _extract_artifact(led, 1, prior_content or {"symptoms": [{"text": "頭痛", "status": "ongoing",
             "subject": "patient", "evidence": "頭痛"}]}, _hash(led))
         qc_id = _qc_artifact(led, 1, source_id, _hash(led), {"qc": "done", "items": [
             {"section": "symptoms", "verdict": "NO_MATCH", "item": {"text": "頭痛"}}]})
@@ -252,6 +254,10 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     row["_proof_vital_policy"] = None
     lease = worker._claim(led, row)
     saved = worker._capture_checkpoint_state(led.db, row, context)
+    extra = dict(extract_extra or {})
+    if row.get("_protected_prior") is not None and "protected_prior" not in extra:
+        extra["protected_prior"] = mcs_util.loads_dict(row["_protected_prior"]["content"])
+        extra["protected_prior_ref"] = row.get("_protected_prior_ref")
 
     sends = []
     real_client = worker.openai_client.OpenAIClient
@@ -263,12 +269,30 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
                                     for text in ("発熱", "咳")]})
             if request["reasoning"]["effort"] == "high":
                 answer["vitals"] = dict(repair_vitals)
+            if answer_hook is not None:
+                answer = answer_hook(request, answer)
+            usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                     "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
+            if truncated is not None and truncated(request):
+                return 200, {}, json.dumps({"status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "model": self.model, "service_tier": "default",
+                    "output": [{"type": "reasoning"}], "usage": usage}).encode()
             return 200, {}, json.dumps({"status": "completed", "model": self.model, "service_tier": "default",
                 "output": [{"type": "message", "role": "assistant", "content": [
                     {"type": "output_text", "text": json.dumps(answer, ensure_ascii=False)}]}],
-                "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
-                          "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
+                "usage": usage}).encode()
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
+    if pending_only:
+        # Exhaust the repair reserve after the pending checkpoint persists:
+        # the run defers with a real paid first response and no started row.
+        monkeypatch.setattr(extract_llm_engine, "_MIN_REPAIR_S", 10**9)
+    if crash_after_started:
+        # Stop between the started checkpoint persist and the repair dispatch:
+        # the started row stays at rest with its paid first-response origin.
+        def _crash(*_args, **_kwargs):
+            raise RuntimeError("synthetic_repair_prompt_crash")
+        monkeypatch.setattr(extract_llm_engine, "_repair_prompt", _crash)
     deadline = time.monotonic() + 600
     provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1, message_id=1,
         unit_key="1", deadline=deadline, current=lambda: worker._owns_current_source(led, row, lease),
@@ -283,15 +307,33 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
             value.quality_started_id = identity[0] if identity is not None else None
         return accepted
 
-    with legacy_cloud_routes():
-        result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
-            posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks,
-            feedback=qc["notes"] if qc else None,
-            quality_qc_src=source_id, on_chunk=checkpoint, chunk_size=row["_chunk_size"], provider=provider,
-            medication_hints=worker._frame_medications(row))
-    assert isinstance(result, dict) and len(sends) == 2
-    row["_provider_evidence"] = meta.pop("_provider_evidence")
-    result["_model"] = selection["model"]
+    def on_split(key, size):
+        row["_splits"][key] = int(size)
+        return worker._persist_chunks(led, row, {key: {}}, context,
+            chunk_size=row["_chunk_size"], splits=row["_splits"], split_size=size,
+            lease=lease, guard=row["_checkpoint_guard"])
+
+    try:
+        with legacy_cloud_routes():
+            result = worker.llm_extract(body, context=context, hints=hints, deadline=deadline, meta_out=meta,
+                posted_at=row["posted_at"], chunks_in=saved, chunks_out=chunks,
+                feedback=qc["notes"] if qc else None,
+                quality_qc_src=source_id, on_chunk=checkpoint, on_split=on_split,
+                chunk_size=row["_chunk_size"], provider=provider,
+                medication_hints=worker._frame_medications(row), **extra)
+    except RuntimeError as error:
+        if not crash_after_started or str(error) != "synthetic_repair_prompt_crash":
+            raise
+        result = None
+    if crash_after_started:
+        assert result is None and len(sends) == expected_sends
+    elif pending_only:
+        assert result is extract_llm_engine._DEFERRED and len(sends) == expected_sends
+    else:
+        assert isinstance(result, dict) and len(sends) == expected_sends
+    row["_provider_evidence"] = meta.pop("_provider_evidence", None)
+    if result is not None and not pending_only:
+        result["_model"] = selection["model"]
     return led, row, context, result, meta, qc_id, prior, chunks, sends
 
 

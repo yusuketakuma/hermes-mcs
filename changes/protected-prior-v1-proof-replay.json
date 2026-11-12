@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "保護属性を持つ抽出で旧形式の修復証明が再生できない問題を修正",
+  "summary": "保護属性の修復証明に prior 参照を埋め込む変更以前に保存された修復済み結果について、記録に保護 prior が紐付いていると再生時に誤って拒否され、支払済みの修復結果が再利用できない状態になり得ました。旧形式の修復証明は保護 prior を根拠にしないため、記録側の参照と現在の採用対象の参照は別の世代を指し得ます。旧形式ではこの参照比較を行わず、新形式（version 2）は従来どおり記録・証明・prior の3者一致を要求するよう修正しました。現在の prior の採用可否は従来どおりコミット時の照合で保護されます。",
+  "upgrade": "追加操作は不要です。新形式（version 2）の修復証明は従来どおり記録・証明・prior の3者一致を要求します。旧形式（version 1）の修復証明は保護 prior を根拠に含まないため、記録側の参照と現在の採用対象の参照が異なっていても再生を拒否しません。採用時の prior 照合は従来どおり有効です。",
+  "details": [
+    "extract_llm_proofs._replay_repair_leaf で version 2 は meta.protected_prior_ref・proof.protected_prior_ref・再生対象の _protected_prior_ref の3者一致を維持し、version 1 は保護 prior を根拠に持たないため参照比較を行わないよう分岐を修正した。v1 の started 行に記録された参照は修復実行時の prior を、再生時の参照は現在の採用対象を指すため、保持や世代交代のあとでは正当に異なり得る。",
+    "現在の保護 prior の採用可否はコミット時の _protected_prior_current・_prior_matches・expected_prior 照合が従来どおり担い、v1 互換のために採用フェンスを緩めたり任意の参照を正当化したりはしていない。",
+    "旧形式の修復証明が誤拒否されると支払済み修復の再生が失敗し抽出が滞留し得たため、合成の複数チャンク本文で「保護 prior 紐付き記録 + 保護属性を含まない piece の v1 修復」の再現テストを追加し、started artifact の meta/provider_leaf から protected_prior_ref を除去した旧形式を commit が受理し再課金しないことを確認した。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm_proofs.py", "tests/extract/llm/test_legacy_negation_paid_proof.py", "tests/extract/llm/test_cloud_repair_final_proof.py"]
+}

@@ -45,6 +45,42 @@ def test_hold_cleanup_keeps_old_checkpoints_and_financial_receipts(source):
     assert {old_chunk, receipt} <= ids and current_chunk not in ids
 
 
+def test_update_released_hold_reholds_and_keeps_paid_evidence(source):
+    """A hold minted under an older contract releases on update; the re-run
+    ends held again under the current contract while paid usage receipts and
+    the released receipt itself remain. Started checkpoint rows follow the
+    existing settled-cleanup contract and are removed with the hold."""
+    led, row = source
+    prior = add(led, row, content={"symptoms": [{"text": "発熱", "negated": True,
+        "subject": "patient", "status": "ongoing", "evidence": "本人は発熱なし。"}]})
+    released = json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
+        "state": "held_prior", "reason": "protected_loss", "hash": row["content_hash"],
+        "prior_artifact_id": prior, "target_version": llm.EXTRACT_VERSION,
+        "contract": "older-code"}, sort_keys=True)
+    led.artifact_add(llm.UPGRADE_KIND, released, project_id=row["project_id"],
+        message_id=row["message_id"],
+        meta={inference.VERSION_KEY: inference.CURRENT_VERSION,
+              "hash": row["content_hash"], "contract": "older-code"})
+    # The released receipt does not hold the message out of pending.
+    assert led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
+    # Paid repair evidence gathered during the re-run: a started checkpoint
+    # leaf plus its financial reserve/result receipts.
+    started = add(led, row, kind="extract_llm_chunk", version=inference.CURRENT_VERSION,
+                  quality_status="started")
+    reserve = add(led, row, kind="cloud_usage_reserve")
+    result = add(led, row, kind="cloud_usage_result")
+    assert not llm._replace_current(led, row, '{"summary":"合成の候補"}')
+    receipts = [json.loads(r[0]) for r in led.db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=? ORDER BY artifact_id",
+        (llm.UPGRADE_KIND, row["message_id"]))]
+    assert [r["contract"] for r in receipts] == ["older-code", receipts[1]["contract"]]
+    assert receipts[1]["contract"] != "older-code" and receipts[1]["state"] == "held_prior"
+    # The new current-contract hold now keeps the message out of pending.
+    assert not led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
+    ids = {r[0] for r in led.db.execute("SELECT artifact_id FROM artifacts")}
+    assert {prior, reserve, result} <= ids and started not in ids
+
+
 def test_stale_ineligible_cleanup_does_not_delete_foreign_corrupt_artifact(source):
     led, row = source
     local = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
