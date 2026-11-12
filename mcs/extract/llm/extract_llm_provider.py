@@ -255,7 +255,7 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
-    if not cloud_policy.send_route(route):
+    if not cloud_policy.route_open(route, cfg if isinstance(cfg, dict) else {}):
         # A closed send route can never need provider settings — resolving
         # them here would read provider keys for work that cannot send.
         return "off"

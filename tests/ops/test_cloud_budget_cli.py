@@ -264,3 +264,22 @@ def test_split_provider_cli_expected_detects_concurrent_change(verified_split, m
     state = _verified_state(conf)
     assert state["common"]["cloud_llm"]["mode"] == "off" and state["providers"] == providers
     assert all(path.read_bytes() == raw for path, raw in previous.items())
+
+
+def test_the_reextract_reopening_needs_a_period_budget_and_can_be_ended(conf, capsys):
+    def run(**kw):
+        return cli.budget_command(SimpleNamespace(daily_usd=None, monthly_usd=None, **kw))
+    before = conf.read_bytes()
+    assert run(reextract_backlog_until="2999-01-01") == 1          # no period budget: nothing saved
+    assert conf.read_bytes() == before
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01") == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert saved["window_budget_usd"] == 60.0 and saved["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00"
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00" and shown["saved"] is True
+    assert cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))
+    assert run(period_usd="none") == 1                              # the cap cannot go while the reopening stays
+    assert json.loads(conf.read_text())["cloud_llm"]["window_budget_usd"] == 60.0
+    assert run(reextract_backlog_until="none") == 0
+    assert "reextract_backlog_until" not in json.loads(conf.read_text())["cloud_llm"]
+    assert not cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))

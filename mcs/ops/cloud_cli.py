@@ -240,7 +240,7 @@ def _route_counts(db, cfg, settings, deadline):
             item["basic_requests_estimate"] += basic
             item["chunk_extra_requests_estimate"] += max(0, chunks - pending["scan_sources"])
             item["requests_estimate"] += pending["summary_units"] + chunks
-    if "reextract" in settings["routes"] and policy.send_route("reextract"):
+    if "reextract" in settings["routes"] and policy.reextract_planned(settings):
         import extract_llm as extract
         import cloud_inference
         selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
@@ -937,6 +937,9 @@ def budget_command(args):
         until = getattr(args, "until", None)
         if until is not None:
             changes["cloud_llm.until"] = _time_value(until, end=True)
+        reopen = getattr(args, "reextract_backlog_until", None)
+        if reopen is not None:
+            changes["cloud_llm.reextract_backlog_until"] = _time_value(reopen, end=True)
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
               "解除は none で指定してください")
@@ -973,6 +976,7 @@ def budget_command(args):
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
                       "period_start": settings["window_start"], "until": settings["until"],
+                      "reextract_backlog_until": settings["reextract_backlog_until"],
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
@@ -1112,6 +1116,8 @@ def add_parsers(sub):
                    help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")
     q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとOpenAIに設定。Jevの期限は変更しません。none で解除")
+    q.add_argument("--reextract-backlog-until", dest="reextract_backlog_until",
+                   help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開（期間の上限額の設定が必要）。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))

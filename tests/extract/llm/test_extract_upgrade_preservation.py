@@ -64,6 +64,32 @@ def seed(tmp_path, *, version=None, body=BODY):
     return db, aid, row
 
 
+def test_a_resident_pass_stays_local_while_only_the_backlog_is_reopened(tmp_path, monkeypatch):
+    """The bounded reopening covers the receipted history scope the background worker selects."""
+    import cloud_policy
+    db, _, _ = seed(tmp_path)
+    try:
+        cfg = {"cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1],
+                             "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+                             "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+        monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
+        for module in (llm, extract_llm_context, extract_llm_prepare, extract_llm_provider, extract_llm_qc,
+                       extract_llm_resident, extract_llm_runner, extract_llm_selection, extract_llm_store):
+            monkeypatch.setattr(module, "load_config", lambda: cfg)
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
+        assert cloud_policy.reextract_planned(cfg) and not cloud_policy.eligible(cfg, "reextract", 1)
+        pending, _ = llm._select_pending(db, 1, None, None, False)
+        jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
+        assert len(jobs) == 1 and skipped == blocked == 0
+        assert jobs[0][0]["_cloud_mode"] == "off" and jobs[0][0]["_target"][1] == "synthetic-local"
+        # Positive control: the same row takes the cloud under the unconditional route.
+        monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
+        jobs, _, _ = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
+        assert jobs[0][0]["_cloud_mode"] == "on"
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("provider", ["anthropic", "openai"])
 def test_closed_individual_dryrun_stays_local_without_usage_estimate(tmp_path, monkeypatch, provider):
     db, _, _ = seed(tmp_path)

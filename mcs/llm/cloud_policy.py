@@ -7,6 +7,7 @@ import hashlib
 from itertools import chain
 import json
 import math
+import os
 import re
 import sqlite3
 import time
@@ -105,7 +106,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
            "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
            "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
-           "window_start": None, "window_budget_usd": None}
+           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None}
     errors = []
     # an absent block means "unset"; an explicit null is a config error, not an omission
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
@@ -212,6 +213,15 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             out["window_start"], out["window_budget_usd"] = start, amount
         except (ValueError, OverflowError):
             errors.append("config: cloud_llm_window_invalid")
+    # Stored-message re-extraction sends reopen only inside a period budget.
+    if block.get("reextract_backlog_until") is not None:
+        try:
+            until_epoch(block["reextract_backlog_until"])
+            if out["window_budget_usd"] is None:
+                raise ValueError
+            out["reextract_backlog_until"] = block["reextract_backlog_until"]
+        except (ValueError, OverflowError):
+            errors.append("config: cloud_llm_reextract_backlog_invalid")
     # A key alone may enable sending, but never without a spending cap.
     budgets = block.get("provider_budgets", {})
     cap_keys = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
@@ -377,9 +387,39 @@ def send_route(route):
     return route == "patient_context"
 
 
+# Set by the pool for its stored-message backlog workers only.
+BACKLOG_WORKER_ENV = "MCS_REEXTRACT_BACKLOG_WORKER"
+
+
+def reextract_backlog_window(cfg, *, now=None):
+    """The owner's bounded reopening of sends for stored-message re-extraction.
+
+    Open only while reextract_backlog_until lies ahead and a period budget
+    (window_start + window_budget_usd) caps every cloud spend made in it.
+    Attachment pages and the semantic backlog stay closed."""
+    c = _cfg(cfg)
+    until = c["reextract_backlog_until"]
+    return (until is not None and c["window_budget_usd"] is not None
+            and (time.time() if now is None else now) < until_epoch(until))
+
+
+def reextract_planned(cfg):
+    """Whether stored-message re-extraction goes to the cloud at all, for
+    spawning workers, estimates and display; route_open decides each send."""
+    return send_route("reextract") or reextract_backlog_window(cfg)
+
+
+def route_open(route, cfg):
+    """send_route, plus stored-message sends inside the bounded window. Only the
+    backlog worker process may make them: its selection is the receipted
+    history scope, so resident and tick passes stay local."""
+    return send_route(route) or (route == "reextract" and os.environ.get(BACKLOG_WORKER_ENV) == "1"
+                                 and reextract_backlog_window(cfg))
+
+
 def eligible(cfg, route, project_id):
-    """Allow new cloud inference only for patient context within its scope."""
-    return send_route(route) and in_scope(cfg, route, project_id)
+    """Allow new cloud inference only for an open route within its scope."""
+    return route_open(route, cfg) and in_scope(cfg, route, project_id)
 
 
 def in_scope(cfg, route, project_id):
