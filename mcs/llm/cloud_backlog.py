@@ -608,9 +608,13 @@ _CONTEXT_PASS_REASONS = frozenset({
     "patient_context_selection_busy", "patient_context_selection_unavailable",
     "patient_context_completed_expired", "patient_context_capacity_or_deadline", "patient_context_admission_deferred",
     "patient_context_turn_busy", "patient_context_local_capacity", "patient_context_source_changed", "patient_context_cloud_budget",
+    "patient_context_generation_active", "patient_context_generation_clock_changed",
+    "patient_context_generation_daily_limit", "patient_context_generation_interval",
     "patient_context_cloud_not_sent", "patient_context_cloud_pending", "patient_context_cloud_source_changed",
     "patient_context_length_stop", "patient_context_unsupported_items", "patient_context_unsupported_summary",
     "summary_quality_promotion", "summary_quality_unavailable", "source_quality_unavailable",
+    "patient_summary_quality_lock", "patient_summary_quality_budget_changed",
+    "patient_summary_quality_source_changed",
     "patient_context_source_repair_changed", "patient_context_source_repair_lock",
     "nightly_completed_expired", "nightly_capacity_or_deadline", "nightly_admission_deferred",
     "nightly_turn_busy", "nightly_local_capacity", "nightly_source_changed", "nightly_cloud_budget",
@@ -618,7 +622,7 @@ _CONTEXT_PASS_REASONS = frozenset({
     "nightly_length_stop", "nightly_unsupported_items", "nightly_unsupported_summary",
     "nightly_source_repair_changed", "nightly_source_repair_lock",
 }) | frozenset(prefix + state for prefix in ("source_quality_", "summary_quality_")
-              for state in ("pending", "deferred", "held", "failed", "budget", "disabled"))
+              for state in ("pending", "deferred", "held", "failed", "budget", "disabled", "unknown"))
 
 
 _SCAN_REFUSALS = frozenset({
