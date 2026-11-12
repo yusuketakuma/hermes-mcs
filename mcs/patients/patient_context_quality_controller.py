@@ -290,7 +290,9 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         except ValueError as exc:
             # Uncertain or incomplete audit evidence cannot prove a repair;
             # hold until the bound inputs change instead of deferring forever.
-            if str(exc) != 'patient_context_source_repair_unresolved':
+            # nightly_* is the pre-rename spelling of the same persisted code.
+            if str(exc) not in ('patient_context_source_repair_unresolved',
+                                'nightly_source_repair_unresolved'):
                 raise
             return 'held', None
         header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
