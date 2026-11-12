@@ -387,6 +387,66 @@ def test_semantic_turn_leaves_the_carry_when_the_update_fence_moved(tmp_path, mo
         release()
 
 
+def _paced(monkeypatch, clock, passes):
+    """run_pending stub: fresh passes follow ``passes``; resumes keep waiting.
+    Records (start time, carry) per call."""
+    starts = []
+
+    def run(led, **kwargs):
+        starts.append((clock[0], list(kwargs['carry'])))
+        clock[0] += 1
+        if kwargs['carry']:
+            return {'done': 0, 'failed': 0, 'left': None, 'selected': 0,
+                    'carry': kwargs['carry'], 'carry_waiting': True}
+        if passes:
+            return dict(passes.pop(0))
+        return {'done': 0, 'failed': 0, 'left': 0, 'selected': 0, 'carry': []}
+    monkeypatch.setattr(worker, 'run_pending', run)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
+
+    def settle(led, carry, **kwargs):
+        if kwargs.get('final', True):
+            carry.clear()
+        return {'done': 0, 'held_prior': 0, 'deferred': 0}, 0, set()
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', settle)
+    return starts
+
+
+def _deferred_pass(reason, carry):
+    return {'done': 0, 'failed': 0, 'left': 1, 'selected': 1, 'deferred': 1,
+            'defer_reasons': {reason: 1}, 'carry': carry}
+
+
+def test_a_carried_result_does_not_wait_30s_after_a_prepare_deferral(tmp_path, monkeypatch):
+    clock = _resident_env(monkeypatch, tmp_path, _StubLedger(), ['--lane', '2', '--stop-after', '40'])
+    row = ({'project_id': 1}, time.time() + 1230, lambda **kw: None)
+    starts = _paced(monkeypatch, clock, [_deferred_pass('prepare_context_load_unverifiable', [row])])
+    assert worker.main() == 0
+    (first, _), (resume, carried) = starts[:2]
+    assert carried == [row]
+    assert resume - (first + 1) == pytest.approx(extract_llm_resident._IDLE_FLOOR_S)
+
+
+def test_a_lookahead_refusal_does_not_hold_the_carried_save_for_30s(tmp_path, monkeypatch):
+    clock = _resident_env(monkeypatch, tmp_path, _StubLedger(), ['--lane', '2', '--stop-after', '40'])
+    row = ({'project_id': 1}, time.time() + 1230, lambda **kw: None)
+    starts = _paced(monkeypatch, clock, [
+        {'done': 1, 'failed': 0, 'left': 1, 'selected': 1, 'carry': [row]},
+        _deferred_pass('cloud_unit_unresolved', [])])
+    assert worker.main() == 0
+    # fresh pass, resume, lookahead (nothing carried in), then the next resume
+    assert [bool(carry) for _, carry in starts[:4]] == [False, True, False, True]
+    assert starts[3][0] - (starts[2][0] + 1) == pytest.approx(extract_llm_resident._IDLE_FLOOR_S)
+
+
+@pytest.mark.parametrize('reason,wait_s', [('endpoint_down', 30), ('prepare_context_load_unverifiable', 5)])
+def test_uncarried_deferral_waits_by_its_reason(tmp_path, monkeypatch, reason, wait_s):
+    clock = _resident_env(monkeypatch, tmp_path, _StubLedger(), ['--lane', '2', '--stop-after', '60'])
+    starts = _paced(monkeypatch, clock, [_deferred_pass(reason, [])])
+    assert worker.main() == 0
+    assert starts[1][0] - (starts[0][0] + 1) == pytest.approx(wait_s)
+
+
 def test_local_only_pass_skips_a_row_a_cloud_reservation_owns(tmp_path, monkeypatch):
     """The lookahead pass (allow_cloud=False) must not infer an owned row locally."""
     led = _ledger(tmp_path)

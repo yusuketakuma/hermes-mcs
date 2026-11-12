@@ -740,12 +740,18 @@ def _main() -> int:
                     pause(min(120, r.get("circuit_open_s") or 120))
                     continue
                 if r["done"] == 0 and r["failed"] == 0:
-                    # rows were selected but nothing committed — either
-                    # every write was skipped (lock/_current race → short
-                    # yield) or all calls deferred on an unreachable
-                    # endpoint (server down → longer backoff instead of
-                    # re-firing refused connections every few seconds)
-                    pause(30 if r.get("deferred") else 5)
+                    # rows were selected but nothing committed. Only an
+                    # endpoint-side deferral (server down, not sent, busy,
+                    # breaker) or another unproven unit backs off 30 s
+                    # instead of re-firing refused connections every few
+                    # seconds. A carried result returns to its save attempt
+                    # at the floor; a pass deferred only at preparation
+                    # re-scans after 5 s (those rows hold a prepare claim).
+                    reasons = set(r.get("defer_reasons") or ())
+                    prepare_only = bool(reasons) and reasons <= cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
+                    endpoint = bool(reasons & {"endpoint_down", "not_sent", "busy", "circuit_open"})
+                    pause(_IDLE_FLOOR_S if carry and not endpoint
+                          else 30 if r.get("deferred") and not prepare_only else 5)
                 elif r["done"] == 0:
                     # Everything selectable failed or is backed off —
                     # wait for the earliest retry instead of quitting.
