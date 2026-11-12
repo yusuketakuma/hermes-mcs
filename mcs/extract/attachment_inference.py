@@ -48,14 +48,16 @@ _history_snapshot = attachment_extraction.history_snapshot
 _input_binding = attachment_extraction.input_binding
 
 
-def _save(ledger, source, cfg, generation, stage, document, meta, unit=None, local=None):
+def _save(ledger, source, cfg, generation, stage, document, meta, unit=None, local=None, deadline=None):
     return attachment_extraction.save(ledger, source, cfg, stage, document, meta, unit, local,
-        contract_for=_contract, write=lambda fn: _write(ledger, source, cfg, generation, fn))
+        contract_for=_contract,
+        write=lambda fn: _write(ledger, source, cfg, generation, fn, deadline=deadline))
 
 
-def _local_checkpoints(ledger, source, cfg, generation):
+def _local_checkpoints(ledger, source, cfg, generation, deadline=None):
     return attachment_inference_checkpoints.local_checkpoints(ledger, source, cfg,
-        contract=_contract, write=lambda fn: _write(ledger, source, cfg, generation, fn))
+        contract=_contract,
+        write=lambda fn: _write(ledger, source, cfg, generation, fn, deadline=deadline))
 
 
 def _guard(ledger, source, cfg, generation):
@@ -73,9 +75,15 @@ def _guard(ledger, source, cfg, generation):
         raise ValueError('attachment_inference_source_changed')
 
 
-def _write(ledger, source, cfg, generation, fn, *, result=False):
+_WRITE_LOCK_WAIT_S = 60
+
+
+def _write(ledger, source, cfg, generation, fn, *, result=False, deadline=None):
     root = attachment_ocr._data_root(ledger)
-    fd = writer_lock.wait_run_lock(str(root / 'run.lock'), wait_s=5,
+    wait_s = _WRITE_LOCK_WAIT_S
+    if deadline is not None:
+        wait_s = min(wait_s, max(deadline - time.monotonic() - 1.0, 0.0))
+    fd = writer_lock.wait_run_lock(str(root / 'run.lock'), wait_s=wait_s,
         expected_code_stamp=generation[1], marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
     if fd is None:
         raise ValueError('attachment_inference_writer_busy')
@@ -89,7 +97,7 @@ def _write(ledger, source, cfg, generation, fn, *, result=False):
         os.close(fd)
 
 
-def _dispatcher(ledger, source, cfg, generation):
+def _dispatcher(ledger, source, cfg, generation, deadline=None):
     # Shared response recovery recursively dispatches commit guards on this same owner thread.
     depth = 0
 
@@ -104,7 +112,8 @@ def _dispatcher(ledger, source, cfg, generation):
                 return fn()
             finally:
                 depth -= 1
-        return call() if depth else _write(ledger, source, cfg, generation, call, result=result)
+        return call() if depth else _write(ledger, source, cfg, generation, call, result=result,
+                                           deadline=deadline)
     return dispatch
 
 
@@ -132,14 +141,15 @@ def _journal_unit(unit, source, cfg):
     return unit
 
 
-def _recover_paid_results(ledger, generation):
+def _recover_paid_results(ledger, generation, deadline=None):
     """Replay bounded accounting journals before any new inference dispatch."""
     import attachment_paid_results as journal
     try:
         paths = journal.pending(attachment_ocr._data_root(ledger))
         if not paths:
             return True
-        _write(ledger, None, None, generation, lambda: journal.replay(ledger, paths, load_config()), result=True)
+        _write(ledger, None, None, generation, lambda: journal.replay(ledger, paths, load_config()),
+               result=True, deadline=deadline)
         return True
     except (cloud_client.CloudError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         return False
@@ -162,7 +172,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     generation = writer_lock.updater_state()
     if generation[0] or not extract_llm._writer_current(full=True):
         return {**counts, 'deferred': 1}
-    if not _recover_paid_results(ledger, generation):
+    if not _recover_paid_results(ledger, generation, deadline=deadline):
         if stage == 'cloud':
             return {**counts, 'deferred': 1}
         counts['paid_recovery_pending'] = True
@@ -252,13 +262,13 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                             current=lambda: original_source_keys.binding(ledger.db, row['project_id'], key)
                                 == source['_source_binding'],
                             dispatch_current=lambda: _history_snapshot(ledger.db, source, require_ready=True) == history,
-                            dispatch=_dispatcher(ledger, source, cfg, generation),
+                            dispatch=_dispatcher(ledger, source, cfg, generation, deadline=deadline),
                             input_binding=_input_binding(source, local),
                             owner={'source_type': 'attachment_ocr', 'source_key': key,
                                    'local_artifact_id': local['artifact_id']})
                         _journal_unit(unit, source, cfg)
                     meta = {}
-                    checkpoints = (_local_checkpoints(ledger, source, cfg, generation)
+                    checkpoints = (_local_checkpoints(ledger, source, cfg, generation, deadline=deadline)
                                    if stage == 'local' else {})
                     routing = local_llm.background_scope(root) if stage == 'local' else nullcontext()
                     with routing, extract_llm.pin_target(local_llm.resolve(cfg)):
@@ -266,7 +276,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                                                        posted_at=None, provider=unit,
                                                        feedback=attachment_feedback.notes(ledger.db, source), **checkpoints)
                     if (not isinstance(result, dict) or meta.get('_quality_hold')
-                            or not _save(ledger, source, cfg, generation, stage, result, meta, unit, local)):
+                            or not _save(ledger, source, cfg, generation, stage, result, meta, unit, local,
+                                     deadline=deadline)):
                         counts['deferred'] += 1
                     else:
                         counts['done'] += 1

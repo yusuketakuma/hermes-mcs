@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "添付OCR・ページ解析の書込みロック待機を期限付きへ延長",
+  "summary": "添付のOCR結果確定とローカル/クラウドページ解析の保存は、run.lockを最大5秒だけ待つ単発取得でした。長時間ジョブがrun.lockを保持し続ける環境では取得に失敗し、解析結果が保存されずに延期・推論のやり直しが発生していました。今回、患者コンテキスト品質監査と同じく最大60秒・呼出し期限で打ち切る期限付き待機へ変更しました。ロックを取得できない場合は従来どおり延期となり、取得後の所有権・世代・出典の再検査は変わりません。",
+  "upgrade": "追加操作は不要です。既存の添付・解析結果・会計ジャーナルはそのまま利用できます。処理がrun.lock解放を待つ時間が最大60秒延びる場合がありますが、各呼出しの期限を超えて待つことはありません。",
+  "details": [
+    "mcs/extract/attachment_inference.py: _writeのrun.lock待機をwait_s=5の単発から、最大60秒かつ呼出しdeadlineの1秒前までの期限付き待機へ変更しました。wait_run_lockは内部でポーリングするため、保持側が一時的に解放する隙間を拾えます。",
+    "同じdeadlineを_save・_local_checkpoints・_dispatcher・_recover_paid_resultsの各書込み経路へ配管し、期限を超えた待機は行いません。",
+    "mcs/extract/attachment_ocr.pyの_settleは既に呼出し期限まで再試行する実装のため変更していません。",
+    "ロック取得後のwriter世代・設定・出典バインディング・revisionの再検査(_guard)と、未送信・不明結果を成功へ変えない既存のfail-closed契約は維持しています。"
+  ],
+  "refs": ["mcs/extract/attachment_inference.py", "tests/extract/test_attachment_inference.py", "tests/extract/test_attachment_inference_recovery.py"]
+}
