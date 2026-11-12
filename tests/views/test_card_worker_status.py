@@ -155,3 +155,47 @@ def test_empty_malformed_notify_values_are_unverified(tmp_path):
                 {'notify': {'interactive': 'slack', 'slack': []}}):
         result = workers.diagnose(tmp_path, cfg)
         assert (result['state'], result['reason']) == ('unknown', 'worker_start_unverified'), cfg
+
+
+def _gateway_source(checkout, mtime):
+    source = checkout / 'hermes_plugin' / 'plugin.py'
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('')
+    os.utime(source, (mtime, mtime))
+
+
+def test_started_worker_older_than_its_sources_is_overdue_only_after_the_restart_window(tmp_path, process_birth):
+    cfg = {'notify': {'interactive': 'slack', 'slack': {'profile': 'primary'}}}
+    data, checkout, started = tmp_path / 'data', tmp_path / 'checkout', process_birth[0]
+    data.mkdir()
+    overdue = lambda now: workers.restart_overdue(data, cfg, now, checkout=str(checkout))  # noqa: E731
+    _gateway_source(checkout, started + 60)
+    assert overdue(started + 10_000) is False          # no start witness: that state has its own reason
+    workers.record(data, 'slack', 'primary', 'worker_started')
+    assert overdue(started + 60 + workers.RESTART_GRACE_S - 1) is False   # the restart may still be on its way
+    assert overdue(started + 60 + workers.RESTART_GRACE_S) is True
+    process_birth[0] = started + 120                   # the gateway restarted and wrote a new witness
+    workers.record(data, 'slack', 'primary', 'worker_started')
+    assert overdue(started + 10_000) is False
+
+
+@pytest.mark.parametrize('cfg', [
+    {'runtime_mode': 'standalone', 'notify': {'interactive': 'slack', 'slack': {'profile': 'primary'}}},
+    {'notify': {'interactive': 'lineworks', 'lineworks': {}}},
+    {'notify': None}, {},
+])
+def test_restart_check_applies_only_to_a_hermes_gateway_worker(tmp_path, process_birth, cfg):
+    workers.record(tmp_path, 'slack', 'primary', 'worker_started')
+    workers.record(tmp_path, 'lineworks', 'default', 'worker_started')
+    _gateway_source(tmp_path / 'checkout', process_birth[0] + 60)
+    assert workers.restart_overdue(tmp_path, cfg, process_birth[0] + 10_000,
+                                   checkout=str(tmp_path / 'checkout')) is False
+
+
+def test_restart_check_is_silent_without_sources_or_for_a_worker_newer_than_them(tmp_path, process_birth):
+    cfg = {'notify': {'interactive': 'discord', 'discord': {'profile': 'primary'}}}
+    workers.record(tmp_path, 'discord', 'primary', 'worker_started')
+    now = process_birth[0] + 10_000
+    assert workers.restart_overdue(tmp_path, cfg, now, checkout=str(tmp_path / 'absent')) is False
+    _gateway_source(tmp_path / 'checkout', process_birth[0] - 60)
+    assert workers.restart_overdue(tmp_path, cfg, now, checkout=str(tmp_path / 'checkout')) is False

@@ -11,6 +11,7 @@ from pathlib import Path
 import time
 
 import environment_diagnostics
+import mcs_util
 from safe_io import atomic_write
 
 VERSION = '2026-10-30.1'
@@ -18,6 +19,9 @@ REASONS = frozenset({'worker_started', 'profile_mismatch', 'owner_unverified',
                      'application_mismatch', 'standalone_owned', 'worker_start_failed',
                      'route_flags_unready'})
 TRANSPORTS = ('slack', 'discord', 'lineworks')
+# The updater's detached gateway restart gives up after 660 s; one collection
+# interval on top keeps a restart that is still on its way out of the alarm.
+RESTART_GRACE_S = 1200
 
 
 def _path(root, transport, profile):
@@ -72,6 +76,28 @@ def status(root, transport, profile):
                 'reason': value['reason']}
     except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return {'state': 'unknown', 'reason': 'worker_start_unverified'}
+
+
+def restart_overdue(root, cfg, now, *, checkout=None) -> bool:
+    """A started Hermes worker that still predates the sources its gateway loads.
+
+    A restart request that failed or was lost, or an edit applied without one,
+    leaves the old code delivering; its start witness alone looks healthy."""
+    notify = cfg.get('notify')
+    transport = notify.get('interactive') if isinstance(notify, dict) else None
+    if cfg.get('runtime_mode') == 'standalone' or transport not in ('slack', 'discord'):
+        return False    # the standalone host and the LINE WORKS adapter load other sources
+    scope = notify.get(transport)
+    profile = (scope.get('profile') if isinstance(scope, dict) else None) or 'default'
+    if status(root, transport, profile)['state'] != 'started':
+        return False    # every other state already reports its own reason
+    try:
+        started = json.loads(_path(root, transport, profile).read_text())['started_at']
+        newest = environment_diagnostics.gateway_sources_mtime(checkout or mcs_util.REPO)
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return False
+    return (type(started) in (int, float) and newest is not None
+            and started < newest <= now - RESTART_GRACE_S)
 
 
 def diagnose(root, cfg, *, probe_data=False):
