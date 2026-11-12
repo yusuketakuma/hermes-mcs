@@ -237,7 +237,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     return outcome
 
 
-def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observed_out=None):
+def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, scan_idle=None, observed_out=None):
     import extract_llm
 
     def _mark(reason):
@@ -262,7 +262,8 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
                 ledger.db.rollback()
                 return None
             content, meta = expected
-            content = {**content, 'patient_scan': bookmark}
+            content = {**{key: value for key, value in content.items() if key != 'scan_idle'},
+                       'patient_scan': bookmark, **({'scan_idle': scan_idle} if scan_idle is not None else {})}
             patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, content, meta)
             if not extract_llm._writer_current(full=True):
                 _mark('writer_generation')
@@ -339,6 +340,26 @@ _WAIT_COUNTER_KEYS = (
 _UNIT_CLAIM_SECONDS = 900
 
 
+# Workless rotations thin the scan for every worker through the rotation row;
+# per-worker sleeps cannot, since workers queue on the selection lock.
+_SCAN_IDLE_MAX_SECONDS = 60
+
+
+def _scan_idle(rotation, now):
+    """Return (workless activity cycles, remaining idle seconds) of a well-formed mark.
+
+    A malformed mark counts as absent; a remaining time beyond the maximum
+    (a clock moved backwards) is ignored so the scan runs normally.
+    """
+    idle = rotation.get('scan_idle')
+    if not (isinstance(idle, dict) and set(idle) == {'cycles', 'until'}
+            and type(idle['cycles']) is int and 0 <= idle['cycles'] <= 2
+            and type(idle['until']) in (int, float) and math.isfinite(idle['until'])):
+        return 0, 0
+    remaining = idle['until'] - now
+    return idle['cycles'], remaining if 0 < remaining <= _SCAN_IDLE_MAX_SECONDS else 0
+
+
 def _unit_claimed(progress, now):
     claim = progress.get('unit_claim')
     until = claim.get('until') if isinstance(claim, dict) else None
@@ -377,25 +398,40 @@ def _release_unit_claim(ledger, pid, token, deadline):
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None):
-    """Advance a bounded scan before evaluating each patient's current evidence."""
+    """Advance a bounded scan before evaluating each patient's current evidence.
+
+    After two activity-order cycles end without a selection on a slice that
+    could not cover every patient, the rotation row carries a shared idle
+    mark; until it expires every worker returns without scanning and reports
+    the remaining seconds in ``observed_out['scan_idle_s']``.
+    """
     if observed_out is not None:
         observed_out.update(dict.fromkeys(_WAIT_COUNTER_KEYS, 0))
+    rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+    cycles, idle_s = _scan_idle(rotation[0], now)
+    if idle_s:
+        if observed_out is not None:
+            observed_out['scan_idle_s'] = idle_s
+        return {}, None, rotation, 0, 0, True, 0, 0
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
     scan_reads, scan_interrupts = 0, 0
     best, selected = {}, None
-    rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
     # The scan holds the selection lock, so the bookmark advances in memory and
     # is saved once before each patient evaluation (a slow patient can exhaust
     # the deadline, after which no save is admitted) and once at the end.
     bookmark = rotation[0].get('patient_scan')
+    # Interim and early-exit saves keep the stored idle mark; only a completed
+    # slice replaces it, so a refused or interrupted scan never advances cycles.
+    idle = rotation[0].get('scan_idle')
     unsaved = False
+    patients = None
 
     def persist():
         nonlocal rotation, unsaved
         unsaved = False
         rotation = _advance_patient_scan(ledger, rotation, bookmark, deadline, admit,
-                                         observed_out=observed_out)
+                                         scan_idle=idle, observed_out=observed_out)
         if rotation is None:
             raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
 
@@ -414,6 +450,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     finally:
                         reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
                     bookmark = plan['next']
+                    if plan['reason'] == 'cycle_end' and context_schedule._bookmark(original)['turn'] != 3:
+                        cycles = min(2, cycles + 1)
                     pid = plan['project_id']
                     if pid is None or pid in seen:
                         if _scan_covered(reader.db, seen):
@@ -522,6 +560,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     if _scan_covered(reader.db, seen):
                         covered = True
                         break
+                if selected is None and not covered and cycles >= 2:
+                    patients = reader.db.execute('SELECT COUNT(*) FROM patients WHERE project_id>0').fetchone()[0]
         except Exception:
             # Early exits keep the turns already consumed; the original error
             # still decides the outcome when this save is refused.
@@ -531,6 +571,18 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 except Exception:
                     pass
             raise
+        # A selection or a full-coverage slice (whose worker already waits 60 s)
+        # clears the mark. Otherwise idle long enough that the activity order
+        # (6 patients per slice) still completes a cycle within about 600 s.
+        if selected is not None or covered:
+            fresh = None
+        elif patients is not None:
+            fresh = {'cycles': cycles, 'until': now + min(
+                _SCAN_IDLE_MAX_SECONDS, max(5, 3600 / max(patients, 1)))}
+        else:
+            fresh = {'cycles': cycles, 'until': 0} if cycles else None
+        if fresh != idle:
+            idle, unsaved = fresh, True
         if unsaved:
             persist()
     # scan_interrupts counts every early abort (contention, deadline or
@@ -642,6 +694,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             stats['scan_refusal'] = scan_observed['scan_refusal']
         if scan_rotation is None:
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        if scan_observed.get('scan_idle_s'):
+            return {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
+                    "scan_idle_s": scan_observed['scan_idle_s'], **stats}
         rotation = scan_rotation[0]
         lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
         if lane is None:

@@ -90,12 +90,21 @@ def test_context_retry_delay_backs_off_for_busy_and_workless_scans():
     assert cloud_backlog._context_retry_delay(
         {"done": 0, "reason": "run_lock"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
+    # A shared scan idle sleeps until it expires, within the 5..60 s bounds.
+    idle = {"done": 0, "reason": "patient_context_waiting", "covered": True}
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 33}) == 33
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 2}) == 5
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 500}) == 60
+    assert cloud_backlog._context_retry_delay(idle) == 60
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_waiting", "covered": False}) == 5
 
 
 def test_context_pass_reports_only_fixed_bounded_diagnostics():
     result = {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
               "scanned": 8, "scan_ms": 900000, "lane": "B", "project_id": 123,
-              "error": "synthetic private source", "patient": "synthetic private patient"}
+              "error": "synthetic private source", "patient": "synthetic private patient",
+              "scan_idle_s": 33.5}
     assert cloud_backlog._context_pass_observation(result) == {
         "status": "deferred", "done": 0, "reason": "patient_context_waiting",
         "scanned": 8, "scan_ms": 900000, "lane": "B"}
