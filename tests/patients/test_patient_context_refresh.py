@@ -1399,6 +1399,22 @@ def test_a_failed_repair_on_a_dense_chunk_splits_instead_of_failing(runtime, mon
     assert lanes['B']['unsupported'] == 0 and lanes['B']['split'] >= 1
 
 
+def test_a_malformed_answer_on_a_dense_chunk_splits_instead_of_failing(runtime, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body=PROSE)
+    def reply(p):
+        if len(p['source']) <= 1500:
+            return _quote(p['source'])
+        return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+            {'category': 'living', 'text': '合成', 'evidence': '合成', 'subject': 'unspecified',
+             'details': [], 'extra': 'bad'}]})}                      # unexpected key: invalid_items
+    scans = _scan_chat(monkeypatch, reply)
+    finish(runtime)
+    scan = document(led, patient_context_refresh_state.SCAN)
+    assert scan['complete'] and scan['split'] >= 1
+    assert not any('rejected' in p for p in scans)   # invalid_items never reaches the bounded repair
+
+
 def test_a_repair_that_stops_at_the_budget_is_replanned_too(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led, body=PROSE)

@@ -92,6 +92,14 @@ def scan_source(source, saved, night_id, *, answer_for, clock, metrics=None, sou
                 if finer:
                     return {**finer, "complete": False, "facts": [], "audited": False, "repairs": repairs}
                 raise ValueError("nightly_unsplittable_assertion") from exc
+            if str(exc) == "nightly_invalid_items" and source_repair is None:
+                # a malformed answer on an over-dense chunk gets the same finer
+                # re-plan as a length stop; each finer chunk is still validated whole
+                finer = context_plan.split_scan(source, saved, cursor)
+                if finer:
+                    return {**finer, "complete": False, "facts": saved.get("facts", []),
+                            "audited": False, **({"repairs": repairs} if repairs else {})}
+                raise
             if str(exc) != "nightly_unsupported_items" or source_repair is not None:
                 raise
             # one bounded repair: name the refused items by index and fixed reason only;

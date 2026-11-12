@@ -1,13 +1,13 @@
 {
   "category": "fixed",
-  "title": "患者コンテキスト走査でrepairも失敗した塊を細分化して再試行するよう修正",
-  "summary": "患者コンテキストの走査（lane B）で、ある塊の回答が原文逐語の根拠付けに失敗し、1回のrepair（拒否項目を理由つきで再質問）も失敗すると、そのソース全体が失敗として24時間間隔で再試行され続け、走査が完了しませんでした。長い・密度の高い塊ではモデルが引用を作れず同じ失敗を繰り返すためです。repair失敗時に、長さ打ち切りや容量超過と同じ既存の細分化（split_scan）機構でより小さい塊へ分けて再開するよう修正しました。各細分塊でも従来どおり逐語根拠の検証は維持され、これ以上細かくできない場合は従来どおり失敗として記録されます。",
-  "upgrade": "追加操作は不要です。走査がrepair失敗で止まっていたソースは、次回の走査単位から自動で細かい塊に分割されて処理が再開されます。検証条件・公開条件・会計の扱いは変更していません。",
+  "title": "患者コンテキスト走査でrepair・形式検証に失敗した塊を細分化して再試行するよう修正",
+  "summary": "患者コンテキストの走査（lane B）で、ある塊の回答が原文逐語の根拠付けに失敗し1回のrepair（拒否項目を理由つきで再質問）も失敗した場合や、回答のJSON構造が不正（invalid_items）だった場合、そのソース全体が失敗として24時間間隔で再試行され続け、走査が完了しませんでした。長い・密度の高い塊ではモデルが引用を作れず、あるいは形式を崩して同じ失敗を繰り返すためです。これらの失敗時に、長さ打ち切りや容量超過と同じ既存の細分化（split_scan）機構でより小さい塊へ分けて再開するよう修正しました。各細分塊でも従来どおり逐語根拠・形式の検証は維持され、これ以上細かくできない場合は従来どおり失敗として記録されます。",
+  "upgrade": "追加操作は不要です。走査がrepair失敗や形式不正で止まっていたソースは、次回の走査単位から自動で細かい塊に分割されて処理が再開されます。検証条件・公開条件・会計の扱いは変更していません。",
   "details": [
-    "patient_context_scan.scan_source で、unsupported_items に対する1回のbounded repairが失敗した場合（repair回答がscan_itemsを通らない、または既にgroundingできた項目を保持できない）に、context_plan.split_scan でより細かい分割計画へ再開します。length_stop・scan_capacity と同じ再開形式（complete=False・facts保持・audited=False）です。",
-    "細分化は MAX_SCAN_SPLIT=3 を上限とし、これ以上分割できない場合は repair が投げた元の例外（nightly_unsupported_items 等）をそのまま再送出します。失敗理由・attempts・next_try のバックオフ規則は変更していません。",
-    "nightly_invalid_items（JSON構造の不正）は密度ではなく形式の問題のため対象外で、従来どおり即座に失敗します。source_repair 経路（別の品質修復フロー）も従来どおり分割せず失敗します。",
-    "各細分塊は独立して scan_items の逐語grounding検証と1回のrepairを受けるため、検証を緩める変更ではありません。"
+    "patient_context_scan.scan_source で、unsupported_items に対する1回のbounded repairが失敗した場合（repair回答がscan_itemsを通らない、または既にgroundingできた項目を保持できない）に、context_plan.split_scan でより細かい分割計画へ再開します。",
+    "nightly_invalid_items（JSON構造の不正）についても、source_repair経路でない通常の走査で、細分化できる場合は同じ finer plan へ再開します。repairは行わず即座に細分化を試みます。",
+    "細分化は MAX_SCAN_SPLIT=3 を上限とし、これ以上分割できない場合は元の例外をそのまま再送出します。失敗理由・attempts・next_try のバックオフ規則は変更していません。scan_capacity の再開（factsを空に戻す既存仕様）とは異なり、完了済み塊のfactsは保持します。",
+    "各細分塊は独立して scan_items の逐語grounding検証と（unsupported_itemsの場合）1回のrepairを受けるため、検証を緩める変更ではありません。"
   ],
   "refs": ["mcs/patients/patient_context_scan.py", "tests/patients/test_patient_context_refresh.py"]
 }
