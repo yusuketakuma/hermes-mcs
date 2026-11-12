@@ -3,6 +3,7 @@ import json
 
 import cloud_policy
 import mcs_queries
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import patient_context_plan as plan
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_state as state
@@ -18,10 +19,11 @@ def test_verified_local_context_covers_every_input_without_cloud_replay_after_re
     body = '本人は合成の自宅で生活しています。' * 170 + '\n\n' + '合成の通院記録です。' * 170
     seed(ledger, body=body)
     summary = '完全合成の補助要約。' * 1500
-    artifact = ledger.artifacts('extract_llm', message_id=1)[-1]['artifact_id']
-    with ledger.db:
-        ledger.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
-                          (json.dumps({'summary': summary}), artifact))
+    # Proof-bound extract_llm summaries cap at 60 chars; large ones arrive via extract_v1.
+    body_hash = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+    artifact = ledger.artifact_add("extract_v1", json.dumps({"summary": summary}, ensure_ascii=False),
+        project_id=1, message_id=1, model="synthetic-rules",
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": body_hash})
     expected = next(mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg))
     assert expected['body_text'] == body
     assert any(item['text'] == summary for item in expected['derived_summaries'])

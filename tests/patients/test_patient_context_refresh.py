@@ -65,7 +65,7 @@ def runtime(tmp_path, monkeypatch):
     led.close()
 
 
-def _raw_proof(led, pid, mid, *, cloud=False):
+def _raw_proof(led, pid, mid, *, cloud=False, summary='合成の経過報告'):
     import extract_llm
     import inference_dependency_loss
     from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -89,7 +89,7 @@ def _raw_proof(led, pid, mid, *, cloud=False):
                 for i in range(len(chunks))}}}
     if cloud:
         meta.update(contract)
-    return led.artifact_add('extract_llm', json.dumps({'summary': '合成の経過報告'}),
+    return led.artifact_add('extract_llm', json.dumps({'summary': summary}),
                             project_id=pid, message_id=mid, model=model, meta=meta)
 
 

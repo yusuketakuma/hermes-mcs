@@ -6,6 +6,7 @@ import pytest
 import mcs_queries
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _delivery_db, _message, _summary
+from test_patient_context_refresh import _raw_proof
 
 
 def _source(led, *, hydrate=True, cfg=None):
@@ -22,9 +23,10 @@ def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
     led = _delivery_db(tmp_path, [_message()])
     try:
         text = "合成補助要約\n" * 3000
-        aid = _local(led, text)
+        # Proof-bound extract_llm summaries cap at 60 chars; large ones arrive via extract_v1.
+        aid = _local(led, text, kind="extract_v1")
         source = _source(led)
-        assert source["derived_summaries"] == [{"kind": "extract_llm", "artifact_id": aid, "text": text}]
+        assert source["derived_summaries"] == [{"kind": "extract_v1", "artifact_id": aid, "text": text}]
         shallow = _source(led, hydrate=False)
         assert shallow["derived_summary_sig"] == source["derived_summary_sig"]
         assert shallow["extraction_sig"] == source["extraction_sig"]
@@ -65,10 +67,10 @@ def test_stale_foreign_old_or_unproven_local_summary_is_excluded(tmp_path, overr
 
 
 def test_rule_and_local_summaries_remain_distinct(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body="合成の近況を報告します。")])
     try:
         aid = _local(led, "ルール", kind="extract_v1")
-        bid = _local(led, "局所推論")
+        bid = _raw_proof(led, 1, 1, summary="局所推論")
         assert _source(led)["derived_summaries"] == [
             {"kind": "extract_llm", "artifact_id": bid, "text": "局所推論"},
             {"kind": "extract_v1", "artifact_id": aid, "text": "ルール"}]
