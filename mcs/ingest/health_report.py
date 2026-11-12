@@ -482,7 +482,8 @@ def cloud_stop_reason(db, cfg) -> str | None:
     key_present = bool(cloud_policy.provider_key(settings["provider"]))
     reason = cloud_policy.global_block_reason(SimpleNamespace(db=db), model=settings["model"])
     if reason == "paused":
-        return None
+        # a human stop is intended; the stop a database restore left needs a human
+        return "restore_paused" if cloud_policy.restore_paused(db) else None
     if not key_present:
         return "no_api_key"
     if reason is None:

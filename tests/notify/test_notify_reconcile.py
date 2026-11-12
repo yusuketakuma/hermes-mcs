@@ -743,3 +743,55 @@ def test_reconcile_idempotent(world):
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'"
     ).fetchone()[0] == 1
+
+
+# --- cloud sends after a restore ---------------------------------------------
+
+CLOUD_CFG = {**CFG, "cloud_llm": {"mode": "on", "project_ids": [1]}}
+
+
+def _cloud_controls(world):
+    return [(row[0], json.loads(row[1])) for row in world.led.db.execute(
+        "SELECT content,meta FROM artifacts WHERE kind='cloud_control' ORDER BY artifact_id")]
+
+
+def test_restore_reconcile_stops_cloud_sends_before_the_marker_clears(world, monkeypatch):
+    import cloud_policy
+    notify_spool.mark_restored(str(world.data), backup_path="b.db", now=NOW)
+
+    monkeypatch.setattr(cloud_policy, "pause_for_restore",
+                        lambda *args: (_ for _ in ()).throw(ValueError("synthetic")))
+    with pytest.raises(ValueError, match="synthetic"):
+        notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + 1)
+    assert notify_spool.restore_pending(str(world.data)) is not None   # senders stay held
+    monkeypatch.undo()
+
+    notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + 2)
+    assert notify_spool.restore_pending(str(world.data)) is None
+    assert _cloud_controls(world) == [("paused", {"reason": "database_restored", "restore": repr(NOW)})]
+    assert cloud_policy.global_block_reason(world.led) == "paused"
+    assert not world.led.db.in_transaction
+
+
+def test_reconcile_owned_marker_is_not_a_database_restore(world):
+    notify_spool.mark_restored(str(world.data), by="reconcile_incomplete", now=NOW)
+    notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + 1)
+    assert _cloud_controls(world) == []
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+def test_adopted_backup_stops_cloud_sends_once_and_keeps_its_marker(world, monkeypatch, adopted):
+    import cloud_policy
+    import mcs_restore
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda root: adopted)
+    notify_spool.mark_restored(str(world.data), by="mcs_backup_restore", phase="awaiting_consent",
+                               now=NOW, report_id="a" * 64)
+    for step in (1, 2):
+        rep = notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + step)
+        assert rep["skipped"] == "awaiting_consent"
+    assert notify_spool.restore_pending(str(world.data))["phase"] == "awaiting_consent"
+    assert [content for content, _ in _cloud_controls(world)] == (["paused"] if adopted else [])
+    if adopted:
+        cloud_policy.resume(world.led)
+        notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + 3)
+        assert cloud_policy.global_block_reason(world.led) != "paused"

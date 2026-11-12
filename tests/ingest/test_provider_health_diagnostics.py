@@ -42,7 +42,7 @@ def test_health_reports_current_provider_and_key_presence_without_secret(tmp_pat
 
 @pytest.mark.parametrize("reason", ["cloud_llm_no_api_key", "cloud_llm_auth_error",
                                     "cloud_llm_payment_required", "cloud_llm_pricing_unverified",
-                                    "cloud_llm_circuit_open"])
+                                    "cloud_llm_circuit_open", "cloud_llm_restore_paused"])
 def test_cloud_reason_without_trusted_selection_never_invents_provider(reason):
     report = {"cloud_selection": {"provider": "synthetic-secret-canary", "key_present": True}}
     text = "\n".join(health_watch._reason_rows(report, [reason]))
