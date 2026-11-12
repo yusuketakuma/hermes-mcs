@@ -711,13 +711,16 @@ def _context_pass_observation(result):
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
     holds the selection lock (usually scanning, not necessarily doing work);
-    a scan that found nothing startable rarely finds work seconds later."""
+    a scan that covered every patient and found nothing startable rarely
+    finds work seconds later. A partial slice or a refused scan keeps the
+    short wait so the rotation reaches the remaining patients."""
     if result.get("done"):
         return 1
     reason = result.get("reason")
     if reason == "patient_context_selection_busy":
         return 20
-    if reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
+    if (reason in ("patient_context_waiting", "patient_context_scan_incomplete")
+            and result.get("covered") is True):
         return 60
     return 5
 
