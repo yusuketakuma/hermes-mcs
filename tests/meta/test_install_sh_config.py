@@ -133,7 +133,8 @@ def test_reinstall_over_complete_settings_does_not_ask_for_initial_setup(tmp_pat
     config.write_text(json.dumps(cfg))
     result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ('既存の設定を保持しています' in result.stdout) is configured
+    assert ('初期設定の開始は不要です' in result.stdout) is configured
+    assert '設定は変更していません。設定と接続の状態' not in result.stdout
     assert ('まだ利用開始前の初期設定が必要' in result.stdout) is not configured
 
 

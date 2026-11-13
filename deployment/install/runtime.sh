@@ -815,14 +815,14 @@ print("configured" if cfg and not validate_config(cfg)[0] else "unconfigured")
 ' "$REPO" "$MCS_ROOT/config.json" 2>/dev/null)" = configured ]; then _configured=1; fi
 printf '\n============================================================\n'
 if [ "$_configured" -eq 1 ]; then
-    printf 'ソフトの準備が完了しました。既存の設定を保持しています。\n'
+    printf 'ソフトの準備が完了しました。初期設定は済んでいるため、初期設定の開始は不要です。\n'
 else
     printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
 fi
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
 if [ "$_configured" -eq 1 ]; then
-    printf '\n設定は変更していません。設定と接続の状態は次のコマンドで確認できます:\n    %s %s check\n' "$PYQ" "$SETUPQ"
+    printf '\n設定と接続の状態は次のコマンドで確認できます:\n    %s %s check\n' "$PYQ" "$SETUPQ"
     printf '設定を見直す場合:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
 else
 printf '\n次は MCS のログイン情報と通知先を設定します。\n'
