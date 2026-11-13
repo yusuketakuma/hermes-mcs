@@ -558,6 +558,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _CALL_NOTES.defer_reason = "currentness_unverified"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
+                local_blocked = {}
                 def reset_local():
                     r.pop("_provider_contract", None)
                     r.pop("_cloud_guard", None)
@@ -566,7 +567,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
                     fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False,
-                                               load_checkpoints=False, deadline=deadline)
+                                               load_checkpoints=False, deadline=deadline,
+                                               blocked_reasons=local_blocked)
                     if not fresh:
                         raise cloud_inference.CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
@@ -574,7 +576,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     local_saved = _capture_checkpoint_state(ledger.db, r, local_ctx)
                     jobs[index] = (r, local_ctx, local_saved, hints, qc)
                     return local_ctx, local_saved
-                ctx, saved = _owner_call(reset_local)
+                try:
+                    ctx, saved = _owner_call(reset_local)
+                except cloud_inference.CloudFallback:
+                    # A refused local context (e.g. a held financial candidate)
+                    # defers this row; it must not abort the whole pass.
+                    _CALL_NOTES.defer_reason = next(iter(local_blocked), "cloud_fallback")
+                    return _DEFERRED
                 chunks_out.clear()
                 meta.clear()
         with local_slots:

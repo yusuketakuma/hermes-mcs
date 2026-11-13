@@ -36,6 +36,12 @@ _RUNTIME_ERROR_CODES = frozenset({
     "patient_summary_transaction_active", "patient_context_source_transaction_required",
     "patient_context_read_changed", "patient_summary_snapshot_required",
 })
+# CloudFallback carries one of these fixed codes (never provider text).
+_CLOUD_FALLBACK_CODES = frozenset({
+    "cloud_profile_invalid", "cloud_unit_changed", "cloud_repair_invalid", "cloud_send_blocked",
+    "cloud_unit_failed", "cloud_incomplete_response", "cloud_invalid_response",
+    "cloud_owner_stopped", "cloud_validation_failed", "cloud_local_context_unavailable",
+})
 _SQLITE_ERROR_PRIMARY = frozenset({
     "SQLITE_ERROR", "SQLITE_INTERNAL", "SQLITE_PERM", "SQLITE_ABORT", "SQLITE_BUSY",
     "SQLITE_LOCKED", "SQLITE_NOMEM", "SQLITE_READONLY", "SQLITE_INTERRUPT", "SQLITE_IOERR",
@@ -54,6 +60,9 @@ def _exception_observation(error):
     record = {"class": type(error).__name__}
     if (type(error) is RuntimeError and len(error.args) == 1
             and type(error.args[0]) is str and error.args[0] in _RUNTIME_ERROR_CODES):
+        record["error_code"] = error.args[0]
+    elif (type(error).__name__ == "CloudFallback" and len(error.args) == 1
+            and type(error.args[0]) is str and error.args[0] in _CLOUD_FALLBACK_CODES):
         record["error_code"] = error.args[0]
     elif isinstance(error, sqlite3.Error):
         try:
@@ -314,6 +323,7 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
                   "prepare_profile_unavailable", "prepare_medication_changed",
                   "prepare_context_invalid", "prepare_database_unavailable", "other",
+                  "prepare_context_load_superseded",
                   "cloud_capacity", "cloud_profile_unavailable", "cloud_source_unverified",
                   "cloud_target_unverified", "audit_pending", "loops_incomplete"}
 # Semantic gates emit only these branch labels; no provider text or source id.
