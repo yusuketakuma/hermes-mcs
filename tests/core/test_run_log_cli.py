@@ -271,3 +271,15 @@ def test_finished_is_set_after_failed_capture_closes_read_fd(cli, monkeypatch):
             child.wait(timeout=10)
         with pytest.raises(run_log.RunLogError, match="capture_failed"):
             capture.close()
+
+
+def test_retire_drifted_command_names_only_refused_sources(cli):
+    _script, data = cli
+    source = data / "run.log"
+    source.write_bytes(b"synthetic old\n")
+    source.chmod(0o600)
+    run_log.migrate(data, ["run.log"])
+    source.unlink()
+    result = invoke(cli, "retire-drifted")
+    assert result.returncode == 0 and result.stdout == b"run.log\n"
+    assert invoke(cli, "retire-drifted").stdout == b"none\n"

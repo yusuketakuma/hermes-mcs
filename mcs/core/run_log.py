@@ -592,6 +592,9 @@ def migrate(data_dir, names=None):
     imported, absent = [], []
     with _locked(data_dir) as (directory, backup, state):
         for name in names:
+            recorded = state["sources"].get(name)
+            if isinstance(recorded, dict) and recorded.get("retired") is True:
+                continue  # an operator retired it: never import this name again
             with ExitStack() as scope:
                 try:
                     source = scope.enter_context(_legacy(directory, name))
@@ -630,6 +633,28 @@ def migrate(data_dir, names=None):
                          source=name, next_source=next_source)
                 imported.append(name)
     return {"imported": imported, "absent": absent, "originals_retained": True}
+
+
+def retire_drifted(data_dir):
+    """Stop importing recorded old logs that migrate() refuses; keep every original and import."""
+    drifted = []
+    with _locked(data_dir) as (_unused_directory, _unused_backup, state):
+        names = sorted(name for name, record in state["sources"].items()
+                       if not (isinstance(record, dict) and record.get("retired") is True))
+    for name in names:
+        try:
+            migrate(data_dir, [name])  # same check, including the remount rebind
+        except RunLogError as error:
+            if str(error) not in ("run_log_legacy_missing", "run_log_legacy_changed"):
+                raise
+            drifted.append(name)
+    if drifted:
+        with _locked(data_dir) as (directory, backup, state):
+            for name in drifted:
+                if isinstance(state["sources"].get(name), dict):
+                    state["sources"][name] = {**state["sources"][name], "retired": True}
+            _save(directory, backup, state)
+    return drifted
 
 
 def enable_rotation(data_dir, *, legacy_writers_closed):
@@ -882,7 +907,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="MCS private runtime log")
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("append-stdin", "append-file", "exec", "_drain"):
+    for command in ("append-stdin", "append-file", "exec", "_drain", "retire-drifted"):
         sub = commands.add_parser(command)
         sub.add_argument("--data-dir", required=True)
         if command == "append-file":
@@ -899,6 +924,9 @@ def main(argv=None):
         elif args.command == "exec":
             values = args.args[1:] if args.args[:1] == ["--"] else args.args
             exec_logged(args.data_dir, values)
+        elif args.command == "retire-drifted":
+            # Allowlisted legacy names only, so they are safe to print.
+            print("\n".join(retire_drifted(args.data_dir)) or "none")
         else:
             if len(args.args) != 2:
                 raise ValueError("run_log_drain_fd_invalid")

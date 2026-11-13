@@ -237,3 +237,53 @@ def test_recorded_identity_survives_a_volume_remount(data):
     legacy(data, raw=b"synthetic old\ntail after reboot\n")
     with pytest.raises(run_log.RunLogError, match="legacy_changed"):
         run_log.migrate(data, ["run.log"])
+
+
+@pytest.mark.parametrize("drift", ["inode", "truncate", "rewrite", "missing"])
+def test_operator_retires_a_drifted_source_and_imports_resume(data, drift):
+    """Regression: a deleted, truncated or moved recorded log held every later
+    install and update; retiring it keeps every byte and unblocks the rest."""
+    source = legacy(data)
+    other = legacy(data, "run.log.1", b"healthy\n")
+    run_log.migrate(data, ["run.log", "run.log.1"])
+    previous = (data / run_log.LOG).read_bytes()
+    if drift == "inode":
+        source.rename(data / "retained-original")
+        legacy(data, raw=b"different inode\n")
+    elif drift == "truncate":
+        source.write_bytes(b"short")
+    elif drift == "rewrite":
+        source.write_bytes(b"x" * source.stat().st_size)
+    else:
+        source.rename(data / "retained-original")
+    kept = {path.name: path.read_bytes() for path in data.iterdir() if path.is_file()}
+    assert run_log.retire_drifted(data) == ["run.log"]
+    assert (data / run_log.LOG).read_bytes() == previous
+    with other.open("ab") as tail:
+        tail.write(b"healthy tail\n")
+    assert run_log.migrate(data)["imported"] == ["run.log.1"]
+    assert (data / run_log.LOG).read_bytes() == previous + b"healthy tail\n"
+    for name, raw in kept.items():
+        if name not in (run_log.LOG, run_log.STATE, "run.log.1"):
+            assert (data / name).read_bytes() == raw
+    # a later file under the retired name is never imported
+    if drift == "missing":
+        legacy(data, raw=b"recreated\n")
+    result = run_log.migrate(data, ["run.log"])
+    assert result["imported"] == [] and result["absent"] == []
+    assert run_log.retire_drifted(data) == []
+
+
+def test_retire_keeps_a_remounted_source_importing(data):
+    source = legacy(data)
+    run_log.migrate(data, ["run.log"])
+    canonical = data / run_log.BACKUPS / run_log.STATE
+    state = json.loads(canonical.read_bytes())
+    state["sources"]["run.log"]["identity"][0] += 1   # remount: new st_dev
+    raw = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    canonical.write_bytes(raw)
+    (data / run_log.STATE).write_bytes(raw)
+    with source.open("ab") as tail:
+        tail.write(b"tail after reboot\n")
+    assert run_log.retire_drifted(data) == []
+    assert (data / run_log.LOG).read_bytes() == b"synthetic old\ntail after reboot\n"
