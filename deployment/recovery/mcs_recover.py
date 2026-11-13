@@ -800,7 +800,7 @@ def _recover_legacy(if_stale=False):
         except (OSError, ValueError):
             return _hold("provider_editor_lock_invalid", 2)
         if editor_fd is None:
-            return 2                        # an editor is publishing — retry
+            return 0                        # an editor is publishing — retry
         mcs_recovery_core._check_recovery_root()
         state = mcs_recovery_core._load_state()               # fresh view under the locks
         record = not (if_stale and _journal_fresh(state))
