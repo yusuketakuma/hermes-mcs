@@ -71,7 +71,7 @@ def _slack_channels_cfg():
             "notify_system_target": "slack:C000000099",
             "notify": {"interactive": "slack", "slack": {
                 "profile": "ops", "application_id": "A000000001", "team_id": "T000000001",
-                "channel_id": "C000000098", "allowed_user_ids": ["U000000001"]}}}
+                "channel_id": "C000000098", "allowed_user_ids": ["U000000001"], "project_ids": [1]}}}
 
 
 def test_interactive_slack_init_uses_the_wizard_profile_without_asking(monkeypatch, tmp_path):
