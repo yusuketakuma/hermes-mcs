@@ -611,3 +611,23 @@ def test_untracked_source_file_stops_before_writers_and_is_named(updater, monkey
     assert state["applying"] is None and state["stages"] == []
     detail = state["attempts"]["v1.1.0"]["detail"]
     assert detail.startswith("source_untracked_files: mcs/.DS_Store")
+
+
+def test_interrupted_apply_keeps_marker_with_journal(updater, monkeypatch):
+    """Regression: Ctrl+C after quiesce dropped only the update marker, so
+    ticks resumed on a half-updated tree while the journal stayed open."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: (updater._write_marker(), [])[1])
+
+    def interrupted(_sha, *, run_lock_fd):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.1.0", target, "cid-interrupt")
+    assert Path(updater.MARKER_PATH).exists()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["sha"] == target

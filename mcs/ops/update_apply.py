@@ -225,6 +225,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         rollback_failed = False
         consent_hold = False
         delegated = False
+        interrupted = False
         hold_mode = None
 
         def bail(reason: str) -> int:
@@ -623,8 +624,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if isinstance(e, UpdateError):
                 return bail(str(e))
             return bail(f"unexpected:{type(e).__name__}")
+        except BaseException:
+            # Ctrl+C/exit: keep the marker with the journal, as a killed updater does,
+            # so ticks cannot run a half-updated tree before recovery.
+            interrupted = True
+            raise
         finally:
-            if quiesced and not consent_hold and not rollback_failed:
+            if quiesced and not consent_hold and not rollback_failed and not interrupted:
                 _remove_marker()
             if borrowed is None:
                 for fd in (run_fd, upd_fd):
@@ -661,6 +667,7 @@ def rollback(command_id: str | None = None) -> int:
     run_fd = None
     quiesced = False
     consent_hold = False
+    interrupted = False
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if _release_legacy_hold(state):
@@ -811,10 +818,13 @@ def rollback(command_id: str | None = None) -> int:
                             use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
+    except BaseException:
+        interrupted = True              # keep the marker with the rollback journal
+        raise
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
         # writers/senders frozen until the bound approval arrives
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not interrupted:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
