@@ -450,6 +450,38 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
     assert json.loads((target / 'config.json').read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
 
 
+def test_root_link_target_with_shared_parent_is_refused_before_software(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    shared = tmp_path / 'synthetic-shared'
+    shared.mkdir()
+    shared.chmod(0o770)
+    target = shared / 'synthetic-root'
+    target.mkdir(mode=0o700)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    result = _run(env, None, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert 'リンク先の親フォルダー' in result.stderr
+    assert list(target.iterdir()) == []
+    assert not any(call.startswith(('brew', 'uv ', 'git clone')) for call in _calls(stub))
+
+
+def test_relative_hermes_home_names_the_invocation_directory_with_root_link(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    target = tmp_path / 'synthetic-root'
+    (target / 'data').mkdir(mode=0o700, parents=True)
+    target.chmod(0o700)
+    (target / 'config.json').write_text('{"runtime_mode":"hermes"}')
+    (target / 'config.json').chmod(0o600)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    work = tmp_path / 'synthetic-work'
+    work.mkdir()
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin', '--no-services',
+                  '--no-recovery', './synthetic-hermes', cwd=work)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (work / 'synthetic-hermes/hermes-agent').is_dir()
+    assert not (target / 'synthetic-hermes').exists()
+
+
 def test_fresh_private_root_link_swap_stops_without_writing_new_target(tmp_path):
     home, _, stub, env = _world(tmp_path)
     _real_config_writer(env)

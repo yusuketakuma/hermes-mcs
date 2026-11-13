@@ -136,6 +136,10 @@ link_target() {
     physpath "$_t"
 }
 
+# A relative HERMES_HOME names the invocation directory, before an install
+# may change into a pinned ~/.mcs link target.
+if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
+
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
@@ -298,6 +302,8 @@ EOF
         _safe_dir . || _unsafe_dir "設定フォルダー"
         _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
         MCS_ROOT="$(pwd -P)" || _unsafe_dir "設定フォルダー"
+        # The initial config is created under the target's parent; check it now.
+        _safe_dir "$(dirname -- "$MCS_ROOT")" || _unsafe_dir "設定フォルダーのリンク先の親フォルダー"
         export MCS_ROOT
     fi
     _lock_data="$MCS_ROOT/data"
