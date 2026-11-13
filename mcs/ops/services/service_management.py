@@ -792,7 +792,8 @@ def standalone_loaded(*, paths: ServicePaths):
 
 def _known_cron_scripts() -> set:
     """Cron wrapper names MCS owns (read at call time); mcs_recover is not cron."""
-    return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'}
+    # mcs_health.sh left CRON_JOBS; it stays owned so older installs' entries are still retired.
+    return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh', 'mcs_health.sh'}
 
 
 def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths):

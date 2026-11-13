@@ -5,11 +5,15 @@ import re
 
 from backup_config import validate_backup_config as _backup_config
 
+# The health watch runs only as the service-owned agent (local.mcs-health /
+# mcs-health.timer) in both runtimes; a cron copy only queued behind the
+# single Hermes cron slot. OCR uses a 10-minute grid offset from the unread
+# check: new attachments arrive at most that often, and a per-minute job kept
+# the slot permanently queued.
 CRON_JOBS = [
     ("MCS unread check", "*/10 * * * *", "mcs_check.sh"),
-    ("MCS health watch", "*/5 * * * *", "mcs_health.sh"),
     ("MCS durable drain", "10,40 * * * *", "mcs_deep.sh"),
-    ("MCS attachment OCR", "* * * * *", "mcs_ocr.sh"),
+    ("MCS attachment OCR", "5,15,25,35,45,55 * * * *", "mcs_ocr.sh"),
     ("MCS retry maintenance", "0 */6 * * *", "mcs_llm_catchup.sh"),
     ("llamacpp daily restart", "0 4 * * *", "llamacpp_restart_if_idle.sh"),
     ("MCS update check", "10 5 * * *", "mcs_update.sh"),

@@ -2,6 +2,8 @@
 # MCS health watcher — independent supervised check that health.json
 # keeps arriving fresh. Same output contract as mcs_check.sh: stdout
 # carries one alert line on a non-OK transition, silent otherwise.
+# Not in CRON_JOBS any more (local.mcs-health schedules health_watch.py);
+# still rendered so a cron entry left until the next `services` keeps working.
 set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH

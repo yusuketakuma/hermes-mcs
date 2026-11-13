@@ -28,7 +28,7 @@ MCSのPythonとは別に、`MCS_ROOT/ocr-venv`へPython 3.13とYomitoku 0.16.1�
 python3 mcs/ops/mcs_setup.py init --set 'attachment_ocr={"enabled":true,"executable":"/Users/your-user/.mcs/ocr-venv/bin/yomitoku","timeout_seconds":120}'
 ```
 
-保存済み添付のOCRとローカルLLM解析は、毎分の独立ジョブで進めます。収集の認証エラーなどで
+保存済み添付のOCRとローカルLLM解析は、10分ごとの独立ジョブで進めます。収集の認証エラーなどで
 新規取得が失敗していても、保存済み資料は現行性・患者権限を確認して処理します。
 アーカイブ・閲覧禁止・権限失効・患者情報がない資料は解析しません。
 OCR実行中の設定OFF・実行設定変更も保存前に確認し、新しい結果を採用しません。

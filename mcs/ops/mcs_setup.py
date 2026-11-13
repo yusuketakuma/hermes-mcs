@@ -1290,10 +1290,9 @@ G6_CRITERIA_PATH = os.path.join(REPO_ROOT, "evaluation",
 
 # RESIDENT = KeepAlive drainers the updater quiesces/restarts itself;
 # WATCHER = WatchPaths/StartInterval jobs — verified loaded, never keep-alive.
-# local.mcs-health repeats the hermes cron health watch (CRON_JOBS, shared
-# with standalone) so alerts still go out when hermes cron itself stalls
-# (one long cron job blocks the rest); health_watch.py's flock and dedup
-# state make the pair safe.
+# local.mcs-health is the only health watch scheduler (it is not in CRON_JOBS),
+# so alerts still go out when hermes cron itself stalls (one long cron job
+# blocks the rest); run_check's watcher_health reports it if it stops.
 # install.sh-owned labels that must never enter MCS ownership (S5).
 MANIFEST_PATH = os.path.join(HOME, "data", "service_manifest.json")
 # the PATH every cron wrapper exports (deployment/scripts/*.sh) — launchd
