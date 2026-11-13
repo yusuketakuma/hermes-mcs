@@ -209,11 +209,14 @@ def _snapshot_work_deadline(ledger, deadline: float) -> float:
     return snapshots.snapshot_work_deadline(deadline, source_db)
 
 
-def _optional_work_deadline(ledger, result, deadline: float) -> float:
+def _optional_work_deadline(ledger, result, deadline: float,
+                            keep_s: float = 0.0) -> float:
     """Work deadline for derive and realtime semantic. Once per run, when
     the finish publish will be held by SNAPSHOT_MIN_INTERVAL_S anyway, the
     verify reserve goes to this work and the finish keeps no publish
-    (``snapshot_reserve`` = 'released'); otherwise it stays 'kept'."""
+    (``snapshot_reserve`` = 'released'); otherwise it stays 'kept'.
+    A released deadline also leaves ``keep_s`` for the stages after the
+    caller, and is never earlier than the kept one."""
     import snapshots
     work_deadline = _snapshot_work_deadline(ledger, deadline)
     if "snapshot_reserve" not in result:
@@ -224,7 +227,7 @@ def _optional_work_deadline(ledger, result, deadline: float) -> float:
             source_db, now=finish_at, deadline=min(work_deadline, time.monotonic() + 10))
         result["snapshot_reserve"] = "released" if released else "kept"
     if result["snapshot_reserve"] == "released":
-        return deadline - snapshots.SNAPSHOT_WORK_TAIL_S
+        return max(work_deadline, deadline - snapshots.SNAPSHOT_WORK_TAIL_S - keep_s)
     return work_deadline
 
 
@@ -243,7 +246,12 @@ def stage_derive(ledger, result, deadline, cfg=None,
     # Keep the existing run cap and verification policy. Derived work yields
     # early enough for size-based snapshot validation (unless this run's
     # publish is held by the interval) and the existing tail.
-    work_deadline = _optional_work_deadline(ledger, result, deadline)
+    # A released reserve still leaves deliver/karte the smallest ledger's
+    # verify floor and realtime semantic its minimum window (SB-3).
+    import snapshots
+    work_deadline = _optional_work_deadline(
+        ledger, result, deadline,
+        keep_s=snapshots.SNAPSHOT_VERIFY_TIMEOUT_S + SEMANTIC_MIN_WORK_S)
     try:
         import extract
         # Leave a fair share for medication mapping, rollups and signals.
