@@ -822,6 +822,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 consumed_turns[mutation.get("turn_key", "turn")] = mutation["turn"]
             if lane == "backlog":
                 _BACKLOG_TURN["kind"] = job["kind"]
+            # One client serves every job: an earlier job's error must not
+            # classify a job that never called Jev as a permanent failure.
+            if hasattr(jev_client, "last_error"):
+                jev_client.last_error = None
             req0 = jev_client.requests_made if jev_client is not None else 0
             usage_before = dict(getattr(jev_client, "usage_totals", {}))
             job_started = time.perf_counter()
