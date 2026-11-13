@@ -209,14 +209,14 @@ def test_hold_receipt_records_loss_classes_and_still_matches_the_hold(tmp_path):
 
 # run_pending wiring: the runner passes the stored prior to plain local re-extractions only.
 SHORT = {"summary": "合成", "symptoms": [{"text": "発熱", "negated": True, "evidence": QUOTE}]}
-FLIPPED = {"summary": "合成", "symptoms": [{**PRIOR_FEVER, "negated": False}]}
 
 
-def _seed_prior(db, *, version=None):
-    db.save_messages([_message(body=BODY)])
+def _seed_prior(db, *, version=None, body=BODY, prior=None):
+    db.save_messages([_message(body=body)])
     binding = inference_dependency_loss.source_binding(db.db, 1, 1)
+    prior = {"summary": "合成の旧抽出", "symptoms": [PRIOR_FEVER]} if prior is None else prior
     return db.artifact_add(
-        "extract_llm", json.dumps({"summary": "合成の旧抽出", "symptoms": [PRIOR_FEVER]}, ensure_ascii=False),
+        "extract_llm", json.dumps(prior, ensure_ascii=False),
         project_id=1, message_id=1,
         meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db), "source_binding": binding,
               "extract_version": extract_llm.EXTRACT_VERSION - 1 if version is None else version})
@@ -270,15 +270,17 @@ def test_run_pending_carries_the_stored_prior_into_a_short_local_candidate(tmp_p
 def test_run_pending_keeps_a_disagreeing_local_candidate_held(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
-        aid = _seed_prior(db)
+        aid = _seed_prior(db, body=HOLD_BODY, prior=HOLD_PRIOR)
         original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
-        _local(monkeypatch, FLIPPED)
-        res = extract_llm.run_pending(db, limit=1, budget_s=60)
+        # A disagreeing item the validator keeps, so the hold receipt sees the same conflict.
+        _local(monkeypatch, HOLD_CANDIDATE)
+        # Above _MIN_REPAIR_S: the protected-loss repair runs instead of deferring on the deadline.
+        res = extract_llm.run_pending(db, limit=1, budget_s=180)
         assert (res["done"], res["held_prior"]) == (0, 1)
         assert res["llm_calls"]["protected_conflict"] >= 1
         assert dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()) == original
         [receipt] = db.artifacts(extract_llm.UPGRADE_KIND)
-        assert json.loads(receipt["content"])["lost_class"]["symptoms"].get("conflict", 0) >= 1
+        assert json.loads(receipt["content"])["lost_class"] == {"symptoms": {"conflict": 1, "absent": 1}}
         assert extract_llm.run_pending(db, limit=1, budget_s=60)["selected"] == 0
     finally:
         db.close()
