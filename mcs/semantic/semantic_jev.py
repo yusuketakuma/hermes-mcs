@@ -212,7 +212,7 @@ def _decode_response(raw: bytes, *, retryable: bool = False):
 
 def finite_value(value) -> float | None:
     """Read a finite wire number without accepting bool or numeric strings."""
-    if type(value) is bool or not isinstance(value, int | float):
+    if type(value) is bool or not isinstance(value, (int, float)):
         return None
     try:
         v = float(value)

@@ -5,8 +5,10 @@ absent), install.sh runs mcs/ops/install_options.py with the PATH python3,
 which is macOS /usr/bin/python3 (3.9). Checked: install_options and the
 function-level imports of it and provider_settings, plus the module-level
 import closure of all of them. Each module must parse with 3.9 grammar (no
-match/type statements) and must not evaluate PEP 604 ``X | Y`` annotations at
-def time. Not proven: deeper lazy imports and 3.10+ runtime/stdlib API use.
+match/type statements), must not evaluate PEP 604 ``X | Y`` annotations at
+def time, and must not build such unions as code (isinstance/issubclass
+arguments, aliases). Not proven: deeper lazy imports and other 3.10+
+runtime/stdlib API use.
 """
 import ast
 from pathlib import Path
@@ -43,15 +45,46 @@ def _helper_path() -> list[Path]:
     return sorted(seen)
 
 
+_TYPE_NAMES = {"bool", "bytes", "dict", "float", "frozenset", "int", "list", "object", "set", "str", "tuple", "type"}
+
+
+def _is_bitor(node) -> bool:
+    return isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+
+
+def _is_type(node) -> bool:
+    if isinstance(node, ast.Subscript):
+        node = node.value
+    return (isinstance(node, ast.Constant) and node.value is None) or (
+        isinstance(node, ast.Name) and node.id in _TYPE_NAMES)
+
+
+def _runtime_unions(tree, skip: set[int]) -> list[str]:
+    """``X | Y`` evaluated as code (TypeError on 3.9 even with __future__ annotations).
+
+    shortcut: outside isinstance/issubclass only unions with None, a builtin
+    type or a subscripted builtin are recognised, so ``Foo | Bar`` aliases of
+    project classes pass; add a real 3.9 import smoke test if one slips through.
+    """
+    bad = []
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("isinstance", "issubclass") and len(node.args) == 2
+                and any(_is_bitor(s) for s in ast.walk(node.args[1]))):
+            bad.append(f"{node.lineno}: runtime PEP 604 {ast.unparse(node.args[1])}")
+        elif _is_bitor(node) and (_is_type(node.left) or _is_type(node.right)):
+            bad.append(f"{node.lineno}: runtime PEP 604 {ast.unparse(node)}")
+    return bad
+
+
 def _violations(source: str) -> list[str]:
     try:
         tree = ast.parse(source, feature_version=(3, 9))
     except SyntaxError as e:
         return [f"{e.lineno}: {e.msg}"]
     bad = [f"{n.lineno}: match" for n in ast.walk(tree) if isinstance(n, ast.Match)]
-    if any(isinstance(n, ast.ImportFrom) and n.module == "__future__"
-           and any(a.name == "annotations" for a in n.names) for n in tree.body):
-        return bad
     annotations = []
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -63,9 +96,12 @@ def _violations(source: str) -> list[str]:
                 annotations.append(node.returns)
         elif isinstance(node, ast.AnnAssign):
             annotations.append(node.annotation)
+    bad += _runtime_unions(tree, {id(s) for a in annotations for s in ast.walk(a)})
+    if any(isinstance(n, ast.ImportFrom) and n.module == "__future__"
+           and any(a.name == "annotations" for a in n.names) for n in tree.body):
+        return bad
     return bad + [f"{a.lineno}: PEP 604 {ast.unparse(a)}" for a in annotations
-                  if any(isinstance(s, ast.BinOp) and isinstance(s.op, ast.BitOr)
-                         for s in ast.walk(a))]
+                  if any(_is_bitor(s) for s in ast.walk(a))]
 
 
 def test_helper_path_covers_the_bootstrap_apply_chain():
@@ -89,6 +125,13 @@ def test_helper_path_loads_on_python39(path):
     ("from __future__ import annotations\ndef f(x: float | None): pass\n", True),
     ("def f(x: 'float | None'): pass\n", True),
     ("y = 1 | 2\n", True),
+    ("import os\nFLAGS = os.O_RDONLY | os.O_NONBLOCK\n", True),
+    ("from __future__ import annotations\ndef f(v): return isinstance(v, int | float)\n", False),
+    ("def f(v): return issubclass(v, KeyError | OSError)\n", False),
+    ("def f(v): return isinstance(v, (int, float))\n", True),
+    ("from __future__ import annotations\nT = str | None\n", False),
+    ("Rows = dict[str, int] | list[int]\n", False),
+    ("from __future__ import annotations\ndef f(x: str | None) -> dict[str, int] | None: pass\n", True),
 ])
 def test_guard_flags_what_python39_cannot_load(source, py39):
     assert (_violations(source) == []) is py39
