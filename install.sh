@@ -394,7 +394,24 @@ EOF
             case "$_lock_status" in
                 0) ;;
                 75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
-                *) die "排他制御（lockf）を実行できません（終了コード ${_lock_status}）。この macOS の lockf が記述子の指定に対応していない可能性があります。変更は行っていません。担当者に確認してください" ;;
+                *)
+                    # macOS 13-14 lockf predates descriptor support (IA-124): take the same
+                    # flock on the inherited descriptor, as the reinstall branch does.
+                    _flock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+                        || die "排他制御（lockf）を実行できず（終了コード ${_lock_status}）、代わりに使う Python も起動しません。変更は行っていません。担当者に確認してください"
+                    _lock_status=0
+                    "$_flock_py" -I -c '
+# mcs-installer-flock-fallback
+import fcntl, sys
+try: fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError: raise SystemExit(75) from None
+except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
+' "$_install_lock_fd" || _lock_status=$?
+                    case "$_lock_status" in
+                        0) ;;
+                        75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                        *) die "排他制御を実行できません（lockf と Python の flock のどちらも使えません）。変更は行っていません。担当者に確認してください" ;;
+                    esac ;;
             esac
         elif command -v flock >/dev/null 2>&1; then
             flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
