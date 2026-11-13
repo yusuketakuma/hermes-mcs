@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "添付OCRジョブが開始時の書込み待ちで定期枠を長く占めないようにし、ローカル解析の延期理由を記録",
+  "summary": "添付OCRの定期ジョブは、開始時に書込みロックが空かないとき、残り時間いっぱい（最長で約14分）待たずに5秒で打ち切り、従来どおり writer_busy（終了コード0）で終わって次の毎分の起動に任せます。定期ジョブが長く実行中のままになりにくくなり、更新後のgateway再起動が空き待ちで時間切れになる要因を一つ減らします。保存済みページのローカル解析を延期したときは、その理由を固定の理由コード（memory_guard・disk_floor・job_lock_busy・writer_busy など）で添付OCRの状態ファイルに local_deferred_reason として残し、健康記録の添付OCR欄にも同じ値を表示します。延期は従来どおり件数として数えるだけで、失敗として再試行しません。",
+  "upgrade": "操作は不要です。設定項目と既定値の追加はありません。添付OCRを有効にしている環境だけが対象です。反映には更新の適用が必要です。attachment_inference.py は添付解析の契約に含まれるため、この変更を適用すると完了済みの添付ページのローカル解析結果と途中経過（checkpoint）が一度無効になり、順にやり直します。契約に含まれる他の変更と同じ適用でまとめて入れると、やり直しは1回で済みます。",
+  "details": [
+    "開始時の書込みロック待ちを min(残り時間, 5秒) にした。取れないときの扱い（writer_busy、終了コード0）、取れた後の更新世代の確認、公開前の5秒待ち、ページ保存時の60秒の書込み待ちは変えていない。",
+    "attachment_inference.run_pending の延期の分岐ごとに deferred_reason を返す。理由コードは ledger_in_transaction・writer_not_current・paid_recovery_pending・disk_floor・memory_guard・job_lock_busy・history_unavailable・result_held・writer_busy・inference_deferred。複数あるときは最後の理由を残す。",
+    "健康判定は local_deferred_reason を英小文字と下線だけの短い文字列として受け付け、表示に加える。判定（deferred など）は変えない。書込み拒否の診断 writer_reason とは別の項目にした。",
+    "OCR結果、既読化、クラウド送信の判定、課金済み結果の回収は変えていない。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_ocr.py",
+    "mcs/extract/attachment_inference.py",
+    "mcs/ingest/health_report.py"
+  ]
+}

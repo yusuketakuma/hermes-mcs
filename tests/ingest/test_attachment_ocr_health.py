@@ -250,6 +250,18 @@ def test_local_inference_counts_are_valid_and_not_ocr_failure(tmp_path, local_do
         assert "ローカル解析" in text
 
 
+@pytest.mark.parametrize('reason,state', [('memory_guard', 'deferred'), ('Bad Reason!', 'unknown'), (3, 'unknown')])
+def test_local_deferral_reason_is_accepted_and_shown_without_changing_verdict(tmp_path, reason, state):
+    _status(tmp_path, local_done=0, local_deferred=1, local_deferred_reason=reason)
+    report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+    assert report['state'] == state
+    if state == 'deferred':
+        assert report['reason'] == 'attachment_ocr_local_inference_deferred'
+        assert report['local_deferred_reason'] == reason
+    else:
+        assert report['reason'] == 'attachment_ocr_status_corrupt'
+
+
 def test_cloud_accounting_hold_is_visible_while_local_progresses(tmp_path):
     _status(tmp_path, local_done=2, local_deferred=0, paid_recovery_pending=True)
     report = health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)

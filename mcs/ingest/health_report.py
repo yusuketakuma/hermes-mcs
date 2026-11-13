@@ -97,7 +97,8 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                'local_deferred_reason'}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         # mcs_ocr records why its publish after new pages was deferred; the
@@ -113,6 +114,9 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         if any(key in value and (type(value[key]) is not int or value[key] < 0) for key in counts):
             raise ValueError("ocr_status_invalid")
         if reason is None and any(key not in value for key in counts if key not in ("pending_failed", "local_done", "local_deferred")):
+            raise ValueError("ocr_status_invalid")
+        if 'local_deferred_reason' in value and not (type(value['local_deferred_reason']) is str
+                                                     and re.fullmatch(r'[a-z_]{1,40}', value['local_deferred_reason'])):
             raise ValueError("ocr_status_invalid")
         if "queue_status" in value and value["queue_status"] not in ("known", "partial"):
             raise ValueError("ocr_status_invalid")
@@ -168,7 +172,8 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
-              **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
+              **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort',
+                                             'local_deferred_reason') if key in value},
               **writer_detail, **failure_detail, **ack_detail, **policy_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
