@@ -328,6 +328,9 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     is written by the caller once the batch is consumed."""
     now = time.time()
     scope, excluded_json = _class_scope(archived, excluded, held_after=held_after)
+    # Notification-free reprocess rows get no cohort share; _reprocess_tail
+    # serves them from the slots every other due job left.
+    scope += f" AND NOT (kind='{JOB_KIND}' AND {_REPROCESS_LAST_SQL}=1)"
     turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
     eligible = _ELIGIBLE_SQL
@@ -362,7 +365,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
         # max_jobs/deadline/request budget. Preserve contested-slot turns.
         if arrivals_due < max_jobs - share:
             share = min(backlog_due, max_jobs - arrivals_due)
-    order = f"CASE WHEN kind=? THEN 0 ELSE 1 END, {_REPROCESS_LAST_SQL}, job_id"
+    order = "CASE WHEN kind=? THEN 0 ELSE 1 END, job_id"
     arrivals = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
@@ -381,6 +384,20 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     if turn_next and contested:
         mutation["turn_job_id"] = contested[0]["job_id"]
     return list(arrivals), list(backfill), mutation
+
+
+def _reprocess_tail(ledger, limit: int, excluded, held_after) -> list:
+    """Combined-lane reprocess rows for the slots left after every other job, active first."""
+    rows = []
+    for archived in (False, True):
+        if len(rows) >= limit:
+            break
+        scope, excluded_json = _class_scope(archived, excluded, held_after=held_after)
+        rows += ledger.db.execute(
+            "SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? AND kind=? "
+            f"AND {_REPROCESS_LAST_SQL}=1 AND {scope} ORDER BY job_id LIMIT ?",
+            (time.time(), JOB_KIND, excluded_json, limit - len(rows))).fetchall()
+    return rows
 
 
 BACKLOG_COMMIT_RESERVE_S = 540.0
@@ -465,6 +482,11 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 excluded=excluded, turns=turns, held_after=after)
             due, qc_jobs, arrivals, backfill = [
                 a + b for a, b in zip(active[:4], archived[:4])]
+            if lane is None and JOB_KIND in kinds:
+                tail = _reprocess_tail(ledger, max_jobs - len(due), excluded, after)
+                due = due + tail
+                arrivals = arrivals + [j for j in tail if runtime.parse_payload(j).get('eligible')]
+                backfill = backfill + [j for j in tail if not runtime.parse_payload(j).get('eligible')]
             return (due, qc_jobs, arrivals, backfill,
                     active[4] if active[4].get("turn") else archived[4])
     result = select(held_after)

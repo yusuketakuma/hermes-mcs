@@ -87,3 +87,30 @@ def test_realtime_serves_newer_reprocess_seed_after_arrival(jobs_db):
     arrival = _job(jobs_db, 100, age=20, eligible=True)
     reprocess = _job(jobs_db, 101, age=5, eligible=True, **REPROCESS)
     assert _order(jobs_db, lane='realtime') == [arrival, reprocess]
+
+
+def _combined(db, max_jobs):
+    return semantic_due_selection._select_due(db, None, ('semantic',), False, max_jobs, {})
+
+
+def test_combined_lane_reserves_no_backfill_share_for_reprocess(jobs_db):
+    # lower job_ids than every arrival: the old cohort share would pick one
+    reprocess = [_job(jobs_db, mid, **REPROCESS) for mid in (100, 101)]
+    arrivals = [_job(jobs_db, mid, eligible=True) for mid in (110, 111, 112, 113)]
+    due, _qc, picked_arrivals, backfill, _mut = _combined(jobs_db, 4)
+    assert [row['job_id'] for row in due] == arrivals
+    assert [row['job_id'] for row in picked_arrivals] == arrivals and backfill == []
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET state='done' WHERE job_id IN (?,?,?)",
+                           tuple(arrivals[:3]))
+    assert [row['job_id'] for row in _combined(jobs_db, 4)[0]] == [arrivals[3], *reprocess]
+
+
+def test_combined_lane_serves_reprocess_after_archived_work(jobs_db):
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+    reprocess = _job(jobs_db, 100, **REPROCESS)
+    archived_history = _job(jobs_db, 101, pid=2, notification_free=True)
+    due, _qc, _arrivals, backfill, _mut = _combined(jobs_db, 1)
+    assert [row['job_id'] for row in due] == [archived_history]
+    assert [row['job_id'] for row in _combined(jobs_db, 2)[3]] == [archived_history, reprocess]
