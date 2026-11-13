@@ -132,10 +132,12 @@ def write_env(path: str, updates: dict[str, str]):
 
 
 def keychain_round_trips(value: str) -> bool:
-    """True when every Keychain reader gets the stored value back unchanged."""
-    # `find-generic-password -w` prints values outside printable ASCII as hex,
-    # and the login and keychain_to_env readers strip surrounding whitespace.
-    return value == value.strip() and all(" " <= c <= "~" for c in value)
+    """False for passwords known to read back changed before any Keychain write."""
+    # The login and keychain_to_env readers strip surrounding whitespace, and
+    # `find-generic-password -w` cannot print control characters as text.
+    # Other non-ASCII text is left to store_keychain's read-back verify: its
+    # `security` output form is unverified on real machines.
+    return value == value.strip() and not any(c < " " or c == "\x7f" for c in value)
 
 
 def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:

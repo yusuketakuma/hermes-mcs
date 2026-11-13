@@ -625,7 +625,7 @@ def _init_store_secrets(args, login_id) -> int | None:
             print('パスワードの形式が正しくありません。保存を中止しました。')
             return 1
         if not lifecycle_io.keychain_round_trips(pw):
-            print('半角英数字・記号以外の文字や前後の空白を含むパスワードは、Keychainから同じ値を'
+            print('タブなどの制御文字や前後の空白を含むパスワードは、Keychainから同じ値を'
                   '読み戻せないため保存を中止しました。認証情報は変更していません。')
             return 1
         # .env carries the same secret as the reboot fallback — after a

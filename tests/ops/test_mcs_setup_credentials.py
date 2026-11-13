@@ -122,11 +122,10 @@ def test_init_password_refuses_visible_prompt(monkeypatch, capsys):
     assert 'synthetic-secret' not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('secret', ['synthetic£pw', 'syntheticé', 'ｓynthetic',
-                                    'synthetic\tpw', ' synthetic', 'synthetic '])
+@pytest.mark.parametrize('secret', ['synthetic\tpw', 'synthetic\x7fpw', ' synthetic', 'synthetic '])
 def test_init_password_keychain_cannot_return_is_refused_before_any_write(monkeypatch, capsys, secret):
-    # `security -w` prints non-printable-ASCII values as hex and the login
-    # reader strips whitespace, so such a password never reads back as stored.
+    # The login reader strips whitespace and `security -w` cannot print
+    # control characters as text, so such a password never reads back as stored.
     from types import SimpleNamespace
     monkeypatch.setenv('MCS_SETUP_PASSWORD', secret)
     monkeypatch.setattr(mcs_setup.subprocess, 'run', lambda *a, **k: pytest.fail('unexpected keychain'))
@@ -134,6 +133,36 @@ def test_init_password_keychain_cannot_return_is_refused_before_any_write(monkey
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), 'synthetic') == 1
     assert '認証情報は変更していません' in capsys.readouterr().out
     assert lifecycle_io.store_keychain('synthetic', secret) is False
+
+
+@pytest.mark.parametrize('secret', ['synthetic£pw', 'syntheticé', 'ｓynthetic'])
+@pytest.mark.parametrize('stored_as_text', [True, False])
+def test_init_non_ascii_password_is_decided_by_keychain_read_back(monkeypatch, capsys, secret, stored_as_text):
+    # security's output form for non-ASCII is unverified, so the read-back alone
+    # decides: verbatim text is stored, any other form (e.g. hex) fails closed.
+    from types import SimpleNamespace
+
+    class R:
+        def __init__(self, out=''):
+            self.returncode, self.stdout, self.stderr = 0, out, ''
+
+    def fake_run(argv, **kw):
+        if '-w' in argv and argv[:2] != ['security', '-i']:
+            return R((secret if stored_as_text else secret.encode().hex()) + '\n')
+        return R()
+
+    env_writes = []
+    monkeypatch.setenv('MCS_SETUP_PASSWORD', secret)
+    for name in ('TYPESAFE_API_KEY', 'MCS_ANTHROPIC_API_KEY', 'MCS_OPENAI_API_KEY'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(mcs_setup.subprocess, 'run', fake_run)
+    monkeypatch.setattr(setup_integration, '_init_write_env', env_writes.append)
+    result = mcs_setup._init_store_secrets(SimpleNamespace(yes=True), 'synthetic')
+    out = capsys.readouterr().out
+    assert '保存を中止しました' not in out
+    assert env_writes == [{'MCS_PASSWORD': secret}]
+    assert result == (None if stored_as_text else 1)
+    assert lifecycle_io.store_keychain('synthetic', secret) is stored_as_text
 
 
 def test_env_write_repairs_only_the_explicitly_updated_key(tmp_path):
