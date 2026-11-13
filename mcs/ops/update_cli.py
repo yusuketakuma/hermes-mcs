@@ -169,6 +169,17 @@ def cmd_check() -> int:
                 if _enqueue_notice("\n".join(lines), use_run_lock=True, notice_code="available", tag=tag):
                     state["notified_at"] = tag
         if not (held or restore_held):
+            if state.get("pending_notices"):
+                # abort notices a busy tick made bail defer
+                kept = [notice for notice in state["pending_notices"]
+                        if isinstance(notice, dict) and isinstance(notice.get("text"), str)
+                        and not _enqueue_notice(notice["text"], use_run_lock=True,
+                                                notice_code=notice.get("notice_code"),
+                                                tag=notice.get("tag"))]
+                if kept:
+                    state["pending_notices"] = kept
+                else:
+                    state.pop("pending_notices")
             pendings, consumed = scan_pending_approvals(state)
             for cid, result in consumed:
                 _record_executed(state, cid, result)

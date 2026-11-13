@@ -405,8 +405,14 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return 1
             if quiesced and not rollback_failed:
                 _remove_marker()
-            _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
-                            use_run_lock=run_fd is None, notice_code="aborted", tag=tag)
+            text = f"[MCS] 更新 {tag or ''} を中止しました: {reason}"
+            if not _enqueue_notice(text, use_run_lock=run_fd is None,
+                                   notice_code="aborted", tag=tag) and run_fd is None:
+                # A tick held run.lock and the receipt is already consumed:
+                # keep the notice for the next daily check to send.
+                state["pending_notices"] = [*(state.get("pending_notices") or []),
+                                            {"text": text, "notice_code": "aborted", "tag": tag}][-10:]
+                journal_store.save_state(STATE_PATH, state)
             return 1
 
         try:
