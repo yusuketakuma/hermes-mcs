@@ -216,6 +216,7 @@ $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 
 `services`は以前のmanifestに記録されたMCS所有cron・workerだけを確認して停止します。
 停止を確認できなければ、新しいserviceを起動しません。
+Hermesを先に削除したなどで、設定されたHermesの実行ファイルがなく定期処理の一覧を確認できない場合は、Hermesの定期処理が動いていないことを担当者が確かめたうえで、`mcs_setup.py services --hermes-absent --confirm-human --reason <理由>`で切り替えられます。確認の理由は常駐設定の管理記録に残ります。実行ファイルが残っている場合は、この指定でも切り替えません。
 共有Hermes gatewayは停止しません。旧pluginは独立モードのinboxを処理しませんが、
 同じBot認証情報で二重に接続しないようHermes側の該当接続を停止・無効化してください。
 手動crontab、manifest外のworker、単体LINE WORKSサービスは別途確認して停止します。

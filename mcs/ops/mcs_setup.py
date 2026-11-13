@@ -1473,6 +1473,10 @@ def main(argv: list[str] | None = None) -> int:
                        help='選択した実行方法の常駐・定期処理を設定します（再実行可能）')
     p.add_argument("--dry-run", action="store_true",
                    help='変更予定だけを表示します（設定やサービスは変更しません）')
+    p.add_argument("--hermes-absent", action="store_true",
+                   help='Hermesを削除済みで定期処理の一覧を確認できないとき、人の確認に基づいて独立実行へ切り替えます')
+    p.add_argument("--confirm-human", action="store_true")
+    p.add_argument("--reason")
     p.set_defaults(fn=cmd_services, yes=True)
     p = sub.add_parser("slack-channels", help='Slackの患者情報先を保持して運用ログ先を準備します')
     p.add_argument("--discard-hold", action="store_true",
@@ -1535,7 +1539,14 @@ def cmd_services(args):
     dry = getattr(args, "dry_run", False)
     def note(message):
         print(("  [変更予定のみ] " if dry else "  ") + message)
-    result = service_management.apply_services(mcs_util.load_config(), paths=_service_paths(), dry_run=dry, note=note)
+    absent = None
+    if getattr(args, "hermes_absent", False):
+        if getattr(args, "confirm_human", False) is not True or not mcs_util.valid_text(getattr(args, "reason", None), 2000):
+            print("--hermes-absent には --confirm-human と --reason による人の確認が必要です")
+            return 1
+        absent = args.reason
+    result = service_management.apply_services(mcs_util.load_config(), paths=_service_paths(), dry_run=dry, note=note,
+                                               hermes_absent=absent)
     if result.message is not None:
         print(result.message)
     return result.exit_code

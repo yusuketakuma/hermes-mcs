@@ -596,6 +596,32 @@ def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypat
     assert not (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
 
 
+def test_standalone_switch_with_hermes_removed_needs_a_human_and_then_proceeds(monkeypatch, tmp_path, capsys):
+    """IA-048: no Hermes executable means its cron cannot be listed; a confirmed reason may proceed."""
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
+    service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]},
+                                     paths=mcs_setup._service_paths())
+    (tmp_path / "agents").mkdir()
+    plist = tmp_path / "agents" / "local.mcs-int.plist"
+    plist.write_text("synthetic hermes agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg=None: str(tmp_path / "removed" / "hermes"))
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert "--hermes-absent" in capsys.readouterr().out
+    assert plist.exists()
+    args.hermes_absent, args.confirm_human, args.reason = True, False, "synthetic"
+    assert mcs_setup.cmd_services(args) == 1                       # no human confirmation
+    assert plist.exists()
+    args.confirm_human = True
+    assert mcs_setup.cmd_services(args) == 0
+    assert not plist.exists()
+    manifest = service_management.load_manifest(paths=mcs_setup._service_paths())
+    assert manifest['hermes_absent_confirmed']['reason'] == "synthetic"
+
+
 @pytest.mark.parametrize("outcomes,late,ok,boots,loads", [
     ([5, 0], False, True, 2, True),
     ([5, 5, 5], True, True, 3, True),

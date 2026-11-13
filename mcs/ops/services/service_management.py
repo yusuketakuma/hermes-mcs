@@ -840,8 +840,12 @@ def _known_cron_scripts() -> set:
     return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'}
 
 
-def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths):
-    """Stop only the previous manifest's owned jobs before switching runtimes."""
+def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths, hermes_absent=None):
+    """Stop only the previous manifest's owned jobs before switching runtimes.
+
+    ``hermes_absent`` is a human-confirmed reason (IA-048): with no Hermes
+    executable at the configured path its cron cannot be listed, and only then
+    may the switch treat that cron as not running."""
     if not prev or prev.get('runtime_mode', 'hermes') == desired_mode:
         return 0
     if prev.get('runtime_mode') == 'standalone':
@@ -856,8 +860,14 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
     if scripts:
         exe = mcs_util.hermes_exe(mcs_util.load_config())
         entries = inspect_cron(exe)
-        if entries is None:
-            note('以前のHermes定期処理の状態を確認できないため、以前の処理を停止せず、新しい処理も起動していません')
+        if entries is None and hermes_absent and not os.path.lexists(exe):
+            note('Hermesの実行ファイルがないため、人の確認（理由: ' + hermes_absent[:200]
+                 + '）に基づき、以前のHermes定期処理は動いていないものとして切り替えます')
+            scripts, entries = set(), []
+        elif entries is None:
+            note('以前のHermes定期処理の状態を確認できないため、以前の処理を停止せず、新しい処理も起動していません'
+                 + ('' if os.path.lexists(exe) else
+                    '。Hermesを削除済みの場合は、mcs setup services --hermes-absent --confirm-human --reason <理由> で切り替えられます'))
             return 1
     for label in sorted(labels):
         lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{paths.uid}/{label}'])
@@ -948,7 +958,7 @@ def record_llm_slots(manifest, note, *, paths: ServicePaths) -> None:
     except Exception as e:
         note(f'AIの同時処理枠を管理記録へ保存できません（{type(e).__name__}: {e}）')
 
-def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
+def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note, hermes_absent=None):
     dry = dry_run
     message = None
     try:
@@ -987,8 +997,10 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         # must retire; stop for a human instead of leaving both runtimes (IA-047).
         return ServiceResult(1, '常駐設定: 管理記録を読み取れないため、以前の定期処理を確実に止められません。'
                              '変更していません。管理記録（' + paths.manifest_path + '）を確認し、担当者に相談してください')
-    if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths):
+    if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths, hermes_absent=hermes_absent):
         return ServiceResult(1, message)
+    if hermes_absent and not dry:
+        manifest['hermes_absent_confirmed'] = {'reason': hermes_absent[:2000], 'at': time.time()}
     if selected_mode == 'standalone' and retire_agents(set(contract.AGENT_LABELS) - {contract.HEALTH_LABEL}, note, dry, paths=paths):
         # Hermes-only agents never belong to the host; a missing or stale manifest
         # must not leave them running beside it.
