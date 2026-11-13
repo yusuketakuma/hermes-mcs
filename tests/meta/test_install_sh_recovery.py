@@ -209,6 +209,27 @@ def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):
     assert pointer.stat().st_mode & 0o777 == 0o600
 
 
+def test_unrepairable_repo_pointer_does_not_stop_install_without_watchdog(tmp_path):
+    """A repo_path whose mode cannot be changed (another owner, uchg) only
+    warns: services and recovery are skipped here, and stage 5's ownership
+    check refuses on its own when it is reached."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    (stub_root / "bin/chmod").write_text(
+        '#!/bin/sh\ncase "$2" in */repo_path) exit 1 ;; esac\nexec /bin/chmod "$@"\n')
+    (stub_root / "bin/chmod").chmod(0o700)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "注意:" in r.stderr and "repo_path のアクセス権" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o644
+
+
 def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
     """launchd's transient EIO right after bootout is retried, not a
     stopped install."""
