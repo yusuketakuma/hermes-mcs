@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "ローカルへの切替を拒まれた投稿で抽出の1回分がまるごと中断する問題を修正",
+  "summary": "ローカルの抽出worker（レーン1〜3）で、クラウドでの再抽出のあとにローカルへ切り替えようとして、その投稿の文脈の準備が拒まれると（課金の関門で保留されている場合など）、例外が抽出の処理の外まで漏れていました。その回のほかの投稿もまとめて中断され、workerは30秒待ってから再開していました。拒まれた投稿だけを後回しにし、その回のほかの投稿は続けて処理するように直しました。新しく送信することはなく、課金の関門の条件も変えていません。",
+  "upgrade": "追加操作は不要です。反映には、抽出workerの再起動（gatewayの再起動）が必要です。",
+  "details": [
+    "後回しの理由には、準備の段で記録された保留の理由（prepare_context_load_superseded など）をそのまま使います。課金の状態を表す理由には言い換えません。",
+    "抽出のループのエラー記録（extract_loop_error）に、CloudFallback の固定コード（error_code）を残します。決まったコードだけを記録し、応答の本文などは記録しません。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/extract/llm/test_local_fallback_refusal_defers.py"
+  ]
+}
