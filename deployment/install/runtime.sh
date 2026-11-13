@@ -628,13 +628,24 @@ else
             _have=0; _want=""
             if [ -f "$MODEL_FILE.part" ]; then
                 _have="$(wc -c < "$MODEL_FILE.part" | tr -d ' ')"
-                _want="$(curl -fsIL --retry 3 "$MODEL_URL" 2>/dev/null \
+                _want="$(curl -fsIL -m 60 --retry 3 "$MODEL_URL" 2>/dev/null \
                     | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')"
             fi
             if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
                 printf '  取得途中のファイルは全容量を取得済みです（%s バイト）\n' "$_have"
             else
-                curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
+                # Keep about 1 GB free beside the remaining bytes (6 GiB when the
+                # size is unknown) so the ledger on the same volume can still write.
+                case "$_want" in ''|*[!0-9]*) _want_bytes=6442450944 ;; *) _want_bytes="$_want" ;; esac
+                _need_kb=$(( (_want_bytes - _have) / 1024 + 1048576 ))
+                _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+                case "$_free_kb" in ''|*[!0-9]*)
+                    die "$MODEL_DIR の空き容量を確認できません。モデルの取得は開始していません" ;;
+                esac
+                [ "$_free_kb" -ge "$_need_kb" ] \
+                    || die "$MODEL_DIR の空き容量が不足しています（空き約 $((_free_kb / 1048576)) GB、必要約 $(((_need_kb + 1048575) / 1048576)) GB）。空き容量を増やして install.sh を再実行してください。取得途中のファイルは保持しています"
+                # A stalled transfer stops (and resumes on re-run) instead of waiting forever.
+                curl -fL --retry 5 --retry-delay 5 -C - --speed-limit 1024 --speed-time 300 --progress-bar \
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
                     || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $MODEL_FILE.part）"
             fi

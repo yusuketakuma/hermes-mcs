@@ -49,7 +49,18 @@ def test_model_download_resumes_from_part(tmp_path):
     model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
     assert model.read_text() == "stub-model-bytes\n"
     dl = [c for c in _calls(stub_root) if c.startswith("curl") and ".part" in c]
-    assert dl and all("-C -" in c and "--retry" in c for c in dl)
+    assert dl and all("-C -" in c and "--retry" in c and "--speed-time" in c for c in dl)
+    heads = [c for c in _calls(stub_root) if c.startswith("curl -fsIL")]
+    assert heads and all(" -m " in c for c in heads)
+
+
+def test_model_download_stops_before_filling_the_volume(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
+    r = _run({**env, "STUB_DF_KB": "1000"}, hermes_home)
+    assert r.returncode == 1
+    assert "空き容量が不足" in r.stderr
+    assert not [c for c in _calls(stub_root) if c.startswith("curl") and " -o " in c]
+    assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf.part").exists()
 
 
 def test_complete_part_is_not_requested_again(tmp_path):
