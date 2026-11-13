@@ -812,14 +812,10 @@ def command(args):
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
         if action in ("stop", "resume"):
-            from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
-            expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
                 print("--confirm-human と --reason による人の確認が必要です")
                 return 1
-            from ledger import Ledger
             import mcs_requests
-            import notify_spool
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
@@ -828,26 +824,10 @@ def command(args):
             if error:
                 print("クラウド操作: 指定を確認してください（" + error + "）")
                 return 1
-            path = Path(mcs_util.HOME) / "data" / "ledger.db"
-            if path.is_symlink() or not path.is_file():
-                raise ValueError("ledger_unavailable")
-            lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
-            if lock_fd is None:
-                lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
-                    expected_code_stamp=expected_code,
-                    marker_path=str(path.parent / "update_in_progress.marker"))
-            if lock_fd is None:
+            receipt = mcs_requests.apply_local_operation(req)
+            if receipt is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
-            try:
-                if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
-                    raise ValueError("update_in_progress")
-                if notify_spool.restore_writer_hold(str(path.parent)) is not None:
-                    raise ValueError("restore_in_progress")
-                with closing(Ledger(str(path))) as ledger:
-                    receipt = mcs_requests.apply_command(ledger, req)
-            finally:
-                os.close(lock_fd)
             print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":

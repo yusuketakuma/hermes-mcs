@@ -456,6 +456,7 @@ SlackカードとSlackのテキスト通知のどちらも、通常の更新経�
 権限不足などで止まった場合は、案内された条件を確認してから
 `mcs setup slack-channels`で準備を再開してください。名前の競合や作成・招待の結果不明の記録が残った場合は、
 このコマンドでも再開できないことがあります。その場合は記録を削除せず、担当者に確認してください。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
 `install.sh --no-services`で省略した準備も同じコマンドで再開できます。
 不明な作成・招待を繰り返したり、運用先を患者情報先へ戻したりしません。
 設定の保存と更新後の接続を確認します。カードを使う構成では通常の通知workerの起動確認も必要です。

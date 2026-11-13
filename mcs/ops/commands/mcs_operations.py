@@ -712,6 +712,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.cloud_stop", "ops.cloud_resume"):
         from cloud_cli import apply_control_tx
         return apply_control_tx(db, req, current)
+    if req["cmd"] == "ops.slack_setup_discard":
+        from slack_channel_setup import discard_hold_tx
+        return discard_hold_tx(db, req, filesystem_changes)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

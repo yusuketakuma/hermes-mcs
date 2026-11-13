@@ -868,6 +868,7 @@ Slackカードを使う導入・更新（`notify.interactive=slack`）では、�
 権限不足などで止まった場合は、案内された条件を確認してから`mcs setup slack-channels`で準備を再開してください。
 名前の競合や作成・招待の結果不明の記録が残った場合は、このコマンドでも再開できないことがあります。
 その場合は記録を削除せず、担当者に確認してください。結果が不明な作成・招待は自動で繰り返しません。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
 
 Slack公式仕様: [チャンネル作成](https://docs.slack.dev/reference/methods/conversations.create/)・[非公開チャンネルの管理権限](https://docs.slack.dev/reference/scopes/groups.write/)・[操作者の招待](https://docs.slack.dev/reference/methods/conversations.invite/)。
 
