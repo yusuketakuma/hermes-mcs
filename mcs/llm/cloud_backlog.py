@@ -205,6 +205,13 @@ def memory_workers(limit):
     return max(0, min(limit, int((available - total / 10) // (256 * 1024 * 1024))))
 
 
+def capacity_reduced(index, limit):
+    """Whether an indexed worker is past the pool's memory target; one worker of
+    hysteresis, because its own resident memory is in the sample."""
+    capacity = memory_workers(limit)
+    return index >= min(limit, capacity + bool(capacity))
+
+
 class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
     def __init__(self, root, *, context_only=False):
@@ -466,8 +473,7 @@ def worker(parent, *, index=None, context_only=False):
                               or index >= settings["max_concurrency"])
                     if time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        capacity = memory_workers(settings["max_concurrency"])
-                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                        retire = retire or capacity_reduced(index, settings["max_concurrency"])
                     if retire:
                         _event("cloud_worker_retired", reason=(
                             "cloud_mode_off" if settings["mode"] != "on"
@@ -750,12 +756,19 @@ def _context_worker(ledger, initial, index):
     import writer_lock
     from mcs_util import HOME, load_config
 
+    capacity_checked = float("-inf")
     with local_llm.scheduling_scope(os.path.join(HOME, "data")):
         while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
             settings = cloud_inference.resolve_cloud_settings(load_config())
             if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                     or not extract_llm_resident._context_memory_available()):
                 return
+            # The worker holds no paid result between passes, so retiring here loses none.
+            if index is not None and time.monotonic() - capacity_checked >= 60:
+                capacity_checked = time.monotonic()
+                if capacity_reduced(index, settings["max_concurrency"]):
+                    _event("cloud_worker_retired", reason="capacity_reduced")
+                    return
             with writer_lock.capture_writer_refusal() as diagnostic:
                 result = extract_llm_resident._background_context_refresh(
                     ledger, initial, cloud_worker=True)
