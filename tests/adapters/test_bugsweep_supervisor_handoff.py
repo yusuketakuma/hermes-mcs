@@ -71,7 +71,8 @@ def test_slack_successor_takes_over_from_a_predecessor_in_startup_backoff(tmp_pa
                                      settings=dict(settings),
                                      log=lambda e, **f: logs.append(("old", e)))
         assert old.start()
-        while ("old", "startup_retry") not in logs:
+        # the failed bind returns False (no exception), so wait for that record
+        while ("old", "workspace_bind_failed") not in logs:
             await asyncio.sleep(0.01)
         new = slack_tasks.Supervisor(ctx=_ctx(), app=_App(FakeClient()), adapter=None,
                                      settings=dict(settings),
@@ -246,3 +247,23 @@ def test_hermes_slack_setup_without_the_bound_client_keeps_the_intent(tmp_path, 
 
     asyncio.run(run())
     assert consumed == []
+
+
+def test_startup_retry_runs_the_step_again_after_a_failure(monkeypatch):
+    calls, logged = [], []
+
+    async def no_wait(seconds):
+        pass
+
+    async def step():
+        calls.append(1)
+        if len(calls) < 3:
+            raise OSError("synthetic network blip")
+        return True
+
+    monkeypatch.setattr(worker_mod.asyncio, "sleep", no_wait)
+    # bounded: a broken retry loop must end the test instead of spinning forever
+    ok = asyncio.run(worker_mod.retry_startup(step, lambda: len(logged) >= 5,
+                                              lambda event, **kw: logged.append((event, kw))))
+    assert ok is True and len(calls) == 3
+    assert logged == [("startup_retry", {"error": "OSError"})] * 2

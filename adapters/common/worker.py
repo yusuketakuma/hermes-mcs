@@ -161,9 +161,9 @@ async def retry_startup(step, stopping, log) -> bool:
             log("startup_retry", error=type(exc).__name__)
         slept = 0.0
         while slept < wait and not stopping():
-            step = min(wait - slept, STARTUP_STOP_CHECK_S)
-            await asyncio.sleep(step)
-            slept += step
+            nap = min(wait - slept, STARTUP_STOP_CHECK_S)
+            await asyncio.sleep(nap)
+            slept += nap
         wait = min(wait * 2, STARTUP_RETRY_MAX_S)
     return False
 
