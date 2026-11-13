@@ -255,6 +255,14 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     _check_runtime_restore(entry)
                 except UpdateError as e:
                     rollback_failed = True
+
+                    def tell_held() -> None:
+                        # The hold lasts until a recovery pass; never leave it silent.
+                        # Fixed text only: the child's output stays in the report.
+                        print("更新後の処理に失敗し、元の版へ自動で戻せないため保留しました。"
+                              "mcs_update.py status と recovery_report.json を確認し、管理者に連絡してください。")
+                        _enqueue_notice(f"[MCS] 更新 {tag or ''} を元の版へ戻せないため保留しました（要手動対応）",
+                                        use_run_lock=run_fd is None, notice_code="rollback_failed", tag=tag)
                     try:
                         marker = _ensure_recovery_marker()
                         if hold_mode is None:
@@ -267,9 +275,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         _report("runtime_restore_blocked", str(e) + "; stop_unverified: "
                                 + type(stop_error).__name__, writers_stopped=False,
                                 apply_failure=reason)
+                        tell_held()
                         return 1           # retain journal; stopping was not proven
                     _report("runtime_restore_blocked", str(e), writers_stopped=True,
                             apply_failure=reason)
+                    tell_held()
                     return 1               # retain the original journal and marker
                 if entry.get("schema_bump") and entry.get("backup_path"):
                     # journal rollback-shaped BEFORE the reset, like

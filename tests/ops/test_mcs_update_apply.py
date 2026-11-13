@@ -502,7 +502,9 @@ def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypa
     monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
-    monkeypatch.setattr(updater, "_enqueue_notice", lambda *_a, **_k: pytest.fail("unexpected notice"))
+    notices = []
+    # Requirement change (IA-072): the hold is no longer silent.
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda *_a, **k: notices.append(k.get("notice_code")) or True)
     monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
@@ -510,6 +512,7 @@ def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypa
     monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
 
     assert updater.apply("v1.1.0", target, "synthetic-command") == 1
+    assert notices == ["rollback_failed"]
     assert updater._head_sha() == target
     state = updater.journal_store.load_state(updater.STATE_PATH)
     # The failed apply is durable even when rollback preflight holds before
