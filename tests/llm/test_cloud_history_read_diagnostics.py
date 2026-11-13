@@ -216,3 +216,23 @@ def test_paid_answer_proof_failure_remains_recoverable_without_resend(
     if error_class is ValueError:
         expected["error_reason"] = "ValueError"
     assert _events(capsys) == [expected]
+
+
+def test_cloud_error_codes_are_named_and_free_text_is_not(capsys):
+    """A refused send names its fixed policy codes so a stalled backlog is diagnosable."""
+    cloud_inference._history_read_error("request_send_block_reason",
+                                        cloud_client.CloudError("budget_exceeded", "cloud_unit_unresolved"))
+    cloud_inference._history_read_error("request_send_block_reason",
+                                        cloud_client.CloudError("budget_exceeded", _SECRET + " free text"))
+    first, second = (json.loads(line) for line in capsys.readouterr().err.splitlines())
+    assert (first["error_kind"], first["error_reason"]) == ("budget_exceeded", "cloud_unit_unresolved")
+    assert second["error_reason"] == "unclassified"
+    assert _SECRET not in json.dumps(second)
+
+
+def test_send_blocked_reason_is_recorded_as_a_fixed_code(capsys):
+    cloud_inference._send_blocked("daily_budget_reached")
+    cloud_inference._send_blocked(_SECRET)
+    first, second = (json.loads(line) for line in capsys.readouterr().err.splitlines())
+    assert first["event"] == "cloud_send_blocked" and first["reason"] == "daily_budget_reached"
+    assert second["reason"] == "unclassified"
