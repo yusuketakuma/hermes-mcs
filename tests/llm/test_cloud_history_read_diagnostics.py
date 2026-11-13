@@ -112,6 +112,8 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         expected["sqlite_primary_code"] = code & 0xff if code is not None else "unknown"
     if kind == "value_error":
         expected["error_reason"] = "ValueError"
+    if kind == "cloud_error":
+        expected["error_kind"] = expected["error_reason"] = "unclassified"
     assert _events(capsys) == [expected]
 
 
