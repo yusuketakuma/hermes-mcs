@@ -131,6 +131,8 @@ def test_progress_path_is_unchanged_when_marked(led, monkeypatch):
 
 def test_loader_reads_material_flag(tmp_path, monkeypatch):
     doc = json.loads(extract_llm_historical._CONTRACTS_PATH.read_text(encoding='utf-8'))
+    for g in doc['generations']:  # the shipped file marks both owner-approved generations
+        g['material'] = False
     doc['generations'][0]['material'] = True
     path = tmp_path / 'contracts.json'
     path.write_text(json.dumps(doc, ensure_ascii=False), encoding='utf-8')
