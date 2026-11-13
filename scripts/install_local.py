@@ -234,7 +234,7 @@ def main(argv=None, source=None):
     parser.add_argument("--dest", help="恒久的なソースフォルダの置き場所（省略時は既存の導入先、なければ ~/.mcs。"
                                        "~/.mcs に設定・データだけがある場合は ~/.local/share/hermes-mcs）")
     parser.add_argument("--dry-run", action="store_true",
-                        help="計画だけを表示し、何も書き込まない（install.sh --dry-run も実行）")
+                        help="計画だけを表示し、何も書き込まない（既存の置き場所を使うときは install.sh --dry-run も実行。新しく複製する場合は複製の計画だけ）")
     args, passthrough = parser.parse_known_args(argv)
     source = source or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     env = environment()

@@ -411,7 +411,7 @@ def interactive_update(cmd, env, repo, *, installed=False):
         elif "standalone_external_apply" in report.get("blockers", []):
             print("MCS 単独実行の構成は、この自動更新では適用できません。担当者に docs/guides/STANDALONE.md と docs/guides/UPGRADE_AGENT.md の手動更新手順を依頼してください。")
         elif "restore_consent_pending" in report.get("blockers", []):
-            print("データを戻す前の人による確認が必要です。通知された内容を担当者と確認してください。")
+            print("データを戻す前の人による確認が必要です。承認待ちの間は通知が出ないため、data/restore_report.json の report_id・backup_sha256・backup_schema を担当者と確認してください。")
         else:
             print("担当者に mcs doctor と mcs update plan での確認を依頼してください。")
         return 1
@@ -519,7 +519,7 @@ def _main(argv=None) -> int:
     ap.add_argument("--repo", default=".", help="MCSの保存先フォルダ（省略時: 現在のフォルダ）")
     ap.add_argument('--installed-standalone', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument("--no-fetch", action="store_true",
-                    help="通信せず、取得済みの版情報を使う")
+                    help="版情報の事前取得を省き、取得済みの版情報を使う（apply の版の照合は通信する）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     recovery = sub.add_parser('reconcile-settings', help='導入設定の移行保留を確認・再開する')
     recovery.add_argument('--to', required=True, help='確認済みの移行先の版')

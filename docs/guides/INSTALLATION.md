@@ -705,7 +705,7 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | llama-server が見つかりません | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
 | プラグインの有効化に失敗しました | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
 | `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`$PY mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
-| `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
+| `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`復旧用 Python（--recovery-python を省略した場合は既定の復旧用 Python）の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
 | `<パス> が PATH にありません` | shell から `hermes` が見えない | シェルの profile で `~/.local/bin` を PATH に追加（定期ジョブは独自の PATH を使うので影響しない） |
 | `AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました` | plist 更新時にサーバが応答中だった | 処理が空いた時に表示された `launchctl bootout ...; launchctl bootstrap ...` を実行 |
 | `Hermes 管理の <パス> は未起動で、ポート8080の応答もありません` | hermes 管理の LLM agent が止まっている | 表示された `launchctl bootstrap ...` を実行 |

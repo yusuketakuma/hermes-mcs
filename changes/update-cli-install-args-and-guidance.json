@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "mcs update の再導入オプションの検査と、導入・更新の案内文を実装に合わせる",
+  "summary": "mcs update apply の --install-arg は --with-yomitoku を受け付けず、記録済みの省略項目に --with-yomitoku がある導入先では mcs update から再導入できませんでした。また --reinstall なしで --install-arg を指定すると、引数の確認を通った後に更新本体で拒否されていました。今後は、導入時に記録できる5つの省略項目をすべて受け付け、--install-arg には --reinstall が必要なことを最初に表示して止まります。あわせて、--no-fetch（適用時の版の照合は通信する）、--no-llm（llama.cpp 本体は段階1で導入される）、--no-recovery（ログ処理プログラムは配置する）、install_local.py の --dry-run、復旧用 Python が一致しないときの修復手順、復元の承認待ちで確認する値（data/restore_report.json）、復旧ツールを起動する Python の説明を、実際の動作に合わせて直しました。install.sh --dry-run は、ログ処理プログラムの配置と既存の実行ログの取込みも導入予定に表示します。",
+  "upgrade": "この版への更新だけで有効になります。--reinstall なしで --install-arg を渡していた手順は、--reinstall を付けてください（従来も更新本体で拒否されていたため、結果は変わりません）。",
+  "details": [
+    "mcs_cli の --install-arg の選択肢を install_options_contract.OPTIONS から作る。",
+    "停止文言・ヘルプ・dry-run の表示だけを変え、導入・更新の処理の順序や判定は変えていない。"
+  ],
+  "refs": ["mcs/ops/mcs_cli.py", "scripts/mcs_upgrade.py", "install.sh", "scripts/install_local.py", "deployment/recovery/mcs_recover.py", "mcs/ops/mcs_update.py"]
+}

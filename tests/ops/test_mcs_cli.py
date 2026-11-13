@@ -85,6 +85,7 @@ def test_setup_features_routes_to_features(pinned, monkeypatch):
     ["setup", "--password", "synthetic"],
     ["update", "plan", "--reinstall"],
     ["update", "apply", "--install-arg=--no-services"],
+    ["update", "apply", "--install-arg=--no-llm"],
     ["update", "plan", "--to", "HEAD;echo unsafe"],
     ["update", "rollback", "--to", "v1.2.0"],
 ])
@@ -414,3 +415,12 @@ def test_recovery_cli_rejects_untrusted_wrapper(recovery_command, monkeypatch, c
     monkeypatch.setattr(mcs_cli.os, "execv", lambda *args: pytest.fail("untrusted recovery must not execute"))
     assert mcs_cli.main(["recover", "--status"]) == 1
     assert plist.read_bytes() == before
+
+
+def test_reinstall_accepts_every_recorded_install_option(pinned, monkeypatch):
+    """IA-120: --install-arg follows install_options_contract (incl. --with-yomitoku)."""
+    calls = []
+    monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append(argv))
+    mcs_cli.main(["update", "apply", "--to", "v1.2.0", "--reinstall", "--install-arg=--with-yomitoku"])
+    assert calls[0][-2:] == ["--reinstall", "--install-arg=--with-yomitoku"]
