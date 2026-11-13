@@ -52,7 +52,8 @@ def test_refused_lane_b_unit_holds_only_its_source(runtime, monkeypatch):
     assert first['status'] == 'deferred' and first['reason'] == 'nightly_cloud_not_sent'
     (held,) = refused
     hold = _scan_row(led, held)
-    assert hold['cloud_unit_hold'] == {'until': clock.wall - 1 + 21600, 'reason': 'nightly_cloud_not_sent'}
+    assert hold['cloud_unit_hold'] == {'until': clock.wall - 1 + 21600, 'reason': 'nightly_cloud_not_sent',
+                                       'released_before': 0.0}
     assert not hold.get('attempts') and not hold.get('failure') and not hold.get('complete')
     second = step(runtime)
     assert second['status'] == 'progressed' and second['lane'] == 'B'
@@ -75,6 +76,40 @@ def test_held_source_keeps_the_patient_unfinished_until_the_hold_expires(runtime
     again = step(runtime)
     assert again['status'] == 'deferred' and again['reason'] == 'nightly_cloud_not_sent'
     assert _scan_row(led, held)['cloud_unit_hold']['until'] == clock.wall - 1 + 21600
+
+
+def _apply_release(led, now):
+    # A receipt-bound human release, as cloud-llm release-local records it.
+    import cloud_policy
+    meta = {'command_id': 'synthetic-release', 'actor': 'synthetic-operator',
+            'reason': 'synthetic approval', 'through': 1,
+            'before': now - cloud_policy.LOCAL_RELEASE_MIN_AGE_S}
+    receipt = {'command_id': meta['command_id'], 'outcome': 'applied', 'control': 'local_release',
+               'through': 1, 'actor': meta['actor'], 'reason': meta['reason'], 'processed_at': now}
+    with led.db:
+        led.db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                       (cloud_policy.LOCAL_RELEASE_KIND, '{}', 'synthetic', json.dumps(meta), now))
+        led.db.execute("INSERT INTO command_receipts(command_id,payload_hash,outcome,receipt_json,processed_at)"
+                       " VALUES(?,?,?,?,?)", (meta['command_id'], '0' * 64, 'applied', json.dumps(receipt), now))
+    return meta['before']
+
+
+def test_human_release_ends_the_hold_before_it_expires(runtime, monkeypatch):
+    led, clock, _ = runtime
+    _two_sources(led)
+    refused = _refuse_local(monkeypatch)
+    results = [step(runtime) for _ in range(12)]
+    (held,) = refused
+    assert results[-1]['reason'] == 'patient_context_waiting' and results[-1]['wait_no_due_B_cloud_hold'] >= 1
+    until = _scan_row(led, held)['cloud_unit_hold']['until']
+    before = _apply_release(led, clock.wall)
+    # before the fix the released source still waited up to six hours
+    again = step(runtime)
+    assert clock.wall < until
+    assert again['status'] == 'deferred' and again['reason'] == 'nightly_cloud_not_sent'
+    # this synthetic guard still refuses, so the source is held again, bound to this release
+    assert _scan_row(led, held)['cloud_unit_hold']['released_before'] == before
+    assert step(runtime)['reason'] == 'patient_context_waiting'
 
 
 @pytest.mark.parametrize('error', [ValueError('synthetic'), OSError('synthetic')])

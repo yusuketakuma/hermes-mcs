@@ -1207,7 +1207,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     saved, mode == "on"))
                 if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
-                if lane == "B" and patient_context_refresh_readiness._cloud_unit_held(saved, now):
+                if lane == "B" and patient_context_refresh_readiness._cloud_unit_held(ledger.db, saved, now):
                     continue
                 if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
@@ -1329,7 +1329,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     # source for a while so the patient's other sources keep progressing.
     cloud_hold = (lane == "B" and result is None and failure is None and cloud_unit_refused
                   and deferred_reason == "nightly_cloud_not_sent" and selected_source[0] is not None
-                  and not patient_context_refresh_readiness._cloud_unit_held(held_scan, now))
+                  and not patient_context_refresh_readiness._cloud_unit_held(ledger.db, held_scan, now))
     if (lane != "A" and result is None and failure is None and deferred_reason is not None
             and provider is None and shadow_call is None and not estimated_unit and generation_claim is None
             and not cloud_hold and not (lane == "C" and deferred_reason.startswith("source_quality_"))):
@@ -1619,7 +1619,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 # attempts and failure stay unchanged because nothing failed.
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid,
                     {**{k: v for k, v in held_scan.items() if not k.startswith("_")},
-                     "cloud_unit_hold": {"until": now + 21600, "reason": "nightly_cloud_not_sent"}},
+                     "cloud_unit_hold": {"until": now + 21600, "reason": "nightly_cloud_not_sent",
+                                         # a later human release ends the hold
+                                         "released_before": cloud_policy._local_release(ledger.db)[1]}},
                     held_scan.get("_source_meta") or meta, source["message_id"])
             if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},

@@ -142,15 +142,20 @@ def _needs_cloud_scan(scan, cloud_scan):
             and scan.get('_source_meta', {}).get('local_fallback') is not True)
 
 
-def _cloud_unit_held(scan, now):
+def _cloud_unit_held(db, scan, now):
     """A paid lane-B unit that can be neither resent nor run locally defers only its own source.
 
     The hold only reorders selection: the source stays unfinished and its
-    unit, reservation and discard records are untouched."""
+    unit, reservation and discard records are untouched.  A human release
+    applied after the hold ends it, so the released source retries now."""
     hold = scan.get("cloud_unit_hold")
     until = hold.get("until") if isinstance(hold, dict) else None
-    return (now is not None and type(until) in (int, float) and math.isfinite(until)
-            and until > now)
+    if not (now is not None and type(until) in (int, float) and math.isfinite(until)
+            and until > now):
+        return False
+    import cloud_policy
+    released = hold.get("released_before", 0)
+    return cloud_policy._local_release(db)[1] <= (released if type(released) in (int, float) else 0)
 
 
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=None):
@@ -474,7 +479,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             scans.append(scan)
             # Local audits and summaries may advance while raw cloud inspection remains due.
             required_scans.append({} if _needs_cloud_scan(scan, cloud_scan) else scan)
-            cloud_held.append(_cloud_unit_held(scan, now))
+            cloud_held.append(_cloud_unit_held(db, scan, now))
     recheck_available = False
     quality_required = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     if (not estimate and quality_required
