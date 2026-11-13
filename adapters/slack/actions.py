@@ -61,6 +61,8 @@ RESULT_POLL_S = 0.25
 MODAL_OPEN_WAIT_S = 1.5
 MEASUREMENT_GUARD_WAIT_S = 30
 MEASUREMENT_GUARD_RESULT_S = 5
+# carries no patient data: said whenever a measurement view cannot be shown
+MEASUREMENT_UNCONFIRMED = "表示を確認できませんでした。もう一度開いてください。"
 
 
 def _modal_blocks(fields):
@@ -348,6 +350,18 @@ class Actions:
 
     def unload(self):
         self._active = False
+
+    def _measurement_guard_live(self, rec):
+        return (rec.get("measurement_instance") == self._measurement_instance
+                and type(rec.get("measurement_deadline")) in (int, float)
+                and time.monotonic() <= rec["measurement_deadline"])
+
+    def _measurement_fresh(self, rec, processed_at):
+        """The guard re-read ran within MEASUREMENT_GUARD_RESULT_S of the guard's publish."""
+        published = rec.get("measurement_published_at")
+        return (self._measurement_guard_live(rec)
+                and type(published) in (int, float) and type(processed_at) in (int, float)
+                and 0 <= processed_at - published <= MEASUREMENT_GUARD_RESULT_S)
 
     def _native_command_current(self):
         try:
@@ -784,12 +798,6 @@ class Actions:
         for cid, rec in window:
             if self._reg.followup(cid) is None:
                 continue
-            if rec.get("kind") == "measurement_guard" and (
-                    rec.get("measurement_instance") != self._measurement_instance
-                    or type(rec.get("measurement_deadline")) not in (int, float)
-                    or time.monotonic() > rec["measurement_deadline"]):
-                self._reg.drop_followup(cid)
-                continue
             origin = rec["origin"]
             if (origin.get("transport") != "slack"
                     or any(origin.get(key) != self._settings[key]
@@ -819,6 +827,11 @@ class Actions:
             if not allowed:
                 self._reg.drop_followup(cid)
                 continue
+            if rec["kind"] == "measurement_guard" and not self._measurement_guard_live(rec):
+                # checked after the origin/user pin: never answer an unverified origin
+                if self._reg.drop_followup(cid):
+                    await self._say(origin["channel_id"], rec["user"], MEASUREMENT_UNCONFIRMED)
+                continue
             result = await self._offload(
                 paths.read_result, self._dirs["cmd_results"],
                 rec.get("request_id") or cid)
@@ -843,8 +856,13 @@ class Actions:
             measurement = bool(pin and pin.get("measurement_view") is True)
             if measurement or result.get("measurement_view") is True or rec["kind"] == "measurement_guard":
                 digest = _measurement_digest(result)
+                if rec["kind"] != "measurement_guard" and result.get("outcome") != "applied":
+                    # a rejected click is answered like every other view
+                    await self._say(origin["channel_id"], rec["user"], ja(result))
+                    continue
                 if not measurement or digest is None or not self._native_command_current() \
                         or not await self._interactive(require_epoch=True):
+                    await self._say(origin["channel_id"], rec["user"], MEASUREMENT_UNCONFIRMED)
                     continue
                 if rec["kind"] != "measurement_guard":
                     env = envelopes.notification(
@@ -854,7 +872,8 @@ class Actions:
                     self._reg.put_followup("measurement:" + env["request_id"], {
                         **rec, "kind": "measurement_guard", "request_id": env["request_id"],
                         "measurement_digest": digest, "measurement_instance": self._measurement_instance,
-                        "measurement_deadline": time.monotonic() + MEASUREMENT_GUARD_WAIT_S})
+                        "measurement_deadline": time.monotonic() + MEASUREMENT_GUARD_WAIT_S,
+                        "measurement_published_at": time.time()})
                     try:
                         await self._publish(env)
                     except (OSError, ValueError):
@@ -862,11 +881,8 @@ class Actions:
                         pass
                     continue
                 processed_at = result.get("processed_at")
-                if (rec.get("measurement_instance") != self._measurement_instance
-                        or type(rec.get("measurement_deadline")) not in (int, float)
-                        or time.monotonic() > rec["measurement_deadline"]
-                        or type(processed_at) not in (int, float)
-                        or not 0 <= time.time() - processed_at <= MEASUREMENT_GUARD_RESULT_S):
+                if not self._measurement_fresh(rec, processed_at):
+                    await self._say(origin["channel_id"], rec["user"], MEASUREMENT_UNCONFIRMED)
                     continue
                 if digest != rec.get("measurement_digest"):
                     await self._say(origin["channel_id"], rec["user"],
@@ -933,9 +949,7 @@ class Actions:
                 for index, (message, tasks) in enumerate(answer):
                     async def measurement_authorized():
                         return (self._native_command_current()
-                                and rec.get("measurement_instance") == self._measurement_instance
-                                and time.monotonic() <= rec.get("measurement_deadline", 0)
-                                and 0 <= time.time() - processed_at <= MEASUREMENT_GUARD_RESULT_S
+                                and self._measurement_fresh(rec, processed_at)
                                 and rec["user"] in self._settings["allowed_user_ids"]
                                 and bool(self._pinned(rec["token"],
                                           {**origin, "actor": rec["actor"]}, rec["actor"]))
