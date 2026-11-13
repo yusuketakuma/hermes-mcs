@@ -15,7 +15,7 @@ import _mcs_path  # noqa: E402, F401
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 from update_policy import release_tag  # noqa: E402
-from mcs_util import HOME, load_config  # noqa: E402
+from mcs_util import HOME, ProviderSettingsUnreadable, load_config  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,8 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     if not os.environ.get("MCS_LIFECYCLE_PINNED"):
         try:
             python = mcs_runtime.python_executable(load_config())
-        except ValueError:
-            python = sys.executable  # doctor must explain an invalid mode
+        except (ValueError, ProviderSettingsUnreadable):
+            python = sys.executable  # doctor must explain an invalid mode or unreadable settings
         if os.path.abspath(python) != os.path.abspath(sys.executable):
             if not os.access(python, os.X_OK):
                 if args.command != "doctor":
@@ -133,7 +133,13 @@ def main(argv: list[str] | None = None) -> int:
                          str(REPO / "mcs/ops/mcs_update.py"), "rollback"])
             cmd = [sys.executable, str(REPO / "scripts/mcs_upgrade.py"),
                    "--repo", str(REPO)]
-            if mcs_runtime.standalone(load_config()):
+            try:
+                standalone = mcs_runtime.standalone(load_config())
+            except (ValueError, ProviderSettingsUnreadable):
+                print("設定（実行方法または提供元設定）を確認できないため、更新を開始しません。"
+                      "設定を保持したまま mcs doctor で状態を確認してください。", file=sys.stderr)
+                return 1
+            if standalone:
                 cmd.append("--installed-standalone")
             if opts.phase == "plan" or opts.no_fetch:
                 cmd.append("--no-fetch")

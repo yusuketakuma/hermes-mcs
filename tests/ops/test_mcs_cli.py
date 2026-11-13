@@ -139,6 +139,23 @@ def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
                       for p in repo.rglob("*") if p.is_file()}
 
 
+@pytest.mark.parametrize("failure", ["runtime_mode_invalid", "provider_settings_unreadable"])
+@pytest.mark.parametrize("phase", ["guide", "plan", "apply"])
+def test_update_stops_with_guidance_when_settings_are_unverifiable(pinned, monkeypatch, capsys, failure, phase):
+    import mcs_util
+
+    def load():
+        if failure == "runtime_mode_invalid":
+            return {"runtime_mode": "synthetic-invalid"}
+        raise mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")
+
+    monkeypatch.setattr(mcs_cli, "load_config", load)
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda *a: pytest.fail("update must not start"))
+    monkeypatch.setattr(mcs_cli.subprocess, "run", lambda *a, **k: pytest.fail("update must not start"))
+    assert mcs_cli.main(["update", phase]) == 1
+    assert "更新を開始しません" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('phase', ['guide', 'plan', 'apply', 'rollback'])
 def test_standalone_cli_uses_installed_update_contract(pinned, monkeypatch, phase):
     monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'standalone'})
