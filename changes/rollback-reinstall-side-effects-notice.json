@@ -5,7 +5,8 @@
   "upgrade": "追加操作は不要です。この表示が出たら、更新前の版のチェックアウトで ./install.sh --no-services を再実行してください。",
   "details": [
     "update_restore._rollback_tree が、更新の記録に reinstall がある場合に、ツリーを元の版へ戻した直後に案内を出力する。",
-    "install.sh が途中で失敗した場合も入れ替え済みのことがあるため、reinstall_done の有無を問わず表示する。"
+    "install.sh が途中で失敗した場合も入れ替え済みのことがあるため、reinstall_done の有無を問わず表示する。",
+    "標準出力が閉じている・書けない場合は案内を出さずに巻戻しを続け、データベースの復元とサービスの再同期を省かない。"
   ],
   "refs": ["mcs/ops/update_restore.py"]
 }
