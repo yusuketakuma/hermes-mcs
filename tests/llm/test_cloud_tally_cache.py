@@ -657,6 +657,7 @@ def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         _reserve(ledger)
         first = c._tally(ledger)
+        first_total = first.total
         _reserve(ledger, unit='appended')
         statements = []
         before = dict(c.TALLY_COST)
@@ -665,7 +666,7 @@ def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(
             second = c._tally(ledger)
         finally:
             ledger.db.set_trace_callback(None)
-        assert second.total == 2 * first.total
+        assert second.total == 2 * first_total
         assert sum('AND artifact_id<=' in sql for sql in statements) == 1
         assert c.TALLY_COST['rebuilds'] == before['rebuilds'] + 1
         # The extended digest equals a fresh full fingerprint of the same rows.
