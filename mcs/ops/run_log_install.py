@@ -262,6 +262,21 @@ def verify_installed_helper(root, recovery_dir, helper):
         raise LogInstallError('run_log_helper_unverified') from None
 
 
+def current_helper(root, *, installed=None):
+    """The helper this process was started with while it stays a verified generation.
+
+    install.sh promotes a new generation before it reloads services; until then
+    running hosts keep the generation they inherited instead of refusing every
+    child (IA-018, IA-046). Without an inherited helper, the installed one
+    (``installed`` defaults to helper_path)."""
+    inherited = os.environ.get('MCS_RUN_LOG_HELPER')
+    if inherited:
+        if not os.path.isabs(inherited):
+            raise LogInstallError('run_log_helper_unverified')
+        return verify_installed_helper(root, str(Path(inherited).parent), inherited)
+    return (installed or helper_path)(root, None, require_installed=True)
+
+
 def migrate_installed(root, recovery_dir):
     """Re-import a verified finite tail without depending on the runtime checkout."""
     # Older installations have no pointer. Do not inspect or modify their
