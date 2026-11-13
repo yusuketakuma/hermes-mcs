@@ -392,11 +392,13 @@ def _consent_store():
     return SimpleNamespace(db=con, close=con.close)
 
 
-def _consent_only(lock_fd) -> int:
+def _consent_only(lock_fd, commands_only=False) -> int:
     """Tick while a schema-bump DB replace awaits human consent: drain
     ONLY the ops.restore_approve channel (drain_commands defers every
     other file while the marker stands). No adapter, no ingest, no
-    reconcile — nothing may write a table the loss report counts."""
+    reconcile — nothing may write a table the loss report counts.
+    A --commands-only tick (every few seconds) skips the full loss-report
+    re-check unless it drained a command; the scheduled tick keeps it."""
     try:
         ledger = _consent_store()
     except Exception:
@@ -415,7 +417,8 @@ def _consent_only(lock_fd) -> int:
         import notify_spool
         marker = notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data"))
-        if marker and marker.get("backup_path"):
+        if marker and marker.get("backup_path") and (
+                result["commands"] or not commands_only):
             try:
                 import restore_evidence
                 report = restore_evidence.create_loss_report(
@@ -1302,7 +1305,7 @@ def _main() -> int:
         os.close(lock_fd)
         raise
     if consent_only:
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
     if not code_current:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))
@@ -1321,7 +1324,7 @@ def _main() -> int:
         # derive, reconcile and sends all stay frozen so the approved
         # loss report cannot drift; only the consent command drains.
         # Checked before --commands-only too: that worker opens a Ledger.
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
     if args.commands_only:
         return _commands_only(lock_fd, deadline)
     adapter = MCSAdapter(token_cache=CACHE)

@@ -328,3 +328,40 @@ def test_consent_hold_records_approval_on_newer_schema_db(tmp_path, monkeypatch,
     fd = writer_lock.acquire_run_lock(str(data / 'run.lock'))
     assert fd is not None
     os.close(fd)
+
+
+@pytest.mark.parametrize('commands_only', [False, True])
+@pytest.mark.parametrize('update_marker', [True, False])
+def test_idle_commands_only_consent_tick_skips_loss_report(tmp_path, monkeypatch, capsys, commands_only, update_marker):
+    """The --commands-only worker ticks every few seconds through a hold
+    that can last hours: with nothing drained it must not rehash the DB
+    and backup or respawn the updater. The scheduled tick still does."""
+    import job_ops
+    import restore_evidence
+    import update_launch
+
+    data = tmp_path / 'data'
+    (data / 'cmd').mkdir(parents=True)
+    _ledger(data).close()
+    for name, value in {'HOME': tmp_path, 'DB': data / 'ledger.db', 'LOCKFILE': data / 'run.lock'}.items():
+        monkeypatch.setattr(run_check, name, str(value))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(data / 'attachments'))
+    monkeypatch.setattr(sys, 'argv', ['run_check'] + (['--commands-only'] if commands_only else []))
+    monkeypatch.setattr(run_check, '_CODE_STAMP', 1)
+    monkeypatch.setattr(writer_lock, 'code_stamp_checked', lambda: 1)
+    monkeypatch.setattr(run_check, 'MCSAdapter', lambda *a, **k: pytest.fail('adapter during hold'))
+    monkeypatch.setattr(run_check, '_commands_only', lambda *a: pytest.fail('ordinary command processing during hold'))
+    if update_marker:
+        (data / 'update_in_progress.marker').write_text('synthetic')
+    notify_spool.mark_restored(str(data), backup_path=str(data / 'b.db'), phase='awaiting_consent')
+    drain = job_ops.drain_commands
+    monkeypatch.setattr(job_ops, 'drain_commands', lambda db, result, **kw: drain(db, result, str(data / 'cmd'), **kw))
+    reports, spawned = [], []
+    monkeypatch.setattr(restore_evidence, 'create_loss_report', lambda **kwargs: reports.append(kwargs) or {
+        'report_id': 'e' * 64, 'backup_sha256': 'f' * 64, 'backup_schema': 7})
+    monkeypatch.setattr(restore_evidence, 'find_restore_consent', lambda *a, **k: {'receipt': 'synthetic'})
+    monkeypatch.setattr(update_launch, 'spawn_detached', lambda **kwargs: spawned.append(True))
+    assert run_check._main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['restore_consent_hold'] is True and result['commands'] == 0
+    assert bool(reports) is bool(spawned) is (not commands_only)
