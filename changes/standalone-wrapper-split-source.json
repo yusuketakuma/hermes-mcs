@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "独立実行で定期処理のファイルを配置すると、更新・巻戻し・復旧が止まる問題を修正",
+  "summary": "独立実行（runtime_mode=standalone）の導入先では、通常の更新が post-merge で provider_settings_migration_unverified になり、提供元別設定を分離済みの導入先では巻戻しも復旧も保留のまま進まなくなっていました。原因は、services が導入先の scripts/ に置く定期処理のファイル（mcs_check.sh など）を、ソース照合が追跡外のコードとして扱っていたことです。標準の配置では導入先とチェックアウトが同じ ~/.mcs のため、独立実行の導入先ではほぼ必ず起きていました。今後は、配布テンプレート deployment/scripts/ に同名の .sh がある scripts/<名前>.sh だけを、MCS が配置したファイルとして照合から外します。そのほかの追跡外ファイルは従来どおり不合格です。",
+  "upgrade": "更新ツール側の修正は、この版への更新から有効になります（post-merge は新しい版のコードで照合します）。独立監視（~/.mcs-recovery/mcs_recover.py）側の修正は、install.sh を再実行して復旧ツールを入れ替えるまで有効になりません。それまでは「復旧ツールが配布版と異なります」の警告が出ます。Hermes モードの導入先には影響がありません。",
+  "details": [
+    "update_repository._split_target_source_matches が、現在の版か対象の版の deployment/scripts/ に同名の .sh がある scripts/<名前>.sh を許容する。",
+    "mcs_recover._split_checkout_hold も、現在の HEAD の deployment/scripts/ に同名の .sh がある場合だけ同じ扱いにする。",
+    "scripts/ の下の階層にあるファイル、.sh 以外のファイル、テンプレートの無い名前は従来どおり保留・不合格にする。"
+  ],
+  "refs": ["mcs/ops/update_repository.py", "deployment/recovery/mcs_recover.py"]
+}

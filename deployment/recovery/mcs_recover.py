@@ -599,6 +599,15 @@ def _provider_settings_state():
         os.close(root_fd)
 
 
+def _rendered_wrapper(head, path):
+    """= update_repository: a standalone cron wrapper rendered from a tracked template."""
+    name = path[len("scripts/"):]
+    if not path.startswith("scripts/") or "/" in name or not name.endswith(".sh"):
+        return False
+    found = mcs_recovery_core._git(["cat-file", "-e", head + ":deployment/scripts/" + name])
+    return found is not None and found.returncode == 0
+
+
 def _split_checkout_hold(applying):
     """Why a settled split install must not take a watchdog route, or None.
 
@@ -623,6 +632,7 @@ def _split_checkout_hold(applying):
     extras = mcs_recovery_core._git(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS])
     if extras is None or extras.returncode != 0 or any(
             path and not (path.endswith(".pyc") and "__pycache__" in path.split("/"))
+            and not _rendered_wrapper(head, path)
             for path in extras.stdout.split("\0")):
         return "provider_checkout_hold"
     return None if mcs_recovery_core._head() == head else "provider_checkout_hold"

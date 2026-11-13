@@ -593,6 +593,18 @@ def test_split_checkout_that_is_not_intact_holds(watchdog, monkeypatch, case, jo
     assert report["result"] == "provider_checkout_hold" and report["held"] is True
 
 
+@pytest.mark.parametrize("untracked,missing,held", [
+    ("scripts/mcs_check.sh\0", (), False),
+    ("scripts/mcs_check.sh\0", ("deployment/scripts/mcs_check.sh",), True),
+    ("scripts/mcs_check.py\0", (), True),
+    ("scripts/sub/mcs_check.sh\0", (), True),
+])
+def test_split_checkout_tolerates_only_rendered_standalone_wrappers(watchdog, monkeypatch, untracked, missing, held):
+    # Standalone services renders <root>/scripts/*.sh, the checkout in the default layout.
+    _checkout(monkeypatch, watchdog, missing=missing, untracked=untracked)
+    assert (watchdog._split_checkout_hold({"sha": HEAD}) == "provider_checkout_hold") is held
+
+
 def test_split_rollback_is_left_to_target_updater(watchdog, monkeypatch):
     _settled(Path(watchdog.DATA))
     journal = Path(watchdog.STATE_PATH)
