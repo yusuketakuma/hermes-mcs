@@ -446,7 +446,8 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
         result_locks.append(enabled)
         if len(result_locks) == 2:
             if loss == "source":
-                led.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=1")
+                # a real body change always carries a valid content hash
+                led.db.execute("UPDATE messages SET content_hash=? WHERE message_id=1", ("f" * 64,))
             elif loss == "lease":
                 led.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
             led.db.commit()
@@ -460,7 +461,8 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
         report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
     assert report["done"] == 0 and len(result_locks) == 2
     assert len(calls) == len(reserved) == len(results) == 1
-    assert len(led.artifacts("cloud_usage_disposition")) == int(loss != "none")
+    # Only a provably changed source closes the paid answer; a lost lease keeps it recoverable.
+    assert len(led.artifacts("cloud_usage_disposition")) == int(loss == "source")
     assert len(report["carry"]) == int(loss == "none")
     if report["carry"]:
         worker._settle_carry(led, report["carry"], final=True)
@@ -611,7 +613,9 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
         assert worker.main() == 0
         assert len(calls) == 2 and sleeps == [1]
         assert events.count("semantic") == 0
-        assert events.count("discard") == events.count("release") == 1
+        # Past the update fence the stale worker only releases: the paid answer
+        # stays undisposed so the updated code can recover it.
+        assert events.count("discard") == 0 and events.count("release") == 1
         assert events[-2:] == ["pool_closed", "ledger_closed"]
         assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved
     finally:

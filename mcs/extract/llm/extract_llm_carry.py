@@ -62,7 +62,8 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     if settled['done'] > before:
                         pids.add(r['project_id'])
                 elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
-                    if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
+                    # Past the update fence old code writes nothing, a disposition included.
+                    if r.get("_cloud_discard") and write and not _owns_current_source(ledger, r, lease):
                         r["_cloud_discard"]()
                     _release(ledger, r, lease)
                     settled['deferred'] += 1
