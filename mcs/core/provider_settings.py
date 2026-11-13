@@ -681,6 +681,54 @@ def _verify_lock(root, lock_fd, *, root_fd=None):
         raise ValueError("provider_lock_invalid")
 
 
+def committed_pending(root, lock_fd) -> str:
+    """Operation of a pending record whose files all reached their "after" state.
+
+    A power loss or SIGKILL after the last file and the authority were
+    published, but before the pending record was unlinked, leaves every reader
+    held (GA-provider-settings-writer-1). Only that exact state is accepted:
+    each file's hash equals pending["after"] and the authority is the committed
+    v2 record for those files. Anything else raises and stays held for a person."""
+    import re
+    root = Path(root)
+    handle = _RootHandle(root)
+    data_fd = settings_fd = None
+    try:
+        _verify_lock(root, lock_fd, root_fd=handle.fd)
+        data_fd = _directory(handle.fd, "data")
+        raw, _ = _read_file(data_fd, ".provider-settings-pending.json")
+        if raw is None:
+            raise ValueError("provider_pending_missing")
+        pending = _document(raw)
+        after = pending.get("after")
+        if (pending.get("version") != 1 or not isinstance(after, dict) or set(after) != set(_FILES)
+                or not isinstance(pending.get("operation"), str)
+                or re.fullmatch(r"[0-9a-f]{32}", pending["operation"]) is None):
+            raise ValueError("provider_pending_invalid")
+        settings_fd = _directory(data_fd, "provider_settings", private=True)
+        for key in _FILES:
+            parent, name, private = ((handle.fd, "config.json", False) if key == "config"
+                                     else (settings_fd, key + ".json", True))
+            _, snapshot = _read_file(parent, name, private=private,
+                                     limit=ALIAS_CONFIG_MAX_BYTES if key == "config" else CONFIG_MAX_BYTES)
+            if snapshot is None or snapshot["sha256"] != after[key]:
+                raise ValueError("provider_pending_not_committed")
+        authority = _document(_read_file(data_fd, ".provider-settings-authority.json")[0])
+        if (authority.get("version") != 2 or authority.get("state") != "committed"
+                or authority.get("files") != {name: after[name] for name in PROVIDERS}):
+            raise ValueError("provider_pending_not_committed")
+        if _read_file(data_fd, ".provider-settings-pending.json")[0] != raw:
+            raise ValueError("provider_snapshot_changed")
+        handle.check()
+        return pending["operation"]
+    finally:
+        if settings_fd is not None:
+            os.close(settings_fd)
+        if data_fd is not None:
+            os.close(data_fd)
+        handle.close()
+
+
 @contextmanager
 def _edit_lock_at(root, expected):
     from config_edit import ConfigConflict

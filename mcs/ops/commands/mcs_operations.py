@@ -715,6 +715,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] == "ops.slack_setup_discard":
         from slack_channel_setup import discard_hold_tx
         return discard_hold_tx(db, req, filesystem_changes)
+    if req["cmd"] == "ops.provider_pending_finalize":
+        from config_edit import finalize_provider_pending_tx
+        return finalize_provider_pending_tx(db, req, filesystem_changes)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

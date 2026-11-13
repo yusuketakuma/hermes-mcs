@@ -1579,3 +1579,66 @@ def test_legacy_config_preserves_directory_identity_between_retry_attempts(tmp_p
         mcs_util.load_config(str(tmp_path / 'config.json'))
     assert str(error.value.__cause__) == 'provider_settings_changed'
     assert changed and len(scans) == 1
+
+
+def _committed_with_stale_pending(tmp_path):
+    """A commit that published every file and the authority, then lost power before unlinking pending."""
+    import config_edit
+
+    _fresh_root(tmp_path, {})
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        legacy = settings.read(tmp_path, model_owners=OWNERS)
+        initial = settings.bootstrap_locked(tmp_path, legacy["snapshot"], {}, model_owners=OWNERS, lock_fd=fd)
+        settings.commit_locked(tmp_path, initial["snapshot"], {"mcs_login_id": "synthetic", "notify_target": "local"},
+                               initial["providers"], selected_provider="anthropic", model_owners=OWNERS, lock_fd=fd)
+    data = tmp_path / "data"
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    after = {"config": digest(tmp_path / "config.json"),
+             **{name: digest(data / "provider_settings" / (name + ".json")) for name in settings.PROVIDERS}}
+    operation = "0123456789abcdef0123456789abcdef"
+    private_json(data / ".provider-settings-pending.json",
+                 {"version": 1, "operation": operation, "before": dict.fromkeys(after), "after": after,
+                  "authority_before": None})
+    assert settings.probe(tmp_path)["state"] == "pending"
+    return operation, after
+
+
+def test_committed_pending_accepts_only_a_fully_published_commit(tmp_path):
+    """GA-provider-settings-writer-1: the exit exists only for the all-"after" state."""
+    import config_edit
+
+    operation, after = _committed_with_stale_pending(tmp_path)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        assert settings.committed_pending(tmp_path, fd) == operation
+    pending = tmp_path / "data" / ".provider-settings-pending.json"
+    private_json(pending, {"version": 1, "operation": operation, "before": dict.fromkeys(after),
+                           "after": {**after, "openai": "0" * 64}, "authority_before": None})
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        with pytest.raises(ValueError, match="provider_pending_not_committed"):
+            settings.committed_pending(tmp_path, fd)
+
+
+def test_human_confirmed_finalize_sets_the_pending_record_aside(tmp_path, monkeypatch):
+    import uuid
+    from contextlib import closing
+    import mcs_requests
+    from ledger import Ledger
+
+    operation, _after = _committed_with_stale_pending(tmp_path)
+    monkeypatch.setattr(cloud_policy, "PROVIDERS", {name: model for model, name in OWNERS.items()})
+    req = {"version": 1, "cmd": "ops.provider_pending_finalize", "command_id": str(uuid.uuid4()),
+           "actor": "synthetic-human", "human_confirmed": True, "project_id": None,
+           "reason": "synthetic: compared hashes by hand", "operation": operation}
+    assert mcs_requests.validate(req) is None
+    with closing(Ledger(str(tmp_path / "data" / "ledger.db"))) as ledger:
+        wrong = mcs_requests.apply_command(ledger, {**req, "command_id": str(uuid.uuid4()), "operation": "f" * 32})
+        assert (wrong["outcome"], wrong["error"]) == ("rejected", "provider_pending_changed")
+        receipt = mcs_requests.apply_command(ledger, req)
+    assert receipt["outcome"] == "applied", receipt
+    data = tmp_path / "data"
+    assert not (data / ".provider-settings-pending.json").exists()
+    assert (data / f".provider-settings-pending.resolved-{operation}.json").exists()
+    assert settings.read(tmp_path, model_owners=OWNERS)["mode"] == "split"

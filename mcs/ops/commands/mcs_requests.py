@@ -165,7 +165,7 @@ def validate(req):
         return "bad_actor"
     if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
-                          "ops.slack_setup_discard"):
+                          "ops.slack_setup_discard", "ops.provider_pending_finalize"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;

@@ -212,6 +212,18 @@ def _v_slack_setup_discard(req: dict, base: set) -> str | None:
     return None
 
 
+def _v_provider_pending_finalize(req: dict, base: set) -> str | None:
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    if req.keys() - (base | {"reason", "operation"}):
+        return "unknown_field"
+    if not valid_text(req.get("reason"), 2000):
+        return "bad_reason"
+    if not isinstance(req.get("operation"), str) or re.fullmatch(r"[0-9a-f]{32}", req["operation"]) is None:
+        return "bad_operation"
+    return None
+
+
 def _v_adopt_summary(req: dict, base: set) -> str | None:
     allowed = base | {"message_id", "summary_artifact_id",
                       "comparison_hash", "reason"}
@@ -364,6 +376,7 @@ _OPS_VALIDATORS = {
     "ops.cloud_stop": _v_cloud_control,
     "ops.cloud_resume": _v_cloud_control,
     "ops.slack_setup_discard": _v_slack_setup_discard,
+    "ops.provider_pending_finalize": _v_provider_pending_finalize,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,

@@ -331,9 +331,91 @@ def settings_command(args) -> int:
     return 0
 
 
+@contextmanager
+def _pending_aside(data_dir, operation):
+    current = os.path.join(data_dir, ".provider-settings-pending.json")
+    kept = os.path.join(data_dir, ".provider-settings-pending.resolved-" + operation + ".json")
+    os.link(current, kept)          # never overwrite an earlier resolved record
+    os.unlink(current)
+    try:
+        yield
+    except BaseException:
+        os.link(kept, current)
+        os.unlink(kept)
+        raise
+
+
+def finalize_provider_pending_tx(db, req, filesystem_changes):
+    """Human-approved exit from a pending provider-settings record (GA-provider-settings-writer-1).
+
+    Accepts only a commit whose files all reached "after" (provider_settings.
+    committed_pending); the record is kept beside the live name, and a checked
+    read must succeed before the receipt commits, else it is put back."""
+    import provider_settings
+    import cloud_policy
+    import semantic_jev
+    if filesystem_changes is None:
+        raise RuntimeError("provider_pending_transaction_scope_required")
+    main = db.execute("PRAGMA database_list").fetchone()["file"]
+    if not main:
+        return "provider_pending_no_data_dir", {}
+    data_dir = os.path.dirname(os.path.abspath(main))
+    root = os.path.dirname(data_dir)
+    try:
+        lock_fd = filesystem_changes.enter_context(_edit_lock(os.path.join(root, "config.json")))
+        operation = provider_settings.committed_pending(root, lock_fd)
+    except ConfigConflict:
+        return "config_busy", {}
+    except (OSError, ValueError) as error:
+        return (str(error) if str(error).startswith("provider_") else "provider_pending_unverified"), {}
+    if operation != req["operation"]:
+        return "provider_pending_changed", {}
+    filesystem_changes.enter_context(_pending_aside(data_dir, operation))
+    # A failing read raises out of the receipt transaction and puts the record back.
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    state = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    if state.get("mode") != "split":
+        raise ValueError("provider_pending_readback_failed")
+    return None, {"provider_pending_finalized": {"operation": operation}}
+
+
+def provider_pending_command(args) -> int:
+    import uuid
+    import mcs_requests
+    if args.confirm_human is not True or not mcs_util.valid_text(args.reason, 2000):
+        print("--confirm-human と --reason による人の確認が必要です")
+        return 1
+    req = {"version": 1, "cmd": "ops.provider_pending_finalize", "command_id": args.command_id or str(uuid.uuid4()),
+           "actor": args.actor, "human_confirmed": True, "project_id": None,
+           "reason": args.reason, "operation": args.operation}
+    error = mcs_requests.validate(req)
+    if error:
+        print("提供元設定の保留: 指定を確認してください（" + error + "）")
+        return 1
+    try:
+        receipt = mcs_requests.apply_local_operation(req)
+    except (OSError, ValueError) as exc:
+        print("提供元設定の保留: 解除できませんでした（" + mcs_util.safe_error_code(exc) + "）。記録を保持しています")
+        return 1
+    if receipt is None:
+        print("提供元設定の保留: ほかの保存処理が終わってから再試行してください")
+        return 3
+    print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "provider_pending_finalized")},
+                     ensure_ascii=False))
+    return 0 if receipt["outcome"] == "applied" else 1
+
+
 def add_parsers(sub) -> None:
     p = sub.add_parser("settings", help="抽出の事前判定・ディスク下限・LLM受付制御を表示・設定します")
     p.add_argument("--prefilter", help="on/off: 挨拶だけの投稿などをLLMに送らない事前判定")
     p.add_argument("--disk-guard-mb", dest="disk_guard_mb", help="空きがこのMB未満ならローカルLLMを止める（0で無効）")
     p.add_argument("--admission", help="on/off: ローカルLLMの共有受付制御（既定off）")
     p.set_defaults(fn=settings_command)
+    p = sub.add_parser("provider-pending-finalize",
+                       help="保存の最後で止まった提供元設定の保留記録を、全ファイルが保存後の状態のときだけ人の確認で解除します")
+    p.add_argument("--operation", required=True, help="data/.provider-settings-pending.json の operation")
+    p.add_argument("--confirm-human", action="store_true")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--actor", default="local-human")
+    p.add_argument("--command-id", help="同じ操作を再試行する場合の承認記録UUID")
+    p.set_defaults(fn=provider_pending_command)
