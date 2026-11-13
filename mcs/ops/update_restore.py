@@ -97,6 +97,10 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "sha": entry["prev_sha"],
         "prev_sha": prev_sha,
         "rollback": True,
+        # Every writer of this record persists restore_incomplete before any
+        # tree, runtime or DB change; older records may not, so recovery must
+        # not read a missing freeze as "nothing changed" without this flag.
+        "hold_before_change": True,
         "plugin_changed": entry.get("plugin_changed"),
         "schema_bump": entry.get("schema_bump"),
         "backup_path": entry.get("backup_path"),

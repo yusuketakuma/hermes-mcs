@@ -274,6 +274,55 @@ def test_manual_rollback_quiesce_failure_before_tree_change_does_not_freeze(
     assert not Path(updater.MARKER_PATH).exists()
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert not (state.get("applying") or {}).get("restore_incomplete")
+    # The next recovery must not freeze the unchanged applied version.
+    monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
+    assert updater.recover_interrupted() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    assert state["applied"][-1]["sha"] == after
+    assert updater._head_sha() == after and Path(live).read_bytes() == live_bytes
+    assert restarts == [1, 1] and not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("flagged", [True, False])
+def test_unstarted_rollback_of_applied_version_is_not_frozen(
+        updater, tmp_path, monkeypatch, engine, flagged):
+    from ops_testkit import _git
+
+    tool, recover, repo, live, _back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    after = state["applying"]["prev_sha"]
+    assert state["applied"][-1]["sha"] == after
+    _git(repo, "reset", "-q", "--hard", after)      # died at quiesce: tree unchanged
+    if flagged:
+        state["applying"]["hold_before_change"] = True
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    db_bytes = Path(live).read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an unstarted rollback must not restore or reset")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "watchdog":
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    if flagged:
+        assert recover() == 0
+        state = updater.journal_store.load_state(updater.STATE_PATH)
+        assert state["applying"] is None and state["applied"][-1]["sha"] == after
+        assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
+    else:
+        # A legacy record cannot prove that no change happened: keep the freeze.
+        assert recover() == 1
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
+    assert Path(live).read_bytes() == db_bytes
 
 
 def test_manual_schema_rollback_persists_hold_before_tree_change(

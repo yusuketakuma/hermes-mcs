@@ -979,9 +979,10 @@ def test_rollback_applying_journal_shape():
              "backup_path": "/x.db", "manifest_snapshot": {},
              "command_id": "cid-apply"}
     rec = mcs_update._rollback_applying(entry, entry["sha"], "cid-rb")
-    assert set(rec) == {"tag", "sha", "prev_sha", "rollback",
+    assert set(rec) == {"tag", "sha", "prev_sha", "rollback", "hold_before_change",
                         "plugin_changed", "schema_bump", "backup_path",
                         "manifest_snapshot", "command_id", "at"}
+    assert rec["hold_before_change"] is True
     assert (rec["tag"], rec["sha"], rec["prev_sha"], rec["rollback"],
             rec["command_id"]) == ("rollback:v1.1.0", "a" * 40, "b" * 40,
                                    True, "cid-rb")

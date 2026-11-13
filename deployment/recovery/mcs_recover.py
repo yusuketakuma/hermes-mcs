@@ -691,6 +691,20 @@ def _restore_entered(state):
         marker is not None and marker.get("by") != "mcs_backup_restore")
 
 
+def _rollback_not_started(state, applying):
+    """= mcs_update._rollback_not_started, stricter: any restore marker keeps
+    the freeze. The rollback of the last applied version stopped at or before
+    quiesce, so that version and its DB are unchanged."""
+    applied = state.get("applied") or []
+    if not (applying.get("hold_before_change") is True
+            and not applying.get("restore_incomplete") and not state.get("restore_consent")
+            and applied and applied[-1].get("sha") == applying.get("prev_sha")
+            and not os.path.lexists(os.path.join(mcs_recovery_core.DATA, "restore_pending.json"))
+            and not os.path.lexists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD"))):
+        return False
+    return mcs_recovery_core._head() == applying.get("prev_sha") and mcs_recovery_core._clean() is True
+
+
 def _clear_hold():
     """Record once that an earlier hold no longer applies."""
     last = mcs_recovery_core._last_report()
@@ -847,7 +861,7 @@ def _recover_legacy(if_stale=False):
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))
-        if schema_rollback:
+        if schema_rollback and not _rollback_not_started(state, applying):
             try:
                 # This marker prevents new launches; it is not stop evidence.
                 mcs_recovery_core._ensure_recovery_marker()
