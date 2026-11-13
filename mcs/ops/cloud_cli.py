@@ -474,9 +474,10 @@ def observe(cfg, *, root=None, days=None, since=None, project=None, evidence_hol
             first = date.fromisoformat(since)
         except (TypeError, ValueError):
             raise ValueError("since_invalid") from None
-        # The averages divide by the JST calendar days actually read, today included.
+        # The averages divide by the JST calendar days actually read, today included;
+        # only plan/estimate (the evidence-hold readers) show them, so only they cap the period.
         days = (datetime.fromtimestamp(now, policy.JST).date() - first).days + 1
-        if not 1 <= days <= 62:
+        if days < 1 or (evidence_holds_wanted and days > 62):
             raise ValueError("since_invalid")
         start = datetime.combine(first, datetime.min.time(), policy.JST).timestamp()
     else:
@@ -882,7 +883,7 @@ def command(args):
 
 _PERIOD_ERRORS = {
     "days_invalid": "クラウド処理: --days は1〜62の整数で指定してください",
-    "since_invalid": "クラウド処理: --since は今日から61日前までの日本時間の日付（YYYY-MM-DD）で指定してください",
+    "since_invalid": "クラウド処理: --since は今日以前の日本時間の日付（YYYY-MM-DD、plan・estimate は今日から61日前まで）で指定してください",
     "period_conflict": "クラウド処理: --since と --days は同時に指定できません",
 }
 
@@ -1123,7 +1124,7 @@ def add_parsers(sub):
     for action in ("plan", "estimate", "log", "compare"):
         q = actions.add_parser(action)
         q.add_argument("--days", type=int, help="集計日数（1〜62、既定14）")
-        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD（--daysとは併用不可）")
+        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD（--daysとは併用不可、plan・estimateは61日前まで）")
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)

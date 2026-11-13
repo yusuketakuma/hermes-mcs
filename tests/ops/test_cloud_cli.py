@@ -183,14 +183,19 @@ def test_since_sets_the_average_denominator_to_the_days_read(world, capsys):
     report = cli.observe(config, root=str(root), since="2026-09-27")
     assert report["days"] == report["historical_average_denominator_days"] == 30
     assert report["new_posts_daily_estimate"] == report["new_posts"] / 30
-    for period, code in (({"since": "2026-08-25"}, "since_invalid"), ({"since": "2026-10-27"}, "since_invalid"),
-                         ({"since": "2026/10/01"}, "since_invalid"),
+    # 63 days exceed the averages' denominator cap of plan/estimate only; log/compare read them.
+    with pytest.raises(ValueError, match="since_invalid"):
+        cli.observe(config, root=str(root), since="2026-08-25", evidence_holds_wanted=True)
+    assert cli.observe(config, root=str(root), since="2026-08-25")["days"] == 63
+    for period, code in (({"since": "2026-10-27"}, "since_invalid"), ({"since": "2026/10/01"}, "since_invalid"),
                          ({"since": "2026-10-01", "days": 14}, "period_conflict"), ({"days": 63}, "days_invalid")):
         with pytest.raises(ValueError, match=code):
             cli.observe(config, root=str(root), **period)
     capsys.readouterr()
+    assert mcs_setup.main(["cloud-llm", "log", "--since", "2026-08-25"]) == 0
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026-08-25"]) == 1
     assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026/10/01"]) == 1
-    assert "--since は今日から61日前まで" in capsys.readouterr().out
+    assert "plan・estimate は今日から61日前まで" in capsys.readouterr().out
     assert mcs_setup.main(["cloud-llm", "estimate", "--days", "7", "--since", "2026-10-20"]) == 1
     assert "同時に指定できません" in capsys.readouterr().out
 
