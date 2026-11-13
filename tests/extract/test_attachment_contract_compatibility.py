@@ -59,7 +59,8 @@ def test_recorded_witness_cannot_bless_extraction_content_or_its_own_digest():
     witness = contract._WITNESS
     assert witness['schema'] == contract.WITNESS_SCHEMA
     assert set(witness['components']) <= actual.keys()
-    assert not set(witness['components']) & extract_llm_source_contract._HOLD_SOURCES
+    assert not set(witness['components']) & (extract_llm_source_contract._HOLD_SOURCES
+                                             | _witness_tool().ATTACHMENT_CONTENT)
     assert contract.WITNESS_KEY not in witness['components']
     assert {'attachment_feedback', 'attachment_observation_seeds', 'attachment_cloud_identity',
             'patient_read_scope', 'measurement_sources'} <= actual.keys()
@@ -170,13 +171,16 @@ def test_deploy_witness_maps_only_changed_sources_back_to_the_baseline():
     assert witness['additions'] == {'cloud_backlog': '5' * 64}
 
 
-@pytest.mark.parametrize('change', ['hold_source', 'version', 'removed'])
+@pytest.mark.parametrize('change', ['hold_source', 'attachment_source', 'version', 'removed'])
 def test_deploy_witness_refuses_extraction_content_version_or_removed_sources(change):
     tool = _witness_tool()
-    previous = {'attachment_inference': BASELINE_CODE, 'extract_llm_prompts': '1' * 64, 'mcs_util': '2' * 64}
+    previous = {'attachment_inference': BASELINE_CODE, 'extract_llm_prompts': '1' * 64, 'mcs_util': '2' * 64,
+                'attachment_ocr': '4' * 64}
     current = dict(previous)
     if change == 'hold_source':
         current['extract_llm_prompts'] = '3' * 64
+    elif change == 'attachment_source':
+        current['attachment_ocr'] = '5' * 64
     elif change == 'removed':
         current.pop('mcs_util')
     baseline, now = _deploy(previous, current)

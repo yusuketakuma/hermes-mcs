@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / 'resources' / 'inference-contracts' / 'attachment-refactor-20261105.json'
 WITNESS = 'resources/inference-contracts/attachment-refactor-20261105.json'
 WITNESS_KEY = 'attachment_refactor_witness'
+# OCR parsing, correction feedback, observation seeds, cloud identity and patient/measurement
+# reads shape what attachment inference produces; _HOLD_SOURCES covers chat extraction only.
+ATTACHMENT_CONTENT = frozenset({'attachment_ocr', 'attachment_feedback', 'attachment_observation_seeds',
+                                'attachment_cloud_identity', 'patient_read_scope', 'measurement_sources'})
 CFG = {'local_llm': {'url': 'http://127.0.0.1:8012', 'model': 'synthetic-local'}}
 PROGRAM = '''import sys, json
 from pathlib import Path
@@ -79,9 +83,8 @@ def build(sha, previous, current):
         raise SystemExit(f'witness_refused: baseline sources were removed: {removed}')
     components = {key: value for key, value in now.items() if previous['sources'].get(key) != value}
     components['attachment_inference'] = now['attachment_inference']
-    blocked = sorted(set(components) & set(current['hold']))
+    blocked = sorted(set(components) & (set(current['hold']) | ATTACHMENT_CONTENT))
     if blocked:
-        # These sources change what extraction produces (extract_llm_source_contract._HOLD_SOURCES).
         raise SystemExit(f'witness_refused: extraction-content sources changed: {blocked}')
     replacements = {key: previous['sources'][key] for key in components if key in previous['sources']}
     if WITNESS_KEY in previous['sources']:
