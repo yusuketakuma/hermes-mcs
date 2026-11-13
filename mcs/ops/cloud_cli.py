@@ -464,10 +464,26 @@ def _comparison_report(log):
             "rate_numerators": {label: pair[0] for label, pair in rates.items()}}
 
 
-def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds_wanted=False):
+def observe(cfg, *, root=None, days=None, since=None, project=None, evidence_holds_wanted=False):
     """Compute a single bounded read snapshot without sending or persisting anything."""
-    if type(days) is not int or not 1 <= days <= 62:
-        raise ValueError("days_invalid")
+    now = time.time()
+    if since is not None:
+        if days is not None:
+            raise ValueError("period_conflict")
+        try:
+            first = date.fromisoformat(since)
+        except (TypeError, ValueError):
+            raise ValueError("since_invalid") from None
+        # The averages divide by the JST calendar days actually read, today included.
+        days = (datetime.fromtimestamp(now, policy.JST).date() - first).days + 1
+        if not 1 <= days <= 62:
+            raise ValueError("since_invalid")
+        start = datetime.combine(first, datetime.min.time(), policy.JST).timestamp()
+    else:
+        days = 14 if days is None else days
+        if type(days) is not int or not 1 <= days <= 62:
+            raise ValueError("days_invalid")
+        start = now - days * 86400
     settings, errors, key = _settings(cfg, root)
     if policy.blocking_errors(errors):
         raise ValueError("cloud_config_invalid")
@@ -475,10 +491,6 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     # Estimate the scope that auto mode would enable once a cap is set; whether it may send now is send_decision.
     planning = policy.cloud_config(cfg, key_present=True, require_cost_limit=False)[0]
     planning["provider"], planning["model"] = settings["provider"], settings["model"]
-    now = time.time()
-    start = now - days * 86400
-    if since is not None:
-        start = datetime.combine(date.fromisoformat(since), datetime.min.time(), policy.JST).timestamp()
     if project is not None:
         if type(project) is not int or project <= 0:
             raise ValueError("project_invalid")
@@ -847,7 +859,7 @@ def command(args):
                 result = cloud_observation.unknown("observation_unavailable")
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["state"] == "complete" else 1
-        report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None),
+        report = observe(cfg, days=getattr(args, "days", None), since=getattr(args, "since", None), project=getattr(args, "project", None),
                          evidence_holds_wanted=action in ("plan", "estimate"))
         log_verified = "artifact_log" in report.get("sections_verified", ("artifact_log",))
         if action == "log":
@@ -862,9 +874,17 @@ def command(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
         return 0
-    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable):
-        print("クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
+    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable) as error:
+        print(type(error) is ValueError and _PERIOD_ERRORS.get(str(error))
+              or "クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
         return 1
+
+
+_PERIOD_ERRORS = {
+    "days_invalid": "クラウド処理: --days は1〜62の整数で指定してください",
+    "since_invalid": "クラウド処理: --since は今日から61日前までの日本時間の日付（YYYY-MM-DD）で指定してください",
+    "period_conflict": "クラウド処理: --since と --days は同時に指定できません",
+}
 
 
 _BUDGET_KEYS = {"daily_usd": "daily_cost_limit_usd", "monthly_usd": "monthly_cost_limit_usd"}
@@ -1099,8 +1119,8 @@ def add_parsers(sub):
     actions = p.add_subparsers(dest="cloud_action", required=True)
     for action in ("plan", "estimate", "log", "compare"):
         q = actions.add_parser(action)
-        q.add_argument("--days", type=int, default=14)
-        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD")
+        q.add_argument("--days", type=int, help="集計日数（1〜62、既定14）")
+        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD（--daysとは併用不可）")
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)

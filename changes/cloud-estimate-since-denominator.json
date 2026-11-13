@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "cloud-llm plan・estimate の --since 指定時に日次・月次の試算がずれる問題を修正",
+  "summary": "mcs_setup.py cloud-llm plan・estimate・log・compare で --since を指定したとき、日次・月次の平均と historical_average_denominator_days は、指定日から今日までの日本時間の日数で計算します。これまでは集計の開始日だけが変わり、平均は既定の14日で割ったままだったため、30日前を指定すると試算が約2倍、3日前を指定すると約1/5になっていました。",
+  "upgrade": "追加操作は不要です。--since と --days は同時に指定できなくなりました。--since は今日から61日前までの日付（集計は最大62日、--days と同じ上限）で指定します。--days の範囲外や --since の書式誤りは、原因を示す専用の文言で表示します。",
+  "details": [
+    "--since を指定しないときの集計（既定14日）は変わりません。",
+    "推奨の日次リクエスト予算はピークの日の件数から計算するため、この修正の影響を受けません。"
+  ],
+  "refs": [
+    "mcs/ops/cloud_cli.py"
+  ]
+}

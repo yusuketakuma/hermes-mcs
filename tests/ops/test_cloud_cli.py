@@ -177,6 +177,24 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     assert report["new_posts_daily_estimate"] > 0
 
 
+def test_since_sets_the_average_denominator_to_the_days_read(world, capsys):
+    root, _, config = world
+    # 2026-09-27 through the fixed "now" (2026-10-26 JST) is 30 calendar days.
+    report = cli.observe(config, root=str(root), since="2026-09-27")
+    assert report["days"] == report["historical_average_denominator_days"] == 30
+    assert report["new_posts_daily_estimate"] == report["new_posts"] / 30
+    for period, code in (({"since": "2026-08-25"}, "since_invalid"), ({"since": "2026-10-27"}, "since_invalid"),
+                         ({"since": "2026/10/01"}, "since_invalid"),
+                         ({"since": "2026-10-01", "days": 14}, "period_conflict"), ({"days": 63}, "days_invalid")):
+        with pytest.raises(ValueError, match=code):
+            cli.observe(config, root=str(root), **period)
+    capsys.readouterr()
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026/10/01"]) == 1
+    assert "--since は今日から61日前まで" in capsys.readouterr().out
+    assert mcs_setup.main(["cloud-llm", "estimate", "--days", "7", "--since", "2026-10-20"]) == 1
+    assert "同時に指定できません" in capsys.readouterr().out
+
+
 
 @pytest.mark.parametrize("public_version", [None, "0.1", inference.CURRENT_VERSION])
 def test_reextract_estimate_includes_local_results_of_each_public_generation(world, public_version):
