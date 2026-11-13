@@ -70,18 +70,55 @@ def test_checkout_with_venv_missing_python_is_rebuilt(tmp_path):
     assert any(c.startswith("uv pip install") for c in _calls(stub_root))
 
 
-def test_fresh_pip_failure_keeps_bootstrap_hold_on_rerun(tmp_path):
+def test_fresh_pip_failure_resumes_verified_bootstrap_hold_on_rerun(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     failed = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
     assert failed.returncode == 1 and "Hermes 導入に失敗" in failed.stderr
+    assert "初回導入を再開します" in failed.stderr
     marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
+    assert marker.is_file() and not (home / ".mcs/config.json").exists()
+    calls = _calls(stub_root)
+    retried = _run(env, hermes_home)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert "初回導入を再開します" in retried.stdout
+    resumed = _calls(stub_root)[len(calls):]
+    assert any(line.startswith("uv pip install") for line in resumed)
+    assert not any(line.startswith("git clone") for line in resumed)
+    assert "fresh-runner bootstrap-fresh" in resumed
+    assert not marker.exists()
+    assert (home / ".mcs/config.json").is_file()
+
+
+@pytest.mark.parametrize("change", ["extra_entry", "config_present", "recreated_data", "edited_hold"])
+def test_fresh_hold_that_no_longer_matches_is_never_resumed(tmp_path, change):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    assert _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home).returncode == 1
+    data = home / ".mcs/data"
+    marker = data / ".provider-bootstrap-fresh.json"
+    if change == "extra_entry":
+        (data / "synthetic-extra").write_text("synthetic")
+    elif change == "config_present":
+        config = home / ".mcs/config.json"
+        config.write_text("{}")
+        config.chmod(0o600)
+    elif change == "recreated_data":
+        moved = home / ".mcs/data-synthetic-old"
+        data.rename(moved)
+        data.mkdir(mode=0o700)
+        for name in ("update.lock", ".provider-bootstrap-fresh.json"):
+            (data / name).write_bytes((moved / name).read_bytes())
+            (data / name).chmod(0o600)
+        shutil.rmtree(moved)
+    else:
+        marker.write_bytes(marker.read_bytes().replace(b'"version":1', b'"version":1 '))
     before, calls = marker.read_bytes(), _calls(stub_root)
     retried = _run(env, hermes_home)
     assert retried.returncode != 0 and "初回導入が中断された記録" in retried.stderr
+    assert "初回導入を再開します" not in retried.stdout
     assert marker.read_bytes() == before
     assert not any(line.startswith(("brew install", "git clone", "uv ", "launchctl bootstrap"))
                    for line in _calls(stub_root)[len(calls):])
-    assert not (home / ".mcs/config.json").exists()
+    assert "fresh-runner bootstrap-fresh" not in _calls(stub_root)[len(calls):]
 
 
 def test_failed_pip_install_converges_on_rerun(tmp_path):
