@@ -122,20 +122,21 @@ def _cancel_open_renders(db, card_id, now):
         _cancel_render(db, r["delivery_id"], now)
 
 
-# A not_sent that is a begin denial (denied_*) or a rate-limit rejection
-# (Slack ratelimited, LINE WORKS rate_limited, HTTP 429) proves the
-# transport is healthy and nothing was written — it never spends the
-# MAX_RESEND budget, or a burst of 429s would park a never-delivered
-# card as update_failed for good.
+# A not_sent that is a begin denial (denied_*), a rate-limit rejection
+# (Slack ratelimited, LINE WORKS rate_limited, HTTP 429) or a busy local
+# sender lock (LINE WORKS sender_busy) proves the transport is healthy and
+# nothing was written — it never spends the MAX_RESEND budget, or a burst
+# of 429s or one long CLI send would park a never-delivered card as
+# update_failed for good.
 _REAL_FAILURE = ("(a.error_code IS NULL OR (a.error_code NOT LIKE 'denied_%'"
                  " AND a.error_code NOT IN"
-                 " ('ratelimited','rate_limited','http_429')))")
+                 " ('ratelimited','rate_limited','http_429','sender_busy')))")
 
 
 def resend_exhausted(db, card_id: int) -> bool:
     """MAX_RESEND consecutive real not_sents on a card suspends auto-retry —
     denied begins (error_code 'denied_*') are not send failures and never
-    count, nor do rate-limit rejections (_REAL_FAILURE). Drift, a
+    count, nor do rate-limit rejections or a busy sender lock (_REAL_FAILURE). Drift, a
     route_epoch bump, or an operator resolve re-opens."""
     return db.execute(
         """SELECT COUNT(*) c FROM notification_delivery_attempts a
@@ -217,12 +218,16 @@ def complete_intent(db, event_id, now) -> str | None:
                  frozen["attachment_id"], frozen["attachment_sha256"])).fetchone()
             if delivered is None:
                 return None
+        # The first acceptance time is kept: a later settle of the same card
+        # must not move updated_at (urgency escalation measures from it).
         db.execute(
             "UPDATE notify_outbox SET state='accepted',next_try=NULL,"
-            "accepted_ref=?,updated_at=? WHERE event_id=?",
+            "accepted_ref=?,updated_at=? WHERE event_id=? AND state!='accepted'",
             (f"cards:{len(rows)}", now, event_id))
         # Cards carry text, while attachments retain the existing file
-        # transport. Include files downloaded before card acceptance too.
+        # transport. Include files downloaded before card acceptance too;
+        # re-run on every settle (deduped) so a file whose card part later
+        # failed still gets its followup.
         from attachment_followups import enqueue_ready_attachment_followups_tx
         enqueue_ready_attachment_followups_tx(db, event_id, now)
         return "accepted"
