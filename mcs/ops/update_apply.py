@@ -467,9 +467,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
                 except update_discovery.DiscoveryError as exc:
                     raise UpdateError(str(exc)) from exc
+                if remote is None:
+                    return bail("tag_not_on_origin: origin にこの版がありません — 要再レビュー")
                 if sha is None:
                     sha = remote                # manual `apply --tag` convenience
-                if sha is None or remote != sha:
+                if remote != sha:
                     return bail("tag_moved: remote sha changed — 要再レビュー")
 
                 journal(state, "fetch")

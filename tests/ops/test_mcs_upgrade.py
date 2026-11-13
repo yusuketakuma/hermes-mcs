@@ -1611,3 +1611,43 @@ def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, 
     report = updater.plan("v1.2.0")
     assert report["route"] == "reinstall"
     assert report["reinstall_requires_recovery_repair"] is repair
+
+
+@pytest.mark.parametrize("blockers,complete", [(["insufficient_disk"], True),
+                                              (["insufficient_disk", "tree_dirty"], False)])
+def test_post_apply_low_disk_alone_does_not_fail_a_finished_update(monkeypatch, capsys, blockers, complete):
+    """Regression: the update's own backup pushed free space below the next
+    update's reserve, and the launcher then reported the finished update failed."""
+    launcher = _launcher()
+    report = {"route": "noop", "blockers": blockers}
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a[0], 0, json.dumps(report), ""))
+    result = launcher._post_apply_plan(["python", "updater", "plan"], {}, "/synthetic")
+    output = capsys.readouterr().out
+    assert (result == report) is complete
+    assert ("空き容量" in output) is complete and ("完了を確認できません" in output) is not complete
+
+
+def test_launcher_tolerates_a_refused_moved_tag_and_skips_withdrawn_tags(tmp_path, monkeypatch):
+    """Regression: one moved tag made `git fetch --tags` exit 1 and stopped
+    every update; a tag withdrawn from origin was offered as the newest."""
+    launcher = _launcher()
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a[0], 1, "", "would clobber existing tag"))
+    assert launcher._git(str(tmp_path), "fetch", "--tags", "origin", check=False) is None
+    listing = {"tag": "v1.2.0\nv1.3.0\n",
+               "ls-remote": "a" * 40 + "\trefs/tags/v1.2.0\n" + "b" * 40 + "\trefs/tags/v1.1.0\n"}
+    monkeypatch.setattr(launcher, "_git", lambda repo, command, *a, **k: listing[command])
+    assert launcher._origin_tags("unused") == {"v1.2.0", "v1.1.0"}
+    assert launcher.latest_tag("unused", launcher._origin_tags("unused")) == "v1.2.0"
+    assert launcher.latest_tag("unused") == "v1.3.0"
+
+
+def test_apply_names_a_tag_missing_from_origin(updater, monkeypatch):
+    repo = _apply_env(updater, monkeypatch)
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: None)
+    assert updater.apply("v1.1.0", None, "cid-withdrawn") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["attempts"]["v1.1.0"]["detail"].startswith("tag_not_on_origin")
