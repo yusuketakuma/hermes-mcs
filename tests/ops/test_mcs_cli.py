@@ -341,6 +341,22 @@ def test_recovery_cli_uses_verified_inner_python(recovery_command, monkeypatch, 
     assert {p: p.read_bytes() for p in plist.parents[2].rglob("*") if p.is_file()} == before
 
 
+def test_recovery_cli_accepts_an_older_verified_helper_generation(recovery_command, monkeypatch):
+    # An update promotes the receipt to a new helper generation; only install.sh
+    # re-renders the watchdog plist, which keeps naming the retained old generation.
+    import run_log_install
+
+    root, helper, tool, plist = recovery_command
+    source = (ROOT / "mcs/core/run_log.py").read_bytes() + b"\n# synthetic newer generation\n"
+    run_log_install.prepare(root, ROOT, helper.parent, source=source, promote=True)
+    assert run_log_install.helper_path(root, helper.parent, require_installed=True) != str(helper)
+    assert helper.exists()
+    calls = []
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append((exe, argv)))
+    mcs_cli.main(["recover", "--status"])
+    assert calls == [(sys.executable, [sys.executable, str(tool), "--status"])]
+
+
 @pytest.mark.parametrize("change", ["data", "tool", "helper", "inner_python", "hash", "pointer",
                                    "missing", "shape", "program", "symlink"])
 def test_recovery_cli_rejects_untrusted_wrapper(recovery_command, monkeypatch, change):

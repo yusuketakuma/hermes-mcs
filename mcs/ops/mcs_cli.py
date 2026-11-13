@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
             print("復旧ツールが見つかりません。担当者に導入状態の確認を依頼してください。", file=sys.stderr)
             return 1
         import runtime_inspection
-        from run_log_install import helper_path, LogInstallError
+        from run_log_install import verify_installed_helper, LogInstallError
 
         try:
             if not opts.status and "\nINTERACTIVE_GUIDE_VERSION = 1\n" not in tool.read_text(encoding="utf-8"):
@@ -53,8 +53,10 @@ def main(argv: list[str] | None = None) -> int:
             wrapped = command[1:2] == ["-I"]
             if (command[7:] if wrapped else command) != [python, str(tool), "--if-stale"]:
                 raise ValueError
+            # An update promotes the receipt without re-rendering this plist,
+            # so any verified immutable generation is the deployed helper.
             if wrapped and (command[5] != str(Path(HOME).resolve() / "data")
-                    or command[2] != helper_path(HOME, tool.parent, require_installed=True)):
+                    or command[2] != verify_installed_helper(HOME, tool.parent, command[2])):
                 raise ValueError
         except (OSError, ValueError, TypeError, AttributeError, ExpatError, LogInstallError):
             print("独立した復旧用の実行環境を確認できません。担当者に復旧ツールの導入状態を確認してもらってください。")
