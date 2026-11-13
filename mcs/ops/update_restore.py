@@ -146,9 +146,18 @@ def _rollback_backup_error(entry: dict) -> str | None:
     path = entry.get("backup_path")
     if not isinstance(path, str) or not path.strip():
         return "backup_invalid: missing or invalid backup path"
+    if _adopted_marker():
+        return "restore_marker_adopted"
     if ledger.valid_mcs_db(path):
         return None
     return "backup_invalid: " + path
+
+
+def _adopted_marker() -> bool:
+    """The backup-adoption marker stands. Its bytes and inode are bound by
+    writers_resumed, so an update restore must never rewrite it."""
+    marker = notify_spool.restore_pending(DATA)
+    return bool(marker) and marker.get("by") == "mcs_backup_restore"
 
 
 def _restore_entered(state: dict) -> bool:
@@ -232,6 +241,8 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
     backup_path = entry.get("backup_path")
     if entry.get("schema_bump") and (not isinstance(backup_path, str) or not backup_path.strip()):
         raise UpdateError("backup_invalid: missing or invalid backup path")
+    if entry.get("schema_bump") and _adopted_marker():
+        raise UpdateError("restore_marker_adopted")   # before any tree change
     if expected_rollback is not None:
         _fresh_rollback_state(expected_rollback)
     _provider_rollback_preflight(prev)
@@ -484,6 +495,10 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     marker = notify_spool.restore_pending(DATA)
     if marker and marker.get("unreadable"):
         raise UpdateError("restore_marker_unreadable")
+    if marker and marker.get("by") == "mcs_backup_restore":
+        # Rewriting the adoption marker would revoke writers_resumed for good
+        # (it binds the marker's bytes and inode); a human decides instead.
+        raise UpdateError("restore_marker_adopted")
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
     live_ver = restore_evidence.database_version(LEDGER)

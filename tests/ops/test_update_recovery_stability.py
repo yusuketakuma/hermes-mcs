@@ -1024,6 +1024,58 @@ def test_non_schema_rollback_resumes_without_pruned_backup(
     assert not Path(updater.MARKER_PATH).exists()
 
 
+def _adopted_marker(data):
+    """A backup-adoption marker and its report, as mcs_backup restore leaves them."""
+    marker = Path(data, "restore_pending.json")
+    marker.write_text(json.dumps({"v": 1, "phase": "awaiting_consent", "backup_path": None,
+                                  "by": "mcs_backup_restore", "at": 1, "report_id": "a" * 64}))
+    marker.chmod(0o600)
+    Path(data, "restore.json").write_text("{}")
+    return marker, marker.read_bytes(), marker.stat().st_ino
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_update_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    import sqlite3
+
+    _repo, live, back, _before, after, restarts = _schema_bump_world(updater, tmp_path, monkeypatch)
+    if live_version == 7:
+        con = sqlite3.connect(live)
+        con.execute("PRAGMA user_version=7")
+        con.commit()
+        con.close()
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+    with pytest.raises(updater.UpdateError, match="restore_marker_adopted"):
+        updater._restore_db(back)
+    # Manual rollback refuses before journaling or resetting.
+    assert updater.rollback("synthetic-adopted-rollback") != 0
+    assert updater._head_sha() == after and restarts == []
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_watchdog_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    from ops_testkit import _load
+    from mcs_recover_testkit import _mk_db
+
+    recovery = _load()
+    data = tmp_path / "watchdog-data"
+    data.mkdir()
+    live, back = data / "ledger.db", data / "backup.db"
+    _mk_db(live, live_version)
+    _mk_db(back, 7)
+    patch_lifecycle_lookup(monkeypatch, recovery, "DATA", str(data))
+    patch_lifecycle_lookup(monkeypatch, recovery, "LEDGER", str(live))
+    marker, raw, inode = _adopted_marker(data)
+    assert recovery.mcs_recovery_database._restore_db(str(back)) == "restore_marker_adopted"
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+
+
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])
 def test_flagless_rollback_does_not_overwrite_changed_journal(
         updater, tmp_path, monkeypatch, engine):
