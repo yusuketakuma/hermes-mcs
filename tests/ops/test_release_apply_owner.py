@@ -489,7 +489,8 @@ def test_native_wait_requires_exact_reap_and_never_signals_after_reap_is_lost(mo
             assert len(signals) == 1
 
 
-@pytest.mark.parametrize('mode', ['success', 'nonzero_causal', 'zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target'])
+@pytest.mark.parametrize('mode', ['success', 'nonzero_causal', 'zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target',
+                                  'rendered_wrapper', 'unrendered_wrapper'])
 def test_native_parent_issues_exactly_one_ticket_and_reaps_actual_child_before_return(registered_effect, mode):
     import json
     cap, entry, parameters = registered_effect
@@ -520,6 +521,9 @@ if {mode!r} == 'nonzero_causal':sys.exit(3)
 ''')
     subprocess.run(['/usr/bin/git', 'init', '-q', entry.repository], check=True)
     subprocess.run(['/usr/bin/git', '-C', entry.repository, 'add', 'mcs/ops/mcs_update.py'], check=True)
+    if mode.endswith('rendered_wrapper'):
+        (Path(entry.repository) / '.gitignore').write_bytes((source / '.gitignore').read_bytes())
+        subprocess.run(['/usr/bin/git', '-C', entry.repository, 'add', '.gitignore'], check=True)
     subprocess.run(['/usr/bin/git', '-C', entry.repository, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'synthetic child'], check=True)
     target = subprocess.check_output(['/usr/bin/git', '-C', entry.repository, 'rev-parse', 'HEAD'], text=True).strip()
     entry.reference['target_commit'] = target
@@ -534,8 +538,13 @@ if {mode!r} == 'nonzero_causal':sys.exit(3)
         subprocess.run(['/usr/bin/git', '-C', entry.repository, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '--allow-empty', '-qm', 'other synthetic commit'], check=True)
     elif mode == 'dirty_target':
         script.write_text(script.read_text() + '\n# synthetic mutation\n')
+    elif mode.endswith('rendered_wrapper'):
+        # Standalone services renders cron wrappers into the checkout in the default layout.
+        wrapper = Path(entry.repository) / 'scripts' / ('mcs_check.sh' if mode == 'rendered_wrapper' else 'other.sh')
+        wrapper.parent.mkdir()
+        wrapper.write_text('#!/bin/bash\n# synthetic wrapper\n')
     try:
-        if mode in ('zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target'):
+        if mode in ('zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target', 'unrendered_wrapper'):
             with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
                 release_apply_owner._run_effect_post_merge(entry, environment={'PATH': '/usr/bin:/bin'}, timeout=10)
         else:
@@ -544,7 +553,7 @@ if {mode!r} == 'nonzero_causal':sys.exit(3)
             except release_apply_owner.ReleaseApplyError:
                 pytest.fail(error_path.read_text())
         actual = update_journal.load_state(parameters['journal_path'])
-        if mode in ('success', 'nonzero_causal'):
+        if mode in ('success', 'nonzero_causal', 'rendered_wrapper'):
             assert actual['applied'][-1]['release_child']['phase'] == 'consumed'
         assert 'nonce' not in json.dumps(actual)
         for fd in entry.locks:

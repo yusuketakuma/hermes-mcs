@@ -1,4 +1,8 @@
 """Standalone wrappers rendered into a shared root/checkout keep split source verifiable."""
+import shutil
+import subprocess
+from pathlib import Path
+
 import mcs_util
 import pytest
 import service_management
@@ -52,3 +56,37 @@ def test_only_rendered_wrapper_names_are_tolerated(updater, tmp_path, monkeypatc
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("# synthetic untracked file\n")
     assert not updater._split_target_source_matches(target)
+
+
+def test_every_rendered_wrapper_name_is_ignored_and_no_tracked_path_is():
+    # The release-owner verify_checkout, its post-merge child and the SDC facts probe honour
+    # .gitignore; a template without an entry would hold those routes on standalone again.
+    root = Path(__file__).resolve().parents[2]
+    names = sorted(p.name for p in (root / "deployment/scripts").iterdir() if p.name.endswith(".sh"))
+    assert names
+    ignored = subprocess.run(["git", "check-ignore", "--no-index", "--stdin", "-z"], cwd=root,
+                             input="\0".join("scripts/" + n for n in names), capture_output=True, text=True,
+                             timeout=10)
+    assert sorted(p for p in ignored.stdout.split("\0") if p) == ["scripts/" + n for n in names]
+    tracked = subprocess.run(["git", "ls-files", "-ci", "--exclude-standard", "-z"], cwd=root,
+                             capture_output=True, text=True, timeout=10)
+    assert tracked.returncode == 0 and tracked.stdout == ""
+
+
+def test_ignored_wrapper_leaves_status_clean_but_other_untracked_scripts_are_reported(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    shutil.copyfile(root / ".gitignore", tmp_path / ".gitignore")
+    (tmp_path / "deployment/scripts").mkdir(parents=True)
+    (tmp_path / "deployment/scripts/mcs_check.sh").write_text("#!/bin/bash\n# synthetic template\n")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/mcs").write_text("#!/bin/bash\n# synthetic launcher\n")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "-qm", "s")
+    (tmp_path / "scripts/mcs_check.sh").write_text("#!/bin/bash\n# synthetic rendered wrapper\n")
+    # Same arguments as release_apply_owner CHILD_HOLD and sdc_cli.facts.
+    for mode in ("all", "normal"):
+        assert _git(tmp_path, "status", "--porcelain=v1", f"--untracked-files={mode}").stdout == ""
+    assert _git(tmp_path, "ls-files", "--others", "--exclude-standard", "-z").stdout == ""
+    (tmp_path / "scripts/other.sh").write_text("# synthetic untracked script\n")
+    assert _git(tmp_path, "status", "--porcelain=v1", "--untracked-files=all").stdout == "?? scripts/other.sh\n"
