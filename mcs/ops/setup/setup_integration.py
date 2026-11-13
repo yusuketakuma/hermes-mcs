@@ -518,11 +518,13 @@ def _reset_section(cfg: dict, key: str, label: str) -> dict:
 
 def _init_apply_section_flags(cfg: dict, args) -> None:
     """Apply the semantic/signals flags and the manual self-identity override."""
-    if args.semantic_mode:
+    # An explicit scope narrows external analysis whether or not the mode is
+    # given: a key alone otherwise selects every project.
+    if args.semantic_mode or args.project_ids is not None:
         sem = _reset_section(cfg, "semantic", "意味解析設定")
         if args.semantic_mode == "auto":
             sem.pop("mode", None)
-        else:
+        elif args.semantic_mode:
             sem["mode"] = args.semantic_mode
         if args.project_ids is not None:
             sem["project_ids"] = args.project_ids

@@ -33,6 +33,21 @@ def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
     assert cfg["signals"] == {"notify": True}
 
 
+def test_init_project_ids_without_mode_narrow_the_key_default(monkeypatch, tmp_path):
+    """--project-ids alone must reach config: with a key and no semantic block
+    the runtime default is every project."""
+    import semantic_policy
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "local"})
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--project-ids", "101", "102"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert cfg["semantic"] == {"project_ids": [101, 102]}
+    effective, errors = semantic_policy.semantic_config(cfg, key_present=True)
+    assert errors == []
+    assert effective["mode"] == "assist" and effective["project_ids"] == [101, 102]
+
+
 def test_init_self_identity_flags(monkeypatch, tmp_path):
     """--self-org/--self-professions write signals.self_* as a manual
     override of the MCS-derived self profile."""
