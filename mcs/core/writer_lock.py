@@ -197,6 +197,11 @@ def wait_run_lock(path: str, *, wait_s: float, expected_code_stamp: int,
     until = time.monotonic() + wait_s
     while time.monotonic() < until:
         time.sleep(RUN_LOCK_POLL_S)
+        if os.path.lexists(marker_path):
+            # An update started: leave now instead of holding a waiting
+            # child that its quiesce must see gone (IA-078).
+            record_writer_refusal("update_marker_present", "update_restore_fence")
+            return None
         fd = acquire_run_lock(path)
         if fd is not None:
             marked = os.path.exists(marker_path)
