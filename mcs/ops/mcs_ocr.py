@@ -165,7 +165,7 @@ def run(cfg=None, *, retry_errors=False):
                         result['reason'] = 'writer_blocked'
                     else:
                         import maintenance
-                        if maintenance.refresh_snapshot(DB, force=True,
+                        if maintenance.refresh_snapshot(DB, dirty=True,
                                 deadline=deadline) is None:
                             result['reason'] = 'snapshot_deferred'
                             failure = snapshots.last_failure()
