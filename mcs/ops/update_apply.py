@@ -77,6 +77,7 @@ from update_preflight import (
     _install_options_snapshot,
     _precheck_target_runtime_files,
     _precheck_target_tree,
+    _provider_bridge_verified,
     _provider_migration_needed,
     _provider_rollback_preflight,
     precheck_local,
@@ -526,6 +527,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 provider_migration_needed = _provider_migration_needed()
             except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                 return bail("provider_settings_unverified")
+            # The legacy post-merge guard refuses a split from any unreviewed source;
+            # refuse here, before writers stop, instead of holding after the merge.
+            if (provider_migration_needed and borrowed is None
+                    and not _provider_bridge_verified(_head_sha(), sha)):
+                return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),

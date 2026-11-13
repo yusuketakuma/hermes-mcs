@@ -568,3 +568,22 @@ def test_interrupted_update_recovery_precedes_changed_guided_options(updater, mo
     monkeypatch.setattr(update_cli, 'recover_interrupted', updater.recover_interrupted)
     monkeypatch.setattr(update_recovery, 'recover_interrupted', updater.recover_interrupted)
     assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 7
+
+
+def test_legacy_settings_without_bridge_stop_before_writers(updater, monkeypatch):
+    """Regression: a legacy-settings install merged an unbridged tag, then
+    the post-merge guard held it with writers stopped and no way back."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: True)
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    assert updater.apply("v1.1.0", target, "cid-bridge") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    assert state["attempts"]["v1.1.0"]["detail"].startswith("provider_update_bridge_required")
+    assert not Path(updater.MARKER_PATH).exists()

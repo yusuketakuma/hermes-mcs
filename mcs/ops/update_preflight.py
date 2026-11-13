@@ -61,6 +61,7 @@ from update_repository import (
     _index_has_flags,
     _ls_tree_paths,
     _norm,
+    _provider_prior_source_verified,
     _safe_relpath,
     _split_target_source_matches,
     _tree_clean,
@@ -216,6 +217,12 @@ def _provider_migration_needed() -> bool:
             or second["mode"] != first["mode"] or second["snapshot"] != first["snapshot"]):
         raise ValueError("provider_settings_unverified")
     return first["mode"] == "legacy_unverified"
+
+
+def _provider_bridge_verified(previous: str, target: str) -> bool:
+    """Legacy settings migrate only from a reviewed bridge source, as the post-merge guard requires."""
+    return (_provider_prior_source_verified(previous)
+            and _git(["merge-base", "--is-ancestor", previous, target]).returncode == 0)
 
 
 def _provider_rollback_preflight(target: str | object) -> bool | None:
