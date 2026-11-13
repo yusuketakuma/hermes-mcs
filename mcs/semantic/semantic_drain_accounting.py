@@ -76,6 +76,7 @@ def _free_hold(job, lane, cloud_only: bool, status, diagnostics: dict,
     an unavailable LLM; its slot goes back to independent due jobs."""
     return (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
             and status == 'deferred' and diagnostics.get('not_sent') is None
+            and diagnostics.get('member_hold') is None
             and diagnostics.get('code') in _FREE_HOLD_CODES
             and used == 0 and llm_s == 0 and not progressed)
 

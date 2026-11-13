@@ -39,7 +39,8 @@ def _row(db, job_id):
     return db.db.execute("SELECT * FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
 
 
-def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, model=False):
+def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, model=False,
+               member_hold=None):
     # Only the processor's result contract is injected; selection, slot
     # accounting and the generation-fenced transitions stay real.
     served = []
@@ -53,6 +54,8 @@ def _processor(monkeypatch, *, code='audit_empty_unverified', not_sent=None, mod
         if model:
             llm_fn('synthetic scheduler control')
         kw['diagnostics']['not_sent'] = not_sent
+        if member_hold is not None:
+            kw['diagnostics']['member_hold'] = member_hold
         return 'deferred'
 
     monkeypatch.setattr(semantic_drain, '_process_job', process)
@@ -82,12 +85,18 @@ def test_free_hold_hands_slot_on_and_waits_an_hour(jobs_db, monkeypatch, priorit
     assert row['next_try'] == row['updated_at'] + semantic_drain.NOT_SENT_BACKOFF_S
 
 
-@pytest.mark.parametrize('kind', ['model_time', 'llm_turn_busy', 'probe_unsent'])
+@pytest.mark.parametrize('kind', ['model_time', 'llm_turn_busy', 'probe_unsent',
+                                  'cloud_capacity', 'cloud_guard'])
 def test_paid_or_llm_unavailable_defer_keeps_minute_and_slot(jobs_db, monkeypatch, kind):
     held = _job(jobs_db, 100)
     _job(jobs_db, 999)
+    # A member hold swallowed in the reserved repair keeps the earlier
+    # audit_empty_unverified code and not_sent None; before the fix it took
+    # the hourly free-hold wait although capacity/guard clear in seconds.
+    member = kind.startswith('cloud_')
     served = _processor(monkeypatch, model=kind == 'model_time',
-                        not_sent=None if kind == 'model_time' else kind)
+                        not_sent=None if kind == 'model_time' or member else kind,
+                        member_hold=kind if member else None)
     out = _run(jobs_db, prioritize_patients=True)
     assert served == [100] and out['done'] == 0 and out['deferred'] == 1
     if kind == 'model_time':
