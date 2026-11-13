@@ -859,8 +859,9 @@ def rollback(command_id: str | None = None) -> int:
                             use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
-    except BaseException:
-        interrupted = True              # keep the marker with the rollback journal
+    except BaseException as error:
+        # Ctrl+C/exit only: keep the marker with the rollback journal.
+        interrupted = not isinstance(error, Exception)
         raise
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
