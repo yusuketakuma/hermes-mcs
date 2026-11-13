@@ -512,6 +512,24 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
     assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/local.mcs-int"] in calls
 
 
+def test_check_reports_an_unverifiable_log_helper_instead_of_crashing(monkeypatch, tmp_path):
+    import run_log_install
+    from mcs_standalone import service
+
+    _services_env(monkeypatch, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise run_log_install.LogInstallError("run_log_helper_untrusted")
+
+    monkeypatch.setattr(run_log_install, "helper_path", broken)
+    monkeypatch.setattr(service, "render_health", broken)
+    paths = mcs_setup._service_paths()
+    errors, warnings = service_management.script_drift(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0] and "install.sh" in errors[0]
+    errors, _ = service_management.check_standalone_health(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0]
+
+
 def test_standalone_retires_installed_hermes_agents_without_a_manifest(monkeypatch, tmp_path):
     # A Hermes run that reported a problem saved no manifest, yet placed its agents.
     calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int", "ai.mcs.extract-drainer"})

@@ -278,6 +278,12 @@ def hermes_py_problem(*, paths: ServicePaths) -> str | None:
     """None when HERMES_PY is an executable Python >= 3.14."""
     return runtime_inspection.python_problem(paths.hermes_python)
 
+def log_helper_problem(error, *, paths: ServicePaths) -> str:
+    """A diagnostic line for an unverifiable private log helper (fixed code only)."""
+    return (f'ログ処理プログラムの配置を確認できません（{error.code}）。'
+            + install_fix('導入時の省略オプションを維持してログ処理プログラムを準備', paths=paths) + '。')
+
+
 def install_fix(stage: str, *, paths: ServicePaths) -> str:
     return f"`{os.path.join(paths.checkout, 'install.sh')}`を再実行してください（{stage}）"
 
@@ -312,6 +318,8 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
                 _, desired = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
                 if Path(path).read_text(encoding='utf-8') != desired:
                     errors.append('独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください')
+            except run_log_install.LogInstallError as e:
+                errors.append(log_helper_problem(e, paths=paths))
             except (OSError, ValueError):
                 errors.append('独立動作の常駐設定を確認できません')
         if os.path.exists(path):
@@ -481,6 +489,8 @@ def script_drift(*, paths: ServicePaths) -> tuple[list[str], list[str]]:
     directory = scripts_dir(paths=paths)
     try:
         subs = service_substitutions(mcs_util.load_config(), paths=paths)
+    except run_log_install.LogInstallError as e:
+        return ([log_helper_problem(e, paths=paths) + '定期処理のファイル比較は行っていません'], [])
     except ValueError as e:
         return ([f'設定に問題があります: {e}。定期処理のファイル比較は行っていません'], [])
     for name, body in rendered_scripts(subs, paths=paths):
@@ -736,6 +746,8 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
     try:
         from mcs_standalone.service import render_health
         bodies = render_health(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
+    except run_log_install.LogInstallError as e:
+        return ([log_helper_problem(e, paths=paths)], warnings)
     except ValueError:
         return (errors, warnings)
     installed = True
