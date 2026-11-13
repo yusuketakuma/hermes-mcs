@@ -81,7 +81,8 @@ from update_services import (
 )
 
 _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
-# Homebrew's default prefixes (Apple silicon, Intel), as runtime_inspection uses.
+# Homebrew's default bin dirs (Apple silicon, Intel). runtime_inspection keeps
+# its own list of interpreter paths under the same prefixes; update both.
 HOMEBREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")
 
 
