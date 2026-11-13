@@ -121,7 +121,7 @@ pip install・モデル DL の `.part`）は続きから収束する。
 - 必須項目と対象・権限範囲を確認する推奨コース、全設定を確認する詳細コースを選択。
   推奨コースでは高度な項目の既存値を保持し、未設定の項目に既定値を使う。
   詳細コースは設定項目を最大12節で案内（使わない機能の節は非表示）。
-  Enterで現状・既定値を採用し、`-` で任意キー削除・`--set KEY=JSON` で非対話も可。
+  Enterで現状・既定値を採用し、`-` で任意キー削除。`--yes` と `--set KEY=JSON` の併用で非対話も可（`--yes` が無いと指定値を反映したうえでウィザードを始める）。
 - `interactive=discord|slack` 選択時は公開 CLI のみで: plugin settings を
   `hermes -p <profile> config set`（serving profile・allowlist は質問）、
   Discord または Slack の token を profile .env へ（env または getpass）
