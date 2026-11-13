@@ -174,6 +174,29 @@ def test_idle_scan_selects_a_startable_patient_within_one_collection_interval(ru
     assert 'scan_idle_s' not in following and len(checked) > before
 
 
+def test_selection_after_idle_keeps_the_readiness_proof(runtime, monkeypatch):
+    led, clock, _ = runtime
+    ready = set()
+    _seed_workless(runtime, monkeypatch, ready=ready)
+    _reach_idle(runtime)
+    ready.update(range(1, 13))
+    clock.wall += 61
+    current = []
+    original = patient_context_refresh_readiness._readiness_for_write
+
+    def spy(ledger, pid, cfg, proof, **kwargs):
+        current.append(proof is not None and proof.get('writer_changes') == ledger.db.total_changes)
+        return original(ledger, pid, cfg, proof, **kwargs)
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_readiness_for_write', spy)
+    result = step(runtime)
+    assert result['status'] == 'progressed'
+    # Clearing the mark rides on the claim, so no write lands between the
+    # proof and the claim and the claim keeps the cheap proof path.
+    assert current and current[0] is True
+    assert _idle(led) is None
+
+
 @pytest.mark.parametrize('mark', [
     {'cycles': 2, 'until': 3600},
     {'cycles': 2},
