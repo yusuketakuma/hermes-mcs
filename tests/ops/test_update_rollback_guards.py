@@ -879,3 +879,32 @@ def test_standalone_rollback_across_sdk_pins_is_refused_before_changes(
     executed = current["executed"]["synthetic-rollback"]
     assert executed["result"] == "rollback_failed"
     assert "standalone_sdk_rollback_unsupported" in executed["detail"]
+
+
+def test_interrupted_migration_undo_refuses_sdk_pin_rollback_before_changes(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """IA-123: the recovery undo path checks the SDK pins like rollback() does."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _head(repo)
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    after = _head(repo)
+    applying = {"tag": "synthetic", "sha": after, "prev_sha": before, "schema_bump": False,
+                "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.default_state()
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(update_recovery, "quiesce", lambda: pytest.fail("no quiesce"))
+    escalated = []
+    result = updater._undo_interrupted_migration(
+        state, applying, lambda *a: pytest.fail("no drainers"), lambda detail: escalated.append(detail) or 1)
+    assert result == 1 and escalated == ["standalone_sdk_rollback_unsupported"]
+    assert _head(repo) == after
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
