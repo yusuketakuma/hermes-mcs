@@ -717,3 +717,22 @@ def test_parent_tail_failure_after_child_done_never_rolls_back(updater, monkeypa
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applied"][-1]["sha"] == target and state["applying"] is None
     assert "done" in [stage["stage"] for stage in state["stages"]]
+
+
+def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, monkeypatch):
+    """Regression: bail cleared the journal before restart_agents, which
+    returns without starting anything when a stop is unconfirmed."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def stop_failed():
+        raise updater.UpdateError("drainer_stop_failed: ai.mcs.synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    monkeypatch.setattr(update_apply, "restart_agents", lambda: ["drainer_stop_failed:ai.mcs.synthetic"])
+    assert updater.apply("v1.1.0", target, "cid-restart") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"]
+    assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]

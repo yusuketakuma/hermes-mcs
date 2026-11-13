@@ -376,11 +376,16 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # newer schema: recovery keeps writers stopped until the
                         # restore completes (no consent report exists to hold on)
                         state["applying"]["restore_incomplete"] = True
+            problems = restart_agents() if quiesced and not rollback_failed else []
+            if problems:
+                reason += " restart:" + ",".join(problems)
             if not rollback_failed:
                 # keep remnants when the rollback itself failed — recovery
                 # must still be able to see and escalate the wedged state
                 state["applying"] = None
-                state["stages"] = []
+                # a failed restart keeps the stages: recovery then restarts
+                # the drainers instead of seeing a finished journal
+                state["stages"] = state["stages"] if problems else []
             if transient and not rollback_failed:
                 # never attempted: clean journal, leave the receipt
                 # pending, no attempt record, no notification — the next
@@ -399,10 +404,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _report("escalate", reason, writers_stopped=stopped)
                 return 1
             if quiesced and not rollback_failed:
-                problems = restart_agents()
                 _remove_marker()
-                if problems:
-                    reason += " restart:" + ",".join(problems)
             _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
                             use_run_lock=run_fd is None, notice_code="aborted", tag=tag)
             return 1
