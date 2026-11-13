@@ -589,6 +589,19 @@ def _init_standalone_grants(cfg: dict, args, standalone_projects) -> None:
               " — カード権限は config.json の notify.<transport> に設定してください")
 
 
+_ENV_STORAGE_REFUSAL = (".env: 保存先の種類・所有者・権限を確認できないため保存していません。既存のファイルを保持しました。"
+                        ".envが本人だけ読み書きできる通常のファイルか（リンクでないか）、保存先フォルダーが本人専用かを確認してください")
+_ENV_REFUSALS = {
+    "invalid_env_update": ".env: 認証情報の形式が正しくありません。既存のファイルを保持しました",
+    "env_too_large": ".env: 保存すると.envが大きさの上限を超えるため保存していません。既存のファイルを保持しました。"
+                     "不要な行を整理してから再実行してください",
+    "env_changed": ".env: 保存中に別の処理が.envを変更したため保存していません。既存のファイルを保持しました。"
+                   "ほかの設定処理の終了を待って再実行してください",
+    "env_parent_changed": ".env: 保存中に保存先フォルダーが入れ替わったため保存していません。既存のファイルを保持しました。"
+                          "ほかの設定処理の終了を待って再実行してください",
+}
+
+
 def _init_store_secrets(args, login_id) -> int | None:
     """Store the MCS password in Keychain and the .env fallback; return 1 on failure."""
     updates = {}
@@ -633,11 +646,9 @@ def _init_store_secrets(args, login_id) -> int | None:
         try:
             lifecycle_io.write_env(ENV_PATH, updates)
         except ValueError as error:
-            # Values were checked above; any other refusal is about the file or its folder.
-            print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました"
-                  if str(error) == "invalid_env_update" else
-                  ".env: 保存先の種類・所有者・権限を確認できないため保存していません。既存のファイルを保持しました。"
-                  ".envが本人だけ読み書きできる通常のファイルか（リンクでないか）、保存先フォルダーが本人専用かを確認してください")
+            # Values were checked above; the refusal code names the size, a race, or the file and its folder.
+            print(".env: 既存の.envをUTF-8の文字として読み取れないため保存していません。既存のファイルを保持しました"
+                  if isinstance(error, UnicodeError) else _ENV_REFUSALS.get(str(error), _ENV_STORAGE_REFUSAL))
             return 1
         except OSError:
             print(".env: 保存結果を確認できません。認証情報の現在の状態を確認してください")

@@ -51,19 +51,25 @@ def test_init_project_ids_without_mode_narrow_the_key_default(monkeypatch, tmp_p
 @pytest.mark.parametrize("code,expected", [
     ("invalid_env_update", "認証情報の形式が正しくありません"),
     ("env_unreadable", "保存先の種類・所有者・権限を確認できない"),
-    ("env_parent_untrusted", "保存先の種類・所有者・権限を確認できない")])
+    ("env_parent_untrusted", "保存先の種類・所有者・権限を確認できない"),
+    ("env_too_large", "大きさの上限を超える"),
+    ("env_changed", "別の処理が.envを変更した"),
+    ("env_parent_changed", "保存先フォルダーが入れ替わった"),
+    (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic"), "UTF-8の文字として読み取れない")])
 def test_init_env_refusal_names_the_storage_not_the_value(monkeypatch, tmp_path, capsys, code, expected):
     _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "local"})
     monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
     monkeypatch.setattr(lifecycle_io, "store_keychain", lambda account, password: True)
 
     def refuse(path, updates):
-        raise ValueError(code)
+        raise code if isinstance(code, ValueError) else ValueError(code)
 
     monkeypatch.setattr(lifecycle_io, "write_env", refuse)
     assert mcs_setup.main(["init", "--yes"]) == 1
     out = capsys.readouterr().out
     assert expected in out and "synthetic-password" not in out
+    # Only the storage refusals point at the file type, owner and permissions.
+    assert ("保存先の種類・所有者・権限" in out) is (code in ("env_unreadable", "env_parent_untrusted"))
 
 
 def _slack_channels_cfg():
