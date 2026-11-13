@@ -118,6 +118,8 @@ def run(cfg=None, *, retry_errors=False):
     generation = writer_lock.updater_state()
     if generation[0]:
         return {'reason': 'writer_blocked'}
+    if writer_lock.gateway_restart_pause(DATA):
+        return {'reason': 'gateway_restart_pending'}
     job = acquire_run_lock(os.path.join(DATA, 'attachment_ocr_job.lock'))
     if job is None:
         return {'reason': 'busy'}
@@ -194,7 +196,8 @@ def main():
         result = run(None, retry_errors=True) if args.retry_errors else run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
-    if result != {"reason": "busy"} and Path(DATA).is_dir():
+    # A yielded run keeps the last recorded OCR evidence, like a busy one.
+    if result.get("reason") not in ("busy", "gateway_restart_pending") and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
                          lambda stream: json.dump({"at": time.time(), **result}, stream), mode=0o600)
@@ -202,7 +205,8 @@ def main():
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
     return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
-                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
+                 and result.get("reason") in (None, "disabled", "writer_busy", "busy",
+                                              "gateway_restart_pending")) else 1
 
 
 if __name__ == "__main__":

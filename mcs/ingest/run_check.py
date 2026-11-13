@@ -1268,6 +1268,11 @@ def _main() -> int:
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against
     # their run budget; scheduled collection retains its full work budget.
+    if not args.commands_only and writer_lock.gateway_restart_pause(os.path.join(HOME, "data")):
+        # Free the single cron slot before any lock wait or fetch so the
+        # pending gateway restart can pass; fetch and mark-read stay coupled.
+        print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
+        return 3
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
         with writer_lock.capture_writer_refusal() as diagnostic:
