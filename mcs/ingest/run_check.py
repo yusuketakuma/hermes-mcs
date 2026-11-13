@@ -49,6 +49,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
+import writer_lock
+
+# Stamp the source before the other imports: a merge checkout that lands
+# while they load then changes the stamp and the tick refuses (IA-081).
+try:
+    _CODE_STAMP = writer_lock.code_stamp_checked()
+except OSError:
+    _CODE_STAMP = None
 import extract_validation
 import semantic_drain
 import semantic_policy
@@ -56,7 +64,6 @@ from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired, describe_error
 from ledger import Ledger, message_write_failure_diagnostic
 from mcs_util import CACHE, CONF_PATH, DB, HOME, load_config
-import writer_lock
 from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_lock
 import job_ops
 import collection_stages
@@ -115,12 +122,6 @@ def _write_health(ledger, result: dict, status: str,
                 collection_stages.queue_run_alert(
                     ledger, "health_write_failed", run_id, type(e).__name__)
 LOCK_WAIT_S = 150
-
-
-try:
-    _CODE_STAMP = writer_lock.code_stamp_checked()
-except OSError:
-    _CODE_STAMP = None
 
 
 def _entry_code_current() -> bool:

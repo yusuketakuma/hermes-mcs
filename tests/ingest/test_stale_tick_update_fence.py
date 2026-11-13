@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -365,3 +366,13 @@ def test_idle_commands_only_consent_tick_skips_loss_report(tmp_path, monkeypatch
     result = json.loads(capsys.readouterr().out)
     assert result['restore_consent_hold'] is True and result['commands'] == 0
     assert bool(reports) is bool(spawned) is (not commands_only)
+
+
+def test_source_stamp_is_taken_before_the_tick_loads_other_modules():
+    """IA-081: a checkout landing mid-import must change the stamp the tick compares."""
+    source = Path(run_check.__file__).read_text()
+    stamp = source.index("_CODE_STAMP = writer_lock.code_stamp_checked()")
+    first_project_import = min(source.index(line) for line in (
+        "\nimport extract_validation", "\nimport semantic_drain", "\nfrom mcs_adapter import",
+        "\nfrom ledger import", "\nimport job_ops", "\nimport collection_stages"))
+    assert stamp < first_project_import
