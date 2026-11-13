@@ -50,6 +50,8 @@ from update_lifecycle_context import (
     _POST_MERGE_UPDATE_FD,
     _PROVIDER_SETTINGS_ONLY,
     _TRANSIENT_BAIL,
+    _NETWORK_BAIL,
+    _PRE_CHANGE_STAGES,
     _acquire_run_lock_wait,
     _bounded_timeout,
     _call_legacy,
@@ -236,9 +238,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
 
         def bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state
-            transient = reason.split(":")[0] in _TRANSIENT_BAIL
             stopped = False                # set only once a rollback quiesce returned
             stages = [s.get("stage") for s in state.get("stages", [])]
+            unreachable = (any(reason == code or reason.startswith(code + ":") or reason.startswith(code + " ")
+                               for code in _NETWORK_BAIL)
+                           and set(stages) <= _PRE_CHANGE_STAGES)
+            transient = reason.split(":")[0] in _TRANSIENT_BAIL or unreachable
             merged = "merge" in stages or "post_merge" in stages
             if merged and state.get("applying"):
                 # A recovery hold can return before the final failure bookkeeping.
@@ -404,7 +409,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # check retries
                 state["stages"] = []
                 journal_store.save_state(STATE_PATH, state)
-                print("実行ロックを取得できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。")
+                print("origin に接続できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。"
+                      if unreachable else
+                      "実行ロックを取得できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。")
                 return 2
             if command_id:
                 _record_executed(state, command_id, "failed", reason)

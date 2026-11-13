@@ -193,6 +193,10 @@ HERMES_PREVIOUS_PINS = frozenset({"b7758d8555931846f4b8f798d4ea9715f65077ca",
 
 
 _TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
+# Network failures of the remote tag lookup, before any local change: the tag
+# did not fail, the check could not reach origin (IA-116).
+_NETWORK_BAIL = frozenset({"git_timeout", "git_spawn_failed", "git_failed: ls-remote"})
+_PRE_CHANGE_STAGES = frozenset({"local_checks", "candidate_verify", "remote_verify", "fetch"})
 
 
 class UpdateError(Exception):

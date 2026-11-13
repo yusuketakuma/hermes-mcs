@@ -212,7 +212,7 @@ supervised（discord/slack 時）→ wrapper drift の順に検証し、末尾�
   新コードのまま writer を停止して `runtime_restore_blocked` で保留する（回復は修正版の前方適用）。
   **中断復旧はジャーナル+実測（HEAD/porcelain/stale .git lock）で判定**
   （HEAD 単独では混在ツリーと区別不能 — 再現指摘済み）。
-  失敗 tag は自動再試行しない
+  失敗 tag は自動再試行しない。ただし、変更を始める前の段階（local_checks・remote_verify・fetch）で origin に接続できなかった場合（git_timeout・git_spawn_failed・ls-remote の失敗）は失敗に数えず、承認を保留したまま次の確認で再試行する
 - **独立復旧経路**: `~/.mcs-recovery/mcs_recover.py`（install 時配置・
   repo 外・stdlib+git のみ — 新版コードが壊れていても git 復旧+
   manifest snapshot reconcile が実行可能）。**検出は独立 launchd

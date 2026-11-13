@@ -108,6 +108,24 @@ def test_apply_transient_lock_failure_keeps_receipt(updater, tmp_path,
     assert after["stages"] == []       # journal cleaned, not wedged
 
 
+@pytest.mark.parametrize("failure", ["git_timeout: ls-remote", "git_failed: ls-remote (exit=128)", "git_spawn_failed"])
+def test_apply_unreachable_origin_keeps_receipt_and_attempts(updater, tmp_path, monkeypatch, capsys, failure):
+    """IA-116: a remote lookup that cannot reach origin is not a failed tag."""
+    _apply_env(updater, monkeypatch)
+
+    def unreachable(tag, **_kwargs):
+        raise update_discovery.DiscoveryError(failure)
+
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', unreachable)
+    rc = updater.apply("v1.1.0", None, "cid-offline")
+    assert rc == 2
+    assert "origin に接続できない" in capsys.readouterr().out
+    after = updater.journal_store.load_state(updater.STATE_PATH)
+    assert "cid-offline" not in after.get("executed", {})
+    assert "v1.1.0" not in after.get("attempts", {})
+    assert after["stages"] == []
+
+
 def test_apply_update_lock_busy_returns_cleanly(updater, tmp_path,
                                                monkeypatch, capsys):
     """A live updater holds update.lock — a second apply must exit
