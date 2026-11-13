@@ -222,6 +222,11 @@ _ARRIVAL_FIRST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 1 "
                       "WHEN COALESCE(json_extract(payload,'$.eligible'),0)=1 "
                       "AND COALESCE(json_extract(payload,'$.notification_free'),0)=0 "
                       "THEN 0 ELSE 1 END")
+# 1 for a notification-free reprocess row (owner 2026-11-13: served locally,
+# after every other due semantic job), else 0; unreadable rows are not buried.
+_REPROCESS_LAST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 0 "
+                       "WHEN json_type(payload,'$.reprocess_only')='true' "
+                       "AND json_type(payload,'$.notification_free')='true' THEN 1 ELSE 0 END")
 
 
 _MALFORMED_JOB_SQL = (
@@ -233,6 +238,10 @@ _MALFORMED_JOB_SQL = (
     "OR json_array_length(payload,'$.targets')=0)) OR "
     "(json_type(payload,'$.generation') IS NOT NULL AND json_type(payload,'$.generation')!='text')) "
     "THEN 1 ELSE 0 END ELSE 0 END)")
+
+
+def _reprocess_last(job):
+    return job['kind'] == JOB_KIND and semantic_store.reprocess_only(runtime.parse_payload(job))
 
 
 def _held_cursor_for(job, lane):
@@ -325,6 +334,9 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     is written by the caller once the batch is consumed."""
     now = time.time()
     scope, excluded_json = _class_scope(archived, excluded, held_after=held_after)
+    # Notification-free reprocess rows get no cohort share; _reprocess_tail
+    # serves them from the slots every other due job left.
+    scope += f" AND NOT (kind='{JOB_KIND}' AND {_REPROCESS_LAST_SQL}=1)"
     turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
     eligible = _ELIGIBLE_SQL
@@ -378,6 +390,20 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     if turn_next and contested:
         mutation["turn_job_id"] = contested[0]["job_id"]
     return list(arrivals), list(backfill), mutation
+
+
+def _reprocess_tail(ledger, limit: int, excluded, held_after) -> list:
+    """Combined-lane reprocess rows for the slots left after every other job, active first."""
+    rows = []
+    for archived in (False, True):
+        if len(rows) >= limit:
+            break
+        scope, excluded_json = _class_scope(archived, excluded, held_after=held_after)
+        rows += ledger.db.execute(
+            "SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? AND kind=? "
+            f"AND {_REPROCESS_LAST_SQL}=1 AND {scope} ORDER BY job_id LIMIT ?",
+            (time.time(), JOB_KIND, excluded_json, limit - len(rows))).fetchall()
+    return rows
 
 
 BACKLOG_COMMIT_RESERVE_S = 540.0
@@ -442,11 +468,13 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
             first = select_class(ledger, lane, kinds, qc_active, max_jobs,
                                       long_defers, archive_first,
                                       excluded=excluded, turns=turns, held_after=after)
-            if first[0]:
+            if first[0] and not _reprocess_last(first[0][0]):
                 return first
-            return select_class(ledger, lane, kinds, qc_active,
+            # The archive turn never puts reprocess rows ahead of other work.
+            second = select_class(ledger, lane, kinds, qc_active,
                                      max_jobs, long_defers, not archive_first,
                                      excluded=excluded, turns=turns, held_after=after)
+            return second if second[0] and (not first[0] or not _reprocess_last(second[0][0])) else first
     else:
         def select(after):
             active = select_class(
@@ -460,6 +488,11 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 excluded=excluded, turns=turns, held_after=after)
             due, qc_jobs, arrivals, backfill = [
                 a + b for a, b in zip(active[:4], archived[:4])]
+            if lane is None and JOB_KIND in kinds:
+                tail = _reprocess_tail(ledger, max_jobs - len(due), excluded, after)
+                due = due + tail
+                arrivals = arrivals + [j for j in tail if runtime.parse_payload(j).get('eligible')]
+                backfill = backfill + [j for j in tail if not runtime.parse_payload(j).get('eligible')]
             return (due, qc_jobs, arrivals, backfill,
                     active[4] if active[4].get("turn") else archived[4])
     result = select(held_after)
@@ -518,7 +551,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                 " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
                 "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
                 "'$.generation') END) "
-                f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
+                f"ORDER BY {_REPROCESS_LAST_SQL}, {_REALTIME_ORDER} LIMIT ?",
                 (time.time(), JOB_KIND, excluded_json, json.dumps(long_defers or {}),
                  max_jobs + 8 + len(long_defers or {}))).fetchall()
             # a payload from before the generation field: its generation
@@ -541,7 +574,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                     for row in ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
-                        + ('' if kind == QC_JOB_KIND else _ARRIVAL_FIRST_SQL + ', ') + priority
+                        + ('' if kind == QC_JOB_KIND else _ARRIVAL_FIRST_SQL + ', ' + _REPROCESS_LAST_SQL + ', ') + priority
                         + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
