@@ -752,6 +752,12 @@ preserve_old_venv() {
     ok "旧実行環境の退避先: $_prior_venv"
 }
 
+recovery_dir_loose() {  # own real directory, not 0700, but no group/other write: safe to tighten
+    [ -d "$RECOVERY_DIR" ] && [ ! -L "$RECOVERY_DIR" ] || return 1
+    [ -n "$(find "$RECOVERY_DIR" -prune -user "$(id -u)" -print)" ] || return 1
+    [ -z "$(find "$RECOVERY_DIR" -prune \( -perm -0020 -o -perm -0002 \) -print)" ] || return 1
+    [ -n "$(find "$RECOVERY_DIR" -prune ! -perm 0700 -print)" ]
+}
 recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
     "$1" -I -B -c '
 import os, plistlib, sys
@@ -920,7 +926,10 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
-    if recovery_wanted; then
+    if recovery_wanted && recovery_dir_loose; then
+        # v1.0.3-v1.0.6 created it 0755; install tightens it before this check
+        pf_warn "${RECOVERY_DIR} の権限が 700 ではありません。導入時に 700 へ直してから復旧用 Python を確認します" ""
+    elif recovery_wanted; then
         if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
             pf_ok "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
@@ -1118,6 +1127,10 @@ if [ -f "$REPO/.git" ]; then
     warn "Git の作業用フォルダ（${REPO}）から実行しています。ここを削除するとサービスとプラグインが動かなくなります。恒久的なメインのフォルダを使ってください"
 fi
 
+if recovery_wanted && recovery_dir_loose; then
+    # The log helper requires exactly 0700; older installers left 0755 (IA-022).
+    chmod 700 "$RECOVERY_DIR" || die "${RECOVERY_DIR} の権限を 700 に直せません。chmod 700 ${RECOVERY_DIR} を実行してから再実行してください"
+fi
 if recovery_wanted; then
     if _probe_host="$(find_py)"; then
         RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
