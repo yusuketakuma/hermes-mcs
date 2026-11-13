@@ -821,6 +821,17 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
         "settings_migration_pending": False}
 
 
+def test_future_journal_timestamp_is_not_fresh(rec):
+    import update_recovery
+
+    state = _applying("p" * 40, ago=-3600)        # stamped while the clock ran ahead
+    assert rec._journal_fresh(state) is False
+    assert update_recovery._journal_is_fresh(state, state["applying"]) is False
+    state = _applying("p" * 40, ago=600)
+    assert rec._journal_fresh(state) is True
+    assert update_recovery._journal_is_fresh(state, state["applying"]) is True
+
+
 @pytest.mark.parametrize("problems", [[], ["services_failed"]])
 def test_previous_head_after_post_merge_reconciles_old_services(rec, tmp_path, monkeypatch, problems):
     repo = _make_repo(tmp_path)

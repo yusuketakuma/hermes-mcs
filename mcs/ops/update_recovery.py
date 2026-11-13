@@ -128,7 +128,7 @@ def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
     last = max(
         [s.get("at", 0) for s in state.get("stages", [])]
         + [(applying or {}).get("at", 0)])
-    return bool(last and time.time() - last < STALE_S)
+    return bool(last and 0 <= time.time() - last < STALE_S)   # future = clock moved back
 
 
 def _rollback_not_started(state: dict, applying: dict) -> bool:
@@ -191,17 +191,22 @@ def _complete_done_bookkeeping(state: dict) -> int:
     return 0
 
 
+def _drop_reverted(state: dict, rollback: dict) -> None:
+    """A finished rollback removes the version it reverted from applied."""
+    applied = state.get("applied") or []
+    if applied and applied[-1].get("sha") == rollback.get("prev_sha"):
+        reverted = applied[-1]
+        state["applied"] = applied[:-1]
+        state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+            "result": "rolled_back", "at": time.time()}
+
+
 def _finish_resumed(state: dict, applying: dict) -> int:
     """Record a resumed apply or rollback as complete and restart services."""
     if not _provider_recovery_ready():
         return 1
     if applying.get("rollback"):
-        applied = state.get("applied") or []
-        if applied and applied[-1].get("sha") == applying.get("prev_sha"):
-            reverted = applied[-1]
-            state["applied"] = applied[:-1]
-            state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
-                "result": "rolled_back", "at": time.time()}
+        _drop_reverted(state, applying)
         result = "rolled_back"
     else:
         state.setdefault("applied", []).append(applying)
@@ -729,6 +734,8 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     if problems:
         return escalate("runtime migration rollback: " + ",".join(problems))
     state = journal_store.load_state(STATE_PATH)
+    if applying.get("rollback"):
+        _drop_reverted(state, applying)
     state.setdefault("attempts", {})[applying.get("tag") or "?"] = {
         "result": "rolled_back", "at": time.time()}
     cid = record.get("command_id")

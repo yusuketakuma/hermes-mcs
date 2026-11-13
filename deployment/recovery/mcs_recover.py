@@ -682,7 +682,7 @@ def _journal_fresh(state):
         return False
     last = max([s.get("at", 0) for s in state.get("stages", [])]
                + [(applying or {}).get("at", 0)])
-    return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
+    return bool(last) and 0 <= time.time() - last < mcs_recovery_core.STALE_S  # future: clock moved back
 
 
 def _restore_entered(state):
