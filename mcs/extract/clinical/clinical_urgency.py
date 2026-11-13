@@ -42,7 +42,12 @@ _URGENT_INACTIVE = re.compile(
     r"低い|低く|低め|高くない|高くありません|"
     r"済み|完了|(?:た|ました|された|されました)"
     # A past ending closes the phrase; 「ただちに」「たすけて」 are not past tense.
-    r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))")
+    r"(?=$|[、,]|ので|ため|から|けど|けれど|が|と))"
+    # A history, preference or possibility names no current need: 救急搬送歴あり, 救急搬送を希望されていません,
+    # 搬送の可能性について, 救急搬送後, and a past predicate behind another verb (救急搬送され入院していました).
+    r"|^(?:され|し)?(?:た)?(?:歴|経緯|既往|後(?!に|で|ほど))"
+    r"|^の?可能性|^(?:を|は)?希望(?:され)?(?:て)?(?:い(?:ない|ません)|ない|しない|しません|せず)"
+    r"|^(?:され|し)[、,]?[^、,。]{1,12}?(?:していました|していた|しました|でした)$")
 
 _CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
 # An absent response to a call or stimulus is the acute sign itself, not a
@@ -56,6 +61,11 @@ _RESPONSE_ABSENCE_TARGET = re.compile(
     r"(?:" + _RESPONSE_ABSENCE_STIMULUS.pattern + r")"
     + _RESPONSE_ABSENCE_LINK + r"$")
 _CLAUSE_BREAK_CHARS = "。！？!?;；\n"
+# A cue reported as normal or stable (意識清明, 呼吸状態安定, SpO2 98%で安定) is not an acute reason.
+_CLINICAL_NORMAL = re.compile(
+    r"(?:状態|状況|レベル)?(?:は|も|が)?[ \t　]*"
+    r"(?:[:：]?[ \t　]*\d+(?:[.．]\d+)?(?:[/／]\d+)?[ \t　]*(?:%|％|℃|度|mmHg|回/分|/分|回)?[ \t　]*(?:で|と|は|も|にて)?[ \t　]*)?"
+    r"(?:安定|清明|問題(?:なし|ありません|ない)|著変(?:なし|ありません|ない)|良好|正常)")
 
 
 
@@ -68,8 +78,12 @@ def clinical_urgency_quote(quote, *, symptom=None):
     for match in pattern.finditer(quote):
         tail = quote[match.end():]
         prefix = r"(?:障害|消失|低下)" if match[0] == "意識" else r"困難" if match[0] == "呼吸" else ""
-        if re.match(prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
-                    r"(?:いません|ありません|ません|ない|なかった|なし|なく)", tail):
+        if _CLINICAL_NORMAL.match(tail):
+            continue
+        if re.match(
+                prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
+                r"(?:いません|ありません|ません|ない|なかった|なし|なく|ず|られ(?:ず|ない|ません)"
+                r"|[見み]られ(?:ず|ない|ません|なかった)|せず)", tail):
             clause_start = max((quote.rfind(c, 0, match.start()) for c in _CLAUSE_BREAK_CHARS),
                                default=-1) + 1
             if (match[0] == "反応"

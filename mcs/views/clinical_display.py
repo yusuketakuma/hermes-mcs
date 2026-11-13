@@ -11,11 +11,11 @@ def item_scope(item, context, surface=None):
 
 
 def scoped_vitals(values, context):
-
+    """The rollup's current-reading filter, so a changed value (98%から88%) shows its current side."""
     body, name, default = context
     if body is None:
         return values
-    values = clinical_values.patient_vitals(values, body, patient_name=name)
+    values = clinical_values.patient_current_vitals(values, body, patient_name=name)
     if default != "patient":
         values = {key: value for key, value in values.items()
                   if item_scope({}, context, str(value)) == "patient"}

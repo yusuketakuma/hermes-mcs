@@ -785,7 +785,10 @@ VITAL_PATTERNS = {
     # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
     "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
-    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
+    # 血圧 10/15 132/80: a month/day written between the label and the reading is not the reading
+    "sbp":  r"(?:血圧|BP)[:：は]?\s*(?:(?:1[0-2]|0?[1-9])[/／](?:3[01]|[12]\d|0?[1-9])"
+            r"(?:\s*[（(][月火水木金土日][）)])?\s*(?:は|に|の|で)?\s*(?=\d{2,3}\s*[/／]\s*\d{2,3}(?![\d.．])))?"
+            r"(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
     # a number followed by a flow unit is oxygen delivery (酸素10L),
     # never a saturation reading
     "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
@@ -797,7 +800,9 @@ VITAL_PATTERNS = {
 def vital_match_values(key: str, match) -> dict:
     """Values one VITAL_PATTERNS match reads: both blood-pressure sides, else one int or float."""
     if key == "sbp":
-        return {"sbp": int(match[1]), "dbp": int(match[2])}
+        sbp, dbp = int(match[1]), int(match[2])
+        # a pair outside physiological range (a date, a ratio) is not a blood pressure
+        return {"sbp": sbp, "dbp": dbp} if 50 <= sbp <= 300 and 20 <= dbp <= 200 and sbp > dbp else {}
     value = match[1].replace("．", ".")  # int/float take full-width digits
     return {key: float(value) if "." in value else int(value)}
 
@@ -821,15 +826,7 @@ def absolute_date(text: str) -> str | None:
         return None
 
 
-_VITAL_CTX_WIN = 40
-
-_VITAL_CTX_EXCLUDE = re.compile(
-    r"父|母|義父|義母|(?<![丈工])夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
-    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
-    r"|を切ると|を超えると|を下回ると"
-    r"|だった|でした|ありました|していた|になった|なりました"
-    r"|先月|先週|昨日|以前|過去に"
-    r"|測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定|不明")
+_VITAL_UNMEASURED = re.compile(r"測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定")
 
 
 def vital_threshold_flags(vit: dict, body: str | None,
@@ -838,8 +835,9 @@ def vital_threshold_flags(vit: dict, body: str | None,
 
     Returns [{key, value, rule, evidence}] — the reading's own body
     span (±20 chars) as the verbatim quote. A crossing whose reading
-    cannot be anchored to its label, or whose context window shows a
-    family/conditional/past/unmeasurable marker, does not flag."""
+    cannot be anchored to its label, is not the patient's current reading
+    in its own source clause, or is bound to an unmeasurable marker in that
+    clause, does not flag."""
     if not body or not vit:
         return []
     toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
@@ -869,8 +867,10 @@ def vital_threshold_flags(vit: dict, body: str | None,
         if span is None:
             continue
         s, e = span
-        if _VITAL_CTX_EXCLUDE.search(
-                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
+        clause = clinical_scope.source_assertion_span(body, body[s:e], anchor=(s, e))
+        text = body[clause[0]:clause[1]] if clause else ""
+        if (clinical_scope.patient_source_scope(body, s, e, measurement=True) != "patient"
+                or _VITAL_UNMEASURED.search(text)):
             continue
         out.append({"key": key, "value": val,
                     "rule": f"{key}_{op}_{limit:g}",
