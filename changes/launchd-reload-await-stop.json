@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "常駐処理の読み込み直しで停止前の旧処理を「読み込み済み」と誤判定する問題を修正",
+  "summary": "常駐設定（plist）が変わったときの読み込み直しで、launchd が旧処理の終了処理をしている間に再登録を試み、失敗しても旧処理を見て「読み込み済み」と判定することがありました。独立モードでは、旧hostが終了すると次回ログインまで収集・抽出・通知・更新が止まる可能性がありました。旧処理が launchd から消えたこと（not found）を確認してから再登録し、確認できない場合は成功と表示せず、servicesの再実行を案内して失敗を返します。更新ジョブの中から実行した場合の後回しの読み込み直しも、旧処理の停止を待ち、再登録を3回まで再試行します。",
+  "upgrade": "追加操作は不要です。実行中の定期処理が長く、30秒以内に旧処理の停止を確認できない場合、services は終了コード1で止まります。その場合は処理の終了を待って mcs_setup.py services を再実行してください。更新の途中で起きた場合は更新が中止されて元の版へ戻り、通知が届きます。",
+  "details": [
+    "agent_reconcile は bootout の後に launchctl print が113（not found）を返すまで最大30秒待ってから bootstrap する。sync_recovery と同じ停止確認の基準。",
+    "自分自身の常駐処理を後で読み込み直す待機スクリプトは、bootout 後に最大約1時間（ExitTimeOut 相当）113を待ち、bootstrap を3回まで再試行する。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "tests/ops/test_mcs_setup_services.py"]
+}

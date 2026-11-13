@@ -553,6 +553,55 @@ def test_agent_reconcile_retries_transient_bootstrap(
     assert any("起動に失敗しました" in n for n in notes) is (not ok)
 
 
+def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch):
+    # launchd keeps answering `print` 0 while a booted-out job drains; that
+    # answer must not be taken as the new load.
+    import subprocess
+    from types import SimpleNamespace
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    sleeps, notes = [], []
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
+    monkeypatch.setattr(service_management, "time",
+                        SimpleNamespace(time=service_management.time.time, sleep=sleeps.append))
+    assert service_management.agent_reconcile(
+        'ai.mcs.x', '/p.plist', notes.append, False, paths=mcs_setup._service_paths()) is False
+    assert "bootstrap" not in seen
+    assert seen.count("print") == 1 + service_management.STOP_POLLS
+    assert any("停止を確認できない" in n for n in notes)
+
+
+def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
+    import subprocess
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    log, count = tmp_path / "launchctl.log", tmp_path / "prints"
+    (stubs / "launchctl").write_text(
+        '#!/bin/sh\necho "$*" >> "$SYNTHETIC_LOG"\n'
+        'case "$1" in\n'
+        '  print) n=$(cat "$SYNTHETIC_COUNT" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$SYNTHETIC_COUNT"\n'
+        '         [ "$n" -ge 3 ] && exit 113; exit 0;;\n'
+        '  bootstrap) [ -f "$SYNTHETIC_COUNT.boot" ] && exit 0; : > "$SYNTHETIC_COUNT.boot"; exit 5;;\n'
+        'esac\nexit 0\n')
+    (stubs / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+    finished = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+    finished.wait()
+    env = {"PATH": f"{stubs}:/usr/bin:/bin", "SYNTHETIC_LOG": str(log), "SYNTHETIC_COUNT": str(count)}
+    result = subprocess.run(["/bin/sh", "-c", service_management.RELOAD_SCRIPT, "mcs-reload",
+                             str(finished.pid), "gui/501/ai.mcs.x", "gui/501", "/synthetic/x.plist"],
+                            env=env, timeout=30)
+    assert result.returncode == 0
+    assert log.read_text().splitlines() == [
+        "bootout gui/501/ai.mcs.x", *["print gui/501/ai.mcs.x"] * 3,
+        *["bootstrap gui/501 /synthetic/x.plist"] * 2]
+
+
 def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,
                                               capsys):
     """Rendering wrappers/plists around a missing interpreter makes every
