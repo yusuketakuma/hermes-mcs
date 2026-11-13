@@ -135,6 +135,31 @@ def test_empty_explicit_dest_with_spaces_is_cloned(home, source, tmp_path):
     assert Path(_ran(home)[0]) == dest.resolve()
 
 
+def test_dest_with_only_finder_metadata_is_cloned(home, source, tmp_path):
+    dest = tmp_path / "Finder folder"
+    dest.mkdir()
+    for name in (".DS_Store", ".localized", "._README"):
+        (dest / name).write_bytes(b"synthetic finder metadata")
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 0
+    assert (dest / "README").read_text() == "mcs"
+    assert not (dest / ".DS_Store").exists() and not (dest / "._README").exists()
+
+
+@pytest.mark.parametrize("other", ["notes.txt", ".DS_Store/"])
+def test_finder_metadata_does_not_hide_other_content(home, source, tmp_path, other, capsys):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    if other.endswith("/"):
+        (dest / other).mkdir()
+    else:
+        (dest / ".DS_Store").write_bytes(b"synthetic finder metadata")
+        (dest / other).write_text("fictional")
+    before = sorted(p.name for p in dest.iterdir())
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 2
+    assert sorted(p.name for p in dest.iterdir()) == before
+    assert repr(other.rstrip("/")) in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("root_value", ["empty", "different"])
 def test_unsupported_data_root_is_refused_before_clone(home, source, tmp_path, monkeypatch, capsys, root_value):
     dest = tmp_path / "permanent-source"

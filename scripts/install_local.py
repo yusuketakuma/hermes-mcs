@@ -19,6 +19,7 @@ import argparse
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ RUNTIME_ROOT = "~/.mcs"                     # mcs_util.HOME default; never moved
 FALLBACK_SOURCE = "~/.local/share/hermes-mcs"  # when ~/.mcs holds data but no checkout
 RECORDED_REPO = "~/.mcs-recovery/repo_path"  # written by install.sh stage 6
 RUNTIME_ENTRIES = {"config.json", "data", "venv", ".env"}
+OS_COMPANIONS = {".DS_Store", ".localized"}  # Finder metadata; "._*" are AppleDouble files
 # Shown for context only: the decision rests on what the session can reach.
 SANDBOX_HINTS = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "SANDBOX_RUNTIME")
 
@@ -60,6 +62,13 @@ def _is_checkout(path):
     except (OSError, subprocess.SubprocessError):
         raise Refused("git を実行できません（xcode-select --install で導入できます）") from None
     return result.returncode == 0 and os.path.realpath(result.stdout.strip()) == os.path.realpath(path)
+
+
+def _content(path):
+    """Entries other than regular Finder metadata files, which macOS adds to empty folders."""
+    return {name for name in os.listdir(path)
+            if not ((name in OS_COMPANIONS or name.startswith("._"))
+                    and stat.S_ISREG(os.lstat(os.path.join(path, name)).st_mode))}
 
 
 def _roots(path):
@@ -147,13 +156,15 @@ def _judge(source, dest, notes):
                           f"{source_head[:8]}）。ここでは導入も版の変更もしません。"
                           "docs/guides/UPGRADE_AGENT.md の手順で移行先の版の更新ツールを使ってください")
         return "reuse", dest
-    entries = set(os.listdir(dest))
+    entries = _content(dest)
     if not entries:
         return "clone", dest
     if entries & RUNTIME_ENTRIES:
         raise DataOnly(f"{dest} には既存の設定・データがありますがソースフォルダではありません。"
                       "データは移動しません。--dest で別の空フォルダを指定してください")
-    raise Refused(f"{dest} は空ではないフォルダです")
+    shown = sorted(entries)
+    raise Refused(f"{dest} は空ではないフォルダです（{'、'.join(map(repr, shown[:3]))}"
+                  f"{' など' if len(shown) > 3 else ''}）")
 
 
 def clone(source, dest):
@@ -177,7 +188,9 @@ def clone(source, dest):
         else:
             _git(staging, "remote", "remove", "origin")
         if os.path.isdir(dest):
-            os.rmdir(dest)   # only an empty dest reaches here
+            for name in set(os.listdir(dest)) - _content(dest):
+                os.unlink(os.path.join(dest, name))
+            os.rmdir(dest)   # only a dest without content reaches here
         os.rename(staging, dest)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
