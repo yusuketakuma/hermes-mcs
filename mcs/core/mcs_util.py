@@ -311,6 +311,11 @@ def until_epoch(value) -> float:
     from datetime import datetime
     if not isinstance(value, str) or len(value) > 64:
         raise ValueError("until_invalid")
+    # Installer helpers may run on Python 3.9/3.10, whose fromisoformat rejects
+    # the 'Z' that 3.11+ accepts. shortcut: other 3.11-only ISO forms (+0900,
+    # basic format) still differ; widen if they show up in saved settings.
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("until_needs_offset")
