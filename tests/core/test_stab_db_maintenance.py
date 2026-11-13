@@ -136,6 +136,37 @@ def test_snapshot_publishes_only_on_change_dirty_or_age(tmp_path, snapdir):
     db.close()
 
 
+def test_dirty_flag_waits_out_the_interval_unless_urgent(tmp_path, snapdir):
+    db = _ledger(tmp_path)
+    path = str(tmp_path / "ledger.db")
+    db.save_messages([_message(1)])
+    now = time.time()
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    copy = snapdir / "ledger-snapshot.db"
+    first = copy.stat().st_ino
+    # a background mark (extraction refresh, OCR, card redraw) never reads
+    # as 'unchanged', but waits like an append-only change
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 1) == "deferred"
+    db.save_messages([_message(2)])
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 2) == "deferred"
+    assert copy.stat().st_ino == first
+    later = now + maintenance.SNAPSHOT_MIN_INTERVAL_S + 1
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later) == "published"
+    second = copy.stat().st_ino
+    assert second != first
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 1) == "deferred"
+    # a human operation writes a command receipt: publish without the wait
+    with db.db:
+        db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
+                      (later,))
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 2) == "published"
+    assert maintenance.refresh_snapshot(path, force=True, now=later + 3) == "published"
+    # an unreadable last-publish record publishes right away
+    os.unlink(maintenance._snapshot_sig_path())
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 4) == "published"
+    db.close()
+
+
 @pytest.mark.parametrize("change", ["patient", "request", "receipt", "schema",
                                     "rowid_fell", "new_table"])
 def test_urgent_snapshot_changes_skip_the_interval(tmp_path, snapdir, change):

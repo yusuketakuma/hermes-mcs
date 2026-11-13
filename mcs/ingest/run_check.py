@@ -482,11 +482,14 @@ def _commands_only(lock_fd, deadline) -> int:
         notify_cards.gc(ledger, cfg)
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
-            result["snapshot"] = maintenance.publish_snapshot(
-                DB, deadline=deadline)
-            if result["snapshot"]:
+            # same interval/urgent-key decision as the tick: a background
+            # mark waits out SNAPSHOT_MIN_INTERVAL_S ('deferred' keeps it)
+            state = maintenance.refresh_snapshot(DB, dirty=True, deadline=deadline)
+            result["snapshot"] = state is not None
+            result["snapshot_state"] = state
+            if state == "published":
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
-            else:
+            elif state is None:
                 result["ok"] = False
                 result["errors"].append("snapshot_publish_failed")
         print(json.dumps(result, ensure_ascii=False))
@@ -1082,7 +1085,8 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
     try:
         # H4: a full copy + quick_check only when the ledger changed, the
         # notification flag asks for it, or the copy is an hour old; an
-        # append-only change within SNAPSHOT_MIN_INTERVAL_S is 'deferred'
+        # append-only change or the flag within SNAPSHOT_MIN_INTERVAL_S is
+        # 'deferred' and the flag stays set
         dirty = notify_cards.snapshot_dirty(ledger)
         hard = _hard_deadline()
         snapshot_deadline = (None if hard is None else
@@ -1091,7 +1095,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
             gate_state = None      # no finite window: legacy held-lock path
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
-                               DB, force=dirty, deadline=snapshot_deadline,
+                               DB, dirty=bool(dirty), deadline=snapshot_deadline,
                                verification_context=(
                                    _verification_context_factory(
                                        ledger, run_lock_fd, gate_state, db_baseline)

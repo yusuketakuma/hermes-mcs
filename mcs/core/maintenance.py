@@ -51,7 +51,8 @@ BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 # H4: the read-only snapshot is republished only when the ledger changed
 # (cheap marker, see _content_signature) or the published copy is this old
 SNAPSHOT_MAX_AGE_S = 3600
-# RC4: a change that only appended rows waits this long after the last
+# RC4: a change that only appended rows, and a background snapshot_dirty
+# flag (extraction refresh, OCR, card redraw), waits this long after the last
 # publish (about every other 10-minute tick) instead of copying ~1 GB each
 # tick; 0 restores publish-on-every-change. Urgent changes skip the wait.
 SNAPSHOT_MIN_INTERVAL_S = 900
@@ -826,19 +827,19 @@ def snapshot_published_age_s(now: float | None = None) -> float | None:
     return max(0.0, (time.time() if now is None else now) - mtime)
 
 
-def refresh_snapshot(db_path: str, *, force: bool = False,
+def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
                      now: float | None = None,
                      deadline: float | None = None,
                      verification_context=None) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
 
     Every tick used to copy and quick_check the whole ledger (144 full
-    copies a day). Now a publish happens when ``force`` (the notification
-    snapshot_dirty flag), an urgent marker key moved or any MAX(rowid)
-    fell, no published copy or marker exists, or the copy is
-    SNAPSHOT_MAX_AGE_S old. A change that only appended rows publishes
-    once SNAPSHOT_MIN_INTERVAL_S has passed since the last publish and
-    is 'deferred' before that. The ages trigger another attempt, not a
+    copies a day). Now a publish happens when ``force``, an urgent marker
+    key moved or any MAX(rowid) fell, no published copy or marker exists,
+    or the copy is SNAPSHOT_MAX_AGE_S old. A change that only appended
+    rows, or ``dirty`` (the notification snapshot_dirty flag: never
+    'unchanged'), publishes once SNAPSHOT_MIN_INTERVAL_S has passed since
+    the last publish and is 'deferred' before that. The ages trigger another attempt, not a
     freshness guarantee when publication fails. Returns 'published',
     'unchanged', 'deferred', or None when a needed publish failed. The
     marker is taken BEFORE the copy: a write landing in between only
@@ -851,13 +852,14 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
     with snapshots._publication_lock(SNAPSHOT_DIR) as lock_fd:
         if lock_fd is None:
             return None
-        return _refresh_snapshot_locked(db_path, force=force, now=now, deadline=deadline,
+        return _refresh_snapshot_locked(db_path, force=force, dirty=dirty, now=now,
+                                        deadline=deadline,
                                         lock_fd=lock_fd, total_started=total_started,
                                         verification_context=verification_context)
 
 
-def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_fd, total_started,
-                             verification_context=None):
+def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, deadline, lock_fd,
+                             total_started, verification_context=None):
     """Check freshness and save its marker under the same publication fence."""
     now = time.time() if now is None else now
     signature_started = time.perf_counter()
@@ -875,7 +877,8 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_f
     skip = None
     if not force and sig is not None and _plain_file(dest):
         published_at = prev.get("published_at")
-        if prev.get("sig") == sig and _recent(published_at, now, SNAPSHOT_MAX_AGE_S):
+        if (not dirty and prev.get("sig") == sig
+                and _recent(published_at, now, SNAPSHOT_MAX_AGE_S)):
             skip = "unchanged"
         elif (_recent(published_at, now, SNAPSHOT_MIN_INTERVAL_S)
               and _rows_appended_only(prev.get("sig"), sig)):
