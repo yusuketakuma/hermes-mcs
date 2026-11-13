@@ -13,9 +13,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socket import SHUT_RDWR
 
+from adapters.common import eventlog
 from adapters.common.paths import atomic_write, fsync_dir
 
 from .client import verify_signature
+
+# Fixed codes only; never callback contents, user IDs or secrets.
+_log = eventlog.make_logger("mcs.lineworks")
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}\Z")
 MAX_BODY = 65536
@@ -89,13 +93,25 @@ class CallbackInbox:
             return 400
         digest = hashlib.sha256(body).hexdigest()
         with self._lock:
-            if any((self.directory / (digest + suffix)).exists()
-                   for suffix in (".json", ".working", ".done")):
-                return 200
-            if sum(1 for _ in self.directory.glob("*.json")) >= 250:
-                return 503
-            atomic_write(str(self.directory / (digest + ".json")), body, mode=0o600)
-        return 200
+            try:
+                if any((self.directory / (digest + suffix)).exists()
+                       for suffix in (".json", ".working", ".done")):
+                    return 200
+                if sum(1 for _ in self.directory.glob("*.json")) >= 250:
+                    code = "callback_inbox_full"
+                else:
+                    atomic_write(str(self.directory / (digest + ".json")), body, mode=0o600)
+                    return 200
+            except OSError:
+                code = "callback_persist_failed"
+            # LINE WORKS never resends: record the refusal as a fixed code and a
+            # content-free unknown receipt `status` counts. A distinct name keeps a
+            # resend of the same body from being deduplicated as already handled.
+            _log(code)
+            with suppress(OSError):
+                atomic_write(str(self.directory / (digest + ".refused.done")),
+                             json.dumps({"result": "unknown"}).encode(), mode=0o600)
+        return 503
 
     def pending(self):
         return sorted(self.directory.glob("*.json"), key=lambda p: p.stat().st_mtime)[:32]
