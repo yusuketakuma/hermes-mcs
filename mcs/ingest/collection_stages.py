@@ -222,6 +222,10 @@ def with_relogin(adapter, ledger, result, where: str, fn, *args,
     # add nothing for rows the aborted attempt already stored
     sizes = {k: len(result[k]) for k in _REPLAYED_LISTS if k in result}
     msgs = result.get("messages")
+    # A nested call for the same stage (stage_unread's list_unread) is
+    # overwritten here, so its seconds are not counted twice.
+    spent = result.get("collect_s", {}).get(where, 0)
+    started = time.monotonic()
     try:
         return fn(*args, **kwargs)
     except SessionExpired as e:
@@ -272,6 +276,8 @@ def with_relogin(adapter, ledger, result, where: str, fn, *args,
     finally:
         # stage_unread's per-patient tally is replay bookkeeping only
         result.pop("_unread_counted", None)
+        result.setdefault("collect_s", {})[where] = round(
+            spent + time.monotonic() - started, 3)
 
 
 def _cap_cleared(adapter, ledger, p, result, top: bool = False) -> bool:
