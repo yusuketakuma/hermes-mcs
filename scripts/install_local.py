@@ -28,7 +28,10 @@ RUNTIME_ROOT = "~/.mcs"                     # mcs_util.HOME default; never moved
 FALLBACK_SOURCE = "~/.local/share/hermes-mcs"  # when ~/.mcs holds data but no checkout
 RECORDED_REPO = "~/.mcs-recovery/repo_path"  # written by install.sh stage 6
 RUNTIME_ENTRIES = {"config.json", "data", "venv", ".env"}
-OS_COMPANIONS = {".DS_Store", ".localized"}  # Finder metadata; "._*" are AppleDouble files
+# Finder metadata macOS adds to empty folders, by name: (header, max bytes).
+# Only files that match are treated as absent (and removed before a clone).
+OS_COMPANIONS = {".DS_Store": (b"\0\0\0\1Bud1", 1 << 20), ".localized": (b"", 0)}
+APPLEDOUBLE = (b"\0\x05\x16\x07", 1 << 20)  # "._*" files
 # Shown for context only: the decision rests on what the session can reach.
 SANDBOX_HINTS = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "SANDBOX_RUNTIME")
 
@@ -64,11 +67,26 @@ def _is_checkout(path):
     return result.returncode == 0 and os.path.realpath(result.stdout.strip()) == os.path.realpath(path)
 
 
+def _companion(path, name):
+    """A regular file whose name, size and header match Finder metadata."""
+    header, limit = OS_COMPANIONS.get(name, APPLEDOUBLE if name.startswith("._") else (None, 0))
+    if header is None:
+        return False
+    try:
+        fd = os.open(os.path.join(path, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(fd)
+        return (stat.S_ISREG(info.st_mode) and info.st_size <= limit
+                and os.read(fd, len(header)) == header)
+    finally:
+        os.close(fd)
+
+
 def _content(path):
-    """Entries other than regular Finder metadata files, which macOS adds to empty folders."""
-    return {name for name in os.listdir(path)
-            if not ((name in OS_COMPANIONS or name.startswith("._"))
-                    and stat.S_ISREG(os.lstat(os.path.join(path, name)).st_mode))}
+    """Entries other than Finder metadata files, which macOS adds to empty folders."""
+    return {name for name in os.listdir(path) if not _companion(path, name)}
 
 
 def _roots(path):

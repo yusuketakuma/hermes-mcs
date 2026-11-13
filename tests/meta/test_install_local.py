@@ -135,28 +135,38 @@ def test_empty_explicit_dest_with_spaces_is_cloned(home, source, tmp_path):
     assert Path(_ran(home)[0]) == dest.resolve()
 
 
+# Synthetic files carrying only the headers Finder metadata starts with.
+FINDER_METADATA = {".DS_Store": b"\0\0\0\1Bud1" + bytes(24), ".localized": b"",
+                   "._README": b"\0\x05\x16\x07" + bytes(28)}
+
+
 def test_dest_with_only_finder_metadata_is_cloned(home, source, tmp_path):
     dest = tmp_path / "Finder folder"
     dest.mkdir()
-    for name in (".DS_Store", ".localized", "._README"):
-        (dest / name).write_bytes(b"synthetic finder metadata")
+    for name, raw in FINDER_METADATA.items():
+        (dest / name).write_bytes(raw)
     assert install_local.main(["--dest", str(dest)], source=str(source)) == 0
     assert (dest / "README").read_text() == "mcs"
-    assert not (dest / ".DS_Store").exists() and not (dest / "._README").exists()
+    assert not any((dest / name).exists() for name in FINDER_METADATA)
 
 
-@pytest.mark.parametrize("other", ["notes.txt", ".DS_Store/"])
+@pytest.mark.parametrize("other", ["notes.txt", ".DS_Store/", "._notes", ".DS_Store", ".localized"])
 def test_finder_metadata_does_not_hide_other_content(home, source, tmp_path, other, capsys):
+    """Names alone never make a file disposable: a user's own ._notes or a
+    .DS_Store/.localized without Finder's format is content and is kept."""
     dest = tmp_path / "dest"
     dest.mkdir()
     if other.endswith("/"):
         (dest / other).mkdir()
     else:
-        (dest / ".DS_Store").write_bytes(b"synthetic finder metadata")
+        for name, raw in FINDER_METADATA.items():
+            if name != other:
+                (dest / name).write_bytes(raw)
         (dest / other).write_text("fictional")
     before = sorted(p.name for p in dest.iterdir())
     assert install_local.main(["--dest", str(dest)], source=str(source)) == 2
     assert sorted(p.name for p in dest.iterdir()) == before
+    assert other.endswith("/") or (dest / other).read_text() == "fictional"
     assert repr(other.rstrip("/")) in capsys.readouterr().err
 
 
