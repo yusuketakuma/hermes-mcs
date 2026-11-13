@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 import os
 import time
 from contextlib import suppress
@@ -187,7 +188,10 @@ def cmd_check() -> int:
             if not picked and mode == "auto" and newer:
                 delay = upd.get("auto_delay_h", 24)
                 first_seen = state.get("first_seen") or 0
-                if time.time() - first_seen >= delay * 3600 \
+                if type(delay) not in (int, float) or not math.isfinite(delay) or delay < 0:
+                    # A hand-edited value must not crash before the state save.
+                    print("update.auto_delay_h が0以上の数値ではないため、自動更新を行いません。設定を確認してください。")
+                elif time.time() - first_seen >= delay * 3600 \
                         and not state.get("attempts", {}).get(tag):
                     auto = (tag, sha)
             journal_store.save_state(STATE_PATH, state)
