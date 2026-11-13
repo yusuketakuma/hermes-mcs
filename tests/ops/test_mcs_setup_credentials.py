@@ -122,6 +122,20 @@ def test_init_password_refuses_visible_prompt(monkeypatch, capsys):
     assert 'synthetic-secret' not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('secret', ['synthetic£pw', 'syntheticé', 'ｓynthetic',
+                                    'synthetic\tpw', ' synthetic', 'synthetic '])
+def test_init_password_keychain_cannot_return_is_refused_before_any_write(monkeypatch, capsys, secret):
+    # `security -w` prints non-printable-ASCII values as hex and the login
+    # reader strips whitespace, so such a password never reads back as stored.
+    from types import SimpleNamespace
+    monkeypatch.setenv('MCS_SETUP_PASSWORD', secret)
+    monkeypatch.setattr(mcs_setup.subprocess, 'run', lambda *a, **k: pytest.fail('unexpected keychain'))
+    monkeypatch.setattr(lifecycle_io, 'write_env', lambda *a: pytest.fail('unexpected file write'))
+    assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), 'synthetic') == 1
+    assert '認証情報は変更していません' in capsys.readouterr().out
+    assert lifecycle_io.store_keychain('synthetic', secret) is False
+
+
 def test_env_write_repairs_only_the_explicitly_updated_key(tmp_path):
     """An unrelated duplicate remains rejected until explicitly changed."""
     p = tmp_path / ".env"

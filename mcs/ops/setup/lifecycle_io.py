@@ -131,6 +131,13 @@ def write_env(path: str, updates: dict[str, str]):
         raise OSError("env_edit_lock_unavailable") from exc
 
 
+def keychain_round_trips(value: str) -> bool:
+    """True when every Keychain reader gets the stored value back unchanged."""
+    # `find-generic-password -w` prints values outside printable ASCII as hex,
+    # and the login and keychain_to_env readers strip surrounding whitespace.
+    return value == value.strip() and all(" " <= c <= "~" for c in value)
+
+
 def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:
     """Store the MCS password in the login keychain without exposing it
     in child-process argv (`ps` shows argv to every local user).
@@ -147,7 +154,7 @@ def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) ->
     def _q(v: str) -> str:
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    if (not service.strip()
+    if (not service.strip() or not keychain_round_trips(pw)
             or any(c in value for value in (account, pw, service) for c in "\r\n\x00")):
         return False
     # Update the item the adapter's service-only read resolves to, under
