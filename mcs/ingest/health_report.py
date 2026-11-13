@@ -10,8 +10,8 @@ import stat
 import time
 from contextlib import closing, suppress
 
-from health_policy import (HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL,
-                           freshness_deadline)
+from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
+                           WATCH_STATUS_REL, freshness_deadline)
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -453,7 +453,6 @@ def backup_health(cfg: dict, now: float) -> dict:
                 "last_restore_at", "source_last_successful_run", "max_rpo_seconds")}}
 
 
-CARD_STALL_S = 1800        # a queued render this old on the live transport
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
 DUE_SLACK_S = 900           # next_try this close counts as due (defer cycles)
 LOCAL_LLM_DOWN_S = 3600     # llm_down_for_s at or past this, with due work, alerts
@@ -908,6 +907,32 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
     return {**report, "status": "recorded"}
 
 
+def delivery_latency_health(db, cfg, now, seconds) -> dict:
+    """Sample delivery latency apart from the card verdict, so a slow sample hides no counts."""
+    import notify_scope
+    try:
+        return bounded_health_read(db, lambda _check: notify_scope._delivery_latency(
+            db, notify_scope.retired_transports(cfg), now), seconds=seconds)
+    except Exception as exc:
+        return {"status": "unavailable", "observed_at": now, "reason": _observation_failure(exc)}
+
+
+def carried_measurement(current: dict, previous, now: float) -> dict:
+    """Keep the previous complete measurement, marked stale, when this read stopped at its bound."""
+    if current.get("status") != "unknown" or current.get("reason") != "observation_limit":
+        return current
+    observed = previous.get("observed_at") if isinstance(previous, dict) else None
+    if (previous is None or previous.get("status") not in (None, "recorded", "stale_measurement")
+            or not finite_number(observed) or not 0 <= now - observed <= CARD_STALL_S
+            # every field the unknown block would publish must be carried
+            or any(k not in previous for k in current if k not in ("status", "reason"))):
+        return current
+    # The original observed_at is kept so chained carries still expire.
+    return {**previous, **{k: current[k] for k in ("observation",) if k in current},
+            "status": "stale_measurement", "reason": "observation_limit",
+            "age_s": round(now - observed, 1)}
+
+
 def build_health(db, result: dict, status: str,
             run_id: int | None = None, *, cfg: dict | None = None,
             deadline: float | None = None) -> dict:
@@ -944,9 +969,11 @@ def build_health(db, result: dict, status: str,
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
     card_observation = {}
+    card_started = time.monotonic()
     try:
         cards_health = bounded_health_read(
-            db, lambda _check: notify_scope.health_cards(db, cfg, observation=card_observation),
+            db, lambda _check: notify_scope.health_cards(
+                db, cfg, observation=card_observation, latency=False),
             seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
             observation=card_observation)
     except Exception as exc:
@@ -961,9 +988,20 @@ def build_health(db, result: dict, status: str,
                                         "reason": _observation_failure(exc)})
         if card_observation.get("stop") == "complete":
             card_observation["stop"] = "read_unavailable"
+    else:
+        cards_health["observed_at"] = now
+        if isinstance(cards_health.get("completion"), dict):
+            # Only what is left of the same card window: the sample never adds time.
+            cards_health["completion"]["latency"] = delivery_latency_health(
+                db, cfg, now, min(remaining(), max(0.0, NOTIFICATION_OBSERVATION_S
+                                                   - (time.monotonic() - card_started))))
     cards_health["observation"] = card_observation
+    cards_health = carried_measurement(cards_health, prev_health().get("cards"), now)
     cards_unknown = cards_health.get("status") == "unknown"
-    incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
+    previous_notify = prev_health().get("notify")
+    incomplete_parts = carried_measurement(
+        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining())),
+        previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
         incomplete_parts.get('unknown_parts_total', 0))

@@ -34,8 +34,8 @@ import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
 
 from mcs_queries import JST
-from health_policy import (HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, WATCH_STATUS_REL,
-                           freshness_deadline)
+from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
+                           WATCH_STATUS_REL, freshness_deadline)
 from mcs_util import (HOME, CONF_PATH, ProviderSettingsUnreadable, _load_config, alert_only_config,
                       load_config)
 
@@ -193,13 +193,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     tracking = _tracking_parts(parts)
     tracking_present = isinstance(parts, dict) and any(key in parts for key in (
         'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
-    parts_unknown = (isinstance(parts, dict) and parts.get('status') == 'unknown'
+    parts_unknown = (_measurement_unknown(parts, now)
                      or tracking_present and tracking is None)
     parts_active = parts_unknown or bool(tracking and (tracking['total'] or tracking['unknown']))
     if parts_active and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
-    cards_unknown = isinstance(cards, dict) and cards.get('status') == 'unknown'
+    cards_unknown = _measurement_unknown(cards, now)
     if cards_unknown and report['status'] == 'ok':
         report['status'] = 'degraded'
     # a pending count the producer could not observe is unmeasured work,
@@ -942,6 +942,15 @@ def _jst(ts) -> str:
 
 def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
+
+
+def _measurement_unknown(block, now) -> bool:
+    """An unknown block, or a carried measurement past the render stall age, is unmeasured."""
+    if not isinstance(block, dict):
+        return False
+    observed = block.get('observed_at')
+    return block.get('status') == 'unknown' or block.get('status') == 'stale_measurement' and not (
+        finite_number(observed) and 0 <= now - observed <= CARD_STALL_S)
 
 
 def _part_breakdown(parts, total):

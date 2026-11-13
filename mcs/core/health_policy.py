@@ -12,6 +12,10 @@ DEFAULT_MAX_MISSED = 2      # miss two whole ticks before 'stale'
 RUN_GRACE_S = 480           # run_check's whole-run deadline
 # A pinned timeline certifies only on a full rescan; lag alone is normal.
 COVERAGE_STALL_S = 24 * 3600
+# A queued render this old on the live transport is stalled. A complete
+# notification measurement older than this cannot vouch for renders queued
+# since, so a carried measurement expires at the same age.
+CARD_STALL_S = 1800
 
 
 def _tick_settings(cfg: dict) -> tuple[float, float]:
