@@ -48,6 +48,33 @@ def test_init_project_ids_without_mode_narrow_the_key_default(monkeypatch, tmp_p
     assert effective["mode"] == "assist" and effective["project_ids"] == [101, 102]
 
 
+def _slack_channels_cfg():
+    return {"mcs_login_id": "u1", "notify_target": "slack:C000000098",
+            "notify_system_target": "slack:C000000099",
+            "notify": {"interactive": "slack", "slack": {
+                "profile": "ops", "application_id": "A000000001", "team_id": "T000000001",
+                "channel_id": "C000000098", "allowed_user_ids": ["U000000001"]}}}
+
+
+def test_interactive_slack_init_uses_the_wizard_profile_without_asking(monkeypatch, tmp_path):
+    _init_env(monkeypatch, tmp_path, _slack_channels_cfg())
+    monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: 1)
+    monkeypatch.setattr(setup_wizard, "wizard_optional_features", lambda cfg: None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("profile must not be asked again"))
+    seen = []
+    monkeypatch.setattr(setup_wizard, "confirm_save",
+                        lambda cfg, *, plugin_profile, key_presence=None: seen.append(plugin_profile) or False)
+    assert mcs_setup.main(["init"]) == 130
+    assert seen == ["ops"]
+
+
+def test_init_profile_mismatch_stops_before_any_secret_write(monkeypatch, tmp_path, capsys):
+    _init_env(monkeypatch, tmp_path, _slack_channels_cfg())
+    monkeypatch.setattr(mcs_setup, "_init_store_secrets", lambda *a: pytest.fail("no secret before the profile check"))
+    assert mcs_setup.main(["init", "--yes", "--plugin-profile", "other"]) == 1
+    assert "slack_setup_binding_mismatch" in capsys.readouterr().out
+
+
 def test_init_self_identity_flags(monkeypatch, tmp_path):
     """--self-org/--self-professions write signals.self_* as a manual
     override of the MCS-derived self profile."""

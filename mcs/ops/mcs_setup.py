@@ -260,7 +260,15 @@ def cmd_init(args) -> int:
     if not args.yes:
         interactive = (cfg.get("notify") or {}).get("interactive")
         if not mcs_runtime.standalone(cfg) and interactive in ("slack", "discord"):
-            args.plugin_profile = _plugin_profile(args, interactive)
+            # The wizard already chose notify.slack.profile; asking again could only disagree.
+            args.plugin_profile = (slack_channel_setup.binding_profile(cfg)
+                                   if interactive == "slack" and getattr(args, "plugin_profile", None) is None
+                                   else _plugin_profile(args, interactive))
+    try:
+        slack_channel_setup.check_profile(cfg, args)
+    except ValueError as error:
+        return slack_channel_setup.report_problem(error)
+    if not args.yes:
         import cloud_cli
         if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None),
                                          key_presence=cloud_cli.pending_key_presence(HOME)):

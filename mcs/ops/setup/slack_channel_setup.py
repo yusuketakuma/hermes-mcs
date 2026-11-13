@@ -343,6 +343,19 @@ def creation_unneeded(cfg, state):
     return _configured_channels(cfg) and (state is None or _post_complete(state))
 
 
+def binding_profile(cfg):
+    """The Hermes profile that serves this Slack binding."""
+    scope = (cfg.get('notify') or {}).get('slack') or {}
+    return scope.get('profile') or cfg.get('notify_bot_profile') or 'default'
+
+
+def check_profile(cfg, args):
+    """Refuse an explicit profile that cannot serve the Slack binding."""
+    if (required(cfg) and cfg.get('runtime_mode', 'hermes') == 'hermes'
+            and getattr(args, 'plugin_profile', None) not in (None, binding_profile(cfg))):
+        raise ValueError('slack_setup_binding_mismatch')
+
+
 def plan(cfg, *, users=None):
     """Keep explicit separate system routes and describe only missing Slack destinations."""
     if not required(cfg):
@@ -350,7 +363,7 @@ def plan(cfg, *, users=None):
     roles = _channel_roles(cfg)
     scope = (cfg.get('notify') or {}).get('slack') or {}
     binding = {key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
-    binding['profile'] = binding['profile'] or cfg.get('notify_bot_profile') or 'default'
+    binding['profile'] = binding_profile(cfg)
     if any(not isinstance(binding[key], str) or not binding[key].strip()
            for key in binding):
         raise ValueError('slack_setup_identity_required')
@@ -457,11 +470,8 @@ def run_setup(root, cfg, args):
     state = prepare(root, cfg)
     if state is None:
         if required(cfg) and cfg.get('runtime_mode', 'hermes') == 'hermes':
-            scope = (cfg.get('notify') or {}).get('slack') or {}
-            profile = scope.get('profile') or cfg.get('notify_bot_profile') or 'default'
-            if getattr(args, 'plugin_profile', None) not in (None, profile):
-                raise ValueError('slack_setup_binding_mismatch')
-            args.plugin_profile = profile
+            check_profile(cfg, args)
+            args.plugin_profile = binding_profile(cfg)
         print('既存の通知先を保持し、チャンネルの新規作成は行いません。')
         return cfg
     binding = state['plan']['binding']
@@ -559,13 +569,16 @@ def report_problem(error):
              'slack_setup_channel_unverified', 'slack_setup_members_unverified',
              'slack_setup_invite_unverified', 'slack_setup_gateway_unavailable',
              'slack_setup_receipt_pending', 'slack_setup_credentials_or_scope_required',
-             'slack_setup_profile_conflict',
+             'slack_setup_profile_conflict', 'slack_setup_binding_mismatch',
              'slack_setup_not_ready_or_config_changed'}
     if code not in known:
         code = 'slack_setup_unverified'
     print('Slackのチャンネル準備は未完了です（' + code + '）。既存の患者情報先は保持しています。')
     if code == 'slack_setup_scope_required':
         print('Slackアプリにgroups:write・groups:readを許可して再インストールし、設定を確認してください。')
+    elif code == 'slack_setup_binding_mismatch':
+        print('指定したHermesの設定名が、Slackの接続に使う設定名（notify.slack.profile）と一致しません。'
+              '同じ設定名を指定して再実行してください。')
     return 1
 
 
