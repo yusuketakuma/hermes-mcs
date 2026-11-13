@@ -18,9 +18,11 @@ Discordのグループ構成員が共有アンカーへ誘導される場合は`
 一覧への掲載は承認・送信・配送成功を意味せず、実際の復旧可否は計画と適用時の再照合が決めます。
 
 一覧が20件を超える場合は、公開snapshotに対してページ単位で続きを読めます。
+この手順のコマンドの`$PY`はMCSのPythonです。Hermesモードは`~/.hermes/hermes-agent/venv/bin/python`、
+独立モードは`$HOME/.mcs/venv/bin/python3`を指定し、macOS標準の`python3`は使いません。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+$PY mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   recovery_parts --offset 20 --limit 20
 ```
 
@@ -31,7 +33,7 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
 `card_part_check`は、計画が作れるpartについて、稼働中のデータ領域の配送journalだけを読み、証拠の状態を返す読み取り専用コマンドです。snapshotは計画の同一性にだけ使い、journalは`--data-dir`で明示したliveのデータルートから読みます。journalルートをsnapshotや`--cmd-dir`の親から推測することはありません。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+$PY mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   card_part_check --delivery-id DELIVERY_UUID --part-id PART_ID \
   --data-dir /absolute/path/to/live-data
 ```
@@ -64,7 +66,7 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
 公開snapshotを指定し、対象の配送IDとpart IDを照合します。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+$PY mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   card_part_plan --delivery-id DELIVERY_UUID --part-id PART_ID
 ```
 
@@ -197,7 +199,7 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 承認用ファイルは運用者だけが読める場所へ0600で保存し、内容を確認した後に実行します。
 
 ```sh
-python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
+$PY mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
   --cmd-dir /absolute/path/data/cmd \
   control card_part_resolve --confirm-human < /absolute/private/approved-part.json
 ```
@@ -227,20 +229,24 @@ Slack・Discord・LINE WORKSの通知を扱い、それ以外の送信先は`uns
 
 | 送信先 | 停止するもの | 適用時に確認する停止証跡 |
 | --- | --- | --- |
-| Slack・Discord | Hermes gatewayの通知ワーカー | `data/worker_status/<送信先>-*.json`の全起動記録が現行版で、記録されたプロセスが終了済み |
-| LINE WORKS | 独立アダプター（例: `launchctl bootout "gui/$(id -u)/ai.mcs.lineworks"`、Linuxは`systemctl --user stop hermes-mcs-lineworks.service`） | `data/lineworks_state/send-*.lock`の全送信ロックを取得できる |
+| Slack・Discord | Hermesモードは Hermes gatewayの通知ワーカー、独立実行モード（`runtime_mode=standalone`）は独立実行のhost（macOSは`ai.mcs.standalone`） | `data/<送信先>_state/send-*.lock`の全送信ロックを取得できる。Hermesモードで`data/worker_status/<送信先>-*.json`の起動記録が残っている場合は、全記録が現行版で、記録されたプロセスが終了済み |
+| LINE WORKS | Hermesモードは独立アダプター（例: `launchctl bootout "gui/$(id -u)/ai.mcs.lineworks"`、Linuxは`systemctl --user stop hermes-mcs-lineworks.service`）、独立実行モードは独立実行のhost | `data/lineworks_state/send-*.lock`の全送信ロックを取得できる |
 
-LINE WORKSアダプターは起動中ずっと送信ロックを持つため、ロックを取れれば停止済みです。
-適用はそのロックを終了まで持ち続けるので、途中でアダプターが起動しても送信を始めません。
-送信ロックが1つも無い（一度も起動していない）場合は`worker_stop_unverified`で拒否します。
+どの送信先でも、配送側は起動中ずっと送信ロックを持つため、ロックを取れれば停止済みです。
+適用はそのロックを終了まで持ち続けるので、途中で配送側が起動しても送信を始めません。
+送信ロックのファイルが1つも無い（一度も起動していない）場合は`worker_stop_unverified`、
+取得できないロックがある場合は`worker_not_stopped`で拒否します。
+起動記録は独立実行モードでは確認しません。ただし`data/flags/notify.json`を読めない場合は確認します。
 複数の送信先を含む計画は、すべての送信先の停止証跡が必要です。
+applyが終わるまでHermes gatewayを再起動しないでください。適用中に起動したSlack・Discordの
+通知ワーカーは送信ロックを待てずに失敗し、次の再起動まで配送を止めます。
 
 ```sh
 (umask 077
- python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+ $PY mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
    plan --event-id EVENT_ID > /absolute/private/cancel-plan.json)
 # 通知ワーカーを正規の手順で停止し、停止を確認してから実行する。
-python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+$PY mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/cancel-plan.json --command-id COMMAND_UUID \
   --actor OPERATOR --reason '運用者の指示で今回の通知を送らず取消' --confirm-human
 ```
@@ -250,7 +256,7 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 配送済み・未送信という事実の認定は行いません。集計の終端specは削除せず退避し、
 DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結果を残します。
 同じ計画とcommand IDでの再実行は同じreceiptを返し、途中で止まったspec退避だけを再開します。
-退避完了を確認してからワーカー（LINE WORKSはアダプター）を戻します。原投稿・配送記録・設定は保持します。
+退避完了を確認してから、停止した配送側（ワーカー・アダプター・独立実行のhost）を戻します。原投稿・配送記録・設定は保持します。
 
 ### 送信結果不明のまま残る run_failed 通知の取り下げ
 
@@ -264,10 +270,10 @@ DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結�
 
 ```sh
 (umask 077
- python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
+ $PY mcs/ops/notification_cancel.py --root /absolute/path/to/mcs \
    plan --event-id EVENT_ID --action retire_operational_alert > /absolute/private/retire-plan.json)
 # update/run の排他ロックと lifecycle marker が空いていることを確認してから実行する。
-python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
+$PY mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
   --plan /absolute/private/retire-plan.json --command-id COMMAND_UUID \
   --actor OPERATOR --reason '復元後に送信結果が不明なまま残る失敗通知を取り下げ' --confirm-human
 ```
@@ -292,9 +298,9 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 
 1. 非公開の診断結果から対象の失敗artifactを確認します。患者名・本文・
    元ファイル名を操作理由や共有する計画へ記載しないでください。
-2. `python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
+2. `$PY mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" plan --artifact-id <対象artifact>`
    で計画を作成し、非公開ファイルに保存します。対象は1回最大20件です。
-3. 計画を確認後、`python3 mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`
+3. 計画を確認後、`$PY mcs/ops/ocr_failure_ack.py --root "$HOME/.mcs" apply --plan <計画ファイル> --command-id <UUID> --actor <操作者> --reason <受付理由> --confirm-human`
    で適用します。必要な場合だけ `--wait-seconds 600` で実行ロックの空きを待てます。
 4. receiptの `ocr_outcome=failed` と `source_coverage=unrecovered` を確認します。
    `receipt_state=pending` はDB保存済み・receiptファイル出力待ちです。
@@ -312,13 +318,13 @@ Slackの過去の未配送部品は、同じ配送先で後続のカードが配
 ローカル管理者は、スナップショットから対象ごとの計画を作ります。
 
 ```bash
-python3 mcs/views/mcs_view.py card_part_tracking_plan --delivery-id DELIVERY_ID --part-id PART_ID
+$PY mcs/views/mcs_view.py card_part_tracking_plan --delivery-id DELIVERY_ID --part-id PART_ID
 ```
 
 返された `targets` に `actor` と `reason` を添えたJSONを、標準入力から次のコマンドへ渡します。`version` と `cmd` は計画を確認するための項目で、入力JSONからは除いてください。`command_id` は省略すると生成されます。1回につき最大20対象です。
 
 ```bash
-python3 mcs/views/mcs_view.py control card_part_tracking_ack --confirm-human < approved-targets.json
+$PY mcs/views/mcs_view.py control card_part_tracking_ack --confirm-human < approved-targets.json
 ```
 
 既存のコマンド処理が採用時に証拠を再照合し、receiptを残します。配送部品・試行・送信権限は変更せず、再送もしません。後続カードの配送は過去の内容の回収を証明しません。未配送総数は保持し、監視の対象件数と「運用終了・未回収」の件数を分けます。結果不明は別に全件集計し、追跡終了では隠しません。配送先や証拠が変われば、古いreceiptだけで監視対象から除外しません。
