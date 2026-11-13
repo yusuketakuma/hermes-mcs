@@ -1017,13 +1017,16 @@ def providers_command(args):
         order = getattr(args, "priority", None)
         if order is not None:
             changes["cloud_llm.provider_order"] = order.split(",")
-            changes["cloud_llm.model"] = None
         cfg = _settings_for_edit()
         if not isinstance(cfg, dict):
             raise ValueError("config_unreadable")
         settings, errors = policy.cloud_config(cfg)
         if errors:
             raise ValueError
+        if order is not None and provider is None and settings["provider"] == "auto":
+            # A single explicit model pins the auto choice; drop it so the new order selects.
+            # A fixed provider ignores the order, so its model (and purpose profiles) stay.
+            changes["cloud_llm.model"] = None
         budgets = {name: dict(caps) for name, caps in settings["provider_budgets"].items()}
         for name in policy.PROVIDERS:
             daily, monthly = (getattr(args, name + suffix, None) for suffix in ("_daily_usd", "_monthly_usd"))
