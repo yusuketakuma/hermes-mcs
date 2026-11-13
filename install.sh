@@ -302,8 +302,11 @@ EOF
         _safe_dir . || _unsafe_dir "設定フォルダー"
         _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
         MCS_ROOT="$(pwd -P)" || _unsafe_dir "設定フォルダー"
-        # The initial config is created under the target's parent; check it now.
-        _safe_dir "$(dirname -- "$MCS_ROOT")" || _unsafe_dir "設定フォルダーのリンク先の親フォルダー"
+        # Only a missing config is created under the target's parent (the same
+        # case runtime.sh checks); an existing install keeps its parent as is.
+        if [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ]; then
+            _safe_dir "$(dirname -- "$MCS_ROOT")" || _unsafe_dir "設定フォルダーのリンク先の親フォルダー"
+        fi
         export MCS_ROOT
     fi
     _lock_data="$MCS_ROOT/data"

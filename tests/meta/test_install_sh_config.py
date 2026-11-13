@@ -479,6 +479,25 @@ def test_root_link_target_with_shared_parent_is_refused_before_software(tmp_path
     assert not any(call.startswith(('brew', 'uv ', 'git clone')) for call in _calls(stub))
 
 
+@pytest.mark.parametrize('parent_mode', [0o770, 0o1777])
+def test_configured_root_link_keeps_shared_parent_unchecked(tmp_path, parent_mode):
+    # Only the initial config is created under the parent; an existing install
+    # under a shared parent (such as /Users/Shared) must keep reinstalling.
+    home, hermes_home, _, env = _world(tmp_path)
+    shared = tmp_path / 'synthetic-shared'
+    shared.mkdir()
+    shared.chmod(parent_mode)
+    target = shared / 'synthetic-root'
+    (target / 'data').mkdir(mode=0o700, parents=True)
+    target.chmod(0o700)
+    (target / 'config.json').write_text('{"runtime_mode":"hermes"}')
+    (target / 'config.json').chmod(0o600)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'リンク先の親フォルダー' not in result.stderr
+
+
 def test_relative_hermes_home_names_the_invocation_directory_with_root_link(tmp_path):
     home, _, stub, env = _world(tmp_path)
     target = tmp_path / 'synthetic-root'
