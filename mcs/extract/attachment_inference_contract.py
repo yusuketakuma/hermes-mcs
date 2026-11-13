@@ -1,4 +1,4 @@
-"""Preserve OCR artifact identity only for an exact reviewed responsibility refactor."""
+"""Preserve OCR artifact identity only across an exact reviewed deploy witness."""
 from __future__ import annotations
 
 import hashlib
@@ -12,8 +12,6 @@ from safe_io import read_regular_nofollow
 
 SCHEMA = 'attachment-inference/v1'
 WITNESS_SCHEMA = 'attachment-refactor-witness/v1'
-BASELINE = '132d87d2994e8d6b5c4d6fce6f1790ced77ef9db'
-BASELINE_CODE = '45a81b77ca67c360ac90ccca5e6667434396ce8afb61e4374e3e821be19739b0'
 WITNESS_KEY = 'attachment_refactor_witness'
 _PATH = str(Path(__file__).resolve().parents[2] / 'resources' / 'inference-contracts' / 'attachment-refactor-20261105.json')
 try:
@@ -33,24 +31,29 @@ def _compatible(code_digest, sources, versions):
     witness = _WITNESS
     if (not isinstance(witness, dict) or set(witness) != {
             'schema', 'baseline', 'baseline_code_digest', 'versions', 'components', 'replacements', 'additions'}
-            or witness['schema'] != WITNESS_SCHEMA or witness['baseline'] != BASELINE
-            or witness['baseline_code_digest'] != BASELINE_CODE or witness['versions'] != versions
+            or witness['schema'] != WITNESS_SCHEMA or not isinstance(witness['baseline'], str)
+            or re.fullmatch(r'[0-9a-f]{40}', witness['baseline']) is None
+            or not _digest(witness['baseline_code_digest']) or witness['versions'] != versions
             or not all(isinstance(witness[key], dict) for key in ('components', 'replacements', 'additions'))
             or sources.get(WITNESS_KEY) != _WITNESS_DIGEST):
         return None
     components, replacements, additions = (witness[key] for key in ('components', 'replacements', 'additions'))
+    # The baseline's own witness digest is restored, never reviewed as a runtime component.
+    reviewed = set(replacements) - {WITNESS_KEY}
     if (components.get('attachment_inference') != code_digest
-            or set(components) != set(replacements) | set(additions)
-            or set(replacements) & set(additions)
+            or set(components) != reviewed | set(additions)
+            or reviewed & set(additions)
             or any(not _digest(value) or sources.get(key) != value for key, value in components.items())
             or any(not _digest(value) for value in replacements.values())
             or any(value != components.get(key) for key, value in additions.items())
-            or WITNESS_KEY in components):
+            or WITNESS_KEY in components or WITNESS_KEY in additions):
         return None
     normalized = dict(sources)
     normalized.update(replacements)
-    for key in (*additions, WITNESS_KEY):
+    for key in additions:
         normalized.pop(key, None)
+    if WITNESS_KEY not in replacements:
+        normalized.pop(WITNESS_KEY, None)
     return witness['baseline_code_digest'], normalized
 
 
