@@ -561,6 +561,24 @@ def test_standalone_retires_installed_hermes_agents_without_a_manifest(monkeypat
     assert (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
 
 
+def test_standalone_switch_stops_on_an_unreadable_manifest(monkeypatch, tmp_path):
+    """IA-047: an existing but unreadable record may list cron jobs to retire."""
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
+    paths = mcs_setup._service_paths()
+    Path(paths.manifest_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(paths.manifest_path).write_text("{ synthetic broken")
+    (tmp_path / "agents").mkdir()
+    plist = tmp_path / "agents" / "local.mcs-int.plist"
+    plist.write_text("synthetic hermes agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(call[:2] == ["launchctl", "bootout"] for call in calls)
+    assert plist.exists()
+    assert not (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+
+
 def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypatch, tmp_path):
     calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
     service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]},

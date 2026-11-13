@@ -982,6 +982,11 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1, message)
     if sync_recovery(cfg, note, dry, paths=paths):
         return ServiceResult(1, message)
+    if selected_mode == 'standalone' and not prev and os.path.lexists(paths.manifest_path):
+        # An existing but unreadable record may list Hermes cron jobs this switch
+        # must retire; stop for a human instead of leaving both runtimes (IA-047).
+        return ServiceResult(1, '常駐設定: 管理記録を読み取れないため、以前の定期処理を確実に止められません。'
+                             '変更していません。管理記録（' + paths.manifest_path + '）を確認し、担当者に相談してください')
     if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths):
         return ServiceResult(1, message)
     if selected_mode == 'standalone' and retire_agents(set(contract.AGENT_LABELS) - {contract.HEALTH_LABEL}, note, dry, paths=paths):
