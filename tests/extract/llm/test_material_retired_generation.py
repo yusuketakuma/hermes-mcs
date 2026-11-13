@@ -81,10 +81,16 @@ def test_live_binding_fixture_is_complete_material(led):
     assert _material(led, _final(led)) == 'complete'
 
 
-def test_shipped_contracts_mark_no_generation(led):
-    assert extract_llm_historical.material_contracts() == ()
+def test_shipped_contracts_mark_both_retired_generations(led):
+    # Owner decision 2026-11-13 #1: both retired generations are material, leaf-sealed finals only.
+    assert extract_llm_historical.material_contracts() == extract_llm_historical.known_old_contracts()
+    assert len(extract_llm_historical.known_old_contracts()) == 2
     assert all(len(gen) == 3 for gen in extract_llm_historical.known_old_contracts())
-    assert _material(led, _final(led, generation=_old())) != 'complete'
+    assert _material(led, _final(led, generation=_old())) == 'complete'
+
+
+def test_shipped_marks_still_require_a_leaf_proof(led):
+    assert _material(led, _final(led, generation=_old(), leaf_claims=False)) != 'complete'
 
 
 def test_marked_generation_admits_leaf_sealed_final(led, monkeypatch):

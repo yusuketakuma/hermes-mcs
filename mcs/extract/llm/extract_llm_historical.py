@@ -8,7 +8,7 @@ runs the current request locally while every old row stays byte-identical.
 A generation may also carry ``"material": true``. Only such marked
 generations let an otherwise current, leaf-sealed final extraction count as
 patient-context material (``material_contracts``); the mark is added only
-after owner approval, and the shipped contracts carry none.
+after owner approval (2026-11-13: both shipped retired generations).
 """
 import json
 from pathlib import Path
