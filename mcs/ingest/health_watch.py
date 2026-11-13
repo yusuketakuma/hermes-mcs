@@ -1028,6 +1028,7 @@ _WAIT_JA = {
     "alert_render_live": "緊急通知の送信中",
     "alert_render_issued": "緊急通知の作成待ち",
     "signals_off_sealed": "設定によりシグナル通知を保留",
+    "signals_interactive_off": "カード表示が無効のためシグナル通知を保留",
     "intent_cards_unsettled": "カードの配信完了待ち",
     "intent_cards_issued": "カードの作成待ち",
     "intent_card_delivery_unknown": "カードの配信結果が不明",
