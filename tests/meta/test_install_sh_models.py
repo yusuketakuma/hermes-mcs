@@ -35,6 +35,18 @@ def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "起動設定を更新しました" in r.stderr and "launchctl bootout" in r.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
+    # The deferred reload is not forgotten once the plist on disk is current.
+    r = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "まだ反映されていません" in r.stderr and "起動設定にも変更はありません" not in r.stdout
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 3
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "起動設定にも変更はありません" in r.stdout
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 3
 
 
 def test_model_download_resumes_from_part(tmp_path):

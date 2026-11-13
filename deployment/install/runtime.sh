@@ -668,9 +668,15 @@ else
             > "$LLAMA_PLIST.tmp"
         _changed=0
         if publish "$LLAMA_PLIST.tmp" "$LLAMA_PLIST"; then _changed=1; fi
+        # A loaded job keeps its old definition until bootout/bootstrap, so a
+        # reload deferred by an earlier run stays pending until it happens.
+        _reload_pending="$MCS_DATA/.llama-reload-pending"
+        _reload_was_pending=0
+        if [ -f "$_reload_pending" ]; then _reload_was_pending=1; _changed=1; fi
         if ! loaded ai.mcs.llamaserver; then
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            rm -f "$_reload_pending"
             ok "AI サーバーの常駐サービスを起動しました"
             sum "4/6 ローカルAI:      AI サーバーを起動"
         elif [ "$_changed" -eq 0 ]; then
@@ -678,13 +684,20 @@ else
             sum "4/6 ローカルAI:      AI サーバーは起動済み"
         elif [ "$SERVING" -eq 1 ]; then
             # never interrupt a serving model mid-request — tell the user
-            warn "AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
-            warn "  launchctl bootout gui/$(id -u)/ai.mcs.llamaserver; launchctl bootstrap gui/$(id -u) $(shell_quote "$LLAMA_PLIST")"
+            : > "$_reload_pending" 2>/dev/null \
+                || warn "再起動待ちの記録を保存できません。次回の install.sh ではこの注意を表示しません"
+            if [ "$_reload_was_pending" -eq 1 ]; then
+                warn "以前に更新した AI サーバーの起動設定がまだ反映されていません。稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
+            else
+                warn "AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
+            fi
+            warn "  launchctl bootout gui/$(id -u)/ai.mcs.llamaserver; launchctl bootstrap gui/$(id -u) $(shell_quote "$LLAMA_PLIST") && rm -f $(shell_quote "$_reload_pending")"
             sum "4/6 ローカルAI:      起動設定を更新、再起動待ち（上の注意を参照）"
         else
             launchctl bootout "gui/$(id -u)/ai.mcs.llamaserver" 2>/dev/null || true
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            rm -f "$_reload_pending"
             ok "更新した設定で AI サーバーを再起動しました"
             sum "4/6 ローカルAI:      設定変更に合わせて AI サーバーを再起動"
         fi
