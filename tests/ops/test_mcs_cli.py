@@ -113,13 +113,15 @@ def test_mutating_update_retains_existing_entrypoints(pinned, monkeypatch, phase
         assert argv[1:] == [str(ROOT / "mcs/ops/mcs_update.py"), "rollback"]
 
 
-@pytest.mark.parametrize("route,exit_code", [("apply", 0), ("blocked", 1)])
+@pytest.mark.parametrize("route,blockers,exit_code", [
+    ("apply", [], 0), ("blocked", ["tree_dirty"], 1), ("noop", [], 0),
+    ("noop", ["update_in_progress_or_interrupted"], 1)])
 def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
-        pinned, monkeypatch, tmp_path, capsys, route, exit_code):
+        pinned, monkeypatch, tmp_path, capsys, route, blockers, exit_code):
     monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
     repo, bare = _make_repo(tmp_path)
     stub = ("import json,os,sys\nprint(json.dumps("
-            f"{{'route':{route!r},'argv':sys.argv[1:],"
+            f"{{'route':{route!r},'blockers':{blockers!r},'argv':sys.argv[1:],"
             "'repo':os.environ['MCS_UPDATE_REPO']}))\n")
     _release(tmp_path / "remote-work", bare, "v1.2.0",
              {"mcs/ops/mcs_update.py": stub, "mcs/_mcs_path.py": ""})

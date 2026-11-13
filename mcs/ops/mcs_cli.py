@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
                 except (ValueError, RecursionError):
                     print("更新内容の確認結果を読み取れませんでした（JSON形式ではありません）。更新は実行していません。管理者に確認してください。", file=sys.stderr)
                     return 1
-                return 1 if report.get("route") == "blocked" else 0
+                # A noop route can still carry blockers (interrupted update, corrupt record).
+                return 1 if report.get("route") == "blocked" or report.get("blockers") else 0
             os.execv(sys.executable, cmd)
         case _:
             ap.error("この操作には対応していません。--help で操作名を確認してください")
