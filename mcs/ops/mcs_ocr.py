@@ -201,8 +201,12 @@ def main():
         except (OSError, ValueError, ProviderSettingsUnreadable):
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
-    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
-                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
+    # Owner 2026-11-13: deferrals beside saved progress are backlog, not a stall; a run with no progress still fails.
+    progressed = bool(result.get("complete", 0) or result.get("local_done", 0))
+    deferred = result.get("deferred", 0) or result.get("local_deferred", 0)
+    accepted = (None, "disabled", "writer_busy", "busy") + (("memory_deferred",) if progressed else ())
+    return 0 if (not result.get("failed", 0) and (progressed or not deferred)
+                 and result.get("reason") in accepted) else 1
 
 
 if __name__ == "__main__":
