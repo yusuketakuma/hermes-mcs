@@ -147,6 +147,14 @@ def _rollback_backup_error(entry: dict) -> str | None:
     return "backup_invalid: " + path
 
 
+def _restore_entered(state: dict) -> bool:
+    """A DB restore already began: a consent record, or a restore marker that is
+    not the backup-adoption marker (an unreadable one counts, fail closed)."""
+    marker = notify_spool.restore_pending(DATA)
+    return bool(state.get("restore_consent")) or (
+        marker is not None and marker.get("by") != "mcs_backup_restore")
+
+
 def _target_card_layout(ref: str) -> int:
     """The card layout the code at ref renders; 1 before the constant existed."""
     path = "mcs/notify/notify_cards.py"

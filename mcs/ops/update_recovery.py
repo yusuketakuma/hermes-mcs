@@ -71,6 +71,7 @@ from update_repository import (
 from update_restore import (
     _consent_hold,
     _restore_db,
+    _restore_entered,
     _rollback_applying,
     _rollback_tree,
 )
@@ -496,7 +497,13 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         pass
                 except (update_migrations.MigrationError, UpdateError):
                     return _provider_migration_recovery_hold()
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # Like _rollback_tree, a rollback without a schema change never
+                # restores its backup (maintenance may have pruned it). Drop a
+                # hold an earlier recovery set for that unneeded restore.
+                if applying.pop("restore_incomplete", None):
+                    journal_store.save_state(STATE_PATH, state)
+            elif rollback_shaped:
                 # Old rollback journals may predate the durable freeze.
                 # Persist it before entering any DB restore operation.
                 applying["restore_incomplete"] = True

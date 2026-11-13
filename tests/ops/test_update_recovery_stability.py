@@ -939,6 +939,43 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
 
 
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("earlier_hold", [False, True])
+def test_non_schema_rollback_resumes_without_pruned_backup(
+        updater, tmp_path, monkeypatch, engine, earlier_hold):
+    tool, recover, _repo, _live, back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    # Maintenance pruned the preupdate backup of an update without a schema change.
+    Path(back).unlink()
+    state["applying"]["schema_bump"] = False
+    if earlier_hold:
+        state["applying"]["restore_incomplete"] = True   # set by an earlier recovery pass
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a rollback without a schema change must not restore its backup")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "updater":
+        monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
+        monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
+        monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
+    else:
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_reconcile_membership", lambda snapshot: [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    assert recover() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and restarts == [1]
+    assert not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
 def test_flagless_rollback_does_not_overwrite_changed_journal(
         updater, tmp_path, monkeypatch, engine):
     tool, recover, _repo, live, _back, _before, restarts = _synthetic_flagless_rollback(

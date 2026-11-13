@@ -683,6 +683,14 @@ def _journal_fresh(state):
     return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
 
 
+def _restore_entered(state):
+    """= mcs_update._restore_entered: a consent record, or a restore marker
+    other than the backup-adoption one (unreadable counts, fail closed)."""
+    marker = mcs_recovery_core._awaiting_consent() or mcs_recovery_core._unreconciled_restore()
+    return bool(state.get("restore_consent")) or (
+        marker is not None and marker.get("by") != "mcs_backup_restore")
+
+
 def _clear_hold():
     """Record once that an earlier hold no longer applies."""
     last = mcs_recovery_core._last_report()
@@ -1014,7 +1022,17 @@ def _recover_legacy(if_stale=False):
                     return git_failed("status")
                 if not clean:
                     return escalate("target tree could not be cleaned")
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # = mcs_update: a rollback without a schema change never restores
+                # its (possibly pruned) backup; drop a hold set for that restore.
+                if applying.pop("restore_incomplete", None):
+                    try:
+                        mcs_recovery_core._save_state(state)
+                    except (OSError, ValueError, TypeError, RecursionError):
+                        mcs_recovery_core._report("restore_hold_unverified",
+                                "rollback hold could not be saved or verified")
+                        return 1
+            elif rollback_shaped:
                 # Older rollback journals did not record the restore hold.
                 # Seal it under both locks before touching the database so
                 # every failure and a process interruption remains held.
