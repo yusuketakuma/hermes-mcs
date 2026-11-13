@@ -5,7 +5,7 @@
   "upgrade": "追加操作は不要です。",
   "details": [
     "親の記録と子の記録で対象版と更新前の版が一致する場合だけ子の記録を採用する。",
-    "子の完了後の失敗は recovery_report.json に recovery_incomplete（after_done）として残る。"
+    "子の完了後の失敗は recovery_report.json に recovery_incomplete（after_done）として残し、画面に mcs recover での後始末を案内する。"
   ],
   "refs": ["mcs/ops/update_apply.py"]
 }

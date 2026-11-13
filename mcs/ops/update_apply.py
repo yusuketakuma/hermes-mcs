@@ -254,6 +254,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # bookkeeping — never roll back a finished update.
                         rollback_failed = True
                         _report("recovery_incomplete", "after_done: " + reason[:200])
+                        print("更新は適用されましたが、その後の記録処理を完了できませんでした。"
+                              "mcs recover で後始末を完了してください。")
                         return 1
                     _record_attempt(failed_state, tag, "failed", reason)
                     journal_store.save_state(STATE_PATH, failed_state)
@@ -322,7 +324,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         state["applying"] = _rollback_applying(
                             entry, entry.get("sha"),
                             command_id or entry.get("command_id"))
-                        journal(state, "rollback")
+                        try:
+                            journal(state, "rollback")
+                        except BaseException:
+                            state["applying"] = entry   # nothing reset: never record a frozen restore
+                            raise
                     schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
                     if schema_hold:
                         consent_hold = True
