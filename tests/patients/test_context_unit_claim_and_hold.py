@@ -169,16 +169,21 @@ def test_concurrent_worker_skips_a_patient_with_a_unit_in_flight(runtime, monkey
         if not nested:
             nested['pid'] = next(pid for pid in (1, 2) if _progress(led, pid).get('unit_claim'))
             nested['claim'] = _progress(led, nested['pid'])['unit_claim']
+            nested['claimed_unit'] = _progress(led, nested['pid'])['last_attempt_unit']
             with closing(Ledger(db_path)) as other:
                 nested['result'] = refresh.run_due(other, CFG, deadline=clock.mono + 600, admit=lambda: True)
+            nested['unit_after'] = {pid: _progress(led, pid).get('last_attempt_unit') for pid in (1, 2)}
         return answer
 
     monkeypatch.setattr(refresh.local_llm, 'admitted_chat', chat_with_second_worker)
     first = step(runtime)
     assert nested['claim']['until'] <= clock.wall - 1 + refresh._UNIT_CLAIM_SECONDS
     if marked:
-        assert nested['result']['wait_unit_claimed'] == 1
+        # The fair rotation may start the second scan on the other patient, so the
+        # counter can stay 0; what must hold is that the marked patient is skipped.
         assert nested['result']['status'] == 'progressed'
+        assert nested['unit_after'][nested['pid']] == nested['claimed_unit']
+        assert nested['unit_after'][3 - nested['pid']] == 2
         assert first['status'] == 'progressed' and first['done'] == 1
         assert 'unit_claim' not in _progress(led, nested['pid'])
         assert all('unit_claim' not in _progress(led, pid) for pid in (1, 2))

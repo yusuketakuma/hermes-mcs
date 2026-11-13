@@ -8,9 +8,10 @@ from ledger import Ledger
 import patient_context_quality_controller as controller
 import patient_context_quality_receipts as receipts
 import patient_context_refresh_state as state
+from test_patient_context_refresh import runtime
 from test_patient_summary_quality import quality_owner
 
-__all__ = ['quality_owner']
+__all__ = ['quality_owner', 'runtime']
 
 
 def _other(led):
@@ -67,9 +68,12 @@ def test_same_patient_source_change_is_refused(quality_owner, monkeypatch):
 def test_unexpected_own_write_in_the_writer_transaction_is_refused(quality_owner, monkeypatch):
     led, clock, cfg, doc, sends, _ = quality_owner
     original = receipts._quality_owns
+    wrote = []
 
     def owns_after_own_write(db, *args, **kwargs):
-        if db.in_transaction:
+        # Once: the later release transaction is the owner's own and may commit.
+        if db.in_transaction and not wrote:
+            wrote.append(True)
             db.execute("INSERT OR IGNORE INTO patients(project_id,last_seen,created_at) VALUES(3,0,0)")
         return original(db, *args, **kwargs)
 

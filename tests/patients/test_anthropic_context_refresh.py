@@ -824,6 +824,9 @@ def test_shadow_pending_is_atomic_with_local_success_and_replay_does_not_duplica
             step(runtime)
     assert [dict(row) for row in led.db.execute("SELECT * FROM artifacts WHERE kind!=? ORDER BY artifact_id", (patient_context_refresh_state.PROGRESS,))] == before
     assert not cloud[0]
+    # An exception ends the unit without releasing its selection mark; the replay
+    # is the next worker after that mark expires.
+    runtime[1].wall += context_refresh._UNIT_CLAIM_SECONDS
     assert step(runtime)["lane"] == "B"
     row, = [row for row in led.artifacts("cloud_compare_v1") if row["artifact_id"] not in prior_ids]
     meta = json.loads(row["meta"])
