@@ -1,4 +1,5 @@
 """Synthetic install sh software contracts; shared helpers preserve isolated runtime state."""
+import json
 import os
 import shutil
 import subprocess
@@ -90,6 +91,19 @@ def test_fresh_pip_failure_resumes_verified_bootstrap_hold_on_rerun(tmp_path):
     assert "fresh-runner bootstrap-fresh" in resumed
     assert not marker.exists()
     assert (home / ".mcs/config.json").is_file()
+
+
+def test_resumed_fresh_install_keeps_the_fresh_default_runtime(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    flags = ("--no-brew", "--no-llm", "--no-plugin", "--no-services", "--no-recovery")
+    assert _run({**env, "STUB_FAIL_PIP": "1"}, None, *flags).returncode == 1
+    assert (home / ".mcs/data/.provider-bootstrap-fresh.json").is_file()
+    retried = _run(env, None, *flags)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    config = json.loads((home / ".mcs/config.json").read_text())
+    assert config["runtime_mode"] == "standalone"
+    assert not (home / ".mcs/data/.provider-bootstrap-fresh.json").exists()
+    assert not (home / ".hermes").exists()
 
 
 @pytest.mark.parametrize("change", ["extra_entry", "config_present", "recreated_data", "edited_hold"])
