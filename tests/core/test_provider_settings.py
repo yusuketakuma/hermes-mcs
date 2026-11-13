@@ -1071,6 +1071,41 @@ def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypat
         settings.read(tmp_path)
 
 
+def test_interrupt_after_receipt_removal_keeps_committed_settings(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    unlink, fired = os.unlink, []
+    def interrupted(name, **kwargs):
+        unlink(name, **kwargs)
+        if name == ".provider-settings-pending.json" and not fired:
+            fired.append(True)
+            raise KeyboardInterrupt("synthetic interruption")
+    monkeypatch.setattr(settings.os, "unlink", interrupted)
+    with pytest.raises(KeyboardInterrupt, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert not (tmp_path / "data" / ".provider-settings-pending.json").exists()
+    after = settings.read(tmp_path)
+    assert after["mode"] == "split" and after["providers"]["openai"] == {"model": "synthetic-openai"}
+
+
+def test_failure_creating_receipt_leaves_settings_untouched(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    create = settings.create_exclusive
+    def refused(name, *args, **kwargs):
+        if name == ".provider-settings-pending.json":
+            raise OSError("synthetic interruption")
+        return create(name, *args, **kwargs)
+    monkeypatch.setattr(settings, "create_exclusive", refused)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert _tree_bytes(tmp_path) == before
+    assert settings.read(tmp_path)["providers"]["openai"] == {}
+
+
 @pytest.mark.parametrize("name", ["config", "anthropic", "openai", "jev", "authority"])
 def test_stale_snapshot_never_rebaselines_or_writes(tmp_path, monkeypatch, name):
     tree(tmp_path, split=True)

@@ -868,6 +868,13 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                 if isinstance(error, FileExistsError):
                     return
                 try:
+                    # No receipt means nothing was published yet, or the commit already
+                    # completed its unlink; never revert a committed state.
+                    pending_now = _read_file(data_fd, ".provider-settings-pending.json")[1]
+                    if pending_now is None:
+                        return
+                    if pending_snapshot is not None and pending_now != pending_snapshot:
+                        raise ValueError("provider_snapshot_changed")
                     root_handle.check()
                     _verify_lock(root, held_fd, root_fd=root_fd)
                     if (_directory_anchor(os.stat("data", dir_fd=root_fd, follow_symlinks=False)) != data_anchor
