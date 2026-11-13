@@ -1113,3 +1113,26 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
     assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
     assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"
+
+
+@pytest.mark.parametrize(("given", "stored"), [
+    ("2026-12-31T23:59:59.5Z", "2026-12-31T23:59:59.500000+00:00"),
+    ("2026-12-31T23:59:59+0900", "2026-12-31T23:59:59+09:00"),
+    ("20261231T235959+09:00", "2026-12-31T23:59:59+09:00"),
+    ("2026-12-31T23:59:59+09:00", "2026-12-31T23:59:59+09:00"),
+])
+def test_cloud_budget_saves_times_in_a_form_python39_helpers_can_read(monkeypatch, given, stored):
+    # install.sh reads these with the PATH python3 (3.9), whose fromisoformat
+    # rejects 3.11-only spellings; the saved text must be the canonical form.
+    import config_edit
+
+    cfg = {"cloud_llm": {"mode": "off"}}
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
+    saved = []
+    def apply(changes, defaults):
+        saved.append(changes)
+        return cfg, []
+    monkeypatch.setattr(config_edit, "apply", apply)
+    assert cli.budget_command(SimpleNamespace(until=given)) == 0
+    assert saved == [{"cloud_llm.until": stored}]
+    assert mcs_util.until_epoch(stored) == mcs_util.until_epoch(given)
