@@ -67,7 +67,8 @@ class CloudClient:
 
     def response_error(self, status, raw):
         kind, retryable = http_error(status)
-        return kind, retryable, {}
+        # A 5xx may be billed, so the resend guard always refuses its retry: never wait for one.
+        return kind, retryable and status < 500, {}
 
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn=None, after_result=None, cache_prefix=None):
@@ -175,8 +176,9 @@ class CloudClient:
                 raise last
             if attempt + 1 < self.max_attempts:
                 # Retry-After alone when given (as Jev), else bounded exponential backoff
-                delay = min(wait if wait is not None else 2**attempt + random.uniform(0, 0.5),
-                            max(0.0, deadline - time.monotonic()))
+                delay = wait if wait is not None else 2**attempt + random.uniform(0, 0.5)
+                if delay >= deadline - time.monotonic():
+                    raise last   # no retry fits before the deadline: do not hold the slot asleep
                 if delay:
                     (self._wait_fn if self._wait_fn is not None else time.sleep)(delay)
         raise last
