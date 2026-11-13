@@ -1119,10 +1119,16 @@ def provider_dialog(root, *, admission=None, on_saved=None):
 
 
 def add_parsers(sub):
-    p = sub.add_parser("cloud-llm", help="外部AIの件数・費用を送信せずに試算、照会します")
+    p = sub.add_parser("cloud-llm", help="外部AIの試算・照会（送信しない）と、利用先・予算の設定、人の確認を伴う停止・再開を行います")
     actions = p.add_subparsers(dest="cloud_action", required=True)
+    read_only_help = {
+        "plan": "保存済み記録から件数・費用を送信せずに試算（estimate と同じ出力）",
+        "estimate": "保存済み記録から件数・費用を送信せずに試算（plan と同じ出力）",
+        "log": "保存済みの外部AI利用記録を表示（送信しない）",
+        "compare": "ローカルAIと外部AIの抽出結果の比較を集計（送信しない）",
+    }
     for action in ("plan", "estimate", "log", "compare"):
-        q = actions.add_parser(action)
+        q = actions.add_parser(action, help=read_only_help[action])
         q.add_argument("--days", type=int, help="集計日数（1〜62、既定14）")
         q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD（--daysとは併用不可、plan・estimateは61日前まで）")
         if action == "log":
