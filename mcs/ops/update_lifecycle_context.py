@@ -49,14 +49,18 @@ except ImportError:
 
 def _load_gateway_restart():
     """Capture the independent restart helper before apply/rollback changes
-    the tree. A missing/broken helper must not disable the whole updater:
-    restart_gateway then reports that the restart could not be requested."""
-    try:
-        return runpy.run_path(os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
-    except Exception:  # noqa: BLE001 — any load failure is the same "unavailable"
-        return None
+    the tree. An older launcher's copy lacks the helper's support files, so
+    the installed checkout's helper is the fallback. A missing/broken helper
+    must not disable the whole updater: restart_gateway then reports that
+    the restart could not be requested."""
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for root in dict.fromkeys(os.path.realpath(path) for path in (here, REPO)):
+        try:
+            return runpy.run_path(os.path.join(
+                root, "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
+        except Exception:  # noqa: BLE001 — any load failure is the same "unavailable"
+            continue
+    return None
 
 
 _request_gateway_restart = _load_gateway_restart()
