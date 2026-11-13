@@ -420,15 +420,25 @@ def agent_absent(label: str, *, paths: ServicePaths) -> bool:
         time.sleep(0.5)
     return False
 
-# Deferred self-reload: launchd can still be tearing the job down (the standalone host
+# Deferred reload: launchd can still be tearing the job down (the standalone host
 # drains for minutes) after bootout returns, so wait for "not found" (113) before a
-# bootstrap that would otherwise fail against the dying job.
-RELOAD_SCRIPT = ('while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; '
-                 'i=0; while launchctl print "$2" >/dev/null 2>&1 || [ $? -ne 113 ]; do '
-                 'i=$((i+1)); [ "$i" -ge 720 ] && exit 1; sleep 5; done; '
-                 'i=0; until launchctl bootstrap "$3" "$4"; do '
-                 'i=$((i+1)); [ "$i" -ge 3 ] && exit 1; sleep 1; done')
+# bootstrap that would otherwise fail against the dying job. 750 x 5 s outlasts the
+# host's ExitTimeOut (3660 s).
+AWAIT_RELOAD_SCRIPT = ('i=0; while launchctl print "$2" >/dev/null 2>&1 || [ $? -ne 113 ]; do '
+                       'i=$((i+1)); [ "$i" -ge 750 ] && exit 1; sleep 5; done; '
+                       'i=0; until launchctl bootstrap "$3" "$4"; do '
+                       'i=$((i+1)); [ "$i" -ge 3 ] && exit 1; sleep 1; done')
+RELOAD_SCRIPT = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; ' + AWAIT_RELOAD_SCRIPT
 STOP_POLLS = 60   # x0.5 s after bootout before a stop counts as unconfirmed
+
+
+def _defer_reload(script: str, label: str, dst: str, *, paths: ServicePaths) -> None:
+    """Hand the reload of `label` to a detached waiter that outlives this run."""
+    uid = paths.uid
+    env = update_launch.without_job_identity(os.environ)
+    waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
+    helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
+    subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, f'gui/{uid}/{label}', f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
 
 
 def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool:
@@ -438,25 +448,18 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
     if os.environ.get('XPC_SERVICE_NAME') == label:
         note(f'常駐処理{label}: この設定処理の終了後に読み込み直します')
         if not dry:
-            target = f'gui/{uid}/{label}'
-            env = update_launch.without_job_identity(os.environ)
-            waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
-            helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
-            subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', RELOAD_SCRIPT, 'mcs-reload', waiter, target, f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+            _defer_reload(RELOAD_SCRIPT, label, dst, paths=paths)
         return True
     if agent_loaded(label, paths=paths):
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
             lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{uid}/{label}'])
-            for _ in range(STOP_POLLS):
-                if lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{uid}/{label}'], timeout=10).returncode == 113:
-                    break
-                time.sleep(0.5)
-            else:
-                # A print answering 0 for the dying job must not count as a new load.
-                note(f'  常駐処理{label}: 以前の処理の停止を確認できないため、読み込み直していません。'
-                     '処理の終了を待って`mcs_setup.py services`を再実行してください')
-                return False
+            if not agent_absent(label, paths=paths):
+                # A print answering 0 for the dying job is not a new load, and a later
+                # run sees the written plist as current: the reload must not wait for one.
+                note(f'  常駐処理{label}: 以前の処理が終了処理中のため、終了後に自動で読み込み直します')
+                _defer_reload(AWAIT_RELOAD_SCRIPT, label, dst, paths=paths)
+                return True
     else:
         note(f'常駐処理{label}: 起動します')
     if dry:

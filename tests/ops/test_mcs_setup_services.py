@@ -621,10 +621,12 @@ def test_agent_reconcile_retries_transient_bootstrap(
 
 def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch):
     # launchd keeps answering `print` 0 while a booted-out job drains; that
-    # answer must not be taken as the new load.
+    # answer must not be taken as the new load. The plist is already written,
+    # so a later run would see it as current: the reload is handed to a
+    # detached waiter instead of a re-run that would report "loaded".
     import subprocess
     from types import SimpleNamespace
-    seen = []
+    seen, spawned = [], []
 
     def fake_run(argv, **kwargs):
         seen.append(argv[1])
@@ -634,11 +636,24 @@ def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch)
     monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
     monkeypatch.setattr(service_management, "time",
                         SimpleNamespace(time=service_management.time.time, sleep=sleeps.append))
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    monkeypatch.setattr(service_management.run_log_install, "helper_path",
+                        lambda *a, **k: "/synthetic/helper")
+    # never a real process here: the waiter would drive the real launchd
+    monkeypatch.setattr(service_management.subprocess, "Popen",
+                        lambda argv, **kw: spawned.append((argv, kw)))
+    paths = mcs_setup._service_paths()
     assert service_management.agent_reconcile(
-        'ai.mcs.x', '/p.plist', notes.append, False, paths=mcs_setup._service_paths()) is False
+        'ai.mcs.x', '/p.plist', notes.append, False, paths=paths) is True
     assert "bootstrap" not in seen
     assert seen.count("print") == 1 + service_management.STOP_POLLS
-    assert any("停止を確認できない" in n for n in notes)
+    assert any("終了後に自動で読み込み直します" in n for n in notes)
+    (argv, kw), = spawned
+    assert argv[7:10] == ["/bin/sh", "-c", service_management.AWAIT_RELOAD_SCRIPT]
+    assert argv[12:] == [f"gui/{paths.uid}/ai.mcs.x", f"gui/{paths.uid}", "/p.plist"]
+    assert kw["start_new_session"]
+    # the waiter never boots out again: a host loaded meanwhile must survive
+    assert "bootout" not in service_management.AWAIT_RELOAD_SCRIPT
 
 
 def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
