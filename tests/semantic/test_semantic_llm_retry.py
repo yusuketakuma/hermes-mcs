@@ -243,6 +243,28 @@ def test_unobserved_probe_defers_without_sending_prompt(monkeypatch):
     assert calls == []
 
 
+def test_probe_lost_gpu_turn_is_the_busy_stage(monkeypatch):
+    """Only a format probe that lost the GPU turn short-defers as
+    llm_turn_busy; the real prompt is never sent and nothing is cached."""
+    import local_llm
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', None)
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', 0.0)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    calls = []
+
+    def busy(prompt, error_out=None, **kw):
+        calls.append(prompt)
+        if error_out is not None:
+            error_out["kind"] = "busy"
+        return None
+    monkeypatch.setattr(local_llm, "chat", busy)
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic_transport.llm_chat("synthetic prompt")
+    assert info.value.stage == "llm_turn_busy"
+    assert calls == ['Reply with {"ok": true}']
+    assert semantic_transport._FMT_MODE is None
+
+
 @pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection, _turn_busy])
 def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
                                                       not_sent):
@@ -281,6 +303,8 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
     ("llm_unreachable", 0, "deferred"),
     ("llm_unreachable", 1, "deferred_backoff"),
     ("llm_turn_busy", 1, "deferred"),
+    ("probe_unsent", 1, "deferred_backoff"),
+    ("llm_admission:held", 1, "deferred_backoff"),
 ])
 def test_not_sent_llm_defers_only_when_no_jev_was_spent(
         monkeypatch, stage, jev_spent, expected):

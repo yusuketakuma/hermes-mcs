@@ -506,7 +506,8 @@ def _remember_plain(endpoint: str, model: str) -> None:
         pass
 
 
-def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
+def _probe_format(endpoint: str, model: str, timeout: float = 10,
+                  error_out: dict | None = None) -> str:
     global _FMT_MODE, _FMT_TS
     if _format_key(endpoint, model) in _format_marks():
         return "plain"
@@ -519,7 +520,8 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
         kw = dict(timeout=min(10, timeout),
                   request_fn=local_llm.bounded_request,
                   slot=local_llm.request_slot(),
-                  verify=lambda text: json_object(text) is not None)
+                  verify=lambda text: json_object(text) is not None,
+                  error_out=error_out)
         if local_llm.admission_enabled():
             # T20: the probe sends real inference POSTs — it takes a
             # class permit (a held/deferred verdict yields None)
@@ -528,7 +530,7 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
         else:
             mode = local_llm.probe_format(endpoint, model, None, **kw)
         if mode is None:
-            return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+            return _FMT_MODE  # nothing sent (busy turn, hold, deadline): probe again next call
         _FMT_MODE = mode
     except Exception:
         # an unobserved probe is not a plain verdict — stay unprobed
@@ -657,10 +659,15 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     # the probe spends the caller's budget, never adds to it: the
     # runtime sized ``timeout`` to the job deadline (absolute)
     call_deadline = time.monotonic() + timeout
-    fmt = _probe_format(endpoint, model, timeout)
+    probe_err: dict = {}
+    fmt = _probe_format(endpoint, model, timeout, probe_err)
     if fmt is None:
         # the probe never left — an unobserved format defers the real
-        # call like any other admission hold, never a silent plain send
+        # call like any other admission hold, never a silent plain send;
+        # only a lost GPU turn is the short-defer busy stage
+        if probe_err.get("kind") == "busy":
+            _failed("busy")
+            raise runtime.LLMNotSent("llm_turn_busy")
         _failed("probe_unsent")
         raise runtime.LLMNotSent("probe_unsent")
     rf = {"type": "json_object"} if fmt == "object" else None

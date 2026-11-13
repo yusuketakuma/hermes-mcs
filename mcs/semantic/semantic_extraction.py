@@ -972,6 +972,8 @@ def extract_facts_v2(llm_fn, member: dict,
             failed.append(index)
             failure_reason = "deadline"
             break
+        # before the call: the preflight gets the full budget and its Jev
+        # guard fires before any LLM work it would otherwise discard
         if jev_client is not None:
             jev_verdicts[cid] = _preflight_verdict(
                 jev_client, spec["text"], deadline, cid)
