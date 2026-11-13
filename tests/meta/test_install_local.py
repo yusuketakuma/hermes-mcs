@@ -206,6 +206,27 @@ def test_source_that_is_not_a_checkout_is_refused(home, tmp_path):
     assert install_local.main([], source=str(plain)) == 2
 
 
+def test_unpacked_source_inside_another_repository_is_refused(home, tmp_path):
+    outer = _repo(tmp_path / "unrelated-project", marker="other")
+    unpacked = outer / "downloads" / "hermes-mcs"
+    unpacked.mkdir(parents=True)
+    (unpacked / "install.sh").write_text(FAKE_INSTALL)
+    assert install_local.main([], source=str(unpacked)) == 2
+    assert not (home / ".mcs").exists() and not (home / "install-ran").exists()
+
+
+def test_home_repository_does_not_turn_data_only_runtime_root_into_a_checkout(home, source, capsys):
+    _git(home, "init", "-q", "-b", "main")
+    runtime = home / ".mcs"
+    (runtime / "data").mkdir(parents=True)
+    (runtime / "config.json").write_text("{}")
+    assert install_local.main([], source=str(source)) == 0
+    dest = home / ".local" / "share" / "hermes-mcs"
+    assert (dest / "README").read_text() == "mcs" and Path(_ran(home)[0]) == dest.resolve()
+    assert sorted(p.name for p in runtime.iterdir()) == ["config.json", "data"]
+    assert "設定・データだけ" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("problem", [
     {"gui_session": False}, {"platform": "linux"}, {"home_writable": False}, {"git": False}])
 def test_non_local_session_is_not_reported_as_installed(home, source, monkeypatch, problem, capsys):

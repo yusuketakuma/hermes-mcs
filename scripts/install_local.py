@@ -51,13 +51,15 @@ def _git(path, *args, check=True):
 
 
 def _is_checkout(path):
+    """True only for the top of its own work tree, not a folder inside another one."""
     if not os.path.isdir(path):
         return False
     try:
-        return subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
-                              capture_output=True, text=True, timeout=30).returncode == 0
+        result = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
+                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         raise Refused("git を実行できません（xcode-select --install で導入できます）") from None
+    return result.returncode == 0 and os.path.realpath(result.stdout.strip()) == os.path.realpath(path)
 
 
 def _roots(path):
@@ -135,8 +137,6 @@ def _judge(source, dest, notes):
     if not os.path.isdir(dest):
         raise Refused(f"{dest} はフォルダではありません")
     if _is_checkout(dest):
-        if os.path.realpath(_git(dest, "rev-parse", "--show-toplevel")) != dest:
-            raise Refused(f"{dest} は別のソースフォルダの内側です。ソースフォルダの最上位か空のフォルダを指定してください")
         dest_head, source_head = _git(dest, "rev-parse", "HEAD"), _git(source, "rev-parse", "HEAD")
         if dest_head != source_head:
             if not _roots(source) & _roots(dest):
