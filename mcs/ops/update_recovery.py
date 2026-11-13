@@ -343,9 +343,11 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 return 1
         try:
             _migrate_log_tail()
-        except UpdateError:
-            _report('recovery_incomplete', 'run_log_tail_unverified')
-            return 1
+        except UpdateError as error:
+            # The legacy-log import keeps its originals and never re-imports an
+            # uncertain record; it gates no writer, so a source that changed or
+            # vanished must not stop recovery. A later report may replace this.
+            _report("run_log_tail_unverified", str(error) + " — recovery continues")
         if not applying and not stages:
             if not _provider_recovery_ready():
                 return 1

@@ -458,3 +458,30 @@ def test_recovery_reimports_tail_under_both_locks_before_empty_journal_return(mo
     monkeypatch.setattr(update_services, '_remove_marker', mcs_update._remove_marker)
     assert mcs_update.recover_interrupted() == 0
     assert trace == ['update_lock', 'run_lock', 'tail', 'marker']
+
+
+def test_recovery_continues_after_unverified_legacy_log_tail(monkeypatch):
+    from ops_testkit import patch_lifecycle_lookup
+
+    trace, reports = [], []
+    monkeypatch.setattr(mcs_update.journal_store, 'load_state', lambda *_: {})
+    for name, value in (
+            ('acquire_update_lock', lambda: trace.append('update_lock') or os.open(os.devnull, os.O_RDONLY)),
+            ('_acquire_run_lock_wait', lambda **_: trace.append('run_lock') or os.open(os.devnull, os.O_RDONLY)),
+            ('_release_legacy_hold', lambda _: False),
+            ('_restore_writer_hold_marker', lambda: None),
+            ('_remove_marker', lambda: trace.append('marker')),
+            ('_report', lambda result, detail, **_: reports.append((result, detail)))):
+        patch_lifecycle_lookup(monkeypatch, mcs_update, name, value)
+
+    def unverified_tail():
+        trace.append('tail')
+        # An imported legacy source vanished or changed after its import.
+        raise mcs_update.UpdateError('run_log_tail_unverified: run_log_legacy_missing')
+
+    patch_lifecycle_lookup(monkeypatch, mcs_update, '_migrate_log_tail', unverified_tail)
+    assert mcs_update.recover_interrupted() == 0
+    # The orphan update marker is still removed, so collection is not held forever.
+    assert trace == ['update_lock', 'run_lock', 'tail', 'marker']
+    assert reports == [('run_log_tail_unverified',
+                        'run_log_tail_unverified: run_log_legacy_missing — recovery continues')]
