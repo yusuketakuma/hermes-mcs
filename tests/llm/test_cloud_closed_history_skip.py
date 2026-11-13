@@ -4,7 +4,7 @@ import time
 
 import cloud_policy
 from cloud_selection_progress_testkit import _select, cloud_candidates, routed  # noqa: F401
-from semantic_testkit import _ledger
+from semantic_testkit import _ledger, _message
 
 
 def _artifact(db, kind, pid, mid, meta):
@@ -15,6 +15,7 @@ def _artifact(db, kind, pid, mid, meta):
 def test_history_closed_matches_the_recovery_refusals(tmp_path):
     led = _ledger(tmp_path)
     try:
+        led.save_messages([_message(mid) for mid in (10, 11, 12, 13)])
         with led.db:
             _artifact(led.db, "cloud_usage_reserve", 1, 10, {"route": "reextract", "reservation_id": "r-missing"})
             _artifact(led.db, "cloud_usage_reserve", 1, 11, {"route": "reextract", "reservation_id": "r-settled"})
