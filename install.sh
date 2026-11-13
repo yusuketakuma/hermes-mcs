@@ -1344,7 +1344,7 @@ trap 'if [ "$?" -ne 0 ]; then
     if [ -f "$MCS_DATA/.provider-bootstrap-fresh.json" ] && [ ! -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ] \
             && [ ! -e "$MCS_DATA/.provider-settings-pending.json" ] && [ ! -L "$MCS_DATA/.provider-settings-pending.json" ]; then
-        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。設定はまだ作成していないため、原因を直して同じコマンドを再実行すると初回導入を再開します。" >&2
+        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。設定はまだ作成していないため、原因を直して最初と同じ指定（--mode など）で再実行すると初回導入を再開します。" >&2
     elif [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
