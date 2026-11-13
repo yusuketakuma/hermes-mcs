@@ -959,6 +959,10 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1, message)
     if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths):
         return ServiceResult(1, message)
+    if selected_mode == 'standalone' and retire_agents(set(contract.AGENT_LABELS) - {contract.HEALTH_LABEL}, note, dry, paths=paths):
+        # Hermes-only agents never belong to the host; a missing or stale manifest
+        # must not leave them running beside it.
+        return ServiceResult(1, message)
     sync_scripts(subs, manifest, note, dry, paths=paths)
     if selected_mode == 'standalone':
         problems += sync_standalone_service(manifest, note, dry, paths=paths)

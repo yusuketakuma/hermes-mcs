@@ -512,6 +512,24 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
     assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/local.mcs-int"] in calls
 
 
+def test_standalone_retires_installed_hermes_agents_without_a_manifest(monkeypatch, tmp_path):
+    # A Hermes run that reported a problem saved no manifest, yet placed its agents.
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int", "ai.mcs.extract-drainer"})
+    (tmp_path / "agents").mkdir()
+    for label in ("local.mcs-int", "ai.mcs.extract-drainer", "ai.mcs.llamaserver"):
+        (tmp_path / "agents" / f"{label}.plist").write_text("synthetic agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 0
+    uid = mcs_setup.os.getuid()
+    for label in ("local.mcs-int", "ai.mcs.extract-drainer"):
+        assert ["launchctl", "bootout", f"gui/{uid}/{label}"] in calls
+        assert not (tmp_path / "agents" / f"{label}.plist").exists()
+    assert (tmp_path / "agents" / "ai.mcs.llamaserver.plist").exists()
+    assert (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+
+
 def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypatch, tmp_path):
     calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
     service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]},
