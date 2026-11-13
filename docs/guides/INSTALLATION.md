@@ -476,7 +476,7 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   カードは、旧 worker では配送されず保留される（再起動後に配送）
 - **カードを操作できる人を増やす（Discord）** — 薬局スタッフ全員に
   ロールを付け、そのロール ID を `allowed_role_ids` に入れる:
-  `python3 mcs/ops/mcs_setup.py init --plugin-role-ids <role id>[,<role id>]`
+  `$PY mcs/ops/mcs_setup.py init --yes --plugin-role-ids <role id>[,<role id>]`
   （または `hermes -p <profile> config set
   plugins.entries.mcs-discord-commands.settings.allowed_role_ids
   '["<role id>"]'`）。guild ID（@everyone ロール）は指定できない。
@@ -574,7 +574,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 ## 4. config.json 設定リファレンス
 
 `~/.mcs/config.json`（0600）。`init` の詳細コースが全項目を案内する
-（`--set KEY=JSON` で非対話設定も可）。必須は `mcs_login_id` と
+（`--yes` と `--set KEY=JSON` を併用すると非対話で設定できる。`--yes` が無いと指定値を反映したうえでウィザードを始める）。必須は `mcs_login_id` と
 `notify_target` の2つのみ。
 
 | キー | 型 | 既定 | 説明 |
