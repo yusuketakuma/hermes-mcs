@@ -91,6 +91,20 @@ def test_install_stops_before_software_when_update_lock_is_held(tmp_path):
         os.close(fd)
 
 
+def test_lockf_usage_failure_is_not_reported_as_a_running_install(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text('#!/bin/sh\necho "lockf $*" >> "$STUB_LOG"\nexit 64\n')  # EX_USAGE
+    lockf.chmod(0o755)
+    result = _run(env, hermes_home, '--no-llm')
+    assert result.returncode != 0
+    assert '排他制御（lockf）を実行できません（終了コード 64）' in result.stderr
+    assert '別の導入または更新' not in result.stderr
+    assert not any(call.startswith(('brew', 'git clone', 'uv ')) for call in _calls(stub_root))
+    assert not (home / '.mcs/data/.provider-bootstrap-fresh.json').exists()
+    assert not (home / '.mcs/config.json').exists()
+
+
 def test_install_rejects_symlinked_update_lock(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     data = home / '.mcs/data'

@@ -375,7 +375,15 @@ EOF
             die "排他制御ファイルの所有者または権限を確認できません"
         fi
         if command -v lockf >/dev/null 2>&1; then
-            lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
+            # Only EX_TEMPFAIL means the lock is held; any other failure (such
+            # as EX_USAGE from a lockf without descriptor support) is not "busy".
+            _lock_status=0
+            lockf -s -t 0 "$_install_lock_fd" || _lock_status=$?
+            case "$_lock_status" in
+                0) ;;
+                75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                *) die "排他制御（lockf）を実行できません（終了コード ${_lock_status}）。この macOS の lockf が記述子の指定に対応していない可能性があります。変更は行っていません。担当者に確認してください" ;;
+            esac
         elif command -v flock >/dev/null 2>&1; then
             flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
         else
