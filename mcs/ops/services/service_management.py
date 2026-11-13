@@ -26,6 +26,7 @@ import runtime_inspection
 import service_contract as contract
 import owned_process
 import update_launch
+import writer_lock
 import run_log_install
 from mcs_config import recovery_python_problem, validate_notify
 import scheduled_jobs
@@ -850,7 +851,11 @@ def sync_standalone_service(manifest, note, dry, *, paths: ServicePaths):
             if lifecycle_io.run_bounded(['systemctl', '--user', 'daemon-reload']).returncode:
                 return 1
         reload = paths.platform == 'darwin' and running and changed and (current is not None)
-        if running and (not reload):
+        if running and (not reload) and os.path.lexists(os.path.join(paths.root, 'data', writer_lock.UPDATE_MARKER_NAME)):
+            # The host cannot restart while the updater (often its own child) runs, and an
+            # early request blocks the drainers the updater verifies; it restarts after bookkeeping.
+            note('独立動作の常駐処理: 更新処理中のため、再起動は更新の完了後に行います')
+        elif running and (not reload):
             try:
                 request_restart(paths.root)
             except (OSError, ValueError):

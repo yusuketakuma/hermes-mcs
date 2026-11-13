@@ -458,6 +458,27 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     assert requests == [str(tmp_path)]
 
 
+def test_standalone_services_under_an_update_defers_the_host_restart(monkeypatch, tmp_path, capsys):
+    # The updater (often the host's own `update` child) verifies drainers after
+    # services; a restart request here would latch the host and keep them down.
+    from mcs_standalone import service
+    import writer_lock
+
+    calls, args = _services_env(monkeypatch, tmp_path)
+    requests = []
+    monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 0
+    (tmp_path / "data" / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic")
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    assert requests == []
+    assert not any("bootstrap" in call or "bootout" in call or "kickstart" in call for call in calls)
+    assert "更新の完了後" in capsys.readouterr().out
+
+
 def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatch, tmp_path):
     from mcs_standalone import service
 
