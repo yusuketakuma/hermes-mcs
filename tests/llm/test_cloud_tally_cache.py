@@ -650,3 +650,23 @@ def test_incremental_tally_streams_and_closes_rows(tmp_path, now, interrupted):
             assert len(tally.open) == expected['unresolved_requests'] == 2
         assert len(cursors) == 1 and cursors[0].closed
         assert not ledger.db.in_transaction
+
+
+def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(tmp_path, now):
+    """One full history read per verification: appended rows extend the verified state."""
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _reserve(ledger)
+        first = c._tally(ledger)
+        _reserve(ledger, unit='appended')
+        statements = []
+        before = dict(c.TALLY_COST)
+        ledger.db.set_trace_callback(statements.append)
+        try:
+            second = c._tally(ledger)
+        finally:
+            ledger.db.set_trace_callback(None)
+        assert second.total == 2 * first.total
+        assert sum('AND artifact_id<=' in sql for sql in statements) == 1
+        assert c.TALLY_COST['rebuilds'] == before['rebuilds'] + 1
+        # The extended digest equals a fresh full fingerprint of the same rows.
+        assert second.prefix == second.fingerprint(ledger, now)

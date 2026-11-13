@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
 import hashlib
-from itertools import chain
 import json
 import math
 import os
@@ -1067,6 +1066,14 @@ def global_block_reason(ledger, *, model=MODEL):
     return None
 
 
+def _hash_row(digest, row):
+    try:
+        digest.update(canonical(tuple(row)))
+    except (TypeError, ValueError, UnicodeError):
+        raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+    digest.update(b'\n')
+
+
 class _Tally:
     """usage_report's month totals kept incrementally for the reservation gate:
     unchanged rows are hashed without decoding their metadata again; changed
@@ -1078,6 +1085,10 @@ class _Tally:
         self.precheck = None
         self.last_id = 0
         self.prefix = None   # fingerprint of the rows already tallied
+        # sha256 state over the in-period rows up to _main_id (fingerprint's
+        # first part): appended rows extend it instead of re-reading history
+        self._main = hashlib.sha256()
+        self._main_id = 0
         self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
         self.closed = {}     # rid -> (maximum, cost, settled, day): one result seen
         self.orphans = {}    # rid -> (prior-month reservation rows, results)
@@ -1096,30 +1107,40 @@ class _Tally:
         self.provider_totals[provider] = self.provider_totals.get(provider, Decimal(0)) + cost
 
     def fingerprint(self, ledger, now):
-        """Hash all accounting columns, including reservations outside the period."""
+        """Hash all accounting columns, including reservations outside the period.
+
+        Re-reads every in-period row (the same-length mutation check) and keeps
+        the verified state so update() can extend it with appended rows only."""
         digest = hashlib.sha256()
         with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id<=? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
-            prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
-            try:
-                for row in chain(rows, sorted(prior, key=lambda row: row['artifact_id'])):
-                    digest.update(canonical(tuple(row)))
-                    digest.update(b'\n')
-            except (TypeError, ValueError, UnicodeError):
-                raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+            for row in rows:
+                _hash_row(digest, row)
+        self._main, self._main_id = digest.copy(), self.last_id
+        return self._with_prior(digest, ledger, now)
+
+    def _with_prior(self, digest, ledger, now):
+        """Finish a main-row digest with the prior-period reservations, in fingerprint's order."""
+        prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
+        for row in sorted(prior, key=lambda row: row['artifact_id']):
+            _hash_row(digest, row)
         return digest.digest()
 
     def update(self, ledger, now):
         last_id = self.last_id
         new_orphans = {}
         changed_orphans = set()
+        # Extend only a state that covers exactly the rows tallied so far.
+        extend = self._main.copy() if self._main_id == last_id else None
         with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
             for row in rows:
+                if extend is not None:
+                    _hash_row(extend, row)
                 m = _accounting_meta(row["meta"])
                 rid = m.get("reservation_id")
                 if row["kind"] == "cloud_usage_reserve":
@@ -1171,7 +1192,11 @@ class _Tally:
                 self.invalid = True
         # The caller already verified this prefix in the same read snapshot.
         if self.prefix is None or self.last_id != last_id:
-            self.prefix = self.fingerprint(ledger, now)
+            if extend is not None:
+                self._main, self._main_id = extend.copy(), self.last_id
+                self.prefix = self._with_prior(extend, ledger, now)
+            else:
+                self.prefix = self.fingerprint(ledger, now)
         self.checked_at = now
 
 
@@ -1179,6 +1204,11 @@ def _tally_precheck(db, start):
     if db.in_transaction:
         return None
     return db, start, db.execute('PRAGMA data_version').fetchone()[0], db.total_changes
+
+
+# Process-wide count and seconds of tally verifications (not cache hits), for
+# the cloud pass record: the full history re-read is the dominant fixed cost.
+TALLY_COST = {"rebuilds": 0, "seconds": 0.0}
 
 
 def _current_tally(ledger, start, attribute, now):
@@ -1190,6 +1220,15 @@ def _current_tally(ledger, start, attribute, now):
         return tally
     if tally is not None:
         tally.precheck = None
+    started = time.monotonic()
+    try:
+        return _refresh_tally(ledger, start, attribute, now, tally, before)
+    finally:
+        TALLY_COST["rebuilds"] += 1
+        TALLY_COST["seconds"] += time.monotonic() - started
+
+
+def _refresh_tally(ledger, start, attribute, now, tally, before):
     try:
         with _accounting_snapshot(ledger.db):
             _validate_accounting_timestamps(ledger.db)
@@ -1521,6 +1560,23 @@ def _saved_answer(answer, metadata):
             or metadata.get('answer_finish_reason_v1') != answer['finish_reason']):
         raise ValueError('cloud_answer_invalid')
     return {key: answer[key] for key in ('text', 'finish_reason')}
+
+
+def history_closed(db, project_id, message_id, *, route):
+    """True when a reservation of this message on ``route`` has no result or a
+    disposition: recover_response refuses those (cloud_result_missing /
+    cloud_result_discarded) and no fresh send is allowed, so selecting the row
+    only defers it again. Read-only; release stays a human operation."""
+    return db.execute(
+        "SELECT 1 FROM artifacts r WHERE r.kind=? AND r.project_id=? AND r.message_id IS ? "
+        "AND CASE WHEN json_valid(r.meta) THEN json_extract(r.meta,'$.route')=? END "
+        "AND (NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind=? AND x.project_id=r.project_id "
+        "AND x.message_id IS r.message_id AND CASE WHEN json_valid(x.meta) THEN "
+        "json_extract(x.meta,'$.reservation_id')=json_extract(r.meta,'$.reservation_id') END) "
+        "OR EXISTS (SELECT 1 FROM artifacts d WHERE d.kind='cloud_usage_disposition' "
+        "AND d.project_id=r.project_id AND d.message_id IS r.message_id AND CASE WHEN json_valid(d.meta) "
+        "THEN json_extract(d.meta,'$.reservation_id')=json_extract(r.meta,'$.reservation_id') END)) LIMIT 1",
+        (KINDS[0], project_id, message_id, route, KINDS[1])).fetchone() is not None
 
 
 def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,

@@ -484,6 +484,7 @@ def worker(parent, *, index=None, context_only=False):
                     wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
                     continue
                 started = time.monotonic()
+                tally_before = dict(cloud_policy.TALLY_COST)
                 try:
                     if phase % 2 and not semantic_open:
                         phase += 1      # only the stored-message backlog is open: no semantic turn
@@ -552,6 +553,8 @@ def worker(parent, *, index=None, context_only=False):
                         "completion_basis": "saved_work_units_not_patient_clinical_or_delivery_completion",
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
                     record.update(_pass_timing_observation(result))
+                    record["tally_rebuilds"] = cloud_policy.TALLY_COST["rebuilds"] - tally_before["rebuilds"]
+                    record["tally_s"] = round(cloud_policy.TALLY_COST["seconds"] - tally_before["seconds"], 3)
                     if not allow_exit_settle:
                         done = result.get("done")
                         record["done"] = done if type(done) is int and done >= 0 else 0

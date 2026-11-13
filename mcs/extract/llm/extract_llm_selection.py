@@ -507,6 +507,13 @@ def _cloud_priority_discard(ledger, mid):
         state['ready'] = [item for item in state['ready'] if item[0] != mid]
 
 
+def _closed_skipped(count):
+    """Keep the skipped closed histories visible (count only; no identifiers)."""
+    with contextlib.suppress(Exception):
+        print(json.dumps({"event": "cloud_history_closed_skipped", "pid": os.getpid(),
+                          "ts": time.time(), "count": int(count)}), file=sys.stderr, flush=True)
+
+
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
@@ -667,6 +674,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             if not cloud_only:
                 return cursor.fetchall()
             selected = []
+            closed = 0
             for row in cursor:
                 if deadline is not None and time.monotonic() >= deadline:
                     raise _CloudSelectionIncomplete('deadline')
@@ -674,9 +682,17 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                         and receipt_check(row["project_id"], row["message_id"])
                         and required_contract is not None
                         and cloud_completion(ledger.db, row, required_contract) is None):
+                    if cloud_policy.history_closed(ledger.db, row["project_id"], row["message_id"],
+                                                   route="reextract"):
+                        # A closed paid history would only defer again; it waits
+                        # for its human release instead of heading every pass.
+                        closed += 1
+                        continue
                     selected.append(row)
                     if len(selected) >= n:
                         break
+            if closed:
+                _closed_skipped(closed)
             if deadline is not None and time.monotonic() >= deadline:
                 raise _CloudSelectionIncomplete('deadline')
             return selected
