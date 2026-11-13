@@ -879,6 +879,21 @@ def _install_progress_warning():
             "実行中の場合は完了を待ち、終了していれば install.sh を同じ引数で再実行すると途中から再開します")
 
 
+def _root_permission_errors() -> list[str]:
+    """Show in check what the protected send paths refuse at send time (IA-035)."""
+    errors = []
+    for directory in (Path(HOME).resolve(), Path(HOME).resolve() / "data"):
+        try:
+            info = directory.stat()
+        except OSError:
+            continue
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            errors.append(f"{directory} にほかの利用者の書込み権限があるか所有者が違うため、"
+                          "Slackへの送信など保護された処理が送信前に止まります — "
+                          f"`chmod go-w {directory}`")
+    return errors
+
+
 def cmd_check(args) -> int:
     try:
         cfg = _diagnostic_config()
@@ -895,7 +910,7 @@ def cmd_check(args) -> int:
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
-    errors = e0 + e1 + e2 + e3
+    errors = e0 + e1 + e2 + e3 + _root_permission_errors()
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
     progress_warning = _install_progress_warning()
     if progress_warning is not None:
