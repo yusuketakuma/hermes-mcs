@@ -713,6 +713,13 @@ _install_progress services running
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
+# Installs before umask 077 left an unchanged repo_path 0644, and services refuse
+# the watchdog as unowned unless it is 0600. Links are left alone; chmod fails
+# (and stops) on a file someone else owns.
+if [ -f "$RECOVERY_DIR/repo_path" ] && [ ! -L "$RECOVERY_DIR/repo_path" ]; then
+    chmod 600 "$RECOVERY_DIR/repo_path" \
+        || die "$RECOVERY_DIR/repo_path のアクセス権を 600 に変更できません。所有者とアクセス権を確認して install.sh を再実行してください"
+fi
 if [ "$SKIP_SERVICES" -eq 1 ]; then
     skip "--no-services のため省略します。後で次のコマンドで登録してください:"
     skip "  $(shell_quote "$MCS_PY") $(shell_quote "$SETUP") services"

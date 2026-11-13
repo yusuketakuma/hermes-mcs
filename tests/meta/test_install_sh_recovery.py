@@ -192,6 +192,23 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     assert not list(rec.glob("*.tmp"))
 
 
+def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):
+    """Installs from before umask 077 left repo_path 0644 with the same content;
+    services refuse the watchdog as unowned unless it is 0600, so the mode is
+    repaired before stage 5 (here stage 5 fails and stage 6 never runs)."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o600
+
+
 def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
     """launchd's transient EIO right after bootout is retried, not a
     stopped install."""
