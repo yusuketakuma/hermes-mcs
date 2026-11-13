@@ -209,6 +209,34 @@ def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):
     assert pointer.stat().st_mode & 0o777 == 0o600
 
 
+def test_unchanged_world_readable_watchdog_files_are_made_private(tmp_path):
+    """The pre-umask tool (0755) and plist (0644) also fail the ownership
+    check, and stage 5 runs before stage 6 could republish them; files others
+    can write are not laundered into private ones."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    tool, pointer = rec / "mcs_recover.py", rec / "repo_path"
+    watch = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    watch.parent.mkdir(parents=True)
+    tool.write_bytes(b"# synthetic prior tool\n")
+    pointer.write_text(str(ROOT) + "\n")
+    watch.write_bytes(plistlib.dumps({"Label": "org.mcs.recovery", "ProgramArguments": [
+        "/usr/bin/python3", str(tool), "--if-stale"]}))
+    tool.chmod(0o755)
+    pointer.chmod(0o664)
+    watch.chmod(0o644)
+    before = {path: path.read_bytes() for path in (tool, pointer, watch)}
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert {path: path.read_bytes() for path in before} == before
+    assert tool.stat().st_mode & 0o777 == 0o700
+    assert watch.stat().st_mode & 0o777 == 0o600
+    assert pointer.stat().st_mode & 0o777 == 0o664
+    assert "repo_path のアクセス権を 600 に変更できませんでした" in r.stderr
+
+
 def test_unrepairable_repo_pointer_does_not_stop_install_without_watchdog(tmp_path):
     """A repo_path whose mode cannot be changed (another owner, uchg) only
     warns: services and recovery are skipped here, and stage 5's ownership
