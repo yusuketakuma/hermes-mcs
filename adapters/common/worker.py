@@ -47,6 +47,9 @@ EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # check expiry on access anyway)
 RECONCILE_EVERY_S = 300.0      # retry receipt recovery without restarting the sender
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
+STARTUP_STOP_CHECK_S = 8.0     # a backoff sleep re-checks stopping() this often,
+                               # so a superseded supervisor frees its scope lock
+                               # well inside a successor's handoff window
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
                                # restorable backup are no longer restore evidence
 NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
@@ -156,7 +159,11 @@ async def retry_startup(step, stopping, log) -> bool:
             raise
         except Exception as exc:
             log("startup_retry", error=type(exc).__name__)
-        await asyncio.sleep(wait)
+        slept = 0.0
+        while slept < wait and not stopping():
+            step = min(wait - slept, STARTUP_STOP_CHECK_S)
+            await asyncio.sleep(step)
+            slept += step
         wait = min(wait * 2, STARTUP_RETRY_MAX_S)
     return False
 
@@ -233,15 +240,26 @@ class DeliveryWorker:
             os.close(self._lock_fd)
             self._lock_fd = None
 
-    async def wait_scope_lock(self, timeout: float, give_up) -> bool:
+    async def wait_scope_lock(self, timeout: float, give_up,
+                              handoff=lambda: False) -> bool:
         """Poll for the scope lock up to ``timeout`` seconds — a dying
         predecessor releases it within the window, but a live foreign
-        owner is never raced. ``give_up()`` aborts early."""
+        owner is never raced. ``give_up()`` aborts early; while
+        ``handoff()`` says an in-process predecessor that was told to stop
+        still runs, the wait outlasts the window (that owner is leaving)."""
         deadline = time.monotonic() + timeout
+        extended = False
         while not self.acquire_scope_lock():
-            if give_up() or time.monotonic() >= deadline:
+            if give_up():
                 self._log("scope_lock_unavailable")
                 return False
+            if time.monotonic() >= deadline:
+                if not handoff():
+                    self._log("scope_lock_unavailable")
+                    return False
+                if not extended:
+                    extended = True
+                    self._log("scope_lock_handoff_wait")
             await asyncio.sleep(0.25)
         return True
 
