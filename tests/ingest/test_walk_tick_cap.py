@@ -68,3 +68,47 @@ def test_backfill_walks_the_probe_window_and_keeps_its_own_cursor(db, monkeypatc
         ticks.append(visited[:])
     assert ticks == [[("probe", p) for p in t] + [("backfill", p) for p in t] for t in ROTATION]
     assert collection_stages.walk_order(db, "backfill")[0]["project_id"] == 1
+
+
+def _fetch_with_self_posts(db, monkeypatch, visited, clock, deadline):
+    """Run three ticks of _stage_fetch with self_posts on and a fake clock."""
+    monkeypatch.setattr(collection_stages, "stage_unread", lambda *a, **k: None)
+    monkeypatch.setattr(collection_stages, "outage_since", lambda: None)
+    monkeypatch.setattr(collection_stages, "time", SimpleNamespace(monotonic=clock, time=time.time))
+    args = SimpleNamespace(mark_read=False, jobs_only=False, no_backfill=False)
+    ticks = []
+    for run_id in (1, 2, 3):
+        visited.clear()
+        result = {"errors": [], "new_messages": 0, "backfilled": 0, "run_id": run_id}
+        run_check._stage_fetch(_adapter(visited), db, args, {"self_posts": True}, result,
+                               deadline, run_id, False, 86400)
+        ticks.append((visited[:], result["errors"]))
+    return ticks
+
+
+def test_backfill_deadline_in_the_probe_window_resumes_at_the_patient_not_reached(db, monkeypatch):
+    """A backfill deadline inside the probe's window must not drop the rest
+    of it: the next tick probes and backfills from the patient not reached,
+    instead of moving on to the next window and starving those patients."""
+    visited = []
+    # every visit costs 100s: the probe (margin 60) finishes its window of 3,
+    # backfill (margin 30) reaches one patient and stops at the next
+    ticks = _fetch_with_self_posts(db, monkeypatch, visited, lambda: len(visited) * 100, 350)
+    starts = [(1, [1, 2, 3]), (2, [2, 3, 4]), (3, [3, 4, 5])]
+    for (seen, errors), (stopped_at, probed) in zip(ticks, starts):
+        assert seen == [("probe", p) for p in probed] + [("backfill", stopped_at)]
+        assert errors == ["deadline_exceeded"]
+
+
+def test_backfill_never_walks_a_patient_the_probe_deadline_did_not_reach(db, monkeypatch):
+    """Backfill stores own/other-read posts silently, so a probe deadline
+    cuts the window it hands to backfill at the first patient not probed."""
+    visited = []
+    # only probes cost time: the probe stops at its third patient, backfill has room
+    clock = lambda: 100 * sum(k == "probe" for k, _ in visited)  # noqa: E731
+    ticks = _fetch_with_self_posts(db, monkeypatch, visited, clock, 250)
+    for seen, errors in ticks:
+        probed = [p for k, p in seen if k == "probe"]
+        assert [p for k, p in seen if k == "backfill"] == probed and len(probed) == 2
+        assert errors == ["self_probe: deadline_exceeded"]
+    assert [[p for k, p in s if k == "probe"] for s, _ in ticks] == [[1, 2], [3, 4], [5, 6]]

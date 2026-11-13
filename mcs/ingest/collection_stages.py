@@ -681,7 +681,9 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
     walk; a gap stays visible via coverage_lag.
     order is the window this tick's self_probe walked: backfill must come
     after the probe for each patient, so it then walks that window and
-    leaves its own cursor alone; without it backfill walks its own."""
+    leaves its own cursor alone; without it backfill walks its own. A
+    deadline inside that window moves the probe's cursor back to the first
+    patient not reached, so the next tick probes and backfills it first."""
     own = order is None
     order, nxt = _walk_window(ledger, "backfill") if own else (order, None)
     for row in order:
@@ -780,8 +782,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                     result["errors"].append(
                         f"backfill {pid}: coverage_stalled_{stall}")
     # the window end or a deadline moves the cursor; a full walk or an exception leaves it
-    if own:
-        _save_walk(ledger, "backfill", nxt)
+    _save_walk(ledger, "backfill" if own else "self_probe", nxt)
 
 
 def _head_stall(ledger, pid: int) -> str | None:
@@ -814,12 +815,12 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
     stored row notifies like an unread arrival (notify_all_new).
     An id that a completed fetch still cannot store is remembered
     (probe_mid) so it is not re-fetched every tick.
-    Walks at most WALK_TICK_CAP patients and returns that window for
-    this tick's backfill.
+    Walks at most WALK_TICK_CAP patients and returns the part it reached
+    for this tick's backfill (a deadline cuts it at the patient not probed).
     """
     probed = 0
     order, nxt = _walk_window(ledger, "self_probe")
-    for row in order:
+    for i, row in enumerate(order):
         pid = row["project_id"]
         wm = ledger.high_watermark(pid)
         if not wm:
@@ -827,6 +828,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
         if time.monotonic() > deadline - SELF_PROBE_MARGIN_S:
             result["errors"].append("self_probe: deadline_exceeded")
             nxt = pid
+            order = order[:i]   # backfill must not reach an unprobed patient
             break
         try:
             probe = adapter.fetch_latest(pid)
