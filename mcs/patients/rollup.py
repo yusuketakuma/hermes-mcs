@@ -20,7 +20,7 @@ import argparse as argparse
 import codecs as codecs
 import contextlib as contextlib
 import copy as copy
-from dataclasses import dataclass as dataclass
+from dataclasses import dataclass as dataclass, replace as replace
 from datetime import date as date, datetime as datetime, timedelta as timedelta
 import hashlib as hashlib
 import json as json
@@ -776,9 +776,13 @@ class RollupScan:
     unknown_reasons: tuple[tuple[str, int], ...] = ()
     rechecked: int = 0
     next_project_id: int | None = None
+    unknown_deadline: tuple[int, ...] = ()
+    interrupted: int | None = None
+    deadline_streak: int = 0
 
 
-def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, start_id=None) -> RollupScan:
+def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, start_id=None,
+                        stalled=()) -> RollupScan:
     """Check markers at read snapshots, rechecking clean candidates once on external writes.
 
     Clean is valid at the observed snapshot, not after its release. Rebuild's
@@ -796,6 +800,7 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, start_id=N
     reasons = {}
     rechecked = 0
     next_project_id = None
+    interrupted = None
 
     def hold(project_ids, reason):
         for pid in project_ids:
@@ -821,18 +826,29 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, start_id=N
                        for reason in sorted(set(reasons.values())))
         return RollupScan(tuple(pid for pid in candidates if pid in dirty),
                           tuple(pid for pid in candidates if pid in unknown), bool(unknown), counts, rechecked,
-                          next_project_id)
+                          next_project_id,
+                          tuple(pid for pid in candidates if pid in unknown and reasons.get(pid) == "deadline"),
+                          interrupted)
 
     observed_now = rollup_builder.time.time() if now is None else now
     checked = set()
+    current = None
     try:
         for index, project_id in enumerate(ids):
             rollup_builder._check_deadline(deadline)
-            next_project_id = ids[(index + 1) % len(ids)]
+            current = index
             check(project_id, observed_now)
             rollup_builder._check_deadline(deadline)
             checked.add(project_id)
+            current = None
+            next_project_id = ids[(index + 1) % len(ids)]
     except rollup_builder.RollupDeadlineExceeded:
+        if current is not None:
+            # Resume at the interrupted patient; step past it only when it alone
+            # consumed the slice or was already cut off, so one slow input cannot pin the cursor.
+            interrupted = ids[current]
+            step = not checked or interrupted in stalled
+            next_project_id = ids[(current + 1) % len(ids)] if step else interrupted
         hold(set(ids) - checked, "deadline")
         return result(ids)
     if ids:
@@ -882,11 +898,20 @@ def scan_fair_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, commi
         "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
         "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
         "ORDER BY artifact_id DESC LIMIT 1", (collection_stages.WALK_CURSOR_KIND, "rollup")).fetchone()
-    start_id = (loads_dict(row[0]) or {}).get("next") if row else None
-    scan = scan_dirty_projects(ledger, now=now, cfg=cfg, deadline=deadline, start_id=start_id)
+    stored = (loads_dict(row[0]) or {}) if row else {}
+    # Consecutive deadline cut-offs per patient, kept until that patient completes a check.
+    raw = stored.get("stalled") if isinstance(stored.get("stalled"), list) else []
+    prior = {item[0]: item[1] for item in raw
+             if isinstance(item, list) and len(item) == 2 and all(type(v) is int for v in item) and item[1] > 0}
+    scan = scan_dirty_projects(ledger, now=now, cfg=cfg, deadline=deadline, start_id=stored.get("next"),
+                               stalled=prior)
+    stalled = {pid: n for pid, n in prior.items() if pid in scan.unknown_deadline}
+    if scan.interrupted is not None:
+        stalled[scan.interrupted] = prior.get(scan.interrupted, 0) + 1
+    scan = replace(scan, deadline_streak=max(stalled.values(), default=0))
     if scan.next_project_id is None:
         return scan
-    content = json.dumps({"next": scan.next_project_id})
+    content = json.dumps({"next": scan.next_project_id, "stalled": sorted([pid, n] for pid, n in stalled.items())})
     previous_wait = None
     try:
         rollup_builder._check_deadline(commit_deadline)
