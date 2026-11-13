@@ -77,5 +77,5 @@ def test_pending_extraction_reaches_the_rendered_heading(ctx):
     ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=7", (T0 + 6 * DAY,))
     _artifact(ctx.db, "extract_v1", 7, {"patient_context": extract_context(body)}, {"hash": _hash_of(ctx.db, 7)})
     view = notify_views.patient_context_list(ctx.db.db, 1, "transition_course", cfg={}, since=T0, now=T0 + 30 * DAY)
-    assert not any("記載なし" in h for h in view["head"])
-    assert any("記載の有無は未確認" in h for h in view["head"])
+    assert not any("の前後14日で記載なし: " in h for h in view["head"])
+    assert any(h.endswith("の前後14日: 未解析の投稿があるため記載の有無は未確認") for h in view["head"])
