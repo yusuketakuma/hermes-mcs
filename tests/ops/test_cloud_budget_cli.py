@@ -57,6 +57,15 @@ def test_legacy_priority_keeps_a_fixed_provider_model_and_unpins_auto(conf):
     assert "model" not in saved and saved["provider_order"] == ["openai", "anthropic"]
 
 
+def test_priority_under_a_fixed_provider_is_saved_with_a_notice(conf, capsys):
+    """GA-cloud-credential-setup-8: the order is kept for a later auto switch, and the user is told."""
+    base = json.loads(conf.read_text())
+    conf.write_text(json.dumps({**base, "cloud_llm": {**base["cloud_llm"], "provider": "openai"}}))
+    assert cli.providers_command(SimpleNamespace(provider=None, priority="anthropic,openai")) == 0
+    assert "auto に切り替えるまで使われません" in capsys.readouterr().err
+    assert json.loads(conf.read_text())["cloud_llm"]["provider_order"] == ["anthropic", "openai"]
+
+
 def test_provider_split_over_total_or_partial_caps_never_saves(conf):
     before = conf.read_bytes()
     assert cli.providers_command(SimpleNamespace(provider="auto", openai_daily_usd="26", openai_monthly_usd="15")) == 1

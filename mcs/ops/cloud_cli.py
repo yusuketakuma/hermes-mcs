@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import sqlite3
+import sys
 import time
 from types import SimpleNamespace
 import uuid
@@ -1047,6 +1048,10 @@ def providers_command(args):
             print("AI利用先: 用途別のモデル設定を確認できません。")
             return 1
         profiles[purpose] = {"model": selection["model"], "effort": selection["effort"]}
+    if order is not None and settings["provider"] != "auto":
+        # Kept for a later switch to auto; say so instead of refusing (GA-cloud-credential-setup-8).
+        print("注意: 利用先が " + settings["provider"] + " に固定されているため、保存した優先順位は"
+              "利用先を auto に切り替えるまで使われません。", file=sys.stderr)
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
         "profiles": profiles, "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
