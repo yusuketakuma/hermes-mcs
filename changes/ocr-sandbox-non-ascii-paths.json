@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "導入先やOCR環境のパスに日本語があると添付OCRが毎回失敗する問題を修正",
+  "summary": "導入先（MCS_ROOT）や attachment_ocr.executable の仮想環境のパスに日本語などASCII以外の文字が含まれていても、添付OCRが動くようになりました。これまではOCRの隔離実行で許可するパスが正しく伝わらず、すべての添付が engine_failed／local_processing_failed になっていました。読取り・書込みを許可する場所と通信の禁止は変わりません。",
+  "upgrade": "追加操作は不要です。反映には更新後の抽出処理の再起動が必要です。失敗のまま再試行上限に達した添付は、自動では再処理されません。",
+  "details": ["macOS の sandbox-exec に渡す隔離設定で、パスを \\uXXXX に変換せず文字のまま書く。引用符とバックスラッシュの逃がしは従来どおり。"],
+  "refs": ["mcs/extract/attachment_ocr.py"]
+}
