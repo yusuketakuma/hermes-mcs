@@ -1335,9 +1335,11 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
         return "stale"
     except runtime.LLMNotSent as e:
         diagnostics["not_sent"] = getattr(e, "stage", None)
-        if diagnostics["not_sent"] == "llm_turn_busy":
-            # the other lane held the GPU turn: the endpoint is healthy
-            # and the next pass normally gets it, so no hourly backoff
+        if diagnostics["not_sent"] in ("llm_turn_busy", "probe_unsent"):
+            # the other lane held the GPU turn (for the call or its format
+            # probe): the endpoint is healthy and the next pass normally
+            # gets it, so no hourly backoff. The chunk preflight runs after
+            # the call, so this pass's Jev spend is durable and reused
             return "deferred"
         # admission hold / refused connection: the LLM request never
         # left, so no attempt is consumed — but Jev calls this pass

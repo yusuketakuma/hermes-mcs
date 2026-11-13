@@ -281,6 +281,8 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
     ("llm_unreachable", 0, "deferred"),
     ("llm_unreachable", 1, "deferred_backoff"),
     ("llm_turn_busy", 1, "deferred"),
+    ("probe_unsent", 1, "deferred"),
+    ("llm_admission:held", 1, "deferred_backoff"),
 ])
 def test_not_sent_llm_defers_only_when_no_jev_was_spent(
         monkeypatch, stage, jev_spent, expected):
