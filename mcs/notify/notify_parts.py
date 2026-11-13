@@ -1280,7 +1280,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         # Hold the render as a whole: retaining the earliest chunks silently
         # loses new replies and can overwrite already delivered content.
         budget_hold = "part_budget_exceeded"
-        keyed = [("truncated#1", _TRUNCATED_PART)]
+        # LINE WORKS card text continues in display#k (cards.validate needs
+        # them); only the per-post groups are withheld.
+        keyed = [kc for kc in keyed if kc[0].startswith("display#")] + [
+            ("truncated#1", _TRUNCATED_PART)]
         attachments = []
     if len(keyed) + len(attachments) + len(cleanup) + group_cost > MAX_PARTS - 2:
         # Keep the resource bound and withhold this whole render: never

@@ -156,7 +156,7 @@ RESEAT_REASONS = frozenset({
     "notice_render_live", "notice_interactive_off", "notice_digest_unset",
     "notice_superseded", "notice_render_issued", "alert_outcome_pending",
     "alert_render_live", "alert_render_issued", "signals_off_sealed",
-    "intent_cards_unsettled", "intent_cards_issued"})
+    "signals_interactive_off", "intent_cards_unsettled", "intent_cards_issued"})
 
 
 _ATTENTION_REASONS = frozenset({
