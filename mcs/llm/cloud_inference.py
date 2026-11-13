@@ -43,10 +43,28 @@ def _history_read_error(phase, error):
         if isinstance(error, sqlite3.Error):
             code = cloud_backlog._exception_observation(error).get("sqlite_errorcode")
             values["sqlite_primary_code"] = code & 0xff if type(code) is int else "unknown"
+        if isinstance(error, cloud_client.CloudError):
+            # CloudError carries fixed codes only; anything else stays unnamed.
+            for key, value in (("error_kind", error.kind), ("error_reason", error.detail)):
+                values[key] = value if _fixed_code(value) else "unclassified"
         print(json.dumps({"event": "cloud_history_read_error", "pid": os.getpid(),
                           "ts": time.time(), **values}), file=sys.stderr, flush=True)
     except Exception:
         pass  # Diagnostics must never replace the existing fail-closed refusal.
+
+
+def _fixed_code(value):
+    return type(value) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value) is not None
+
+
+def _send_blocked(reason):
+    """Name the policy code that refused a fresh send; the row itself defers."""
+    try:
+        print(json.dumps({"event": "cloud_send_blocked", "pid": os.getpid(), "ts": time.time(),
+                          "reason": reason if _fixed_code(reason) else "unclassified"}),
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 class CloudFallback(Exception):
@@ -377,9 +395,11 @@ class CloudInferenceUnit:
                         _history_read_error("request_send_block_reason", error)
                         self.possibly_sent = True
                         raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
-                if self.dispatch(send_block_reason, result=True):
+                blocked = self.dispatch(send_block_reason, result=True)
+                if blocked:
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
+                    _send_blocked(blocked)
                     raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
                 with cloud_backlog.request_slot(HOME, capacity) as held:
