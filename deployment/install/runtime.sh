@@ -572,7 +572,7 @@ fi
 _install_progress log_helper running
 mkdir -p "$MCS_DATA"
 "$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" "$MCS_ROOT" "$REPO" "$RECOVERY_DIR" \
-    || die "ログの統合準備を確認できません。旧ログを保持して常駐サービスの登録前に停止しました。内容を確認して再実行してください"
+    || die "ログの統合準備を確認できません。旧ログを保持して常駐サービスの登録前に停止しました。直前に表示された案内（取込み済みの旧ログが変わった場合は retire-drifted のコマンド）に従ってから再実行してください"
 RUN_LOG_HELPER="$("$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" --helper-path \
     "$MCS_ROOT" "$REPO" "$RECOVERY_DIR" --require-installed)" \
     || die "ログ処理の配置を確認できません。常駐サービスの登録前に停止しました"
