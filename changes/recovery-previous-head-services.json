@@ -6,7 +6,8 @@
   "details": [
     "リポジトリ内の復旧は retire_to_snapshot と services の再実行を、巻戻しの後処理（_rollback_tree）と同じ順で行う。",
     "独立復旧監視は既存の _reconcile_membership（services の再実行を含む）を使う。",
-    "失敗時は escalate する（常駐処理の再開と更新記録の保持は既存の方針どおり）。"
+    "失敗時は escalate する（常駐処理の再開と更新記録の保持は既存の方針どおり）。",
+    "独立復旧監視の完了通知（post_merge_reverted）は、ほかの復旧完了と同じ「更新・復旧の処理完了」として届く。"
   ],
   "refs": ["mcs/ops/update_recovery.py", "deployment/recovery/mcs_recover.py"]
 }

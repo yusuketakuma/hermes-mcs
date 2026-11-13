@@ -856,6 +856,8 @@ def test_previous_head_after_post_merge_reconciles_old_services(rec, tmp_path, m
     calls = []
     monkeypatch.setattr(rec.mcs_recovery_services, "_reconcile_membership",
                         lambda snapshot: calls.append(snapshot) or list(problems))
+    notices = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_notify", notices.append)
     report_path = Path(rec.mcs_recovery_core.REPORT_PATH)
     if problems:
         assert rec.recover() == 1
@@ -864,6 +866,10 @@ def test_previous_head_after_post_merge_reconciles_old_services(rec, tmp_path, m
     else:
         assert rec.recover() == 0
         assert json.loads(report_path.read_text())["result"] == "post_merge_reverted"
+        # The completed recovery must reach users as a completion, not "unknown".
+        finished = [n for n in notices if "巻戻しが途中で止まっていた" in n]
+        assert len(finished) == 1
+        assert "MCS-UPD-RECOVERY-COMPLETED" in rec.mcs_recovery_services._notification_text(finished[0])
     assert calls == [state["applying"]["manifest_snapshot"]]
 
 
