@@ -936,8 +936,12 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                         raise ValueError("provider_snapshot_changed")
                     os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
                     os.fsync(data_fd)
-                except BaseException:
-                    pass  # keep pending and the remaining evidence; the caller re-raises the original failure
+                except BaseException as failure:
+                    # Keep pending and the remaining evidence; the caller re-raises the
+                    # original failure, so leave a person the cause of the following hold.
+                    print("mcs: 設定の保存に失敗した後、保存前の状態へ戻せませんでした。保存中の記録を残したため、"
+                          "以降の処理は保留されます。担当者に確認してください"
+                          f"（provider_settings_rollback_failed: {type(failure).__name__}）", file=sys.stderr)
 
             undo = rollback
 

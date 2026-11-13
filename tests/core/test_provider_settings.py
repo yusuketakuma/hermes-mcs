@@ -1041,7 +1041,7 @@ def _tree_bytes(root):
 @pytest.mark.parametrize("point", ["pending", "backup", "staged", "replace-1", "replace-3", "replace-5", "link"])
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
 @pytest.mark.parametrize("split", [False, True])
-def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypatch, point, failure, split):
+def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypatch, capsys, point, failure, split):
     tree(tmp_path, split=split)
     original = settings.read(tmp_path)
     before = _tree_bytes(tmp_path)
@@ -1050,6 +1050,7 @@ def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypat
     with pytest.raises(failure, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert _tree_bytes(tmp_path) == before
+    assert "provider_settings_rollback_failed" not in capsys.readouterr().err
     after = settings.read(tmp_path)
     assert after["mode"] == ("split" if split else "legacy_unverified")
     assert after["providers"] == {name: {} for name in settings.PROVIDERS}
@@ -1057,7 +1058,7 @@ def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypat
             == {key: value and value["sha256"] for key, value in original["snapshot"]["files"].items()})
 
 
-def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypatch):
+def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypatch, capsys):
     tree(tmp_path)
     original = settings.read(tmp_path)
     _interrupt_commit(monkeypatch, "replace-2", OSError)
@@ -1066,6 +1067,7 @@ def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypat
     monkeypatch.setattr(settings.os, "rmdir", refused)
     with pytest.raises(OSError, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
+    assert "provider_settings_rollback_failed: OSError" in capsys.readouterr().err
     assert (tmp_path / "data" / ".provider-settings-pending.json").exists()
     with pytest.raises(ValueError, match="provider_settings_pending"):
         settings.read(tmp_path)
@@ -1089,7 +1091,7 @@ def test_interrupt_after_receipt_removal_keeps_committed_settings(tmp_path, monk
     assert after["mode"] == "split" and after["providers"]["openai"] == {"model": "synthetic-openai"}
 
 
-def test_failure_creating_receipt_leaves_settings_untouched(tmp_path, monkeypatch):
+def test_failure_creating_receipt_leaves_settings_untouched(tmp_path, monkeypatch, capsys):
     tree(tmp_path, split=True)
     original = settings.read(tmp_path)
     before = _tree_bytes(tmp_path)
@@ -1103,6 +1105,7 @@ def test_failure_creating_receipt_leaves_settings_untouched(tmp_path, monkeypatc
     with pytest.raises(OSError, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert _tree_bytes(tmp_path) == before
+    assert "provider_settings_rollback_failed" not in capsys.readouterr().err
     assert settings.read(tmp_path)["providers"]["openai"] == {}
 
 
