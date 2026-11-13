@@ -510,6 +510,9 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
         slot_deadline = deadline if deadline is not None else time.monotonic() + kw.get("timeout", 10)
         with _request_turn(slot_deadline, PROBE_TURN_MIN_S, request_slot(), held_slots=broker.held_slots) as slot:
             if slot is None:
+                # the GPU turn never came: nothing sent (as chat's "busy")
+                if kw.get("error_out") is not None:
+                    kw["error_out"]["kind"] = "busy"
                 return None
             token = _OWNED_TURN.set(slot)
             try:

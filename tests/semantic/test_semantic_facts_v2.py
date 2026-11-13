@@ -525,20 +525,25 @@ def test_preflight_verdicts_cached_with_chunk(request):
     sf.validate_facts_doc(second["doc"])
 
 
-def test_unsent_chunk_call_spends_no_preflight(request):
-    """A busy GPU turn short-defers the job, so the not-sent chunk must not
-    have spent an uncached Jev preflight the retry would re-send."""
+def test_preflight_guard_fires_before_chunk_llm_work(request):
+    """A Jev guard (budget/reservation) refusing the chunk preflight aborts
+    before the chunk's LLM call, so no generated output is discarded."""
     import semantic_runtime
 
-    def unsent(_prompt):
-        raise semantic_runtime.LLMNotSent("probe_unsent")
+    class GuardedJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            self.calls += 1
+            raise semantic_runtime.RuntimeGuardError("jev_budget")
 
-    jev = _FakeJev()
-    with pytest.raises(semantic_runtime.LLMNotSent):
+    prompts = []
+    jev = GuardedJev()
+    with pytest.raises(semantic_runtime.RuntimeGuardError):
         extraction.extract_facts_v2(
-            unsent, _member("一段落目です。" + "あ" * 50), ledger=_FakeLedger(request),
+            lambda prompt: prompts.append(prompt) or "{}",
+            _member("一段落目です。" + "あ" * 50), ledger=_FakeLedger(request),
             source_fingerprint=FP, chunk_size=40, jev_client=jev)
-    assert jev.calls == 0
+    assert jev.calls == 1
+    assert prompts == []
 
 
 def test_deadline_between_chunks_leaves_pending():
