@@ -36,3 +36,19 @@ def test_a_search_without_category_needs_no_classification(led):
     view = notify_views.patient_search_view(led.db, 1, "残薬")
     assert len(view["items"]) == 1
     assert not any("分類を判定できない" in note for note in view["notes"])
+
+
+def test_an_unscanned_range_keeps_its_scope_wording_with_unclassified_matches(led, monkeypatch):
+    _patient(led, 1)
+    _msg(led, 101, body="残薬が合成の量あります")
+    import patient_search
+    real = patient_search.search
+
+    def limited(*args, **kwargs):
+        result = real(*args, **kwargs)
+        return {**result, "next_cursor": result.get("next_cursor") or "synthetic-cursor",
+                "range_complete": False}
+
+    monkeypatch.setattr(patient_search, "search", limited)
+    view = notify_views.patient_search_view(led.db, 1, "残薬 分類:服薬管理")
+    assert view["empty"] == "この範囲の解析が完了した原資料には、この分類で一致するものはありません。"

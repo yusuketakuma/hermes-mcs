@@ -801,8 +801,9 @@ def vital_match_values(key: str, match) -> dict:
     """Values one VITAL_PATTERNS match reads: both blood-pressure sides, else one int or float."""
     if key == "sbp":
         sbp, dbp = int(match[1]), int(match[2])
-        # a pair outside physiological range (a date, a ratio) is not a blood pressure
-        return {"sbp": sbp, "dbp": dbp} if 50 <= sbp <= 300 and 20 <= dbp <= 200 and sbp > dbp else {}
+        # a pair outside physiological range (a date, a ratio) is not a blood pressure;
+        # the floor stays above any month (M/D dates) but keeps shock readings such as 40/20
+        return {"sbp": sbp, "dbp": dbp} if 30 <= sbp <= 300 and 10 <= dbp <= 200 and sbp > dbp else {}
     value = match[1].replace("．", ".")  # int/float take full-width digits
     return {key: float(value) if "." in value else int(value)}
 

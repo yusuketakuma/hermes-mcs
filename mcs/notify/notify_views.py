@@ -708,9 +708,12 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
-            "empty": "解析が完了した原資料には、この分類で一致するものはありません。" if result['unclassified'] else
-                     "この範囲には一致する原資料がありません。" if result['next_cursor'] else
-                     "検索した取得済み原資料に一致するものはありません。",
+            # an unscanned range keeps its scope wording: no match there is not no record
+            "empty": ("この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+                      if result['unclassified'] and result['next_cursor'] else
+                      "解析が完了した原資料には、この分類で一致するものはありません。" if result['unclassified'] else
+                      "この範囲には一致する原資料がありません。" if result['next_cursor'] else
+                      "検索した取得済み原資料に一致するものはありません。"),
             "notes": notes}
 
 

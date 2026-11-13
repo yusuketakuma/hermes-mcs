@@ -43,9 +43,16 @@ def test_the_current_value_keeps_its_threshold_flag_on_the_card(monkeypatch):
     assert "バイタル: SpO2 88" in lines and "閾値超過の測定値: SpO2 88" in lines
 
 
-def test_two_different_labelled_readings_are_not_one_rule_value():
-    assert "bt" not in _rule("朝 BT36.5 夕 BT38.0").get("vitals", {})
+def test_the_latest_labelled_reading_is_the_current_rule_value():
+    # review 2026-11-13: dropping both readings hid a critical evening value
+    assert _rule("朝 BT36.5 夕 BT38.0")["vitals"] == {"bt": 38.0}
+    assert _rule("朝 血圧 130/80、夕 血圧 70/40")["vitals"] == {"sbp": 70, "dbp": 40}
     assert _rule("BT36.5 本日BT36.5")["vitals"] == {"bt": 36.5}
+    assert _rule("SpO2 98%から88%に低下、再検でSpO2 92%")["vitals"] == {"spo2": 92}
+
+
+def test_a_duration_after_its_reading_is_not_a_change():
+    assert _rule("体温37.5度、その後30分安静")["vitals"] == {"bt": 37.5}
 
 
 @pytest.mark.parametrize("body", ["血圧 10/15 132/80", "BP 10/15は132/80", "血圧 11/30(土) 132/80"])
@@ -141,3 +148,27 @@ def test_a_normal_vital_or_negated_symptom_keeps_an_urgent_request_administrativ
 @pytest.mark.parametrize("quote", ["呼吸苦あり、至急往診お願いします", "呼吸状態不安定、至急", "意識レベル低下、至急"])
 def test_an_acute_clause_stays_clinical(quote):
     assert clinical_urgency.clinical_urgency_quote(quote) is True
+
+
+@pytest.mark.parametrize("quote", [
+    "呼吸状態は安定していません、至急往診お願いします",
+    "SpO2 85%で安定せず、至急",
+    "意識は清明ではない、至急",
+    "血圧は正常範囲外、至急連絡ください",
+    "呼吸状態は良好とは言えない、至急",
+])
+def test_a_negated_normal_word_keeps_the_acute_cue(quote):
+    assert clinical_urgency.clinical_urgency_quote(quote) is True
+
+
+@pytest.mark.parametrize("body, vitals", [
+    ("血圧 48/30", {"sbp": 48, "dbp": 30}),
+    ("血圧 40/20 下顎呼吸あり", {"sbp": 40, "dbp": 20}),
+])
+def test_a_shock_blood_pressure_is_still_a_reading(body, vitals):
+    assert _rule(body)["vitals"] == vitals
+
+
+@pytest.mark.parametrize("body", ["血圧 12/5", "血圧 11/30"])
+def test_a_month_day_pair_is_not_a_blood_pressure(body):
+    assert "vitals" not in _rule(body)

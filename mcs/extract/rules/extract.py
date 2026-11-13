@@ -72,7 +72,11 @@ _SYMPTOM_DRUG_CLASS = re.compile(r"止め|薬")
 # in a medication sentence that reports no current use or course.
 _SYMPTOM_CONTINGENCY = re.compile(r"\s*(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?")
 _SYMPTOM_PRN_MED = re.compile(r"薬|処方|内服|服用|服薬|使用|頓用|頓服|投与|mg|錠|包|坐薬|座薬|外用|貼付|飲(?:む|ん|み)")
-_SYMPTOM_REPORTED = re.compile(r"(?:使用|服用|内服|頓服|投与)(?:した|しました|済)|飲んだ|飲みました|現在|持続|続いて|悪化|強い")
+# a use that already happened, or an injury at the event (転倒時に打撲), reports the symptom
+_SYMPTOM_REPORTED = re.compile(
+    r"(?:使用|服用|内服|頓服|投与|貼付|塗布|挿入|吸入)(?:した|しました|済|して(?:い|お)|中)"
+    r"|飲んだ|飲みました|飲んで(?:い|お)|現在|持続|続いて|悪化|強い"
+    r"|打撲|受傷|骨折|出血|負傷|外傷|怪我|けが|ケガ")
 
 
 def _symptom_as_medication(body, end):
@@ -103,7 +107,9 @@ _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm
              (r"報告(?:いたします|します|をお願い)", "report"))
 
 _VITAL_CHANGE_AFTER = re.compile(
-    r"[ \t　]*(?:[%％℃度]|mmHg)?[ \t　]*(?:→|⇒|->|から|[、,]?[ \t　]*(?:その後|再検(?:で|にて|時)?))[ \t　]*\d")
+    r"[ \t　]*(?:[%％℃度]|mmHg)?[ \t　]*(?:(?:→|⇒|->|から)[ \t　]*\d"
+    # その後/再検 change a vital only when a reading follows (その後90%), not a duration (その後30分)
+    r"|[、,]?[ \t　]*(?:その後|再検(?:で|にて|時)?)[ \t　]*\d+(?:[.．]\d+)?[ \t　]*(?:[%％℃度/／]|mmHg))")
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
 # rx_actions keep at most RX_ACTIONS_CAP entries, each ctx starting RX_CTX_BACK chars before its word
 RX_ACTIONS_CAP = 10
@@ -183,9 +189,10 @@ def _ymd(month: int, day: int, year: int | None,
       'past'   — event already happened (visit_date): never after posted
       'future' — planned date (next_planned): never before posted
       'any'    — explicit year or neutral
-    Year wraps at Dec/Jan are resolved by shifting the year, not by
-    guessing (Oracle B26): only a shifted date within _YEAR_WRAP_DAYS of
-    the post is a wrap; any other date on the wrong side is None."""
+    Year wraps are resolved by shifting the year, not by guessing (Oracle
+    B26): a same-year date within _YEAR_WRAP_DAYS on the wrong side of the
+    post is an already-passed (or not yet reached) date and gives None; a
+    farther one is a year wrap (posted 11/20, 次回 2/15 -> next February)."""
     if year is None:
         return None
     years = (year,) if mode == "any" else (year, year + 1, year - 1)
@@ -200,7 +207,8 @@ def _ymd(month: int, day: int, year: int | None,
             continue        # push to next year
         if mode == "past" and d > posted.date():
             continue        # pull to last year
-        if y != year and abs((d - posted.date()).days) > _YEAR_WRAP_DAYS:
+        same = _md_date(month, day, year)
+        if y != year and same is not None and abs((same - posted.date()).days) <= _YEAR_WRAP_DAYS:
             return None     # an already-passed (or not yet reached) date, not a year wrap
         return d.isoformat()
     return None
@@ -367,21 +375,20 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["rx_actions"] = acts[:RX_ACTIONS_CAP]
 
     # --- vitals ---
-    # A reading followed by its unlabelled change (98%から88%, 36.5℃→38.2℃) or a second,
-    # different reading of the same vital is not one current value: the rule keeps neither.
-    vit, mentions, changed = {}, [], set()
+    # The latest labelled reading of a vital is its current value (朝 BT36.5 夕 BT38.0 -> 38.0).
+    # A latest reading followed by an unlabelled change (98%から88%, 36.5℃→38.2℃) is not
+    # current and the rule cannot read the new value, so it keeps none for that vital.
+    latest, mentions = {}, []
     for k, pat in clinical_values.VITAL_PATTERNS.items():
         for m in re.finditer(pat, body):
             scope = clinical_scope.patient_source_scope(body, m.start(), m.end(), measurement=True)
             values = clinical_values.vital_match_values(k, m)
             mentions.append({"scope": scope, "values": values, "evidence": m.group(0)})
             if scope == "patient":
-                if _VITAL_CHANGE_AFTER.match(body, m.end()):
-                    changed.update(values)
+                superseded = bool(_VITAL_CHANGE_AFTER.match(body, m.end()))
                 for key, value in values.items():
-                    if vit.setdefault(key, value) != value:
-                        changed.add(key)
-    vit = {key: value for key, value in vit.items() if key not in changed}
+                    latest[key] = (value, superseded)
+    vit = {key: value for key, (value, superseded) in latest.items() if not superseded}
     if vit:
         out["vitals"] = vit
     if any(mention["scope"] != "patient" for mention in mentions):

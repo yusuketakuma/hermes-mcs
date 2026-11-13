@@ -37,6 +37,7 @@ def test_negated_rule_symptoms_never_reach_the_card(body):
     "疼痛時ロキソニン60mg頓用で処方",
     "便秘薬を継続します",
     "かゆみ止めの軟膏を処方",
+    "発熱時カロナールを処方しました",
 ])
 def test_prn_conditions_and_drug_class_names_are_not_symptoms(body):
     assert "symptoms" not in _rule(body)
@@ -55,6 +56,9 @@ def test_body_sites_and_functions_in_normal_findings_are_not_symptoms():
     ("痛みが強く、痛み止めを使用", "痛み"),
     ("嚥下困難あり", "嚥下困難"),
     ("下痢はないわけではない", "下痢"),
+    ("発熱時にカロナールを使用していました", "発熱"),
+    ("転倒時に右膝を打撲し、湿布を貼付しました", "転倒"),
+    ("疼痛時にロキソニンを内服中", "疼痛"),
 ])
 def test_present_symptoms_stay(body, symptom):
     assert symptom in _rule(body)["symptoms"]
@@ -94,3 +98,15 @@ def test_year_shift_is_only_a_dec_jan_wrap():
     assert extract._ymd(12, 28, 2027, posted, "past") == "2026-12-28"
     assert extract._ymd(1, 4, 2026, datetime.fromisoformat("2026-12-30T10:00:00+09:00"), "future") == "2027-01-04"
     assert extract._ymd(11, 10, 2026, datetime.fromisoformat(POSTED), "future") is None
+
+
+@pytest.mark.parametrize("posted, month, day, mode, expected", [
+    ("2026-11-20T10:00:00+09:00", 2, 15, "future", "2027-02-15"),   # a plan across New Year
+    ("2026-12-20T10:00:00+09:00", 3, 15, "future", "2027-03-15"),
+    ("2026-03-01T10:00:00+09:00", 12, 25, "past", "2025-12-25"),    # a visit before New Year
+    ("2026-11-13T10:00:00+09:00", 11, 20, "past", None),            # not yet reached
+])
+def test_a_year_crossing_date_resolves_but_a_recent_wrong_side_date_does_not(posted, month, day, mode, expected):
+    from datetime import datetime
+    when = datetime.fromisoformat(posted)
+    assert extract._ymd(month, day, when.year, when, mode) == expected
