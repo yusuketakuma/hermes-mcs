@@ -95,7 +95,7 @@ def test_only_a_nonempty_model_list_reuses_external_server(tmp_path, response, s
     assert downloaded is not serving
 
 
-@pytest.mark.parametrize('busy', [False, True])
+@pytest.mark.parametrize('busy', [False, 'interpreter', 'framework_script'])
 def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_path, busy):
     home, _, _, env = _world(tmp_path)
     venv = home / '.mcs/venv'
@@ -104,8 +104,13 @@ def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_p
     py.write_text('#!/bin/sh\nexit 1\n')
     py.chmod(0o700)
     (venv / 'prior-marker').write_text('synthetic prior runtime')
-    if busy:
+    if busy == 'interpreter':
         env['STUB_VENV_PROCESS'] = str(py) + ' -m synthetic-runtime'
+    elif busy == 'framework_script':
+        # Homebrew's framework Python re-execs Python.app: the venv path is argv[1].
+        env['STUB_VENV_PROCESS'] = ('/opt/homebrew/Cellar/python@3.13/3.13.9/Frameworks/Python.framework/'
+                                    'Versions/3.13/Resources/Python.app/Contents/MacOS/Python '
+                                    + str(venv / 'bin/synthetic-gateway') + ' run')
     result = _run(env, None, '--mode', 'standalone', *FLAGS)
     assert result.returncode == (1 if busy else 0), result.stdout + result.stderr
     preserved = venv if busy else home / '.mcs/venv.pre-python314'
@@ -131,8 +136,30 @@ def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebui
     result = _run(env, None, '--mode', 'standalone', *FLAGS)
     assert result.returncode == 1
     assert 'Python 移行には更新ツールが必要' in result.stderr
+    assert 'venv.broken' in result.stderr and '常駐サービスが止まっている' in result.stderr
     assert py.read_text() == '#!/bin/sh\nexit 1\n'
     assert not (home / '.mcs/venv.pre-python314').exists()
+    assert not (home / '.mcs/venv.broken').exists()
+
+
+@pytest.mark.parametrize('established', [False, True])
+def test_preflight_reports_unusable_established_runtime_with_its_way_out(tmp_path, established):
+    home, _, _, env = _world(tmp_path)
+    venv = home / '.mcs/venv'
+    (venv / 'bin').mkdir(parents=True)
+    py = venv / 'bin/python3'
+    py.write_text('#!/bin/sh\nexit 1\n')
+    py.chmod(0o700)
+    data = home / '.mcs/data'
+    data.mkdir(mode=0o700)
+    if established:
+        (data / 'ledger.db').write_text('synthetic established installation')
+    result = _run(env, None, '--preflight', '--mode', 'standalone', *FLAGS)
+    assert result.returncode == (1 if established else 0), result.stdout + result.stderr
+    assert ('段階2では作り直しません' in result.stdout) is established
+    if established:
+        assert 'venv.broken' in result.stdout
+    assert py.read_text() == '#!/bin/sh\nexit 1\n'
 
 
 @pytest.mark.parametrize('proof', ['valid', 'wrong_inode', 'closed', 'foreign_backup'])

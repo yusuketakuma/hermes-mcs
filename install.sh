@@ -697,6 +697,12 @@ hermes_admits_314() {
     "$_ha_py" -I "$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"
 }
 
+# Established installs never rebuild a runtime here; a runtime that cannot
+# start at all is moved aside by the operator once its services are stopped.
+venv_unusable_hint() {
+    printf '%s' "実行環境の Python が起動しない場合は、常駐サービスが止まっていることを確認し、mv $(shell_quote "$VENV") $(shell_quote "$VENV.broken") で退避してから install.sh を再実行してください（退避した環境は削除しません）"
+}
+
 preserve_old_venv() {
     if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
     if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
@@ -706,12 +712,14 @@ preserve_old_venv() {
         # A scheduled tick can start after a process check; established installs
         # require the updater's inherited run.lock for runtime migration.
         if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then
-            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。リリースの更新手順に従ってください"
+            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。動作する旧版の Python からの移行はリリースの更新手順に従ってください。$(venv_unusable_hint)"
         fi
         _runtime_processes="$(ps -axo command=)" \
             || die "実行環境の停止を確認できません。既存の Python 環境は保持しました"
+        # Homebrew's framework Python re-execs Python.app, so a venv script
+        # shows up as an argument rather than argv[0]; match the whole line.
         if printf '%s\n' "$_runtime_processes" | MCS_VENV_PREFIX="$VENV/" awk '
-            index($0, ENVIRON["MCS_VENV_PREFIX"]) == 1 { busy=1 }
+            index($0, ENVIRON["MCS_VENV_PREFIX"]) > 0 { busy=1 }
             END { exit !busy }'; then
             die "既存環境は稼働中です。Gateway または独立接続サービスを通常の停止手順で止めてから再実行してください。既存環境は保持しました"
         fi
@@ -929,8 +937,14 @@ preflight() {
     if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$MODEL_FILE" ]; then _need_hf=1; fi
     pf_net huggingface.co "$MODEL_URL" "$_need_hf"
 
+    _venv_established=0
+    if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then _venv_established=1; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
         pf_info "MCS 単独接続の実行環境: ${VENV}（Hermes は不要です）"
+        if { [ -e "$VENV" ] || [ -L "$VENV" ]; } && ! py_ok "$VENV_PY" 14 15 && [ "$_venv_established" -eq 1 ]; then
+            pf_ng "導入済みの実行環境で Python 3.14 を使用できません（段階2では作り直しません）" \
+                "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
+        fi
         pf_net pypi.org https://pypi.org 1
     else
     if command -v hermes >/dev/null 2>&1; then pf_info "Hermes コマンド: $(command -v hermes)"
@@ -941,11 +955,14 @@ preflight() {
         if ! _h="$(git -C "$HERMES_DIR" rev-parse HEAD 2>/dev/null)"; then
             pf_ng "$HERMES_DIR の現在の版（HEAD）を読み取れません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")   # 段階2で再取得します"
         elif [ "$_h" = "$HERMES_PIN" ]; then pf_ok "Hermes は検証済みの固定版です"
-        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "git -C $(shell_quote "$HERMES_DIR") checkout --detach $HERMES_PIN"; fi
+        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "版の変更はリリースの更新手順（更新ツール）で行ってください。手作業で checkout すると依存関係が更新されません"; fi
     elif [ -e "$HERMES_DIR" ]; then
         pf_ng "$HERMES_DIR は存在しますが Git で取得したフォルダではありません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
     else pf_info "Hermes は未取得です。段階2で $HERMES_PIN を取得します"; fi
     if py_ok "$VENV_PY" 14 15; then pf_ok "Hermes 用 Python: $VENV_PY"
+    elif { [ -e "$VENV" ] || [ -L "$VENV" ]; } && [ "$_venv_established" -eq 1 ]; then
+        pf_ng "導入済みの Hermes 用 Python 3.14 を使用できません（段階2では作り直しません）" \
+            "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
     elif [ -e "$VENV" ]; then pf_info "Hermes 用 Python 3.14 が使用できません。段階2で環境を再作成します"
     else pf_info "Hermes 用 Python 環境は未作成です。段階2で作成します"; fi
     fi
