@@ -516,6 +516,24 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if borrowed is not None and _release_migration_probe(borrowed.prequiesce_deadline) != 'none':
                 return bail('settings_migration_requires_manual_update')
 
+            # Both refusals run before the backup and the settings migration so
+            # their "nothing changed" text holds; an already-applied target exits below.
+            if borrowed is None and _head_sha() != sha:
+                try:
+                    bridge_needed = _provider_migration_needed()
+                except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+                    return bail("provider_settings_unverified")
+                # The legacy post-merge guard refuses a split from any unreviewed source;
+                # refuse here, before writers stop, instead of holding after the merge.
+                if bridge_needed and not _provider_bridge_verified(_head_sha(), sha):
+                    return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
+                # The same guard refuses any untracked file in the source trees
+                # (ignored ones such as .DS_Store included); name it while nothing changed.
+                extras = _split_source_extras()
+                if extras:
+                    return bail("source_untracked_files: " + ",".join(extras)[:160]
+                                + " — 追跡外のファイルを移動してから再実行してください（変更はありません）")
+
             journal(state, "backup")
             import maintenance
             try:
@@ -586,20 +604,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return 0
 
             try:
-                provider_migration_needed = _provider_migration_needed()
+                provider_migration_needed = _provider_migration_needed()  # re-read under run.lock
             except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                 return bail("provider_settings_unverified")
-            # The legacy post-merge guard refuses a split from any unreviewed source;
-            # refuse here, before writers stop, instead of holding after the merge.
-            if (provider_migration_needed and borrowed is None
-                    and not _provider_bridge_verified(_head_sha(), sha)):
-                return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
-            # The same guard refuses any untracked file in the source trees
-            # (ignored ones such as .DS_Store included); name it while nothing changed.
-            extras = _split_source_extras() if borrowed is None else []
-            if extras:
-                return bail("source_untracked_files: " + ",".join(extras)[:160]
-                            + " — 追跡外のファイルを移動してから再実行してください（変更はありません）")
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),

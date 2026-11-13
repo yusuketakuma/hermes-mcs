@@ -5,7 +5,8 @@
   "upgrade": "追加操作は不要です。更新が source_untracked_files で中止された場合は、表示されたファイルをソース配下の外へ移動するか削除してから、更新をやり直してください。ソース配下で許される追跡外ファイルは __pycache__ 内の .pyc だけで、この条件は変えていません。",
   "details": [
     "追跡外ファイルの判定を update_repository._split_source_extras にまとめ、post-merge の移行ガードと merge 前の確認で同じ関数を使う。",
-    "release 経路（release_ref）の更新は対象外のまま。"
+    "release 経路（release_ref）の更新は対象外のまま。",
+    "この中止は更新前のDBバックアップと導入設定の移行より前に判定するため、中止のたびにバックアップを取り直さず、config.json も書き換えない。"
   ],
   "refs": ["mcs/ops/update_apply.py", "mcs/ops/update_preflight.py", "mcs/ops/update_repository.py"]
 }

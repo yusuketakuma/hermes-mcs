@@ -573,6 +573,16 @@ def test_interrupted_update_recovery_precedes_changed_guided_options(updater, mo
     assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 7
 
 
+def _refuse_before_backup(monkeypatch):
+    """Regression: these refusals said nothing changed, yet ran after the
+    pre-update DB backup and the install-settings migration."""
+    import maintenance
+    monkeypatch.setattr(maintenance, "preupdate_backup",
+                        lambda *_a, **_k: pytest.fail("refusal must precede the backup"))
+    monkeypatch.setattr(update_apply.update_migrations, "apply",
+                        lambda *_a, **_k: pytest.fail("refusal must precede the settings migration"))
+
+
 def test_legacy_settings_without_bridge_stop_before_writers(updater, monkeypatch):
     """Regression: a legacy-settings install merged an unbridged tag, then
     the post-merge guard held it with writers stopped and no way back."""
@@ -584,6 +594,7 @@ def test_legacy_settings_without_bridge_stop_before_writers(updater, monkeypatch
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: True)
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    _refuse_before_backup(monkeypatch)
     assert updater.apply("v1.1.0", target, "cid-bridge") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
     state = updater.journal_store.load_state(updater.STATE_PATH)
@@ -605,6 +616,7 @@ def test_untracked_source_file_stops_before_writers_and_is_named(updater, monkey
     assert update_repository._split_source_extras() == ["mcs/.DS_Store"]
     monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
     monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    _refuse_before_backup(monkeypatch)
     assert updater.apply("v1.1.0", target, "cid-untracked") == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
     state = updater.journal_store.load_state(updater.STATE_PATH)
