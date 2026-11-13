@@ -123,6 +123,20 @@ def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
     assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
 
 
+@pytest.mark.parametrize('configured', [False, True])
+def test_reinstall_over_complete_settings_does_not_ask_for_initial_setup(tmp_path, configured):
+    home, hermes_home, _, env = _world(tmp_path, configured=True)
+    config = home / '.mcs/config.json'
+    cfg = {'runtime_mode': 'hermes'}
+    if configured:
+        cfg.update({'mcs_login_id': 'synthetic-login', 'notify_target': 'synthetic-target'})
+    config.write_text(json.dumps(cfg))
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ('既存の設定を保持しています' in result.stdout) is configured
+    assert ('まだ利用開始前の初期設定が必要' in result.stdout) is not configured
+
+
 @pytest.mark.parametrize('runtime', ['hermes', 'standalone'])
 def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
     home, _, _, env = _world(tmp_path)

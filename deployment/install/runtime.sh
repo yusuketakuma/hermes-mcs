@@ -797,10 +797,33 @@ PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
+# A reinstall over complete settings needs no initial-setup guidance.
+_configured=0
+if [ "$("$MCS_PY" -I -B -c '
+# mcs-installer-configured-probe
+import sys
+sys.path.insert(0, sys.argv[1] + "/mcs")
+import _mcs_path
+import lifecycle_io
+from mcs_config import validate_config
+try:
+    cfg = lifecycle_io.read_owner_config(sys.argv[2])
+except ValueError:
+    raise SystemExit(0)
+print("configured" if cfg and not validate_config(cfg)[0] else "unconfigured")
+' "$REPO" "$MCS_ROOT/config.json" 2>/dev/null)" = configured ]; then _configured=1; fi
 printf '\n============================================================\n'
-printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+if [ "$_configured" -eq 1 ]; then
+    printf 'ソフトの準備が完了しました。既存の設定を保持しています。\n'
+else
+    printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+fi
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
+if [ "$_configured" -eq 1 ]; then
+    printf '\n設定は変更していません。設定と接続の状態は次のコマンドで確認できます:\n    %s %s check\n' "$PYQ" "$SETUPQ"
+    printf '設定を見直す場合:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+else
 printf '\n次は MCS のログイン情報と通知先を設定します。\n'
 printf 'アカウント情報は、ご自身の端末で入力してください。\n'
 printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
@@ -825,6 +848,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
             printf '入力内容や表示された問題を確認し、次のコマンドで再開してください:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
         fi
     fi
+fi
 fi
 # Explicit installer lifecycle only; ordinary runtime startup never creates an intent.
 if [ "$SETUP_STATUS" -eq 0 ]; then
