@@ -410,9 +410,15 @@ def agent_loaded(label: str, *, paths: ServicePaths, deadline=None) -> bool | No
     return r.returncode == 0
 
 def agent_absent(label: str, *, paths: ServicePaths) -> bool:
-    """True only when launchd reports `label` not found (113): any other
-    probe failure is not proof that a booted-out agent stopped."""
-    return lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}']).returncode == 113
+    """After a bootout: True only once launchd reports `label` not found (113).
+    A job still listed (0) may be draining, so it is polled for STOP_POLLS x 0.5 s;
+    any other probe failure is not proof that a booted-out agent stopped."""
+    for _ in range(STOP_POLLS):
+        rc = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}'], timeout=10).returncode
+        if rc != 0:
+            return rc == 113
+        time.sleep(0.5)
+    return False
 
 # Deferred self-reload: launchd can still be tearing the job down (the standalone host
 # drains for minutes) after bootout returns, so wait for "not found" (113) before a
@@ -422,7 +428,7 @@ RELOAD_SCRIPT = ('while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bo
                  'i=$((i+1)); [ "$i" -ge 720 ] && exit 1; sleep 5; done; '
                  'i=0; until launchctl bootstrap "$3" "$4"; do '
                  'i=$((i+1)); [ "$i" -ge 3 ] && exit 1; sleep 1; done')
-STOP_POLLS = 60   # x0.5 s after bootout before a reload gives up
+STOP_POLLS = 60   # x0.5 s after bootout before a stop counts as unconfirmed
 
 
 def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool:
