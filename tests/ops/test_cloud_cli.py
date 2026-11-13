@@ -155,6 +155,22 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     assert "message_id" not in raw and "project_id" not in raw and str(root) not in raw
 
 
+def test_plan_warns_when_the_reextract_window_cannot_send(world, capsys):
+    root, _, config = world
+    config["cloud_llm"].update(routes=["patient_context"], window_start="2026-10-26T00:00:00+09:00",
+                               window_budget_usd=60, reextract_backlog_until="2999-01-01T23:59:59+09:00")
+    (root / "config.json").write_text(json.dumps(config))
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == ["reextract_route_missing"]
+    assert mcs_setup.main(["cloud-llm", "plan"]) == 0
+    out = capsys.readouterr().out
+    assert '"reextract_route_missing"' in out and "cloud_llm.routes に reextract がありません" in out
+    config["cloud_llm"].update(routes=["patient_context", "reextract"],
+                               reextract_backlog_until="2026-01-01T23:59:59+09:00")
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == ["window_ended"]
+    del config["cloud_llm"]["reextract_backlog_until"]
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == []
+
+
 def test_recent_target_is_excluded_from_background_estimate(world):
     root, path, config = world
     with closing(Ledger(str(path))) as db, db.db:

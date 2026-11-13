@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "保存済み投稿の再抽出を再開しても送信されない設定のとき、予算と試算のコマンドで注意を表示",
+  "summary": "`cloud-llm budget --reextract-backlog-until` で再開期間を設定しても、`cloud_llm.routes` に `reextract` が無いと、クラウドへの再抽出は1件も始まりません。これまでは保存の成功だけを表示していたため、送信されないことに気付けませんでした。今後は `cloud-llm budget` と `cloud-llm plan`・`estimate` が理由を表示します。",
+  "upgrade": "追加操作は不要です。注意が表示された場合、再抽出をクラウドで再開するには、`cloud_llm.routes` に `reextract` を加えます（提供元別設定を使う環境では認証された設定変更経路を使用）。このコマンドは `routes` を自動で変更せず、送信範囲・予算・モデルの既定値も変えません。",
+  "details": [
+    "`reextract_backlog_until` が設定されているとき、`routes` に `reextract` が無い、クラウド処理のmodeが `on` でない、終了日時を過ぎた、`project_ids` が `[]` のいずれかに当たると、出力の `reextract_backlog_blockers` に理由を出し、日本語の注意を1行表示します。",
+    "`cloud-llm budget` では、mode を省略した設定はAPIキーがある前提で判定します。APIキーの有無は `cloud-llm plan` で確かめられます。",
+    "再開期間の保存内容と保存の条件（期間予算が必要）は従来どおりです。"
+  ],
+  "refs": [
+    "mcs/ops/cloud_cli.py",
+    "docs/guides/ANTHROPIC.md"
+  ]
+}

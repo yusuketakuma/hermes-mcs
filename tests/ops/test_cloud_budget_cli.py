@@ -283,3 +283,29 @@ def test_the_reextract_reopening_needs_a_period_budget_and_can_be_ended(conf, ca
     assert run(reextract_backlog_until="none") == 0
     assert "reextract_backlog_until" not in json.loads(conf.read_text())["cloud_llm"]
     assert not cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))
+
+
+def test_the_reextract_reopening_warns_when_routes_or_mode_would_send_nothing(conf, capsys):
+    def run(**kw):
+        return cli.budget_command(SimpleNamespace(daily_usd=None, monthly_usd=None, **kw))
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"]["routes"] = ["patient_context"]
+    conf.write_text(json.dumps(cfg))
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01") == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "cloud_llm.routes に reextract がありません" in lines[0]
+    assert json.loads(lines[-1])["reextract_backlog_blockers"] == ["reextract_route_missing"]
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    # The window is saved as asked; the paid route is never widened by the budget command.
+    assert saved["routes"] == ["patient_context"]
+    assert saved["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00"
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(routes=["patient_context", "reextract"], mode="off")
+    conf.write_text(json.dumps(cfg))
+    assert run() == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["reextract_backlog_blockers"] == ["cloud_mode_not_on"]
+    cfg["cloud_llm"]["mode"] = "on"
+    conf.write_text(json.dumps(cfg))
+    assert run() == 0
+    out = capsys.readouterr().out
+    assert "注意" not in out and json.loads(out)["reextract_backlog_blockers"] == []

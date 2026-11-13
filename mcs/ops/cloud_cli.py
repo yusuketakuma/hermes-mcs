@@ -216,6 +216,34 @@ def _source_scope(settings, alias="m"):
     return sql, params
 
 
+_REEXTRACT_BLOCKERS = {
+    "cloud_mode_not_on": "クラウド処理が on ではありません（mode、または mode 省略時のAPIキー）",
+    "reextract_route_missing": "cloud_llm.routes に reextract がありません",
+    "window_ended": "終了日時を過ぎています",
+    "project_scope_empty": "project_ids が空です",
+}
+
+
+def _reextract_blockers(settings):
+    """Why a set re-extraction window still sends nothing: the window alone never
+    adds the route, and the cloud-only selection checks mode, routes and the window."""
+    if settings["reextract_backlog_until"] is None:
+        return []
+    # A window without a period budget is a config error and never reaches here.
+    return [code for code, blocked in (
+        ("cloud_mode_not_on", settings["mode"] != "on"),
+        ("reextract_route_missing", "reextract" not in settings["routes"]),
+        ("window_ended", not policy.reextract_backlog_window(settings)),
+        ("project_scope_empty", settings["project_ids"] == [])) if blocked]
+
+
+def _warn_reextract_blockers(blockers):
+    if blockers:
+        print("注意: 保存済み投稿の再抽出の再開期間を設定していますが、次の理由でクラウドへ送信しません: "
+              + "、".join(_REEXTRACT_BLOCKERS[code] for code in blockers)
+              + "。設定は認証された設定変更経路で見直してください")
+
+
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
                    "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
@@ -653,6 +681,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 ("eligible" if any(item["targets"] for item in routes.values()) else "no_targets"))
     return {"mode": settings["mode"], "key_present": key, "send_decision": decision, "routes": routes,
         "patient_context_recurring_estimate": recurring, "reextract_backlog_once": routes["reextract"],
+        "reextract_backlog_blockers": _reextract_blockers(settings),
         "new_posts_daily_estimate": sum(row["posts"] for row in counts.values()) / days,
         "additional_runtime_checks": "source_claim_deadline_and_current_config",
         "daily_request_budget": settings["daily_request_budget"],
@@ -726,6 +755,7 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
     data, interrupted and untouched sections are named unknown, nothing is guessed."""
     report = {"mode": settings["mode"], "key_present": key,
               "send_decision": "observation_incomplete",
+              "reextract_backlog_blockers": _reextract_blockers(settings),
               "state": "partial", "incomplete_reason": _reader_failure_reason(error),
               "interrupted_section": interrupted,
               "sections_verified": list(completed),
@@ -861,6 +891,8 @@ def command(args):
                                      for key in ("state", "incomplete_reason", "interrupted_section")}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
+        if action in ("plan", "estimate"):
+            _warn_reextract_blockers(result.get("reextract_backlog_blockers"))
         return 0
     except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable):
         print("クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
@@ -974,11 +1006,15 @@ def budget_command(args):
     if errors:
         print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
         return 1
+    # API key presence is plan/check's concern; an omitted mode is judged as if a key exists.
+    blockers = _reextract_blockers(policy.cloud_config(cfg, key_present=True)[0])
+    _warn_reextract_blockers(blockers)
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
                       "period_start": settings["window_start"], "until": settings["until"],
                       "reextract_backlog_until": settings["reextract_backlog_until"],
+                      "reextract_backlog_blockers": blockers,
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
