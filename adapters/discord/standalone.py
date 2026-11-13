@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import io
 import logging
@@ -20,6 +21,10 @@ from .tasks import Supervisor
 
 _BOUNDARY = "_mcs_discord_boundary"
 _CURRENT = "_mcs_standalone_current"
+# Session requests issued inside the current HTTPClient.request call. Only
+# a refusal before the first one is provably unsent: the SDK's in-call
+# retry follows a try that may have committed.
+_TRIES = contextvars.ContextVar("discord_session_tries", default=None)
 
 
 def _sdk():
@@ -66,11 +71,16 @@ def _session_boundary(session, current=None):
 
     @functools.wraps(original)
     def request(method, url, *args, **kwargs):
+        tries = _TRIES.get()
         if current is not None and not current():
+            if tries is not None and tries[0] == 0:
+                raise worker.SendNotAdmitted(code="discord_scope_changed")
             raise ValueError("discord_scope_changed")
         if not _official_url(url):
             raise ValueError("discord_endpoint_forbidden")
         kwargs.update(allow_redirects=False, proxy=None, proxy_auth=None)
+        if tries is not None:
+            tries[0] += 1
         return original(method, url, *args, **kwargs)
 
     setattr(request, _BOUNDARY, True)
@@ -92,7 +102,11 @@ def _harden(bot):
         if not session:
             raise ValueError("discord_session_missing")
         _session_boundary(session, lambda: getattr(bot, _CURRENT, lambda: True)())
-        return await original(route, *args, **kwargs)
+        token = _TRIES.set([0])
+        try:
+            return await original(route, *args, **kwargs)
+        finally:
+            _TRIES.reset(token)
 
     http.request = request
 

@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from adapters.common.paths import read_verified_attachment
 from adapters.common import envelopes, eventlog
 from adapters.common.spec import post_scoped, reply_card_key, token_map
-from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
+from adapters.common.worker import SendNotAdmitted, WorkspaceDeliveryWorker as _BaseWorker, err_code
 
 from .cards import render, validate
 from .emoji_text import slack_emoji_pattern
@@ -163,8 +163,16 @@ def single_attempt(client):
         async def checked(*args, _native=native, **kwargs):
             allowed = RETRY_ALLOWED.get()
             if allowed is not None and not await allowed():
-                raise RuntimeError("send_authority_revoked")
-            return await _native(*args, **kwargs)
+                raise SendNotAdmitted()     # refused before this request
+            try:
+                result = await _native(*args, **kwargs)
+            except SendNotAdmitted:
+                raise                       # an inner gate refused before HTTP
+            except BaseException:
+                sender._mcs_wired = True
+                raise
+            sender._mcs_wired = True        # a composite upload may have begun
+            return result
         setattr(sender, edge, checked)
     return sender
 
@@ -231,6 +239,9 @@ _MAY_HAVE_APPLIED = frozenset({"internal_error", "fatal_error"})
 
 
 def _failed(exc, op, message_id):
+    if isinstance(exc, SendNotAdmitted):
+        # The current authority refused before the request: provably unsent.
+        return {"result": "not_sent", "error_code": err_code(exc)}
     response = getattr(exc, "response", None)
     data = _payload(response)
     status = getattr(response, "status_code", None)
@@ -488,11 +499,17 @@ class DeliveryWorker(_BaseWorker):
         message_id = outcome.get("message_id")
         if outcome.get("result") == "delivered" and message_id \
                 and claim["spec"]["op"] != "revoke":
-            self._reg.put_tokens({
-                token: {**context, "message_id": message_id,
-                        "team_id": self._settings["team_id"]}
-                for token, context in token_map(claim["spec"]).items()
-            }, durable=True)  # pins durable before the receipt publishes
+            try:
+                self._reg.put_tokens({
+                    token: {**context, "message_id": message_id,
+                            "team_id": self._settings["team_id"]}
+                    for token, context in token_map(claim["spec"]).items()
+                }, durable=True)  # pins durable before the receipt publishes
+            except Exception as exc:
+                # The card is posted: a local pin failure must not replace
+                # that fact (and its message_id) with an unknown result.
+                self._log("token_pin_failed", delivery_id=claim["spec"]["delivery_id"],
+                          error=type(exc).__name__)
         return outcome
 
     # -- durable render parts (T9) ----------------------------------------
@@ -720,7 +737,7 @@ class DeliveryWorker(_BaseWorker):
         if ctx.get("history") is None:
             try:
                 ctx["history"] = await self._replies(thread_ts)
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, SendNotAdmitted):
                 raise
             except Exception:
                 self._log("edit_preflight_held", reason="edit_history_unverified")
@@ -947,9 +964,11 @@ class DeliveryWorker(_BaseWorker):
             raise
         except Exception as exc:
             # files_upload_v2 is composite: its completion may reject after
-            # creating a private FID. Never authorize a second upload.
+            # creating a private FID. Never authorize a second upload —
+            # unless the very first request was refused before HTTP.
             failed = _failed(exc, "attachment_part", thread_ts)
-            failed["result"] = "unknown"
+            if not isinstance(exc, SendNotAdmitted) or getattr(sender, "_mcs_wired", False):
+                failed["result"] = "unknown"
             return failed
         data = _payload(response)
         fid = _upload_file_id(data)
@@ -975,7 +994,7 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "unknown", "error_code": "sdk_capability_missing"}
         try:
             data = _payload(await call_native(info, file=prior, limit=1))
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, SendNotAdmitted):
             raise
         except Exception:
             self._log("edit_preflight_held", reason="file_info_unverified")
