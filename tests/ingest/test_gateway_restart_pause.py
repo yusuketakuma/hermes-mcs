@@ -47,6 +47,7 @@ def test_only_a_fresh_requested_receipt_pauses(tmp_path, row, paused):
 def test_scheduled_tick_yields_before_lock_wait_or_fetch(tmp_path, monkeypatch, capsys):
     data = _point_run_check_at(tmp_path, monkeypatch)
     _receipt(data, {"status": "requested", "at": run_check.time.time()})
+    monkeypatch.setattr(run_check.job_ops, "CMD_DIR", str(data / "cmd"))   # empty queue
     monkeypatch.setattr(run_check, "acquire_run_lock",
                         lambda path: pytest.fail("a pending restart must not take or wait for run.lock"))
     for argv in (["run_check", "--json", "--mark-read"], ["run_check", "--json", "--jobs-only"]):
@@ -64,6 +65,28 @@ def test_command_worker_is_not_paused(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["run_check", "--commands-only"])
     assert run_check.main() == 3            # synthetic lock refusal, after the pause check
     assert taken and "gateway_restart_pending" not in capsys.readouterr().out
+
+
+def test_queued_command_is_drained_instead_of_stranded(tmp_path, monkeypatch, capsys):
+    # local.mcs-cmd runs the full-tick argv on a data/cmd change and is not re-fired
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    _receipt(data, {"status": "requested", "at": run_check.time.time()})
+    (data / "cmd").mkdir()
+    (data / "cmd" / "synthetic.json").write_text("{}")
+    monkeypatch.setattr(run_check.job_ops, "CMD_DIR", str(data / "cmd"))
+    lock = run_check.os.open(str(data / "run.lock"), run_check.os.O_CREAT | run_check.os.O_RDWR)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: lock)
+    monkeypatch.setattr(run_check, "_entry_code_current", lambda: True)
+    monkeypatch.setattr(run_check, "_entry_update_pending", lambda: False)
+    drained = []
+    monkeypatch.setattr(run_check, "_commands_only",
+                        lambda fd, deadline: drained.append(deadline) or run_check.os.close(fd) or 0)
+    monkeypatch.setattr(run_check, "MCSAdapter",
+                        lambda *a, **k: pytest.fail("a pending restart must not start a fetch"))
+    monkeypatch.setattr(sys, "argv", ["run_check", "--json", "--download-files", "--mark-read"])
+    assert run_check.main() == 0
+    assert drained and drained[0] is not None
+    assert "gateway_restart_pending" not in capsys.readouterr().out
 
 
 def test_ocr_yields_without_overwriting_its_status(tmp_path, monkeypatch, capsys):

@@ -443,6 +443,14 @@ def _consent_only(lock_fd) -> int:
     return 0 if result["ok"] else 1
 
 
+def _commands_queued() -> bool:
+    """Whether data/cmd holds a request file the command drain would read."""
+    try:
+        return any(name.endswith(".json") for name in os.listdir(job_ops.CMD_DIR))
+    except OSError:
+        return False
+
+
 def _commands_only(lock_fd, deadline) -> int:
     """Interactive-notification command worker: drains data/cmd (shared
     queue — operator card_resolve lives there) and data/cmd_int, repairs
@@ -1264,15 +1272,19 @@ def _main() -> int:
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
 
+    if not args.commands_only and writer_lock.gateway_restart_pause(os.path.join(HOME, "data")):
+        if not _commands_queued():
+            # Free the single cron slot before any lock wait or fetch so the
+            # pending gateway restart can pass; fetch and mark-read stay coupled.
+            print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
+            return 3
+        # local.mcs-cmd (WatchPaths) fires once per change: drain the queued
+        # commands without any fetch rather than strand them until the next file.
+        args.commands_only = True
     deadline = time.monotonic() + RUN_DEADLINE_S if args.commands_only else None
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against
     # their run budget; scheduled collection retains its full work budget.
-    if not args.commands_only and writer_lock.gateway_restart_pause(os.path.join(HOME, "data")):
-        # Free the single cron slot before any lock wait or fetch so the
-        # pending gateway restart can pass; fetch and mark-read stay coupled.
-        print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
-        return 3
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
         with writer_lock.capture_writer_refusal() as diagnostic:
