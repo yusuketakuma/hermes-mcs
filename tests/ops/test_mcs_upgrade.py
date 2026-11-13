@@ -798,6 +798,31 @@ def test_plan_blocks(updater, monkeypatch, tmp_path, kw, errors, blocker):
     assert p["route"] == "blocked" and blocker in p["blockers"]
 
 
+@pytest.mark.parametrize("needed, bridged, blocker", [
+    (True, False, "provider_update_bridge_required"),
+    (OSError("synthetic"), False, "provider_settings_unverified"),
+    (True, True, None),
+    (False, False, None),
+])
+def test_plan_reports_the_provider_bridge_refusal_apply_would_make(updater, monkeypatch, tmp_path,
+                                                                   needed, bridged, blocker):
+    """IA-110: plan shows the provider-bridge refusal instead of apply discovering it."""
+    _plan_env(updater, monkeypatch, tmp_path, [])
+
+    def migration_needed():
+        if isinstance(needed, Exception):
+            raise needed
+        return needed
+
+    monkeypatch.setattr(update_planning, "_provider_migration_needed", migration_needed)
+    monkeypatch.setattr(update_planning, "_provider_bridge_verified", lambda previous, target: bridged)
+    p = updater.plan("v1.2.0")
+    if blocker is None:
+        assert not {"provider_update_bridge_required", "provider_settings_unverified"} & set(p["blockers"])
+    else:
+        assert p["route"] == "blocked" and blocker in p["blockers"]
+
+
 def test_plan_reports_interrupted_update(updater, monkeypatch, tmp_path):
     _plan_env(updater, monkeypatch, tmp_path, [])
     state = updater.journal_store.default_state()
