@@ -403,7 +403,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
     After two activity-order cycles end without a selection on a slice that
     could not cover every patient, the rotation row carries a shared idle
     mark; until it expires every worker returns without scanning and reports
-    the remaining seconds in ``observed_out['scan_idle_s']``.
+    the remaining seconds in ``observed_out['scan_idle_s']``. A selecting
+    slice writes nothing after its readiness proof; the claim clears the mark.
     """
     if observed_out is not None:
         observed_out.update(dict.fromkeys(_WAIT_COUNTER_KEYS, 0))
@@ -571,18 +572,21 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 except Exception:
                     pass
             raise
-        # A selection or a full-coverage slice (whose worker already waits 60 s)
-        # clears the mark. Otherwise idle long enough that the activity order
-        # (6 patients per slice) still completes a cycle within about 600 s.
-        if selected is not None or covered:
-            fresh = None
-        elif patients is not None:
-            fresh = {'cycles': cycles, 'until': now + min(
-                _SCAN_IDLE_MAX_SECONDS, max(5, 3600 / max(patients, 1)))}
-        else:
-            fresh = {'cycles': cycles, 'until': 0} if cycles else None
-        if fresh != idle:
-            idle, unsaved = fresh, True
+        # A selection leaves the mark to the claim, which drops it in the same
+        # transaction: a write here would outdate the candidate's readiness proof.
+        # A full-coverage slice (whose worker already waits 60 s) clears it.
+        # Otherwise idle long enough that the activity order (6 patients per
+        # slice) still completes a cycle within about 600 s.
+        if selected is None:
+            if covered:
+                fresh = None
+            elif patients is not None:
+                fresh = {'cycles': cycles, 'until': now + min(
+                    _SCAN_IDLE_MAX_SECONDS, max(5, 3600 / max(patients, 1)))}
+            else:
+                fresh = {'cycles': cycles, 'until': 0} if cycles else None
+            if fresh != idle:
+                idle, unsaved = fresh, True
         if unsaved:
             persist()
     # scan_interrupts counts every early abort (contention, deadline or
@@ -746,7 +750,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             "night_id": night_id, "unit_claim": claim,
                             **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
-                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
+                # The claim clears the shared scan idle the selection left in place.
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {
+                    **{k: v for k, v in rotation.items() if k != "scan_idle"},
+                    "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
                 if not extract_llm._writer_current(full=True):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0, **stats}
