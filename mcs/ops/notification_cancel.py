@@ -228,9 +228,28 @@ def _workers_stopped(data, transports, locks=None):
             _witnesses_stopped(data, transport)
 
 
+def _standalone(data):
+    """Effective runtime_mode from flags/notify.json, as the Hermes plugin reads it.
+    Unreadable or malformed flags count as Hermes, so the witnesses stay checked."""
+    flags_dir = data / "flags"
+    try:
+        if flags_dir.is_symlink():
+            return False
+        raw = read_regular_nofollow(str(flags_dir / "notify.json"), 4096, ValueError)
+        flags = json.loads(raw) if len(raw) <= 4096 else None
+    except (OSError, ValueError, RecursionError):
+        return False
+    return isinstance(flags, dict) and flags.get("runtime_mode") == "standalone"
+
+
 def _witnesses_stopped(data, transport):
     """A Hermes gateway that recorded a witness must also be gone; the
-    standalone host records none, so the held scope lock is its proof."""
+    standalone host records none, so the held scope lock is its proof.
+    Under standalone the Hermes plugin starts no card worker, so a witness
+    there is a leftover (old version, reused pid); a Hermes worker started
+    before the switch still holds its scope lock and is refused by it."""
+    if _standalone(data):
+        return
     for path in (data / "worker_status").glob(f"{transport}-*.json"):
         value = json.loads(read_regular_nofollow(str(path), 2048, ValueError))
         pid = value.get("pid") if isinstance(value, dict) else None
