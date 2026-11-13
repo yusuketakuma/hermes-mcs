@@ -631,3 +631,33 @@ def test_interrupted_apply_keeps_marker_with_journal(updater, monkeypatch):
     assert Path(updater.MARKER_PATH).exists()
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applying"]["sha"] == target
+
+
+def test_schema_rollback_stop_failure_does_not_freeze_or_claim_a_stop(updater, monkeypatch):
+    """Regression: a failed rollback quiesce rewrote the journal as an
+    incomplete restore (permanent freeze) and reported writers as stopped."""
+    repo = _apply_env(updater, monkeypatch, precheck_errors=["schema_bump:7->8"])
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    stops = []
+
+    def quiesce():
+        stops.append(True)
+        updater._write_marker()
+        if len(stops) == 2:
+            raise updater.UpdateError("drainer_stop_failed: synthetic")
+        return []
+
+    def child_failed(_sha, *, run_lock_fd):
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", quiesce)
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no tree change"))
+    assert updater.apply("v1.1.0", target, "cid-schema") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["sha"] == target and not state["applying"].get("rollback")
+    assert not state["applying"].get("restore_incomplete")
+    assert Path(updater.MARKER_PATH).exists()
