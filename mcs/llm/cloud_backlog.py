@@ -654,6 +654,14 @@ _SCAN_REFUSALS = frozenset({
 })
 
 
+_SOURCE_CHANGED_CODES = frozenset({
+    "quota", "source", "scans", "version", "contract", "occurrence", "fence", "adoption", "deadline",
+})
+_NO_DUE_LANE_KEYS = tuple(f"wait_no_due_{lane}_{code}" for lane, codes in (
+    ("A", ("not_needed", "local_not_ready", "backoff", "source_incomplete")),
+    ("B", ("none_incomplete", "backoff", "cloud_hold")), ("C", ("none_unaudited", "backoff"))) for code in codes)
+
+
 def _bounded_pass_code(value):
     """Identifier-shaped failure identity only; free text never qualifies."""
     return (type(value) is str and value.isascii() and value.isidentifier()
@@ -690,13 +698,20 @@ def _context_pass_observation(result):
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
+    changed = result.get("changed")
+    if record["status"] == "source_changed" and changed is not None:
+        record["changed"] = changed if type(changed) is str and changed in _SOURCE_CHANGED_CODES else "unclassified"
+    detail = result.get("detail")
+    if "reason" in record and detail is not None:
+        record["detail"] = detail if _bounded_pass_code(detail) else "unclassified"
     # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
-                       ("wait_dependency_incomplete", 16)):
+                       ("wait_dependency_incomplete", 16), ("wait_unit_claimed", 8),
+                       *((key, 16) for key in _NO_DUE_LANE_KEYS)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
             record[key] = value
@@ -705,12 +720,23 @@ def _context_pass_observation(result):
 
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
-    holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer."""
+    holds the selection lock (usually scanning, not necessarily doing work);
+    a scan that covered every patient and found nothing startable rarely
+    finds work seconds later. A partial slice or a refused scan keeps the
+    short wait so the rotation reaches the remaining patients. A shared scan
+    idle (scan_idle_s) sleeps until it expires, so one worker scans next and
+    the others meet selection_busy."""
     if result.get("done"):
         return 1
-    if result.get("reason") == "patient_context_selection_busy":
+    reason = result.get("reason")
+    if reason == "patient_context_selection_busy":
         return 20
+    idle = result.get("scan_idle_s")
+    if type(idle) in (int, float) and idle > 0:
+        return min(60, max(5, idle))
+    if (reason in ("patient_context_waiting", "patient_context_scan_incomplete")
+            and result.get("covered") is True):
+        return 60
     return 5
 
 

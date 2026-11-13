@@ -103,7 +103,11 @@ def llm_extract(body: str, *, context: str | None = None,
     confirmable candidates so the v3 pass folds the v1/v2 (rules) work
     into one call instead of a second pipeline. `feedback` carries Jev
     QC findings on the current extraction — unsupported items to drop
-    or re-anchor, applied as a one-shot repair steer.
+    or re-anchor, applied as a one-shot repair steer. `protected_prior` is
+    the stored extraction bound to this exact source: on the local provider
+    the protected assertions a candidate lost are first added back unchanged
+    (extract_quality.carry_protected); any disagreement leaves the candidate
+    to the single protected repair and the commit-time hold.
 
     Long bodies are covered in full via plan_chunks; each piece's output
     validates against the piece first and then the WHOLE body so evidence
@@ -129,6 +133,22 @@ def llm_extract(body: str, *, context: str | None = None,
         raise ValueError("extract_chunk_size_invalid")
 
     protected_prior = extract_quality.protected_assertions(protected_prior, body)
+
+    def carry(value, raw, prior, piece, start, piece_context):
+        # A cloud result stays exactly what its provider hash and repair proof bind.
+        if value is None or not prior or provider is not None:
+            return value
+        merged, counts = extract_quality.carry_protected(
+            prior, value, piece, body, raw=raw,
+            validate_item=lambda field, item: extract_validation.validate_piece(
+                {field: [item]}, piece, body, None, piece_context, references, source_offset=start))
+        if merged is None:
+            bump("protected_conflict")
+            return value
+        if counts.get("carried"):
+            bump("protected_carried", counts["carried"])
+        return merged
+
     saved = chunks_in or {}
     splits = dict(splits_in or {})
     sizes = []
@@ -308,14 +328,17 @@ def llm_extract(body: str, *, context: str | None = None,
             # a guess (the rules live in _CTX_HEAD): drop it before it
             # counts as a protected fact in the thin/repair decisions
             v.pop("reply", None)
+        piece_prior = extract_quality.protected_assertions(protected_prior, piece)
         # Thin-nudge only when the prompt covered the WHOLE body — a
         # sparse chunk legitimately yields few fields, and the nudge's
         # "extract everything" ask is only fair when one call saw the
         # entire message. Multi-chunk thin output is still recorded on
-        # the merged result via meta.thin below.
+        # the merged result via meta.thin below. Judged on the model's own
+        # output: carried prior items must not hide an under-extraction.
         thin = piece == body and extract_quality.is_thin(v, body)
+        if not quality_status:
+            v = carry(v, d, piece_prior, piece, start, piece_context)
         completeness = extract_quality.completeness_issues(v, piece_hints, piece)
-        piece_prior = extract_quality.protected_assertions(protected_prior, piece)
         protected_loss = extract_quality.protected_lost(piece_prior, v, body) if piece_prior else {}
         quality_repair_needed = bool(completeness or protected_loss)
 
@@ -463,6 +486,7 @@ def llm_extract(body: str, *, context: str | None = None,
                           if _response_has_required_fields(rd) else None)
                     if rv is not None and not context:
                         rv.pop("reply", None)
+                    rv = carry(rv, rd, piece_prior, piece, start, piece_context)
                     # a replacement must see every change in the message, so only an unsplit body
                     if ((extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
                              if quality_repair_needed else extract_quality.improves(rv, v))

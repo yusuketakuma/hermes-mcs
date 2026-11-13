@@ -723,6 +723,58 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
         return False
 
 
+LOCAL_RELEASE_KIND = "cloud_local_release"
+# Longer than any request's deadline: a younger reservation may still be answered.
+LOCAL_RELEASE_MIN_AGE_S = 3600
+
+
+def local_release_tx(db, meta, now):
+    """Record a human decision to stop waiting on the cloud for old unresolved requests.
+
+    Nothing is deleted or re-priced: the reservations stay charged at their
+    reserved amount and are never sent again. Only local processing of the
+    same input stops being held (see _guard_repeated_request)."""
+    before = now - LOCAL_RELEASE_MIN_AGE_S
+    through = db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind=? AND created_at<=?",
+                         (KINDS[0], before)).fetchone()[0]
+    if through is None:
+        return None
+    db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+               (LOCAL_RELEASE_KIND, "{}", MODEL,
+                json.dumps({**meta, "through": through, "before": before}, ensure_ascii=False), now))
+    return through
+
+
+def _local_release(db):
+    """(artifact id, creation time) bounds of the widest applied human release; (0, 0.0) without one."""
+    best = (0, 0.0)
+    for raw in db.execute("SELECT meta FROM artifacts WHERE kind=? ORDER BY artifact_id DESC LIMIT 64",
+                          (LOCAL_RELEASE_KIND,)):
+        try:
+            meta = strict_json(raw[0]) if isinstance(raw[0], str) and len(raw[0]) <= 32768 else None
+            through, before = meta["through"], meta["before"]
+            if (type(through) is not int or through <= 0 or type(before) not in (int, float)
+                    or not math.isfinite(before) or not isinstance(meta.get("command_id"), str)
+                    or not all(isinstance(meta.get(key), str) and meta[key].strip() for key in ("actor", "reason"))):
+                continue
+            receipt = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
+                                 (meta["command_id"],)).fetchone()
+            recorded = strict_json(receipt[1]) if receipt is not None and receipt[0] == "applied" else None
+            processed = recorded.get("processed_at") if isinstance(recorded, dict) else None
+            if (not isinstance(recorded, dict) or recorded.get("command_id") != meta["command_id"]
+                    or recorded.get("outcome") != "applied" or recorded.get("control") != "local_release"
+                    or recorded.get("through") != through or recorded.get("actor") != meta["actor"]
+                    or recorded.get("reason") != meta["reason"]
+                    # The age floor is bound to the approval time, not to the row's own claim.
+                    or type(processed) not in (int, float)
+                    or before > processed - LOCAL_RELEASE_MIN_AGE_S):
+                continue
+        except (ValueError, TypeError, KeyError, RecursionError):
+            continue    # an unreadable release releases nothing
+        best = max(best, (through, before))
+    return best
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],
@@ -731,6 +783,9 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     result_map = None
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False
+    # The human release covers patient-context local work only: a cloud send
+    # and the reextract migration keep their own rules.
+    releasable, release = local_fallback and candidate['route'] == 'patient_context', None
     for row in rows:
         try:
             previous = _receipt_meta(row['meta'])
@@ -785,12 +840,24 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                         disposition_ids.add(reservation_id)
                     else:
                         result_map.setdefault(reservation_id, []).append((result_meta, result_row))
+            # A human released this old request to local processing: its answer is
+            # no longer waited for. It stays charged and is never sent again.
+            if releasable and release is None:
+                release = _local_release(ledger.db)
+            released = (releasable and row['artifact_id'] <= release[0]
+                        and row['created_at'] <= release[1])
             if previous['reservation_id'] in disposition_ids:
+                if released:
+                    continue
                 raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
+            if released and not matches:
+                continue
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
             if result.get('disposition'):
+                if released:
+                    continue
                 raise ValueError('discarded')
             http_class = result.get('http_class')
             if (local_fallback and isinstance(http_class, str)
@@ -805,6 +872,9 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
+            if released and not (settled and result.get('usage') is not None
+                                 and result.get('http_class') == 'http_200' and result.get('error_kind') is None):
+                continue    # never settled; a clean paid answer is recovered instead, not redone
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
             raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None

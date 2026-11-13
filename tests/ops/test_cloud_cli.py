@@ -82,7 +82,7 @@ def _req(action, **kw):
             "reason": "synthetic maintenance", **kw}
 
 
-@pytest.mark.parametrize("action", ["stop", "resume"])
+@pytest.mark.parametrize("action", ["stop", "resume", "release-local"])
 @pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
 def test_control_restore_hold_precedes_writer_under_the_lock(world, monkeypatch, action, witness):
     import ledger
@@ -319,7 +319,40 @@ def test_cli_commands_use_nested_parser_and_never_touch_network(world, capsys):
     assert '"outcome": "applied"' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume"])
+def test_release_local_cli_prints_through_and_rejects_when_nothing_is_old_enough(world, capsys):
+    _, path, _ = world
+    args = ["cloud-llm", "release-local", "--confirm-human", "--reason", "synthetic"]
+    assert mcs_setup.main(["cloud-llm", "release-local", "--reason", "synthetic"]) == 1
+    capsys.readouterr()
+    assert mcs_setup.main(args) == 1
+    rejected = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rejected["outcome"] == "rejected" and rejected["error"] == "cloud_release_nothing"
+    assert rejected["through"] is None
+    now = cli.time.time()
+    with closing(Ledger(str(path))) as db:
+        assert not db.artifacts("cloud_local_release")
+        with db.db:
+            # Only the row's kind and age matter to the release cutoff.
+            old, young = (db.db.execute(
+                "INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                ("cloud_usage_reserve", "{}", "synthetic", "{}", now - age)).lastrowid
+                for age in (cloud_policy.LOCAL_RELEASE_MIN_AGE_S + 1, 60))
+    command_id = str(uuid.uuid4())
+    assert mcs_setup.main(args + ["--command-id", command_id]) == 0
+    applied = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert old < young and applied == {"command_id": command_id, "outcome": "applied", "error": None,
+                                       "control": "local_release", "through": old}
+    assert mcs_setup.main(args + ["--command-id", command_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1]) == applied
+    with closing(Ledger(str(path))) as db:
+        [release] = db.artifacts("cloud_local_release")
+        assert json.loads(release["meta"]) == {
+            "command_id": command_id, "actor": "local-human", "reason": "synthetic",
+            "through": old, "before": now - cloud_policy.LOCAL_RELEASE_MIN_AGE_S}
+        assert len(db.artifacts("cloud_usage_reserve")) == 2
+
+
+@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume", "release-local"])
 def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypatch, capsys, action):
     import ledger
     root, _, _ = world
@@ -329,7 +362,7 @@ def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypat
     monkeypatch.setattr(ledger, "Ledger", lambda *args, **kwargs: pytest.fail("must not open writer"))
     monkeypatch.setattr(cli, "observe", lambda *args, **kwargs: pytest.fail("must not read reports"))
     args = ["cloud-llm", action]
-    if action in ("stop", "resume"):
+    if action in ("stop", "resume", "release-local"):
         args += ["--confirm-human", "--reason", "synthetic"]
     assert mcs_setup.main(args) != 0
     captured = capsys.readouterr()

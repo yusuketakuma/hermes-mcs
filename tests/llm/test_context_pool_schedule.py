@@ -71,19 +71,40 @@ def test_context_child_does_not_enter_after_source_generation_changes(runtime, r
     assert not posts and not document(ledger)
 
 
-def test_context_retry_delay_backs_off_only_for_selection_busy():
+def test_context_retry_delay_backs_off_for_busy_and_workless_scans():
     assert cloud_backlog._context_retry_delay({"done": 1}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+        {"done": 1, "reason": "patient_context_waiting"}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_waiting"}) == 5
+        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+    for reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": True}) == 60
+        # A partial slice (or a refused scan) must not stall the rotation.
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False}) == 5
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False,
+             "scan_refusal": "bookmark_cas"}) == 5
+        assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 5
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "run_lock"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
+    # A shared scan idle sleeps until it expires, within the 5..60 s bounds.
+    idle = {"done": 0, "reason": "patient_context_waiting", "covered": True}
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 33}) == 33
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 2}) == 5
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 500}) == 60
+    assert cloud_backlog._context_retry_delay(idle) == 60
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_waiting", "covered": False}) == 5
 
 
 def test_context_pass_reports_only_fixed_bounded_diagnostics():
     result = {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
               "scanned": 8, "scan_ms": 900000, "lane": "B", "project_id": 123,
-              "error": "synthetic private source", "patient": "synthetic private patient"}
+              "error": "synthetic private source", "patient": "synthetic private patient",
+              "scan_idle_s": 33.5}
     assert cloud_backlog._context_pass_observation(result) == {
         "status": "deferred", "done": 0, "reason": "patient_context_waiting",
         "scanned": 8, "scan_ms": 900000, "lane": "B"}
@@ -275,3 +296,26 @@ def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
         assert key not in cloud_backlog._context_pass_observation({'status': 'deferred', key: invalid})
     assert 'wait_unregistered' not in cloud_backlog._context_pass_observation({
         'status': 'deferred', 'wait_unregistered': 1})
+
+
+def test_context_pass_lane_breakdown_keys_match_the_engine():
+    import patient_context_refresh
+    assert cloud_backlog._NO_DUE_LANE_KEYS == patient_context_refresh._NO_DUE_LANE_KEYS
+
+
+def test_context_pass_reports_fixed_change_cause_detail_and_lane_breakdown():
+    result = {"status": "source_changed", "done": 0, "changed": "scans",
+              "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(result) == {
+        "status": "source_changed", "done": 0, "changed": "scans",
+        "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "changed": "合成の非公開値"})["changed"] == "unclassified"
+    assert "changed" not in cloud_backlog._context_pass_observation({"status": "deferred", "changed": "scans"})
+    assert "wait_no_due_A_backoff" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "wait_no_due_A_backoff": 17})
+    record = cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable:RuntimeStale", "detail": "RuntimeStale"})
+    assert record == {"status": "deferred", "reason": "source_quality_unavailable", "detail": "RuntimeStale"}
+    assert cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable", "detail": "合成 本文"})["detail"] == "unclassified"

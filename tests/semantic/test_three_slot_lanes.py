@@ -86,6 +86,13 @@ def test_realtime_selects_newest_arrival_background_selects_oldest(tmp_path, mon
         root['eligible'] = False
         db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
                       (json.dumps(root), original['job_id']))
+        # The background lane serves notifiable arrivals first
+        # (test_backlog_arrival_order); with none left it takes the oldest.
+        for row in db.db.execute("SELECT job_id, payload FROM fetch_jobs WHERE message_id IN (2,3)").fetchall():
+            arrival = json.loads(row['payload'])
+            arrival['eligible'] = False
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                          (json.dumps(arrival), row['job_id']))
         db.db.commit()
         seen.clear()
         out = semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 480,

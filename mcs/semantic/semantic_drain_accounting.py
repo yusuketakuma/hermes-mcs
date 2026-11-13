@@ -5,7 +5,7 @@ import json
 import math
 import time
 import semantic_runtime as runtime
-from semantic_policy import (KIND_DRAIN_RUN, QC_JOB_KIND)
+from semantic_policy import (JOB_KIND, KIND_DRAIN_RUN, QC_JOB_KIND)
 
 from semantic_due_selection import (
     _merge_long_defers,
@@ -65,15 +65,37 @@ def _defer_note(out: dict, reason: str) -> None:
     counts[reason] = counts.get(reason, 0) + 1
 
 
+# Deterministic holds whose answer only an input change can alter.
+_FREE_HOLD_CODES = ('empty_repair_candidate_binding', 'audit_empty_unverified')
+
+
+def _free_hold(job, lane, cloud_only: bool, status, diagnostics: dict,
+               used: int, llm_s: float, progressed: bool) -> bool:
+    """True for a backlog semantic defer that spent no model time, no Jev
+    request and saved no stage, held by a deterministic gate rather than
+    an unavailable LLM; its slot goes back to independent due jobs."""
+    return (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
+            and status == 'deferred' and diagnostics.get('not_sent') is None
+            and diagnostics.get('member_hold') is None
+            and diagnostics.get('code') in _FREE_HOLD_CODES
+            and used == 0 and llm_s == 0 and not progressed)
+
+
 def _apply_job_status(ledger, token, limit: int, status: str,
-                      budget_short: bool, out: dict) -> bool:
+                      budget_short: bool, out: dict,
+                      free_hold: bool = False) -> bool:
     """Map one finished job's status onto its queue transition and the
-    pass counters; True when the pass must stop (no further call fits)."""
+    pass counters; True when the pass must stop (no further call fits).
+
+    ``free_hold`` marks a deterministic hold that spent nothing: its
+    answer cannot change until a re-seed (which resets next_try), so it
+    waits NOT_SENT_BACKOFF_S instead of being re-selected every minute."""
     if status == "done":
         out["done"] += 1
     elif status in ("deferred", "deferred_short"):
         out["deferred"] += 1
-        runtime.transition(ledger, token, "defer", retry_in=60)
+        runtime.transition(ledger, token, "defer",
+                           retry_in=NOT_SENT_BACKOFF_S if free_hold else 60)
         if status == "deferred_short":
             # less than one call reserve is left: the next job's
             # first call is exempt from the reserve gate and would

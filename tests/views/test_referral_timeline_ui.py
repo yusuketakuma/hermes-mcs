@@ -92,15 +92,18 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {'synthetic': True})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *args: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *args: '合成患者')
-    # the views read one snapshot (SAVEPOINT); an empty in-memory DB stands in for the ledger
-    db = sqlite3.connect(':memory:')
     cli = mcs_view.View.__new__(mcs_view.View)
+    # One schema-less connection for both callers: the views open SAVEPOINTs on it.
+    db = sqlite3.connect(':memory:')
     cli.db, cli.meta = db, {'generated_at': 1}
-    result = cli._patient_context(1, 'timeline', None, '', '')
-    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
+    try:
+        result = cli._patient_context(1, 'timeline', None, '', '')
+        ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
+        care = views.care_events(db, 1, cfg={'synthetic': True})
+    finally:
+        db.close()
     assert len(calls) == 2
     assert calls[0] == calls[1]
-    care = views.care_events(db, 1, cfg={'synthetic': True})   # the CLI timeline also carries care events
     assert result == views.timeline(ev, documents=projection, pumps={"events": [], "coverage": {}}, care=care)
     dated = [row for row in ui['items'] if row['group'] == '紹介状の記載（日付順）']
     unknown = [row for row in ui['items'] if row['group'] == '紹介状の記載（時点不明）']
@@ -125,7 +128,11 @@ def test_unavailable_document_coverage_is_visible(monkeypatch, state, expected):
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
-    ui = notify_views.patient_context_list(sqlite3.connect(':memory:'), 1, 'timeline', cfg={}, since=0, now=1)
+    db = sqlite3.connect(':memory:')  # the view opens a SAVEPOINT on its connection
+    try:
+        ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=0, now=1)
+    finally:
+        db.close()
     assert f'紹介状: {expected}' in ui['notes']
 
 

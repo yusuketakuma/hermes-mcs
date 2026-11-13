@@ -290,8 +290,8 @@ def bounded_http_request(endpoint: str, method: str, body,
         with suppress(Exception):
             worker_process.reap_worker(process)
         raise
-    if time.monotonic() >= operation_deadline:
-        raise TimeoutError("http worker deadline exceeded")
+    # A worker that finished in time may have returned a billed answer;
+    # whether a late answer is used is the caller's decision.
     if process.returncode != 0:
         raise OSError("http worker failed")
     try:

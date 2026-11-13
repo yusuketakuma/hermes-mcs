@@ -12,6 +12,7 @@ import extract_llm_runner
 import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
+import contextlib
 import gc
 import json
 import os
@@ -22,7 +23,7 @@ import pytest
 import cloud_inference
 import extract_llm as worker
 from extract_testkit import _ledger, _message
-from test_lane_slot_and_lock import _carry_one, _claims
+from test_lane_slot_and_lock import _carry_one, _claims, _lock_stub
 from test_anthropic_runtime import (
     routed as routed, old, _use_real_cloud_accounting, _current_artifacts,
 )
@@ -228,3 +229,81 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
     assert len(context_calls) == int(lane == 3)
     assert clock[0] == 10 and not pending
     assert 'SYNTH-NEVER-LOG-CARRY' not in capsys.readouterr().out
+
+
+def test_released_carry_is_counted_even_when_reported(tmp_path, monkeypatch, capsys):
+    led = _ledger(tmp_path)
+    try:
+        _lock, carry = _carry_one(led, monkeypatch, tmp_path)
+        capsys.readouterr()
+        settled, count, _pids = worker._settle_carry(
+            led, carry, write=False, lock_context=contextlib.nullcontext(True))
+        assert count == 0 and carry == [] and _claims(led) == []
+        assert settled['deferred'] == 1 and settled['defer_reasons'] == {'update_fence': 1}
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [row['carry_settled'] for row in rows if 'carry_settled' in row] == [settled]
+        assert not led.artifacts('extract_llm')
+    finally:
+        led.close()
+
+
+def _held_run_lock(tmp_path, monkeypatch, release_at):
+    """A real run lock held by another fd; released once the fake clock reaches ``release_at``."""
+    path = str(tmp_path / 'synthetic-run.lock')
+    holder = [worker.writer_lock.acquire_run_lock(path)]
+    assert holder[0] is not None
+    clock, attempts = [0.0], []
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if release_at is not None and clock[0] >= release_at and holder[0] is not None:
+            os.close(holder[0])
+            holder[0] = None
+
+    def acquire():
+        attempts.append(clock[0])
+        return worker.writer_lock.acquire_run_lock(path)
+    monkeypatch.setattr(extract_llm_errors, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(extract_llm_errors, '_writer_current_diagnostic', lambda **kw: True)
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    return clock, attempts, holder
+
+
+def test_write_lock_wins_a_sub_second_gap(tmp_path, monkeypatch):
+    clock, attempts, holder = _held_run_lock(tmp_path, monkeypatch, release_at=0.5)
+    with extract_llm_errors._write_lock(True, wait_s=3) as held:
+        assert held is True and clock[0] < 1.0
+    assert len(attempts) == 4 and holder[0] is None
+
+
+def test_write_lock_gives_up_within_the_same_bound(tmp_path, monkeypatch):
+    clock, attempts, holder = _held_run_lock(tmp_path, monkeypatch, release_at=None)
+    try:
+        with extract_llm_errors._write_lock(True, wait_s=3) as held:
+            assert held is False
+        assert clock[0] == pytest.approx(3.0) and attempts[-1] == pytest.approx(3.0)
+    finally:
+        os.close(holder[0])
+
+
+def test_unwritten_failure_is_counted_without_charging_an_attempt(tmp_path, monkeypatch):
+    led = _ledger(tmp_path)
+    try:
+        led.save_messages([_message(body='合成の本文です。' * 20)])
+        state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=0)
+        monkeypatch.setattr(worker, '_llm_up', lambda **kw: True)
+        monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
+
+        def extract(body, **_kw):
+            state['blocked'] = None
+            return None
+        monkeypatch.setattr(worker, 'llm_extract', extract)
+        monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)
+        result = worker.run_pending(led, limit=1, budget_s=30, per_write_lock=True,
+                                    write_wait_s=1, carry=[])
+        assert result['failed'] == result['unwritten'] == 1
+        assert result['deferred'] == 0 and result['carry'] == []
+        assert led.artifacts('extract_llm', message_id=1) == [] and _claims(led) == []
+    finally:
+        led.close()

@@ -163,6 +163,7 @@ from semantic_drain_accounting import (
     _job_metric as _job_metric,
     _defer_note as _defer_note,
     _apply_job_status as _apply_job_status,
+    _free_hold as _free_hold,
     _observation as _observation,
     _persist_drain_accounting as _persist_drain_accounting,
 )
@@ -821,6 +822,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 consumed_turns[mutation.get("turn_key", "turn")] = mutation["turn"]
             if lane == "backlog":
                 _BACKLOG_TURN["kind"] = job["kind"]
+            # One client serves every job: an earlier job's error must not
+            # classify a job that never called Jev as a permanent failure.
+            if hasattr(jev_client, "last_error"):
+                jev_client.last_error = None
             req0 = jev_client.requests_made if jev_client is not None else 0
             usage_before = dict(getattr(jev_client, "usage_totals", {}))
             job_started = time.perf_counter()
@@ -951,14 +956,18 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     reason = "unclassified"
                 counts = out.setdefault("defer_reasons", {})
                 counts[reason] = counts.get(reason, 0) + 1
-            if _apply_job_status(ledger, token, limit, status,
-                                 budget_short, out):
+            free_hold = _free_hold(job, lane, cloud_only, status, diagnostics,
+                                   used, llm_s, job_progressed)
+            # _why keeps only the first cause: a later target of a multi-target
+            # job may wait on a resource without a code, so only a single-target
+            # hold is known to be deterministic enough for the hourly wait.
+            targets = runtime.parse_payload(job).get('targets')
+            if _apply_job_status(ledger, token, limit, status, budget_short, out,
+                                 free_hold=free_hold and isinstance(targets, list)
+                                 and len(targets) == 1):
                 break
-            # A binding hold with no new work must not starve independent due jobs.
-            if (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
-                    and status == 'deferred'
-                    and diagnostics.get('code') == 'empty_repair_candidate_binding'
-                    and used == 0 and llm_s == 0 and not job_progressed):
+            # A free hold with no new work must not starve independent due jobs.
+            if free_hold:
                 selected[cohort_name] -= 1
             if getattr(getattr(jev_client, "last_error", None),
                        "kind", "") == "payment_required":

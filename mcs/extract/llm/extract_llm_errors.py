@@ -1,6 +1,7 @@
 """Persist bounded extraction failures and source-bound work leases."""
 import contextlib
 import json
+import math
 import os
 import sqlite3
 import time
@@ -294,24 +295,26 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
     Claim renewal checks the owner token, lease and source hash; release
     checks the owner token and lease. Other writes use their respective
     source and generation guards. Taking the lock per row (up to 60 s
-    each) while leases are held would stall the drainer for no proven gain."""
+    each) while leases are held would stall the drainer for no proven gain.
+
+    The lock is polled every ``writer_lock.RUN_LOCK_POLL_S``, the cmd
+    worker's and tick's interval, so a sub-second gap between their
+    holds is not lost to a coarser poll."""
     fd = None
-    if enabled and deadline is not None:
-        until = min(deadline, time.monotonic() + max(0.0, wait_s))
-        while time.monotonic() < deadline:
-            fd = acquire_run_lock()
-            if fd is not None:
+    if enabled:
+        wait_s = max(0.0, wait_s)
+        until = time.monotonic() + wait_s
+        if deadline is not None:
+            until = min(until, deadline)
+        # The attempt bound keeps a clock that does not advance from stretching the wait.
+        for _ in range(math.ceil(wait_s / writer_lock.RUN_LOCK_POLL_S) + 1):
+            if deadline is not None and time.monotonic() >= deadline:
                 break
+            fd = acquire_run_lock()
             remaining = until - time.monotonic()
-            if remaining <= 0:
+            if fd is not None or remaining <= 0:
                 break
-            time.sleep(min(1.0, remaining))
-    elif enabled:
-        for _ in range(max(1, int(wait_s))):
-            fd = acquire_run_lock()
-            if fd is not None:
-                break
-            time.sleep(1)
+            time.sleep(min(writer_lock.RUN_LOCK_POLL_S, remaining))
     try:
         if enabled and fd is None:
             writer_lock.record_writer_refusal("run_lock_not_acquired", "write_lock")
