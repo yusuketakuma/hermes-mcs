@@ -21,10 +21,13 @@ def _hash(value):
                                     ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
+def _root(root):
+    # install.sh supports a linked ~/.mcs; residents see the link, setup the target.
+    return Path(root).absolute().resolve()
+
+
 def path(root):
-    root = Path(root).absolute()
-    if root.resolve() != root:
-        raise ValueError('slack_setup_root_unverified')
+    root = _root(root)
     for directory in (root, root / 'data'):
         if not directory.exists():
             continue
@@ -38,7 +41,7 @@ def path(root):
 def _validate(root, state):
     try:
         if (not isinstance(state, dict) or type(state.get('version')) is not int or state['version'] != 1
-                or state.get('root') != str(Path(root).absolute())
+                or state.get('root') != str(_root(root))
                 or str(uuid.UUID(state['request_id'])) != state['request_id']
                 or state.get('state') not in ('pending', 'blocked', 'unknown', 'verified', 'applied')):
             raise ValueError
@@ -412,7 +415,7 @@ def prepare(root, cfg, *, users=None):
                 elif not _legacy_plan_match(state.get('plan'), desired, cfg):
                     raise ValueError('slack_setup_existing_intent_conflict')
             return state
-        state = {'version': 1, 'root': str(Path(root).absolute()), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
+        state = {'version': 1, 'root': str(_root(root)), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
                  'plan': desired, 'roles': deepcopy(desired['roles']), 'state': 'pending'}
         save(root, state)
         return state

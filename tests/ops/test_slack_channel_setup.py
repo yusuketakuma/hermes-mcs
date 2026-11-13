@@ -753,6 +753,32 @@ def test_text_only_unset_send_profile_uses_binding_for_created_channel(tmp_path,
     assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
 
 
+def test_linked_root_resolves_send_profiles_like_the_installer_target(tmp_path, monkeypatch):
+    # install.sh supports ~/.mcs as a link and sets up the physical root;
+    # resident senders keep the unresolved link path.
+    import mcs_util
+    import notify_sender
+    real, link = tmp_path / 'real', tmp_path / 'link'
+    (real / 'data').mkdir(parents=True, mode=0o700)
+    real.chmod(0o700)
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    legacy = config()
+    legacy.update(notify_target='slack:C000000098', notify_bot_profile='legacy')
+    argv = notify_sender.send_argv(legacy, legacy['notify_target'],
+                                    str(link / 'config.json'), kind='new_messages')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'legacy']
+    cfg, client = text_config(), Client()
+    setup.prepare(real, cfg)
+    consume(real, client, cfg)
+    saved = setup.candidate(real, cfg)
+    setup.applied(real, cfg, saved)
+    assert setup.read(link) == setup.read(real)
+    for target, kind in (('notify_target', 'new_messages'), ('notify_system_target', 'run_failed')):
+        argv = notify_sender.send_argv(saved, saved[target], str(link / 'config.json'), kind=kind)
+        assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
+
+
 def test_text_only_existing_patient_target_keeps_legacy_send_profile(tmp_path, monkeypatch):
     import mcs_util
     import notify_sender
