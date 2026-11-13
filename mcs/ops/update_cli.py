@@ -330,6 +330,34 @@ class _WallClock:
         return int(time.time() * 1000)
 
 
+def cmd_restore_approve(args) -> int:
+    """Queue ops.restore_approve from a terminal, like the /mcs command (IA-085).
+
+    The values come from data/restore_report.json after a human read the loss
+    report; the queued command is applied by the same consent-only drain."""
+    import uuid
+    import mcs_requests
+    if args.confirm_human is not True or not mcs_util.valid_text(args.reason, 2000):
+        print("--confirm-human と --reason による人の確認が必要です")
+        return 1
+    req = {"version": 1, "cmd": "ops.restore_approve", "command_id": args.command_id or str(uuid.uuid4()),
+           "actor": args.actor, "human_confirmed": True, "project_id": None,
+           "report_id": args.report_id, "backup_sha256": args.backup_sha256,
+           "backup_schema": args.backup_schema, "reason": args.reason}
+    error = mcs_requests.validate(req)
+    if error:
+        print("復元の承認: 指定を確認してください（" + error + "）")
+        return 1
+    try:
+        receipt = mcs_requests.enqueue(req, os.path.join(mcs_util.HOME, "data", "cmd"))
+    except (OSError, ValueError) as exc:
+        print("復元の承認: 承認を受け付けられませんでした（" + mcs_util.safe_error_code(exc) + "）")
+        return 1
+    print(json.dumps(receipt, ensure_ascii=False))
+    print("承認を受け付けました。次の確認で復元の処理に渡します。結果は mcs_update.py status で確認してください。")
+    return 0 if receipt.get("outcome") == "queued" else 1
+
+
 def cmd_consent_confirm(args) -> int:
     """v3 standing consentの人間確認付き確定(spec 03 SEM10)。
 
@@ -553,6 +581,16 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="consent_termsを確認し同意したことを明示する")
     cc_p.add_argument("--reason", help="人間確認の理由（監査用・必須）")
     cc_p.set_defaults(fn=lambda args: cmd_consent_confirm(args))
+    ra_p = sub.add_parser("restore-approve",
+                          help="DB復元の承認を端末から送る（data/restore_report.json の値を確認して指定）")
+    ra_p.add_argument("--report-id", required=True)
+    ra_p.add_argument("--backup-sha256", required=True)
+    ra_p.add_argument("--backup-schema", type=int, required=True)
+    ra_p.add_argument("--confirm-human", action="store_true")
+    ra_p.add_argument("--reason", required=True)
+    ra_p.add_argument("--actor", default="local-human")
+    ra_p.add_argument("--command-id", help="同じ承認を再送する場合の承認記録UUID")
+    ra_p.set_defaults(fn=lambda args: cmd_restore_approve(args))
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted(_resume_provider_migration=True))
