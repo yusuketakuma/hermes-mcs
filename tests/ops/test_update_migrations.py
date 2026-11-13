@@ -127,14 +127,18 @@ def test_provider_initial_migration_refuses_unverified_state(tmp_path, monkeypat
     assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()
 
 
+class _Crash(BaseException):
+    """Synthetic hard stop (power loss, SIGKILL) that no in-process cleanup observes."""
+
+
 def test_provider_initial_migration_keeps_pending_on_interrupted_publication(tmp_path, monkeypatch):
     _provider_root(tmp_path, monkeypatch)
     original = provider_settings._replace
     def interrupted(*args, **kwargs):
         original(*args, **kwargs)
-        raise OSError('synthetic interruption')
+        raise _Crash('synthetic interruption')
     monkeypatch.setattr(provider_settings, '_replace', interrupted)
-    with pytest.raises(update_migrations.MigrationError):
+    with pytest.raises(_Crash):
         update_migrations.migrate_provider_settings(tmp_path)
     assert (tmp_path / 'data' / '.provider-settings-pending.json').exists()
     with pytest.raises(update_migrations.MigrationError):

@@ -823,6 +823,7 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
         root_handle = _RootHandle(root)
         root_fd = root_handle.fd
         data_fd = settings_fd = stage_fd = None
+        undo = None
         try:
             root_handle.check()
             if (root_handle.identity[:4] != actual["root"][:4]
@@ -856,6 +857,83 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                        "before": {name: actual["files"][name]["sha256"] if actual["files"][name] else None for name in _FILES},
                        "after": {name: hashlib.sha256(new_bytes[name]).hexdigest() for name in _FILES},
                        "authority_before": authority_snapshot["sha256"] if authority_snapshot else None}
+            stage_name = ".provider-settings-stage-" + operation
+            pending_snapshot = authority_raw = None
+            created_settings = False
+
+            def rollback(error):
+                # Restore the verified pre-commit files after an I/O failure or
+                # interrupt under the held lock; any doubt keeps pending for a person.
+                # Another party created a name proven absent: hold every artifact as evidence.
+                if isinstance(error, FileExistsError):
+                    return
+                try:
+                    root_handle.check()
+                    _verify_lock(root, held_fd, root_fd=root_fd)
+                    if (_directory_anchor(os.stat("data", dir_fd=root_fd, follow_symlinks=False)) != data_anchor
+                            or any(fd is not None and _directory_anchor(os.stat(name, dir_fd=data_fd, follow_symlinks=False))
+                                   != _directory_anchor(os.fstat(fd))
+                                   for fd, name in ((settings_fd, "provider_settings"), (stage_fd, stage_name)))):
+                        raise ValueError("provider_snapshot_changed")
+                    targets = [(root_fd, "config.json", "config", old["config"], new_bytes["config"], False, config_limit),
+                               *((settings_fd, key + ".json", key, old[key], new_bytes[key], True, CONFIG_MAX_BYTES)
+                                 for key in PROVIDERS),
+                               (data_fd, ".provider-settings-authority.json", "authority", old_authority,
+                                authority_raw, True, CONFIG_MAX_BYTES)]
+                    if stage_fd is not None:
+                        with os.scandir(stage_fd) as entries:
+                            temporaries = [entry.name for entry in entries if entry.name.startswith("new-")]
+                        for name in temporaries:
+                            os.unlink(name, dir_fd=stage_fd)
+                    for parent, name, moved_name, before, after, private, limit in reversed(targets):
+                        if parent is None:
+                            continue
+                        current = _read_file(parent, name, private=private, limit=limit)[0]
+                        saved = (_read_file(stage_fd, moved_name, private=private, limit=limit)[0]
+                                 if stage_fd is not None else None)
+                        if saved is None and current == before:
+                            continue
+                        if (stage_fd is None or saved != before or after is None
+                                or current not in ((None, after) if saved is not None else (after,))):
+                            raise ValueError("provider_snapshot_changed")
+                        if current is not None:
+                            discarded = "rollback-" + moved_name
+                            os.rename(name, discarded, src_dir_fd=parent, dst_dir_fd=stage_fd)
+                            if _read_file(stage_fd, discarded, private=private, limit=limit)[0] != after:
+                                raise ValueError("provider_snapshot_changed")
+                            os.unlink(discarded, dir_fd=stage_fd)
+                        if saved is not None:
+                            # link never overwrites a late writer's file.
+                            os.link(moved_name, name, src_dir_fd=stage_fd, dst_dir_fd=parent, follow_symlinks=False)
+                            os.unlink(moved_name, dir_fd=stage_fd)
+                        os.fsync(stage_fd)
+                        os.fsync(parent)
+                    for parent, name, _, before, _, private, limit in targets:
+                        if parent is not None and _read_file(parent, name, private=private, limit=limit)[0] != before:
+                            raise ValueError("provider_snapshot_changed")
+                    # Backups are this operation's duplicates of the originals verified in place above.
+                    for name in (*_FILES, "authority"):
+                        try:
+                            os.unlink(".provider-settings-backup-" + operation + "-" + name + ".bin", dir_fd=data_fd)
+                        except FileNotFoundError:
+                            pass
+                    try:
+                        os.rmdir(stage_name, dir_fd=data_fd)
+                    except FileNotFoundError:
+                        pass
+                    if created_settings:
+                        os.rmdir("provider_settings", dir_fd=data_fd)
+                    os.fsync(data_fd)
+                    if (pending_snapshot is not None
+                            and _read_file(data_fd, ".provider-settings-pending.json")[1] != pending_snapshot):
+                        raise ValueError("provider_snapshot_changed")
+                    os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
+                    os.fsync(data_fd)
+                except BaseException:
+                    pass  # keep pending and the remaining evidence; the caller re-raises the original failure
+
+            undo = rollback
+
             pending_snapshot = _write_new(data_fd, ".provider-settings-pending.json", _json_bytes(pending))
             for name, raw in {**old, "authority": old_authority}.items():
                 if raw is None:
@@ -867,9 +945,9 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                     raise ValueError("provider_backup_invalid")
             if settings_fd is None:
                 os.mkdir("provider_settings", 0o700, dir_fd=data_fd)
+                created_settings = True
                 os.fsync(data_fd)
                 settings_fd = _directory(data_fd, "provider_settings", private=True)
-            stage_name = ".provider-settings-stage-" + operation
             os.mkdir(stage_name, 0o700, dir_fd=data_fd)
             os.fsync(data_fd)
             stage_fd = _directory(data_fd, stage_name, private=True)
@@ -912,10 +990,12 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                          "files": {name: pending["after"][name] for name in PROVIDERS}}
             if configuration_state is not None:
                 authority["configuration_state"] = configuration_state
-            authority_snapshot = _replace(data_fd, ".provider-settings-authority.json", _json_bytes(authority),
+            authority_raw = _json_bytes(authority)
+            authority_snapshot = _replace(data_fd, ".provider-settings-authority.json", authority_raw,
                                           stage_fd, authority_snapshot, "authority", moved, True, CONFIG_MAX_BYTES)
             check()
             os.unlink(".provider-settings-pending.json", dir_fd=data_fd)
+            undo = None
             os.fsync(data_fd)
             final = read(root, model_owners=model_owners, jev_model=jev_model, config_limit=config_limit)
             root_handle.check()
@@ -928,6 +1008,10 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
                     or final["snapshot"]["root"][:4] != actual["root"][:4]):
                 raise ValueError("provider_readback_failed")
             return final
+        except (OSError, KeyboardInterrupt) as error:
+            if undo is not None:
+                undo(error)
+            raise
         finally:
             if stage_fd is not None:
                 os.close(stage_fd)

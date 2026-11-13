@@ -955,6 +955,10 @@ def test_root_directory_replacement_rejects_stale_snapshot(tmp_path, monkeypatch
     assert not (root / "data" / ".provider-settings-pending.json").exists()
 
 
+class _Crash(BaseException):
+    """Synthetic hard stop (power loss, SIGKILL) that no in-process cleanup observes."""
+
+
 @pytest.mark.parametrize("stage", range(1, 6))
 def test_interrupted_replacement_keeps_pending_and_blocks_reader(tmp_path, monkeypatch, stage):
     tree(tmp_path)
@@ -965,10 +969,10 @@ def test_interrupted_replacement_keeps_pending_and_blocks_reader(tmp_path, monke
         result = replace(*args)
         calls.append(True)
         if len(calls) == stage:
-            raise OSError("synthetic interruption")
+            raise _Crash("synthetic interruption")
         return result
     monkeypatch.setattr(settings, "_replace", interrupted)
-    with pytest.raises(OSError, match="synthetic interruption"):
+    with pytest.raises(_Crash, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert len(calls) == stage
     with pytest.raises(ValueError, match="provider_settings_pending"):
@@ -988,12 +992,81 @@ def test_interrupted_prepublication_keeps_pending_and_source(tmp_path, monkeypat
         if (phase == "pending" and name == ".provider-settings-pending.json"
                 or phase == "backup" and name.startswith(".provider-settings-backup-")
                 or phase == "staged" and name.startswith("new-")):
-            raise OSError("synthetic interruption")
+            raise _Crash("synthetic interruption")
         return result
     monkeypatch.setattr(settings, "_write_new", interrupted)
-    with pytest.raises(OSError, match="synthetic interruption"):
+    with pytest.raises(_Crash, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert (tmp_path / "config.json").read_bytes() == source
+    with pytest.raises(ValueError, match="provider_settings_pending"):
+        settings.read(tmp_path)
+
+
+def _interrupt_commit(monkeypatch, point, failure):
+    kind, _, count = point.partition("-")
+    if kind == "replace":
+        replace, calls = settings._replace, []
+        def interrupted(*args):
+            result = replace(*args)
+            calls.append(True)
+            if len(calls) == int(count):
+                raise failure("synthetic interruption")
+            return result
+        monkeypatch.setattr(settings, "_replace", interrupted)
+    elif kind == "link":
+        link, failed = os.link, []
+        def interrupted(src, dst, **kwargs):
+            if dst == "openai.json" and not failed:
+                failed.append(True)
+                raise failure("synthetic interruption")
+            return link(src, dst, **kwargs)
+        monkeypatch.setattr(settings.os, "link", interrupted)
+    else:
+        write_new = settings._write_new
+        def interrupted(parent, name, raw, **kwargs):
+            result = write_new(parent, name, raw, **kwargs)
+            if (kind == "pending" and name == ".provider-settings-pending.json"
+                    or kind == "backup" and name.startswith(".provider-settings-backup-")
+                    or kind == "staged" and name.startswith("new-")):
+                raise failure("synthetic interruption")
+            return result
+        monkeypatch.setattr(settings, "_write_new", interrupted)
+
+
+def _tree_bytes(root):
+    return {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+            for path in [root / "config.json", *(root / "data").rglob("*")]}
+
+
+@pytest.mark.parametrize("point", ["pending", "backup", "staged", "replace-1", "replace-3", "replace-5", "link"])
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+@pytest.mark.parametrize("split", [False, True])
+def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypatch, point, failure, split):
+    tree(tmp_path, split=split)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    _interrupt_commit(monkeypatch, point, failure)
+    with pytest.raises(failure, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert _tree_bytes(tmp_path) == before
+    after = settings.read(tmp_path)
+    assert after["mode"] == ("split" if split else "legacy_unverified")
+    assert after["providers"] == {name: {} for name in settings.PROVIDERS}
+    assert ({key: value and value["sha256"] for key, value in after["snapshot"]["files"].items()}
+            == {key: value and value["sha256"] for key, value in original["snapshot"]["files"].items()})
+
+
+def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypatch):
+    tree(tmp_path)
+    original = settings.read(tmp_path)
+    _interrupt_commit(monkeypatch, "replace-2", OSError)
+    def refused(*args, **kwargs):
+        raise OSError("synthetic rollback failure")
+    monkeypatch.setattr(settings.os, "rmdir", refused)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert (tmp_path / "data" / ".provider-settings-pending.json").exists()
     with pytest.raises(ValueError, match="provider_settings_pending"):
         settings.read(tmp_path)
 
