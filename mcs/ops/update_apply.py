@@ -92,6 +92,7 @@ from update_repository import (
     _head_sha,
     _local_changes_outside,
     _release_git_scope,
+    _split_source_extras,
     _tree_clean,
 )
 from update_restore import (
@@ -532,6 +533,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if (provider_migration_needed and borrowed is None
                     and not _provider_bridge_verified(_head_sha(), sha)):
                 return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
+            # The same guard refuses any untracked file in the source trees
+            # (ignored ones such as .DS_Store included); name it while nothing changed.
+            extras = _split_source_extras() if borrowed is None else []
+            if extras:
+                return bail("source_untracked_files: " + ",".join(extras)[:160]
+                            + " — 追跡外のファイルを移動してから再実行してください（変更はありません）")
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),

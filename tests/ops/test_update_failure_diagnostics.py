@@ -79,6 +79,7 @@ def test_post_merge_failure_survives_early_recovery_hold(
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     # This test starts after the merge; the pre-merge bridge refusal is tested separately.
     monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a: True)
+    monkeypatch.setattr(update_apply, '_split_source_extras', lambda: [])
     monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(updater, "_plugin_changed", lambda *_a, **_k: False)
     monkeypatch.setattr(update_apply, '_plugin_changed', updater._plugin_changed)

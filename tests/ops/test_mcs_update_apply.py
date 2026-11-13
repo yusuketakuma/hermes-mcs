@@ -587,3 +587,24 @@ def test_legacy_settings_without_bridge_stop_before_writers(updater, monkeypatch
     assert state["applying"] is None and state["stages"] == []
     assert state["attempts"]["v1.1.0"]["detail"].startswith("provider_update_bridge_required")
     assert not Path(updater.MARKER_PATH).exists()
+
+
+def test_untracked_source_file_stops_before_writers_and_is_named(updater, monkeypatch):
+    """Regression: an ignored Finder .DS_Store under a source tree passed the
+    pre-merge checks, then failed the post-merge guard with writers stopped."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    (repo / "mcs" / "__pycache__").mkdir(parents=True)
+    (repo / "mcs" / "__pycache__" / "synthetic.cpython-314.pyc").write_bytes(b"")
+    (repo / "mcs" / ".DS_Store").write_bytes(b"synthetic")
+    assert update_repository._split_source_extras() == ["mcs/.DS_Store"]
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    assert updater.apply("v1.1.0", target, "cid-untracked") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    detail = state["attempts"]["v1.1.0"]["detail"]
+    assert detail.startswith("source_untracked_files: mcs/.DS_Store")
