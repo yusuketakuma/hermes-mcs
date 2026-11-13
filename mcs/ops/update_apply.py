@@ -241,11 +241,25 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     failed_state = journal_store.load_state(STATE_PATH)
                     if failed_state.get("_corrupt"):
                         raise UpdateError("failure_journal_unreadable")
+                    if failed_state.get("applying") is None and "done" in [
+                            s.get("stage") for s in failed_state.get("stages", [])]:
+                        # The child applied and announced the update; only the
+                        # parent's tail failed. Recovery completes 'done'
+                        # bookkeeping — never roll back a finished update.
+                        rollback_failed = True
+                        _report("recovery_incomplete", "after_done: " + reason[:200])
+                        return 1
                     _record_attempt(failed_state, tag, "failed", reason)
                     journal_store.save_state(STATE_PATH, failed_state)
                 except Exception:
                     rollback_failed = True  # A failed diagnostic write must keep the marker.
                     raise
+                child = failed_state.get("applying") or {}
+                if (child.get("sha"), child.get("prev_sha")) == (
+                        state["applying"].get("sha"), state["applying"].get("prev_sha")):
+                    # The child may have journaled more (runtime_migration,
+                    # reinstall_done); roll back and save from its record.
+                    state = failed_state
                 # the tree is already on the new code — a plain abort would
                 # leave the system running NEW code while claiming nothing
                 # happened; fall back to the surgical rollback path

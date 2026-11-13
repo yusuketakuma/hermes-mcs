@@ -661,3 +661,59 @@ def test_schema_rollback_stop_failure_does_not_freeze_or_claim_a_stop(updater, m
     assert state["applying"]["sha"] == target and not state["applying"].get("rollback")
     assert not state["applying"].get("restore_incomplete")
     assert Path(updater.MARKER_PATH).exists()
+
+
+def test_bail_rolls_back_from_the_childs_journal(updater, monkeypatch):
+    """Regression: bail used the parent's post_merge snapshot, so a
+    runtime migration the child journaled was neither checked nor restored."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    migration = {"venv": "/synthetic/venv", "backup_path": "/synthetic/venv.pre"}
+
+    def child_failed(_sha, *, run_lock_fd):
+        current = updater.journal_store.load_state(updater.STATE_PATH)
+        current["applying"]["runtime_migration"] = migration
+        current["stages"].append({"stage": "runtime_migration", "at": 1.0})
+        updater.journal_store.save_state(updater.STATE_PATH, current)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    seen = []
+
+    def runtime(entry):
+        seen.append(entry.get("runtime_migration"))
+        raise updater.UpdateError("runtime_restore_checkout_changed")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_check_runtime_restore", runtime)
+    monkeypatch.setattr(update_apply, "_quiesce_for_mode", lambda _mode: [])
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("held, not reset"))
+    assert updater.apply("v1.1.0", target, "cid-child") == 1
+    assert seen == [migration]
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["runtime_migration"] == migration
+
+
+def test_parent_tail_failure_after_child_done_never_rolls_back(updater, monkeypatch):
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def child_done_then_tail_failed(_sha, *, run_lock_fd):
+        current = updater.journal_store.load_state(updater.STATE_PATH)
+        current.setdefault("applied", []).append({"tag": "v1.1.0", "sha": target,
+                                                  "prev_sha": current["applying"]["prev_sha"]})
+        current["stages"].append({"stage": "done", "at": 1.0})
+        current["applying"] = None
+        updater.journal_store.save_state(updater.STATE_PATH, current)
+        raise updater.UpdateError("run_log_tail_unverified")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_done_then_tail_failed)
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no rollback"))
+    assert updater.apply("v1.1.0", target, "cid-done") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applied"][-1]["sha"] == target and state["applying"] is None
+    assert "done" in [stage["stage"] for stage in state["stages"]]
