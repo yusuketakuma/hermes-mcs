@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "スタンプ操作の結果と拒否理由を正しく伝えるよう修正",
+  "summary": "カードのスタンプボタンを押した後の送信の最終結果（反映済み・拒否・確認中）を、押下への返答として受け取れるようにしました（Slack・LINE WORKS）。ただし結果の前にカードが描き直されると、アダプター側でその押下の返答待ちが打ち切られ、返答が届かないことがあります。実行時に拒否された操作のボタンをもう一度押すと、以前は「受け付けました」と表示されていましたが、拒否の理由を表示するようになりました。データ復元後にMCSが受け付けなかった操作を再確認したときは「MCSがスタンプ操作を受け付けませんでした」と表示し、以前のように通知を省略しません。試行記録の不正や件数超過は「復元確認中」ではなく、管理者への連絡を求める本来の文言で示します。同じ投稿に確認中の操作があるときにフォームで確定した場合は「現在の状態を確認できない」ではなく「確認中の操作があります」と示します。自動での再送はしません。",
+  "upgrade": "追加操作は不要です。変更は runner 側だけで、通常の更新手順で反映されます（standalone の常駐 host は再起動後）。試行記録に終了時の理由の欄を追加しましたが、既存の記録はそのまま読めます。理由の欄がない古い拒否記録は「MCSが受け付けなかった」として扱います（拒否の記録を書くのはその経路だけです）。Discord ではボタン押下の後続を待たない作りのため、最終結果の返答は従来どおり届きません。",
+  "details": [
+    "stamp_write: 試行記録に終了時の error を保存し、復元後の再確認で渡す。受付時の StampRefused（stamp_witness_invalid・stamp_witness_capacity）は自分の理由で返し、読めない・JSONでない・名前が不正な記録は stamp_witness_invalid とする。予期しない OSError などは従来どおり stamp_restore_hold。",
+    "stamp_write.enqueue_tx: 対象投稿に未完了の操作があれば stamp_result_unknown を返す（カード押下と同じ判定）。",
+    "stamp_write.receipt_result を追加し、結果の公開とボタン再押下の再現が同じ規則（実行時の拒否は outcome=rejected と理由）を使う。",
+    "notify_actions.stamp_press: 受付直後の結果に stamp_state=queued を含め、押下の request_id を操作に記録する。stamp_write._publish_result はその request_id の結果ファイルにも最終結果を書くため、押下の後続が最終結果を受け取れる。記録できない場合は queued を外し、従来どおりの受付の返答で終える。",
+    "残課題（アダプター側）: Slack・LINE WORKS の押下の後続はボタンのトークン文脈で認可するため、再描画でトークンが整理されると最終結果を読む前に後続が破棄される。Discord は押下の後続を登録しない。"
+  ],
+  "refs": [
+    "mcs/stamps/stamp_write.py",
+    "mcs/notify/notify_actions.py",
+    "tests/stamps/test_bugsweep_stamp_results.py"
+  ]
+}
