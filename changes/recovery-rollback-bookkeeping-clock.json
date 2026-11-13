@@ -5,7 +5,7 @@
   "upgrade": "追加操作は不要です。すでに巻戻し済みの更新が applied に残っている導入先は自動では直しません。必要なら次の更新で整合します。独立復旧監視の変更は、導入先の復旧ツールが更新されたときに反映されます。",
   "details": [
     "_undo_interrupted_migration が巻戻し形の記録を完了したとき、_finish_resumed と同じ共通処理（_drop_reverted）で applied の末尾を外し、attempts に rolled_back を記録する。",
-    "記録の最新時刻が現在より後なら新しい記録とは見なさない（0 <= 経過秒 < STALE_S）。"
+    "記録の最新時刻が現在より後なら新しい記録とは見なさない（経過秒が0以上 STALE_S 未満のときだけ新しい記録とする）。"
   ],
   "refs": ["mcs/ops/update_recovery.py", "deployment/recovery/mcs_recover.py"]
 }
