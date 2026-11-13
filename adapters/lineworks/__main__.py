@@ -68,15 +68,21 @@ def initialize(root):
     parent = parent_identity()
     print("LINE WORKSの開発者画面で発行した認証情報を入力します。入力は表示されません。")
     values = {"bot_id": scope["application_id"]}
-    for key, label in (("client_id", "アプリのClient ID"), ("client_secret", "アプリのClient Secret"),
-                       ("service_account", "サービスアカウント（Service Account）"), ("bot_secret", "Botの認証用秘密値（Bot Secret）")):
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", getpass.GetPassWarning)
-                values[key] = getpass.getpass(label + ": ").strip()
-        except getpass.GetPassWarning:
-            raise ClientError("credential_input_not_hidden") from None
-    key = Path(input("ダウンロードした秘密鍵の絶対パス: ").strip()).expanduser().resolve(strict=True)
+    try:
+        for key, label in (("client_id", "アプリのClient ID"), ("client_secret", "アプリのClient Secret"),
+                           ("service_account", "サービスアカウント（Service Account）"), ("bot_secret", "Botの認証用秘密値（Bot Secret）")):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", getpass.GetPassWarning)
+                    values[key] = getpass.getpass(label + ": ").strip()
+            except getpass.GetPassWarning:
+                raise ClientError("credential_input_not_hidden") from None
+        key_text = input("ダウンロードした秘密鍵の絶対パス: ")
+    except (EOFError, KeyboardInterrupt):
+        # Nothing is staged or published before the temporary file below.
+        print("\nLINE WORKSの認証設定は変更していません。")
+        return 1
+    key = Path(key_text.strip()).expanduser().resolve(strict=True)
     values["private_key_path"] = str(key)
     if not key.is_file() or key.stat().st_mode & 0o077 or key.stat().st_size > 16384:
         raise ClientError("private_key_permissions")
@@ -377,7 +383,9 @@ def main(argv=None):
     except (ClientError, OSError, ValueError) as exc:
         # Never echo native exceptions: they can embed local paths or secret values.
         if args.command in ("init", "credentials", "check"):
-            print("LINE WORKSの設定を確認できません。認証情報と秘密鍵の場所・アクセス権を確認してください。")
+            print("LINE WORKSの通知設定を確認できません。config.jsonのnotify（notify.lineworks）を確認してください。"
+                  if getattr(exc, "error_code", None) == "lineworks_configuration_invalid" else
+                  "LINE WORKSの設定を確認できません。認証情報と秘密鍵の場所・アクセス権を確認してください。")
         print(getattr(exc, "error_code", "local_configuration_error"), file=sys.stderr)
         # EX_TEMPFAIL: provably nothing was accepted, so the collector may retry.
         return 75 if getattr(exc, "not_sent", False) else 1
