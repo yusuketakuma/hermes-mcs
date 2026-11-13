@@ -369,6 +369,7 @@ def _unit_claimed(progress, now):
 def _release_unit_claim(ledger, pid, token, deadline):
     """Drop this unit's own selection mark when it ended without its final save."""
     import extract_llm
+    import notify_spool
     if ledger.db.in_transaction:
         return
     try:
@@ -378,8 +379,10 @@ def _release_unit_claim(ledger, pid, token, deadline):
                 content, meta = patient_context_refresh_state._latest(
                     ledger.db, patient_context_refresh_state.PROGRESS, pid)
                 claim = content.get('unit_claim')
+                # A restored database takes no write before consent; the mark expires.
                 if not (isinstance(claim, dict) and claim.get('token') == token
-                        and extract_llm._writer_current(full=True)):
+                        and extract_llm._writer_current(full=True)
+                        and notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is None):
                     ledger.db.rollback()
                     return
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid,

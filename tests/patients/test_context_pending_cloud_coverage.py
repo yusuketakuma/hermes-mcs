@@ -72,7 +72,7 @@ def test_patient_selection_resolves_once_after_out_of_scope_patient(runtime, mon
     checked, observed = [], []
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: checked.append(args[-1]) or 'on')
     plans = iter([1, 2])
-    monkeypatch.setattr(refresh.context_schedule, 'plan', lambda *args: {'project_id': next(plans), 'next': None})
+    monkeypatch.setattr(refresh.context_schedule, 'plan', lambda *args: {'project_id': next(plans), 'next': None, 'exhausted': False, 'reason': 'candidate'})
     monkeypatch.setattr(refresh.context_schedule, 'advance_turn', lambda *args: None)
     monkeypatch.setattr(refresh, '_advance_patient_scan', lambda ledger, expected, *args, **kwargs: expected)
     monkeypatch.setattr(refresh, '_scan_covered', lambda *args: False)

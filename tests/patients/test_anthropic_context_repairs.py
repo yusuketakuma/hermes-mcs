@@ -577,7 +577,12 @@ def test_unexpected_write_during_source_adoption_rolls_back_and_retains_stage(ru
     assert tuple(led.db.execute('SELECT project_type,karte_id,is_archived FROM patients WHERE project_id=1').fetchone()) == before['scope']
     assert led.db.execute('SELECT value FROM source_adoption_sentinel').fetchone()[0] == 0
     assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (patient_context_refresh_state.SCAN,))] == before['scan']
-    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (patient_context_refresh_state.PROGRESS,))] == before['progress']
+    # The rolled-back unit releases only its own selection mark; no other progress field changes.
+    def without_claim(rows):
+        return [json.loads(row[4]) | {'unit_claim': None} for row in rows]
+    after_progress = [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (patient_context_refresh_state.PROGRESS,))]
+    assert without_claim(after_progress) == without_claim(before['progress'])
+    assert all('unit_claim' not in json.loads(row[4]) for row in after_progress)
     assert tuple(led.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic_sched'").fetchone()) == before['epoch']
     assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
                                                (patient_context_refresh_state.SOURCE_REPAIR, patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE))] == before['stage']
