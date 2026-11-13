@@ -547,8 +547,9 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     # probe BEFORE backfill: backfill notifies unread rows only, so an
     # own / other-read post on its first pages would be stored silently
     # and the probe would then see the latest id as already stored
+    window = None
     if self_posts:
-        collection_stages.with_relogin(adapter, ledger, result, "self_probe",
+        window = collection_stages.with_relogin(adapter, ledger, result, "self_probe",
                       collection_stages.stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
@@ -564,7 +565,8 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s,
                       notify_all_new=outage_since is not None,
-                      notify_after=probe_after, ack_exclusions=ack_exclusions)
+                      notify_after=probe_after, ack_exclusions=ack_exclusions,
+                      order=window)
         _require_closed_transaction(ledger, result)
     if outage_since is not None:
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
