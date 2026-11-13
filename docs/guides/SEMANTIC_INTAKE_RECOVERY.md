@@ -15,7 +15,9 @@
 解除後の新しいジョブは、解除に対応した現行版で処理してください。
 旧版を別のターミナルなどから起動して同時に使う運用には対応しません。
 
-以下のコマンドはMCSの導入先で実行します。`123`と`456`は架空の患者プロジェクトIDと
+以下のコマンドはMCSの導入先で実行します。`$PY`はMCSのPythonです。Hermesモードは
+`~/.hermes/hermes-agent/venv/bin/python`、独立モードは`$HOME/.mcs/venv/bin/python3`を指定します。
+`123`と`456`は架空の患者プロジェクトIDと
 スレッド先頭の投稿IDです。実際の対象IDに置き換えてください。
 `--offline`では外部APIを呼ばず、ローカルの確認・再投入だけを行います。
 
@@ -24,20 +26,20 @@
 まず、保留の概要を読み取ります。この表示は解除や通知の可否を判定しません。
 
 ```sh
-.venv/bin/python mcs/semantic/semantic.py --offline --intake-preview 123 456
+$PY mcs/semantic/semantic.py --offline --intake-preview 123 456
 ```
 
 次に、対象全体を検査し、解除に必要な識別値を取得します。この操作も読取り専用です。
 
 ```sh
-.venv/bin/python mcs/semantic/semantic.py --offline --intake-prepare 123 456
+$PY mcs/semantic/semantic.py --offline --intake-prepare 123 456
 ```
 
 成功時のJSONにある `job_sha256`、`hold_epoch`、`snapshot_sha256` を、次の各引数へ指定します。
 コマンド内の大文字部分と `1` は、準備結果の値に置き換えてください。
 
 ```sh
-.venv/bin/python mcs/semantic/semantic.py --offline --intake-release 123 456 \
+$PY mcs/semantic/semantic.py --offline --intake-release 123 456 \
   --expected-job-sha256 JOB_SHA256_FROM_PREPARE \
   --expected-hold-epoch 1 \
   --expected-snapshot-sha256 SNAPSHOT_SHA256_FROM_PREPARE
