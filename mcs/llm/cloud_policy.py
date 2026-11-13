@@ -406,8 +406,9 @@ def reextract_backlog_window(cfg, *, now=None):
 def reextract_planned(cfg):
     """Whether stored-message re-extraction goes to the cloud at all, for
     spawning workers and estimates; route_open decides each send. Card display
-    follows send_route alone, because the window opens in one process only."""
-    return send_route("reextract") or reextract_backlog_window(cfg)
+    follows send_route alone, because the window opens in one process only.
+    A route list without reextract keeps it closed, window or not."""
+    return "reextract" in _cfg(cfg)["routes"] and (send_route("reextract") or reextract_backlog_window(cfg))
 
 
 def route_open(route, cfg):
