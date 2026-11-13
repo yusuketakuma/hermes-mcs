@@ -225,12 +225,19 @@ def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
     assert run(capacity) == {"status": "error", "done": 0, "error": "RuntimeError"}
 
 
-@pytest.mark.parametrize("percent,expected", [(9, False), (10, True), (50, True), (101, False)])
-def test_macos_memory(monkeypatch, percent, expected):
+@pytest.mark.parametrize("percent,level,expected", [
+    (9, 1, False), (10, 1, True), (50, 1, True), (101, 1, False),
+    (50, 4, False),  # kernel-critical pressure defers even with free memory
+])
+def test_macos_memory(monkeypatch, percent, level, expected):
+    import llm_availability
     monkeypatch.setattr(worker.sys, "platform", "darwin")
+    monkeypatch.setattr(llm_availability, "_pressure_critical_last", False)
     def probe(argv, **kwargs):
-        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         assert kwargs["timeout"] == 2
+        if argv == ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]:
+            return SimpleNamespace(stdout=f"{level}\n")
+        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         return SimpleNamespace(stdout=f"System-wide memory free percentage: {percent}%")
     monkeypatch.setattr(worker.subprocess, "run", probe)
     assert worker._context_memory_available() is expected
