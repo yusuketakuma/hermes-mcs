@@ -23,7 +23,7 @@ import local_llm
 from ledger import Ledger, LedgerReader
 from mcs_util import CONF_PATH, HOME, load_config
 from writer_lock import acquire_run_lock
-from llm_availability import circuit_open_s, disk_floor_mb, disk_free_mb
+from llm_availability import circuit_open_s, disk_floor_mb, disk_free_mb, memory_pressure_critical
 
 from extract_llm_admission import (
     legacy_admissions,
@@ -99,7 +99,12 @@ def _background_semantic(ledger, stop=None):
 
 
 def _context_memory_available() -> bool:
-    """Reserve ten percent memory for foreground work; unknown pressure defers."""
+    """Reserve ten percent memory for foreground work; unknown pressure defers,
+    and so does kernel-critical pressure (background admission only)."""
+    return _memory_reserve_available() and not memory_pressure_critical()
+
+
+def _memory_reserve_available() -> bool:
     try:
         if sys.platform == "darwin":
             result = subprocess.run(

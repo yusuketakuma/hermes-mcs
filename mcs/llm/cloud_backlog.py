@@ -173,6 +173,9 @@ def request_slot(root, capacity):
 
 def memory_workers(limit):
     """Bound the pool by free memory after a ten-percent reserve and 256 MiB per worker."""
+    import llm_availability
+    if llm_availability.memory_pressure_critical():
+        return 0
     if sys.platform != "darwin":
         try:
             values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
