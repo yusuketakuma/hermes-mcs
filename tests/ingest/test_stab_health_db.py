@@ -173,6 +173,7 @@ def test_disarm_clears_the_hard_deadline(monkeypatch):
 @pytest.mark.parametrize(("dirty", "state", "cleared", "errors"), [
     (False, "unchanged", False, []),
     (True, "published", True, []),
+    (True, "deferred", False, []),      # a background mark waits; the flag stays
     (False, None, False, ["snapshot: RuntimeError"]),
 ])
 @pytest.mark.parametrize("hard", [None, 530.0])
@@ -191,14 +192,14 @@ def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
     monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                         lambda _l, _g: calls.setdefault("cleared", True))
 
-    def refresh(_path, *, force, deadline=None, verification_context=None):
-        calls["force"] = force
+    def refresh(_path, *, dirty, deadline=None, verification_context=None):
+        calls["dirty"] = dirty
         calls["deadline"] = deadline
         return state
     monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     result = {"errors": [], "incomplete": [], "notify": {}}
     status = run_check._finish_run(db, {}, result, run_id, time.monotonic() + 60)
-    assert calls["force"] is dirty
+    assert calls["dirty"] is dirty
     assert calls["deadline"] == (None if hard is None else 495.0)
     assert calls.get("cleared", False) is cleared
     assert result["errors"] == errors

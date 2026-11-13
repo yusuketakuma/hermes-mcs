@@ -638,7 +638,10 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     os.close(fd)
 
 
-def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize(("state", "code", "cleared"), [
+    (None, 1, False), ("deferred", 0, False), ("published", 0, True)])
+def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
+        tmp_path, monkeypatch, capsys, state, code, cleared):
     import maintenance
     import notify_cards
     import notify_cmds
@@ -662,11 +665,19 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(tmp_path
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: None)
     monkeypatch.setattr(notify_cards, "gc", lambda *a, **kw: None)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda ledger: 42)
-    cleared, calls = [], []
-    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: cleared.append(a))
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda db, *, deadline: calls.append(deadline) or False)
+    clears, calls = [], []
+    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: clears.append(a))
+    monkeypatch.setattr(maintenance, "publish_snapshot",
+                        lambda *a, **kw: pytest.fail("bypassed the shared interval decision"))
+
+    def refresh(db, *, dirty, deadline):
+        calls.append((dirty, deadline))
+        return state
+    monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     fd = os.open(str(tmp_path / "synthetic.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     deadline = time.monotonic() - 1
-    assert run_check._commands_only(fd, deadline) == 1
-    assert calls == [deadline] and not cleared
-    assert "snapshot_publish_failed" in capsys.readouterr().out
+    assert run_check._commands_only(fd, deadline) == code
+    assert calls == [(True, deadline)]
+    assert bool(clears) is cleared
+    out = capsys.readouterr().out
+    assert ("snapshot_publish_failed" in out) is (state is None)
