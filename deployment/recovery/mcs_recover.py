@@ -291,6 +291,8 @@ def _recovery_explanation(detail):
         "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + mcs_recovery_database.RESTORE_LOSS_NOTICE,
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
+        "restore_marker_adopted": "バックアップを採用した導入先では、更新の巻戻しでデータベースを戻しません。保留を維持し、戻すかどうかを担当者が判断してください。",
+        "apply failed after merge": "更新の適用に失敗し、更新前の版への巻戻しも完了していません。適用済みとは扱わず、mcs_update.py recover で状態を確認してください。",
     }
     if detail.startswith("rollback db restore: "):
         detail = detail[len("rollback db restore: "):]
@@ -1126,6 +1128,15 @@ def _recover_legacy(if_stale=False):
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     mcs_recovery_core._save_state(state)
+            attempt = (state.get("attempts") or {}).get(applying.get("tag"))
+            if (not applying.get("rollback") and isinstance(attempt, dict)
+                    and attempt.get("result") == "failed"
+                    and type(attempt.get("at")) in (int, float)
+                    and attempt["at"] >= (applying.get("at") or 0)):
+                # This apply already failed (its own postcheck included) and its
+                # rollback did not finish; this helper has no postcheck to
+                # promote it with, so it never records it applied.
+                return escalate("apply failed after merge — rollback incomplete")
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):
                 # install.sh is never re-run unattended; the operator

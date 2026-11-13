@@ -821,7 +821,37 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
         "settings_migration_pending": False}
 
 
+@pytest.mark.parametrize("failed_during_this_apply", [True, False])
+def test_failed_apply_at_target_is_not_promoted_without_postcheck(
+        rec, tmp_path, monkeypatch, failed_during_this_apply):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying(prev, sha=target, stage="post_merge")
+    # bail() records the failed attempt; an older failure of the same tag predates this apply.
+    at = state["applying"]["at"] + (100 if failed_during_this_apply else -100)
+    state["attempts"]["v1.1.0"] = {"result": "failed", "at": at, "detail": "postcheck_failed"}
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    monkeypatch.setattr(rec.mcs_recovery_services, "_reconcile_membership", lambda snapshot: [])
+    after_state = None
+    if failed_during_this_apply:
+        assert rec.recover() == 1
+        after_state = json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())
+        assert after_state["applying"] == state["applying"] and after_state["applied"] == []
+        report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
+        assert report["result"] == "escalate" and "apply failed after merge" in report["detail"]
+    else:
+        assert rec.recover() == 0
+        after_state = json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())
+        assert after_state["applying"] is None and after_state["applied"] == [state["applying"]]
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+
+
 @pytest.mark.parametrize("detail,expected", [
+    ("apply failed after merge — rollback incomplete", "適用済みとは扱わず"),
+    ("rollback db restore: restore_marker_adopted", "バックアップを採用した導入先"),
     ("git unverifiable: rev-parse HEAD", "保存状態を確認できません"),
     ("rollback db restore: restore_consent_pending:synthetic", "人の承認待ち"),
     ("rollback db restore: restore_failed: synthetic-private-path", "保留を維持"),
