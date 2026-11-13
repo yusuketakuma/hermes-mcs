@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "最新確認と履歴補完を1回の収集あたり40人までに分けて巡回",
+  "summary": "未読の取得と既読化は従来どおり毎回すべて行います。他の人が既読にした投稿や自分の投稿に気付く最新確認（self_probe）と履歴補完（backfill）は、1回の収集で40人までを扱い、続きは次の回から巡回します。患者がN人なら、全員を一巡するまでに最大でN÷40（切り上げ）回かかり、その分だけ既読済みの投稿や自分の投稿の取込みと通知が遅れることがあります。履歴の遅れ・停滞の健康記録（coverage_lagging・coverage_stalled）も、その回に巡回した患者の分だけになります。",
+  "upgrade": "追加操作は不要です。上限は設定項目ではなくコードの定数（WALK_TICK_CAP=40）です。反映には更新後の収集の起動が必要です。",
+  "details": [
+    "collection_stages.stage_self_probe と stage_backfill は、既存の段ごとの巡回位置（patient_walk_cursor_v1）から40人を取り、41人目を次回の開始位置として保存する。時間切れで止まった場合は従来どおり止まった患者から再開する。",
+    "self_posts が有効なとき、履歴補完はその回の最新確認と同じ40人を巡回し、自分の巡回位置を動かさない。履歴補完が最新確認より先に投稿を保存すると通知されないため、患者ごとに最新確認を先に行う順序を保つ。",
+    "stage_unread・既読化（snapshot timestamp の確認）・history_head などの継続ジョブ・通知の条件は変更しない。"
+  ],
+  "refs": ["mcs/ingest/collection_stages.py", "mcs/ingest/run_check.py"]
+}

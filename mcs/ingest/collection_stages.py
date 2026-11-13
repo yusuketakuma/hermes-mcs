@@ -40,6 +40,7 @@ THREAD_READ_MAX = 10               # threads checked per tick (MCS load)
 WALK_CURSOR_KIND = "patient_walk_cursor_v1"
 SELF_PROBE_PAGES = 2          # bounded history fetch per positive probe
 SELF_PROBE_MARGIN_S = 60      # keep the tail of the deadline for notify
+WALK_TICK_CAP = 40            # patients self_probe/backfill visit per tick (MCS load)
 REACTION_ACTORS_TICK_CAP = 4
 
 
@@ -635,6 +636,15 @@ def walk_order(ledger, stage: str) -> list:
     return rows[k:] + rows[:k]
 
 
+def _walk_window(ledger, stage: str):
+    """The first WALK_TICK_CAP patients of this stage's walk and the
+    patient the next tick starts at (None once the window ends the walk),
+    so every patient is visited within ceil(N/WALK_TICK_CAP) ticks."""
+    order = walk_order(ledger, stage)
+    nxt = order[WALK_TICK_CAP]["project_id"] if len(order) > WALK_TICK_CAP else None
+    return order[:WALK_TICK_CAP], nxt
+
+
 def _save_walk(ledger, stage: str, nxt) -> None:
     """Store where the next tick of this stage starts (one row per stage)."""
     if type(nxt) is not int:
@@ -658,7 +668,8 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None,
                    notify_all_new: bool = False,
-                   notify_after: dict | None = None, ack_exclusions=None):
+                   notify_after: dict | None = None, ack_exclusions=None,
+                   order=None):
     """Catch posts the unread API misses (e.g. read by another human).
     notify_all_new (the first collecting run after an outage) announces
     every newly stored row, not only unread ones. notify_after maps a
@@ -667,9 +678,12 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
     Walk each patient's history down to CONFIRMED coverage — never the
     newest stored message, so storing a new unread cannot skip older
     unfetched items (Oracle B06). Coverage only advances on a complete
-    walk; a gap stays visible via coverage_lag."""
-    order = walk_order(ledger, "backfill")
-    nxt = None
+    walk; a gap stays visible via coverage_lag.
+    order is the window this tick's self_probe walked: backfill must come
+    after the probe for each patient, so it then walks that window and
+    leaves its own cursor alone; without it backfill walks its own."""
+    own = order is None
+    order, nxt = _walk_window(ledger, "backfill") if own else (order, None)
     for row in order:
         pid = row["project_id"]
         if time.monotonic() > deadline - 30:
@@ -765,8 +779,9 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                         {"pid": pid, "lag_s": lag, "reason": stall})
                     result["errors"].append(
                         f"backfill {pid}: coverage_stalled_{stall}")
-    # only a deadline moves the cursor; a full walk or an exception leaves it as it was
-    _save_walk(ledger, "backfill", nxt)
+    # the window end or a deadline moves the cursor; a full walk or an exception leaves it
+    if own:
+        _save_walk(ledger, "backfill", nxt)
 
 
 def _head_stall(ledger, pid: int) -> str | None:
@@ -799,10 +814,11 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
     stored row notifies like an unread arrival (notify_all_new).
     An id that a completed fetch still cannot store is remembered
     (probe_mid) so it is not re-fetched every tick.
+    Walks at most WALK_TICK_CAP patients and returns that window for
+    this tick's backfill.
     """
     probed = 0
-    order = walk_order(ledger, "self_probe")
-    nxt = None
+    order, nxt = _walk_window(ledger, "self_probe")
     for row in order:
         pid = row["project_id"]
         wm = ledger.high_watermark(pid)
@@ -890,6 +906,7 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
                 raise batch.error
     _save_walk(ledger, "self_probe", nxt)
     result["self_probe"] = probed
+    return order
 
 
 def stage_attachments(adapter, ledger, result, deadline, semantic=False):
