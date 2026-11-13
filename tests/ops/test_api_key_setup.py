@@ -121,6 +121,16 @@ def test_untrusted_env_is_not_replaced(tmp_path, terminal, bad):
     assert path.is_symlink() if bad == 'symlink' else path.exists()
 
 
+def test_untrusted_env_reports_nothing_was_saved(tmp_path, terminal, capsys):
+    path = tmp_path / '.env'
+    path.write_text('MCS_PASSWORD=synthetic\n')
+    path.chmod(0o644)
+    terminal.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))
+    assert api_key_setup.run(tmp_path) == 1
+    text = capsys.readouterr().out
+    assert 'APIキーは保存していません' in text and '保存結果を確認できません' not in text
+
+
 def test_noninteractive_does_not_prompt_or_write(tmp_path, monkeypatch):
     monkeypatch.setattr(api_key_setup, 'is_terminal', lambda: False)
     monkeypatch.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))

@@ -48,6 +48,24 @@ def test_init_project_ids_without_mode_narrow_the_key_default(monkeypatch, tmp_p
     assert effective["mode"] == "assist" and effective["project_ids"] == [101, 102]
 
 
+@pytest.mark.parametrize("code,expected", [
+    ("invalid_env_update", "認証情報の形式が正しくありません"),
+    ("env_unreadable", "保存先の種類・所有者・権限を確認できない"),
+    ("env_parent_untrusted", "保存先の種類・所有者・権限を確認できない")])
+def test_init_env_refusal_names_the_storage_not_the_value(monkeypatch, tmp_path, capsys, code, expected):
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "local"})
+    monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
+    monkeypatch.setattr(lifecycle_io, "store_keychain", lambda account, password: True)
+
+    def refuse(path, updates):
+        raise ValueError(code)
+
+    monkeypatch.setattr(lifecycle_io, "write_env", refuse)
+    assert mcs_setup.main(["init", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert expected in out and "synthetic-password" not in out
+
+
 def _slack_channels_cfg():
     return {"mcs_login_id": "u1", "notify_target": "slack:C000000098",
             "notify_system_target": "slack:C000000099",

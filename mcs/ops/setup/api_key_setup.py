@@ -183,7 +183,10 @@ def run(root=None, *, admission=None):
               if saving else '\nAPIキーの変更は保存していません。')
         return 130
     except (OSError, ValueError, UnicodeError, getpass.GetPassWarning):
-        print('APIキーの保存結果を確認できません。本人専用の保存先と現在の設定を確認してください。')
+        print('APIキーの保存結果を確認できません。本人専用の保存先と現在の設定を確認してください。'
+              if saving else
+              'APIキーは保存していません。既存の.envが本人だけ読み書きできる通常のファイル（権限0600）か、'
+              '保存先と現在の設定を確認してください。')
         return 1
     print('選んだAPIキーを保存しました。サービスの利用条件と設定を確認してください。')
     return 0

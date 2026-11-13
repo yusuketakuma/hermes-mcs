@@ -632,8 +632,12 @@ def _init_store_secrets(args, login_id) -> int | None:
     if updates:
         try:
             lifecycle_io.write_env(ENV_PATH, updates)
-        except ValueError:
-            print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
+        except ValueError as error:
+            # Values were checked above; any other refusal is about the file or its folder.
+            print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました"
+                  if str(error) == "invalid_env_update" else
+                  ".env: 保存先の種類・所有者・権限を確認できないため保存していません。既存のファイルを保持しました。"
+                  ".envが本人だけ読み書きできる通常のファイルか（リンクでないか）、保存先フォルダーが本人専用かを確認してください")
             return 1
         except OSError:
             print(".env: 保存結果を確認できません。認証情報の現在の状態を確認してください")

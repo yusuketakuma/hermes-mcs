@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": ".env の保存に失敗したときの表示を原因に合わせて修正",
+  "summary": "初期設定（init）で .env がリンク・複数のハードリンク・他者書込み可、または保存先フォルダーが本人専用でないために保存を止めた場合、「認証情報の形式が正しくありません」ではなく、保存先の種類・所有者・権限を確認するよう表示します。mcs setup api-keys で既存の .env の権限が0600でないなど、保存を始める前に止めた場合は「保存結果を確認できません」ではなく「APIキーは保存していません」と表示します。保存を止める条件は変わりません。",
+  "upgrade": "追加操作は不要です。表示に従い .env と保存先フォルダーの所有者・権限（.env は0600）を確認してください。",
+  "details": [
+    "_init_store_secrets は write_env の ValueError のうち invalid_env_update だけを形式エラーとして表示し、それ以外は保存先の問題として表示する。エラー内容（ファイルの中身を含み得る）は表示しない。",
+    "api_key_setup.run は保存処理を始める前の失敗を「保存していません」と表示し、保存開始後の失敗だけを「保存結果を確認できません」と表示する。"
+  ],
+  "refs": ["mcs/ops/setup/setup_integration.py", "mcs/ops/setup/api_key_setup.py", "tests/ops/test_mcs_setup_initialization.py", "tests/ops/test_api_key_setup.py"]
+}
