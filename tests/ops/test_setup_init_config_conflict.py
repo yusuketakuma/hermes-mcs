@@ -150,6 +150,33 @@ def test_init_env_fsync_failure_reports_unknown_after_keychain_save(monkeypatch,
     assert 'SYNTHETIC_PRIVATE_MARKER' not in out
 
 
+def test_init_saves_environment_api_key_only_after_config(monkeypatch, tmp_path, capsys):
+    # A key alone enables cloud sends for every patient, so a failed config
+    # save (the old, unscoped config stays) must leave no key behind.
+    original_store, original_save = mcs_setup._init_store_secrets, mcs_setup._init_save_config
+    cfg, path = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_setup, '_init_store_secrets', original_store)
+    monkeypatch.setenv('MCS_ANTHROPIC_API_KEY', 'synthetic-cloud-key')
+    env = tmp_path / '.env'
+    argv = ['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local']
+
+    def conflict(*_a, **_k):
+        assert not env.exists()
+        raise config_edit.ConfigConflict('synthetic')
+    monkeypatch.setattr(mcs_setup, '_init_save_config', conflict)
+    assert mcs_setup.main(argv) == 1
+    assert json.loads(path.read_text()) == cfg and not env.exists()
+
+    seen = []
+    def save(*args, **kwargs):
+        seen.append(env.exists())
+        return original_save(*args, **kwargs)
+    monkeypatch.setattr(mcs_setup, '_init_save_config', save)
+    assert mcs_setup.main(argv) == 0
+    assert seen == [False] and 'MCS_ANTHROPIC_API_KEY=synthetic-cloud-key' in env.read_text()
+    assert 'synthetic-cloud-key' not in capsys.readouterr().out
+
+
 def test_broken_symlink_backup_keeps_the_target(monkeypatch, tmp_path):
     _, path = _setup(monkeypatch, tmp_path)
     path.unlink()

@@ -635,13 +635,42 @@ def _init_store_secrets(args, login_id) -> int | None:
         else:
             print(f"Keychain: '{KEYCHAIN_SERVICE}' を登録しました")
 
+    # Validate the API keys now; they are written only after config.json holds the scope.
+    if _init_api_key_updates() is None:
+        return 1
+    if _init_write_env(updates):
+        return 1
+    if keychain_failed:
+        return 1
+    return None
+
+
+def _init_api_key_updates() -> dict[str, str] | None:
+    """Return the API keys passed in the environment; None after reporting a malformed one."""
+    updates = {}
     for name in ("TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY", "MCS_OPENAI_API_KEY"):
         key = os.environ.get(name)
         if key:
             if any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key):
                 print(".env: APIキーの形式が正しくありません。既存のファイルを保持しました")
-                return 1
+                return None
             updates[name] = key
+    return updates
+
+
+def _init_store_api_keys() -> int | None:
+    """Store the environment API keys; init calls this only after config.json is saved.
+
+    A key alone enables every cloud service for all patients (cloud_config's
+    key-only default), so it must never precede the scope saved by the same init."""
+    updates = _init_api_key_updates()
+    if updates is None:
+        return 1
+    return _init_write_env(updates)
+
+
+def _init_write_env(updates) -> int | None:
+    """Merge init's secrets into .env; return 1 after reporting a failure."""
     if updates:
         try:
             lifecycle_io.write_env(ENV_PATH, updates)
@@ -654,8 +683,6 @@ def _init_store_secrets(args, login_id) -> int | None:
             print(".env: 保存結果を確認できません。認証情報の現在の状態を確認してください")
             return 1
         print(f".env: {sorted(updates)} を保存しました（本人のみ読書き可能）")
-    if keychain_failed:
-        return 1
     return None
 
 

@@ -83,6 +83,7 @@ from setup_integration import (
     _init_apply_section_flags as _init_apply_section_flags,
     _init_standalone_grants as _init_standalone_grants,
     _init_store_secrets as _init_store_secrets,
+    _init_store_api_keys as _init_store_api_keys,
     _init_standalone_connectors as _init_standalone_connectors,
     PLUGIN_SETTINGS as PLUGIN_SETTINGS,
 )
@@ -333,7 +334,11 @@ def cmd_init(args) -> int:
     args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
     api_key_result = 0
-    if not args.yes:
+    if _init_store_api_keys():
+        api_key_result = 1
+        print('初期設定: 設定は保存済みですが、APIキーの保存を確認できていません。'
+              '上の表示を確認し、mcs setup api-keys で続けてください。')
+    elif not args.yes:
         import api_key_setup
         if api_key_setup.is_terminal():
             api_key_result = api_key_setup.run(HOME)
