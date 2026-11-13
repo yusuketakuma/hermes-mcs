@@ -260,6 +260,10 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
+    if entry.get("reinstall"):
+        # install.sh may have replaced these even when it failed; only install.sh places them.
+        print("再導入で入れ替えたローカルAIの起動設定と復旧ツールは元に戻していません。"
+              "更新前の版で ./install.sh --no-services を再実行してください")
     if entry.get("schema_bump") and entry.get("backup_path"):
         expected = expected_rollback
         _restore_db(entry["backup_path"], on_hold=on_hold)

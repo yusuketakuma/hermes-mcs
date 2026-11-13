@@ -171,6 +171,28 @@ def test_rollback_preserves_untracked_update_name(updater, tmp_path, monkeypatch
     assert path.read_text() == "user content after interrupted update"
 
 
+@pytest.mark.parametrize("reinstall", [True, False])
+def test_rollback_after_reinstall_reports_install_side_effects(updater, tmp_path, monkeypatch, capsys, reinstall):
+    # install.sh stages 4/6 (llama plist, recovery tool) are outside the rollback.
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    for module in (update_apply, update_cli, update_execution, update_lifecycle_context, update_preflight,
+                   update_recovery, update_repository, update_runtime_migration, update_services):
+        monkeypatch.setattr(module, 'REPO', updater.REPO)
+    previous = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "synthetic.txt").write_text("release content")
+    _git(repo, "add", "synthetic.txt")
+    _git(repo, "commit", "-qm", "release")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
+    monkeypatch.setattr(update_restore, '_services_reconcile', lambda: None)
+
+    updater._rollback_tree({"sha": target, "prev_sha": previous, "reinstall": reinstall})
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == previous
+    assert ("./install.sh --no-services" in capsys.readouterr().out) is reinstall
+
+
 def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     """SQLite settles old WAL sidecars before replacing the live DB (F9)."""
     import ledger as _ledger  # noqa: F401 — real module, tmp DBs only
