@@ -1651,3 +1651,20 @@ def test_apply_names_a_tag_missing_from_origin(updater, monkeypatch):
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["attempts"]["v1.1.0"]["detail"].startswith("tag_not_on_origin")
+
+
+@pytest.mark.parametrize('report, code', [
+    ({'route': 'apply', 'blockers': []}, 0),
+    ({'route': 'noop', 'blockers': ['synthetic_interrupted']}, 1),
+    ({'route': 'blocked', 'blockers': []}, 1),
+])
+def test_installed_plan_exit_code_reports_blockers(tmp_path, monkeypatch, capfd, report, code):
+    """IA-126: plan through the installed updater exits 1 when it would not proceed."""
+    launcher = _launcher()
+    updater = tmp_path / 'mcs' / 'ops' / 'mcs_update.py'
+    updater.parent.mkdir(parents=True)
+    updater.write_text('# synthetic\n')
+    monkeypatch.setattr(launcher, '_update_plan', lambda *a, **k: report)
+    args = type('Args', (), {'cmd': 'plan'})()
+    assert launcher._installed_update(args, str(tmp_path.resolve()), 'v1.2.0') == code
+    assert json.loads(capfd.readouterr().out) == report
