@@ -148,6 +148,39 @@ def _mark_llm_down(db) -> None:
     _health_write(llm_health_path(db), state)
 
 
+# Resident semantic turns and whether the run lock was busy, kept for the
+# stall alert only (observation; never read by admission).
+SEMANTIC_TURNS_NAME = "semantic_turns.json"   # beside the ledger, like llm_health.json
+SEMANTIC_TURNS_WINDOW_S = 86400.0
+_SEMANTIC_TURNS_MAX = 2000
+
+
+def semantic_turns_path(db):
+    return circuit_state_path(db).with_name(SEMANTIC_TURNS_NAME)
+
+
+def _semantic_turns(path, now: float) -> list:
+    turns = load_config(path).get("turns")
+    return [t for t in turns if isinstance(t, list) and len(t) == 2
+            and _finite_ts(t[0]) is not None and 0 <= now - t[0] < SEMANTIC_TURNS_WINDOW_S
+            and t[1] in (0, 1)] if isinstance(turns, list) else []
+
+
+def record_semantic_turn(path, lock_busy: bool) -> None:
+    """Append one resident semantic turn; an unwritable file only loses the sample."""
+    with _circuit_lock(path):
+        now = time.time()
+        turns = _semantic_turns(path, now) + [[now, 1 if lock_busy else 0]]
+        _health_write(path, {"turns": turns[-_SEMANTIC_TURNS_MAX:]})
+
+
+def semantic_turns_24h(db, now: float | None = None) -> dict | None:
+    """{"attempts", "lock_busy"} over the last 24 h, or None when none was recorded."""
+    turns = _semantic_turns(semantic_turns_path(db), time.time() if now is None else now)
+    return ({"attempts": len(turns), "lock_busy": sum(t[1] for t in turns)}
+            if turns else None)
+
+
 def circuit_success(db) -> None:
     """Any answered call proves the endpoint is alive — reset state."""
     path = circuit_state_path(db)
