@@ -42,8 +42,9 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
     return clinical_scope.patient_source_scope(body, *span, patient_name=patient_name, default=default)
 
 
-def patient_current_vitals(values, body, *, patient_name=None):
-    """Keep source-consistent vitals and the trusted unscoped legacy contract."""
+def patient_current_vitals(values, body, *, patient_name=None, unmentioned=True):
+    """Keep source-consistent vitals and the trusted unscoped legacy contract.
+    ``unmentioned=False`` (the card) drops fields the body never names."""
     kept = patient_vitals(values, body, patient_name=patient_name)
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
         # A source-labelled measurement overrides unscoped parsed compatibility.
@@ -66,8 +67,9 @@ def patient_current_vitals(values, body, *, patient_name=None):
                                                          match.end(), patient_name=patient_name,
                                                          measurement=True) == "patient"):
                     grounded[label] = values[label]
-        return {**{key: value for key, value in values.items() if key not in observed},
-                **_current_only(grounded, body, patient_name), **kept}
+        legacy = ({key: value for key, value in values.items() if key not in observed}
+                  if unmentioned else {})
+        return {**legacy, **_current_only(grounded, body, patient_name), **kept}
     return kept
 
 

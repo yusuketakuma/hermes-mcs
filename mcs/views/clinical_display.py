@@ -15,7 +15,8 @@ def scoped_vitals(values, context):
     body, name, default = context
     if body is None:
         return values
-    values = clinical_values.patient_current_vitals(values, body, patient_name=name)
+    # a card shows only readings its own body supports
+    values = clinical_values.patient_current_vitals(values, body, patient_name=name, unmentioned=False)
     if default != "patient":
         values = {key: value for key, value in values.items()
                   if item_scope({}, context, str(value)) == "patient"}
