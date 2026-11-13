@@ -62,6 +62,7 @@ def run_stage(tmp_path, *, no_services=False):
     environment = {**os.environ, 'HOME': str(home), 'MCS_ROOT': str(home / '.mcs'),
                    'MCS_DATA': str(home / '.mcs/data'), 'REPO': str(tmp_path / 'checkout'),
                    'MCS_PY': sys.executable, 'RECOVERY_DIR': str(home / '.mcs-recovery'),
+                   'WATCH_PLIST': str(home / 'Library/LaunchAgents/org.mcs.recovery.plist'),
                    'SKIP_LLM': '1', 'RUNTIME_MODE': 'standalone',
                    'SKIP_SERVICES': '1' if no_services else '0',
                    'TRACE': str(tmp_path / 'services.trace')}
