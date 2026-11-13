@@ -116,6 +116,12 @@ from update_services import (
     restart_services,
 )
 
+def _recover_first() -> int:
+    """An open journal belongs to recovery; say the requested change did not run."""
+    print("中断した更新の記録があるため、要求した更新・巻戻しは行わず、中断した更新の復旧を先に行います。")
+    return recover_interrupted()
+
+
 def apply(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
           install_args: tuple = (), *, candidate_sha: str | None = None,
@@ -190,7 +196,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
                 return 2
             if state.get("applying") or state.get("stages"):
-                return recover_interrupted()
+                return _recover_first()
             try:
                 options_base, current_options = _install_options_snapshot()
                 encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
@@ -392,6 +398,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # check retries
                 state["stages"] = []
                 journal_store.save_state(STATE_PATH, state)
+                print("実行ロックを取得できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。")
                 return 2
             if command_id:
                 _record_executed(state, command_id, "failed", reason)
@@ -437,7 +444,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     # which would treat that journal as this apply's own and
                     # _rollback_tree it unlocked, then overwrite it
                     delegated = True
-                    return recover_interrupted()
+                    return _recover_first()
                 if _restore_hold_active():
                     # Same restore gate as plan and recover: writes now would join its loss report.
                     print("DBの復元が承認待ちまたは未完了のため、更新を開始しません（変更はありません）。"
@@ -692,7 +699,7 @@ def rollback(command_id: str | None = None) -> int:
     # an interrupted apply/rollback journal belongs to recovery — rolling
     # back the last APPLIED entry would overwrite it (same rule as apply)
     if state.get("applying") or state.get("stages"):
-        return recover_interrupted()
+        return _recover_first()
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         print("別の更新処理が動いています。完了するまで待ってから再実行してください")
@@ -710,7 +717,7 @@ def rollback(command_id: str | None = None) -> int:
         if state.get("applying") or state.get("stages"):
             os.close(upd_fd)
             upd_fd = None
-            return recover_interrupted()
+            return _recover_first()
         applied = state.get("applied") or []
         entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
@@ -721,6 +728,7 @@ def rollback(command_id: str | None = None) -> int:
             return 0
         run_fd = _acquire_run_lock_wait()
         if run_fd is None:
+            print("実行ロックを取得できないため、巻戻しは開始していません。承認は保留のまま、次の確認で再試行します。")
             return 2                    # transient — receipt stays
         prev = entry["prev_sha"]
         try:

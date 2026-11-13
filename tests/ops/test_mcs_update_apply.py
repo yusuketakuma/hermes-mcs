@@ -736,3 +736,20 @@ def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, mon
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["applying"] is None and state["stages"]
     assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]
+
+
+def test_apply_says_when_it_ran_recovery_or_did_not_start(updater, monkeypatch, capsys):
+    """Regression: a delegated recovery or a busy run.lock returned 0/2 with
+    no output, so a direct caller could not tell the tag was not applied."""
+    repo = _apply_env(updater, monkeypatch)
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: sha)
+    monkeypatch.setattr(update_apply, "_acquire_run_lock_wait", lambda **_kw: None)
+    assert updater.apply("v1.1.0", sha, "cid-busy") == 2
+    assert "この更新は開始していません" in capsys.readouterr().out
+    state = updater.journal_store.default_state()
+    state["stages"] = [{"stage": "local_checks", "at": 1.0}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(update_apply, "recover_interrupted", lambda: 0)
+    assert updater.apply("v1.1.0", sha, "cid-delegated") == 0
+    assert "中断した更新の復旧を先に行います" in capsys.readouterr().out
