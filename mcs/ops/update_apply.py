@@ -80,6 +80,7 @@ from update_preflight import (
     _provider_bridge_verified,
     _provider_migration_needed,
     _provider_rollback_preflight,
+    _standalone_sdk_rollback_error,
     precheck_local,
 )
 from update_recovery import (
@@ -253,6 +254,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 try:
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
+                    sdk_error = _standalone_sdk_rollback_error(entry, cfg)
+                    if sdk_error:
+                        raise UpdateError(sdk_error)
                 except UpdateError as e:
                     rollback_failed = True
 
@@ -684,7 +688,8 @@ def rollback(command_id: str | None = None) -> int:
                 raise UpdateError("tree_dirty_before_rollback")
             _provider_rollback_preflight(prev)
             # an unusable backup aborts before the journal: nothing runs
-            err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
+            err = (_rollback_backup_error(entry) or _rollback_layout_error(entry)
+                   or _standalone_sdk_rollback_error(entry, mcs_util.load_config()))
             if err:
                 raise UpdateError(err)
             try:

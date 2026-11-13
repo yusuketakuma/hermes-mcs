@@ -220,6 +220,18 @@ def _provider_migration_needed() -> bool:
     return first["mode"] == "legacy_unverified"
 
 
+def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
+    """A rollback keeps ~/.mcs/venv's SDKs; the older host refuses any other pins."""
+    try:
+        hermes = mcs_runtime.mode(cfg) == "hermes"
+    except (ValueError, TypeError, AttributeError):
+        hermes = False                  # unknown mode: keep the stricter standalone rule
+    if hermes or _git(["diff", "--quiet", str(entry.get("prev_sha")), "HEAD", "--",
+                       "deployment/requirements-standalone.txt"]).returncode == 0:
+        return None
+    return "standalone_sdk_rollback_unsupported"
+
+
 def _provider_bridge_verified(previous: str, target: str) -> bool:
     """Legacy settings migrate only from a reviewed bridge source, as the post-merge guard requires."""
     return (_provider_prior_source_verified(previous)
