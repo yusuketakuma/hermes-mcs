@@ -661,7 +661,8 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
                         "--transport", transport] + (["--yes"] if args.yes else [])
             # Terminal-bound getpass owns credentials; no secret ever travels in argv.
             try:
-                result = subprocess.run(argv, timeout=300 if not args.yes else 30,
+                # No bound while a person types secrets: a kill mid-getpass leaves echo off.
+                result = subprocess.run(argv, timeout=None if not args.yes else 30,
                                         cwd=REPO_ROOT,
                                         stdin=subprocess.DEVNULL if args.yes else None)
                 integration_ok = integration_ok and result.returncode == 0
