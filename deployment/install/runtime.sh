@@ -333,7 +333,8 @@ if recovery_wanted; then
 fi
 # Make the private hold durable before an initial config can be published.
 if [ "$_fresh_authorized" -eq 1 ]; then
-    "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-sync "$MCS_ROOT/config.json" \
+    MCS_FRESH_RUNTIME_MODE="$RUNTIME_MODE" MCS_FRESH_HERMES_HOME="$HERMES_HOME" MCS_FRESH_HERMES_EXE="$VENV_HERMES" \
+        "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-sync "$MCS_ROOT/config.json" \
         "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD" \
         || die "初回導入の記録を確認できません。設定と記録を保持してください"
 fi

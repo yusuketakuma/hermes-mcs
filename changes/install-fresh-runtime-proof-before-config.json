@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "初回導入を確定できない環境では、設定ファイルを作る前に止めて再実行で続きから導入できるように修正",
+  "summary": "初回導入の途中で止まった後、前回と違う接続方法で再実行すると（例: 最初は --mode hermes で始め、再実行では何も指定しない）、設定ファイル（~/.mcs/config.json）を作った後に「初回導入の安全性を確認できません」で止まり、以後は再実行もできない保留になっていました。Hermes の保存先・定期実行や MCS の常駐処理の確認を、設定ファイルを作る前にも行うようにしたため、この場合は設定を作らずに止まり、前回と同じ指定（--mode hermes など）で再実行すると初回導入を再開できます。既存の Hermes の保存先が残る Mac で初めて導入する場合も同じく、設定を作る前に止まります。",
+  "upgrade": "追加操作は不要です。対象は config.json がまだ無い新規導入だけで、導入済みの環境と更新ツールの動作は変わりません。止まったときは表示に従い、前回 --mode hermes や Hermes の保存先を指定して始めた場合は同じ指定で再実行してください。設定ファイルを作った後の確認（bootstrap-fresh）はこれまでどおり行い、そこで止まった場合の保留も従来どおりです。",
+  "details": [
+    "mcs/ops/install_options.py: fresh-sync（設定ファイルを作る直前）で、bootstrap-fresh と同じ常駐処理と Hermes の定期実行の不在確認を行う。確認できない場合は前回と同じ指定での再実行を案内して停止する。",
+    "deployment/install/runtime.sh: fresh-sync に接続方法・Hermes の保存先・Hermes 実行ファイルを bootstrap-fresh と同じ形で渡す。",
+    "初回導入の記録の形式は変えていない（接続方法は記録しない）。"
+  ],
+  "refs": ["mcs/ops/install_options.py", "deployment/install/runtime.sh", "install.sh", "tests/meta/test_install_sh_software.py"]
+}

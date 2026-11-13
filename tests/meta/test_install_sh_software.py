@@ -106,6 +106,25 @@ def test_resumed_fresh_install_keeps_the_fresh_default_runtime(tmp_path):
     assert not (home / ".hermes").exists()
 
 
+def test_resume_with_a_different_runtime_stops_before_config_and_stays_resumable(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    flags = ("--no-brew", "--no-llm", "--no-plugin", "--no-services", "--no-recovery")
+    marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
+    assert _run({**env, "STUB_FAIL_PIP": "1"}, None, "--mode", "hermes", *flags).returncode == 1
+    assert marker.is_file() and (home / ".hermes").exists()
+    # A flagless rerun defaults to standalone, which the Hermes trace refuses:
+    # that refusal must come before config.json, keeping the install resumable.
+    switched = _run(env, None, *flags)
+    assert switched.returncode != 0
+    assert "--mode hermes" in switched.stderr and "初回導入を再開します" in switched.stderr
+    assert not (home / ".mcs/config.json").exists() and marker.is_file()
+    assert "fresh-runner bootstrap-fresh" not in _calls(stub_root)
+    retried = _run(env, None, "--mode", "hermes", *flags)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "hermes"
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("change", ["extra_entry", "config_present", "recreated_data", "edited_hold"])
 def test_fresh_hold_that_no_longer_matches_is_never_resumed(tmp_path, change):
     home, hermes_home, stub_root, env = _world(tmp_path)
