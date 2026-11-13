@@ -203,6 +203,13 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
         return Child()
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
+    # The daily check's fixed PATH has no Homebrew; install.sh needs brew/uv/python3.14.
+    brew_bin, listed_bin = tmp_path / "brew-bin", tmp_path / "listed-bin"
+    brew_bin.mkdir()
+    listed_bin.mkdir()
+    monkeypatch.setattr(update_runtime_migration, "HOMEBREW_BINS",
+                        (str(brew_bin), str(tmp_path / "absent-bin"), str(listed_bin)))
+    monkeypatch.setenv("PATH", f"/usr/bin:{listed_bin}:/bin")
     backup = str(tmp_path / "venv.pre-python314")
     baseline = updater._install_options_snapshot()[0]
     applying = {"reinstall": True, "install_args": ["--no-llm", "--no-plugin"],
@@ -222,6 +229,8 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
         assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
         assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
         assert kwargs["env"]["MCS_UPDATE_OPTIONS_BASE"] == baseline
+        assert kwargs["env"]["PATH"] == f"{brew_bin}:/usr/bin:{listed_bin}:/bin"
+        assert os.environ["PATH"] == f"/usr/bin:{listed_bin}:/bin"
         # A plain reinstall still inherits update.lock, but not the run lock.
         calls.clear()
         updater._reinstall({"reinstall": True, "install_args": [], "install_options_base": baseline})

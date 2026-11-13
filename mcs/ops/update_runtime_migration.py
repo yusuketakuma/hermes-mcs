@@ -81,6 +81,17 @@ from update_services import (
 )
 
 _SERVICES_PYTHON: str | None = None   # rebuilt runtime after a migration
+# Homebrew's default prefixes (Apple silicon, Intel), as runtime_inspection uses.
+HOMEBREW_BINS = ("/opt/homebrew/bin", "/usr/local/bin")
+
+
+def _install_path(path: str, dirs) -> str:
+    """PATH for install.sh with Homebrew first, as an operator terminal has it."""
+    # Scheduled checks run with a fixed system PATH, where install.sh cannot
+    # find brew, uv or python3.14.
+    current = [p for p in path.split(os.pathsep) if p]
+    missing = [d for d in dirs if d not in current and os.path.isdir(d)]
+    return os.pathsep.join(missing + current)
 
 
 def _services_reconcile() -> None:
@@ -121,6 +132,7 @@ def _reinstall(applying: dict) -> None:
     args = list(dict.fromkeys([*(saved_args or []), *args]))
     env = os.environ.copy()
     env.pop('MCS_INSTALL_UPDATE_LOCK_FD', None)
+    env["PATH"] = _install_path(env.get("PATH", os.defpath), HOMEBREW_BINS)
     try:
         from release_apply_owner import _verify_inherited_lock
         raw = env.get(UPDATE_LOCK_FD_ENV, '')
