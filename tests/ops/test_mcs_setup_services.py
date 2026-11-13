@@ -238,6 +238,19 @@ def test_services_removed_undesired_cron_leaves_manifest(
     assert scripts == [s for _, _, s in scheduled_jobs.CRON_JOBS]
 
 
+def test_services_flags_a_paused_registered_job_without_resuming_it(monkeypatch, tmp_path, capsys):
+    import json
+    present = _desired_cron_entries()
+    present[0]["state"] = "disabled"
+    calls, args = _services_env(monkeypatch, tmp_path, cron_entries=present)
+    assert mcs_setup.cmd_services(args) == 0
+    out = capsys.readouterr().out
+    assert f"'{present[0]['name']}'はHermes側で停止中（disabled）" in out
+    assert not any(call[1:2] == ["cron"] for call in calls)
+    manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
+    assert present[0]["id"] in {row.get("id") for row in manifest["cron"]}
+
+
 def test_services_noop_remove_keeps_created_job_owned(
         monkeypatch, tmp_path):
     """A create that lands and a remove that does not must both stay

@@ -670,6 +670,10 @@ def sync_cron(prev, hermes, manifest, note, dry, jobs=None):
                     problems += 1
         else:
             note(f"定期処理'{name}': 登録済みです")
+        if entry.get("state") not in (None, "active"):
+            # Never resumed automatically: an operator may have stopped it on purpose.
+            note(f"  注意: 定期処理'{name}'はHermes側で停止中（{entry['state']}）のため実行されません。"
+                 f"意図した停止でなければ`hermes cron list --all`で確認し、再開してください（ID: {entry['id']}）")
         manifest["cron"].append({"name": name, "schedule": schedule, "script": script, "id": entry["id"]})
     persist = False
     if mutated and not dry:
