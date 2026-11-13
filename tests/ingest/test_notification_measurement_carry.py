@@ -237,7 +237,7 @@ def test_cheaper_part_query_keeps_verdicts_on_old_history(stored):
 def test_card_counts_without_latency_match_the_full_card_read(stored):
     # the fixture pins time.time for every module, so both reads share one clock
     _seed_history(stored)
-    full = notify_scope.health_cards(stored, SLACK)
+    full = notify_scope.health_cards(stored, SLACK, latency=True)
     latency = full['completion'].pop('latency')
-    assert notify_scope.health_cards(stored, SLACK, latency=False) == full
+    assert notify_scope.health_cards(stored, SLACK) == full
     assert latency == notify_scope._delivery_latency(stored, notify_scope.retired_transports(SLACK), NOW)

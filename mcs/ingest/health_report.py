@@ -972,8 +972,7 @@ def build_health(db, result: dict, status: str,
     card_started = time.monotonic()
     try:
         cards_health = bounded_health_read(
-            db, lambda _check: notify_scope.health_cards(
-                db, cfg, observation=card_observation, latency=False),
+            db, lambda _check: notify_scope.health_cards(db, cfg, observation=card_observation),
             seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
             observation=card_observation)
     except Exception as exc:

@@ -882,12 +882,13 @@ def _delivery_completion(db, cfg, now, observation=None, *, latency=True):
             **sample}
 
 
-def health_cards(db, cfg=None, *, observation=None, latency=True) -> dict:
+def health_cards(db, cfg=None, *, observation=None, latency=False) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
     ops.card_resolve (ids only, no patient data). Attempts on a retired
     transport (after a notify.interactive switch) are reported only as
-    ``retired_unsettled`` and leave the live counts."""
+    ``retired_unsettled`` and leave the live counts. ``latency=True`` adds
+    the delivery-latency sample, which the health report reads separately."""
     now = time.time()
     from notify_recovery import recovery_guidance, recovery_worklist
     retired = retired_transports(cfg)
