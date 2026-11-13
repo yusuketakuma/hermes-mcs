@@ -360,6 +360,37 @@ def test_fresh_bootstrap_publishes_checked_split_before_services(tmp_path, monke
         os.close(fd)
 
 
+def test_fresh_bootstrap_after_restored_failure_requires_retaken_proof(tmp_path, monkeypatch):
+    import os
+    root, data, fd, config, token, proof = _fresh_install_fixture(tmp_path)
+    monkeypatch.setattr(install_options, '_fresh_cron_absent', lambda: True)
+    monkeypatch.setattr(install_options, '_fresh_workers_absent', lambda: True)
+    replace, calls = provider_settings._replace, []
+    def full_disk(*args):
+        result = replace(*args)
+        calls.append(True)
+        if len(calls) == 2:
+            raise OSError('synthetic interruption')
+        return result
+    monkeypatch.setattr(provider_settings, '_replace', full_disk)
+    config_before = config.read_bytes()
+    try:
+        with pytest.raises(ValueError, match='fresh_bootstrap_unverified'):
+            install_options.bootstrap_fresh(config, data / 'install_options.json', proof, token, fd)
+        assert config.read_bytes() == config_before
+        assert set(os.listdir(data)) == {'update.lock', '.provider-bootstrap-fresh.json'}
+        monkeypatch.setattr(provider_settings, '_replace', replace)
+        # The rollback restores bytes, not the ctime-bearing identity the old proof pinned.
+        with pytest.raises(ValueError, match='fresh_bootstrap_unverified') as stale:
+            install_options.bootstrap_fresh(config, data / 'install_options.json', proof, token, fd)
+        assert stale.value.__cause__.args == ('fresh_config_changed',)
+        retaken = json.dumps({'identity': provider_settings._identity(config.stat()),
+                              'sha256': hashlib.sha256(config.read_bytes()).hexdigest()})
+        assert install_options.bootstrap_fresh(config, data / 'install_options.json', retaken, token, fd) == 0
+    finally:
+        os.close(fd)
+
+
 @pytest.mark.parametrize('damage', ['ledger', 'manifest', 'pending', 'staging', 'config', 'data', 'worker', 'lock'])
 def test_fresh_bootstrap_refuses_ambiguous_or_existing_state(tmp_path, monkeypatch, damage):
     import os

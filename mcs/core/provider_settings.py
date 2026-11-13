@@ -792,6 +792,10 @@ def _commit(root, expected_snapshot, common, providers, *, selected_provider, mo
     Initial migration requires the updater's verified quiescence before new
     services start. Later edits require the verified split snapshot and editor
     lock; pending and readback fence the cooperating readers during publication.
+
+    A rollback after a failure restores the bytes, but rename and link change
+    the restored files' ctime, so callers must re-read before retrying; a stale
+    snapshot or identity proof is refused as a change.
     """
     if configuration_state not in (None, "bootstrap"):
         raise ValueError("provider_configuration_state_invalid")
