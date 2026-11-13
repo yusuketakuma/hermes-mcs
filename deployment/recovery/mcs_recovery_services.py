@@ -331,12 +331,15 @@ def _reconcile_membership(snapshot):
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
                                timeout=mcs_recovery_core.T_GIT)
-            if r.returncode != 0:
-                problems.append("cron_list_unverifiable")
-            for block in re.finditer(
+            # = service_contract.parse_cron_listing: strip colours, and only an
+            # explicit "No scheduled jobs" proves an empty listing.
+            listing = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout or "") if r.returncode == 0 else ""
+            blocks = list(re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)",
-                    r.stdout if r.returncode == 0 else "", re.M):
+                    r"((?:\s{4}\S[^\n]*\n?)+)", listing, re.M))
+            if r.returncode != 0 or (not blocks and not re.search(r"^No scheduled jobs", listing, re.M)):
+                problems.append("cron_list_unverifiable")
+            for block in blocks:
                 jid, body = block.group(1), block.group(2)
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))

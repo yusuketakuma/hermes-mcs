@@ -48,7 +48,7 @@ import types
 import linecache
 
 # The entrypoint and each retained .prev select only their own complete generation.
-SUPPORT_FILES = {'mcs_recovery_gateway.py': '4b896f55269b9197f6d91b0dbbffea36682ac56438483482fe624725a3263fc0', 'mcs_recovery_core.py': '3bc35ad1e7b051bbfaaef52c46814856105919a36570090347327bd636b3408e', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
+SUPPORT_FILES = {'mcs_recovery_gateway.py': '4b896f55269b9197f6d91b0dbbffea36682ac56438483482fe624725a3263fc0', 'mcs_recovery_core.py': '3bc35ad1e7b051bbfaaef52c46814856105919a36570090347327bd636b3408e', 'mcs_recovery_services.py': 'c1cba954d8dafae9779616928765c07d6a3a637f26f0593c8822c7a2354c9806', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
 
 
 class _PinnedSourceLoader(importlib.abc.SourceLoader):
@@ -945,11 +945,13 @@ def _recover_legacy(if_stale=False):
                     "at": time.time()}
                 mcs_recovery_core._save_state(state)
             dkey = mcs_recovery_core._drainers_key(state, head)
+            # = mcs_update: the alert carries any worker that failed to restart
+            problems = drainers(dkey)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
-                          f"（要手動対応）: {_recovery_explanation(detail)}",
-                          drainers_key=dkey)
-            drainers(dkey)
+                          f"（要手動対応）: {_recovery_explanation(detail)}"
+                          + (" restart:" + ",".join(problems) if problems else ""),
+                          drainers_key=dkey, **({"restart": problems} if problems else {}))
             mcs_recovery_core._remove_marker()
             return 1
 
