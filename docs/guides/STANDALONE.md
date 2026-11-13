@@ -166,14 +166,15 @@ $PY -m mcs_standalone status
 
 サービスを使わず端末で動かすなら`$PY -m mcs_standalone run`を使います。
 hostは同じdata rootに1つだけ起動できます。本文・秘密値を含まないheartbeatとlive PIDで稼働を判定します。
-ログは`~/.mcs/data/standalone.log`、専用venv/scripts/modelsは`~/.mcs/`に置きます。
+ログは共通のログhelperが`~/.mcs/data/mcs.log`へ書きます（サービス定義の標準出力は使いません。旧`standalone.log`は取込み元です）。専用venv/scripts/modelsは`~/.mcs/`に置きます。
 
 ### 自己回復と外部監視
 
 - Slack/Discordの接続が切れても（トークン失効・障害・起動時のネット断）、hostは止まりません。
   接続だけを30秒から倍々（上限30分）の間隔で再接続し、収集・抽出・定期ジョブは続けます。
   設定・認証情報の変更による終了はすぐ再接続します。hostの全体再起動は設定変更・
-  `services`の再起動要求・停止シグナルのときだけです。
+  再起動要求（`services`、更新・巻戻しの完了後、稼働監視による自動復旧）・停止シグナルのときと、
+  子プロセスを起動できなかったとき（ログに`child_start_failed`、`status`の`restarting`）です。
 - 子プロセス（抽出worker・cmd・定期ジョブ）の異常終了も30秒から倍々（上限30分）で再起動し、
   成功で間隔を戻します。回数は`status`の`exits`に、接続の状態は`connector`に出ます。
 - 独立した監視`local.mcs-health`（Linuxは`mcs-health.timer`）をhostの外に置きます。
@@ -206,6 +207,12 @@ Linuxでは`$PY -m mcs_standalone service`コマンドがsystemd user serviceの
 $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py init --runtime-mode standalone
 $HOME/.mcs/venv/bin/python3 mcs/ops/mcs_setup.py services
 ```
+
+提供元別の設定を分離済みの環境（1.1.0以降の新規導入と、更新で分離した環境）では、1行目の
+`./install.sh --mode standalone`は保存済みの接続方法と違うため
+`提供元設定のある環境では接続方法をここで変更できません。設定を保持してください`で変更前に停止します。
+設定は変わりません。この環境で接続方法を切り替える手順は確認できていないため、
+続く行を実行せず、管理担当者に相談してください（`--recovery-python`の指定が保存値と違う場合も同じ表示で停止します）。
 
 `services`は以前のmanifestに記録されたMCS所有cron・workerだけを確認して停止します。
 停止を確認できなければ、新しいserviceを起動しません。
@@ -241,7 +248,8 @@ Hermesへ戻す場合は`./install.sh --mode hermes`、HermesのPythonで`init -
 
 既存の承認・理由・receipt、送信不確実性の抑止、添付pin、安全な既読化を維持します。
 更新marker中はhostが背景処理を止め、自分のupdaterを維持します。
-更新後はdrainer復帰をlive PIDで検証し、hostが処理・ロック解放後に新コードで再起動します。
+更新中の`services`はhostの再起動を要求しません。更新markerを外した後にdrainer復帰をlive PIDで検証し、
+適用を記録してから再起動を要求します。hostは処理・ロック解放後に新コードで再起動します。
 repo外watchdogはhostが停止した場合も復旧を試みます。
 
 独立モード非対応タグへの更新・ロールバックは変更前に拒否します。
