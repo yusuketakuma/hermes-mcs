@@ -209,6 +209,28 @@ def _snapshot_work_deadline(ledger, deadline: float) -> float:
     return snapshots.snapshot_work_deadline(deadline, source_db)
 
 
+def _optional_work_deadline(ledger, result, deadline: float,
+                            keep_s: float = 0.0) -> float:
+    """Work deadline for derive and realtime semantic. Once per run, when
+    the finish publish will be held by SNAPSHOT_MIN_INTERVAL_S anyway, the
+    verify reserve goes to this work and the finish keeps no publish
+    (``snapshot_reserve`` = 'released'); otherwise it stays 'kept'.
+    A released deadline also leaves ``keep_s`` for the stages after the
+    caller, and is never earlier than the kept one."""
+    import snapshots
+    work_deadline = _snapshot_work_deadline(ledger, deadline)
+    if "snapshot_reserve" not in result:
+        # the finish publish runs about when this run's deadline falls
+        finish_at = time.time() + max(0.0, deadline - time.monotonic())
+        source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+        released = maintenance.snapshot_publish_deferrable(
+            source_db, now=finish_at, deadline=min(work_deadline, time.monotonic() + 10))
+        result["snapshot_reserve"] = "released" if released else "kept"
+    if result["snapshot_reserve"] == "released":
+        return max(work_deadline, deadline - snapshots.SNAPSHOT_WORK_TAIL_S - keep_s)
+    return work_deadline
+
+
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90, run_lock_fd=None):
     """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
@@ -222,8 +244,14 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     transaction_pending()
     # Keep the existing run cap and verification policy. Derived work yields
-    # early enough for size-based snapshot validation and the existing tail.
-    work_deadline = _snapshot_work_deadline(ledger, deadline)
+    # early enough for size-based snapshot validation (unless this run's
+    # publish is held by the interval) and the existing tail.
+    # A released reserve still leaves deliver/karte the smallest ledger's
+    # verify floor and realtime semantic its minimum window (SB-3).
+    import snapshots
+    work_deadline = _optional_work_deadline(
+        ledger, result, deadline,
+        keep_s=snapshots.SNAPSHOT_VERIFY_TIMEOUT_S + SEMANTIC_MIN_WORK_S)
     try:
         import extract
         # Leave a fair share for medication mapping, rollups and signals.
@@ -413,6 +441,14 @@ def _consent_only(lock_fd) -> int:
     finally:
         os.close(lock_fd)
     return 0 if result["ok"] else 1
+
+
+def _commands_queued() -> bool:
+    """Whether data/cmd holds a request file the command drain would read."""
+    try:
+        return any(name.endswith(".json") for name in os.listdir(job_ops.CMD_DIR))
+    except OSError:
+        return False
 
 
 def _commands_only(lock_fd, deadline) -> int:
@@ -810,7 +846,7 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
         result["semantic"] = _semantic_skipped(cfg, "background_worker")
         return
     try:
-        work_deadline = _snapshot_work_deadline(ledger, deadline)
+        work_deadline = _optional_work_deadline(ledger, result, deadline)
     except Exception as e:
         result["errors"].append(f"semantic: {type(e).__name__}")
         result["semantic"] = _semantic_skipped(cfg, "work_deadline_unavailable")
@@ -1098,6 +1134,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
                                DB, dirty=bool(dirty), deadline=snapshot_deadline,
+                               publish=result.get("snapshot_reserve") != "released",
                                verification_context=(
                                    _verification_context_factory(
                                        ledger, run_lock_fd, gate_state, db_baseline)
@@ -1237,6 +1274,15 @@ def _main() -> int:
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
 
+    if not args.commands_only and writer_lock.gateway_restart_pause(os.path.join(HOME, "data")):
+        if not _commands_queued():
+            # Free the single cron slot before any lock wait or fetch so the
+            # pending gateway restart can pass; fetch and mark-read stay coupled.
+            print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
+            return 3
+        # local.mcs-cmd (WatchPaths) fires once per change: drain the queued
+        # commands without any fetch rather than strand them until the next file.
+        args.commands_only = True
     deadline = time.monotonic() + RUN_DEADLINE_S if args.commands_only else None
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against

@@ -6,7 +6,8 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
 from mcs_util import HOME
-from safe_io import open_lock_file
+from safe_io import open_lock_file, read_json_nofollow
+from stats_math import finite_number
 
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 UPDATE_MARKER_NAME = "update_in_progress.marker"
@@ -146,6 +147,29 @@ def writer_blocked() -> bool:
 
 def updater_state() -> tuple:
     return (writer_blocked(), code_stamp())
+
+
+# The restart helper's busy-retry window (deployment/recovery/mcs_recovery_gateway.py:130);
+# its source is frozen into a detached child, so the bound is restated here.
+GATEWAY_RESTART_PAUSE_S = 660
+
+
+def gateway_restart_pause(data_dir: str, now: float | None = None) -> dict | None:
+    """Report a recorded, unverified gateway restart request that scheduled jobs yield to.
+
+    Only a readable ``requested`` receipt younger than the helper's window pauses;
+    a verified, failed, unknown, missing or unreadable receipt keeps normal work."""
+    try:
+        row = read_json_nofollow(os.path.join(data_dir, "gateway_restart.json"), 4096)
+    except (OSError, ValueError, RecursionError):
+        return None
+    now = time.time() if now is None else now
+    at = row.get("at") if isinstance(row, dict) else None
+    if (at is None or row.get("status") != "requested" or not finite_number(at)
+            or not 0 <= now - at <= GATEWAY_RESTART_PAUSE_S):
+        return None
+    return {"reason": "gateway_restart_pending", "requested_at": at,
+            "until": at + GATEWAY_RESTART_PAUSE_S}
 
 
 @contextmanager
