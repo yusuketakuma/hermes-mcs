@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import sys
 import uuid
@@ -327,4 +328,10 @@ if __name__ == '__main__':
             raise LogInstallError('run_log_install_arguments')
     except LogInstallError as error:
         print(str(error), file=sys.stderr)
+        if len(sys.argv) == 4 and error.helper_code in ('run_log_legacy_missing', 'run_log_legacy_changed'):
+            # Old helpers cannot name the file; the checkout's helper retires it.
+            print('取込み済みの旧ログが削除または変更されています。旧ログの原本を確認し、次を実行してから'
+                  'もう一度実行してください: ' + shlex.join([
+                      sys.executable, '-I', os.path.join(sys.argv[2], 'mcs', 'core', 'run_log.py'),
+                      'retire-drifted', '--data-dir', os.path.join(sys.argv[1], 'data')]), file=sys.stderr)
         raise SystemExit(1) from None

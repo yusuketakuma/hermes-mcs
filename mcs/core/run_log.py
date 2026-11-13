@@ -584,6 +584,51 @@ def _rebind_source_device(directory, backup, state, name, source, info, record):
     return state["sources"][name]
 
 
+def _archived_record(backup, source, info):
+    """Copy a legacy file's current bytes to a retained stage; return the record covering them."""
+    with _new_stage(backup) as (stage_name, stage):
+        position = 0
+        while position < info.st_size:
+            raw = os.pread(source, min(BLOCK, info.st_size - position), position)
+            if not raw:
+                raise RunLogError("run_log_legacy_changed")
+            _write(stage, raw)
+            position += len(raw)
+        digest = _digest(stage, info.st_size)
+    if _identity(os.fstat(source)) != _identity(info) or _digest(source, info.st_size) != digest:
+        raise RunLogError("run_log_legacy_changed")
+    return {"identity": _identity(info), "offset": info.st_size,
+            "sha256": digest, "backup": stage_name}
+
+
+def _migrate_one(directory, backup, state, name):
+    """Import one old log's verified growth; return "absent", "imported" or None."""
+    with ExitStack() as scope:
+        try:
+            source = scope.enter_context(_legacy(directory, name))
+        except FileNotFoundError:
+            if name in state["sources"]:
+                raise RunLogError("run_log_legacy_missing") from None
+            return "absent"
+        info = os.fstat(source)
+        old = state["sources"].get(name)
+        offset = 0
+        if old is not None:
+            if isinstance(old, dict) and old.get("identity") != _identity(info):
+                old = _rebind_source_device(directory, backup, state, name, source, info, old)
+            if (not isinstance(old, dict) or old.get("identity") != _identity(info)
+                    or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
+                    or _digest(source, old["offset"]) != old.get("sha256")):
+                raise RunLogError("run_log_legacy_changed")
+            offset = old["offset"]
+        if offset == info.st_size:
+            return None
+        next_source = _archived_record(backup, source, info)
+        _prepare(directory, backup, state, next_source["backup"], start=offset,
+                 source=name, next_source=next_source)
+        return "imported"
+
+
 def migrate(data_dir, names=None):
     """Import verified growing prefixes of allowlisted old logs; retain every original and backup."""
     names = LEGACY_NAMES if names is None else tuple(names)
@@ -592,68 +637,39 @@ def migrate(data_dir, names=None):
     imported, absent = [], []
     with _locked(data_dir) as (directory, backup, state):
         for name in names:
-            recorded = state["sources"].get(name)
-            if isinstance(recorded, dict) and recorded.get("retired") is True:
-                continue  # an operator retired it: never import this name again
-            with ExitStack() as scope:
-                try:
-                    source = scope.enter_context(_legacy(directory, name))
-                except FileNotFoundError:
-                    if name in state["sources"]:
-                        raise RunLogError("run_log_legacy_missing") from None
-                    absent.append(name)
-                    continue
-                info = os.fstat(source)
-                old = state["sources"].get(name)
-                offset = 0
-                if old is not None:
-                    if isinstance(old, dict) and old.get("identity") != _identity(info):
-                        old = _rebind_source_device(directory, backup, state, name, source, info, old)
-                    if (not isinstance(old, dict) or old.get("identity") != _identity(info)
-                            or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
-                            or _digest(source, old["offset"]) != old.get("sha256")):
-                        raise RunLogError("run_log_legacy_changed")
-                    offset = old["offset"]
-                if offset == info.st_size:
-                    continue
-                with _new_stage(backup) as (stage_name, stage):
-                    position = 0
-                    while position < info.st_size:
-                        raw = os.pread(source, min(BLOCK, info.st_size - position), position)
-                        if not raw:
-                            raise RunLogError("run_log_legacy_changed")
-                        _write(stage, raw)
-                        position += len(raw)
-                    digest = _digest(stage, info.st_size)
-                if _identity(os.fstat(source)) != _identity(info) or _digest(source, info.st_size) != digest:
-                    raise RunLogError("run_log_legacy_changed")
-                next_source = {"identity": _identity(info), "offset": info.st_size,
-                               "sha256": digest, "backup": stage_name}
-                _prepare(directory, backup, state, stage_name, start=offset,
-                         source=name, next_source=next_source)
+            outcome = _migrate_one(directory, backup, state, name)
+            if outcome == "imported":
                 imported.append(name)
+            elif outcome == "absent":
+                absent.append(name)
     return {"imported": imported, "absent": absent, "originals_retained": True}
 
 
 def retire_drifted(data_dir):
-    """Stop importing recorded old logs that migrate() refuses; keep every original and import."""
+    """Re-baseline recorded old logs that migrate() refuses; keep every original and import.
+
+    Installed helper copies that predate this command run their own
+    migrate(), so the result uses only shapes they already accept: no record
+    for a missing file, and a record covering the whole current file
+    otherwise. Its unimported content is retained, never imported."""
     drifted = []
-    with _locked(data_dir) as (_unused_directory, _unused_backup, state):
-        names = sorted(name for name, record in state["sources"].items()
-                       if not (isinstance(record, dict) and record.get("retired") is True))
-    for name in names:
-        try:
-            migrate(data_dir, [name])  # same check, including the remount rebind
-        except RunLogError as error:
-            if str(error) not in ("run_log_legacy_missing", "run_log_legacy_changed"):
-                raise
-            drifted.append(name)
-    if drifted:
-        with _locked(data_dir) as (directory, backup, state):
-            for name in drifted:
-                if isinstance(state["sources"].get(name), dict):
-                    state["sources"][name] = {**state["sources"][name], "retired": True}
+    with _locked(data_dir) as (directory, backup, state):
+        for name in sorted(state["sources"]):
+            try:
+                _migrate_one(directory, backup, state, name)  # same check, incl. the remount rebind
+                continue
+            except RunLogError as error:
+                if str(error) not in ("run_log_legacy_missing", "run_log_legacy_changed"):
+                    raise
+            with ExitStack() as scope:
+                try:
+                    source = scope.enter_context(_legacy(directory, name))
+                except FileNotFoundError:
+                    del state["sources"][name]
+                else:
+                    state["sources"][name] = _archived_record(backup, source, os.fstat(source))
             _save(directory, backup, state)
+            drifted.append(name)
     return drifted
 
 

@@ -266,11 +266,24 @@ def test_operator_retires_a_drifted_source_and_imports_resume(data, drift):
     for name, raw in kept.items():
         if name not in (run_log.LOG, run_log.STATE, "run.log.1"):
             assert (data / name).read_bytes() == raw
-    # a later file under the retired name is never imported
+    # Only shapes a pre-retire helper already accepts: no record for a missing
+    # file, else one covering the whole current file (its bytes stay unimported).
+    record = json.loads((data / run_log.STATE).read_bytes())["sources"].get("run.log")
     if drift == "missing":
-        legacy(data, raw=b"recreated\n")
-    result = run_log.migrate(data, ["run.log"])
-    assert result["imported"] == [] and result["absent"] == []
+        assert record is None
+        legacy(data, raw=b"recreated\n")   # new content under a forgotten name
+        assert run_log.migrate(data, ["run.log"])["imported"] == ["run.log"]
+        assert (data / run_log.LOG).read_bytes().endswith(b"healthy tail\nrecreated\n")
+    else:
+        current = data / "run.log"
+        assert set(record) == {"identity", "offset", "sha256", "backup"}
+        assert record["offset"] == current.stat().st_size
+        assert (data / run_log.BACKUPS / record["backup"]).read_bytes() == current.read_bytes()
+        assert run_log.migrate(data, ["run.log"])["imported"] == []
+        with current.open("ab") as tail:
+            tail.write(b"after retire\n")
+        assert run_log.migrate(data, ["run.log"])["imported"] == ["run.log"]
+        assert (data / run_log.LOG).read_bytes().endswith(b"healthy tail\nafter retire\n")
     assert run_log.retire_drifted(data) == []
 
 
