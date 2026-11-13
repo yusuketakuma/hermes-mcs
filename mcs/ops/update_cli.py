@@ -43,6 +43,7 @@ from update_lifecycle_context import (
     _legacy_entry,
     _record_executed,
     _release_legacy_hold,
+    _restore_hold_active,
     _update_mode,
     acquire_update_lock,
 )
@@ -113,7 +114,7 @@ def cmd_check() -> int:
     newer = _tag_is_newer(tag, sha, cur_sha)
     # --- serialized state update + decision --------------------------
     picked = auto = None
-    held = False
+    held = restore_held = False
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         return 0                        # another updater is alive
@@ -143,6 +144,10 @@ def cmd_check() -> int:
             # consent-held restore re-enters here via spawn_detached
             # once its receipt lands)
             held = True
+        elif _restore_hold_active():
+            # A restore owns the DB and writers: no notice, receipt or apply
+            # may join its loss report (same reading as plan and recover).
+            restore_held = True
         elif tag:
             if tag != state.get("latest_tag"):
                 state.update({"latest_tag": tag, "latest_sha": sha,
@@ -163,7 +168,7 @@ def cmd_check() -> int:
                           '"reason":"<理由>"}']
                 if _enqueue_notice("\n".join(lines), use_run_lock=True, notice_code="available", tag=tag):
                     state["notified_at"] = tag
-        if not held:
+        if not (held or restore_held):
             pendings, consumed = scan_pending_approvals(state)
             for cid, result in consumed:
                 _record_executed(state, cid, result)
@@ -179,6 +184,8 @@ def cmd_check() -> int:
         if upd_fd is not None:
             os.close(upd_fd)
     # public look-ups take minutes; never delay a recovery or an approved apply/rollback
+    if restore_held:
+        return 0
     if not (held or (mode != "off" and (picked or auto))):
         _drug_info_notices(cfg)
     if held:

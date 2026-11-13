@@ -412,6 +412,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     # _rollback_tree it unlocked, then overwrite it
                     delegated = True
                     return recover_interrupted()
+                if _restore_hold_active():
+                    # Same restore gate as plan and recover: writes now would join its loss report.
+                    print("DBの復元が承認待ちまたは未完了のため、更新を開始しません（変更はありません）。"
+                          "復元を完了してから再実行してください。")
+                    return 2
 
             journal(state, "local_checks")
             errors = precheck_local(cfg, **before_args)
