@@ -821,6 +821,27 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
         "settings_migration_pending": False}
 
 
+@pytest.mark.parametrize("problems", [[], ["services_failed"]])
+def test_previous_head_after_post_merge_reconciles_old_services(rec, tmp_path, monkeypatch, problems):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying(prev, sha="f" * 40, stage="post_merge")
+    state["applying"]["manifest_snapshot"] = {"agents": [], "cron": []}
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    calls = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_reconcile_membership",
+                        lambda snapshot: calls.append(snapshot) or list(problems))
+    report_path = Path(rec.mcs_recovery_core.REPORT_PATH)
+    if problems:
+        assert rec.recover() == 1
+        assert json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())["applying"] == state["applying"]
+        assert json.loads(report_path.read_text())["detail"] == "resume incomplete: services_failed"
+    else:
+        assert rec.recover() == 0
+        assert json.loads(report_path.read_text())["result"] == "post_merge_reverted"
+    assert calls == [state["applying"]["manifest_snapshot"]]
+
+
 @pytest.mark.parametrize("failed_during_this_apply", [True, False])
 def test_failed_apply_at_target_is_not_promoted_without_postcheck(
         rec, tmp_path, monkeypatch, failed_during_this_apply):

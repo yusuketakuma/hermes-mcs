@@ -1194,8 +1194,18 @@ def _recover_legacy(if_stale=False):
                 mcs_recovery_core._git_out(["reset", "--hard", prev])
                 if mcs_recovery_core._head() != prev or mcs_recovery_core._clean() is not True:
                     return escalate("prev tree could not be cleaned")
-                return _finish(state, "mixed_tree_reset", removed)
-            return _finish(state, "interrupted_pre_merge", removed)
+                result = "mixed_tree_reset"
+            else:
+                result = "interrupted_pre_merge"
+            if not applying.get("rollback") and "post_merge" in stages:
+                # = mcs_update: the new code ran and its failed rollback may have
+                # reset the tree without re-rendering services; redo them here.
+                problems = mcs_recovery_services._reconcile_membership(
+                    applying.get("manifest_snapshot") or state.get("manifest_snapshot"))
+                if problems:
+                    return escalate("resume incomplete: " + ",".join(problems))
+                result = "post_merge_reverted"
+            return _finish(state, result, removed)
         return escalate("unclassifiable repo state — no destructive "
                         f"action taken (HEAD={head[:12]})")
     finally:
@@ -1237,6 +1247,7 @@ def _finish(state, result, removed):
         "merge_aborted": "中断されたプログラムの統合を取り消し、更新前の状態に戻しました。",
         "mixed_tree_reset": "更新前後のファイルが混在していたため、更新前の状態に戻しました。",
         "interrupted_pre_merge": "プログラムの切り替え前に中断した更新を終了しました。",
+        "post_merge_reverted": "更新前の版への巻戻しが途中で止まっていたため、更新前の版で常駐処理の設定を整え直しました。",
     }.get(result, "中断された更新の復旧を完了しました。")
     mcs_recovery_services._notify("[MCS] " + explanation)
     # = mcs_update._finish_recovery: the tree is back on prev, so the

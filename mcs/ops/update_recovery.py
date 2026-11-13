@@ -631,6 +631,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
             if continuation == "undo_interrupted_migration":
                 # journaled the migration undo, then died before the reset
                 return _undo_interrupted_migration(state, applying, drainers, escalate)
+            result = "interrupted_pre_merge"
             if continuation == "reset_previous_tree":
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
@@ -643,8 +644,22 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 _git_out(["reset", "--hard", prev])
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")
-                return _finish_recovery(state, "mixed_tree_reset", removed)
-            return _finish_recovery(state, "interrupted_pre_merge", removed)
+                result = "mixed_tree_reset"
+            if not applying.get("rollback") and "post_merge" in stages:
+                # The new code ran and its failed rollback reset the tree but
+                # may not have re-rendered services: redo them, as _rollback_tree.
+                try:
+                    problems = service_management.retire_to_snapshot(
+                        applying["manifest_snapshot"] if "manifest_snapshot" in applying
+                        else state.get("manifest_snapshot"),
+                        cfg=mcs_util.load_config(), paths=_service_paths())
+                    _services_reconcile()
+                except UpdateError as e:
+                    return escalate("rollback services: " + str(e))
+                if problems:
+                    return escalate("membership: " + ",".join(problems))
+                result = "post_merge_reverted"
+            return _finish_recovery(state, result, removed)
         return escalate("unclassifiable repo state — "
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
