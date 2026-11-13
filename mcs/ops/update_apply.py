@@ -53,6 +53,8 @@ from update_lifecycle_context import (
     _NETWORK_BAIL,
     _PRE_CHANGE_STAGES,
     _acquire_run_lock_wait,
+    _alert_due,
+    _alert_key,
     _bounded_timeout,
     _call_legacy,
     _enqueue_notice,
@@ -763,8 +765,18 @@ def rollback(command_id: str | None = None) -> int:
             try:
                 _check_runtime_restore(entry)
             except UpdateError as e:
-                _report("runtime_restore_blocked", str(e))
+                # The receipt stays so the rollback can run once the checkout is
+                # fixed; the approver hears about the hold once per condition (IA-090).
+                key = _alert_key({"applying": {"rollback_of": entry.get("sha"), "command_id": command_id}},
+                                 "runtime_restore_blocked")
+                notify, notified_at = _alert_due("runtime_restore_blocked", key, time.time())
+                _report("runtime_restore_blocked", str(e), alert_key=key, notified_at=notified_at)
                 print("Hermes のソースが更新記録と一致しないため、変更せず停止しました。詳細:", e)
+                if notify and not _enqueue_notice(
+                        "[MCS] 元の版へ戻す操作を保留しました（要手動対応）: Hermes のソースが更新記録と一致しません。"
+                        "承認は保留のままです。mcs_update.py status を確認してください",
+                        notice_code="rollback_failed"):
+                    _report("runtime_restore_blocked", str(e), alert_key=key)   # retry the notice next pass
                 return 1
             foreign = _local_changes_outside(entry.get("sha"), prev)
             if foreign:

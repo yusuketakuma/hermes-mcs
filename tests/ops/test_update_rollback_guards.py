@@ -908,3 +908,35 @@ def test_interrupted_migration_undo_refuses_sdk_pin_rollback_before_changes(
     assert result == 1 and escalated == ["standalone_sdk_rollback_unsupported"]
     assert _head(repo) == after
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+
+
+def test_runtime_restore_hold_keeps_the_receipt_and_notifies_once(updater, tmp_path, monkeypatch):  # noqa: F811
+    """IA-090: a rollback held by the Hermes checkout tells the approver once, keeps the receipt."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
+    after = _head(repo)
+    state = updater.journal_store.default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": False}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(update_apply, "_provider_rollback_preflight", lambda _target: None)
+    monkeypatch.setattr(update_apply, "_rollback_backup_error", lambda _entry: None)
+    monkeypatch.setattr(update_apply, "_rollback_layout_error", lambda _entry: None)
+
+    def blocked(_entry):
+        raise update_lifecycle_context.UpdateError("runtime_restore_checkout_changed")
+
+    monkeypatch.setattr(update_apply, "_check_runtime_restore", blocked)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("no quiesce"))
+    notices = []
+    monkeypatch.setattr(update_apply, "_enqueue_notice", lambda text, *a, **k: notices.append(k.get("notice_code")) or True)
+    assert updater.rollback("synthetic-rollback") == 1
+    assert updater.rollback("synthetic-rollback") == 1
+    assert notices == ["rollback_failed"]
+    current = updater.journal_store.load_state(updater.STATE_PATH)
+    assert "synthetic-rollback" not in current.get("executed", {})
+    assert current["applied"] == state["applied"] and _head(repo) == after
