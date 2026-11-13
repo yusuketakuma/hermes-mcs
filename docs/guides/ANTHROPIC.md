@@ -105,13 +105,14 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none    
 - 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。設定項目は `cloud_llm.window_start`・`window_budget_usd`・`until` と、独立した `semantic.until` です。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
 - 期間予算は、予約時の最大額で判定します。結果が戻ると実際の額で数え直すため、表示額は進行中の予約の分だけ多く見えることがあります。
 
-保存済み投稿の再抽出（過去の投稿を現行の抽出世代へ上書きする処理）は、既定ではローカルで処理します。期間予算と終了日時を指定した場合に限り、その終了日時までクラウドへ送れます。
+保存済み投稿の再抽出（過去の投稿を現行の抽出世代へ上書きする処理）は、既定ではローカルで処理します。`cloud_llm.routes` に `reextract` が含まれ、期間予算と終了日時を指定した場合に限り、その終了日時までクラウドへ送れます。
 
 ```bash
 python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20   # 11月20日の終わりまで再開
 python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none                         # 再開を終了
 ```
 
+- `--reextract-backlog-until` が保存するのは終了日時だけで、`routes` は変更しません。`routes` に `reextract` が無い場合、クラウド処理のmodeが `on` でない場合、終了日時を過ぎた場合、`project_ids` が `[]` の場合は送信しません。このとき `cloud-llm budget` と `cloud-llm plan`・`estimate` は `reextract_backlog_blockers` に理由を出し、注意を表示します。`routes` は設定ファイルで変更します。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
 - 設定項目は `cloud_llm.reextract_backlog_until` です。期間予算（`window_budget_usd`）が無い状態では保存できません。設定ファイルへ直接書いた場合は設定エラーになり、クラウド送信をすべて止めます。期間予算を解除するときは、先に再開を終了してください。
 - 再開中は、患者名を含む投稿本文を外部APIへ送ります。対象は `cloud-llm resume --confirm-human` で記録した履歴の範囲と、`project_ids`・`exclude_project_ids` の範囲に含まれる投稿です。
 - 期間予算は、患者コンテキストを含む期間内の利用額の合計に適用します。上限に達すると、患者コンテキストのクラウド送信も止まります。
@@ -149,7 +150,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                  
 
 手動で有効なmodeを指定する場合は、対象も明示してください。`project_ids` は患者のプロジェクトID一覧、
 `null` は全対象、`[]` は対象なしです。クラウド処理の `exclude_project_ids` は指定した患者を除外します。
-`routes` では `patient_context`、`reextract`、`semantic_backlog` を選べます。省略時はすべてを対象にします。クラウドへの新規送信は `patient_context` の患者コンテキスト作成・更新と、その品質修復に限り、`reextract`・`semantic_backlog` を選んでも個別の履歴抽出や意味解析の新規クラウド送信は行いません。例外は、後述の期間を限った保存済み投稿の再抽出だけです。これらのroute指定は過去のクラウド結果・送信結果不明の要求・会計記録を読み取り、回復できるか確認する対象範囲として残ります。モデルは利用先と用途に応じて選びます。OpenAIの既定は上記の用途別モデルです。
+`routes` では `patient_context`、`reextract`、`semantic_backlog` を選べます。省略時はすべてを対象にします。クラウドへの新規送信は `patient_context` の患者コンテキスト作成・更新と、その品質修復に限り、`reextract`・`semantic_backlog` を選んでも個別の履歴抽出や意味解析の新規クラウド送信は行いません。例外は、後述の期間を限った保存済み投稿の再抽出だけで、これにも `routes` の `reextract` が必要です。これらのroute指定は過去のクラウド結果・送信結果不明の要求・会計記録を読み取り、回復できるか確認する対象範囲として残ります。モデルは利用先と用途に応じて選びます。OpenAIの既定は上記の用途別モデルです。
 
 リアルタイム枠の投稿抽出と意味解析はローカルで処理します。取り込み・通知・編集を観測してから10分未満の処理対象は、即時処理用にローカルへ残します。背景枠に回った過去分の個別抽出と意味解析もローカルで継続し、クラウドは患者コンテキストの作成・更新に使います。品質修復、人承認、再試行、保留の既存条件は維持します。
 
