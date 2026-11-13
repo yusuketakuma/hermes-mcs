@@ -199,10 +199,11 @@ def _transports(db, event_ids):
     return found
 
 
-def _hold_adapter_locks(data, locks):
-    """The LINE WORKS adapter holds its send scope lock for its whole life.
-    Holding every one until apply returns also prevents it from starting."""
-    state = Path(notify_dirs(str(data))["lineworks_state"])
+def _hold_adapter_locks(data, transport, locks):
+    """Every delivery worker (Hermes, standalone or the LINE WORKS adapter)
+    holds its send scope lock for its whole life. Holding every one until
+    apply returns also prevents it from starting."""
+    state = Path(notify_dirs(str(data))[transport + "_state"])
     if state.is_symlink():
         raise ValueError("unsafe_data_path")
     held = sorted(state.glob("send-*.lock"))
@@ -221,18 +222,16 @@ def _workers_stopped(data, transports, locks=None):
     if not transports or not transports <= set(TRANSPORTS):
         raise ValueError("worker_stop_unverified")
     for transport in sorted(transports):
-        if transport == "lineworks":
-            if locks is not None:  # a recheck runs while the first call's locks are held
-                _hold_adapter_locks(data, locks)
-            continue
-        _witnesses_stopped(data, transport)
+        if locks is not None:  # a recheck runs while the first call's locks are held
+            _hold_adapter_locks(data, transport, locks)
+        if transport != "lineworks":
+            _witnesses_stopped(data, transport)
 
 
 def _witnesses_stopped(data, transport):
-    witnesses = list((data / "worker_status").glob(f"{transport}-*.json"))
-    if not witnesses:
-        raise ValueError("worker_stop_unverified")
-    for path in witnesses:
+    """A Hermes gateway that recorded a witness must also be gone; the
+    standalone host records none, so the held scope lock is its proof."""
+    for path in (data / "worker_status").glob(f"{transport}-*.json"):
         value = json.loads(read_regular_nofollow(str(path), 2048, ValueError))
         pid = value.get("pid") if isinstance(value, dict) else None
         if (type(pid) is not int or pid <= 0 or value.get("version") != VERSION

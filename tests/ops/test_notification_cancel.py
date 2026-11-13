@@ -86,6 +86,9 @@ def case(tmp_path, monkeypatch, request):
     witnesses.mkdir()
     (witnesses / "slack-synthetic.json").write_text(json.dumps({
         "version": cancel.VERSION, "reason": "worker_started", "pid": FAKE_PID}))
+    # Every worker creates its send scope lock; a free one proves it stopped.
+    (data / "slack_state").mkdir(exist_ok=True)
+    (data / "slack_state" / "send-synthetic.lock").touch()
 
     def stopped(pid, signal):
         assert (pid, signal) == (FAKE_PID, 0)
@@ -263,7 +266,8 @@ def test_worker_stop_must_be_proven_before_queue_changes(case, monkeypatch, work
     request = _request(case)
     path = case.data / "worker_status" / "slack-synthetic.json"
     if worker == "missing":
-        path.unlink()
+        # The scope lock is the stop proof; a worker that never created one is unproven.
+        (case.data / "slack_state" / "send-synthetic.lock").unlink()
     elif worker in ("old_version", "bad_reason"):
         record = json.loads(path.read_text())
         record["version" if worker == "old_version" else "reason"] = "invalid-synthetic"
@@ -278,6 +282,29 @@ def test_worker_stop_must_be_proven_before_queue_changes(case, monkeypatch, work
     with pytest.raises((ValueError, PermissionError)):
         cancel.apply(case.root, request)
     assert _snapshot(case.led.db) == before
+
+
+def test_standalone_worker_without_witness_is_proven_stopped_by_its_free_scope_lock(case):
+    # The standalone Slack/Discord host records no worker_status witness.
+    (case.data / "worker_status" / "slack-synthetic.json").unlink()
+    (case.data / "worker_status").rmdir()
+    receipt = cancel.apply(case.root, _request(case))
+    assert receipt["event_ids"] == case.events
+    _assert_cancelled(case)
+
+
+def test_running_worker_refuses_even_with_a_stale_dead_witness(case):
+    # A Hermes-era witness whose pid is gone says nothing about a standalone worker.
+    worker = cancel.acquire_run_lock(str(case.data / "slack_state" / "send-synthetic.lock"))
+    request = _request(case)
+    before = _snapshot(case.led.db)
+    try:
+        with pytest.raises(ValueError, match="worker_not_stopped"):
+            cancel.apply(case.root, request)
+    finally:
+        os.close(worker)
+    assert _snapshot(case.led.db) == before
+    assert not (case.data / "notification_cancellations").exists()
 
 
 def test_every_worker_witness_must_be_stopped(case, monkeypatch):
