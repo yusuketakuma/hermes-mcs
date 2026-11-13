@@ -308,12 +308,6 @@ esac
 sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
 fi
 
-if [ "$WITH_YOMITOKU" -eq 1 ]; then
-    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
-        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
-    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
-fi
-
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
 # is never overwritten; an MCS shim from another checkout needs --force-repo.
 MCS_BODY="$(printf '#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\nexport MCS_LIFECYCLE_PINNED=1\nexec %s %s "$@"' \
@@ -532,6 +526,13 @@ if [ "$_fresh_authorized" -eq 1 ]; then
         || die "初回導入の安全性を確認できません。設定と保留記録を保持し、担当者に確認してください"
 fi
 _install_progress_hold=""
+# The OCR model cache lives in data/; a fresh install fetches it only after
+# bootstrap-fresh has verified the exact initial data inventory.
+if [ "$WITH_YOMITOKU" -eq 1 ]; then
+    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
+        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
+    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
+fi
 # -------------------------------------------------------- 3. plugin
 say "【3/6】Slack／Discord の操作カード用プラグイン"
 _install_progress plugin running
