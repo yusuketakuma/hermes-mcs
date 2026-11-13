@@ -826,6 +826,14 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
     if dry:
         note('以前のHermes経由のMCS処理を停止します: ' + ', '.join(sorted(labels | scripts)))
         return 0
+    # Observe the cron side before stopping anything: an unknown listing must
+    # leave the previous runtime whole, not half retired with nothing started.
+    if scripts:
+        exe = mcs_util.hermes_exe(mcs_util.load_config())
+        entries = inspect_cron(exe)
+        if entries is None:
+            note('以前のHermes定期処理の状態を確認できないため、以前の処理を停止せず、新しい処理も起動していません')
+            return 1
     for label in sorted(labels):
         lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{paths.uid}/{label}'])
         if not agent_absent(label, paths=paths):
@@ -834,11 +842,6 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
         with suppress(FileNotFoundError):
             os.unlink(os.path.join(paths.agents_dir, label + '.plist'))
     if scripts:
-        exe = mcs_util.hermes_exe(mcs_util.load_config())
-        entries = inspect_cron(exe)
-        if entries is None:
-            note('以前のHermes定期処理の状態を確認できないため、新しい処理は起動していません')
-            return 1
         for entry in entries:
             if entry.get('script') in scripts:
                 if lifecycle_io.run_bounded([exe, 'cron', 'remove', entry['id']]).returncode:
