@@ -327,11 +327,13 @@ def test_a_healthy_row_beyond_the_lookahead_is_reached_in_a_later_pass(cloud_can
     assert _cloud_pass(led)["done"] == 1 and len(calls) == 1      # the held claims let row 65 through
 
 
-def test_a_durable_reservation_then_an_exception_never_frees_the_slot(cloud_candidates, monkeypatch):
-    """The real reserver commits its row, then the attempt raises before any POST."""
-    led, _, calls, reservations, results = cloud_candidates
+def test_a_durable_reservation_then_an_exception_never_frees_the_slot(routed, monkeypatch):
+    """Through the real client body and accounting: the real reserver commits its row, then the
+    attempt raises before any POST."""
     from anthropic_runtime_testkit import real_usage_reserver
-    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+    led, _, _, _, _ = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    _use_real_cloud_accounting(monkeypatch)
 
     def commit_then_raise(ledger, config, **identity):
         reserve = real_usage_reserver(ledger, config, **identity)
@@ -341,23 +343,27 @@ def test_a_durable_reservation_then_an_exception_never_frees_the_slot(cloud_cand
             raise RuntimeError("synthetic failure after the durable reservation")
         return wrapped
     monkeypatch.setattr(cloud_policy, "usage_reserver", commit_then_raise)
-    report = _cloud_pass(led)
-    rows = led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0]
-    assert rows == 1 and not calls and not results and report["refilled"] == 0
+    report = _split_pass(led)
+    reserved = led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0]
+    settled = led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_result'").fetchone()[0]
+    assert reserved == 1 and settled == 0 and not posts and report["refilled"] == 0
 
 
-def test_a_not_sent_timeout_through_the_runner_never_refills(cloud_candidates, monkeypatch):
-    import cloud_client
-    import extract_llm as worker
-    led, _, calls, reservations, results = cloud_candidates
-    stub = worker.anthropic_client.AnthropicClient
+def test_a_not_sent_timeout_through_the_runner_never_refills(routed, monkeypatch):
+    """The real client meets a proven not-sent transport timeout: it is settled once as
+    not_sent under the existing rules, never retried in this pass and never refilled."""
+    import anthropic_client
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    attempts = []
 
-    class TimedOut(stub):
-        def complete(self, prompt, **kwargs):
-            raise cloud_client.CloudNotSent("budget_exceeded", "deadline")
-    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", TimedOut)
-    report = _cloud_pass(led)
-    assert report["refilled"] == 0 and not calls
+    def unsent(self, method, request, timeout, **kwargs):
+        attempts.append(True)
+        raise anthropic_client.bounded_http.NotSentTimeout("synthetic")
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", unsent)
+    report = _split_pass(led)
+    assert len(attempts) == len(reservations) == len(results) == 1
+    assert report["refilled"] == 0 and report["done"] == 0
 
 
 def test_a_recovered_answer_then_a_refused_quality_repair_never_frees_the_slot(cloud_candidates, monkeypatch):
@@ -377,9 +383,10 @@ def test_a_recovered_answer_then_a_refused_quality_repair_never_frees_the_slot(c
     monkeypatch.setattr(cloud_policy, "recover_response", recover)
     monkeypatch.setattr(worker.extract_quality, "completeness_issues", lambda *_args: ["synthetic-missing"])
     monkeypatch.setattr(worker.extract_quality, "is_thin", lambda *_args: False)
-    _refuse(monkeypatch, {head}, "repeat_success")
+    seen = _refuse(monkeypatch, {head}, "repeat_success")
     report = _cloud_pass(led)
-    assert recovered and report["refilled"] == 0 and not calls
+    assert recovered and seen == [head]         # the repair's own request reached the guard
+    assert report["refilled"] == 0 and not calls
 
 
 def test_a_reservation_or_a_started_repair_marks_the_whole_unit(routed, monkeypatch):
