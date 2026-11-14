@@ -369,7 +369,8 @@ def test_first_start_runs_current_ocr_slot_without_replaying_old_slots(tmp_path,
     monkeypatch.setattr(runtime.subprocess, "Popen",
                         lambda argv, **kw: started.append(argv) or Child())
     monkeypatch.setattr(runtime, "BACKGROUND", {})
-    host.tick(QUIET)
+    # 05:15 is a current OCR slot (5,15,...,55) and no other job's current slot
+    host.tick(QUIET + 4 * 60)
     assert len(started) == 1 and set(host.children) == {'mcs_ocr'}
     assert str(tmp_path / 'scripts' / 'mcs_ocr.sh') in started[0]
     assert not any(event == 'slot_catchup' for event, _ in events)
