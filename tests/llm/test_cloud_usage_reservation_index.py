@@ -191,19 +191,6 @@ def test_existing_ledger_is_audited_once_and_a_cleared_guard_is_restored(tmp_pat
         assert not any('BEGIN' in sql or 'json_tree' in sql for sql in statements)
 
 
-def _refresh(ledger, now):
-    """A budget check inside a writer transaction, where the unchanged-read cache never applies."""
-    ledger.db.execute('BEGIN IMMEDIATE')
-    try:
-        return c._tally(ledger, now)
-    finally:
-        ledger.db.rollback()
-
-
-def _rereads(statements):
-    return [sql for sql in statements if 'artifact_id<=?' in sql]
-
-
 def test_paid_result_save_waits_out_a_busy_writer(monkeypatch):
     import sqlite3
 
