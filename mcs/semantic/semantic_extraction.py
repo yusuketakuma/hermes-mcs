@@ -239,7 +239,8 @@ def _provider_from_reservation(row, prepared, reservation):
                 return None
             if profile is not None and openai_client.PROFILE_DEFINITIONS.get(profile) != (actual, effort):
                 return None
-        elif effort is not None or profile is not None:
+        elif not cloud_policy.profile_contract_valid(provider, actual, effort, profile,
+                                                     reservation.get("max_tokens")):
             return None
         selection = {"provider": provider, "model": actual, "effort": effort}
         return provider if contract == cloud_inference.cloud_provider_contract(selection=selection) else None

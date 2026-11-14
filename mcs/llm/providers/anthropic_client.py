@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import time  # noqa: F401  retained for existing integrations that patch the shared clock
+from decimal import Decimal
 from types import MappingProxyType
 
 import bounded_http
 from cloud_client import CloudClient, CloudError, MAX_TOKENS, SYSTEM  # noqa: F401
+from mcs_util import payload_hash
 
 AnthropicError = CloudError
 MODEL = "claude-haiku-5-5"
@@ -78,6 +80,27 @@ def _validate_usage_20261026(value):
 validate_usage = _validate_usage_20261026
 
 
+SONNET_MODEL = "claude-sonnet-5-5"
+SONNET_PRICE_VERSION = "anthropic-sonnet-5-5-2026-11-15"
+# Sonnet 5.5 has one price tier (no long-input step): its long_* rates equal the
+# base rates and its threshold is the 1M input bound, so no request is "long".
+SONNET_PRICES_20261115 = MappingProxyType({"input": "2", "output": "10", "long_input": "2",
+    "long_output": "10", "cache_write_5m_multiplier": "1.25",
+    "cache_write_1h_multiplier": "2", "cache_read_multiplier": "0.05"})
+CURRENT_PRICE_VERSIONS = MappingProxyType({MODEL: PRICE_VERSION, SONNET_MODEL: SONNET_PRICE_VERSION})
+# Opt-in purpose profiles. A selection without a profile is the original
+# Haiku contract: effort None on the record, "low" on the wire.
+PROFILE_DEFINITIONS = MappingProxyType({
+    "haiku-medium": (MODEL, "medium"),
+    "sonnet-high": (SONNET_MODEL, "high"),
+})
+PROFILE_PURPOSES = frozenset({"backlog", "patient_context", "quality_repair"})
+DEFAULT_PROFILES = MappingProxyType({"backlog": "haiku-medium", "patient_context": "sonnet-high",
+                                     "quality_repair": "sonnet-high"})
+ORIGINAL_CONTRACT = (MODEL, None)
+VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values()})
+
+
 PRICE_SNAPSHOTS = MappingProxyType({
     ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-10-26"): MappingProxyType({
         "provider": "anthropic", "model": "claude-haiku-5-5",
@@ -89,12 +112,59 @@ PRICE_SNAPSHOTS = MappingProxyType({
         "prices": PRICES_20261026, "long_input_threshold": 100000,
         "validate_usage": _validate_usage_20261026, "max_tokens": 128000, "legacy_reservation": True,
     }),
+    (SONNET_MODEL, SONNET_PRICE_VERSION): MappingProxyType({
+        "provider": "anthropic", "model": SONNET_MODEL, "price_version": SONNET_PRICE_VERSION,
+        "price_checked_on": "2026-11-15", "price_valid_until": "2026-12-15",
+        "price_sources": ("https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+                          "https://platform.claude.com/docs/en/about-claude/pricing"),
+        "prices": SONNET_PRICES_20261115, "long_input_threshold": 1048576,
+        "validate_usage": _validate_usage_20261026, "max_tokens": 128000, "legacy_reservation": False,
+    }),
 })
+
+
+def provider_contract(model, effort):
+    """Reuse key of one finite request shape. The original contract (effort None)
+    hashes its wire effort "low", so its key is unchanged."""
+    return {"backend": "anthropic", "model": model,
+            "prompt": payload_hash({"system": SYSTEM, "effort": effort or "low"})[:16]}
+
+
+def reservation_cost(definition, input_bound, max_tokens, *, legacy=False):
+    """Worst-case cost of one request: the long-input rate, at the highest cache-write multiplier."""
+    prices = definition["prices"]
+    rate = Decimal(prices["long_input"]) * (1 if legacy else max(
+        Decimal(1), Decimal(prices["cache_write_5m_multiplier"]), Decimal(prices["cache_write_1h_multiplier"])))
+    return (Decimal(input_bound) * rate + Decimal(max_tokens) * Decimal(prices["long_output"])) / Decimal(1000000)
+
+
+def usage_cost(definition, u, *, input_limit):
+    """Price validated usage; the long tier is chosen by the total input including cache."""
+    prices = definition["prices"]
+    total_input = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
+    if total_input > input_limit or u["output_tokens"] > definition["max_tokens"]:
+        raise AnthropicError("pricing_unverified", "usage_bounds")
+    long = total_input > definition["long_input_threshold"]
+    input_price, output_price = (Decimal(prices["long_input"]), Decimal(prices["long_output"])) if long else (Decimal(prices["input"]), Decimal(prices["output"]))
+    cache = u.get("cache_creation", {})
+    cost = (u["input_tokens"] * input_price + u["output_tokens"] * output_price
+            + cache.get("ephemeral_5m_input_tokens", 0) * input_price * Decimal(prices["cache_write_5m_multiplier"])
+            + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(prices["cache_write_1h_multiplier"])
+            + u["cache_read_input_tokens"] * input_price * Decimal(prices["cache_read_multiplier"]))
+    return cost / Decimal(1000000)
 
 
 class AnthropicClient(CloudClient):
     """Send Anthropic Messages through the shared guarded attempt loop."""
     MODEL = MODEL
+
+    def __init__(self, api_key, *, model=MODEL, effort=None, **kwargs):
+        if not isinstance(model, str) or effort is not None and not isinstance(effort, str) \
+                or (model, effort) not in VALID_MODEL_EFFORTS:
+            raise ValueError("anthropic_profile_invalid")
+        super().__init__(api_key, **kwargs)
+        self.model = model
+        self.effort = effort
 
     def request(self, method, body, timeout, *, deadline=None):
         return bounded_http.bounded_http_request(
@@ -109,12 +179,13 @@ class AnthropicClient(CloudClient):
             content = [{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}]
             if prompt[len(cache_prefix):]:
                 content.append({"type": "text", "text": prompt[len(cache_prefix):]})
-        return {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
-                "output_config": {"effort": "low"},
+        # The original contract (effort None) keeps its exact "low" wire body.
+        return {"model": self.model, "max_tokens": max_tokens, "system": SYSTEM,
+                "output_config": {"effort": self.effort or "low"},
                 "messages": [{"role": "user", "content": content}]}
 
     def answer(self, obj, meta):
-        if not isinstance(obj, dict) or obj.get("model") != MODEL:
+        if not isinstance(obj, dict) or obj.get("model") != self.model:
             raise AnthropicError("model_mismatch")
         meta["usage"] = validate_usage(obj.get("usage"))
         content = obj.get("content")
@@ -134,6 +205,10 @@ class AnthropicClient(CloudClient):
             else:
                 raise AnthropicError("protocol_error", "content_invalid")
         stop = obj.get("stop_reason")
+        if stop == "refusal":
+            # A 200 refusal may be billed: its validated usage is already in meta.
+            # It is never an answer and is not retried or sent elsewhere.
+            raise AnthropicError("contract_error", "refusal")
         answer = "".join(text)
         if (stop not in ("end_turn", "max_tokens") or not content
                 or stop == "end_turn" and not answer.strip()):
@@ -143,4 +218,7 @@ class AnthropicClient(CloudClient):
         # caller handles as truncation, not a failure the breaker counts.
         return {"status": 200, "text": answer,
                   "finish_reason": "length" if stop == "max_tokens" else "stop",
-                  "model": MODEL, "usage": meta["usage"]}
+                  "model": self.model, "usage": meta["usage"]}
+
+
+CLIENT = AnthropicClient

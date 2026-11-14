@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 import anthropic_client
 import openai_client
+import provider_registry
 from anthropic_client import AnthropicError, MODEL
 from mcs_util import payload_hash, strict_json
 
@@ -82,8 +83,8 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
     if not isinstance(model, str):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     if price_version is _CURRENT_PRICE:
-        if model == PROVIDERS["anthropic"]:
-            price_version = anthropic_client.PRICE_VERSION
+        if model in anthropic_client.CURRENT_PRICE_VERSIONS:
+            price_version = anthropic_client.CURRENT_PRICE_VERSIONS[model]
         elif model in openai_client.CURRENT_PRICE_VERSIONS:
             price_version = openai_client.CURRENT_PRICE_VERSIONS[model]
         else:
@@ -100,6 +101,24 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp",
                  "effort", "profile", "input_binding")
+
+
+PROFILE_MAX_TOKENS = (8192, 16384, 32768)
+
+
+def profile_contract_valid(provider, model, effort, profile, max_tokens):
+    """One finite (model, effort, profile) contract per provider. A selection
+    without a profile is the provider's original contract: OpenAI Luna at
+    "low", Anthropic Haiku with effort None (its wire effort is "low")."""
+    module = provider_registry.provider_module(provider)
+    if (module is None or not isinstance(model, str)
+            or effort is not None and not isinstance(effort, str)
+            or profile is not None and not isinstance(profile, str)
+            or (model, effort) not in module.VALID_MODEL_EFFORTS):
+        return False
+    if profile is not None:
+        return module.PROFILE_DEFINITIONS.get(profile) == (model, effort) and max_tokens in PROFILE_MAX_TOKENS
+    return (model, effort) == module.ORIGINAL_CONTRACT
 
 
 def _decimal(value):
@@ -155,15 +174,8 @@ def input_bound(body):
 
 def _reservation_cost(input_bound, max_tokens, *, legacy=False, model=MODEL, price_version=_CURRENT_PRICE):
     definition = _price_definition(model, price_version)
-    prices = definition["prices"]
-    if definition["provider"] == "openai":
-        if legacy:
-            raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
-        return (Decimal(input_bound) * Decimal(prices["reservation_input"])
-                + Decimal(max_tokens) * Decimal(prices["reservation_output"])) / Decimal(1000000)
-    rate = Decimal(prices["long_input"]) * (1 if legacy else max(
-        Decimal(1), Decimal(prices["cache_write_5m_multiplier"]), Decimal(prices["cache_write_1h_multiplier"])))
-    return (Decimal(input_bound) * rate + Decimal(max_tokens) * Decimal(prices["long_output"])) / Decimal(1000000)
+    return provider_registry.provider_module(definition["provider"]).reservation_cost(
+        definition, input_bound, max_tokens, legacy=legacy)
 
 
 def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None, model=MODEL):
@@ -176,29 +188,8 @@ def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None, model
 
 def usage_cost(usage, *, model=MODEL, price_version=_CURRENT_PRICE):
     definition = _price_definition(model, price_version)
-    prices = definition["prices"]
-    u = definition["validate_usage"](usage)
-    if definition["provider"] == "openai":
-        if u["input_tokens"] > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
-            raise AnthropicError("pricing_unverified", "usage_bounds")
-        cached, written = (u["input_tokens_details"][k] for k in ("cached_tokens", "cache_write_tokens"))
-        long = u["input_tokens"] > definition["long_input_threshold"]
-        value = (Decimal(u["input_tokens"] - cached - written) * Decimal(prices["input"])
-                 + Decimal(cached) * Decimal(prices["cached_input"]) + Decimal(written) * Decimal(prices["cache_write_30m"]))
-        if long:
-            value *= Decimal(prices["long_input_multiplier"])
-        return (value + Decimal(u["output_tokens"]) * Decimal(prices["long_output"] if long else prices["output"])) / Decimal(1000000)
-    total_input = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
-    if total_input > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
-        raise AnthropicError("pricing_unverified", "usage_bounds")
-    long = total_input > definition["long_input_threshold"]
-    input_price, output_price = (Decimal(prices["long_input"]), Decimal(prices["long_output"])) if long else (Decimal(prices["input"]), Decimal(prices["output"]))
-    cache = u.get("cache_creation", {})
-    cost = (u["input_tokens"] * input_price + u["output_tokens"] * output_price
-            + cache.get("ephemeral_5m_input_tokens", 0) * input_price * Decimal(prices["cache_write_5m_multiplier"])
-            + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(prices["cache_write_1h_multiplier"])
-            + u["cache_read_input_tokens"] * input_price * Decimal(prices["cache_read_multiplier"]))
-    return cost / Decimal(1000000)
+    return provider_registry.provider_module(definition["provider"]).usage_cost(
+        definition, definition["validate_usage"](usage), input_limit=INPUT_RESERVATION_BOUND)
 
 
 def _unbilled(http_class):
@@ -304,15 +295,8 @@ def _reserve_valid(meta, row):
     if ("effort" in meta) != ("profile" in meta):
         raise AnthropicError("pricing_unverified", "reservation_invalid")
     if "effort" in meta:
-        effort, profile = meta["effort"], meta["profile"]
-        if definition["provider"] == "openai":
-            if (not isinstance(effort, str) or profile is not None and not isinstance(profile, str)
-                    or (model, effort) not in openai_client.VALID_MODEL_EFFORTS
-                    or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
-                        or meta.get("max_tokens") not in (8192, 16384, 32768))
-                    or profile is None and (model != openai_client.MODEL or effort != "low")):
-                raise AnthropicError("pricing_unverified", "reservation_invalid")
-        elif effort is not None or profile is not None:
+        if not profile_contract_valid(definition["provider"], model, meta["effort"], meta["profile"],
+                                      meta.get("max_tokens")):
             raise AnthropicError("pricing_unverified", "reservation_invalid")
     if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
             or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
