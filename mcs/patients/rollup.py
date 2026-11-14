@@ -553,8 +553,20 @@ def _publication_source_signature(db, project_id, *, deadline=None):
               ('fetch_jobs', "kind IS NOT 'extract_claim' AND (project_id=? OR " + members + ')',
                (project_id, project_id)),
               ('requests', 'project_id=?', (project_id,)),
-              ('artifacts', 'project_id=? OR ' + members
-               + " OR kind IN ('semantic_policy','med_ref_progress')", (project_id, project_id)),
+              # Keep kind values in SQLite; CROSS JOIN orders message lookup before artifacts.
+              ('artifacts', """_rowid_ IN (
+                  WITH kinds(kind) AS (SELECT DISTINCT kind FROM artifacts), chosen(rid) AS (
+                      SELECT a._rowid_ FROM kinds AS k JOIN artifacts AS a ON a.kind IS k.kind
+                       WHERE a.project_id=?
+                      UNION
+                      SELECT a._rowid_ FROM kinds AS k
+                      CROSS JOIN messages AS m
+                      CROSS JOIN artifacts AS a ON a.kind IS k.kind AND a.message_id=m.message_id
+                       WHERE m.project_id=?
+                      UNION
+                      SELECT _rowid_ FROM artifacts WHERE kind IN ('semantic_policy','med_ref_progress')
+                  ) SELECT rid FROM chosen
+              )""", (project_id, project_id)),
               ('snapshot_meta', '1=1', ()))
     if (schema_text(db.execute('PRAGMA encoding').fetchone()[0]) != 'UTF-8'
             or getattr(db, 'text_factory', str) not in (str, bytes)):
