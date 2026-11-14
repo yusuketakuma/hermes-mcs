@@ -797,6 +797,48 @@ def _classified(error, refusal):
     return error
 
 
+def _repeat_comparison(previous, candidate, field):
+    nullable = field in ('effort', 'profile')
+    def valid(value):
+        if field == 'max_tokens':
+            return type(value) is int and value > 0
+        return (value is None and nullable) or type(value) is str
+    if field not in previous and field not in candidate:
+        return 'unknown'
+    if field not in previous:
+        return 'stored_absent' if valid(candidate[field]) else 'unknown'
+    if field not in candidate:
+        return 'current_absent' if valid(previous[field]) else 'unknown'
+    old, new = previous[field], candidate[field]
+    if not valid(old) or not valid(new):
+        return 'unknown'
+    return 'same' if type(old) is type(new) and old == new else 'different'
+
+
+def _repeat_observation(previous, candidate, match):
+    values = {label + '_cmp': _repeat_comparison(previous, candidate, field) for label, field in (
+        ('unit_key', 'unit_key'), ('binding', 'input_binding'), ('request_fp', 'request_fp'),
+        ('model', 'model'), ('effort', 'effort'), ('profile', 'profile'), ('max_tokens', 'max_tokens'))}
+    exact = ('unit_key_cmp', 'binding_cmp', 'request_fp_cmp')
+    # Precedence groups observations; it does not establish why recovery missed.
+    reason = ('recovery_not_requested' if 'input_binding' not in candidate else
+              'unit_key_mismatch' if values['unit_key_cmp'] == 'different' else
+              'stored_binding_missing' if values['binding_cmp'] == 'stored_absent' else
+              'input_binding_mismatch' if values['binding_cmp'] == 'different' else
+              'request_envelope_mismatch' if values['request_fp_cmp'] == 'different' else
+              'exact_keys_same_unexplained' if all(values[key] == 'same' for key in exact) else
+              'observation_unknown')
+    return {**values, 'guard_match': match, 'primary_reason': reason}
+
+
+def _observe_recovery(observation, path):
+    try:
+        if type(observation) is dict:
+            observation['recovery_path'] = path
+    except Exception:
+        pass
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],
@@ -807,6 +849,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     candidate_occurrence, occurrence_checked = None, False
     for row in rows:
         refusal = None
+        guard_match = None
         try:
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
@@ -828,8 +871,12 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 if old_fp != new_fp:
                     continue
                 prompt_verified = True
+                guard_match = 'logical_equal'
             elif _legacy_luna_low_proven(previous, current_body):
                 prompt_verified = True
+                guard_match = 'legacy_low_verified'
+            else:
+                guard_match = 'legacy_unproven'
             if (candidate['route'] == 'reextract' and candidate.get('message_id') is None
                     and isinstance(candidate.get('owner'), dict)
                     and candidate['owner'].get('source_type') == 'attachment_ocr'):
@@ -891,8 +938,14 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                                             and result.get('error_kind') is None) else 'repeat_failed')
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
-                              refusal or 'receipt_inconsistent') from None
+            error = _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
+                                refusal or 'receipt_inconsistent')
+            if candidate['route'] == 'reextract' and candidate.get('message_id') is not None and guard_match:
+                try:
+                    error.history_observation = _repeat_observation(previous, candidate, guard_match)
+                except Exception:
+                    error.history_observation = {}
+            raise error from None
 
 
 
@@ -1567,7 +1620,7 @@ def _saved_answer(answer, metadata):
 
 
 def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
-                     owner=None, scope=None):
+                     owner=None, scope=None, observation=None):
     """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
     with _accounting_snapshot(ledger.db):
         rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
@@ -1580,6 +1633,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             from attachment_cloud_identity import recovery_rows
             rows.extend(recovery_rows(ledger.db, project_id=project_id, unit_key=unit_key,
                 binding=input_binding, request_fp=request_fp, owner=owner, scope=scope))
+        observed = observation if route == 'reextract' and message_id is not None else None
+        _observe_recovery(observed, 'unknown' if rows else 'no_exact_rows')
         saved = None
         for row in rows:
             reservation = _receipt_meta(row['meta'])
@@ -1618,6 +1673,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             answer = _saved_answer(answer, evidence['result'])
             saved = (evidence, {'status': 200, **answer, 'model': reservation['model'],
                                 'usage': evidence['result']['usage']})
+        if rows and saved is None:
+            _observe_recovery(observed, 'confirmed_rejection_only')
         return saved
 
 
