@@ -209,6 +209,13 @@ def _split_pass(led):
         return extract_llm.run_pending(led, limit=1, workers=1, budget_s=180, cloud_only=True)
 
 
+def _split_head(led):
+    """Messages 1 and 2 share posted_at; selection is newest first with message_id breaking the
+    tie, so the one-row pass takes the head and the other is the next candidate."""
+    head = _select(led, "extract")[0]["message_id"]
+    return head, ({1, 2} - {head}).pop()
+
+
 @pytest.mark.parametrize("real_accounting", [False, True], ids=["stub-accounting", "durable-reservation"])
 def test_an_earlier_sent_chunk_followed_by_a_refusal_never_frees_the_slot(routed, monkeypatch, real_accounting):
     """Two chunks through the real runner and client: the first chunk posts (with a durable
@@ -217,10 +224,11 @@ def test_an_earlier_sent_chunk_followed_by_a_refusal_never_frees_the_slot(routed
     bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
     if real_accounting:
         _use_real_cloud_accounting(monkeypatch)
-    count = _refuse_on_call(monkeypatch, 1, set(range(2, 50)))
+    head, _ = _split_head(led)
+    count = _refuse_on_call(monkeypatch, head, set(range(2, 50)))
     report = _split_pass(led)
     assert count["n"] >= 2                                  # the refusal came after a send
-    assert {post["message_id"] for post in posts} == {1}    # the next candidate never started
+    assert {post["message_id"] for post in posts} == {head}  # the next candidate never started
     assert report["refilled"] == 0
     if real_accounting:
         assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] >= 1
@@ -233,24 +241,26 @@ def test_a_really_saved_chunk_disqualifies_a_later_verified_refusal(routed, monk
     led, _, _, reservations, results = routed
     bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
     persist, saved = extract_llm._persist_chunks, []
+    head, _ = _split_head(led)
 
     def counted(ledger, row, chunks, context=None, **kwargs):
         accepted = persist(ledger, row, chunks, context, **kwargs)
-        if accepted and row["message_id"] == 1 and kwargs.get("split_size") is None:
+        if accepted and row["message_id"] == head and kwargs.get("split_size") is None:
             saved.extend(value for value in chunks.values() if value)   # a paid chunk result, not a split marker
         return accepted
     monkeypatch.setattr(extract_llm, "_persist_chunks", counted)
     monkeypatch.setattr(extract_llm_runner, "_persist_chunks", extract_llm._persist_chunks)
     # call 1: the whole body stops at length and splits; call 2: the first child succeeds and is saved
-    _refuse_on_call(monkeypatch, 1, set(range(3, 50)))
+    _refuse_on_call(monkeypatch, head, set(range(3, 50)))
     _split_pass(led)
     assert saved and all(item.get("patient_context") for item in saved)
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
     posts.clear()
-    _refuse_on_call(monkeypatch, 1, set(range(1, 50)))
+    count = _refuse_on_call(monkeypatch, head, set(range(1, 50)))
     report = _split_pass(led)
-    assert report["refilled"] == 0 and {post["message_id"] for post in posts} <= {1}
+    assert count["n"] >= 1                                  # the second pass reached the saved head
+    assert report["refilled"] == 0 and {post["message_id"] for post in posts} <= {head}
 
 
 def test_a_recovered_paid_answer_followed_by_a_refusal_never_frees_the_slot(routed, monkeypatch):
@@ -258,19 +268,20 @@ def test_a_recovered_paid_answer_followed_by_a_refusal_never_frees_the_slot(rout
     message splits); the next chunk is refused as a verified repeat."""
     led, _, _, reservations, results = routed
     bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    head, following = _split_head(led)
     recovered = []
 
     def recover(ledger, **kwargs):
-        if kwargs.get("message_id") == 1 and not recovered:
+        if kwargs.get("message_id") == head and not recovered:
             recovered.append(True)
             return ({"reservation": {"reservation_id": "e" * 32}},
                     {"status": 200, "text": "", "finish_reason": "length"})
         return None
     monkeypatch.setattr(cloud_policy, "recover_response", recover)
-    _refuse_on_call(monkeypatch, 1, set(range(1, 50)))
+    _refuse_on_call(monkeypatch, head, set(range(1, 50)))
     report = _split_pass(led)
     assert recovered and report["refilled"] == 0
-    assert 2 not in {post["message_id"] for post in posts}
+    assert following not in {post["message_id"] for post in posts}
 
 
 def test_a_rate_limited_head_keeps_its_retry_rules_and_never_refills(routed, monkeypatch):
@@ -311,10 +322,13 @@ def test_refused_rows_keep_their_claims_for_both_selections_and_a_late_result_is
 def test_a_healthy_row_beyond_the_lookahead_is_reached_in_a_later_pass(cloud_candidates, monkeypatch):
     """Every candidate inside the 64-row lookahead is refused: the pass ends finitely, and the
     held claims let the next pass reach a healthy row that was outside it."""
-    from test_anthropic_runtime import old
-    led, _, calls, reservations, results = cloud_candidates
     import time
-    old(led, 65)
+    from extract_testkit import _hash, _message
+    led, _, calls, reservations, results = cloud_candidates
+    # posted a minute before the fixture's 64 rows, so newest-first selection reaches it last
+    led.save_messages([_message(65, "完全合成の記録。", posted_at="2026-09-18T23:59:00+09:00")])
+    led.artifact_add(extract_llm.KIND, "{}", project_id=1, message_id=65,
+        meta={"hash": _hash(led, 65), "extract_version": extract_llm.EXTRACT_VERSION - 1})
     with led.db:   # the same history window and capture as the fixture's 64 rows
         led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=65", (time.time() - 1200,))
         led.db.execute("UPDATE message_revisions SET observed_at=? WHERE message_id=65", (time.time() - 1200,))
