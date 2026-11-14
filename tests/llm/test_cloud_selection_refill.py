@@ -92,3 +92,104 @@ def test_only_the_guard_repeat_branch_marks_a_verified_repeat(refusal, verified)
     assert (error.kind, error.detail) == ("budget_exceeded", "cloud_unit_unresolved")
     assert error.verified_repeat is verified
     assert getattr(AnthropicError("budget_exceeded", "cloud_unit_unresolved"), "verified_repeat", False) is False
+
+
+def test_a_source_change_seen_by_the_handler_does_not_free_the_slot(cloud_candidates, monkeypatch):
+    """The refusal alone is not terminal: the handler's currentness check decides."""
+    import extract_llm_runner
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    seen = _refuse(monkeypatch, {head}, "repeat_success")
+    owns = extract_llm_runner._owns_current_source
+    monkeypatch.setattr(extract_llm_runner, "_owns_current_source",
+                        lambda ledger, r, lease: False if seen and r["message_id"] == head else owns(ledger, r, lease))
+    report = _cloud_pass(led)
+    assert report["refilled"] == 0 and not calls and not reservations
+
+
+@pytest.mark.parametrize("failure", ["sqlite", "value", "not_sent"])
+def test_read_or_observation_failures_and_plain_not_sent_never_refill(cloud_candidates, monkeypatch, failure):
+    import sqlite3
+    import cloud_client
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    real = cloud_policy.request_send_block_reason
+
+    def guard(ledger, cfg, body, **kwargs):
+        if kwargs.get("message_id") == head:
+            if failure == "sqlite":
+                raise sqlite3.OperationalError("synthetic busy")
+            if failure == "value":
+                raise ValueError("synthetic unreadable receipt")
+            raise cloud_client.CloudNotSent("budget_exceeded", "deadline")
+        return real(ledger, cfg, body, **kwargs)
+    monkeypatch.setattr(cloud_policy, "request_send_block_reason", guard)
+    report = _cloud_pass(led)
+    assert report["refilled"] == 0 and not calls and not reservations and not results
+
+
+def test_a_distinct_request_of_the_same_message_follows_the_normal_guarded_send(cloud_candidates, monkeypatch):
+    """A different logical request is not refused by the guard: it sends once, with no refill."""
+    led, _, calls, reservations, results = cloud_candidates
+    report = _cloud_pass(led)
+    assert report["refilled"] == 0 and report["done"] == 1
+    assert len(calls) == len(reservations) == len(results) == 1
+
+
+def test_a_saved_paid_checkpoint_disqualifies_the_candidate(cloud_candidates, monkeypatch):
+    import extract_llm_runner
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    _refuse(monkeypatch, {head}, "repeat_success")
+    capture = extract_llm_runner._capture_checkpoint_state
+
+    def with_saved_work(db, r, context):
+        saved = capture(db, r, context)
+        if r["message_id"] == head:
+            r["_work_seen"] = True     # as if a paid chunk had been saved for this candidate
+        return saved
+    monkeypatch.setattr(extract_llm_runner, "_capture_checkpoint_state", with_saved_work)
+    report = _cloud_pass(led)
+    assert report["refilled"] == 0 and not calls
+
+
+def test_refused_candidates_keep_their_claims_and_return_after_expiry(cloud_candidates, monkeypatch):
+    """Retained-claim amplification: every refused row keeps its bounded claim, so neither
+    selection sees it until the claim expires; a result arriving meanwhile is seen then."""
+    led, _, calls, reservations, results = cloud_candidates
+    rows = _select(led, "extract")
+    refused = {row["message_id"] for row in rows[:3]}
+    _refuse(monkeypatch, refused, "repeat_success")
+    report = _cloud_pass(led)
+    assert report["refilled"] == 3 and report["done"] == 1
+    held = led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
+    assert held >= 3
+    assert not refused & {row["message_id"] for row in _select(led, "extract")}
+    with led.db:
+        led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
+    assert refused <= {row["message_id"] for row in _select(led, "extract")}
+
+
+def test_a_reservation_or_recovered_answer_marks_the_whole_unit_as_started(routed, monkeypatch):
+    """Reserve-commit-then-exception and a used recovered answer both count before any refusal."""
+    import time
+    led, cfg, *_ = routed
+    unit = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+        unit_key="synthetic", deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    unit._verified_repeat = True
+    assert unit.replacement_eligible is True
+    try:
+        unit.reserve({"prompt": "synthetic", "max_tokens": 1}, 1)
+    except Exception:
+        pass     # a commit-then-raise still began work
+    assert unit.effect_started is True and unit.replacement_eligible is False
+    repaired = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+        unit_key="synthetic-repair", deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    repaired._verified_repeat = True
+    try:
+        repaired.spawn_quality_repair()
+    except Exception:
+        pass
+    assert repaired.replacement_eligible is False      # a started repair is work

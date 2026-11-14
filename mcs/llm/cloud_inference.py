@@ -232,6 +232,7 @@ class CloudInferenceUnit:
                 child.commit_guard()
         self.commit_guard = commit_guard
         def spawn_quality_repair():
+            self._effect_started = True   # a started repair is work, even before its child sends
             if route != "reextract" or purpose != "backlog":
                 raise CloudFallback("cloud_repair_invalid")
             child = CloudInferenceUnit(ledger, raw_cfg, route=route, project_id=project_id,

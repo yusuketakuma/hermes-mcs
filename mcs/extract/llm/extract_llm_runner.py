@@ -404,6 +404,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _checkpoint(index, chunk, value, split=False, receipt=None, replay=False):
         r, ctx = jobs[index][0], jobs[index][1]
+        r["_work_seen"] = True   # before a write that can commit and then fail to return
         saved = False
         try:
             # Only a start precedes a dispatch; releasing an unsent start back
@@ -434,6 +435,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 receipt["event"].set()
 
     def _queue_checkpoint(index, chunk, value, split=False, replay=False):
+        jobs[index][0]["_work_seen"] = True   # a new checkpoint or repair start is work
         if (not replay and not split and "_quality_status" not in value
                 and getattr(value, "repair_proof", None) is None):
             checkpoints.put((index, chunk, value, split, None, replay))
@@ -528,8 +530,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return result
             except cloud_client.CloudNotSent as error:
                 _CALL_NOTES.defer_reason = cloud_client.not_sent_reason(error)
-                # Only the unit's own monotonic observations decide (never the reason text).
-                r["_replacement_eligible"] = provider.replacement_eligible is True
+                # Only the unit's own monotonic observations decide (never the reason text),
+                # and only when no saved paid chunk was used or produced for this candidate.
+                r["_replacement_eligible"] = (provider.replacement_eligible is True
+                                              and not saved and not chunks_out and not r.get("_splits")
+                                              and not r.get("_work_seen"))
                 if _CALL_NOTES.defer_reason == "checkpoint_unverified":
                     meta["_quality_hold"] = True
                 return _DEFERRED
@@ -739,6 +744,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         nonlocal breaker_fed
         ctx = r.get("_context", ctx)
         keep_lease = False
+        # The terminal outcome decides a freed slot: only the plain deferral below may set it.
+        eligible = r.pop("_replacement_eligible", False) is True
+        r["_replacement_freed"] = False
         try:
             if not _owns_current_source(ledger, r, lease):
                 if r.get("_cloud_discard"):
@@ -787,6 +795,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # the health marker the stall alert reads
                 if transport in ("answered", "unreachable", "unavailable"):
                     _observe(transport, at)
+                r["_replacement_freed"] = (eligible and r.get("_defer_reason") == "cloud_unit_unresolved"
+                                           and not r.get("_cloud_failed") and transport is None)
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
@@ -1177,7 +1187,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 qc)
                         # Handler and cleanup are done: a verified refusal of an already
                         # settled same request that began no work frees its slot.
-                        if cloud_only and d is _DEFERRED and r.get("_replacement_eligible") is True:
+                        if cloud_only and d is _DEFERRED and r.get("_replacement_freed") is True:
                             freed += 1
                         continue
                     res = _exec_batch(payload)
