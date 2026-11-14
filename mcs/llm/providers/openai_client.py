@@ -250,4 +250,6 @@ class OpenAIClient(CloudClient):
                 "model": self.model, "usage": meta["usage"]}
 
 
-CLIENT = OpenAIClient
+def client_class():
+    """This provider's client, read at call time so a replaced OpenAIClient is used."""
+    return OpenAIClient
