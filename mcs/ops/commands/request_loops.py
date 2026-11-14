@@ -222,7 +222,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
 
 
 def _effective_loop_state(db, r, state, policy, relation_limit,
-                          event_rows=None, rejection_rows=None, links=None):
+                          event_rows=None, rejection_rows=None, links=None, unrelated_triggers=False):
     import semantic_jev as jev
     from semantic_loops import rejected_relation_pair
     from mcs_util import loads_dict
@@ -231,6 +231,7 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
     pid = r["project_id"]
     events = []                       # (created_at, event)
     evaluated_pairs = set()
+    unrelated = []
     if event_rows is None:
         event_rows = db.execute(
             "SELECT content,meta,created_at FROM artifacts "
@@ -269,12 +270,20 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
             evaluated_pairs.add((trigger_id, ev["trigger_revision"]))
         if ev.get("relation") == "unrelated":
             # Keep unrelated evaluations for dedup, hide them from the display.
+            # scalars only, as the SQL json_extract read they replace compared them
+            if (ev.get("loop_artifact_id") == r["artifact_id"]
+                    and isinstance(trigger_id, (int, float, str))
+                    and trigger_id not in unrelated):
+                unrelated.append(trigger_id)
             continue
         if ev.get("loop_artifact_id") == r["artifact_id"] or (
                 ev.get("loop_artifact_id") is None
                 and ev.get("loop_origin_id") == r["message_id"]):
             events.append((e["created_at"], ev))
     cand["relation_events"] = [ev for _, ev in events[:relation_limit]]
+    if unrelated_triggers:
+        # unrelated evaluations of this loop, stale or not, read from the same history query
+        cand["unrelated_trigger_ids"] = unrelated
     unavailable = set()
     if current:
         if rejection_rows is None:
@@ -331,7 +340,8 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
 
 
 def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
-                          relation_limit=5, eligible_only=False, local_model=None):
+                          relation_limit=5, eligible_only=False, local_model=None,
+                          unrelated_triggers=False):
     """Evaluate candidates with one history query per project, sharing source guards."""
     policy = latest_policy(db) if policy is None else policy
     bundles = {} if bundles is None else bundles
@@ -371,5 +381,6 @@ def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
         result.extend(_effective_loop_state(db, row, states[row["artifact_id"]], policy,
                                             relation_limit, events[row["artifact_id"]],
                                             rejections[row["artifact_id"]],
-                                            links.get(row["artifact_id"], [])) for row in rows)
+                                            links.get(row["artifact_id"], []),
+                                            unrelated_triggers) for row in rows)
     return result

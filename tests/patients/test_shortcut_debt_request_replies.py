@@ -155,6 +155,26 @@ def test_only_current_relation_to_unique_request_counts(tmp_path, fault):
         db.close()
 
 
+@pytest.mark.parametrize("case,unavailable", [("unrelated", False), ("stale_unrelated", False),
+                                            ("no_event", True), ("other_loop_unrelated", True)])
+def test_unrelated_evaluation_of_this_request_counts_as_evaluated(tmp_path, case, unavailable):
+    db, event, meta, row = _setup(tmp_path, "unrelated")
+    try:
+        if case == "stale_unrelated":
+            event["trigger_revision"] = "old"
+        if case == "other_loop_unrelated":
+            event["loop_artifact_id"] += 1000
+        if case != "no_event":
+            db.artifact_add("loop_event", json.dumps(event), project_id=1, message_id=2, meta=meta)
+        messages = list(db.db.execute("SELECT * FROM messages WHERE project_id=1"))
+        rollup._match_request_replies(db.db, 1, [(row, 1, 101, 1)], [row], messages, 1000)
+        assert "reply_state" not in row
+        assert row.get("reply_evaluation") == ("unavailable" if unavailable else None)
+        assert row.get("reply_evaluation_unavailable") == (1 if unavailable else None)
+    finally:
+        db.close()
+
+
 def test_reply_events_keep_all_accepted_sources_and_do_not_order_equal_times(tmp_path):
     db, event, meta, row = _setup(tmp_path, extra=(3, 4, 5), times={3: 103, 4: 103, 5: 104})
     try:

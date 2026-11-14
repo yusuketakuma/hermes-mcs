@@ -522,7 +522,7 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
     source_mids = {source["artifact_id"]: source["message_id"] for source in sources}
     for loop in effective_loop_states(db, sources, policy=policy,
                                      relation_limit=None, eligible_only=True,
-                                     local_model=llm_model(cfg)):
+                                     local_model=llm_model(cfg), unrelated_triggers=True):
         key = (source_mids[loop["artifact_id"]], loop["description"])
         candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}
@@ -549,12 +549,7 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
         # shortcut: `unrelated` evaluations are hidden by request_loops, so they count as
         # evaluated whatever their staleness; expose evaluated pairs there to tighten this.
         evaluated = {event.get("trigger_message_id") for event in matched[0]["relation_events"]
-                     if not event.get("stale")} | {r[0] for r in db.execute(
-                         "SELECT json_extract(content,'$.trigger_message_id') FROM artifacts "
-                         "WHERE kind='loop_event' AND project_id=? AND json_valid(content) "
-                         "AND json_extract(content,'$.loop_artifact_id')=? "
-                         "AND json_extract(content,'$.relation')='unrelated'",
-                         (project_id, matched[0]["artifact_id"]))}
+                     if not event.get("stale")} | set(matched[0]["unrelated_trigger_ids"])
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
