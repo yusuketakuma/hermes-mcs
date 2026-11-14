@@ -88,7 +88,8 @@ def test_sonnet_prices_have_one_tier_and_their_own_cache_rates():
     ("anthropic", a.SONNET_MODEL, "high", "sonnet-high", 16384, True),
     ("anthropic", a.SONNET_MODEL, "high", "haiku-medium", 16384, False),
     ("anthropic", a.SONNET_MODEL, "high", None, 16384, False),
-    ("anthropic", a.SONNET_MODEL, None, None, None, True),     # model checked by the caller's price
+    ("anthropic", a.SONNET_MODEL, None, None, None, False),    # Sonnet only through sonnet-high
+    ("anthropic", "synthetic-rotated-haiku", None, None, None, True),   # the caller checks the price
 
     ("anthropic", a.MODEL, "medium", "haiku-medium", 100, False),
     ("anthropic", a.MODEL, "low", None, None, False),

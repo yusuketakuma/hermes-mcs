@@ -123,8 +123,10 @@ def profile_contract_valid(provider, model, effort, profile, max_tokens):
                 and module.PROFILE_DEFINITIONS.get(profile) == (model, effort) and max_tokens in PROFILE_MAX_TOKENS)
     if provider == "anthropic":
         # The original Anthropic contract carries no effort; its model is checked by
-        # the caller against the current price definition (rotations included).
-        return effort is None
+        # the caller against the price definition (rotations included). A model that
+        # only a profile may select (Sonnet) never stands without its profile.
+        profile_only = {selected for selected, _ in module.PROFILE_DEFINITIONS.values()} - {module.ORIGINAL_CONTRACT[0]}
+        return effort is None and model not in profile_only
     return (model, effort) == module.ORIGINAL_CONTRACT
 
 
