@@ -7,7 +7,9 @@ import extract_llm_resident
 import extract_llm_runner
 import extract_llm_selection
 import extract_llm_store
+import hashlib
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -184,6 +186,147 @@ def test_provider_split_preserves_user_settings_and_jev_defaults(semantic):
     assert rebuilt == raw
     assert semantic_policy.semantic_config(rebuilt, key_present=True) == semantic_policy.semantic_config(raw, key_present=True)
     assert cloud_policy.cloud_config(rebuilt, key_present=True) == cloud_policy.cloud_config(raw, key_present=True)
+
+
+def _profile_split_case(selected):
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    state = {"common": {"cloud_llm": {"mode": "on", "provider": selected, "project_ids": [1]},
+                        "future_setting": {"synthetic": [None, False]}},
+             "providers": {
+                 "openai": {"profiles": {"backlog": "luna-medium", "patient_context": "sol-medium",
+                                          "quality_repair": "sol-high"}},
+                 "anthropic": {"profiles": {"backlog": "haiku-medium", "patient_context": "sonnet-high",
+                                             "quality_repair": "sonnet-high"}},
+                 "jev": {"daily_request_budget": 0}}}
+    cfg = provider_settings.execution_view(state["common"], state["providers"], selected_provider=selected,
+                                           model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    return state, cfg, owners
+
+
+@pytest.mark.parametrize("selected", ["openai", "anthropic"])
+@pytest.mark.parametrize("alias", [True, False])
+def test_profile_split_edits_merge_purposes_without_erasing_hidden_provider_values(selected, alias):
+    state, cfg, owners = _profile_split_case(selected)
+    before = deepcopy(state)
+    key = "profiles" if alias else "provider_profiles"
+    cfg["cloud_llm"][key] = ({"patient_context": "sol-high"} if alias else {
+        "openai": {"patient_context": "sol-high"}})
+    common, providers = config_edit._split_changes(state, cfg, {"cloud_llm." + key}, selected, owners)
+    assert state == before
+    assert common == before["common"]
+    assert providers["openai"]["profiles"] == {
+        **before["providers"]["openai"]["profiles"], "patient_context": "sol-high"}
+    assert providers["anthropic"] == before["providers"]["anthropic"]
+    assert providers["jev"] == before["providers"]["jev"]
+    rebuilt = provider_settings.execution_view(common, providers, selected_provider="openai", model_owners=owners,
+                                               jev_model=semantic_jev.JEV_MODEL)
+    assert rebuilt["cloud_llm"]["profiles"]["patient_context"] == "sol-high"
+    assert "profiles" not in common["cloud_llm"] and "provider_profiles" not in common["cloud_llm"]
+
+
+@pytest.mark.parametrize("selected", ["openai", "anthropic"])
+def test_anthropic_profile_split_retains_other_purposes_and_the_openai_private_profile(selected):
+    state, cfg, owners = _profile_split_case(selected)
+    before = deepcopy(state)
+    cfg["cloud_llm"]["provider_profiles"] = {"anthropic": {"backlog": "sonnet-high"}}
+    common, providers = config_edit._split_changes(
+        state, cfg, {"cloud_llm.provider_profiles"}, selected, owners)
+    assert common == before["common"] and state == before
+    assert providers["anthropic"]["profiles"] == {
+        **before["providers"]["anthropic"]["profiles"], "backlog": "sonnet-high"}
+    assert providers["openai"] == before["providers"]["openai"]
+    assert providers["jev"] == before["providers"]["jev"]
+
+
+def test_profile_alias_conflicts_are_rejected_without_mutating_the_locked_state():
+    state, cfg, owners = _profile_split_case("openai")
+    before = deepcopy(state)
+    cfg["cloud_llm"].update(profiles={"patient_context": "sol-high"},
+                            provider_profiles={"openai": {"patient_context": "sol-medium"}})
+    with pytest.raises(ValueError, match="provider_config_ambiguous"):
+        config_edit._split_changes(state, cfg, {"cloud_llm.profiles", "cloud_llm.provider_profiles"},
+                                   "openai", owners)
+    assert state == before
+
+
+def test_profile_aliases_can_agree_and_supply_different_purposes_in_one_edit():
+    state, cfg, owners = _profile_split_case("openai")
+    cfg["cloud_llm"].update(profiles={"patient_context": "sol-high"},
+                            provider_profiles={"openai": {"patient_context": "sol-high", "backlog": "sol-medium"}})
+    common, providers = config_edit._split_changes(
+        state, cfg, {"cloud_llm.profiles", "cloud_llm.provider_profiles"}, "openai", owners)
+    assert providers["openai"]["profiles"] == {
+        "backlog": "sol-medium", "patient_context": "sol-high", "quality_repair": "sol-high"}
+    assert common == state["common"]
+
+
+@pytest.mark.parametrize("by_provider", [
+    {"unknown": {"patient_context": "sol-high"}},
+    {"openai": {"patient_context": "unknown"}}, {"anthropic": {"patient_context": "sol-high"}},
+    {"openai": {"unknown_purpose": "sol-high"}}, {"anthropic": None},
+])
+def test_profile_split_rejects_nonfinite_provider_profile_contracts(by_provider):
+    state, cfg, owners = _profile_split_case("openai")
+    before = deepcopy(state)
+    cfg["cloud_llm"]["provider_profiles"] = by_provider
+    with pytest.raises(ValueError, match="provider_profiles_invalid"):
+        config_edit._split_changes(state, cfg, {"cloud_llm.provider_profiles"}, "openai", owners)
+    assert state == before
+
+
+@pytest.mark.parametrize("selected,key,removed", [
+    ("anthropic", "profiles", "openai"), ("anthropic", "provider_profiles", "anthropic"),
+])
+def test_profile_removal_only_clears_the_addressed_private_profiles(selected, key, removed):
+    state, cfg, owners = _profile_split_case(selected)
+    before = deepcopy(state)
+    cfg["cloud_llm"].pop(key, None)
+    common, providers = config_edit._split_changes(state, cfg, {"cloud_llm." + key}, selected, owners)
+    assert "profiles" not in providers[removed]
+    other = "openai" if removed == "anthropic" else "anthropic"
+    assert providers[other] == before["providers"][other]
+    assert common == before["common"] and state == before
+
+
+def test_public_split_profile_edit_is_atomic_and_preserves_other_provider_purposes(conf):
+    state, _, owners = _profile_split_case("openai")
+    common = {**json.loads(conf.read_text()), **state["common"]}
+    conf.parent.chmod(0o700)
+    data = conf.parent / "data"
+    data.mkdir(mode=0o700)
+    directory = data / "provider_settings"
+    directory.mkdir(mode=0o700)
+
+    def write_private(path, value):
+        raw = json.dumps(value).encode()
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return hashlib.sha256(raw).hexdigest()
+
+    write_private(conf, common)
+    hashes = {name: write_private(directory / (name + ".json"), value)
+              for name, value in state["providers"].items()}
+    authority = data / ".provider-settings-authority.json"
+    write_private(authority, {"version": 2, "state": "committed", "files": hashes,
+                              "common_policy_sha256": provider_settings.common_policy_digest(common)})
+    before = config_edit.read_strict()
+    saved, errors = config_edit.apply({"cloud_llm.provider_profiles": {
+        "openai": {"patient_context": "sol-high"}}}, expected=before)
+    assert not errors and saved["cloud_llm"]["profiles"]["patient_context"] == "sol-high"
+    current = provider_settings.read(conf.parent, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    assert current["common"] == common
+    assert current["providers"]["openai"]["profiles"] == {
+        **state["providers"]["openai"]["profiles"], "patient_context": "sol-high"}
+    assert current["providers"]["anthropic"] == state["providers"]["anthropic"]
+    assert current["providers"]["jev"] == state["providers"]["jev"]
+    files = [conf, authority, *directory.glob("*.json")]
+    exact = {path: path.read_bytes() for path in files}
+    with pytest.raises(config_edit.ConfigConflict):
+        config_edit.apply({"cloud_llm.profiles": {"patient_context": "sol-medium"}}, expected=before)
+    with pytest.raises(ValueError, match="provider_profiles_invalid"):
+        config_edit.apply({"cloud_llm.provider_profiles": {"anthropic": {"backlog": "sol-high"}}})
+    assert all(path.read_bytes() == raw and path.stat().st_mode & 0o777 == 0o600
+               for path, raw in exact.items())
 
 
 def test_provider_failure_keeps_local_user_settings_for_existing_consumers(tmp_path, monkeypatch):
