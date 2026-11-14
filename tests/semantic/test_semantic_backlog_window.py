@@ -24,11 +24,14 @@ def _open_window(cfg):
 
 @pytest.mark.parametrize("until", [None, "2999-01-01T00:00:00+09:00", "2000-01-01T00:00:00+09:00"])
 def test_window_changes_do_not_change_received_input_generation(until):
-    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic"}}
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+                         "semantic_backlog_until": None}}
     changed = {"cloud_llm": {**cfg["cloud_llm"], "semantic_backlog_until": until}}
     assert semantic_runtime.config_generation(changed) == semantic_runtime.config_generation(cfg)
     assert semantic_runtime.config_generation({"cloud_llm": {"semantic_backlog_until": until}}) \
-        == semantic_runtime.config_generation({})
+        == semantic_runtime.config_generation({"cloud_llm": {"semantic_backlog_until": None}})
+    assert semantic_runtime.config_generation({"cloud_llm": {"semantic_backlog_until": until}}) \
+        != semantic_runtime.config_generation({})
     changed["cloud_llm"]["project_ids"] = [2]
     assert semantic_runtime.config_generation(changed) != semantic_runtime.config_generation(cfg)
 
