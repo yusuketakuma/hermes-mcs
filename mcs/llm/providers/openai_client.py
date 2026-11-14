@@ -184,6 +184,20 @@ class OpenAIClient(CloudClient):
                 "store": False, "service_tier": "default",
                 "prompt_cache_options": {"ttl": "30m"}, "tools": []}
 
+    def wire(self, body, cache_prefix):
+        """Mark the fixed head as the cache boundary. One string under the default
+        (implicit) mode is written whole at the cache-write rate on every request
+        and never read back, because the next request differs after the head.
+        Explicit mode writes only up to the marked block; with no head, nothing."""
+        posted = {**body, "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+        if cache_prefix:
+            content = [{"type": "input_text", "text": cache_prefix,
+                        "prompt_cache_breakpoint": {"mode": "explicit"}}]
+            if body["input"][len(cache_prefix):]:
+                content.append({"type": "input_text", "text": body["input"][len(cache_prefix):]})
+            posted["input"] = [{"role": "user", "content": content}]
+        return posted
+
     def answer(self, obj, meta):
         if not isinstance(obj, dict) or obj.get("model") != self.model:
             raise AnthropicError("model_mismatch")
