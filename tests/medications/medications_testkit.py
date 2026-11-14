@@ -7,6 +7,7 @@ import errno
 import hashlib
 import json
 import os
+from pathlib import Path
 from typing import TypedDict
 
 import drug_map
@@ -86,6 +87,12 @@ store = ledger_fixture(name="store", patients=(1,))
 
 def _fail_dictionary_io(monkeypatch, path, failure):
     """Inject a synthetic failure only into this dictionary's acquired FD."""
+    # Rewrite the same bytes so the file identity changes and the next load reads
+    # the file again instead of reusing the last parsed copy (drug_map.load).
+    target = Path(path)
+    target.write_bytes(target.read_bytes())
+    info = os.stat(target)
+    os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
     opened = []
     real_open, real_fdopen, real_fstat = os.open, os.fdopen, os.fstat
 
