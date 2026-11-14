@@ -734,7 +734,8 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
             maximum = _reserve_valid(previous, row)
             reservations.setdefault(previous['reservation_id'], []).append((previous, maximum))
     except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-        raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
+        raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
+                          'receipt_inconsistent') from None
     checked_results = {}
     for row in records:
         if row['kind'] != KINDS[1]:
@@ -746,18 +747,20 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
                 raise ValueError('result_invalid')
             checked_results.setdefault(rid, []).append((result, row))
         except (InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+            raise _classified(AnthropicError('pricing_unverified', 'cloud_unit_unresolved'),
+                              'receipt_inconsistent') from None
     for rid, results in checked_results.items():
         matches = reservations.get(rid, [])
         if len(matches) != 1:
-            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
+            raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'), 'receipt_inconsistent')
         previous, maximum = matches[0]
         try:
             # Validate the complete result set: two individually valid rows
             # are still ambiguous accounting, including on a same-prompt retry.
             _settled(previous, maximum, results)
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+            raise _classified(AnthropicError('pricing_unverified', 'cloud_unit_unresolved'),
+                              'receipt_inconsistent') from None
     return rows
 
 
@@ -783,6 +786,17 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
         return False
 
 
+# Fixed classification of an accounting refusal, set where it is decided and read only by
+# the history observation. It never changes the exception, its detail or any decision.
+HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled",
+                              "disposition", "receipt_inconsistent"})
+
+
+def _classified(error, refusal):
+    error.history_refusal = refusal
+    return error
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],
@@ -792,6 +806,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False
     for row in rows:
+        refusal = None
         try:
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
@@ -846,11 +861,13 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     else:
                         result_map.setdefault(reservation_id, []).append((result_meta, result_row))
             if previous['reservation_id'] in disposition_ids:
+                refusal = 'disposition'
                 raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
             if result.get('disposition'):
+                refusal = 'disposition'
                 raise ValueError('discarded')
             http_class = result.get('http_class')
             if (local_fallback and isinstance(http_class, str)
@@ -865,9 +882,15 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
+            # The one validated result of the same request: a proven success, a settled
+            # failure, or an unsettled one. Counts only; none of them permits a resend.
+            refusal = ('repeat_unsettled' if not settled else
+                       'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
+                                            and result.get('error_kind') is None) else 'repeat_failed')
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
+            raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
+                              refusal or 'receipt_inconsistent') from None
 
 
 
@@ -1441,7 +1464,8 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
             # An orphan result cannot prove this is a fresh request. Validate the
             # existing accounting snapshot even when a circuit would short-circuit caps.
             if _tally(ledger).invalid:
-                raise AnthropicError("pricing_unverified", "cloud_unit_unresolved")
+                raise _classified(AnthropicError("pricing_unverified", "cloud_unit_unresolved"),
+                                  "receipt_inconsistent")
             return (block_reason(ledger, c, route, project_id, model=candidate['model'])
                     or setting_block_reason(c)
                     or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
