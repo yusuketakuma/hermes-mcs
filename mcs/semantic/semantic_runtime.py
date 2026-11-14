@@ -134,7 +134,7 @@ def payload_generation(payload: dict) -> str:
 # job's answer is interpreted: editing them must not discard results already received.
 CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
                           "max_concurrency", "usd_jpy", "window_budget_usd", "window_start", "until",
-                          "provider_budgets", "reextract_backlog_until")
+                          "provider_budgets", "reextract_backlog_until", "semantic_backlog_until")
 _GENERATION_EXEMPT = {"semantic": ("until",), "cloud_llm": CLOUD_OPERATING_LIMITS}
 
 
