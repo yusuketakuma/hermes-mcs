@@ -769,11 +769,14 @@ _V1_CATEGORY_FIELDS = {
 
 def _symptom_names(source, names):
     """Keep symptom reports; an explicit PRN instruction alone is not a symptom report."""
+    import extract
     result = []
     for name in names:
         if not isinstance(name, str) or not name:
             continue
         for match in re.finditer(re.escape(name), source):
+            if extract.symptom_is_drug_class(source, match.end()):
+                continue
             tail = re.split(r"[。！？!?;；\n]", source[match.end():], maxsplit=1)[0]
             contingency = re.match(
                 r"\s*(?:(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?|"

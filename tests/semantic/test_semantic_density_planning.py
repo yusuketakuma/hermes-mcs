@@ -73,6 +73,9 @@ def test_dense_229_character_case_is_planned_before_inference_with_all_obligatio
 
 
 @pytest.mark.parametrize("body,signal", [
+    ("痛み止めを処方。", False), ("痛み止めを処方。痛み時のみ使用。", False),
+    ("痛み止めを処方。痛みが続く。", True),
+    ("発熱時は服用してください。発熱なし。", True),
     ("痛み時のみ使用とのこと。", False), ("疼痛時は架空薬を頓服してください。", False),
     ("発熱がある場合は架空薬を服用。", False), ("膝の痛みが続いています。", True),
     ("痛みが続くため、痛み時のみ使用。", True), ("痛みはない。痛み時のみ使用。", True),

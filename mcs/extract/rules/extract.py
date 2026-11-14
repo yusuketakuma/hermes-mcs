@@ -79,9 +79,14 @@ _SYMPTOM_REPORTED = re.compile(
     r"|打撲|受傷|骨折|出血|負傷|外傷|怪我|けが|ケガ")
 
 
+def symptom_is_drug_class(body, end):
+    """Return whether a symptom mention names a drug class."""
+    return bool(_SYMPTOM_DRUG_CLASS.match(body, end))
+
+
 def _symptom_as_medication(body, end):
     """True when the symptom word only names a drug class or the condition of a PRN instruction."""
-    if _SYMPTOM_DRUG_CLASS.match(body, end):
+    if symptom_is_drug_class(body, end):
         return True
     tail = re.split(r"[。！？!?;；\n]", body[end:], maxsplit=1)[0]
     return bool(_SYMPTOM_CONTINGENCY.match(tail) and _SYMPTOM_PRN_MED.search(tail)
@@ -89,11 +94,12 @@ def _symptom_as_medication(body, end):
 
 
 def symptom_matches(body):
-    """End offsets of each listed symptom's mentions that are not directly negated (発熱なし, 吐き気は見られません)."""
+    """End offsets of symptom mentions that are neither directly negated nor drug-class names."""
     found = {}
     for s in clinical_scope.SYMPTOMS:
         ends = [m.end() for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body)
-                if not _SYMPTOM_NEGATION.match(body, m.end())]
+                if not _SYMPTOM_NEGATION.match(body, m.end())
+                and not symptom_is_drug_class(body, m.end())]
         if ends:
             found[s] = ends
     return found
