@@ -216,6 +216,23 @@ def _source_scope(settings, alias="m"):
     return sql, params
 
 
+def _backlog_setting_blockers(settings, route):
+    """Report settings-only blockers, without claiming accounting or key availability."""
+    key = "semantic_backlog_until" if route == "semantic_backlog" else "reextract_backlog_until"
+    if settings[key] is None:
+        return []
+    window = policy.semantic_backlog_window if route == "semantic_backlog" else policy.reextract_backlog_window
+    reasons = [code for code, blocked in (
+        ("cloud_mode_not_on", settings["mode"] != "on"),
+        ("route_missing", route not in settings["routes"]),
+        ("window_ended", not window(settings)),
+        ("project_scope_empty", settings["project_ids"] == [])) if blocked]
+    reason = policy.setting_block_reason(settings)
+    if reason:
+        reasons.append(reason)
+    return reasons
+
+
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
                    "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
@@ -279,7 +296,7 @@ def _route_counts(db, cfg, settings, deadline):
                 item["basic_requests_estimate"] += 1
                 item["chunk_extra_requests_estimate"] += requests - 1
                 item["requests_estimate"] += requests
-    if "semantic_backlog" in settings["routes"] and policy.send_route("semantic_backlog"):
+    if policy.semantic_planned(cfg):
         scope, params = _source_scope(settings, "j")
         rows = db.execute(
             "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
@@ -663,6 +680,8 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
         **({"retained_records_observation": retained_observation} if retained_observation is not None else {}),
         "period_budget": period, "until": settings["until"],
+        "reextract_backlog_blockers": _backlog_setting_blockers(settings, "reextract"),
+        "semantic_backlog_blockers": _backlog_setting_blockers(settings, "semantic_backlog"),
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
         "daily_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) / days,
@@ -736,6 +755,8 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
                   "settled_cost_usd": None, "max_reserved_cost_usd": None,
                   "unresolved_requests": None, "pricing_unverified": True},
               "period_budget": period if 'period_budget' in completed else None,
+              "reextract_backlog_blockers": _backlog_setting_blockers(settings, "reextract"),
+              "semantic_backlog_blockers": _backlog_setting_blockers(settings, "semantic_backlog"),
               "block_reason": reason if 'block_reason' in completed else None,
               "usage_calibration": ({key: str(value) if isinstance(value, Decimal) else value
                                      for key, value in calibration.items()}
@@ -942,6 +963,11 @@ def budget_command(args):
         reopen = getattr(args, "reextract_backlog_until", None)
         if reopen is not None:
             changes["cloud_llm.reextract_backlog_until"] = _time_value(reopen, end=True)
+        reopen = getattr(args, "semantic_backlog_until", None)
+        if reopen is not None:
+            changes["cloud_llm.semantic_backlog_until"] = _time_value(reopen, end=True)
+            if changes["cloud_llm.semantic_backlog_until"] is None:
+                defaults["cloud_llm.semantic_backlog_until"] = None
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
               "解除は none で指定してください")
@@ -974,11 +1000,16 @@ def budget_command(args):
     if errors:
         print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
         return 1
+    blocker_settings = policy.cloud_config(cfg, key_present=True)[0]
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
                       "period_start": settings["window_start"], "until": settings["until"],
                       "reextract_backlog_until": settings["reextract_backlog_until"],
+                      "semantic_backlog_until": settings["semantic_backlog_until"],
+                      "provider_budgets": settings["provider_budgets"],
+                      "reextract_backlog_blockers": _backlog_setting_blockers(blocker_settings, "reextract"),
+                      "semantic_backlog_blockers": _backlog_setting_blockers(blocker_settings, "semantic_backlog"),
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
@@ -1121,7 +1152,9 @@ def add_parsers(sub):
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")
     q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとOpenAIに設定。Jevの期限は変更しません。none で解除")
     q.add_argument("--reextract-backlog-until", dest="reextract_backlog_until",
-                   help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開（期間の上限額の設定が必要）。none で終了")
+                   help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開。期間上限、または全体と提供元別の日額・月額上限が必要。none で終了")
+    q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
+                   help="意味解析の未処理分に限り、この日時までクラウド送信を再開。同じ費用上限が必要。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))

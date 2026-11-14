@@ -1301,6 +1301,30 @@ def test_worker_runs_only_message_extraction_while_the_backlog_is_reopened(carry
     assert waits == [10] and state.closed
 
 
+def test_worker_runs_only_semantic_when_only_its_window_is_open(carry_worker, monkeypatch):
+    import extract_llm
+    import mcs_util
+    import semantic_drain
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+        "semantic_backlog_until": "2999-01-01T00:00:00+09:00",
+        "daily_cost_limit_usd": 30, "monthly_cost_limit_usd": 300,
+        "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150}}}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("reextract window is closed"))
+    monkeypatch.setattr(extract_llm_resident, "run_pending", extract_llm.run_pending)
+
+    def semantic(*args, **kwargs):
+        state.events.append("semantic")
+        state.alive = False
+        return {"done": 1}
+
+    monkeypatch.setattr(semantic_drain, "run_due", semantic)
+    backlog.worker(991)
+    assert state.events == ["semantic"] and state.closed
+
+
 def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reopened(tmp_path, monkeypatch):
     import extract_llm
     (tmp_path / "data").mkdir()

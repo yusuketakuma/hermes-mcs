@@ -241,13 +241,16 @@ class CloudBacklogPool:
             # Cloud availability is decided inside run_due. A missing key or
             # a spend hold must not hide its existing local fallback/recovery.
         else:
-            if not cloud_policy.reextract_planned(settings):
+            extract_open = cloud_policy.reextract_planned(settings)
+            semantic_open = ("semantic_backlog" in settings["routes"]
+                             and cloud_policy.semantic_backlog_window(settings))
+            if not (extract_open or semantic_open):
                 # Existing workers settle paid carry before retiring.
                 return
             if not cloud_policy.selected_key(self.root):
                 return
             selection, errors = cloud_policy.resolve_profile(
-                cfg, route="reextract", purpose="backlog", root=self.root)
+                cfg, route="reextract" if extract_open else "semantic_backlog", purpose="backlog", root=self.root)
             if errors or selection is None:
                 return
             limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
@@ -459,8 +462,10 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
-                routes_open = cloud_policy.reextract_planned(settings)
-                semantic_open = cloud_policy.send_route("semantic_backlog")
+                extract_open = cloud_policy.reextract_planned(settings)
+                semantic_open = ("semantic_backlog" in settings["routes"]
+                                 and cloud_policy.route_open("semantic_backlog", settings))
+                routes_open = extract_open or semantic_open
                 if index is not None:
                     retire = (settings["mode"] != "on" or not routes_open
                               or index >= settings["max_concurrency"])
@@ -474,8 +479,10 @@ def worker(parent, *, index=None, context_only=False):
                             else "cloud_route_closed" if not routes_open
                             else "capacity_reduced"))
                         return
+                if routes_open and not (semantic_open if phase % 2 else extract_open):
+                    phase += 1
                 selection, errors = cloud_policy.resolve_profile(
-                    cfg, route="reextract", purpose="backlog")
+                    cfg, route="semantic_backlog" if phase % 2 else "reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
                          else extract_llm.MAX_TOKENS)
                 if settings["mode"] != "on":
@@ -495,9 +502,6 @@ def worker(parent, *, index=None, context_only=False):
                     continue
                 started = time.monotonic()
                 try:
-                    if phase % 2 and not semantic_open:
-                        phase += 1      # only the stored-message backlog is open: no semantic turn
-                        continue
                     if phase % 2 == 0:
                         waiting["code"] = None
                         with _phase_progress("extract"):
