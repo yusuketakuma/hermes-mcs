@@ -4,11 +4,15 @@ runner and CloudInferenceUnit run with the routed transport stubs; nothing is re
 import pytest
 
 import cloud_inference
+import extract_llm
 import cloud_policy
 from anthropic_client import AnthropicError
 from test_anthropic_runtime import routed as routed
 from cloud_selection_progress_testkit import _cloud_pass as _cloud_pass, _select as _select, \
-    cloud_candidates as cloud_candidates
+    _complete_cloud_tx as _complete_cloud_tx, cloud_candidates as cloud_candidates
+from anthropic_runtime_testkit import _split_checkpoint_cloud_jobs as _split_checkpoint_cloud_jobs, \
+    _use_real_cloud_accounting as _use_real_cloud_accounting
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ["routed", "cloud_candidates"]
 
@@ -128,68 +132,161 @@ def test_read_or_observation_failures_and_plain_not_sent_never_refill(cloud_cand
     assert report["refilled"] == 0 and not calls and not reservations and not results
 
 
-def test_a_distinct_request_of_the_same_message_follows_the_normal_guarded_send(cloud_candidates, monkeypatch):
-    """A different logical request is not refused by the guard: it sends once, with no refill."""
-    led, _, calls, reservations, results = cloud_candidates
-    report = _cloud_pass(led)
-    assert report["refilled"] == 0 and report["done"] == 1
-    assert len(calls) == len(reservations) == len(results) == 1
+def _refuse_on_call(monkeypatch, message_id, refused_calls, refusal="repeat_success"):
+    """The real guard runs, except that the given calls for one message are refused."""
+    real = cloud_policy.request_send_block_reason
+    count = {"n": 0}
+
+    def guard(ledger, cfg, body, **kwargs):
+        if kwargs.get("message_id") == message_id:
+            count["n"] += 1
+            if count["n"] in refused_calls:
+                raise cloud_policy._classified(AnthropicError("budget_exceeded", "cloud_unit_unresolved"), refusal)
+        return real(ledger, cfg, body, **kwargs)
+    monkeypatch.setattr(cloud_policy, "request_send_block_reason", guard)
+    return count
 
 
-def test_a_saved_paid_checkpoint_disqualifies_the_candidate(cloud_candidates, monkeypatch):
+def _split_pass(led):
+    with legacy_cloud_routes():
+        return extract_llm.run_pending(led, limit=1, workers=1, budget_s=180, cloud_only=True)
+
+
+@pytest.mark.parametrize("real_accounting", [False, True], ids=["stub-accounting", "durable-reservation"])
+def test_an_earlier_sent_chunk_followed_by_a_refusal_never_frees_the_slot(routed, monkeypatch, real_accounting):
+    """Two chunks through the real runner and client: the first chunk posts (with a durable
+    reservation row when accounting is real), a later chunk is refused as a verified repeat."""
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    if real_accounting:
+        _use_real_cloud_accounting(monkeypatch)
+    count = _refuse_on_call(monkeypatch, 1, set(range(2, 50)))
+    report = _split_pass(led)
+    assert count["n"] >= 2                                  # the refusal came after a send
+    assert {post["message_id"] for post in posts} == {1}    # the next candidate never started
+    assert report["refilled"] == 0
+    if real_accounting:
+        assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] >= 1
+
+
+def test_a_really_saved_chunk_disqualifies_a_later_verified_refusal(routed, monkeypatch):
+    """A first pass saves a paid chunk checkpoint; in the next pass the same message's first
+    guard call is refused. Its saved work keeps the slot from being given away."""
     import extract_llm_runner
-    led, _, calls, reservations, results = cloud_candidates
-    head = _select(led, "extract")[0]["message_id"]
-    _refuse(monkeypatch, {head}, "repeat_success")
-    capture = extract_llm_runner._capture_checkpoint_state
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    persist, saved = extract_llm._persist_chunks, []
 
-    def with_saved_work(db, r, context):
-        saved = capture(db, r, context)
-        if r["message_id"] == head:
-            r["_work_seen"] = True     # as if a paid chunk had been saved for this candidate
-        return saved
-    monkeypatch.setattr(extract_llm_runner, "_capture_checkpoint_state", with_saved_work)
-    report = _cloud_pass(led)
-    assert report["refilled"] == 0 and not calls
+    def counted(ledger, row, chunks, context=None, **kwargs):
+        accepted = persist(ledger, row, chunks, context, **kwargs)
+        if accepted and row["message_id"] == 1:
+            saved.append(True)
+        return accepted
+    monkeypatch.setattr(extract_llm, "_persist_chunks", counted)
+    monkeypatch.setattr(extract_llm_runner, "_persist_chunks", extract_llm._persist_chunks)
+    _refuse_on_call(monkeypatch, 1, set(range(2, 50)))
+    _split_pass(led)
+    assert saved                                          # a real checkpoint of message 1 exists
+    with led.db:
+        led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
+    posts.clear()
+    _refuse_on_call(monkeypatch, 1, set(range(1, 50)))
+    report = _split_pass(led)
+    assert report["refilled"] == 0 and {post["message_id"] for post in posts} <= {1}
 
 
-def test_refused_candidates_keep_their_claims_and_return_after_expiry(cloud_candidates, monkeypatch):
-    """Retained-claim amplification: every refused row keeps its bounded claim, so neither
-    selection sees it until the claim expires; a result arriving meanwhile is seen then."""
+def test_a_recovered_paid_answer_followed_by_a_refusal_never_frees_the_slot(routed, monkeypatch):
+    """The exact recovery returns a saved paid answer for the first chunk (a length stop, so the
+    message splits); the next chunk is refused as a verified repeat."""
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    recovered = []
+
+    def recover(ledger, **kwargs):
+        if kwargs.get("message_id") == 1 and not recovered:
+            recovered.append(True)
+            return ({"reservation": {"reservation_id": "e" * 32}},
+                    {"status": 200, "text": "", "finish_reason": "length"})
+        return None
+    monkeypatch.setattr(cloud_policy, "recover_response", recover)
+    _refuse_on_call(monkeypatch, 1, set(range(1, 50)))
+    report = _split_pass(led)
+    assert recovered and report["refilled"] == 0
+    assert 2 not in {post["message_id"] for post in posts}
+
+
+def test_a_rate_limited_head_keeps_its_retry_rules_and_never_refills(routed, monkeypatch):
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 1)
+    import anthropic_client
+
+    def limited(self, method, request, timeout, **kwargs):
+        posts.append({"message_id": 1, "piece": "", "after_rejection": False})
+        return 429, {}, b'{"type":"error","error":{"type":"rate_limit_error"}}'
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", limited)
+    report = _split_pass(led)
+    assert report["refilled"] == 0 and {post["message_id"] for post in posts} == {1}
+
+
+def test_refused_rows_keep_their_claims_for_both_selections_and_a_late_result_is_seen(cloud_candidates, monkeypatch):
+    """Retained-claim amplification: each refused row keeps its bounded claim, so neither the
+    cloud nor the local selection takes it until expiry; a result written meanwhile by another
+    worker is what the next selection sees."""
     led, _, calls, reservations, results = cloud_candidates
     rows = _select(led, "extract")
     refused = {row["message_id"] for row in rows[:3]}
     _refuse(monkeypatch, refused, "repeat_success")
     report = _cloud_pass(led)
     assert report["refilled"] == 3 and report["done"] == 1
-    held = led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
-    assert held >= 3
-    assert not refused & {row["message_id"] for row in _select(led, "extract")}
+    local = {row["message_id"] for row in extract_llm._select_pending(led, 64, None, None, False)[0]}
+    assert not refused & {row["message_id"] for row in _select(led, "extract")} and not refused & local
+    late = next(row for row in rows if row["message_id"] == min(refused))
+    with led.db:
+        led.db.execute("BEGIN IMMEDIATE")
+        _complete_cloud_tx(led, late)
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
-    assert refused <= {row["message_id"] for row in _select(led, "extract")}
+    again = {row["message_id"] for row in _select(led, "extract")}
+    assert (refused - {late["message_id"]}) <= again and late["message_id"] not in again
 
 
-def test_a_reservation_or_recovered_answer_marks_the_whole_unit_as_started(routed, monkeypatch):
-    """Reserve-commit-then-exception and a used recovered answer both count before any refusal."""
+def test_a_healthy_row_beyond_the_lookahead_is_reached_in_a_later_pass(cloud_candidates, monkeypatch):
+    """Every candidate inside the 64-row lookahead is refused: the pass ends finitely, and the
+    held claims let the next pass reach a healthy row that was outside it."""
+    from test_anthropic_runtime import old
+    led, _, calls, reservations, results = cloud_candidates
+    old(led, 65)
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=first_seen-60 WHERE message_id=65")
+    first = {row["message_id"] for row in _select(led, "extract")}
+    _refuse(monkeypatch, first, "repeat_success")
+    report = _cloud_pass(led)
+    assert report["done"] == 0 and not calls and report["refilled"] <= 64
+    if 65 not in first:
+        assert _cloud_pass(led)["done"] == 1 and len(calls) == 1
+
+
+def test_a_reservation_or_a_started_repair_marks_the_whole_unit(routed, monkeypatch):
+    """Inside the real unit: entering reserve (even when it then raises) and starting a repair
+    both count as work before any refusal is seen."""
     import time
     led, cfg, *_ = routed
+
+    def failing_reserver(ledger, config, **identity):
+        def reserve(body, timeout):
+            raise RuntimeError("synthetic commit-then-raise")
+        return reserve
+    monkeypatch.setattr(cloud_policy, "usage_reserver", failing_reserver)
     unit = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    unit._verified_repeat = True
-    assert unit.replacement_eligible is True
-    try:
+    with pytest.raises(Exception):
         unit.reserve({"prompt": "synthetic", "max_tokens": 1}, 1)
-    except Exception:
-        pass     # a commit-then-raise still began work
+    unit._verified_repeat = True
     assert unit.effect_started is True and unit.replacement_eligible is False
     repaired = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic-repair", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    repaired.spawn_quality_repair()
     repaired._verified_repeat = True
-    try:
-        repaired.spawn_quality_repair()
-    except Exception:
-        pass
-    assert repaired.replacement_eligible is False      # a started repair is work
+    assert repaired.replacement_eligible is False
