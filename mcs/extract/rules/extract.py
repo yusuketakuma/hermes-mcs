@@ -88,6 +88,17 @@ def _symptom_as_medication(body, end):
                 and not _SYMPTOM_REPORTED.search(tail))
 
 
+def symptom_matches(body):
+    """End offsets of each listed symptom's mentions that are not directly negated (発熱なし, 吐き気は見られません)."""
+    found = {}
+    for s in clinical_scope.SYMPTOMS:
+        ends = [m.end() for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body)
+                if not _SYMPTOM_NEGATION.match(body, m.end())]
+        if ends:
+            found[s] = ends
+    return found
+
+
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
@@ -395,11 +406,10 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["vital_mentions"] = mentions
 
     # --- symptoms / adherence flags ---
-    # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません)
-    # and is not a drug-class name or a PRN condition (痛み止め, 発熱時カロナール).
-    sym = [s for s in clinical_scope.SYMPTOMS
-           if any(not _SYMPTOM_NEGATION.match(body, m.end()) and not _symptom_as_medication(body, m.end())
-                  for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body))]
+    # A symptom counts when one not-negated mention is not a drug-class name or a PRN
+    # condition (痛み止め, 発熱時カロナール).
+    sym = [s for s, ends in symptom_matches(body).items()
+           if any(not _symptom_as_medication(body, end) for end in ends)]
     if sym:
         out["symptoms"] = sym
     adh = [s for s in _ADHERENCE if s in body]

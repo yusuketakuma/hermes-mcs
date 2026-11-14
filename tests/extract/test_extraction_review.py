@@ -607,9 +607,8 @@ def test_rollup_vitals_do_not_fall_back_to_v1_over_llm_row(db):
     ('明後日も伺います9/18訪問', {'visit_date': '2026-09-18'}),
     ('今度こそ確認、9/18訪問', {'visit_date': '2026-09-18'}),
     ('来週まで様子見、9/18訪問', {'visit_date': '2026-09-18'}),
-    # next_planned here is HEAD's unchanged (pre-existing) resolution
-    ('次回持参物確認し9/18訪問',
-     {'visit_date': '2026-09-18', 'next_planned': '2027-09-18'}),
+    # 次回 9/18 two days before the 9/20 post is an already-passed date, not next year's plan
+    ('次回持参物確認し9/18訪問', {'visit_date': '2026-09-18'}),
     ('次回10/5訪問予定。9/18訪問しました',
      {'visit_date': '2026-09-18', 'next_planned': '2026-10-05'}),
 ])
