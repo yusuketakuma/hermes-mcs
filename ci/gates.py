@@ -393,7 +393,7 @@ def gate_snapshot_readonly() -> list[str]:
         ledger_write_lines = {
             node.lineno for fn in tree.body
             if isinstance(fn, ast.FunctionDef) and (
-                (path == MCS / "ops/cloud_cli.py" and fn.name == "command")
+                (path == MCS / "ops/commands/mcs_requests.py" and fn.name == "apply_local_operation")
                 or (path == MCS / "semantic/semantic_jev.py" and fn.name == "_reserve_live_usage"))
             for node in ast.walk(fn)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
