@@ -246,7 +246,7 @@ def approve_tx(db, req, now):
     except ValueError:
         return 'local_rebuild_bundle_changed', {}
     return None, {'kind': RECEIPT_KIND, 'reason': req['reason'], 'bundle_digest': plan['bundle_digest'],
-                  'units': plan['units'], 'approved': len(plan['units'])}
+                  'database': plan['database'], 'units': plan['units'], 'approved': len(plan['units'])}
 
 
 def approved_units(db):
@@ -261,12 +261,14 @@ def approved_units(db):
         except (ValueError, TypeError, RecursionError):
             receipt = None
         listed = receipt.get('units') if type(receipt) is dict else None
-        if type(listed) is not list:
+        database = receipt.get('database') if type(receipt) is dict else None
+        if (type(listed) is not list or type(database) is not list or len(database) != 2
+                or not all(type(value) is int for value in database)):
             continue   # a broken receipt grants nothing and hides nothing
         for unit in listed:
             if _valid_unit(unit):
                 units[(unit['project_id'], unit['message_id'])] = {
-                    **unit, 'command_id': receipt.get('command_id')}
+                    **unit, 'command_id': receipt.get('command_id'), 'database': database}
     return units
 
 
@@ -284,6 +286,11 @@ def _approval_state(ledger, project_id, message_id, approvals):
     unit = approvals.get((project_id, message_id))
     if unit is None:
         return UNAPPROVED
+    try:
+        if _database_identity(ledger.db) != unit['database']:
+            return PROOF_CHANGED   # a copied or replaced database never inherits the approval
+    except (OSError, ValueError):
+        return UNVERIFIED
     if unit['extract_version'] != EXTRACT_VERSION:
         return PROOF_CHANGED
     binding = inference_dependency_loss.source_binding(ledger.db, project_id, message_id)
