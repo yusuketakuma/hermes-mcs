@@ -1014,17 +1014,28 @@ def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
 
 def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
                  source_changed: list | None = None, source_unknown: list | None = None,
-                 source_unknown_reasons: dict | None = None, cfg=None) -> int:
+                 source_unknown_reasons: dict | None = None, cfg=None, timings=None) -> int:
     """Rebuild patients, optionally reporting unverified inputs and races.
 
     A deadline stops the remaining work; without collectors, source races and
     unverified inputs still raise. Uncommitted work remains eligible for a later scan.
+    Optional timings count completed rebuilds and selected-but-unfinished patients;
+    the maximum includes failed attempts, but excludes the pre-attempt deadline check.
     """
     project_ids = list(project_ids)
     n = 0
+    max_patient_s = 0.0
+    if timings is not None:
+        timings.update(rebuilt=0, deferred=len(project_ids), max_patient_s=0.0)
     for index, pid in enumerate(project_ids):
+        started = None
         try:
             rollup_builder._check_deadline(deadline)
+            if timings is not None and max_patient_s is not None:
+                try:
+                    started = time.monotonic()
+                except Exception:
+                    max_patient_s = None
             rebuild(ledger, pid, cfg=cfg, **({"deadline": deadline} if deadline is not None else {}))
         except rollup_builder.RollupDeadlineExceeded:
             if source_unknown is not None:
@@ -1046,7 +1057,23 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
                 source_unknown_reasons["source_unverified"] = (
                     source_unknown_reasons.get("source_unverified", 0) + 1)
             continue
-        n += 1
+        else:
+            n += 1
+        finally:
+            if timings is not None:
+                timings.update(rebuilt=n, deferred=len(project_ids) - n)
+                try:
+                    if started is not None:
+                        elapsed = time.monotonic() - started
+                        max_patient_s = (max(max_patient_s, max(0, elapsed))
+                                         if math.isfinite(elapsed) else None)
+                    if max_patient_s is None:
+                        timings.pop("max_patient_s", None)
+                    else:
+                        timings["max_patient_s"] = round(max_patient_s, 3)
+                except Exception:
+                    max_patient_s = None
+                    timings.pop("max_patient_s", None)
     return n
 
 
