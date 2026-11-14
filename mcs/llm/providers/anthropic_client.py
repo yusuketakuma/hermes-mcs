@@ -157,6 +157,9 @@ def usage_cost(definition, u, *, input_limit):
 class AnthropicClient(CloudClient):
     """Send Anthropic Messages through the shared guarded attempt loop."""
     MODEL = MODEL
+    # Class defaults keep the original contract for subclasses that replace __init__.
+    model = MODEL
+    effort = None
 
     def __init__(self, api_key, *, model=MODEL, effort=None, **kwargs):
         if not isinstance(model, str) or effort is not None and not isinstance(effort, str) \

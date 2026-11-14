@@ -165,6 +165,9 @@ def usage_cost(definition, u, *, input_limit):
 class OpenAIClient(CloudClient):
     """Reuse bounded retries, reservations and uncertain-send handling for Responses."""
     MODEL = MODEL
+    # Class defaults keep the original contract for subclasses that replace __init__.
+    model = MODEL
+    effort = "low"
 
     def __init__(self, api_key, *, model=MODEL, effort="low", **kwargs):
         if not isinstance(model, str) or not isinstance(effort, str) or (model, effort) not in VALID_MODEL_EFFORTS:

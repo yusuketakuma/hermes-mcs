@@ -561,9 +561,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                             if "budget" in providers[name]:
                                 _budget(providers[name]["budget"])
                             if "profiles" in providers[name]:
-                                if name != "openai":
-                                    raise ValueError("provider_profiles_invalid")
-                                _profiles(providers[name]["profiles"])
+                                _profiles(providers[name]["profiles"], name)
                         if "model" in providers["jev"] and jev_model is None and allow_unavailable:
                             raise ValueError("provider_validation_context_missing")
                         _jev_values(providers["jev"], jev_model)
