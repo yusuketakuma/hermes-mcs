@@ -185,10 +185,10 @@ class OpenAIClient(CloudClient):
                 "prompt_cache_options": {"ttl": "30m"}, "tools": []}
 
     def wire(self, body, cache_prefix):
-        """Mark the fixed head as the cache boundary. One string under the default
-        (implicit) mode is written whole at the cache-write rate on every request
-        and never read back, because the next request differs after the head.
-        Explicit mode writes only up to the marked block; with no head, nothing."""
+        """Mark the fixed head as its own cache block (explicit mode), so a later
+        request that shares the head can read it back. A hit is not guaranteed
+        (short input, duplicate requests, expiry or routing can miss) and the
+        saving is not measured. With no head, no breakpoint is marked."""
         posted = {**body, "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
         if cache_prefix:
             content = [{"type": "input_text", "text": cache_prefix,
