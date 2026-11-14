@@ -143,7 +143,10 @@ def config_generation(cfg: dict) -> str:
     cfg = dict(cfg) if isinstance(cfg, dict) else {}
     for section, keys in _GENERATION_EXEMPT.items():
         if isinstance(cfg.get(section), dict):
+            declared = section == "cloud_llm" and "semantic_backlog_until" in cfg[section]
             cfg[section] = {k: v for k, v in cfg[section].items() if k not in keys}
+            if declared:
+                cfg[section]["semantic_backlog_until"] = True  # Contract presence, never its deadline.
             if not cfg[section]:
                 # first adding only an exempt key must not look like a new section
                 del cfg[section]
