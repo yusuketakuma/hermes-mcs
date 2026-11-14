@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "用途別profileをCLIから提供元の設定へ保存可能に",
+  "summary": "分割形式の設定でも、OpenAIとAnthropicの用途別profileをCLIから保存できます。OpenAIの患者コンテキストを sol-high にする場合は --patient-context-profile sol-high を使います。",
+  "upgrade": "追加操作は不要です。変更する用途の引数だけを指定してください。設定の保存経路と同意・課金条件は維持します。Anthropicのprofileを初めて設定すると、その提供元の用途別profileが有効になります。",
+  "details": [
+    "各提供元の定義にあるprofileだけを受け付けます。OpenAI用の短い引数と --openai- で始まる引数は同じ設定を変更し、Anthropicには --anthropic- で始まる引数を使います。",
+    "指定していない用途、別の提供元、予算、利用先の選択、キーを保持します。既存の編集ロックと競合検出を通して保存し、私有設定ファイルの手動編集は不要です。",
+    "cloud_llm.profiles はOpenAIの互換名として扱い、provider_profiles との食い違いは拒否します。分割設定では共通ファイルへprofileを残さず、提供元別のprofilesへ保存します。",
+    "戻す場合はprofile設定の振り分けとCLI追加のコミットを revert します。新しいモデルやprofileで送ったあとの記録は、それを解釈できる版で保持してください。設定値や課金証跡は削除しません。"
+  ],
+  "refs": ["mcs/ops/cloud_cli.py", "mcs/ops/setup/config_edit.py"]
+}

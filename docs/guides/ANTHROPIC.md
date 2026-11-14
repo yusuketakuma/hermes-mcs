@@ -33,9 +33,12 @@ Jevの自動有効化は `summary_mode`、`loop_mode`、`extract_qc`、canonical
 
 `mcs setup api-keys` の「1」でキーを非表示入力し、「5」で利用先・優先順位・API別予算を設定できます。
 新規導入・更新後のキー設定でもOpenAIを登録できます。キーは既存の認証情報と同じMCS専用 `.env` に保存します。
-OpenAIの用途別モデル設定は旧来の背景抽出・意味解析に `gpt-6-luna`（推論 `medium`）、患者コンテキストに `gpt-6.1-sol`（`medium`）、同コンテキストの正式な品質確認で必要になった有限の修復に `gpt-6.1-sol`（`high`）です。現在、個別投稿・添付OCRの新規の抽出・意味解析は過去分も含めてローカルで行い、`gpt-6-luna` の設定は過去のクラウド記録の読み取り・回復に残します。
-用途別の最大出力は順に8192・16384・32768トークンで、推論トークンも含みます。既存の明示モデルは保持し、用途別の指定があればその設定を優先します。Anthropicは `claude-haiku-5-5` を使います。
+OpenAIの用途別モデル設定は背景抽出・意味解析に `gpt-6-luna`（推論 `medium`）、患者コンテキストに `gpt-6.1-sol`（`medium`）、正式な品質確認で必要になった有限の修復に `gpt-6.1-sol`（`high`）です。個別投稿の抽出と意味解析は既定ではローカルで処理し、終了日時を指定して再開した過去分だけクラウドへ送ります。添付OCRの新規クラウド送信は再開しません。過去のクラウド記録の読み取り・回復も維持します。
+用途別の最大出力は順に8192・16384・32768トークンで、推論トークンも含みます。既存の明示モデルは保持し、用途別の指定があればその設定を優先します。Anthropicの旧設定は `claude-haiku-5-5` の low を維持します。用途別profileを有効にした場合の既定は、再抽出・意味解析がHaiku 5.5 medium、患者コンテキスト・品質修復がSonnet 5.5 highです。
 OpenAIの用途別設定は提供元専用の私有設定に保持します。`mcs setup api-keys` の利用先設定画面で実効モデルを確認できます。 利用先と予算を保存した後、同じ画面でキーの設定を続けられます。別の操作で設定が変わった場合は、画面を開き直してください。
+
+用途別のprofileはCLIでも変更できます。たとえば `cloud-llm providers --patient-context-profile sol-high` はOpenAIの患者コンテキスト用profileを変更します。OpenAIには `--backlog-profile`・`--patient-context-profile`・`--quality-repair-profile` を使い、`--openai-` から始まる同名の引数も使えます。Anthropicには `--anthropic-backlog-profile`・`--anthropic-patient-context-profile`・`--anthropic-quality-repair-profile` を使います。値は各提供元で定義されたprofile名に限ります。
+指定しなかった用途・提供元・利用先の選択・予算・キーは保持します。分割形式の設定も既存の設定保存経路で更新するため、私有ファイルを直接編集する必要はありません。Anthropicのprofileを初めて設定すると、その提供元の用途別profileが有効になるため、未指定用途にも定義済みの既定値を使います。
 
 `cloud_llm.provider` は `anthropic`、`openai`、`auto` から選びます。省略時は `auto` です。
 `auto` は `provider_order` の順に登録済みキーを探します。既定の順はAnthropic、OpenAIです。

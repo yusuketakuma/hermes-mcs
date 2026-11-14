@@ -1,5 +1,6 @@
 """cloud-llm budget writes shared cloud cost caps into config.json (synthetic only)."""
 import hashlib
+import argparse
 import json
 from types import SimpleNamespace
 
@@ -330,3 +331,48 @@ def test_backlog_setting_blockers_do_not_claim_live_key_or_accounting_status(mon
         "cloud_mode_not_on", "route_missing", "project_scope_empty"]
     settings[key] = "2000-01-01T00:00:00+09:00"
     assert "window_ended" in cli._backlog_setting_blockers(settings, route)
+
+
+def test_profile_cli_preserves_legacy_alias_and_other_purposes(conf, capsys):
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(provider="openai", profiles={"backlog": "sol-medium"})
+    conf.write_text(json.dumps(cfg))
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="sol-high")) == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert saved["profiles"] == {"backlog": "sol-medium", "patient_context": "sol-high"}
+    assert saved["provider_profiles"]["openai"] == saved["profiles"]
+    assert json.loads(capsys.readouterr().out)["profile_changes"] == {
+        "openai": {"patient_context": "sol-high"}}
+
+
+def test_split_profile_cli_updates_both_providers_without_changing_selection_or_keys(verified_split):
+    conf, _, _, _, key = verified_split
+    before = _verified_state(conf)
+    key_before = key.read_bytes()
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="sol-high",
+        anthropic_backlog_profile="haiku-medium")) == 0
+    after = _verified_state(conf)
+    assert after["providers"]["openai"]["profiles"]["patient_context"] == "sol-high"
+    assert after["providers"]["anthropic"]["profiles"]["backlog"] == "haiku-medium"
+    assert after["common"]["cloud_llm"]["provider"] == before["common"]["cloud_llm"]["provider"]
+    assert "profiles" not in after["common"]["cloud_llm"]
+    assert "provider_profiles" not in after["common"]["cloud_llm"]
+    assert key.read_bytes() == key_before
+
+
+def test_invalid_provider_profile_is_refused_before_saving(conf):
+    before = conf.read_bytes()
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="haiku-medium")) == 1
+    assert conf.read_bytes() == before
+
+
+def test_profile_parser_aliases_and_finite_values():
+    parser = argparse.ArgumentParser()
+    cli.add_parsers(parser.add_subparsers())
+    for option in ("--patient-context-profile", "--openai-patient-context-profile"):
+        args = parser.parse_args(["cloud-llm", "providers", option, "sol-high"])
+        assert args.openai_patient_context_profile == "sol-high"
+    args = parser.parse_args(["cloud-llm", "providers", "--anthropic-backlog-profile", "haiku-medium"])
+    assert args.anthropic_backlog_profile == "haiku-medium"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["cloud-llm", "providers", "--patient-context-profile", "unknown-profile"])

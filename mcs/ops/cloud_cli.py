@@ -1046,6 +1046,24 @@ def providers_command(args):
                         caps[key] = value
                 budgets[name] = caps
                 changes["cloud_llm.provider_budgets"] = budgets
+        block = cfg.get("cloud_llm", {})
+        profile_maps = {name: dict(mapping) for name, mapping in block.get("provider_profiles", {}).items()}
+        if "profiles" in block:
+            profile_maps.setdefault("openai", {}).update(block["profiles"])
+        profile_changes = {}
+        for name, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+            for purpose in sorted(module.PROFILE_PURPOSES):
+                value = getattr(args, f"{name}_{purpose}_profile", None)
+                if value is None:
+                    continue
+                if type(value) is not str or value not in module.PROFILE_DEFINITIONS:
+                    raise ValueError("provider_profile_invalid")
+                profile_maps.setdefault(name, {})[purpose] = value
+                profile_changes.setdefault(name, {})[purpose] = value
+        if profile_changes:
+            changes["cloud_llm.provider_profiles"] = profile_maps
+            if "profiles" in block and "openai" in profile_changes:
+                changes["cloud_llm.profiles"] = profile_maps["openai"]
         if changes:
             callback_args = {key: getattr(args, key) for key in ("admission", "on_saved")
                              if getattr(args, key, None) is not None}
@@ -1073,7 +1091,8 @@ def providers_command(args):
             return 1
         profiles[purpose] = {"model": selection["model"], "effort": selection["effort"]}
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
-        "profiles": profiles, "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
+        "profiles": profiles, "profile_changes": profile_changes,
+        "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS}}, ensure_ascii=False))
     return 0
@@ -1143,6 +1162,13 @@ def add_parsers(sub):
     for provider in policy.PROVIDERS:
         q.add_argument(f"--{provider}-daily-usd")
         q.add_argument(f"--{provider}-monthly-usd")
+    for provider, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+        for purpose in sorted(module.PROFILE_PURPOSES):
+            label = purpose.replace("_", "-")
+            flags = ([f"--{label}-profile", f"--openai-{label}-profile"] if provider == "openai"
+                     else [f"--anthropic-{label}-profile"])
+            q.add_argument(*flags, dest=f"{provider}_{purpose}_profile",
+                           choices=sorted(module.PROFILE_DEFINITIONS), help=f"{provider} の {purpose} 用profile")
     q.set_defaults(fn=providers_command, cloud_action="providers")
     q = actions.add_parser("budget", help="外部AI合計の費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
     q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル、設定省略時25）。none でこの上限を解除")
