@@ -95,6 +95,26 @@ def test_publication_artifact_union_preserves_legacy_rows_and_digest(tmp_path, f
             db.execute('RELEASE synthetic_selection')
 
 
+@pytest.mark.parametrize('statement,params', [
+    ('INSERT INTO artifacts(kind,project_id,message_id,content) VALUES(?,?,?,?)', ('synthetic', 2, 1, '{}')),
+    ('INSERT INTO artifacts(kind,project_id,message_id,content) VALUES(?,?,?,?)', ('synthetic', 1, 999, '{}')),
+    ('UPDATE artifacts SET project_id=? WHERE artifact_id=?', (2, None)),
+    ('UPDATE artifacts SET message_id=? WHERE artifact_id=?', (999, None)),
+])
+def test_enforced_guard_rejects_the_mismatched_artifacts_the_legacy_union_tolerates(tmp_path, statement, params):
+    with closing(_seed(tmp_path)) as ledger:
+        db = ledger.db
+        assert db.execute("SELECT mode FROM ledger_relation_guards WHERE relation='artifacts'").fetchone()[0] == 'enforce'
+        with db:
+            rid = db.execute("INSERT INTO artifacts(kind,project_id,message_id,content) "
+                             "VALUES('synthetic_initial',1,1,'{}')").lastrowid
+        before = db.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall()
+        with pytest.raises(sqlite3.IntegrityError, match='g1: artifacts message relation'):
+            with db:
+                db.execute(statement, tuple(rid if value is None else value for value in params))
+        assert db.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall() == before
+
+
 @pytest.mark.parametrize('change', ['new_kind', 'null_kind', 'blob_kind', 'kind', 'project', 'message', 'delete'])
 def test_artifact_union_rechecks_changed_inputs_after_data_version(tmp_path, monkeypatch, change):
     with closing(_seed(tmp_path)) as ledger:
