@@ -15,6 +15,9 @@ import openai_client
 from test_anthropic_runtime import routed as routed
 
 __all__ = ["routed"]
+# Captured at import: the routed fixture replaces both with stubs.
+_REAL_RESERVE = c.usage_reserver
+_REAL_RESULT = c.record_result
 
 
 def _cfg(**kw):
@@ -85,6 +88,8 @@ def test_sonnet_prices_have_one_tier_and_their_own_cache_rates():
     ("anthropic", a.SONNET_MODEL, "high", "sonnet-high", 16384, True),
     ("anthropic", a.SONNET_MODEL, "high", "haiku-medium", 16384, False),
     ("anthropic", a.SONNET_MODEL, "high", None, 16384, False),
+    ("anthropic", a.SONNET_MODEL, None, None, None, True),     # model checked by the caller's price
+
     ("anthropic", a.MODEL, "medium", "haiku-medium", 100, False),
     ("anthropic", a.MODEL, "low", None, None, False),
     ("openai", "gpt-6-luna", "low", None, 8192, True),
@@ -147,6 +152,8 @@ def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(rout
     led, cfg, *_ = routed
     sent = []
     monkeypatch.setattr(a.time, "sleep", lambda _: None)
+    monkeypatch.setattr(c, "usage_reserver", _REAL_RESERVE)
+    monkeypatch.setattr(c, "record_result", _REAL_RESULT)
 
     def post(body, timeout):
         sent.append(body["model"])

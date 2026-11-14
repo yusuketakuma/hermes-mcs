@@ -83,7 +83,10 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
     if not isinstance(model, str):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     if price_version is _CURRENT_PRICE:
-        if model in anthropic_client.CURRENT_PRICE_VERSIONS:
+        if model == PROVIDERS["anthropic"]:
+            # Read at call time: a price rotation replaces the current Haiku version.
+            price_version = anthropic_client.PRICE_VERSION
+        elif model in anthropic_client.CURRENT_PRICE_VERSIONS:
             price_version = anthropic_client.CURRENT_PRICE_VERSIONS[model]
         elif model in openai_client.CURRENT_PRICE_VERSIONS:
             price_version = openai_client.CURRENT_PRICE_VERSIONS[model]
@@ -113,11 +116,15 @@ def profile_contract_valid(provider, model, effort, profile, max_tokens):
     module = provider_registry.provider_module(provider)
     if (module is None or not isinstance(model, str)
             or effort is not None and not isinstance(effort, str)
-            or profile is not None and not isinstance(profile, str)
-            or (model, effort) not in module.VALID_MODEL_EFFORTS):
+            or profile is not None and not isinstance(profile, str)):
         return False
     if profile is not None:
-        return module.PROFILE_DEFINITIONS.get(profile) == (model, effort) and max_tokens in PROFILE_MAX_TOKENS
+        return ((model, effort) in module.VALID_MODEL_EFFORTS
+                and module.PROFILE_DEFINITIONS.get(profile) == (model, effort) and max_tokens in PROFILE_MAX_TOKENS)
+    if provider == "anthropic":
+        # The original Anthropic contract carries no effort; its model is checked by
+        # the caller against the current price definition (rotations included).
+        return effort is None
     return (model, effort) == module.ORIGINAL_CONTRACT
 
 

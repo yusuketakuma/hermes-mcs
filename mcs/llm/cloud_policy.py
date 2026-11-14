@@ -1281,7 +1281,8 @@ def _selection_model(settings, selection, max_tokens):
             or selection["max_tokens"] is not None and selection["max_tokens"] != max_tokens):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     if (not profile_contract_valid(settings["provider"], model, effort, profile, selection["max_tokens"])
-            or settings["provider"] == "openai" and selection["max_tokens"] not in PROFILE_MAX_TOKENS):
+            or settings["provider"] == "openai" and selection["max_tokens"] not in PROFILE_MAX_TOKENS
+            or settings["provider"] == "anthropic" and profile is None and model != PROVIDERS["anthropic"]):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     return model
 
