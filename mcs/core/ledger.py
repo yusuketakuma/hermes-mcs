@@ -128,6 +128,7 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             self._fts = ledger_schema.initialize(self.db, schema_version=SCHEMA_VERSION)
             ledger_schema.install_relation_guards(self.db,
                 new_database=not tables, audit=version != SCHEMA_VERSION)
+            ledger_schema.install_cloud_usage_guard(self.db)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             # a checkpoint truncates the -wal file back to this size; without

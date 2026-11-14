@@ -652,6 +652,132 @@ def install_relation_guards(db, *, new_database: bool = False,
     _mark_relation_recount(db)
 
 
+# Cloud accounting rows are looked up by reservation id on every reserve,
+# result and disposition. Scanning the retained history for each lookup held
+# the writer for tens of seconds; the index answers it, and the guard below
+# records whether the index alone is a complete answer.
+CLOUD_USAGE_KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_disposition")
+CLOUD_USAGE_KINDS_SQL = "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition')"
+CLOUD_USAGE_RESERVATION_SQL = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END"
+CLOUD_USAGE_INDEX = "idx_cloud_usage_reservation"
+CLOUD_USAGE_RECHECK_S = 3600.0
+
+
+def _cloud_usage_malformed(meta: str) -> str:
+    """SQL: 1 when the accounting scans would not trust this metadata, or when
+    the index key could disagree with the top-level reservation_id member."""
+    return (
+        f"CASE WHEN typeof({meta})!='text' OR length({meta})>32768 OR NOT json_valid({meta}) THEN 1 "
+        f"WHEN json_type({meta})!='object' THEN 1 "
+        f"WHEN EXISTS (SELECT 1 FROM json_tree({meta}) WHERE key IS NOT NULL "
+        "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+        f"WHEN EXISTS (SELECT 1 FROM json_tree({meta}) WHERE type='real' "
+        "AND abs(value)>1.7976931348623157e308) THEN 1 "
+        f"WHEN (SELECT COUNT(*) FROM json_each({meta}) WHERE key='reservation_id' AND type!='null')"
+        f"!=(json_extract({meta},'$.reservation_id') IS NOT NULL) THEN 1 ELSE 0 END")
+
+
+_CLOUD_USAGE_DDL = {
+    CLOUD_USAGE_INDEX:
+        f"CREATE INDEX {CLOUD_USAGE_INDEX} ON artifacts(kind, {CLOUD_USAGE_RESERVATION_SQL}) "
+        f"WHERE kind IN {CLOUD_USAGE_KINDS_SQL}",
+    # REPLACE skips DELETE triggers with SQLite's default settings.
+    "cloud_usage_guard_replace":
+        "CREATE TRIGGER cloud_usage_guard_replace BEFORE INSERT ON artifacts "
+        "WHEN EXISTS(SELECT 1 FROM artifacts WHERE artifact_id=NEW.artifact_id "
+        f"AND kind IN {CLOUD_USAGE_KINDS_SQL}) "
+        "BEGIN UPDATE cloud_usage_guard SET mutations=mutations+1; END",
+    "cloud_usage_guard_insert":
+        "CREATE TRIGGER cloud_usage_guard_insert AFTER INSERT ON artifacts "
+        f"WHEN NEW.kind IN {CLOUD_USAGE_KINDS_SQL} BEGIN "
+        f"UPDATE cloud_usage_guard SET verified=0 WHERE {_cloud_usage_malformed('NEW.meta')}; "
+        # An id below the newest row lands inside history an incremental reader already passed.
+        "UPDATE cloud_usage_guard SET mutations=mutations+1 "
+        "WHERE EXISTS(SELECT 1 FROM artifacts WHERE artifact_id>NEW.artifact_id); END",
+    "cloud_usage_guard_update":
+        "CREATE TRIGGER cloud_usage_guard_update AFTER UPDATE ON artifacts "
+        f"WHEN OLD.kind IN {CLOUD_USAGE_KINDS_SQL} OR NEW.kind IN {CLOUD_USAGE_KINDS_SQL} BEGIN "
+        "UPDATE cloud_usage_guard SET mutations=mutations+1; "
+        f"UPDATE cloud_usage_guard SET verified=0 WHERE NEW.kind IN {CLOUD_USAGE_KINDS_SQL} "
+        f"AND {_cloud_usage_malformed('NEW.meta')}; END",
+    "cloud_usage_guard_delete":
+        "CREATE TRIGGER cloud_usage_guard_delete AFTER DELETE ON artifacts "
+        f"WHEN OLD.kind IN {CLOUD_USAGE_KINDS_SQL} "
+        "BEGIN UPDATE cloud_usage_guard SET mutations=mutations+1; END",
+}
+
+
+def _cloud_usage_installed(db) -> dict:
+    return dict(db.execute(
+        "SELECT name,sql FROM sqlite_master WHERE name IN (" + ",".join("?" * len(_CLOUD_USAGE_DDL)) + ")",
+        tuple(_CLOUD_USAGE_DDL)).fetchall())
+
+
+def cloud_usage_guard_state(db):
+    """(verified, mutations) while the exact index and triggers are installed, else None.
+
+    ``verified`` means no retained accounting row is malformed, so the
+    reservation index finds every row naming a reservation. ``mutations``
+    moves whenever an accounting row is changed, removed, replaced or inserted
+    below a newer id; appended rows leave it unchanged."""
+    try:
+        if _cloud_usage_installed(db) != _CLOUD_USAGE_DDL:
+            return None
+        row = db.execute("SELECT verified,mutations FROM cloud_usage_guard WHERE singleton=1").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None or row[0] not in (0, 1) or type(row[1]) is not int:
+        return None
+    return row[0] == 1, row[1]
+
+
+def install_cloud_usage_guard(db) -> None:
+    """Install the reservation index and its guard, auditing retained rows.
+
+    The audit and the triggers share one writer transaction, so no malformed
+    row can slip between them. A malformed row keeps ``verified`` at 0 (the
+    accounting scans stay in charge) and is re-audited at most once per
+    CLOUD_USAGE_RECHECK_S; it is never repaired or removed here."""
+    def settled():
+        if cloud_usage_guard_state(db) is None:
+            return False
+        verified, audited_at = db.execute(
+            "SELECT verified,audited_at FROM cloud_usage_guard WHERE singleton=1").fetchone()
+        return verified == 1 or (isinstance(audited_at, int | float) and not isinstance(audited_at, bool)
+                                 and 0 <= time.time() - audited_at < CLOUD_USAGE_RECHECK_S)
+
+    if settled():
+        return
+    try:
+        db.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError:
+        # A busy writer must not stop this process opening the ledger: without
+        # the guard the accounting scans decide, and a later open installs it.
+        return
+    with db:
+        if settled():   # another process finished the same work while this one waited
+            return
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS cloud_usage_guard("
+            "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+            "verified INTEGER NOT NULL CHECK(verified IN (0,1)), "
+            "mutations INTEGER NOT NULL, audited_at REAL NOT NULL)")
+        installed = _cloud_usage_installed(db)
+        for name, ddl in _CLOUD_USAGE_DDL.items():
+            if installed.get(name) != ddl:
+                db.execute(("DROP INDEX IF EXISTS " if name == CLOUD_USAGE_INDEX else "DROP TRIGGER IF EXISTS ") + name)
+                db.execute(ddl)
+        malformed = db.execute(
+            f"SELECT EXISTS(SELECT 1 FROM artifacts WHERE kind IN {CLOUD_USAGE_KINDS_SQL} "
+            f"AND {_cloud_usage_malformed('meta')})").fetchone()[0]
+        # Rows may have changed while a trigger was absent: move the epoch.
+        db.execute(
+            "INSERT INTO cloud_usage_guard(singleton,verified,mutations,audited_at) VALUES(1,?,0,?) "
+            "ON CONFLICT(singleton) DO UPDATE SET verified=excluded.verified,"
+            "audited_at=excluded.audited_at,mutations=mutations+?",
+            (0 if malformed else 1, time.time(), 0 if installed == _CLOUD_USAGE_DDL else 1))
+
+
 def _script(db, s: str):
     """Run a ;-separated DDL/DML script inside the caller's transaction
     (executescript commits implicitly — do NOT use it mid-migration)."""

@@ -91,6 +91,22 @@ def _current_cloud_settings():
         raise CloudObservationIncomplete("cloud_config_unverified") from None
 
 
+_RESULT_SAVE_TRIES = 5
+
+
+def _save_result(save):
+    """Wait out a busy writer: until this write lands, the answer already paid
+    for exists only in memory, and giving up leaves the unit unresolved for good.
+    Each try already waits the connection's busy timeout; saving is idempotent."""
+    for attempt in range(_RESULT_SAVE_TRIES):
+        try:
+            return save()
+        except sqlite3.OperationalError as error:
+            busy = getattr(error, "sqlite_errorcode", 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if not busy or attempt == _RESULT_SAVE_TRIES - 1:
+                raise
+
+
 class CloudInferenceUnit:
     """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
 
@@ -273,8 +289,8 @@ class CloudInferenceUnit:
                         outcome = {**metadata, "disposition": self.final_disposition}
                 else:
                     outcome = dict(metadata)
-                value = cloud_policy.record_result(ledger, reservation, outcome,
-                    **({"answer": answer} if answer is not None else {}))
+                value = _save_result(lambda: cloud_policy.record_result(ledger, reservation, outcome,
+                    **({"answer": answer} if answer is not None else {})))
                 if isinstance(metadata.get('http_class'), str) and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class']):
                     self._unresolved = False
                 if unbilled:
