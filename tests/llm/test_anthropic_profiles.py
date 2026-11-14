@@ -1,6 +1,8 @@
 """Anthropic purpose profiles (D1): opt-in Haiku-medium / Sonnet-high, the unchanged
 original Haiku-low contract, Sonnet prices and the fail-closed finite combinations."""
 from decimal import Decimal
+import json
+import time
 
 import pytest
 
@@ -9,6 +11,10 @@ import cloud_inference
 import cloud_policy as c
 import cloud_usage_accounting as accounting
 import provider_settings
+import openai_client
+from test_anthropic_runtime import routed as routed
+
+__all__ = ["routed"]
 
 
 def _cfg(**kw):
@@ -133,3 +139,39 @@ def test_split_settings_carry_anthropic_profiles_only_for_anthropic():
     providers["anthropic"]["profiles"] = {"backlog": "luna-medium"}      # an OpenAI name
     with pytest.raises(ValueError, match="provider_profiles_invalid"):
         provider_settings.compose(common, providers, selected_provider="anthropic", model_owners=owners)
+
+
+def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(routed, monkeypatch):
+    """Through CloudInferenceUnit: the refusal is one paid attempt. Its validated usage
+    stays on the result row, no second POST follows and no other provider is built."""
+    led, cfg, *_ = routed
+    sent = []
+    monkeypatch.setattr(a.time, "sleep", lambda _: None)
+
+    def post(body, timeout):
+        sent.append(body["model"])
+        return 200, {"request-id": "req_synthetic_refusal"}, json.dumps(
+            {**_reply(a.MODEL, stop="refusal"), "content": []}).encode()
+
+    monkeypatch.setattr(a, "AnthropicClient", lambda key, **kw: _Recording(key, post, **kw))
+    monkeypatch.setattr(openai_client, "OpenAIClient",
+                        lambda *args, **kwargs: pytest.fail("a refusal must not switch provider"))
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="patient_context", project_id=1,
+        unit_key="synthetic-refusal", deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn(), max_attempts=3)
+    with pytest.raises(cloud_inference.CloudFallback):
+        provider("synthetic prompt", deadline=time.monotonic() + 180, max_tokens=100)
+    assert sent == [a.MODEL]                                  # one POST, never retried
+    rows = led.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchall()
+    assert len(rows) == 1
+    meta = json.loads(rows[0][0])
+    assert meta["usage"]["input_tokens"] == 10 and meta["usage"]["output_tokens"] == 5
+    assert meta["error_kind"] == "contract_error" and meta["http_class"] == "http_200"
+    assert "answer_text_sha256_v1" not in meta                 # never adopted as an answer
+    report = c.usage_report(led)
+    assert report["daily_requests"] == 1 and report["unresolved_requests"] == 0
+
+
+class _Recording(a.AnthropicClient):
+    def __init__(self, key, post, **kwargs):
+        super().__init__(key, post_fn=post, **kwargs)
