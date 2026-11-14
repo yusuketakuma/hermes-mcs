@@ -29,6 +29,109 @@ def _race(ledger, monkeypatch, change):
     monkeypatch.setattr(rollup, 'build_rollup', concurrent)
 
 
+class _ArtifactSelectionReader:
+    def __init__(self, db, *, legacy=False):
+        self.db, self.legacy, self.rows = db, legacy, []
+
+    def __getattr__(self, name):
+        return getattr(self.db, name)
+
+    def execute(self, query, params=()):
+        if 'WITH kinds(kind)' in query:
+            selected, _, scope = query.partition(' FROM artifacts WHERE ')
+            assert scope
+            if self.legacy:
+                scope = ("project_id=? OR message_id IN (SELECT message_id FROM messages WHERE project_id=?)"
+                         " OR kind IN ('semantic_policy','med_ref_progress') ORDER BY _rowid_")
+            self.rows = [row[0] for row in self.db.execute('SELECT _rowid_ FROM artifacts WHERE ' + scope, params)]
+            query = selected + ' FROM artifacts WHERE ' + scope
+        return self.db.execute(query, params)
+
+
+def _assert_publication_selection_matches_legacy(db, project_id):
+    candidate = _ArtifactSelectionReader(db)
+    legacy = _ArtifactSelectionReader(db, legacy=True)
+    signature = rollup._publication_source_signature(candidate, project_id)
+    assert signature == rollup._publication_source_signature(legacy, project_id)
+    assert candidate.rows == legacy.rows
+    return signature, candidate.rows
+
+
+@pytest.mark.parametrize('factory', [str, bytes])
+def test_publication_artifact_union_preserves_legacy_rows_and_digest(tmp_path, factory):
+    with closing(_seed(tmp_path)) as ledger:
+        db = ledger.db
+        with db:
+            db.execute('INSERT INTO messages(message_id,project_id) VALUES(2,2)')
+            expected = []
+            shared = []
+            for kind in [None, '', 'synthetic_unknown', sqlite3.Binary(b'kind\x00\xff'), 17, 2.5,
+                         'semantic_policy', 'med_ref_progress']:
+                for project, message in [(1, None), (2, 1), (1, 1), (None, 1), (None, None), (2, 2),
+                                         (1, 999), (None, 999), (1, 1)]:
+                    large = kind is None and project == 1 and message is None
+                    rid = db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                                     (kind, project, message, 'x' * 32767 + '界' * 20000 if large else '{}',
+                                      sqlite3.Binary(b'\x00\xff' * (20000 if large else 1)))).lastrowid
+                    if kind in ('semantic_policy', 'med_ref_progress'):
+                        shared.append(rid)
+                    if project == 1 or message == 1 or kind in ('semantic_policy', 'med_ref_progress'):
+                        expected.append(rid)
+        db.execute('SAVEPOINT synthetic_selection')
+        try:
+            before = db.total_changes
+            expected_signature, _ = _assert_publication_selection_matches_legacy(db, 1)
+            db.text_factory = factory
+            signature, rows = _assert_publication_selection_matches_legacy(db, 1)
+            assert signature == expected_signature
+            assert rows == expected
+            _, rows = _assert_publication_selection_matches_legacy(db, 3)
+            assert rows == shared
+            assert db.in_transaction and db.total_changes == before
+        finally:
+            db.execute('ROLLBACK TO synthetic_selection')
+            db.execute('RELEASE synthetic_selection')
+
+
+@pytest.mark.parametrize('change', ['new_kind', 'null_kind', 'blob_kind', 'kind', 'project', 'message', 'delete'])
+def test_artifact_union_rechecks_changed_inputs_after_data_version(tmp_path, monkeypatch, change):
+    with closing(_seed(tmp_path)) as ledger:
+        with ledger.db:
+            rid = ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content) "
+                                    "VALUES('synthetic_initial',1,1,'{}')").lastrowid
+        rollup.rebuild(ledger, 1)
+        before = _cached(ledger.db)
+        signature = rollup._publication_source_signature
+        versions = []
+
+        def compare(db, project_id, **kwargs):
+            result = signature(db, project_id, **kwargs)
+            legacy = _ArtifactSelectionReader(db, legacy=True)
+            assert result == signature(legacy, project_id, **kwargs)
+            versions.append(db.execute('PRAGMA data_version').fetchone()[0])
+            return result
+
+        monkeypatch.setattr(rollup, '_publication_source_signature', compare)
+
+        def write(other):
+            if change in ('new_kind', 'null_kind', 'blob_kind'):
+                kind = {'new_kind': 'synthetic_added', 'null_kind': None,
+                        'blob_kind': sqlite3.Binary(b'new\x00\xff')}[change]
+                other.execute('INSERT INTO artifacts(kind,project_id,content) VALUES(?,1,?)', (kind, '{}'))
+            elif change == 'delete':
+                other.execute('DELETE FROM artifacts WHERE artifact_id=?', (rid,))
+            else:
+                field, value = {'kind': ('kind', 'synthetic_changed'), 'project': ('project_id', 2),
+                                'message': ('message_id', 999)}[change]
+                other.execute(f'UPDATE artifacts SET {field}=? WHERE artifact_id=?', (value, rid))
+
+        _race(ledger, monkeypatch, write)
+        with pytest.raises(rollup.RollupSourceChanged):
+            rollup.rebuild(ledger, 1)
+        assert len(versions) == 2 and versions[0] != versions[1]
+        assert _cached(ledger.db) == before and not ledger.db.in_transaction
+
+
 @pytest.mark.parametrize('scope', ['cloud_usage', 'other_patient'])
 def test_unrelated_writes_publish_without_rebuilding_under_writer(tmp_path, monkeypatch, scope):
     with closing(_seed(tmp_path)) as ledger:
