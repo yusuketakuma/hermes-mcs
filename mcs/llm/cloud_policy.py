@@ -789,7 +789,7 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
 # Fixed classification of an accounting refusal, set where it is decided and read only by
 # the history observation. It never changes the exception, its detail or any decision.
 HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled",
-                              "disposition", "receipt_inconsistent"})
+                              "result_missing", "disposition", "receipt_inconsistent"})
 
 
 def _classified(error, refusal):
@@ -864,6 +864,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 refusal = 'disposition'
                 raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
+            if not matches:
+                refusal = 'result_missing'   # no result yet: the send's outcome is unknown, not a broken receipt
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
             if result.get('disposition'):
