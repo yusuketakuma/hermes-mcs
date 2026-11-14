@@ -1421,11 +1421,6 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
                 retention_error = error
             con.execute("PRAGMA analysis_limit=1000")
             con.execute("PRAGMA optimize=0x10002")
-            # artifacts.kind is heavily skewed: the sampled estimate (about 200
-            # rows per kind against thousands) sent per-patient lookups through
-            # kind-only indexes. An exact pass over this one table corrects it.
-            con.execute("PRAGMA analysis_limit=0")
-            con.execute("ANALYZE artifacts")
             if retention_error is None:
                 state["daily_at"] = now
         if daily or retry_ckpt:
