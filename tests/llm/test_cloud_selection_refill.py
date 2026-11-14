@@ -367,8 +367,10 @@ def test_a_not_sent_timeout_through_the_runner_never_refills(routed, monkeypatch
 
 
 def test_a_recovered_answer_then_a_refused_quality_repair_never_frees_the_slot(cloud_candidates, monkeypatch):
-    """Recovery hands back a paid answer, the engine starts a quality repair, and the repair's
-    request is refused as a verified repeat: the started repair keeps the slot."""
+    """Recovery hands back a paid answer, the engine asks for a quality repair, and that repair's
+    request reaches the guard and is refused as a verified repeat: the used recovery keeps the
+    slot. With the same quality profile the engine reuses the root unit, so this pins that the
+    repair request is guarded, not that a separate repair child was created."""
     import extract_llm as worker
     led, _, calls, reservations, results = cloud_candidates
     head = _select(led, "extract")[0]["message_id"]
