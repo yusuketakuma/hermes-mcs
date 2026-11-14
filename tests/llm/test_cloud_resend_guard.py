@@ -736,6 +736,14 @@ def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
+def test_reservation_without_result_is_result_missing_not_a_broken_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _reserve(ledger, 'synthetic prompt')
+        assert _refusal_of(ledger, 'synthetic prompt') == 'result_missing'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
 def test_disposition_is_classified_apart_from_a_repeat(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:
