@@ -8,6 +8,7 @@ import update_launch
 import health_report
 import mcs_contract
 import json
+import re
 import os
 import sys
 import time
@@ -415,7 +416,9 @@ def test_lock_held_exit_waits_for_scheduled_and_command_runs(
     finally:
         os.close(held)
     assert bool(waited) is waits
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
+    assert _without_not_started(json.loads(capsys.readouterr().out),
+                                "commands" if "--commands-only" in argv else "collection") \
+        == {"ok": False, "error": "lock_held"}
 
 
 @pytest.mark.parametrize("mode", ["tick", "commands"])
@@ -444,8 +447,11 @@ def test_entry_reports_only_observed_writer_refusal(
     try:
         assert run_check.main() == 3
         raw = capsys.readouterr().out
-        assert json.loads(raw) == {
+        refusal = json.loads(raw)
+        assert _without_not_started(refusal, "commands" if mode == "commands" else "collection") == {
             "ok": False, "error": "lock_held", "writer_reason": reason, "writer_stage": stage}
+        if cause == "busy":
+            assert refusal["wait_s"] >= run_check.LOCK_WAIT_S   # the fake clock's whole bounded wait
         assert "SYNTHETIC_SECRET_MUST_NOT_APPEAR" not in raw and str(tmp_path) not in raw
         assert not (data / "ledger.db").exists() and not (data / "health.json").exists()
         if cause == "busy":
@@ -473,7 +479,30 @@ def test_entry_keeps_unclassified_writer_refusal_private(tmp_path, monkeypatch, 
     monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
     monkeypatch.setattr(sys, "argv", ["run_check"])
     assert run_check.main() == 3
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
+    assert _without_not_started(json.loads(capsys.readouterr().out), "collection") \
+        == {"ok": False, "error": "lock_held"}
+
+
+def _without_not_started(refusal, mode):
+    """Check the not-started observation's fixed shape, then return the original refusal."""
+    observed = {key: refusal.pop(key) for key in ("ts", "mode", "phase", "outcome", "wait_s")}
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", observed["ts"])
+    assert (observed["mode"], observed["phase"], observed["outcome"]) == (mode, "run_lock", "not_started")
+    assert type(observed["wait_s"]) is float and 0 <= observed["wait_s"] < 1e6
+    return refusal
+
+
+@pytest.mark.parametrize("argv, mode", [(["run_check", "--jobs-only"], "jobs"),
+                                        (["run_check", "--commands-only"], "commands")])
+def test_not_started_records_its_mode_without_opening_the_ledger(tmp_path, monkeypatch, capsys, argv, mode):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+    monkeypatch.setattr(writer_lock, "wait_run_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_check, "Ledger", lambda *a, **k: pytest.fail("a not-started run opened the ledger"))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert run_check.main() == 3
+    assert _without_not_started(json.loads(capsys.readouterr().out), mode) == {"ok": False, "error": "lock_held"}
+    assert not (data / "health.json").exists()
 
 
 @pytest.mark.parametrize("fence", [None, "marker", "code_changed"])

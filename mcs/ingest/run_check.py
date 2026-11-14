@@ -39,6 +39,7 @@ import os
 import sqlite3
 import sys
 import time
+from datetime import datetime, timezone
 from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -1281,6 +1282,15 @@ def _run_stage(result, name, deadline, function, *args, required=False, **kwargs
         }
 
 
+def _not_started(args, lock_started):
+    """Observation of a run that started but never took the run lock: no DB is
+    opened, so this printed line is its only record (the run log keeps stdout)."""
+    mode = "commands" if args.commands_only else "jobs" if args.jobs_only else "collection"
+    return {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": mode,
+            "phase": "run_lock", "outcome": "not_started",
+            "wait_s": round(max(0.0, time.monotonic() - lock_started), 3)}
+
+
 def main() -> int:
     import local_llm
     with local_llm.pinned_slot(local_llm.REALTIME_SLOT):
@@ -1316,6 +1326,7 @@ def _main() -> int:
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against
     # their run budget; scheduled collection retains its full work budget.
+    lock_started = time.monotonic()
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
         with writer_lock.capture_writer_refusal() as diagnostic:
@@ -1328,6 +1339,7 @@ def _main() -> int:
             if diagnostic["writer_reason"] != "writer_refusal_unclassified":
                 refusal.update(writer_reason=diagnostic["writer_reason"],
                                writer_stage=diagnostic["writer_stage"])
+            refusal.update(_not_started(args, lock_started))
             print(json.dumps(refusal))
             return 3
 
