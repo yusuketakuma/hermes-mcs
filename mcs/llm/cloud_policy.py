@@ -108,7 +108,8 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
            "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
            "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
-           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None}
+           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None,
+           "semantic_backlog_until": None}
     errors = []
     # an absent block means "unset"; an explicit null is a config error, not an omission
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
@@ -225,15 +226,16 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             out["window_start"], out["window_budget_usd"] = start, amount
         except (ValueError, OverflowError):
             errors.append("config: cloud_llm_window_invalid")
-    # Stored-message re-extraction sends reopen only inside a period budget.
-    if block.get("reextract_backlog_until") is not None:
+    # A retained period remains binding; removing it requires daily/monthly caps.
+    for route in ("reextract", "semantic"):
+        key = route + "_backlog_until"
+        if block.get(key) is None:
+            continue
         try:
-            until_epoch(block["reextract_backlog_until"])
-            if out["window_budget_usd"] is None:
-                raise ValueError
-            out["reextract_backlog_until"] = block["reextract_backlog_until"]
+            until_epoch(block[key])
+            out[key] = block[key]
         except (ValueError, OverflowError):
-            errors.append("config: cloud_llm_reextract_backlog_invalid")
+            errors.append(f"config: cloud_llm_{route}_backlog_invalid")
     # A key alone may enable sending, but never without a spending cap.
     budgets = block.get("provider_budgets", {})
     cap_keys = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
@@ -253,6 +255,11 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
         out["provider_budgets"] = {name: dict(caps) for name, caps in budgets.items()}
     except (ValueError, OverflowError):
         errors.append("config: cloud_llm_provider_budgets_invalid")
+    for route in ("reextract", "semantic"):
+        key = route + "_backlog_until"
+        if out[key] is not None and out["window_budget_usd"] is None and not _backlog_caps_configured(out):
+            errors.append(f"config: cloud_llm_{route}_backlog_invalid")
+            out[key] = None
     if (require_cost_limit and key_present is True and "mode" not in block and out["project_ids"] != []
             and out["daily_cost_limit_usd"] is None and out["monthly_cost_limit_usd"] is None
             and out["window_budget_usd"] is None):
@@ -421,16 +428,38 @@ def send_route(route):
 BACKLOG_WORKER_ENV = "MCS_REEXTRACT_BACKLOG_WORKER"
 
 
-def reextract_backlog_window(cfg, *, now=None):
-    """The owner's bounded reopening of sends for stored-message re-extraction.
+def _backlog_caps_configured(settings):
+    """Require both aggregate and selected-provider daily/monthly spending caps."""
+    providers = (settings["provider_order"] if settings["provider"] == "auto"
+                 else [settings["provider"]])
+    return (all(settings[key] is not None for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
+            and all(name in settings["provider_budgets"] for name in providers))
 
-    Open only while reextract_backlog_until lies ahead and a period budget
-    (window_start + window_budget_usd) caps every cloud spend made in it.
-    Attachment pages and the semantic backlog stay closed."""
-    c = _cfg(cfg)
-    until = c["reextract_backlog_until"]
-    return (until is not None and c["window_budget_usd"] is not None
+
+def reextract_backlog_window(cfg, *, now=None):
+    """The owner's bounded reopening of stored-message sends under spending caps."""
+    return _backlog_window(cfg, "reextract_backlog_until", now)
+
+
+def semantic_backlog_window(cfg, *, now=None):
+    """The owner's separate bounded reopening of semantic backlog sends."""
+    return _backlog_window(cfg, "semantic_backlog_until", now)
+
+
+def _backlog_window(cfg, key, now):
+    c, errors = cloud_config(cfg if "cloud_llm" in cfg else {"cloud_llm": cfg})
+    until = c[key]
+    return (not errors and until is not None
             and (time.time() if now is None else now) < until_epoch(until))
+
+
+def semantic_planned(cfg):
+    """Name the semantic cloud contract from raw config, retaining explicit null."""
+    c, errors = cloud_config(cfg)
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    # Explicit null stops sends but retains the declared paid-answer contract.
+    return not errors and "semantic_backlog" in c["routes"] and (
+        send_route("semantic_backlog") or isinstance(block, dict) and "semantic_backlog_until" in block)
 
 
 def reextract_planned(cfg):
@@ -444,8 +473,9 @@ def route_open(route, cfg):
     """send_route, plus stored-message sends inside the bounded window. Only the
     backlog worker process may make them: its selection is the receipted
     history scope, so resident and tick passes stay local."""
-    return send_route(route) or (route == "reextract" and os.environ.get(BACKLOG_WORKER_ENV) == "1"
-                                 and reextract_backlog_window(cfg))
+    window = {"reextract": reextract_backlog_window, "semantic_backlog": semantic_backlog_window}.get(route)
+    return send_route(route) or (window is not None and os.environ.get(BACKLOG_WORKER_ENV) == "1"
+                               and window(cfg))
 
 
 def eligible(cfg, route, project_id):
@@ -1271,12 +1301,14 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     if not pricing_valid(model=selected_model):
         return "pricing_unverified"
     try:
-        tally = _tally(ledger)
+        now = time.time()
+        tally = _tally(ledger, now)
     except (AnthropicError, ValueError, InvalidOperation):
         return "pricing_unverified"
     if tally.invalid:
         return "pricing_unverified"
-    today = tally.days.get(_periods(time.time())[0], [0, Decimal(0)])
+    day = _periods(now)[0]
+    today = tally.days.get(day, [0, Decimal(0)])
     if c["daily_request_budget"] is not None and today[0] >= c["daily_request_budget"]:
         return "daily_cap"
     cost = max_cost(max_tokens, input_bound=input_bound, model=selected_model)
@@ -1285,13 +1317,14 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     limit = c["monthly_cost_limit_usd"]
     if limit is not None and tally.total + cost > _decimal(limit):
         return "monthly_cap"
-    caps = c["provider_budgets"].get(c["provider"])
+    provider = _price_definition(selected_model)["provider"]
+    caps = c["provider_budgets"].get(provider)
     if c["provider_budgets"] and caps is None:
         return "provider_budget_missing"
     if caps is not None:
-        if tally.provider_days.get((c["provider"], _periods(time.time())[0]), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
+        if tally.provider_days.get((provider, day), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
             return "provider_daily_cap"
-        if tally.provider_totals.get(c["provider"], Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
+        if tally.provider_totals.get(provider, Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
             return "provider_monthly_cap"
     if c["window_budget_usd"] is not None:
         if window_history_pruned(ledger, c):

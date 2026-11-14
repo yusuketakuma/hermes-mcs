@@ -35,6 +35,8 @@ def test_window_changes_do_not_change_received_input_generation(until):
 
 def test_cloud_contract_is_stable_across_worker_context_and_window_expiry(monkeypatch):
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
+    assert semantic_candidate._cloud_contract(cfg) is None
+    assert not cloud_policy.semantic_planned(cloud_policy.cloud_config(cfg)[0])
     _open_window(cfg)
     clock = [cloud_policy.until_epoch("2998-12-31T23:59:59+09:00")]
     monkeypatch.setattr(cloud_policy, "time", SimpleNamespace(time=lambda: clock[0]))
@@ -49,6 +51,11 @@ def test_cloud_contract_is_stable_across_worker_context_and_window_expiry(monkey
     clock[0] += 1
     assert not cloud_policy.route_open("semantic_backlog", cfg)
     assert semantic_candidate._cloud_contract(cfg) == first
+    cfg["cloud_llm"]["semantic_backlog_until"] = None
+    assert not cloud_policy.route_open("semantic_backlog", cfg)
+    assert semantic_candidate._cloud_contract(cfg) == first
+    del cfg["cloud_llm"]["semantic_backlog_until"]
+    assert semantic_candidate._cloud_contract(cfg) is None
 
 
 def test_cloud_selection_requires_worker_and_live_window(cloud, monkeypatch):

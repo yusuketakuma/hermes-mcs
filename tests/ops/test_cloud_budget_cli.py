@@ -283,3 +283,50 @@ def test_the_reextract_reopening_needs_a_period_budget_and_can_be_ended(conf, ca
     assert run(reextract_backlog_until="none") == 0
     assert "reextract_backlog_until" not in json.loads(conf.read_text())["cloud_llm"]
     assert not cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))
+
+
+def test_daily_monthly_caps_allow_both_windows_after_explicit_period_removal(conf, capsys):
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(provider="anthropic", daily_cost_limit_usd=30, monthly_cost_limit_usd=300,
+        provider_budgets={name: {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150}
+                          for name in ("anthropic", "openai")})
+    conf.write_text(json.dumps(cfg))
+
+    def run(**options):
+        return cli.budget_command(SimpleNamespace(**options))
+
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01",
+               semantic_backlog_until="2999-01-01") == 0
+    assert run(period_usd="none") == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert "window_budget_usd" not in saved and "window_start" not in saved
+    assert saved["provider_budgets"] == cfg["cloud_llm"]["provider_budgets"]
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["semantic_backlog_until"] == shown["reextract_backlog_until"]
+    assert shown["provider_budgets"] == saved["provider_budgets"]
+    before = conf.read_bytes()
+    assert run(daily_usd="none") == 1 and conf.read_bytes() == before
+    assert run(semantic_backlog_until="none") == 0
+    ended = json.loads(conf.read_text())
+    assert "semantic_backlog_until" in ended["cloud_llm"]
+    assert ended["cloud_llm"]["semantic_backlog_until"] is None
+    assert cloud_policy.semantic_planned(ended)
+    assert not cloud_policy.semantic_backlog_window(ended)
+    assert run(monthly_usd="300") == 0
+    assert json.loads(conf.read_text())["cloud_llm"]["semantic_backlog_until"] is None
+
+
+@pytest.mark.parametrize("route", ["reextract", "semantic_backlog"])
+def test_backlog_setting_blockers_do_not_claim_live_key_or_accounting_status(monkeypatch, route):
+    key = "semantic_backlog_until" if route == "semantic_backlog" else "reextract_backlog_until"
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+        "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+        key: "2999-01-01T00:00:00+09:00"}}
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda *a: pytest.fail("not a key observation"))
+    settings = cloud_policy.cloud_config(cfg)[0]
+    assert cli._backlog_setting_blockers(settings, route) == []
+    settings.update(mode="off", routes=[], project_ids=[])
+    assert cli._backlog_setting_blockers(settings, route) == [
+        "cloud_mode_not_on", "route_missing", "project_scope_empty"]
+    settings[key] = "2000-01-01T00:00:00+09:00"
+    assert "window_ended" in cli._backlog_setting_blockers(settings, route)
