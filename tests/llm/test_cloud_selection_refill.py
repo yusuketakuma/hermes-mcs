@@ -437,6 +437,8 @@ def test_a_failed_refill_preparation_keeps_the_other_paid_work(cloud_candidates,
     monkeypatch.setattr(extract_llm_runner, "_prepare_jobs", failing_after_refusal)
     report = _cloud_pass(led, limit=limit)
     assert seen == [head] and raised and report["refilled"] == 0
+    # the stop is reported with a fixed class, never silently
+    assert report["refill_stopped"] is True and report["refill_stop_error"] == "runtime_error"
     assert report["done"] == limit - 1 and len(calls) == len(results) == limit - 1
     held = led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
     assert held <= 1            # only the refused unit's bounded claim may remain

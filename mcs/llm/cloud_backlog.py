@@ -586,6 +586,12 @@ def worker(parent, *, index=None, context_only=False):
                     refilled = result.get("refilled")
                     if type(refilled) is int and 0 <= refilled <= 64:   # the extract pass's finite lookahead
                         record["refilled"] = refilled
+                    if result.get("refill_stopped") is True:
+                        # a failed replacement preparation stopped refilling: never silent
+                        code = result.get("refill_stop_error")
+                        record["refill_stopped"] = True
+                        record["refill_stop_error"] = (code if type(code) is str and code in _REFILL_STOP_CODES
+                                                        else "unclassified")
                     if type(result.get("disk_low")) is bool:
                         record["disk_low"] = result["disk_low"]
                     calls = result.get("llm_calls")
@@ -659,6 +665,10 @@ _SCAN_REFUSALS = frozenset({
     "scan_interrupted", "read_sqlite", "read_io",
     "invalid_bookmark", "invalid_source",
 })
+
+
+_REFILL_STOP_CODES = frozenset({"sqlite_error", "os_error", "value_error", "type_error", "key_error",
+                                "runtime_error", "other"})
 
 
 def _bounded_pass_code(value):

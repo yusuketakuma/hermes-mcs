@@ -180,6 +180,11 @@ def _run_batch_call(tups, target, deadline: float,
     return "ok", out, meta
 
 
+# Fixed classes of a refill preparation failure: the pass reports which, never its text.
+REFILL_STOP_ERRORS = ((sqlite3.Error, "sqlite_error"), (OSError, "os_error"), (ValueError, "value_error"),
+                      (TypeError, "type_error"), (KeyError, "key_error"), (RuntimeError, "runtime_error"))
+
+
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
@@ -796,7 +801,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if transport in ("answered", "unreachable", "unavailable"):
                     _observe(transport, at)
                 r["_replacement_freed"] = (eligible and r.get("_defer_reason") == "cloud_unit_unresolved"
-                                           and not r.get("_cloud_failed") and transport is None)
+                                           and not r.get("_cloud_failed") and transport is None
+                                           and not r.get("_work_seen"))
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
@@ -956,6 +962,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     visit = [0]   # next unvisited candidate: each is visited at most once per pass
     refilled = 0  # candidates claimed into slots freed by a replacement-eligible refusal
     refill_stopped = False
+    refill_stop_error = None   # fixed class of the failure that stopped refilling
 
     def _claim_next(wanted, *, release_on_error):
         """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
@@ -1047,11 +1054,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         """Claim replacements; a preparation failure only stops refilling for this pass, so
         finished paid work still reaches its handler and the tail. Interrupts and a lost
         run lock (BaseException) still propagate."""
-        nonlocal refill_stopped
+        nonlocal refill_stopped, refill_stop_error
         try:
             return _claim_next(wanted, release_on_error=False)
-        except Exception:
+        except Exception as error:
             refill_stopped = True    # claims it made stay in `claimed`: the finally releases them
+            refill_stop_error = next((name for kind, name in REFILL_STOP_ERRORS if isinstance(error, kind)),
+                                     "other")
             return []
 
     def _exec_batch(tups):
@@ -1291,6 +1300,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     if writer_stopped:
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
+                **({'refill_stopped': True, 'refill_stop_error': refill_stop_error} if refill_stopped else {}),
                 'defer_reasons': dict(defer_reasons),
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
@@ -1347,6 +1357,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
             "selected": selected_count, "deferred": deferred, "refilled": refilled,
+            **({"refill_stopped": True, "refill_stop_error": refill_stop_error} if refill_stopped else {}),
             "defer_reasons": dict(defer_reasons),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
