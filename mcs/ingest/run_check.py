@@ -447,7 +447,7 @@ def _commands_only(lock_fd, deadline) -> int:
             return 0 if result["ok"] else 1
         # startup/periodic recovery: missing spec files, flags,
         # stale-claim visibility — before any command is applied
-        notify_spool.recover(ledger, cfg, result)
+        _run_stage(result, "cmd_recover", deadline, notify_spool.recover, ledger, cfg, result, required=True)
         # a DB restore holds all send grants until the journal-vs-DB
         # reconcile finishes — run it before draining new commands
         if notify_spool.restore_pending(root) is not None:
@@ -462,7 +462,7 @@ def _commands_only(lock_fd, deadline) -> int:
         # dependency order: existing data/cmd traffic first (a resolve
         # may settle an attempt a receipt then reports), then cmd_int
         cmds_before = result.get("command_commands", 0)
-        job_ops.drain_commands(ledger, result)
+        _run_stage(result, "cmd_drain", deadline, job_ops.drain_commands, ledger, result, required=True)
         if result.get("command_commands", 0) > cmds_before:
             # drain_int sweeps after its own applies; data/cmd applies
             # (card_resolve, request.create) drift cards the same way —
@@ -471,20 +471,21 @@ def _commands_only(lock_fd, deadline) -> int:
                 notify_cards.sweep(ledger, cfg)
             except Exception as e:
                 result["errors"].append(f"cmd_sweep:{type(e).__name__}")
-        notify_cmds.drain_int_commands(
+        _run_stage(result, "cmd_int_drain", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root,
             deadline=min(deadline, time.monotonic() + min(120, max(
-                5, deadline - time.monotonic() - 10))))
+                5, deadline - time.monotonic() - 10)))), required=True)
         # a second drain: commands queued by the first pass's receipts
-        notify_cmds.drain_int_commands(
-            ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30))
+        _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
+            ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
         notify_spool.publish_flags(cfg, root)
-        notify_cards.gc(ledger, cfg)
+        _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
             # same interval/urgent-key decision as the tick: a background
             # mark waits out SNAPSHOT_MIN_INTERVAL_S ('deferred' keeps it)
-            state = maintenance.refresh_snapshot(DB, dirty=True, deadline=deadline)
+            state = _run_stage(result, "cmd_snapshot", deadline, lambda: maintenance.refresh_snapshot(
+                DB, dirty=True, deadline=deadline), required=True)
             result["snapshot"] = state is not None
             result["snapshot_state"] = state
             if state == "published":

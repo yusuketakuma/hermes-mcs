@@ -214,6 +214,8 @@ CREATE TABLE IF NOT EXISTS notification_action_tokens(
   expires_at REAL NOT NULL, created_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_ntokens_card
   ON notification_action_tokens(card_id);
+CREATE INDEX IF NOT EXISTS idx_ntokens_expires
+  ON notification_action_tokens(expires_at);
 CREATE TABLE IF NOT EXISTS notification_meta(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   notify_dirty INTEGER NOT NULL DEFAULT 0);
