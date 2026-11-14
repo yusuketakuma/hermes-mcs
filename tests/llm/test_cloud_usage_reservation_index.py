@@ -133,10 +133,12 @@ def test_malformed_row_hands_every_lookup_back_to_the_scans(tmp_path, now, raw, 
         verified, mutations = ledger_schema.cloud_usage_guard_state(ledger.db)
         assert not verified and mutations == int(by_update)
         statements = _traced(ledger, lambda: _decisions(ledger, ids))
-        assert not any(ledger_schema.CLOUD_USAGE_INDEX in sql for sql in statements)
+        # the guard's own sqlite_master lookup names the index; only a query through it counts
+        assert not any('INDEXED BY ' + ledger_schema.CLOUD_USAGE_INDEX in sql for sql in statements)
         refused = _decisions(ledger, ids)
         assert refused == _scan_decisions(ledger, ids)
-        assert refused['window', 'cloud_usage_result', FOREIGN][0] == 'AnthropicError'
+        # AnthropicError is an alias of CloudError, so the refusal's type name is CloudError
+        assert refused['window', 'cloud_usage_result', FOREIGN] == ('CloudError', ('pricing_unverified',))
         assert refused['evidence', 'all'] == ('ValueError', ('cloud_receipt_invalid',))
 
 
@@ -152,20 +154,24 @@ def test_guard_counts_changes_to_retained_rows_but_not_appends(tmp_path, now):
             assert state() == (True, 1)
             ledger.db.execute("INSERT OR REPLACE INTO artifacts(artifact_id,kind,content,model,meta,created_at) "
                               "VALUES(?,'cloud_usage_reserve','{}','synthetic',?,?)", (first[0], first[1], now))
-            assert state() == (True, 2)
-            ledger.db.execute("UPDATE artifacts SET kind='cloud_usage_dryrun' WHERE artifact_id=?", (first[0],))
+            # REPLACE of a retained row fires both cloud_usage_guard_replace (BEFORE INSERT) and
+            # cloud_usage_guard_insert (AFTER INSERT, an id below the newest row): two counts.
+            # mutations is an epoch a reader compares for change, not a count of changed rows,
+            # so counting one change twice only makes a reader re-check sooner.
             assert state() == (True, 3)
-            ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_disposition'")
+            ledger.db.execute("UPDATE artifacts SET kind='cloud_usage_dryrun' WHERE artifact_id=?", (first[0],))
             assert state() == (True, 4)
+            ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_disposition'")
+            assert state() == (True, 5)
             ledger.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) VALUES('other','{}','{}',?)", (now,))
             ledger.db.execute("UPDATE artifacts SET meta='[' WHERE kind='other'")
-            assert state() == (True, 4)
+            assert state() == (True, 5)
             newest = ledger.db.execute("SELECT MAX(artifact_id) FROM artifacts").fetchone()[0]
             ledger.db.execute("INSERT INTO artifacts(artifact_id,kind,content,meta,created_at) VALUES(?,'other','{}','{}',?)",
                               (newest + 100, now))
             ledger.db.execute("INSERT INTO artifacts(artifact_id,kind,content,model,meta,created_at) "
                               "VALUES(?,'cloud_usage_result','{}','synthetic','{}',?)", (newest + 50, now))
-            assert state() == (True, 5)
+            assert state() == (True, 6)
 
 
 def test_existing_ledger_is_audited_once_and_a_cleared_guard_is_restored(tmp_path, now, monkeypatch):

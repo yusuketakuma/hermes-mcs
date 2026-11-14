@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 import cloud_usage_accounting
+import ledger_schema
 import cloud_policy as c
 from anthropic_client import AnthropicError, MODEL
 from ledger import Ledger
@@ -563,7 +564,10 @@ def test_result_rejects_reservation_with_only_one_profile_field(tmp_path, now, m
         assert not db.artifacts("cloud_usage_result")
 
 
-def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path, now, monkeypatch):
+# guard=True: the write-time guard vouches for the rows, so lookups go through the reservation
+# index; guard=False: without the guard the full scans decide (the original statement shapes).
+@pytest.mark.parametrize('guard', [True, False])
+def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path, now, monkeypatch, guard):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         reservation = _reserve(db)
         target = reservation["reservation_id"]
@@ -576,6 +580,9 @@ def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path
         db.db.executemany("INSERT INTO artifacts(kind,meta,created_at) VALUES('cloud_usage_reserve',?,?)",
                           [(json.dumps({"reservation_id": f"{i:032x}"}), now) for i in range(200)])
         db.db.commit()
+        if not guard:
+            db.db.execute('DROP TRIGGER cloud_usage_guard_delete')
+            assert ledger_schema.cloud_usage_guard_state(db.db) is None
         statements = []
         db.db.set_trace_callback(statements.append)
         rows = c._matching_rows(db, "cloud_usage_reserve", target)
@@ -584,13 +591,22 @@ def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path
         selects = [sql for sql in statements if sql.startswith("SELECT")]
         anchors = [sql for sql in selects if sql.startswith("SELECT artifact_id FROM (SELECT artifact_id")]
         timestamp_checks = [sql for sql in selects if sql.startswith("SELECT created_at FROM artifacts")]
-        retained = [sql for sql in selects if sql not in anchors and sql not in timestamp_checks]
+        # the guard state read: its installed DDL, then (only while installed) its counter row
+        guard_checks = [sql for sql in selects if sql.startswith("SELECT name,sql FROM sqlite_master")
+                        or "FROM cloud_usage_guard" in sql]
+        retained = [sql for sql in selects
+                    if sql not in anchors and sql not in timestamp_checks and sql not in guard_checks]
         assert len(anchors) == len(timestamp_checks) == 1
         assert "UNION ALL SELECT NULL" in anchors[0]
         assert "typeof(created_at)" in timestamp_checks[0]
-        assert len(retained) == 2
+        indexed = [sql for sql in retained if "INDEXED BY " + ledger_schema.CLOUD_USAGE_INDEX in sql]
+        if guard:
+            # one indexed lookup replaces the validation scan and the matching scan
+            assert len(guard_checks) == 2 and retained == indexed and len(indexed) == 1
+        else:
+            assert len(guard_checks) == 1 and len(retained) == 2 and indexed == []
         assert all("created_at>=" in sql and "json_valid(meta)" in sql for sql in retained)
-        assert "json_extract(meta,'$.reservation_id')" in retained[1]
+        assert "json_extract(meta,'$.reservation_id')" in retained[-1]   # the matching lookup is last
         assert all("SELECT *" not in sql for sql in selects)
 
 
@@ -609,8 +625,11 @@ def _late_results(db, count, reserve_at, result_at):
     db.db.commit()
 
 
+# guard=True: the write-time guard vouches for the rows, so lookups go through the reservation
+# index; guard=False: without the guard the full scans decide (the original statement shapes).
+@pytest.mark.parametrize('guard', [True, False])
 @pytest.mark.parametrize("count", [40, 400, 901])
-def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(tmp_path, now, monkeypatch, count):
+def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(tmp_path, now, monkeypatch, count, guard):
     current = datetime(2026, 11, 1, 0, 1, tzinfo=c.JST).timestamp()
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         _late_results(db, count, current - 120, current - 30)
@@ -627,6 +646,9 @@ def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(
 
         monkeypatch.setattr(c, "_accounting_meta", tracked)
         monkeypatch.setattr(cloud_usage_accounting, "_accounting_meta", tracked)
+        if not guard:
+            db.db.execute('DROP TRIGGER cloud_usage_guard_delete')
+            assert ledger_schema.cloud_usage_guard_state(db.db) is None
         statements = []
         db.db.set_trace_callback(statements.append)
         report = c.usage_report(db, now=current)
@@ -635,11 +657,23 @@ def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(
         selects = [sql for sql in statements if sql.startswith("SELECT")]
         anchors = [sql for sql in selects if sql.startswith("SELECT artifact_id FROM (SELECT artifact_id")]
         timestamp_checks = [sql for sql in selects if sql.startswith("SELECT created_at FROM artifacts")]
-        period_queries = [sql for sql in selects if sql not in anchors and sql not in timestamp_checks]
+        guard_checks = [sql for sql in selects if sql.startswith("SELECT name,sql FROM sqlite_master")
+                        or "FROM cloud_usage_guard" in sql]
+        period_queries = [sql for sql in selects
+                          if sql not in anchors and sql not in timestamp_checks and sql not in guard_checks]
         assert len(anchors) == len(timestamp_checks) == 1
         assert "UNION ALL SELECT NULL" in anchors[0]
         assert "typeof(created_at)" in timestamp_checks[0]
-        assert len(period_queries) == 2 + (count + 899) // 900
+        indexed = [sql for sql in period_queries if "INDEXED BY " + ledger_schema.CLOUD_USAGE_INDEX in sql]
+        batches = (count + 899) // 900
+        if guard:
+            # the batched indexed lookups replace the validation scan of the period
+            assert len(guard_checks) == 2 and len(indexed) == batches
+            assert len(period_queries) == 1 + batches
+            assert not any("json_tree(meta)" in sql for sql in period_queries)
+        else:
+            assert len(guard_checks) == 1 and indexed == []
+            assert len(period_queries) == 2 + batches
         assert len(decoded) == 2 * count
         assert all("created_at>=" in sql for sql in period_queries)
 
