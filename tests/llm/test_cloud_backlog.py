@@ -580,6 +580,21 @@ def test_semantic_lock_yield_rechecks_fence_before_extract(carry_worker, tmp_pat
     ({'llm_calls': {'calls': 1.5}}, {}),
     ({'llm_calls': {'calls': 'synthetic-private-detail'}}, {}),
     ({'llm_calls': {'private': 'synthetic-private-detail'}}, {}),
+    # same-pass replacement: a bounded count and a fixed stop class only
+    ({'refilled': 0}, {'refilled': 0}),
+    ({'refilled': 64}, {'refilled': 64}),
+    ({'refilled': True}, {}), ({'refilled': -1}, {}), ({'refilled': 65}, {}), ({'refilled': 1.5}, {}),
+    ({'refill_stopped': True, 'refill_stop_error': 'runtime_error'},
+     {'refill_stopped': True, 'refill_stop_error': 'runtime_error'}),
+    ({'refill_stopped': True, 'refill_stop_error': 'synthetic-private-detail'},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': True, 'refill_stop_error': ['runtime_error']},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': True, 'refill_stop_error': type('PrivateCode', (str,), {})('runtime_error')},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': False, 'refill_stop_error': 'runtime_error'}, {}),
+    ({'refill_stopped': 1, 'refill_stop_error': 'runtime_error'}, {}),
+    ({'refill_stop_error': 'runtime_error'}, {}),
 ])
 def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, capsys, diagnostics, expected):
     import extract_llm
@@ -597,7 +612,8 @@ def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, c
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     passes = [item for item in records if item['event'] == 'cloud_backlog_pass']
     assert len(passes) == 1 and state.closed
-    keys = {'failed', 'held_prior', 'carried', 'disk_low', 'llm_calls'}
+    keys = {'failed', 'held_prior', 'carried', 'disk_low', 'llm_calls', 'refilled',
+            'refill_stopped', 'refill_stop_error'}
     assert {key: passes[0][key] for key in keys if key in passes[0]} == expected
     assert 'private' not in passes[0] and 'pids' not in passes[0]
     assert 'synthetic-private-detail' not in json.dumps(records)
