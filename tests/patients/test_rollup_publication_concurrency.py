@@ -62,6 +62,8 @@ def test_publication_artifact_union_preserves_legacy_rows_and_digest(tmp_path, f
     with closing(_seed(tmp_path)) as ledger:
         db = ledger.db
         with db:
+            # Upgraded ledgers can retain older mismatches under the shadow guard.
+            db.execute("UPDATE ledger_relation_guards SET mode='shadow' WHERE relation='artifacts'")
             db.execute('INSERT INTO messages(message_id,project_id) VALUES(2,2)')
             expected = []
             shared = []
@@ -99,6 +101,9 @@ def test_artifact_union_rechecks_changed_inputs_after_data_version(tmp_path, mon
         with ledger.db:
             rid = ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content) "
                                     "VALUES('synthetic_initial',1,1,'{}')").lastrowid
+            if change in ('project', 'message'):
+                # Upgraded ledgers can retain older mismatches under the shadow guard.
+                ledger.db.execute("UPDATE ledger_relation_guards SET mode='shadow' WHERE relation='artifacts'")
         rollup.rebuild(ledger, 1)
         before = _cached(ledger.db)
         signature = rollup._publication_source_signature
