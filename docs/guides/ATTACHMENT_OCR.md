@@ -16,23 +16,39 @@ Yomitokuの公開コード・モデルはCC BY-NC-SA 4.0です。個人の非商
 bash install.sh --with-yomitoku
 ```
 
+`install.sh`はその回に指定したオプションで導入し、成功すると導入記録をその内容に置き換えます。
+以前の記録から引き継ぐのは`--with-yomitoku`だけです。`--no-llm`や`--no-recovery`などで導入済みの場合は、
+前回と同じ省略オプションに`--with-yomitoku`を加えて実行してください（例: `bash install.sh --no-llm --with-yomitoku`）。
+付けないと省略していた段階も実行されます。旧形式の導入記録（`data/install_options.json`）が残る環境では、
+その記録も新しい指定に置き換えます。
+
 MCSのPythonとは別に、`MCS_ROOT/ocr-venv`へPython 3.13とYomitoku 0.16.1を導入します。
-公式ソースの固定commitを使い、必要なモデルは導入時に取得します。
+公式ソースの固定commitを使い、必要なモデルは導入時に`MCS_ROOT/data/huggingface`へ取得します。
 既存のモデルキャッシュは削除しません。選択した導入項目は更新時にも引き継ぎ、
 依存や導入手順が変わった場合は再導入が必要になります。
 
+以前の版ではモデルを`~/.cache/huggingface`へ取得していました。現在のOCRはこの旧キャッシュを読みません。
+導入記録に`--with-yomitoku`が無い端末（`scripts/setup_yomitoku.py`を直接実行した場合など）は、
+更新時に再導入を求められません。この場合は更新後に上の導入コマンドを再実行し、
+モデルを新しい場所へ取得してください。取得するまでは全添付のOCRが`engine_load_failed`になり、
+3回失敗した添付は24時間ごとに再試行します。取得後は後述の`--retry-errors`ですぐに再処理できます。
+旧キャッシュは自動では削除しません。
+
 導入しただけではOCRは動きません。実行ファイルの絶対パスを指定して有効にします。
 次は標準の導入先を使う例です。`$HOME`は実際のホームディレクトリに置き換えてください。
+`$PY`はMCSのPythonです。Hermesモードは`~/.hermes/hermes-agent/venv/bin/python`、
+独立モードは`$HOME/.mcs/venv/bin/python3`を指定し、macOS標準の`python3`は使いません。
+`--yes`を付けないと、指定した値を反映したうえで初期設定のウィザード全体を始めます。
 
 ```sh
-python3 mcs/ops/mcs_setup.py init --set 'attachment_ocr={"enabled":true,"executable":"/Users/your-user/.mcs/ocr-venv/bin/yomitoku","timeout_seconds":120}'
+$PY mcs/ops/mcs_setup.py init --yes --set 'attachment_ocr={"enabled":true,"executable":"/Users/your-user/.mcs/ocr-venv/bin/yomitoku","timeout_seconds":120}'
 ```
 
 保存済み添付のOCRとローカルLLM解析は、10分ごとの独立ジョブで進めます。収集の認証エラーなどで
 新規取得が失敗していても、保存済み資料は現行性・患者権限を確認して処理します。
 アーカイブ・閲覧禁止・権限失効・患者情報がない資料は解析しません。
 OCR実行中の設定OFF・実行設定変更も保存前に確認し、新しい結果を採用しません。
-手動では`python3 mcs/ops/mcs_ocr.py --run`を使えます。
+手動では`$PY mcs/ops/mcs_ocr.py --run`を使えます。
 1回のジョブは最大900秒で、ローカル解析を優先しながら原画像のOCRも進めます。
 1ページ・1添付を処理して必ず終了する制限はありません。重複起動は専用ロックで防ぎ、
 保留・無進捗・失敗の段階を同じ回の中で繰り返さず、もう一方の処理へ進みます。
@@ -50,7 +66,7 @@ OCR中は収集やLLMと共用の書込みロックを保持しません。演�
 失敗した資料を今すぐ再評価する場合は、次のコマンドを使います。
 
 ```sh
-python3 mcs/ops/mcs_ocr.py --run --retry-errors
+$PY mcs/ops/mcs_ocr.py --run --retry-errors
 ```
 
 開始時点より古いOCR失敗について、この実行内では各添付1回だけ待機時間を省いて再処理します。

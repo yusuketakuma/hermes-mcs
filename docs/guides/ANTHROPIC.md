@@ -15,7 +15,7 @@
 キーはMCSの導入先にある `.env` に保存し、所有者だけが読み書きできる権限 `0600` にしてください。
 通常ファイル・所有者・権限・サイズを確認して読み取ります。同じキーの行が複数ある場合や、値に空白・制御文字がある場合も読みません。プロセス環境やHermesのキーは流用しません。
 キーの値をチャット、診断資料、Gitへ含めないでください。
-入力中に設定や保存先が変わった場合は保存を止めます。保存後は内容を読み直して確認し、確認できない場合は結果未確認と表示します。
+`mcs setup api-keys` から入力した場合は、入力中に設定や保存先が変わると保存を止めます。`mcs_setup.py init` の最後に続けて入力した場合は、保存先と `.env` の変更だけを確かめ、入力中の `config.json` の変更では保存を止めません。保存後は内容を読み直して確認し、確認できない場合は結果未確認と表示します。
 以前にプロセス環境やHermesの `.env` だけへ登録したJevキーは、このMCSの `.env` へ移す必要があります。
 権限が `0640` や `0400` のファイルも読みません。移行できていない場合はキー未設定として送信を止めます。
 
@@ -42,11 +42,13 @@ OpenAIの用途別設定は提供元専用の私有設定に保持します。`m
 選択したAPIの予算上限やエラーで停止した処理を、別APIへ自動で再送することはありません。
 上限到達後に別APIを使う場合は、利用先を明示的に変更してください。過去の使用額と未精算の予約額は保持します。
 
+以下のコマンドの `$PY` はMCSのPythonです。Hermesモードは `~/.hermes/hermes-agent/venv/bin/python`、独立モードは `$HOME/.mcs/venv/bin/python3` を指定し、macOS標準の `python3` は使いません。
+
 次の例はAnthropic優先で、合計の日25ドル・月75ドルを、Anthropicの日20ドル・月60ドルとOpenAIの日5ドル・月15ドルに配分します。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm providers --provider auto --priority anthropic,openai --anthropic-daily-usd 20 --anthropic-monthly-usd 60 --openai-daily-usd 5 --openai-monthly-usd 15
-python3 mcs/ops/mcs_setup.py cloud-llm providers
+$PY mcs/ops/mcs_setup.py cloud-llm providers --provider auto --priority anthropic,openai --anthropic-daily-usd 20 --anthropic-monthly-usd 60 --openai-daily-usd 5 --openai-monthly-usd 15
+$PY mcs/ops/mcs_setup.py cloud-llm providers
 ```
 
 API別の上限と合計上限を同時に適用します。API別上限の合計が合計上限を超える設定は保存しません。
@@ -80,7 +82,7 @@ Jevは日本時間の1日10000要求が上限です。再試行、モデル一�
 modeを明示した既存設定で予算を省略した場合は、従来どおり `0` です。
 10000を超える設定でも実効上限は10000です。評価CLIが通常のmodeを迂回する場合も、この件数上限を迂回しません。
 背景の意味解析では、日上限の10%をリアルタイム処理のために残します。留保する件数は端数を切り上げます。日上限10000の場合、背景からのJev要求は9000件までで、残り1000件をリアルタイム処理に使います。Jevの枠を使い切っても、Anthropic・OpenAIによる処理は続けます。意味解析を有効にしている環境では、Jevが未設定、日次予算が0、または利用できない場合も、Jevの検証を省略して処理を続けます。
-`python3 mcs/ops/mcs_setup.py doctor --probe data --json` で、Jevの使用数と背景枠の状態を確認できます。
+`$PY mcs/ops/mcs_setup.py doctor --probe data --json` で、Jevの使用数と背景枠の状態を確認できます。
 
 Jevを省略しても、原文との対応、数量・薬剤などのコードによる検証、処理世代、公開範囲の確認は続けます。既に見つかった不一致を省略扱いで消しません。設定不正、利用期限切れ、送信結果・料金の確認待ち、人の承認待ちを、Jevの省略で解除することもありません。
 
@@ -94,22 +96,22 @@ AnthropicとOpenAIの合計に対して、1日の件数 `cloud_llm.daily_request
 送信する期間と、その期間全体の予算（ドル）を指定できます。期間予算は日をまたいでも合計で数え、日本時間の0時に戻りません。日・月・期間の費用上限を同時に適用します。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --until 2026-10-30            # 今から10月30日の終わりまで、合計80ドル
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 --until 2026-11-07
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
+$PY mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --until 2026-10-30            # 今から10月30日の終わりまで、合計80ドル
+$PY mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 --until 2026-11-07
+$PY mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
 ```
 
 - `--until` はAnthropic・OpenAIの `cloud_llm.until` を設定します。Jevの `semantic.until` は変更しません。日付だけを指定すると、その日の23:59:59（日本時間）までです。
 - 期間が無いときに `--from` を省略すると、期間は設定した時点から始まります。すでにある期間の金額を変える場合は開始時刻を保ち、使用済みの額も引き続き数えます。開始時刻だけを変える場合は `--from` だけを指定します。Anthropic・OpenAIは開始前と終了後に新しい送信（再試行を含む）を始めません。期間外の新しいクラウド処理は保留し、受付条件と品質条件を満たすローカル処理は継続します。送信中の要求は最後まで処理し、その結果は対象範囲や原文などの保存条件を満たす場合に保存します。予算や利用期間だけの変更では取得済みの結果を破棄しません。
 - Jevは終了時刻を過ぎると、新しい要求（再試行と手動の評価ツールを含む）を予約しません。予約した直後、送信の前に終了時刻を過ぎた要求も送信しません。患者情報の照合では、その予約を未送信として記録し、期間を延ばすと同じ質問をもう一度問い合わせます。新着投稿の保存、既存の通知、送信中の結果の保存はそのまま続きます。Jevの開始時刻と期間予算はありません。Jevの量は1日の要求件数で制限します。
-- 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。設定項目は `cloud_llm.window_start`・`window_budget_usd`・`until` と、独立した `semantic.until` です。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
+- 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。時刻で指定した値は、同じ時点を表す標準形（例 `2026-12-31T23:59:59+09:00`）で保存します。設定項目は `cloud_llm.window_start`・`window_budget_usd`・`until` と、独立した `semantic.until` です。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
 - 期間予算は、予約時の最大額で判定します。結果が戻ると実際の額で数え直すため、表示額は進行中の予約の分だけ多く見えることがあります。
 
 保存済み投稿の再抽出（過去の投稿を現行の抽出世代へ上書きする処理）は、既定ではローカルで処理します。`cloud_llm.routes` に `reextract` が含まれ、期間予算と終了日時を指定した場合に限り、その終了日時までクラウドへ送れます。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20   # 11月20日の終わりまで再開
-python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none                         # 再開を終了
+$PY mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20   # 11月20日の終わりまで再開
+$PY mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none                         # 再開を終了
 ```
 
 - `--reextract-backlog-until` が保存するのは終了日時だけで、`routes` は変更しません。`routes` に `reextract` が無い場合、クラウド処理のmodeが `on` でない場合、終了日時を過ぎた場合、`project_ids` が `[]` の場合は送信しません。このとき `cloud-llm budget` と `cloud-llm plan`・`estimate` は `reextract_backlog_blockers` に理由を出し、注意を表示します。`routes` は設定ファイルで変更します。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
@@ -125,12 +127,12 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --reextract-backlog-until none    
 費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、共通の費用設定は認証された設定変更経路で保存されます。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
-python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
-python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
+$PY mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
+$PY mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
+$PY mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
 ```
 
-設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
+設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときや保存の失敗が表示されたときは、現在の設定を読み直してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
 
 論理的な設定構造の例です。提供元別設定を使う環境では、この断片をファイルへ直接書かず、設定画面またはCLIを使ってください。
@@ -181,17 +183,20 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                  
 導入先で次のコマンドを実行できます。保存済み記録を読み取り、APIへは送信しません。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm plan
-python3 mcs/ops/mcs_setup.py cloud-llm estimate --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm log --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm compare --days 14
-python3 mcs/ops/mcs_setup.py cloud-llm outstanding
+$PY mcs/ops/mcs_setup.py cloud-llm plan
+$PY mcs/ops/mcs_setup.py cloud-llm estimate --days 14
+$PY mcs/ops/mcs_setup.py cloud-llm log --days 14
+$PY mcs/ops/mcs_setup.py cloud-llm compare --days 14
+$PY mcs/ops/mcs_setup.py cloud-llm outstanding
 ```
 
 `outstanding` は保存されている会計履歴全体から、結果記録がない要求と、結果を精算できない要求の件数・最古の経過時間・10分以上の件数を集計します。本文や患者識別子は表示しません。読取り上限に達した場合は `unknown`、不正・重複・対応しない記録がある場合は `partial` とし、未確定の件数を0とは表示しません。この照会で予約額の解除や再送はしません。
 会計履歴が増えて既定の読取り上限（5秒・10万件）では `unknown` になるときは、`cloud-llm outstanding --full` で上限を広げて全件を確認します。最長で5分かかります。検証の内容は同じで、読取り専用のため収集や解析は止まりません。
 
-`--since YYYY-MM-DD` は日本時間の日付で絞ります。`log` だけは `--project` でも絞れます。
+`--days` は集計日数で、1〜62の整数を指定します。省略時は14日です。
+`--since YYYY-MM-DD` は日本時間の日付で絞ります。`--since` と `--days` は同時に指定できず、今日より後の日付は受け付けません。
+`plan`・`estimate` の `--since` は今日から61日前までで、平均の分母は指定日と今日を含む日数です。`log`・`compare` はそれより前の日付も指定できます。
+`log` だけは `--project` でも絞れます。
 文字数はトークン数ではありません。dry-runは保存に成功した処理単位の観測から試算します。
 失敗・未完了・未着手の処理は含めないため、全対象を処理する総費用の見積りではありません。
 履歴が不足する場合、費用の試算には未確定の項目が残ります。
@@ -228,13 +233,15 @@ AnthropicとOpenAIの利用記録は62日、Jevの利用記録は7日保持し�
 AnthropicとOpenAIの処理を停止するときは、理由を付けて次の操作を行います。
 
 ```bash
-python3 mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '外部処理を一時停止'
-python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定と利用状況を確認して再開'
+$PY mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '外部処理を一時停止'
+$PY mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定と利用状況を確認して再開'
 ```
 
-返された `command_id` を控え、同じ操作を再試行するときは `--command-id` で指定します。
+結果のJSONに `command_id` が表示された場合は控え、同じ操作を再試行するときは `--command-id` で指定します。
 書込みロックは最大5秒待ちます。取得できなければ終了コード3となり、停止・再開は未適用です。
-この場合は同じコマンドIDで再試行してください。開始済みの外部通信を即時に取り消す操作ではありません。
+このとき `command_id` は表示せず、記録も作りません。同じコマンドを再実行してください。最初に `--command-id` を指定していた場合は、同じIDを指定します。
+更新の途中と、DB復元の承認待ち・未完了の間も、停止・再開は未適用のまま「設定または保存記録を確認できません」と表示し、終了コード1になります。更新や復元を終えてから再実行してください。
+開始済みの外部通信を即時に取り消す操作ではありません。
 認証・支払い・料金確認の問題による停止も、原因を解消してから明示的に再開します。
 
 DBをバックアップの状態へ戻したときは、外部AIの新しい送信を自動で停止します。

@@ -91,6 +91,38 @@ def test_install_stops_before_software_when_update_lock_is_held(tmp_path):
         os.close(fd)
 
 
+def test_lockf_usage_failure_is_not_reported_as_a_running_install(tmp_path):
+    # Requirement change (IA-124): a lockf without descriptor support (macOS 13-14,
+    # EX_USAGE) falls back to Python's flock on the same descriptor instead of stopping.
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text('#!/bin/sh\necho "lockf $*" >> "$STUB_LOG"\nexit 64\n')  # EX_USAGE
+    lockf.chmod(0o755)
+    result = _run(env, hermes_home, '--no-llm')
+    assert '排他制御（lockf）を実行できません' not in result.stderr
+    assert '排他制御を実行できません' not in result.stderr
+    assert '別の導入または更新' not in result.stderr
+
+
+def test_lockf_fallback_still_detects_a_held_install_lock(tmp_path):
+    import fcntl
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text('#!/bin/sh\nexit 64\n')  # EX_USAGE
+    lockf.chmod(0o755)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = _run(env, hermes_home, '--no-llm')
+        assert result.returncode != 0
+        assert '別の導入または更新' in result.stderr
+        assert not (home / '.mcs/config.json').exists()
+    finally:
+        os.close(fd)
+
+
 def test_install_rejects_symlinked_update_lock(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     data = home / '.mcs/data'
@@ -294,7 +326,10 @@ def test_new_install_updates_opt_outs_without_a_legacy_record(tmp_path):
     assert not (home / '.mcs' / 'data' / 'install_options.json').exists()
 
 
-def test_conflicting_legacy_record_stops_before_install_side_effects(tmp_path):
+def test_direct_install_with_a_new_selection_updates_the_legacy_record(tmp_path):
+    # Requirement change (IA-015): a direct run that differs from the pre-1.1
+    # record no longer stops; config and the legacy record both take the new
+    # selection, so a rollback to an old version repeats the latest choice.
     home, hermes_home, stub, env = _world(tmp_path)
     data = home / '.mcs' / 'data'
     data.mkdir(parents=True)
@@ -302,10 +337,8 @@ def test_conflicting_legacy_record_stops_before_install_side_effects(tmp_path):
     config.write_text('{}')
     legacy = data / 'install_options.json'
     legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
-    original = legacy.read_bytes()
-    result = _run(env, hermes_home, '--no-brew', '--no-llm')
-    assert result.returncode != 0
-    assert '旧記録' in result.stderr
-    assert config.read_text() == '{}'
-    assert legacy.read_bytes() == original
-    assert not any(c.startswith(('brew install', 'git clone', 'uv ', 'launchctl bootstrap')) for c in _calls(stub))
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stderr
+    assert '旧記録' not in result.stderr
+    assert json.loads(config.read_text())['install_args'] == ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']
+    assert json.loads(legacy.read_text()) == {'v': 1, 'install_args': ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']}

@@ -130,10 +130,12 @@ def request_restart(root, *, expected_generation=None):
     return value["request_id"]
 
 
-def _systemd_quote(value):
+def _systemd_quote(value, *, dollar=True):
     if any(c in value for c in "\n\r\x00"):
         raise ValueError("standalone_service_path_invalid")
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+    value = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    # "$$" is an escape only in command lines; Environment= keeps "$" literal.
+    return '"' + (value.replace("$", "$$") if dollar else value) + '"'
 
 
 def render_health(root, platform=None, *, recovery_dir=None):
@@ -159,7 +161,7 @@ def render_health(root, platform=None, *, recovery_dir=None):
         _systemd_quote(repository)
         unit = ("[Unit]\nDescription=Independent MCS health watch\n\n"
                 "[Service]\nType=oneshot\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
-                + "\nEnvironment=" + _systemd_quote("MCS_ROOT=" + str(root))
+                + "\nEnvironment=" + _systemd_quote("MCS_ROOT=" + str(root), dollar=False)
                 + "\nExecStart=" + " ".join(_systemd_quote(v) for v in argv)
                 + "\nTimeoutStartSec=300\nUMask=0077\nStandardOutput=null\nStandardError=null\n")
         timer = ("[Unit]\nDescription=Independent MCS health watch timer\n\n"

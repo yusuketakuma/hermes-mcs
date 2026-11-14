@@ -109,7 +109,8 @@ OSや依存ソフトが返す技術的な詳細には英語が含まれること
 MCS ログインは依存導入を妨げないため、初回収集の直前に確認する。
 
 以下を順に確認する。Path B と決まっている場合は install.sh に
-`--mode standalone`を付ける。不合格は【失敗時】
+`--mode standalone`、Path A と決まっている場合は `--mode hermes` を付ける
+（設定も `~/.mcs/data` も無い新規導入で `--mode` を省くと standalone になる）。不合格は【失敗時】
 の指示に従う。**Python の事前確認はしない** — 新規 Mac の `python3` は
 3.9 系で、Path A では `install.sh` が `python@3.14` と hermes-agent の
 venv を用意する。MCS のスクリプト（`mcs_setup.py` 等）は素の `python3` で
@@ -175,13 +176,16 @@ Phase 1 の `--preflight` が exit 0 であることが前提。
 
 ```bash
 # Phase 1 で確認した同じリポジトリルートで実行
-./install.sh --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
-./install.sh             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
+./install.sh --mode hermes --dry-run   # 任意: 作成・変更されるものを確認（何も書き込まない）
+./install.sh --mode hermes             # Phase 1 の【ユーザー確認】で決めたフラグ（--no-llm / --force-repo 等）を付ける
 ```
 
 【検証】`ソフトの準備が完了しました` と 6 ステージ分の結果が表示される。
 終了コード0でも、初期設定を後回しにした場合は利用開始前の作業が残る。
 初期設定を開始して失敗・中断した場合は非0となるが、ソフトの再導入は不要。
+初期設定を始めていなくても、Slack の設定がある環境（再実行など）では最後の
+`mcs_setup.py slack-channels` が失敗すると非0になる（`--no-services` 以外）。
+このときも `Slackのチャンネル準備は未完了です（<コード>）` の案内に従って準備を再開し、ソフトの再導入はしない。
 表示された再開コマンドと、次の確認で段階を区別する:
 
 ```bash
@@ -195,7 +199,7 @@ cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パ�
 （venv インタプリタと `mcs_setup.py` のフルパス付き）を Phase 5 で使う。
 
 【失敗時】install.sh は失敗したステージで止まり、`エラー: <原因と直し方>`
-と `エラー: 導入を中断しました。失敗した段階の原因を確認してください。<段階名>の段階で止まっていました。同じコマンドを再実行すると途中から再開します` を出す（後続ステージは実行されない。更新処理の一部として動いた導入では `mcs recover` の確認を案内する）。止まった段階は `~/.mcs/data/install_progress.json` にも記録され（初回導入で bootstrap 検査が data/ を厳密に確認する区間の brew・runtime 段階は記録対象外）、`mcs setup check` の注意にも残った記録が出る（診断の注意であり、初期設定や実接続の完了を意味しない）。`エラー:` 行の指示を
+と `エラー: 導入を中断しました。失敗した段階の原因を確認してください。<段階名>の段階で止まっていました。同じコマンドを再実行すると途中から再開します` を出す（後続ステージは実行されない。更新処理の一部として動いた導入では `mcs recover` の確認を案内する）。設定の作成前に止まった場合は `設定はまだ作成していないため、原因を直して最初と同じ指定（--mode など）で再実行すると初回導入を再開します` も出るので、最初と同じ指定で再実行する。提供元別設定の初回準備や保留の記録が残っている場合は `エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。` を出す。このときは再実行や記録の削除をせず、ユーザーと担当者に確認する。止まった段階は `~/.mcs/data/install_progress.json` にも記録され（初回導入で bootstrap 検査が data/ を厳密に確認する区間の brew・runtime 段階は記録対象外）、`mcs setup check` の注意にも残った記録が出る（診断の注意であり、初期設定や実接続の完了を意味しない）。`エラー:` 行の指示を
 実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
 skip され、中断した clone/checkout・venv・依存導入・モデル DL
 （`.part` から再開）は続きから進み、再実行の冒頭に前回の記録が残っている段階の案内が出る（記録は実行中かどうかを証明しないため、案内は「残っています」と「実行中なら完了を待つ」形で、時間経過だけで中断とは断定しない）。よくある原因と対処は
@@ -294,11 +298,15 @@ installer 内で初期設定を完了した場合は `init` を繰り返さず�
   ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
       --login-id <ID> --notify-target slack:<channel_id> \
       --set 'notify.interactive="slack"' \
-      --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
+      --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C","allowed_user_ids":["<uid>"]}' \
       --plugin-profile <profile> \
       --plugin-user-ids <uid,...> \
       --plugin-project-ids <pid,...>
   ```
+
+  Slack のチャンネル準備は操作者を `notify.slack.allowed_user_ids` か Hermes 側に保存済みの
+  `slack_allowed_user_ids` から読み、`--plugin-user-ids` は使わない。初回は同じ ID を
+  `allowed_user_ids` にも指定する（無いと `slack_setup_operators_required` で何も保存せずに終了1）。
 
   Discord の場合は `notify.interactive="discord"` +
   `notify.discord={"profile","application_id","guild_id","channel_id"}`
@@ -393,15 +401,18 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 メッセージ別の対処は INSTALLATION.md §7-2。主なもの:
 
-- 実行用Pythonが見つからない、または実行できない → `./install.sh` 再実行
-  （stage 2 が venv を作り直す）→ `services`
+- 実行用Pythonが見つからない、または実行できない → 導入済みの環境では stage 2 は
+  venv を作り直さない。常駐サービスが止まっていることを確認し、
+  `mv <実行環境> <実行環境>.broken` で退避（削除しない）してから `./install.sh` を
+  再実行 → `services`。動作する旧版の Python からの移行は
+  [更新手順](UPGRADE_AGENT.md)で行う。退避は【ユーザー確認】の上で行う
 - 定期実行からHermesを呼び出せない → 表示の
   `ln -s ... ~/.local/bin/hermes`
 - 必須設定が不足している → `init` で再登録
 - Keychainの登録内容を読み取れない → `security unlock-keychain` を
   ユーザーに依頼
 - 常駐処理の設定はあるが起動していない → 表示の
-  `launchctl bootstrap ...`（MCS 5件なら `services` 再実行）
+  `launchctl bootstrap ...`（MCS 6件なら `services` 再実行）
 - 配置済みのスクリプトが配布版と異なる → `services` 再実行
 - 復旧監視が別の保存先を参照している → 正しい
   checkout で `./install.sh`（移動した場合。別 checkout が残っていれば

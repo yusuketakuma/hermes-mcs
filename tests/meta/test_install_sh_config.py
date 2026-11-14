@@ -123,6 +123,21 @@ def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
     assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
 
 
+@pytest.mark.parametrize('configured', [False, True])
+def test_reinstall_over_complete_settings_does_not_ask_for_initial_setup(tmp_path, configured):
+    home, hermes_home, _, env = _world(tmp_path, configured=True)
+    config = home / '.mcs/config.json'
+    cfg = {'runtime_mode': 'hermes'}
+    if configured:
+        cfg.update({'mcs_login_id': 'synthetic-login', 'notify_target': 'synthetic-target'})
+    config.write_text(json.dumps(cfg))
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ('初期設定の開始は不要です' in result.stdout) is configured
+    assert '設定は変更していません。設定と接続の状態' not in result.stdout
+    assert ('まだ利用開始前の初期設定が必要' in result.stdout) is not configured
+
+
 @pytest.mark.parametrize('runtime', ['hermes', 'standalone'])
 def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
     home, _, _, env = _world(tmp_path)
@@ -448,6 +463,57 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
                   '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads((target / 'config.json').read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
+
+
+def test_root_link_target_with_shared_parent_is_refused_before_software(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    shared = tmp_path / 'synthetic-shared'
+    shared.mkdir()
+    shared.chmod(0o770)
+    target = shared / 'synthetic-root'
+    target.mkdir(mode=0o700)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    result = _run(env, None, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert 'リンク先の親フォルダー' in result.stderr
+    assert list(target.iterdir()) == []
+    assert not any(call.startswith(('brew', 'uv ', 'git clone')) for call in _calls(stub))
+
+
+@pytest.mark.parametrize('parent_mode', [0o770, 0o1777])
+def test_configured_root_link_keeps_shared_parent_unchecked(tmp_path, parent_mode):
+    # Only the initial config is created under the parent; an existing install
+    # under a shared parent (such as /Users/Shared) must keep reinstalling.
+    home, hermes_home, _, env = _world(tmp_path)
+    shared = tmp_path / 'synthetic-shared'
+    shared.mkdir()
+    shared.chmod(parent_mode)
+    target = shared / 'synthetic-root'
+    (target / 'data').mkdir(mode=0o700, parents=True)
+    target.chmod(0o700)
+    (target / 'config.json').write_text('{"runtime_mode":"hermes"}')
+    (target / 'config.json').chmod(0o600)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'リンク先の親フォルダー' not in result.stderr
+
+
+def test_relative_hermes_home_names_the_invocation_directory_with_root_link(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    target = tmp_path / 'synthetic-root'
+    (target / 'data').mkdir(mode=0o700, parents=True)
+    target.chmod(0o700)
+    (target / 'config.json').write_text('{"runtime_mode":"hermes"}')
+    (target / 'config.json').chmod(0o600)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    work = tmp_path / 'synthetic-work'
+    work.mkdir()
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin', '--no-services',
+                  '--no-recovery', './synthetic-hermes', cwd=work)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (work / 'synthetic-hermes/hermes-agent').is_dir()
+    assert not (target / 'synthetic-hermes').exists()
 
 
 def test_fresh_private_root_link_swap_stops_without_writing_new_target(tmp_path):

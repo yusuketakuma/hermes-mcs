@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "schema変更を伴う巻戻しで、DB復元の承認を受け付けられない問題を修正",
+  "summary": "schema変更を伴う更新が失敗または巻き戻され、DB復元の承認待ちで止まった場合に、担当者の承認（ops.restore_approve）を記録できず、収集・抽出・通知が止まったままになる問題を修正します。旧版のコードが新しいschemaのDBを開けなかったことが原因です。承認待ちの間は、承認の記録だけを書き込み、DBのschema移行は行いません。",
+  "upgrade": "この修正を含む版へ既存の更新手順で更新すると反映されます。効くのは、この版より新しい版から巻き戻したときです。この版より前の版へ巻き戻す場合は旧版のコードが動くため、効きません。承認の条件（喪失レポートのreport_id・backupのsha256・schemaとの束縛、human_confirmed）は変わりません。",
+  "details": [
+    "承認待ちのtickは、既存のDBをLedgerを通さずに開き、command_receiptsに承認の記録だけを書き込みます。schemaの版の検査・移行・初期化は行わないため、喪失レポートが数える表は変わりません。",
+    "run_check.py --commands-only も、承認待ちの間はLedgerを開く前に同じ承認専用の経路へ切り替わります。",
+    "承認以外のコマンドは、従来どおり承認待ちが解除されるまでキューに残ります。"
+  ],
+  "refs": ["mcs/ingest/run_check.py", "tests/ingest/test_stale_tick_update_fence.py"]
+}

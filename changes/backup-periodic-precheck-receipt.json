@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "定期の復元訓練が事前確認で止まると、成功した offsite 保存の受領情報が出力されない問題を修正",
+  "summary": "mcs_backup.py offsite --scheduled で保存に成功した後、定期の復元訓練が事前確認（受領記録、鮮度、drills/ の中身、空き容量）で止まった場合でも、保存先・sha256 を含む結果を表示し、periodic_drill に status=failed と理由を付けて終了コード1で終わります。これまでは {\"error\": ...} だけを表示し、その回の受領情報が出力されませんでした。",
+  "upgrade": "追加操作は不要です。保存と backup_state.json への記録はこれまでどおり訓練より前に完了します。drills/ に Finder の .DS_Store など想定外のファイルがある場合の理由は、従来どおり backup_periodic_capacity です。",
+  "details": [
+    "_periodic_drill の事前確認で起きた例外を、訓練中の失敗と同じ periodic_drill の failed 結果として扱う。"
+  ],
+  "refs": ["mcs/ops/mcs_backup.py"]
+}

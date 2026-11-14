@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "利用先が固定のとき cloud-llm providers --priority が明示モデルを外す問題を修正",
+  "summary": "提供元設定を分離する前の形式の config.json で、cloud_llm.provider を anthropic または openai に固定している場合、mcs_setup.py cloud-llm providers --priority を実行しても cloud_llm.model を削除しません。これまでは優先順位だけを変えたつもりでも明示モデルが消え、たとえば Sol（gpt-6.1-sol）を指定していた導入先では、用途別のモデルが既定（背景処理は luna-medium など）へ知らせなく変わっていました。",
+  "upgrade": "追加操作は不要です。利用先が auto のときは、これまでどおり --priority で明示モデルを外し、新しい優先順位で選びます。利用先が固定のとき、優先順位は保存されますが、auto に切り替えるまで選択には影響しません。分離済み形式の設定の動作は変わりません。",
+  "details": [
+    "以前の実行でモデルが外れた導入先は、mcs_setup.py init --set cloud_llm.model=... で改めて指定してください。"
+  ],
+  "refs": [
+    "mcs/ops/cloud_cli.py"
+  ]
+}

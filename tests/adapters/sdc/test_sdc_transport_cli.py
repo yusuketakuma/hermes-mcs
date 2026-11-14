@@ -251,6 +251,28 @@ def test_facts_project_only_fixed_version_and_process_sources(monkeypatch):
     assert all('doctor' not in argv for argv, _ in calls)
 
 
+@pytest.mark.parametrize('name,clean', [('mcs_check.sh', True), ('other.sh', False)])
+def test_facts_keep_commit_with_rendered_standalone_wrapper_in_checkout(monkeypatch, tmp_path, name, clean):
+    import subprocess
+    # Standalone services renders deployment/scripts/*.sh into <root>/scripts, the checkout by default.
+    root = Path(sdc_cli.__file__).resolve().parents[2]
+    (tmp_path / '.gitignore').write_bytes((root / '.gitignore').read_bytes())
+    (tmp_path / 'scripts').mkdir()
+    (tmp_path / 'scripts/mcs').write_text('#!/bin/bash\n# synthetic launcher\n')
+    git = ['/usr/bin/git', '-C', str(tmp_path)]
+    subprocess.run([*git, 'init', '-q'], check=True)
+    subprocess.run([*git, 'add', '.'], check=True)
+    subprocess.run([*git, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 's'], check=True)
+    head = subprocess.check_output([*git, 'rev-parse', 'HEAD'], text=True).strip()
+    (tmp_path / 'scripts' / name).write_text('#!/bin/bash\n# synthetic wrapper\n')
+    monkeypatch.setattr(sdc_cli, 'REPO', tmp_path)
+    monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: {'runtime_mode': 'standalone'})
+    actual = sdc_cli.lifecycle_io.run_bounded
+    monkeypatch.setattr(sdc_cli.lifecycle_io, 'run_bounded', lambda argv, timeout: actual(argv, timeout=timeout)
+                        if argv[0] == '/usr/bin/git' else SimpleNamespace(returncode=1, stdout=''))
+    assert sdc_cli.facts()['mcs_commit'] == (head if clean else None)
+
+
 def test_redirect_is_a_permanent_denial_without_following_location():
     transport = Transport(CONFIG)
     calls = []

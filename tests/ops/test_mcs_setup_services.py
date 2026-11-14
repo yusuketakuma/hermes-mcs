@@ -238,6 +238,19 @@ def test_services_removed_undesired_cron_leaves_manifest(
     assert scripts == [s for _, _, s in scheduled_jobs.CRON_JOBS]
 
 
+def test_services_flags_a_paused_registered_job_without_resuming_it(monkeypatch, tmp_path, capsys):
+    import json
+    present = _desired_cron_entries()
+    present[0]["state"] = "disabled"
+    calls, args = _services_env(monkeypatch, tmp_path, cron_entries=present)
+    assert mcs_setup.cmd_services(args) == 0
+    out = capsys.readouterr().out
+    assert f"'{present[0]['name']}'はHermes側で停止中（disabled）" in out
+    assert not any(call[1:2] == ["cron"] for call in calls)
+    manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
+    assert present[0]["id"] in {row.get("id") for row in manifest["cron"]}
+
+
 def test_services_noop_remove_keeps_created_job_owned(
         monkeypatch, tmp_path):
     """A create that lands and a remove that does not must both stay
@@ -458,6 +471,27 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     assert requests == [str(tmp_path)]
 
 
+def test_standalone_services_under_an_update_defers_the_host_restart(monkeypatch, tmp_path, capsys):
+    # The updater (often the host's own `update` child) verifies drainers after
+    # services; a restart request here would latch the host and keep them down.
+    from mcs_standalone import service
+    import writer_lock
+
+    calls, args = _services_env(monkeypatch, tmp_path)
+    requests = []
+    monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 0
+    (tmp_path / "data" / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic")
+    calls.clear()
+    assert mcs_setup.cmd_services(args) == 0
+    assert requests == []
+    assert not any("bootstrap" in call or "bootout" in call or "kickstart" in call for call in calls)
+    assert "更新の完了後" in capsys.readouterr().out
+
+
 def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatch, tmp_path):
     from mcs_standalone import service
 
@@ -489,6 +523,103 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
     assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
     assert not any("bbbbbb" in call or "ai.hermes.gateway" in call for call in calls)
     assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/local.mcs-int"] in calls
+
+
+def test_check_reports_an_unverifiable_log_helper_instead_of_crashing(monkeypatch, tmp_path):
+    import run_log_install
+    from mcs_standalone import service
+
+    _services_env(monkeypatch, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise run_log_install.LogInstallError("run_log_helper_untrusted")
+
+    monkeypatch.setattr(run_log_install, "helper_path", broken)
+    monkeypatch.setattr(service, "render_health", broken)
+    paths = mcs_setup._service_paths()
+    errors, warnings = service_management.script_drift(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0] and "install.sh" in errors[0]
+    errors, _ = service_management.check_standalone_health(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0]
+
+
+def test_standalone_retires_installed_hermes_agents_without_a_manifest(monkeypatch, tmp_path):
+    # A Hermes run that reported a problem saved no manifest, yet placed its agents.
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int", "ai.mcs.extract-drainer"})
+    (tmp_path / "agents").mkdir()
+    for label in ("local.mcs-int", "ai.mcs.extract-drainer", "ai.mcs.llamaserver"):
+        (tmp_path / "agents" / f"{label}.plist").write_text("synthetic agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 0
+    uid = mcs_setup.os.getuid()
+    for label in ("local.mcs-int", "ai.mcs.extract-drainer"):
+        assert ["launchctl", "bootout", f"gui/{uid}/{label}"] in calls
+        assert not (tmp_path / "agents" / f"{label}.plist").exists()
+    assert (tmp_path / "agents" / "ai.mcs.llamaserver.plist").exists()
+    assert (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+
+
+def test_standalone_switch_stops_on_an_unreadable_manifest(monkeypatch, tmp_path):
+    """IA-047: an existing but unreadable record may list cron jobs to retire."""
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
+    paths = mcs_setup._service_paths()
+    Path(paths.manifest_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(paths.manifest_path).write_text("{ synthetic broken")
+    (tmp_path / "agents").mkdir()
+    plist = tmp_path / "agents" / "local.mcs-int.plist"
+    plist.write_text("synthetic hermes agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(call[:2] == ["launchctl", "bootout"] for call in calls)
+    assert plist.exists()
+    assert not (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+
+
+def test_standalone_switch_with_unknown_cron_keeps_the_previous_agents(monkeypatch, tmp_path):
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
+    service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]},
+                                     paths=mcs_setup._service_paths())
+    (tmp_path / "agents").mkdir()
+    plist = tmp_path / "agents" / "local.mcs-int.plist"
+    plist.write_text("synthetic hermes agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert not any(call[:2] == ["launchctl", "bootout"] for call in calls)
+    assert plist.exists()
+    assert not (tmp_path / "agents" / "ai.mcs.standalone.plist").exists()
+
+
+def test_standalone_switch_with_hermes_removed_needs_a_human_and_then_proceeds(monkeypatch, tmp_path, capsys):
+    """IA-048: no Hermes executable means its cron cannot be listed; a confirmed reason may proceed."""
+    calls, args = _services_env(monkeypatch, tmp_path, loaded={"local.mcs-int"})
+    service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]},
+                                     paths=mcs_setup._service_paths())
+    (tmp_path / "agents").mkdir()
+    plist = tmp_path / "agents" / "local.mcs-int.plist"
+    plist.write_text("synthetic hermes agent")
+    _previous = mcs_util.load_config
+    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg=None: str(tmp_path / "removed" / "hermes"))
+    monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
+    monkeypatch.setattr(service_management, 'inspect_cron', lambda h: None)
+    assert mcs_setup.cmd_services(args) == 1
+    assert "--hermes-absent" in capsys.readouterr().out
+    assert plist.exists()
+    args.hermes_absent, args.confirm_human, args.reason = True, False, "synthetic"
+    assert mcs_setup.cmd_services(args) == 1                       # no human confirmation
+    assert plist.exists()
+    args.confirm_human = True
+    assert mcs_setup.cmd_services(args) == 0
+    assert not plist.exists()
+    manifest = service_management.load_manifest(paths=mcs_setup._service_paths())
+    assert manifest['hermes_absent_confirmed']['reason'] == "synthetic"
 
 
 @pytest.mark.parametrize("outcomes,late,ok,boots,loads", [
@@ -530,6 +661,70 @@ def test_agent_reconcile_retries_transient_bootstrap(
     assert state["calls"][-1] == "print"
     assert sleeps == [1] * sum(rc != 0 for rc in outcomes)
     assert any("起動に失敗しました" in n for n in notes) is (not ok)
+
+
+def test_agent_reconcile_never_bootstraps_over_a_job_still_stopping(monkeypatch):
+    # launchd keeps answering `print` 0 while a booted-out job drains; that
+    # answer must not be taken as the new load. The plist is already written,
+    # so a later run would see it as current: the reload is handed to a
+    # detached waiter instead of a re-run that would report "loaded".
+    import subprocess
+    from types import SimpleNamespace
+    seen, spawned = [], []
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv[1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    sleeps, notes = [], []
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', fake_run)
+    monkeypatch.setattr(service_management, "time",
+                        SimpleNamespace(time=service_management.time.time, sleep=sleeps.append))
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    monkeypatch.setattr(service_management.run_log_install, "helper_path",
+                        lambda *a, **k: "/synthetic/helper")
+    # never a real process here: the waiter would drive the real launchd
+    monkeypatch.setattr(service_management.subprocess, "Popen",
+                        lambda argv, **kw: spawned.append((argv, kw)))
+    paths = mcs_setup._service_paths()
+    assert service_management.agent_reconcile(
+        'ai.mcs.x', '/p.plist', notes.append, False, paths=paths) is True
+    assert "bootstrap" not in seen
+    assert seen.count("print") == 1 + service_management.STOP_POLLS
+    assert any("終了後に自動で読み込み直します" in n for n in notes)
+    (argv, kw), = spawned
+    assert argv[7:10] == ["/bin/sh", "-c", service_management.AWAIT_RELOAD_SCRIPT]
+    assert argv[12:] == [f"gui/{paths.uid}/ai.mcs.x", f"gui/{paths.uid}", "/p.plist"]
+    assert kw["start_new_session"]
+    # the waiter never boots out again: a host loaded meanwhile must survive
+    assert "bootout" not in service_management.AWAIT_RELOAD_SCRIPT
+
+
+def test_deferred_reload_waits_for_the_job_to_leave_and_retries_bootstrap(tmp_path):
+    import subprocess
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    log, count = tmp_path / "launchctl.log", tmp_path / "prints"
+    (stubs / "launchctl").write_text(
+        '#!/bin/sh\necho "$*" >> "$SYNTHETIC_LOG"\n'
+        'case "$1" in\n'
+        '  print) n=$(cat "$SYNTHETIC_COUNT" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$SYNTHETIC_COUNT"\n'
+        '         [ "$n" -ge 3 ] && exit 113; exit 0;;\n'
+        '  bootstrap) [ -f "$SYNTHETIC_COUNT.boot" ] && exit 0; : > "$SYNTHETIC_COUNT.boot"; exit 5;;\n'
+        'esac\nexit 0\n')
+    (stubs / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+    finished = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+    finished.wait()
+    env = {"PATH": f"{stubs}:/usr/bin:/bin", "SYNTHETIC_LOG": str(log), "SYNTHETIC_COUNT": str(count)}
+    result = subprocess.run(["/bin/sh", "-c", service_management.RELOAD_SCRIPT, "mcs-reload",
+                             str(finished.pid), "gui/501/ai.mcs.x", "gui/501", "/synthetic/x.plist"],
+                            env=env, timeout=30)
+    assert result.returncode == 0
+    assert log.read_text().splitlines() == [
+        "bootout gui/501/ai.mcs.x", *["print gui/501/ai.mcs.x"] * 3,
+        *["bootstrap gui/501 /synthetic/x.plist"] * 2]
 
 
 def test_services_refuses_missing_interpreter(monkeypatch, tmp_path,

@@ -753,6 +753,32 @@ def test_text_only_unset_send_profile_uses_binding_for_created_channel(tmp_path,
     assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
 
 
+def test_linked_root_resolves_send_profiles_like_the_installer_target(tmp_path, monkeypatch):
+    # install.sh supports ~/.mcs as a link and sets up the physical root;
+    # resident senders keep the unresolved link path.
+    import mcs_util
+    import notify_sender
+    real, link = tmp_path / 'real', tmp_path / 'link'
+    (real / 'data').mkdir(parents=True, mode=0o700)
+    real.chmod(0o700)
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: 'synthetic-hermes')
+    legacy = config()
+    legacy.update(notify_target='slack:C000000098', notify_bot_profile='legacy')
+    argv = notify_sender.send_argv(legacy, legacy['notify_target'],
+                                    str(link / 'config.json'), kind='new_messages')
+    assert argv[:3] == ['synthetic-hermes', '-p', 'legacy']
+    cfg, client = text_config(), Client()
+    setup.prepare(real, cfg)
+    consume(real, client, cfg)
+    saved = setup.candidate(real, cfg)
+    setup.applied(real, cfg, saved)
+    assert setup.read(link) == setup.read(real)
+    for target, kind in (('notify_target', 'new_messages'), ('notify_system_target', 'run_failed')):
+        argv = notify_sender.send_argv(saved, saved[target], str(link / 'config.json'), kind=kind)
+        assert argv[:3] == ['synthetic-hermes', '-p', 'synthetic']
+
+
 def test_text_only_existing_patient_target_keeps_legacy_send_profile(tmp_path, monkeypatch):
     import mcs_util
     import notify_sender
@@ -1135,3 +1161,67 @@ def test_rebase_history_is_hash_chained_to_the_current_plan(tmp_path, mutate):
         setup.read(tmp_path)
     with pytest.raises(ValueError):
         setup.prepare(tmp_path, drifted)
+
+
+def _held(tmp_path):
+    cfg, client = config(), Client()
+    client.failure = 'lost'
+    setup.prepare(tmp_path, cfg)
+    consume(tmp_path, client, cfg)
+    state = setup.read(tmp_path)
+    assert state['state'] == 'unknown'
+    return state
+
+
+def _discard(tmp_path, request_id, command_id=None):
+    import uuid
+    from contextlib import closing
+    import mcs_requests
+    from ledger import Ledger
+    req = {'version': 1, 'cmd': 'ops.slack_setup_discard', 'command_id': command_id or str(uuid.uuid4()),
+           'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
+           'reason': 'synthetic: checked Slack by hand', 'request_id': request_id}
+    assert mcs_requests.validate(req) is None
+    with closing(Ledger(str(tmp_path / 'data' / 'ledger.db'))) as ledger:
+        return mcs_requests.apply_command(ledger, req)
+
+
+def test_human_confirmed_discard_sets_the_unknown_intent_aside(tmp_path):
+    """IA-033: the held record moves aside under a receipt; nothing is deleted."""
+    state = _held(tmp_path)
+    before = setup.path(tmp_path).read_bytes()
+    receipt = _discard(tmp_path, state['request_id'], command_id='00000000-0000-4000-8000-000000000033')
+    assert receipt['outcome'] == 'applied', receipt
+    assert receipt['slack_setup_discarded']['state'] == 'unknown'
+    assert not setup.path(tmp_path).exists()
+    kept = setup.path(tmp_path).with_name(f"slack-channel-setup.discarded-{state['request_id']}.json")
+    assert kept.read_bytes() == before
+    again = _discard(tmp_path, state['request_id'], command_id='00000000-0000-4000-8000-000000000033')
+    assert again['outcome'] == 'applied' and kept.read_bytes() == before      # replayed receipt
+
+
+def test_discard_refuses_another_or_settled_intent(tmp_path):
+    state = _held(tmp_path)
+    other = _discard(tmp_path, '00000000-0000-4000-8000-000000000000')
+    assert (other['outcome'], other['error']) == ('rejected', 'slack_setup_hold_changed')
+    assert setup.read(tmp_path) == state
+    state['state'] = 'pending'
+    state['reason'] = None
+    for record in state['roles'].values():
+        record.update(state='pending', id=None)
+        record.pop('create_receipt', None)
+        record.pop('create_error', None)
+    setup.save(tmp_path, state)
+    settled = _discard(tmp_path, state['request_id'])
+    assert (settled['outcome'], settled['error']) == ('rejected', 'slack_setup_not_held')
+    assert setup.path(tmp_path).exists()
+
+
+def test_set_aside_restores_the_record_when_the_transaction_fails(tmp_path):
+    live, kept = tmp_path / 'live.json', tmp_path / 'kept.json'
+    live.write_text('synthetic')
+    with pytest.raises(RuntimeError):
+        with setup._set_aside(live, kept):
+            assert not live.exists()
+            raise RuntimeError('synthetic commit failure')
+    assert live.read_text() == 'synthetic' and not kept.exists()

@@ -137,6 +137,21 @@ def test_development_writer_outputs_only_review_material_and_check_rejects_tampe
     assert capsys.readouterr().out.strip() == 'RELEASE_PROVIDER_SOURCE_HOLD'
 
 
+@pytest.mark.parametrize('name,held', [('scripts/mcs_check.sh', False), ('scripts/other.sh', True)])
+def test_rendered_standalone_wrapper_is_not_untracked_source(repository, name, held):
+    # Standalone services renders deployment/scripts/*.sh into <root>/scripts, the checkout by default.
+    shutil.copyfile(ROOT / '.gitignore', repository / '.gitignore')
+    git(repository, 'add', '.gitignore')
+    git(repository, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'ignore rules')
+    value = manifest(repository)
+    (repository / name).write_text('#!/bin/bash\n# synthetic rendered wrapper\n')
+    if held:
+        with pytest.raises(source.SourceError):
+            source.verify_checkout(repository, value, deadline=time.monotonic() + 10, current=True)
+    else:
+        assert source.verify_checkout(repository, value, deadline=time.monotonic() + 10, current=True)['sha256'] == source.digest(value)
+
+
 def test_native_launcher_without_a_suffix_is_part_of_the_source_closure(repository):
     value = manifest(repository)
     assert 'scripts/mcs' in [row['path'] for row in value['files']]

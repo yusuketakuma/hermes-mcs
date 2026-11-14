@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "ログ処理プログラムの世代が進んだ後も mcs recover を使えるように修正",
+  "summary": "mcs/core/run_log.py だけが変わる更新や --no-recovery 付きの再導入の後でも、mcs recover と mcs recover --status が「独立した復旧用の実行環境を確認できません」で止まらなくなります。復旧監視が使う検証済みの旧世代のログ処理プログラムを、所有確認と同じ方法で受け入れます。",
+  "upgrade": "追加操作は不要です。対象は復旧監視（org.mcs.recovery）を導入済みの環境です。受け入れるのは本人専用の保存先にあり、名前と内容のハッシュが一致する配置済みの世代だけで、改変・欠落・リンク・別の導入先の記録は従来どおり拒否します。",
+  "details": [
+    "mcs_cli の recover 分岐で、plist の helper を現在の受領記録の世代との完全一致ではなく run_log_install.verify_installed_helper で検証する。services の所有確認・診断と同じ基準になる。"
+  ],
+  "refs": ["mcs/ops/mcs_cli.py", "tests/ops/test_mcs_cli.py"]
+}

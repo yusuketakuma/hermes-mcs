@@ -203,6 +203,13 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
         return Child()
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
+    # The daily check's fixed PATH has no Homebrew; install.sh needs brew/uv/python3.14.
+    brew_bin, listed_bin = tmp_path / "brew-bin", tmp_path / "listed-bin"
+    brew_bin.mkdir()
+    listed_bin.mkdir()
+    monkeypatch.setattr(update_runtime_migration, "HOMEBREW_BINS",
+                        (str(brew_bin), str(tmp_path / "absent-bin"), str(listed_bin)))
+    monkeypatch.setenv("PATH", f"/usr/bin:{listed_bin}:/bin")
     backup = str(tmp_path / "venv.pre-python314")
     baseline = updater._install_options_snapshot()[0]
     applying = {"reinstall": True, "install_args": ["--no-llm", "--no-plugin"],
@@ -222,6 +229,8 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
         assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
         assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
         assert kwargs["env"]["MCS_UPDATE_OPTIONS_BASE"] == baseline
+        assert kwargs["env"]["PATH"] == f"{brew_bin}:/usr/bin:{listed_bin}:/bin"
+        assert os.environ["PATH"] == f"/usr/bin:{listed_bin}:/bin"
         # A plain reinstall still inherits update.lock, but not the run lock.
         calls.clear()
         updater._reinstall({"reinstall": True, "install_args": [], "install_options_base": baseline})
@@ -606,6 +615,21 @@ def test_undo_resumes_when_interrupted_before_the_reset(updater, tmp_path, monke
     assert updater.recover_interrupted() == 0
     _assert_undone(updater, repo, prev, old, runtime, order, notices)
     assert order.index("quiesce") < order.index("runtime")
+
+
+def test_undo_of_interrupted_rollback_drops_reverted_applied_entry(updater, tmp_path, monkeypatch):
+    repo, prev, old, runtime, order, notices = _interrupted(
+        updater, tmp_path, monkeypatch, rollback_shaped=True)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    older = {"tag": "v1.0.0", "sha": "0" * 40, "prev_sha": "1" * 40}
+    state["applied"] = [older, {"tag": "v1.1.0", "sha": state["applying"]["prev_sha"],
+                                "prev_sha": prev}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    assert updater.recover_interrupted() == 0
+    _assert_undone(updater, repo, prev, old, runtime, order, notices)
+    after = updater.journal_store.load_state(updater.STATE_PATH)
+    assert after["applied"] == [older]
+    assert after["attempts"]["v1.1.0"]["result"] == "rolled_back"
 
 
 def test_undo_reports_manual_content_without_restoring_runtime(updater, tmp_path, monkeypatch):

@@ -111,17 +111,22 @@ def _provider_preflight(config_path, legacy_path):
 
 
 def inspect(config_path, legacy_path, desired=None):
+    """Token of the recorded selection; ``desired`` is a direct install.sh run.
+
+    A direct run may change the selection: save() then rewrites the legacy
+    record too, so a rollback to an old version repeats the operator's latest
+    choice (IA-015). A crash between the two writes leaves them different;
+    the same direct run (its selection matches one of them) repairs that."""
     _provider_preflight(config_path, legacy_path)
     central, _ = _central(config_path)
     legacy, digest = _legacy(legacy_path)
-    if central is not None and legacy is not None and central != legacy:
-        raise ValueError('record_conflict')
     if desired is not None:
         if not valid(desired):
             raise ValueError('options_invalid')
         desired = sorted(set(desired))
-        if legacy is not None and desired != legacy:
-            raise ValueError('legacy_rollback_conflict')
+    if (central is not None and legacy is not None and central != legacy
+            and desired not in (central, legacy)):
+        raise ValueError('record_conflict')
     if central is None and legacy is None:
         return 'empty'
     state = json.dumps([central, legacy, digest], separators=(',', ':')).encode()
@@ -143,6 +148,14 @@ def recorded(config_path, legacy_path):
         return None
 
 
+def _write_legacy(legacy_path, desired):
+    """Keep the pre-1.1 record in step with a direct run's new selection."""
+    import safe_io
+    body = json.dumps({'v': 1, KEY: desired}, ensure_ascii=False) + '\n'
+    safe_io.atomic_write(legacy_path, lambda stream: stream.write(body), 0o600,
+                         tmp_prefix='install_options.json.stage-', makedirs=False)
+
+
 def save(config_path, legacy_path, desired, expected, *, check_pending=False):
     import config_edit
     import mcs_util
@@ -160,13 +173,18 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
                 if central is not None or legacy is None:
                     return 0
                 desired = legacy
+            legacy, _ = _legacy(legacy_path)
             raw, base = config_edit._snapshot(config_path)
             cfg = config_edit._parse(raw)
             if os.lstat(config_path).st_uid != os.getuid():
                 raise ValueError('config_owner')
-            if cfg.get(KEY) == sorted(set(desired)):
+            desired = sorted(set(desired))
+            if cfg.get(KEY) == desired:
+                if legacy is not None and legacy != desired:
+                    publication_started = True
+                    _write_legacy(legacy_path, desired)
                 return 0
-            cfg[KEY] = sorted(set(desired))
+            cfg[KEY] = desired
             body = json.dumps(cfg, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
             if len(body.encode('utf-8')) > mcs_util.CONFIG_MAX_BYTES:
                 raise ValueError('config_too_large')
@@ -179,6 +197,8 @@ def save(config_path, legacy_path, desired, expected, *, check_pending=False):
             publication_started = True
             safe_io.atomic_write(config_path, write_checked, 0o600,
                                  tmp_prefix='config.json.stage-', makedirs=False)
+            if legacy is not None and legacy != desired:
+                _write_legacy(legacy_path, desired)
     except config_edit.ConfigConflict:
         print('導入の省略項目が変更されたか、別の設定保存が進行中です。現在の状態を確認してください。', file=sys.stderr)
         return 1
@@ -684,6 +704,10 @@ def fresh_marker_sync(root, update_fd):
     root = Path(os.path.abspath(root))
     _fresh_update_lock(root, int(update_fd))
     _fresh_root_clean(root)
+    # Prove what bootstrap-fresh will require while no config exists yet, so a
+    # refused environment stays a resumable install instead of a held config.
+    if not _fresh_workers_absent() or not _fresh_cron_absent():
+        raise ValueError('fresh_workers_unverified')
     _, raw, identity = _fresh_marker_read(root)
     fd = os.open(root / 'data' / _FRESH_MARKER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -764,7 +788,15 @@ def main(argv):
             if len(desired) != 1:
                 return 1
             fresh_marker_sync(Path(os.path.abspath(config_path)).parent, desired[0])
-        except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+        except ValueError as exc:
+            if str(exc) == 'fresh_workers_unverified':
+                print('既存の Hermes の保存先・定期実行、または MCS の常駐処理を確認できないため、初回導入を確定せず中止しました。'
+                      '設定はまだ作成していません。前回 --mode hermes や Hermes の保存先を指定して導入を始めた場合は、'
+                      '同じ指定で再実行してください。', file=sys.stderr)
+            else:
+                print('初回導入の記録を確認できません。設定と記録を保持します。', file=sys.stderr)
+            return 1
+        except (OSError, TypeError, KeyError, RecursionError, ImportError):
             print('初回導入の記録を確認できません。設定と記録を保持します。', file=sys.stderr)
             return 1
         return 0

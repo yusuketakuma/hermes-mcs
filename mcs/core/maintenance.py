@@ -228,7 +228,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     os.close(fd)
     _publish_backup(db_path, tmp, dest, deadline=deadline)
     _write_ok_marker(dest)
-    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
+    files = _daily_backups()
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):
             with suppress(OSError):
@@ -236,10 +236,16 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     prune_preupdate_backups()
 
 
+def _daily_backups() -> list[str]:
+    """Daily backups only: a hand-made ledger-*.db copy is neither rotated nor counted."""
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db"))
+                  if re.fullmatch(r"ledger-\d{8}\.db", os.path.basename(path)))
+
+
 def newest_backup_age_s() -> float | None:
     """Age of the newest daily backup; None when there is none."""
     stamps = []
-    for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
+    for path in _daily_backups():
         with suppress(OSError):   # rotated away mid-scan
             stamps.append(os.path.getmtime(path))
     return time.time() - max(stamps) if stamps else None

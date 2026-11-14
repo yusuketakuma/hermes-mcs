@@ -193,6 +193,29 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     assert report["new_posts_daily_estimate"] > 0
 
 
+def test_since_sets_the_average_denominator_to_the_days_read(world, capsys):
+    root, _, config = world
+    # 2026-09-27 through the fixed "now" (2026-10-26 JST) is 30 calendar days.
+    report = cli.observe(config, root=str(root), since="2026-09-27")
+    assert report["days"] == report["historical_average_denominator_days"] == 30
+    assert report["new_posts_daily_estimate"] == report["new_posts"] / 30
+    # 63 days exceed the averages' denominator cap of plan/estimate only; log/compare read them.
+    with pytest.raises(ValueError, match="since_invalid"):
+        cli.observe(config, root=str(root), since="2026-08-25", evidence_holds_wanted=True)
+    assert cli.observe(config, root=str(root), since="2026-08-25")["days"] == 63
+    for period, code in (({"since": "2026-10-27"}, "since_invalid"), ({"since": "2026/10/01"}, "since_invalid"),
+                         ({"since": "2026-10-01", "days": 14}, "period_conflict"), ({"days": 63}, "days_invalid")):
+        with pytest.raises(ValueError, match=code):
+            cli.observe(config, root=str(root), **period)
+    capsys.readouterr()
+    assert mcs_setup.main(["cloud-llm", "log", "--since", "2026-08-25"]) == 0
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026-08-25"]) == 1
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026/10/01"]) == 1
+    assert "plan・estimate は今日から61日前まで" in capsys.readouterr().out
+    assert mcs_setup.main(["cloud-llm", "estimate", "--days", "7", "--since", "2026-10-20"]) == 1
+    assert "同時に指定できません" in capsys.readouterr().out
+
+
 
 @pytest.mark.parametrize("public_version", [None, "0.1", inference.CURRENT_VERSION])
 def test_reextract_estimate_includes_local_results_of_each_public_generation(world, public_version):
@@ -481,7 +504,10 @@ def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, 
     monkeypatch.setattr(setup_integration, "ENV_PATH", str(root / ".env"))
     monkeypatch.setenv("MCS_ANTHROPIC_API_KEY", "synthetic-incoming-key")
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
+    # The key is validated with the other secrets but written only after config.json.
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), "synthetic") is None
+    assert not (root / ".env").exists()
+    assert mcs_setup._init_store_api_keys() is None
     assert cloud_policy.api_key(str(root)) == "synthetic-incoming-key"
     output = capsys.readouterr().out
     assert "synthetic-incoming-key" not in output and str(root) not in output
@@ -1162,3 +1188,26 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
     assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
     assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"
+
+
+@pytest.mark.parametrize(("given", "stored"), [
+    ("2026-12-31T23:59:59.5Z", "2026-12-31T23:59:59.500000+00:00"),
+    ("2026-12-31T23:59:59+0900", "2026-12-31T23:59:59+09:00"),
+    ("20261231T235959+09:00", "2026-12-31T23:59:59+09:00"),
+    ("2026-12-31T23:59:59+09:00", "2026-12-31T23:59:59+09:00"),
+])
+def test_cloud_budget_saves_times_in_a_form_python39_helpers_can_read(monkeypatch, given, stored):
+    # install.sh reads these with the PATH python3 (3.9), whose fromisoformat
+    # rejects 3.11-only spellings; the saved text must be the canonical form.
+    import config_edit
+
+    cfg = {"cloud_llm": {"mode": "off"}}
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
+    saved = []
+    def apply(changes, defaults):
+        saved.append(changes)
+        return cfg, []
+    monkeypatch.setattr(config_edit, "apply", apply)
+    assert cli.budget_command(SimpleNamespace(until=given)) == 0
+    assert saved == [{"cloud_llm.until": stored}]
+    assert mcs_util.until_epoch(stored) == mcs_util.until_epoch(given)

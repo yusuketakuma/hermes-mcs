@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "対話形式の独立接続の初期化を5分で強制終了しないように修正",
+  "summary": "独立モードの対話形式の初期設定で、LINE WORKS（またはSlack・Discord）の認証情報を入力している途中に5分の制限時間で入力処理が強制終了され、端末の入力表示が戻らなくなることがありました。人が入力する対話形式では制限時間を設けません。--yes の非対話実行は従来どおり30秒で打ち切ります。",
+  "upgrade": "追加操作は不要です。入力を中止するときは Ctrl+C を使ってください。",
+  "details": [
+    "_init_standalone_connectors の subprocess.run の timeout を、対話時は None、--yes 時は30秒にした。"
+  ],
+  "refs": ["mcs/ops/setup/setup_integration.py", "tests/ops/test_lineworks_diagnostics_and_init.py"]
+}

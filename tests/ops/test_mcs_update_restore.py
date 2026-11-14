@@ -171,6 +171,57 @@ def test_rollback_preserves_untracked_update_name(updater, tmp_path, monkeypatch
     assert path.read_text() == "user content after interrupted update"
 
 
+@pytest.mark.parametrize("reinstall", [True, False])
+def test_rollback_after_reinstall_reports_install_side_effects(updater, tmp_path, monkeypatch, capsys, reinstall):
+    # install.sh stages 4/6 (llama plist, recovery tool) are outside the rollback.
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    for module in (update_apply, update_cli, update_execution, update_lifecycle_context, update_preflight,
+                   update_recovery, update_repository, update_runtime_migration, update_services):
+        monkeypatch.setattr(module, 'REPO', updater.REPO)
+    previous = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "synthetic.txt").write_text("release content")
+    _git(repo, "add", "synthetic.txt")
+    _git(repo, "commit", "-qm", "release")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda manifest, **_service_kwargs: [])
+    monkeypatch.setattr(update_restore, '_services_reconcile', lambda: None)
+
+    updater._rollback_tree({"sha": target, "prev_sha": previous, "reinstall": reinstall})
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == previous
+    assert ("./install.sh --no-services" in capsys.readouterr().out) is reinstall
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError, OSError, ValueError])
+def test_reinstall_notice_write_failure_does_not_cut_rollback_short(updater, tmp_path, monkeypatch, error):
+    # A closed parent pipe or full log disk after reset --hard must still reach the DB restore and reconcile.
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, "REPO", str(repo))
+    for module in (update_apply, update_cli, update_execution, update_lifecycle_context, update_preflight,
+                   update_recovery, update_repository, update_runtime_migration, update_services):
+        monkeypatch.setattr(module, 'REPO', updater.REPO)
+    previous = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "synthetic.txt").write_text("release content")
+    _git(repo, "add", "synthetic.txt")
+    _git(repo, "commit", "-qm", "release")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    steps = []
+    def broken_print(*_args, **_kwargs):
+        raise error("synthetic stdout failure")
+    monkeypatch.setattr(update_restore, "print", broken_print, raising=False)
+    monkeypatch.setattr(update_restore, "_restore_db", lambda path, on_hold=None: steps.append("restore_db"))
+    monkeypatch.setattr(service_management, 'retire_to_snapshot',
+                        lambda manifest, **_service_kwargs: steps.append("retire") or [])
+    monkeypatch.setattr(update_restore, '_services_reconcile', lambda: steps.append("reconcile"))
+
+    updater._rollback_tree({"sha": target, "prev_sha": previous, "reinstall": True, "schema_bump": True,
+                            "backup_path": str(tmp_path / "synthetic-backup.db")})
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == previous
+    assert steps == ["restore_db", "retire", "reconcile"]
+
+
 def test_restore_db_removes_wal_sidecars(updater, tmp_path, monkeypatch):
     """SQLite settles old WAL sidecars before replacing the live DB (F9)."""
     import ledger as _ledger  # noqa: F401 — real module, tmp DBs only
@@ -979,9 +1030,10 @@ def test_rollback_applying_journal_shape():
              "backup_path": "/x.db", "manifest_snapshot": {},
              "command_id": "cid-apply"}
     rec = mcs_update._rollback_applying(entry, entry["sha"], "cid-rb")
-    assert set(rec) == {"tag", "sha", "prev_sha", "rollback",
+    assert set(rec) == {"tag", "sha", "prev_sha", "rollback", "hold_before_change",
                         "plugin_changed", "schema_bump", "backup_path",
                         "manifest_snapshot", "command_id", "at"}
+    assert rec["hold_before_change"] is True
     assert (rec["tag"], rec["sha"], rec["prev_sha"], rec["rollback"],
             rec["command_id"]) == ("rollback:v1.1.0", "a" * 40, "b" * 40,
                                    True, "cid-rb")
