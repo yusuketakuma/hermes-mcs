@@ -684,6 +684,14 @@ def _context_pass_observation(result):
     lane = result.get("lane")
     if type(lane) is str and lane in ("A", "B", "C"):
         record["lane"] = lane
+    # Save-stage detail: seconds spent waiting for the run lock (the wait
+    # stops at 60) and the fixed code of a guard refusal.
+    wait = result.get("lock_wait_s")
+    if type(wait) is int and 0 < wait <= 60:
+        record["lock_wait_s"] = wait
+    guard = result.get("guard_error")
+    if guard is not None:
+        record["guard_error"] = guard if _bounded_pass_code(guard) else "unclassified"
     refusal = result.get("scan_refusal")
     if refusal is not None:
         record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"

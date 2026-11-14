@@ -1,6 +1,7 @@
 """The context child reaches the real context engine without occupying a local turn."""
 from types import SimpleNamespace
 import json
+import sqlite3
 
 import pytest
 
@@ -275,3 +276,33 @@ def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
         assert key not in cloud_backlog._context_pass_observation({'status': 'deferred', key: invalid})
     assert 'wait_unregistered' not in cloud_backlog._context_pass_observation({
         'status': 'deferred', 'wait_unregistered': 1})
+
+
+@pytest.mark.parametrize("wait,expected", [(60, 60), (1, 1), (0, None), (61, None), (-1, None),
+                                           (1.5, None), (True, None), ("60", None)])
+def test_context_pass_reports_the_bounded_run_lock_wait(wait, expected):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": wait})
+    assert record.get("lock_wait_s") == expected and record["reason"] == "run_lock"
+
+
+@pytest.mark.parametrize("guard,expected", [
+    ("cloud_unit_unresolved", "cloud_unit_unresolved"), ("OperationalError", "OperationalError"),
+    ("synthetic private text", "unclassified"), ("secret/path", "unclassified"),
+    ("a" * 81, "unclassified"), (7, "unclassified"),
+])
+def test_context_pass_reports_only_a_bounded_guard_refusal_code(guard, expected):
+    record = cloud_backlog._context_pass_observation(
+        {"status": "deferred", "reason": "nightly_cloud_not_sent", "guard_error": guard})
+    assert record["reason"] == "nightly_cloud_not_sent" and record["guard_error"] == expected
+
+
+def test_guard_refusal_code_keeps_the_cloud_kind_and_drops_text():
+    import cloud_client
+    import patient_context_refresh
+    code = patient_context_refresh._guard_refusal_code
+    assert code(cloud_client.CloudError("cloud_unit_unresolved", detail="synthetic private")) \
+        == "cloud_unit_unresolved"
+    assert code(cloud_client.CloudNotSent("cloud_budget_blocked")) == "cloud_budget_blocked"
+    assert code(ValueError("synthetic private patient")) == "ValueError"
+    assert code(sqlite3.OperationalError("database is locked")) == "OperationalError"
